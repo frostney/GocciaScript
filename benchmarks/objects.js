@@ -37,6 +37,19 @@ group("object access", () => {
     };
   } }).setup);
 
+  bench("Object.keys over 2000 descending-inserted index keys", ({ *setup() {
+    const obj = (() => {
+      const target = {};
+      const count = 2000;
+      for (const index of Array.from({ length: count }, (_, i) => count - 1 - i))
+        target[index] = index;
+      return target;
+    })();
+    yield () => {
+      const keys = Object.keys(obj);
+    };
+  } }).setup);
+
   bench("Object.entries", ({ *setup() {
     const obj = (() => ({ a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8 }))();
     yield () => {

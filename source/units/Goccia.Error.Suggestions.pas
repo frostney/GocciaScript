@@ -104,10 +104,16 @@ resourcestring
   SSuggestAddPropertyInitializer = 'Add ''= value'' to initialize the property';
   SSuggestAddConstInitializer = 'Add ''= value'' after the variable name';
   SSuggestComputedPropertyNeedsValue = 'Add '': value'' after the computed property (e.g., [key]: value)';
+  SSuggestDefiniteAssignmentNeedsAnnotation = 'Add a type annotation after ''!'' (e.g., let x!: number)';
+  SSuggestTypeExpected = 'Write the type here, or drop the '':'' to leave the binding unannotated';
+  SSuggestTypeSyntaxOperator = 'Types are joined with ''|'', ''&'', ''extends'' or a type argument list — two type names cannot sit side by side';
+  SSuggestDefiniteAssignmentNoInitializer = 'Remove the ''!'' — a declaration with an initializer is already assigned';
+  SSuggestDefiniteAssignmentNotOnConst = 'Remove the ''!'' — a const is always assigned at its declaration';
 
   // Imports and exports
   SSuggestImportMetaSyntax = 'Use import.meta to access module metadata (e.g., import.meta.url)';
   SSuggestDynamicImportSyntax = 'Use import("./module-path") to dynamically load a module';
+  SSuggestConfigureModuleContentProvider = 'Install a module content provider on the engine (or attach a runtime) before importing modules';
   SSuggestStringImportAs = 'Use: import { "name" as localName } from "module"';
   SSuggestStringExportAs = 'Use: export { localName as "export-name" }';
   SSuggestDestructuringExportDeclareFirst = 'Declare first, then export: const x = ...; export { x };';
@@ -195,6 +201,13 @@ resourcestring
   SSuggestPromiseResolver = 'pass a function to the Promise constructor: new Promise((resolve, reject) => { ... })';
   SSuggestPromiseAnyRejected = 'Promise.any() requires at least one promise to fulfill';
   SSuggestCallbackRequired = 'pass a function as the argument';
+
+  // Runtime errors — node:async_hooks
+  SSuggestAsyncLocalStorageReceiver =
+    'call run(), getStore(), enterWith(), exit() and disable() on an ' +
+    'AsyncLocalStorage instance';
+  SSuggestAsyncResourceReceiver =
+    'call runInAsyncScope() and bind() on an AsyncResource instance';
 
   // Runtime errors — ArrayBuffer
   SSuggestArrayBufferThisType = 'ArrayBuffer methods must be called on an ArrayBuffer instance';

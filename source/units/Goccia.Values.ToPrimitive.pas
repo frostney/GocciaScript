@@ -17,9 +17,20 @@ function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitive
 // else is coerced via ToString. Callers must check the returned type.
 function ToPropertyKey(const AValue: TGocciaValue): TGocciaValue;
 
+// Every computed property access on a possibly-nullish base must call
+// ToPropertyKeyForBase rather than a bare ToPropertyKey. Pass AForWrite for store
+// targets so the message reads "cannot set properties" rather than "cannot read
+// properties".
+procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean = False); {$IFDEF FPC}inline;{$ENDIF}
+function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean = False): TGocciaValue;
+
 implementation
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -34,23 +45,24 @@ function TryCallMethod(const AObj: TGocciaObjectValue; const AMethodName: string
 var
   Method: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   Result := False;
   Method := AObj.GetProperty(AMethodName);
   if Assigned(Method) and Method.IsCallable then
   begin
+    { The frame, not AddTempRoot/RemoveTempRoot: temp roots are a set, so an
+      unconditional removal deletes the entry a *caller* added when the method
+      returned an object that caller already roots — a toString that returns
+      `this` is enough to alias them. A frame push is owned by this call alone. }
+    Roots.Initialize;
     Args := TGocciaArgumentsCollection.Create;
     try
       AResult := TGocciaFunctionBase(Method).Call(Args, AThisValue);
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(AResult);
-      try
-        Result := AResult.IsPrimitive;
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(AResult);
-      end;
+      Roots.Add(AResult);
+      Result := AResult.IsPrimitive;
     finally
+      Roots.Clear;
       Args.Free;
     end;
   end;
@@ -87,6 +99,7 @@ var
   Obj: TGocciaObjectValue;
   ExoticToPrim: TGocciaValue;
   Args: TGocciaArgumentsCollection;
+  Roots: TGocciaActiveRootFrame;
 begin
   if AValue.IsPrimitive then
   begin
@@ -114,17 +127,18 @@ begin
       finally
         Args.Free;
       end;
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(Result);
+      { Frame-rooted for the same reason as TryCallMethod: a shared temp-root
+        entry removed here is removed for whoever else was holding it. }
+      Roots.Initialize;
       try
+        Roots.Add(Result);
         // Step 2.b.ii: If result is not an Object, return result.
         if Result.IsPrimitive then
           Exit;
         // Step 2.b.iii: Throw a TypeError exception.
         ThrowTypeError(SErrorToPrimitiveReturnedObject, SSuggestToPrimitiveReturnPrimitive);
       finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(Result);
+        Roots.Clear;
       end;
     end;
 
@@ -165,6 +179,77 @@ begin
   // Step 3: Return ! ToString(key). Prim is a primitive here, so ToStringLiteral
   // on it cannot re-enter user code.
   Result := Prim.ToStringLiteral;
+end;
+
+// Name the key for the TypeError message without invoking user code. The whole
+// point of the base check is that ToPropertyKey has not run yet, so only keys that
+// are already primitives can be named exactly; object keys report '<computed>'.
+function DescribeUncoercedPropertyKey(const AKeyValue: TGocciaValue): string;
+begin
+  // Symbols are primitives but ToStringLiteral throws on them (ES2026 §7.1.17),
+  // so use the non-throwing description instead.
+  if AKeyValue is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AKeyValue).ToDisplayString.Value
+  else if AKeyValue.IsPrimitive then
+    Result := AKeyValue.ToStringLiteral.Value
+  else
+    Result := '<computed>';
+end;
+
+// Throw path only. Split out of RequireCoercibleBaseForPropertyAccess — and
+// deliberately not inlined — so the managed string local and the implicit
+// exception frame FPC emits for it stay off every computed member access.
+procedure ThrowNullishBasePropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean);
+var
+  KeyText: string;
+begin
+  KeyText := DescribeUncoercedPropertyKey(AUncoercedKey);
+  if AForWrite then
+  begin
+    if ABase is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end
+  else
+  begin
+    if ABase is TGocciaNullLiteralValue then
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [KeyText]),
+        SSuggestCheckNullBeforeAccess)
+    else
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [KeyText]),
+        SSuggestCheckNullBeforeAccess);
+  end;
+end;
+
+// ES2026 §6.2.5.5 GetValue step 3.a and §6.2.5.6 PutValue step 3.a perform
+// ToObject(_V_.[[Base]]) — which throws a *TypeError* for null/undefined — BEFORE
+// step 3.c converts _V_.[[ReferencedName]] with ToPropertyKey. Since §13.3.3
+// EvaluatePropertyAccessWithExpressionKey stores the *unconverted* key value in the
+// Reference Record, a nullish base must be rejected before the key expression's
+// result is coerced: a throwing or observable toString/valueOf on the key must not
+// run. The key *expression* is still evaluated first (§13.3.3 step 1); only the
+// ToPropertyKey conversion is ordered after the base check.
+//
+// Hot path: no managed locals here, so FPC emits no implicit exception frame.
+procedure RequireCoercibleBaseForPropertyAccess(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean);
+begin
+  if (ABase is TGocciaNullLiteralValue) or
+     (ABase is TGocciaUndefinedLiteralValue) then
+    ThrowNullishBasePropertyAccess(ABase, AUncoercedKey, AForWrite);
+end;
+
+// ES2026 §6.2.5.5 GetValue steps 3.a then 3.c (or §6.2.5.6 PutValue, same order):
+// reject a nullish base, then convert the referenced name with ToPropertyKey.
+function ToPropertyKeyForBase(const ABase, AUncoercedKey: TGocciaValue;
+  const AForWrite: Boolean): TGocciaValue;
+begin
+  RequireCoercibleBaseForPropertyAccess(ABase, AUncoercedKey, AForWrite);
+  Result := ToPropertyKey(AUncoercedKey);
 end;
 
 end.

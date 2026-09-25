@@ -4,7 +4,7 @@
 
 A drop of JavaScript — sandboxed by default
 
-GocciaScript is a sandbox-first ECMAScript runtime and toolchain for AI agents.
+GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime and toolchain for AI agents.
 Hosts define the available capabilities, runtime surface, and execution limits.
 It uses modern recommended defaults while tracking ECMAScript compatibility
 through generated test262 reports.
@@ -39,6 +39,13 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
   --diff
 ```
 
+Nothing the script writes reaches the host unless the host asks for it:
+`--write-back` writes the files a successful run changed to the host paths they
+were seeded from, and without it the virtual filesystem is discarded. A program
+that only reports and a program that fixes are therefore the same program, and
+the difference is a word on the host's command line. See
+[ADR 0119](docs/adr/0119-host-applied-sandbox-write-back.md).
+
 The host can also define globals, virtual modules, allowed network hosts,
 instruction and memory limits, deterministic time/randomness, and
 application-specific APIs. See [Build System — Sandbox Runner](docs/build-system.md#gocciasandboxrunner-virtual-filesystem-sandbox)
@@ -70,6 +77,7 @@ paths:
 | non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
 | `eval` | Not installed by normal hosts | private `GocciaScriptLoaderBare --test262-host` |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
+| `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
 
 Annex B's browser-only legacy surface is not a general pre-1.0 target; see
 [ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md). See
@@ -86,7 +94,9 @@ effect by default. GocciaScript additionally provides the optional
 inferred primitive contracts at runtime in interpreter and bytecode modes.
 
 `--strict-types` is a runtime contract extension, not a replacement for a static
-structural type checker such as `tsc`.
+structural type checker such as `tsc`. See
+[Type Annotations](docs/type-annotations.md) for the supported syntax and its
+parsing rules.
 
 ## Node host compatibility and sandbox `fs`
 
@@ -112,9 +122,26 @@ modules, decorators, and proposal-compatible type syntax.
 
 ### Built-in Objects
 
-`console`, `Math`, `JSON`, `Object`, `Array`, `Number`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`, `WeakMap`, `Promise`, `Temporal`, `Iterator`, `Proxy`, `Reflect`, `ArrayBuffer`, `SharedArrayBuffer`, TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with ArrayBuffer and SharedArrayBuffer backing, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only), `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, plus error constructors (`Error`, `TypeError`, `ReferenceError`, `RangeError`, `DOMException`).
+Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
+`Number`, `BigInt`, `String`, `RegExp`, `Symbol`, `Set`, `Map`, `WeakSet`,
+`WeakMap`, `WeakRef`, `FinalizationRegistry`, `Promise`, `Temporal`, `Intl`,
+`Iterator`, `DisposableStack`, `AsyncDisposableStack`, `Proxy`, `Reflect`,
+`ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `Atomics`, and TypedArrays
+(`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
+`Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
+`BigInt64Array`, `BigUint64Array`), alongside the global functions
+`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader profile adds
+`console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
+`AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
+`URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
+`ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`,
+`SuppressedError`, and `DOMException`.
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
+
+`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments, so a lint rule or a codemod can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [Built-ins](docs/built-ins.md#ast--experimental-gocciabuiltinsastpas), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), and [ADR 0118](docs/adr/0118-original-file-source-ranges.md).
+
+`node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
 Native FFI is an explicit unsafe runtime opt-in (`--unsafe-ffi` or the matching configuration key). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0095](docs/adr/0095-custom-bidirectional-ffi-abi-engine.md).
 
@@ -220,7 +247,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 11,000+ JavaScript unit tests covering language features, built-in objects, and edge cases.
+GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
 
 ```bash
 ./build.pas testrunner
@@ -230,6 +257,12 @@ GocciaScript has 11,000+ JavaScript unit tests covering language features, built
 
 The test runner supports Vitest-compatible external and inline snapshots,
 property shapes, asymmetric matchers, custom serializers, and `-u` updates.
+Importing `vi` from `"vitest"` resolves to a bundled compatibility shim, so
+suites written against `vi.fn`, `vi.spyOn`, and factory-form `vi.mock` (a
+synchronous arrow factory returning an object literal — no automock, no
+spread-based partial mock) run unmodified; see
+[Test Framework API](docs/testing-api.md) for the full factory constraints and
+the members that are not implemented.
 See [Testing](docs/testing.md) for test organization and [Build System](docs/build-system.md#compile-and-test) for runner options.
 
 ### Run Benchmarks
@@ -352,10 +385,12 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
+| [Type Annotations](docs/type-annotations.md) | TypeScript-compatible type syntax, `--strict-types`, and the `<` disambiguation rules |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
+| [Async Context](docs/built-ins-async-context.md) | `node:async_hooks`: `AsyncLocalStorage`, `AsyncResource`, and what propagates |
 | [Errors](docs/errors.md) | Error types, parser/runtime display, JSON output, `Error.cause`, `try`/`catch`/`finally` |
 | [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
 | [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution modes |
@@ -365,6 +400,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Garbage Collector](docs/garbage-collector.md) | Mark-and-sweep GC: architecture, contributor rules, design rationale |
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
+| [Module Resolution](docs/module-resolution.md) | Resolution order, opt-in `node_modules` lookup, and the deviations from Node |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Capability Audit Events](docs/capability-audit.md) | Structured host capability decisions, embedding sink, and CLI JSONL output |

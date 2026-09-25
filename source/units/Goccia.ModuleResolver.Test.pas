@@ -5,6 +5,7 @@ program Goccia.ModuleResolver.Test;
 uses
   SysUtils,
 
+  FileUtils,
   TestingPascalLibrary,
 
   Goccia.ModuleResolver,
@@ -27,9 +28,17 @@ type
     procedure TestApplyAliasesLeavesUnmatchedSpecifierUnchanged;
     procedure TestApplyAliasesUsesLongestPrefixAlias;
     procedure TestApplyAliasesMatchesNormalizedRelativeSpecifier;
+    procedure TestResolveFailureForRelativeSpecifierHidesHostPath;
+    procedure TestResolveFailureForAliasHidesHostPath;
   public
     procedure SetupTests; override;
   end;
+
+const
+  MISSING_RELATIVE_SPECIFIER = './definitely-missing-probe.js';
+  MISSING_ALIAS_PREFIX = '@missing/';
+  MISSING_ALIAS_SPECIFIER = '@missing/definitely-missing-probe.js';
+  MISSING_ALIAS_REPLACEMENT = 'vendor/missing/';
 
 function TTestModuleResolver.ExposedApplyAliases(const AModulePath,
   AImportingFilePath: string): string;
@@ -45,6 +54,8 @@ begin
   Test('ApplyAliases leaves unmatched specifier unchanged', TestApplyAliasesLeavesUnmatchedSpecifierUnchanged);
   Test('ApplyAliases uses longest prefix alias', TestApplyAliasesUsesLongestPrefixAlias);
   Test('ApplyAliases matches normalized relative specifier', TestApplyAliasesMatchesNormalizedRelativeSpecifier);
+  Test('Resolve failure for relative specifier hides the host path', TestResolveFailureForRelativeSpecifierHidesHostPath);
+  Test('Resolve failure for alias hides the host path', TestResolveFailureForAliasHidesHostPath);
 end;
 
 function TModuleResolverTests.CreateResolver: TTestModuleResolver;
@@ -141,6 +152,86 @@ begin
     Expect<string>(Resolver.ExposedApplyAliases('../shared/math.js',
       ImportingFilePath)).ToBe(ProjectDirectory + 'vendor' + PathDelim +
       'math.js');
+  finally
+    Resolver.Free;
+  end;
+end;
+
+procedure TModuleResolverTests.TestResolveFailureForRelativeSpecifierHidesHostPath;
+var
+  CandidatePath, FailureMessage: string;
+  ImportingFilePath, ProjectDirectory: string;
+  Raised: Boolean;
+  Resolver: TTestModuleResolver;
+begin
+  Resolver := CreateResolver;
+  try
+    ProjectDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
+    ImportingFilePath := ProjectDirectory + 'entry.js';
+    Raised := False;
+    CandidatePath := '';
+    FailureMessage := '';
+
+    try
+      Resolver.Resolve(MISSING_RELATIVE_SPECIFIER, ImportingFilePath);
+    except
+      on E: EModuleNotFound do
+      begin
+        Raised := True;
+        FailureMessage := E.Message;
+        CandidatePath := E.ResolvedCandidatePath;
+      end;
+    end;
+
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<string>(FailureMessage).ToBe(
+      Format(MODULE_NOT_FOUND_MESSAGE_FORMAT, [MISSING_RELATIVE_SPECIFIER]));
+    if Pos(ProjectDirectory, FailureMessage) > 0 then
+      Fail('Resolution failure message leaked the expanded host directory.');
+    Expect<string>(CandidatePath).ToBe(ExpandHostFileName(ProjectDirectory +
+      MISSING_RELATIVE_SPECIFIER));
+  finally
+    Resolver.Free;
+  end;
+end;
+
+procedure TModuleResolverTests.TestResolveFailureForAliasHidesHostPath;
+var
+  CandidatePath, FailureMessage, ProjectDirectory: string;
+  Raised: Boolean;
+  Resolver: TTestModuleResolver;
+begin
+  Resolver := CreateResolver;
+  try
+    ProjectDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
+    Resolver.AddAlias(MISSING_ALIAS_PREFIX, MISSING_ALIAS_REPLACEMENT);
+    Raised := False;
+    CandidatePath := '';
+    FailureMessage := '';
+
+    try
+      Resolver.Resolve(MISSING_ALIAS_SPECIFIER, ProjectDirectory + 'entry.js');
+    except
+      on E: EModuleNotFound do
+      begin
+        Raised := True;
+        FailureMessage := E.Message;
+        CandidatePath := E.ResolvedCandidatePath;
+      end;
+    end;
+
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<string>(FailureMessage).ToBe(
+      Format(MODULE_NOT_FOUND_MESSAGE_FORMAT, [MISSING_ALIAS_SPECIFIER]));
+    if Pos(ProjectDirectory, FailureMessage) > 0 then
+      Fail('Alias resolution failure message leaked the expanded host directory.');
+    if Pos(MISSING_ALIAS_REPLACEMENT, FailureMessage) > 0 then
+      Fail('Alias resolution failure message leaked the alias replacement.');
+    { Build the expectation the way Resolve does — ExpandHostFileName over the
+      alias replacement joined with '/' — so the assertion does not assume how
+      the host rewrites separators. }
+    Expect<string>(CandidatePath).ToBe(ExpandHostFileName(ProjectDirectory +
+      MISSING_ALIAS_REPLACEMENT + 'definitely-missing-probe.js'));
   finally
     Resolver.Free;
   end;

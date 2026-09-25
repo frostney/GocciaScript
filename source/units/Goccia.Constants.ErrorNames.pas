@@ -16,6 +16,9 @@ const
   DOM_EXCEPTION_NAME    = 'DOMException';
   DATA_CLONE_ERROR_NAME = 'DataCloneError';
   INVALID_CHARACTER_ERROR_NAME = 'InvalidCharacterError';
+  ABORT_ERROR_NAME              = 'AbortError';
+  TIMEOUT_ERROR_NAME            = 'TimeoutError';
+  INVALID_STATE_ERROR_NAME      = 'InvalidStateError';
   SUPPRESSED_ERROR_NAME        = 'SuppressedError';
 
 implementation

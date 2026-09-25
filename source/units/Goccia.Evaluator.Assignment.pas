@@ -15,8 +15,14 @@ procedure AssignProperty(const AObj: TGocciaValue; const APropertyName: string; 
 procedure AssignSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False);
 
 // Compound assignment operations
-function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
-function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
+// ES2026 §13.15.2 step 3 performs GetValue(lref) once, before the right-hand
+// side is evaluated, so the read is the caller's — it owns the evaluation order
+// and the short-circuit operators consume the same read. The value it obtained
+// is passed back in as ACurrentValue; reading the property again here would call
+// an accessor's getter twice per compound assignment.
+function ReadPropertyCompoundAssignmentValue(const AObj: TGocciaValue; const APropertyName: string; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; out ACurrentValue: TGocciaValue): Boolean;
+function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const ACurrentValue, AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
+function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const ACurrentValue, AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
 
 // Increment/Decrement operations
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;
@@ -206,80 +212,64 @@ begin
       SSuggestCheckNullBeforeAccess);
 end;
 
-function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
+// ES2026 §13.15.2 step 3 → §6.2.5.5 GetValue step 3: a primitive base is read
+// through its wrapper object, so the fallbacks below mirror the boxing that
+// GetValue performs. Returns False when the base cannot be read at all — the
+// caller then has no current value to compute with.
+function ReadPropertyCompoundAssignmentValue(const AObj: TGocciaValue; const APropertyName: string; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; out ACurrentValue: TGocciaValue): Boolean;
 var
-  CurrentValue, NewValue: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  EnsureAssignableReceiver(AObj, APropertyName);
-  CurrentValue := AObj.GetProperty(APropertyName);
-  if CurrentValue = nil then
+  { This is the read step, so a nullish base fails as a read — the store's
+    set-flavored message would misattribute the failure (and diverge from the
+    VM, which reports the read). }
+  if AObj is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [APropertyName]),
+      SSuggestCheckNullBeforeAccess)
+  else if AObj is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [APropertyName]), SSuggestCheckNullBeforeAccess);
+  ACurrentValue := AObj.GetProperty(APropertyName);
+  if ACurrentValue = nil then
   begin
     BoxedValue := BoxAssignablePrimitive(AObj);
     if Assigned(BoxedValue) then
-    begin
-      CurrentValue := BoxedValue.GetPropertyWithContext(APropertyName, AObj);
-      if CurrentValue = nil then
-        CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
+      ACurrentValue := BoxedValue.GetPropertyWithContext(APropertyName, AObj)
     else if (AObj is TGocciaSymbolValue) and
             (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
-    begin
-      CurrentValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-        .GetPropertyWithContext(APropertyName, AObj);
-      if CurrentValue = nil then
-        CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end
+      ACurrentValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
+        .GetPropertyWithContext(APropertyName, AObj)
     else
     begin
       if Assigned(AOnError) then
         AOnError('Cannot access property on non-object', ALine, AColumn);
-      Exit;
+      ACurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit(False);
     end;
   end;
 
-  NewValue := Goccia.Arithmetic.CompoundOperations(
-    CurrentValue, AValue, AOperator);
-  AssignProperty(AObj, APropertyName, NewValue, AOnError, ALine, AColumn,
-    ANonStrictMode);
-  Result := NewValue;
+  if ACurrentValue = nil then
+    ACurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := True;
 end;
 
-function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
-var
-  CurrentValue, NewValue: TGocciaValue;
-  BoxedValue: TGocciaObjectValue;
+// ES2026 §13.15.2 steps 5-7: ApplyStringOrNumericBinaryOperator on the value
+// step 3 already read, then PutValue.
+function PerformPropertyCompoundAssignment(const AObj: TGocciaValue; const APropertyName: string; const ACurrentValue, AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
 begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  EnsureAssignableReceiver(AObj, ASymbol.ToDisplayString.Value);
-  if AObj is TGocciaClassValue then
-    CurrentValue := TGocciaClassValue(AObj).GetSymbolProperty(ASymbol)
-  else if AObj is TGocciaObjectValue then
-    CurrentValue := TGocciaObjectValue(AObj).GetSymbolProperty(ASymbol)
-  else if (AObj is TGocciaSymbolValue) and
-          (TGocciaSymbolValue.SharedPrototype is TGocciaObjectValue) then
-    CurrentValue := TGocciaObjectValue(TGocciaSymbolValue.SharedPrototype)
-      .GetSymbolPropertyWithReceiver(ASymbol, AObj)
-  else
-  begin
-    CurrentValue := nil;
-    BoxedValue := BoxAssignablePrimitive(AObj);
-    if Assigned(BoxedValue) then
-      CurrentValue := BoxedValue.GetSymbolPropertyWithReceiver(ASymbol, AObj)
-    else if Assigned(AOnError) then
-    begin
-      AOnError('Cannot access property on non-object', ALine, AColumn);
-      Exit;
-    end;
-  end;
-  if CurrentValue = nil then
-    CurrentValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-  NewValue := Goccia.Arithmetic.CompoundOperations(
-    CurrentValue, AValue, AOperator);
-  AssignSymbolProperty(AObj, ASymbol, NewValue, AOnError, ALine, AColumn,
+  Result := Goccia.Arithmetic.CompoundOperations(
+    ACurrentValue, AValue, AOperator);
+  AssignProperty(AObj, APropertyName, Result, AOnError, ALine, AColumn,
     ANonStrictMode);
-  Result := NewValue;
+end;
+
+// ES2026 §13.15.2 steps 5-7 for a symbol-keyed target.
+function PerformSymbolPropertyCompoundAssignment(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue; const ACurrentValue, AValue: TGocciaValue; const AOperator: TGocciaTokenType; const AOnError: TGocciaThrowErrorCallback; const ALine, AColumn: Integer; const ANonStrictMode: Boolean = False): TGocciaValue;
+begin
+  Result := Goccia.Arithmetic.CompoundOperations(
+    ACurrentValue, AValue, AOperator);
+  AssignSymbolProperty(AObj, ASymbol, Result, AOnError, ALine, AColumn,
+    ANonStrictMode);
 end;
 
 function PerformIncrement(const AOldValue: TGocciaValue; const AIsIncrement: Boolean): TGocciaValue;

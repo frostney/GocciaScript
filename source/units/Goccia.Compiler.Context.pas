@@ -69,6 +69,8 @@ function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
   const AOp: TGocciaOpCode; const AReg: UInt16): Integer; overload;
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
   const AOp: TGocciaOpCode; const AReg, AFlags: UInt16): Integer; overload;
+function EmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
+  const ALeftReg, ARightReg: UInt16): Integer;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
@@ -147,6 +149,13 @@ begin
     Result := EmitInstruction(ACtx, EncodeABC(AOp, AReg, AFlags, 0));
 end;
 
+function EmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
+  const ALeftReg, ARightReg: UInt16): Integer;
+begin
+  Result := EmitInstruction(ACtx,
+    EncodeABC(OP_JUMP_IF_NOT_LT, ALeftReg, ARightReg, 0), True);
+end;
+
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 var
@@ -192,7 +201,8 @@ begin
     ACtx.Template.PatchInstruction(AIndex,
       EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
   end
-  else if TGocciaOpCode(Op) = OP_JUMP_IF_NUM_NOT_LTE_IMM then
+  else if (TGocciaOpCode(Op) = OP_JUMP_IF_NUM_NOT_LTE_IMM) or
+          (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_LT) then
   begin
     A := DecodeA(Instruction);
     B := DecodeB(Instruction);
@@ -207,8 +217,7 @@ begin
     if (Offset < Low(Int16)) or (Offset > High(Int16)) then
       raise Exception.Create('Numeric immediate jump offset exceeds 16-bit range');
     ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM, A, B,
-        UInt16(Int16(Offset))));
+      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Int16(Offset))));
   end
   else
   begin

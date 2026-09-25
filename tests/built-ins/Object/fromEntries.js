@@ -61,3 +61,83 @@ describe("Object.fromEntries", () => {
     expect(Object.getOwnPropertySymbols(obj)[0]).toBe(key);
   });
 });
+
+// Both entry reads are accessor calls and ToPropertyKey coerces the key, so
+// three separate GC safe points run while the entry, the key and the value are
+// held only in native locals.
+describe.runIf(typeof Goccia !== "undefined")("Object.fromEntries under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  const freshEntries = (makeEntry) => ({
+    [Symbol.iterator]() {
+      let index = 0;
+      return {
+        next() {
+          index++;
+          if (index > 2) {
+            return { done: true };
+          }
+          return { value: makeEntry(index), done: false };
+        },
+      };
+    },
+  });
+
+  test("keeps the key alive when the value getter collects", () => {
+    const obj = Object.fromEntries(
+      freshEntries((index) => {
+        const label = "k" + index;
+        return {
+          get 0() {
+            return {
+              [Symbol.toPrimitive]() {
+                return label;
+              },
+            };
+          },
+          get 1() {
+            gcChurn();
+            return "v" + index;
+          },
+        };
+      }),
+    );
+
+    expect(obj.k1).toBe("v1");
+    expect(obj.k2).toBe("v2");
+  });
+
+  test("keeps the value alive when the key's toPrimitive collects", () => {
+    const obj = Object.fromEntries(
+      freshEntries((index) => {
+        const label = "k" + index;
+        return {
+          get 0() {
+            return {
+              [Symbol.toPrimitive]() {
+                gcChurn();
+                return label;
+              },
+            };
+          },
+          get 1() {
+            return { s: "v" + index, pad: [1, 2, 3] };
+          },
+        };
+      }),
+    );
+
+    expect(obj.k1.s).toBe("v1");
+    expect(obj.k2.s).toBe("v2");
+  });
+});

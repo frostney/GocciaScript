@@ -163,7 +163,20 @@ const
   //               Number subtraction and less-than-or-equal branches.
   //   v74 -> v75: added a direct scalar-frame self-call opcode for functions
   //               accepted by the closed-world numeric-call proof.
-  GOCCIA_FORMAT_VERSION = 75;
+  //   v75 -> v76: added the VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER validation
+  //               mode, which rejects a nullish computed-member base before the
+  //               key is coerced and carries the key register in operand C.
+  //   v76 -> v77: debug info carries each function's declaration line and
+  //               column, so coverage reports a function at the line it is
+  //               declared on rather than at its first executed instruction.
+  //   v77 -> v78: added OP_ADD_NUM_IMM.
+  //   v78 -> v79: added OP_GET_LOCAL_PROP_CONST (opcode 231), a fused
+  //               decode of OP_GET_LOCAL + OP_GET_PROP_CONST for
+  //               `local.ident` that reuses the existing shape-lite
+  //               property-read IC.
+  //   v79 -> v80: added OP_JUMP_IF_NOT_LT (opcode 232), a fused generic
+  //               `<` compare and jump used by for/if/conditional tests.
+  GOCCIA_FORMAT_VERSION = 80;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -180,6 +193,13 @@ const
   COLLECTION_OP_TRY_ITERABLE_TO_ARRAY = 3;
   VALIDATE_OP_REQUIRE_OBJECT = 0;
   VALIDATE_OP_REQUIRE_ITERABLE = 1;
+  // Same nullish-base rejection as VALIDATE_OP_REQUIRE_OBJECT, but for a computed
+  // *member* base (`a[k]++`, `a[k] += v`, `a[k] ??= v`) rather than a destructuring
+  // pattern, so it reports the ES2026 §6.2.5.5 GetValue step 3.a "cannot read
+  // properties of null" wording instead of the destructuring wording. The C operand
+  // carries the key register, still holding the UNCOERCED key: this validate is
+  // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
+  VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
@@ -429,8 +449,21 @@ type
     // A = destination, B = first contiguous argument register,
     // C = argument count (1..3). Valid only in a compiler-proven closed-world
     // numeric self-recursive template.
-    OP_CALL_SELF_NUM = 229
+    OP_CALL_SELF_NUM = 229,
+    // A = destination, B = proven Number source, C = signed Int16 immediate.
+    OP_ADD_NUM_IMM   = 230,
+    // A = destination, B = local slot holding the object, C = name-constant
+    // index. Fused OP_GET_LOCAL + OP_GET_PROP_CONST for `local.ident`.
+    OP_GET_LOCAL_PROP_CONST = 231,
+    // A = left register, B = right register, C = signed Int16 jump offset
+    // when A < B is false. Generic `<` semantics (Number, BigInt, objects).
+    OP_JUMP_IF_NOT_LT = 232
   );
+
+function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
+function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
+function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
+function GocciaOpCodeUsesRegisterC(const AOp: TGocciaOpCode): Boolean;
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}
 function EncodeABx(const AOp: TGocciaOpCode; const A: UInt16; const ABx: UInt16): UInt64; {$IFDEF FPC}inline;{$ENDIF}
@@ -452,6 +485,84 @@ implementation
 const
   SBIAS_16 = 32767;
   SBIAS_24 = 8388607;
+
+function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
+begin
+  Result := (AOp >= Ord(Low(TGocciaOpCode))) and
+    (AOp <= Ord(High(TGocciaOpCode))) and
+    not (AOp in [99, 144..166]);
+end;
+
+function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
+begin
+  Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
+    OP_WIDE, OP_CLOSE_UPVALUE]);
+end;
+
+function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
+begin
+  Result := AOp in [
+    OP_MOVE, OP_ARRAY_POP, OP_ARRAY_PUSH, OP_ARRAY_GET, OP_ARRAY_SET,
+    OP_GET_LENGTH, OP_ADD_INT, OP_SUB_INT, OP_MUL_INT, OP_DIV_INT,
+    OP_MOD_INT, OP_NEG_INT, OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+    OP_DIV_FLOAT, OP_MOD_FLOAT, OP_NEG_FLOAT, OP_EQ_INT, OP_NEQ_INT,
+    OP_LT_INT, OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT,
+    OP_NEQ_FLOAT, OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT,
+    OP_CONCAT, OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST, OP_GET_ITER, OP_ITER_NEXT,
+    OP_CLASS_SET_SUPER, OP_CLASS_SET_FIELD_INITIALIZER,
+    OP_CLASS_EXEC_STATIC_BLOCK, OP_UNPACK, OP_NOT, OP_TO_BOOL,
+    OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE, OP_GET_INDEX, OP_SET_INDEX,
+    OP_DEL_INDEX, OP_SET_OBJECT_PROTO, OP_DEFINE_PROP_DYNAMIC,
+    OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP, OP_ADD, OP_SUB, OP_MUL,
+    OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
+    OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_AWAIT,
+    OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
+    OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
+    OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,
+    OP_TO_PROPERTY_KEY, OP_ENUM_KEYS, OP_ENUM_ENTRY, OP_ITER_UNPACK,
+    OP_SET_FUNCTION_NAME, OP_INC_NUMERIC, OP_DEC_NUMERIC,
+    OP_POST_INC_NUMERIC, OP_POST_DEC_NUMERIC, OP_GET_WITH_BINDING,
+    OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
+    OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
+    OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
+    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM, OP_SET_UPVALUE_REF,
+    OP_JUMP_IF_NOT_LT,
+    OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+    OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
+    OP_NEG, OP_BNOT, OP_EQ, OP_NEQ, OP_LOOSE_EQ, OP_LOOSE_NEQ,
+    OP_LT, OP_GT, OP_LTE, OP_GTE, OP_TYPEOF, OP_IS_INSTANCE,
+    OP_HAS_PROPERTY
+  ];
+end;
+
+function GocciaOpCodeUsesRegisterC(const AOp: TGocciaOpCode): Boolean;
+begin
+  Result := AOp in [
+    OP_ARRAY_GET, OP_ARRAY_SET, OP_ADD_INT, OP_SUB_INT, OP_MUL_INT,
+    OP_DIV_INT, OP_MOD_INT, OP_ADD_FLOAT, OP_SUB_FLOAT, OP_MUL_FLOAT,
+    OP_DIV_FLOAT, OP_MOD_FLOAT, OP_EQ_INT, OP_NEQ_INT, OP_LT_INT,
+    OP_GT_INT, OP_LTE_INT, OP_GTE_INT, OP_EQ_FLOAT, OP_NEQ_FLOAT,
+    OP_LT_FLOAT, OP_GT_FLOAT, OP_LTE_FLOAT, OP_GTE_FLOAT, OP_CONCAT,
+    OP_SET_PROP_CONST, OP_SET_PROP_CONST_LOOSE, OP_CLASS_ADD_METHOD_CONST,
+    OP_DEFINE_STATIC_PROP_CONST, OP_DEFINE_STATIC_PROP_DYNAMIC,
+    OP_DEFINE_PROP_DYNAMIC, OP_DEFINE_STATIC_METHOD_CONST,
+    OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP,
+    OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_ITER_NEXT, OP_GET_INDEX,
+    OP_SET_INDEX, OP_DEL_INDEX, OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE,
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR,
+    OP_BXOR, OP_SHL, OP_SHR, OP_USHR, OP_EQ, OP_NEQ, OP_LOOSE_EQ,
+    OP_LOOSE_NEQ, OP_LT, OP_GT, OP_LTE, OP_GTE, OP_IS_INSTANCE,
+    OP_HAS_PROPERTY, OP_DEFINE_ACCESSOR_DYNAMIC, OP_COLLECTION_OP,
+    OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR,
+    OP_USING_DISPOSE, OP_ENUM_ENTRY, OP_ASYNC_ITER_NEXT, OP_ITER_UNPACK,
+    OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
+    OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_GET_WITH_BINDING,
+    OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
+    OP_SET_WITH_BINDING_LOOSE, OP_SUPER_GET, OP_SUPER_SET,
+    OP_SUPER_BASE, OP_SUPER_GET_BASE, OP_SUPER_SET_BASE,
+    OP_CONSTRUCT_SPREAD
+  ];
+end;
 
 function EncodeABC(const AOp: TGocciaOpCode; const A, B, C: UInt16): UInt64;
 begin

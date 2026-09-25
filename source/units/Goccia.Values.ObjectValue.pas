@@ -10,6 +10,7 @@ uses
   HashMap,
 
   Goccia.Arguments.Collection,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -95,8 +96,11 @@ type
     function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>; virtual;
     function GetAllPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyNames: TArray<string>; virtual;
+    // Ordered own string keys. Ordinary objects use ES2026 §10.1.11.1;
+    // exotic overrides preserve their own [[OwnPropertyKeys]] order.
     function GetOwnPropertyKeys: TArray<string>; virtual;
 
+    // Includes symbols and preserves the complete mixed order of proxy traps.
     function OwnPropertyKeyValues: TArray<TGocciaValue>;
     function OwnPropertyDescriptorForKey(
       const AKey: TGocciaValue): TGocciaPropertyDescriptor;
@@ -147,6 +151,69 @@ type
     function ObjectPrototypeValueOf(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  { An error object that also carries engine-recorded throw provenance for its
+    runtime code frame. Kept as a subclass so these fields exist ONLY on error
+    objects — adding them to the base TGocciaObjectValue would enlarge every
+    object's InstanceSize and inflate the GC's per-object byte accounting (which
+    charges InstanceSize), shifting --max-memory behaviour for all programs.
+
+    The provenance is set from the real top call frame when the engine creates
+    the error (Goccia.Values.ErrorHelper.AttachErrorSourceProvenance), NEVER
+    from the guest-writable `.stack` property. HasErrorSourceLocation is False
+    on a guest-forged plain object (which is not this class at all), so it
+    renders no code frame. }
+  TGocciaErrorObjectValue = class(TGocciaObjectValue)
+  private
+    FHasErrorSourceLocation: Boolean;
+    FErrorSourcePath: string;
+    FErrorSourceLine: Integer;
+    FErrorSourceColumn: Integer;
+    // The ±context window of the throwing module's source, captured at creation
+    // (LF-joined), with the absolute line number of its first line. Empty when
+    // the module was not in the engine's own source scope (e.g. the entry file,
+    // whose lines the host still holds); the header location is shown regardless.
+    FErrorSourceExcerpt: string;
+    FErrorSourceExcerptFirstLine: Integer;
+    // Durable identity of the source scope (principal) the excerpt was captured
+    // from — compared, never dereferenced. A renderer must explicitly supply
+    // that same principal; a mismatch or no supplied principal refuses source.
+    // A process-monotonic Int64 (not a scope
+    // pointer) so a freed-then-reallocated scope can never be mistaken for the
+    // one that stamped the excerpt. See Goccia.Diagnostics.SourceRegistry.
+    FErrorSourcePrincipal: Int64;
+    // Bytes of FErrorSourceExcerpt charged against the GC --max-memory budget,
+    // released in Destroy so held errors cannot retain diagnostic copies past
+    // the ceiling.
+    FErrorSourceExcerptCharged: Int64;
+    // The collector the excerpt bytes were reserved against. Destroy releases
+    // through THIS owner rather than TGarbageCollector.Instance: the thread-local
+    // Instance can be a different thread's collector (or nil after Shutdown) when
+    // the error is destroyed, which would decrement the wrong budget or lose the
+    // release entirely. Per the GC lifecycle invariant an object is freed before
+    // its collector shuts down, so this pointer stays valid until release.
+    FErrorSourceExcerptCollector: TGarbageCollector;
+  public
+    destructor Destroy; override;
+    property HasErrorSourceLocation: Boolean read FHasErrorSourceLocation
+      write FHasErrorSourceLocation;
+    property ErrorSourcePath: string read FErrorSourcePath
+      write FErrorSourcePath;
+    property ErrorSourceLine: Integer read FErrorSourceLine
+      write FErrorSourceLine;
+    property ErrorSourceColumn: Integer read FErrorSourceColumn
+      write FErrorSourceColumn;
+    property ErrorSourceExcerpt: string read FErrorSourceExcerpt
+      write FErrorSourceExcerpt;
+    property ErrorSourceExcerptFirstLine: Integer
+      read FErrorSourceExcerptFirstLine write FErrorSourceExcerptFirstLine;
+    property ErrorSourcePrincipal: Int64 read FErrorSourcePrincipal
+      write FErrorSourcePrincipal;
+    property ErrorSourceExcerptCharged: Int64 read FErrorSourceExcerptCharged
+      write FErrorSourceExcerptCharged;
+    property ErrorSourceExcerptCollector: TGarbageCollector
+      read FErrorSourceExcerptCollector write FErrorSourceExcerptCollector;
+  end;
+
 
 implementation
 
@@ -159,7 +226,6 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
@@ -244,13 +310,117 @@ begin
   Result := AIndex < High(UInt32);
 end;
 
+// Bottom-up merge sort over the collected array-index keys.  Every own-key
+// enumeration runs this, and insertion order is arbitrary, so an insertion sort
+// degrades to O(n^2) on descending input; the already-ascending case is the
+// common one and returns from the ordered check without touching the scratch
+// buffer.  Small key counts stay on insertion sort: below the threshold it
+// beats the merge because it never allocates the scratch buffer.  The keys
+// come from distinct property names, so stability is not required here.
+procedure SortArrayIndexKeys(var AKeys: TArray<UInt64>; const ACount: Integer);
+const
+  InsertionSortThreshold = 32;
+var
+  IsOrdered: Boolean;
+  Scratch: TArray<UInt64>;
+  // Width and LowIndex are Int64 so doubling Width and computing LowIndex +
+  // 2 * Width cannot overflow Integer near High(Integer) key counts.
+  Width, LowIndex: Int64;
+  Destination, HighIndex, Index, Left, MiddleIndex, Right: Integer;
+  SortedIndex: Integer;
+  TempKey: UInt64;
+begin
+  if ACount < 2 then
+    Exit;
+
+  if ACount <= InsertionSortThreshold then
+  begin
+    for Index := 1 to ACount - 1 do
+    begin
+      TempKey := AKeys[Index];
+      SortedIndex := Index - 1;
+      while (SortedIndex >= 0) and (AKeys[SortedIndex] > TempKey) do
+      begin
+        AKeys[SortedIndex + 1] := AKeys[SortedIndex];
+        Dec(SortedIndex);
+      end;
+      AKeys[SortedIndex + 1] := TempKey;
+    end;
+    Exit;
+  end;
+
+  IsOrdered := True;
+  for Index := 1 to ACount - 1 do
+    if AKeys[Index] < AKeys[Index - 1] then
+    begin
+      IsOrdered := False;
+      Break;
+    end;
+  if IsOrdered then
+    Exit;
+
+  SetLength(Scratch, ACount);
+  Width := 1;
+  while Width < ACount do
+  begin
+    LowIndex := 0;
+    while LowIndex < ACount do
+    begin
+      // Clamp in Int64, then narrow: both bounds are <= ACount.
+      if LowIndex + Width < ACount then
+        MiddleIndex := Integer(LowIndex + Width)
+      else
+        MiddleIndex := ACount;
+      if LowIndex + 2 * Width < ACount then
+        HighIndex := Integer(LowIndex + 2 * Width)
+      else
+        HighIndex := ACount;
+
+      Left := Integer(LowIndex);
+      Right := MiddleIndex;
+      Destination := Integer(LowIndex);
+      while (Left < MiddleIndex) and (Right < HighIndex) do
+      begin
+        if AKeys[Right] < AKeys[Left] then
+        begin
+          Scratch[Destination] := AKeys[Right];
+          Inc(Right);
+        end
+        else
+        begin
+          Scratch[Destination] := AKeys[Left];
+          Inc(Left);
+        end;
+        Inc(Destination);
+      end;
+      while Left < MiddleIndex do
+      begin
+        Scratch[Destination] := AKeys[Left];
+        Inc(Left);
+        Inc(Destination);
+      end;
+      while Right < HighIndex do
+      begin
+        Scratch[Destination] := AKeys[Right];
+        Inc(Right);
+        Inc(Destination);
+      end;
+      LowIndex := LowIndex + 2 * Width;
+    end;
+
+    for Index := 0 to ACount - 1 do
+      AKeys[Index] := Scratch[Index];
+    Width := Width * 2;
+  end;
+end;
+
 function OrderOwnStringPropertyKeys(const AKeys: TArray<string>):
   TArray<string>;
 var
-  Count, I, J, K: Integer;
+  Count, I, J: Integer;
   NumericKeys: TArray<UInt64>;
   OtherKeys: TArray<string>;
-  ParsedIndex, TempIndex: UInt64;
+  ParsedIndex: UInt64;
 begin
   SetLength(NumericKeys, Length(AKeys));
   SetLength(OtherKeys, Length(AKeys));
@@ -271,17 +441,7 @@ begin
     end;
   end;
 
-  for I := 1 to Count - 1 do
-  begin
-    TempIndex := NumericKeys[I];
-    K := I - 1;
-    while (K >= 0) and (NumericKeys[K] > TempIndex) do
-    begin
-      NumericKeys[K + 1] := NumericKeys[K];
-      Dec(K);
-    end;
-    NumericKeys[K + 1] := TempIndex;
-  end;
+  SortArrayIndexKeys(NumericKeys, Count);
 
   SetLength(Result, Count + J);
   for I := 0 to Count - 1 do
@@ -327,18 +487,18 @@ begin
     Result := TGocciaNullLiteralValue.NullValue;
 end;
 
-function OwnPropertyKeyValues(const AObject: TGocciaObjectValue): TArray<TGocciaValue>;
+function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
 var
   Count: Integer;
   I: Integer;
   StringKeys: TArray<string>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
 begin
-  if AObject is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(AObject).GetOwnPropertyKeyValues);
+  if Self is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(Self).GetOwnPropertyKeyValues);
 
-  StringKeys := AObject.GetOwnPropertyKeys;
-  SymbolKeys := AObject.GetOwnSymbols;
+  StringKeys := GetOwnPropertyKeys;
+  SymbolKeys := GetOwnSymbols;
   SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
   Count := 0;
   for I := 0 to High(StringKeys) do
@@ -377,11 +537,6 @@ begin
     ADescriptor.Free;
     raise;
   end;
-end;
-
-function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
-begin
-  Result := Goccia.Values.ObjectValue.OwnPropertyKeyValues(Self);
 end;
 
 function TGocciaObjectValue.OwnPropertyDescriptorForKey(
@@ -498,6 +653,12 @@ begin
   // Shaped map: layout tracking for the VM's shape-validated inline caches
   // rides on the property map itself, so every mutation path stays in sync.
   FProperties := TGocciaShapedPropertyMap.Create(APropertyCapacity);
+  // Rooting for the property-store path lives on the map, at the growth gate:
+  // that is the one point in a store that can collect, and the map is the only
+  // thing every entry path — evaluator, native builder, class field, spread —
+  // passes through. The map needs a way back to the value that holds it so the
+  // properties already stored stay reachable across a collection taken there.
+  TGocciaShapedPropertyMap(FProperties).Owner := Self;
   FSymbolDescriptors := TSymbolDescriptorMap.Create;
   FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
   FPrototype := APrototype;
@@ -790,6 +951,20 @@ begin
 
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
+  inherited;
+end;
+
+destructor TGocciaErrorObjectValue.Destroy;
+begin
+  // Return the excerpt's charged bytes to the collector that reserved them, not
+  // to this thread's TGarbageCollector.Instance: a cross-thread destructor would
+  // otherwise decrement another collector's budget, and a release after the
+  // reserving collector's Shutdown would be lost.
+  if (FErrorSourceExcerptCharged > 0) and
+     Assigned(FErrorSourceExcerptCollector) then
+    FErrorSourceExcerptCollector.ReleaseExternalBytes(FErrorSourceExcerptCharged);
+  FErrorSourceExcerptCharged := 0;
+  FErrorSourceExcerptCollector := nil;
   inherited;
 end;
 

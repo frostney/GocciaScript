@@ -1041,6 +1041,9 @@ begin
       ModuleScope.ArgumentsObjectEnabled := True;
       Context := AInterpreter.CreateEvaluationContext;
       Context.Scope := ModuleScope;
+      // Shims are engine implementation details, not user source. Keep their
+      // generated locations out of the caller's line/branch/function report.
+      Context.CoverageEnabled := False;
       Context.HideFunctionSourceText := True;
       for I := 0 to ProgramNode.Body.Count - 1 do
         EvaluateStatement(ProgramNode.Body[I], Context);

@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.AsyncContext,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.SharedPrototype,
@@ -24,6 +25,11 @@ type
     OnFulfilled: TGocciaValue;
     OnRejected: TGocciaValue;
     ResultPromise: TGocciaValue;
+    { The async context in effect where the reaction was registered. A
+      reaction on a pending promise outlives the call that registered it, so
+      the context has to travel with the reaction rather than be read again
+      when the promise settles. }
+    Context: TGocciaAsyncContextSnapshot;
   end;
 
   TGocciaPromiseFinallyWrapper = class(TGocciaObjectValue)
@@ -623,6 +629,8 @@ begin
         Reaction.OnRejected.MarkReferences;
       if Assigned(Reaction.ResultPromise) then
         Reaction.ResultPromise.MarkReferences;
+      if Assigned(Reaction.Context) then
+        Reaction.Context.MarkReferences;
     end;
 end;
 
@@ -719,6 +727,7 @@ begin
       Reaction.OnFulfilled := nil;
       Reaction.OnRejected := nil;
       Reaction.ResultPromise := Self;
+      Reaction.Context := CurrentAsyncContext;
       if not Assigned(APromise.FReactions) then
         APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
       APromise.FReactions.Add(Reaction);
@@ -748,7 +757,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtFulfill;
-        Queue.Enqueue(Task);
+        Queue.EnqueueWithContext(Task, Reaction.Context);
       end;
       gpsRejected:
       begin
@@ -756,7 +765,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtReject;
-        Queue.Enqueue(Task);
+        Queue.EnqueueWithContext(Task, Reaction.Context);
       end;
     end;
   end;
@@ -811,6 +820,7 @@ begin
       Reaction.OnFulfilled := AOnFulfilled;
       Reaction.OnRejected := AOnRejected;
       Reaction.ResultPromise := CapabilityHost;
+      Reaction.Context := CurrentAsyncContext;
       if not Assigned(APromise.FReactions) then
         APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
       APromise.FReactions.Add(Reaction);

@@ -1,14 +1,15 @@
 # Built-in Objects
 
-<!-- doc-length-limit: 1000 -->
+<!-- doc-length-limit: 1050 -->
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
 ## Executive Summary
 
-- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) and import-only `goccia:` runtime modules
+- **Core vs runtime registration** — `TGocciaEngine` always registers core language built-ins (Math, Object, Array, String, Number, RegExp, JSON, Symbol, Set, Map, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, TypedArrays, Proxy, Reflect, Iterator, DisposableStack, etc.); `Goccia.Runtime` provides optional runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) and import-only `goccia:` runtime modules
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
+- **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
 - **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
@@ -20,7 +21,9 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile plus `TGocciaTestingLibraryRuntimeExtension`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. It additionally registers the `goccia:test` module namespace without injecting any testing global, so the testing API is importable from every host that applies the profile. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile with the module-only testing install suppressed and installs `TGocciaTestingLibraryRuntimeExtension` with global injection enabled instead, which is why it is the only binary with global `describe`/`test`/`expect`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. See [Test Framework API](testing-api.md#availability-per-binary) for the per-binary table. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper by default; the test262 conformance runner may opt into private test262 host capabilities with `--test262-host`.
+
+Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtension`, which registers the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. The loader runtime profile does not install it: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
 
 `GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
@@ -258,10 +261,10 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
 | `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
-| `proposal` | `object` | Selected TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-3"`, `"stage-1"`). Each represented stage maps to an array of `{ name, link }` entries; use the language tables for the complete implemented proposal surface. |
+| `proposal` | `object` | Selected TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-4"`, `"stage-2.7"`, `"stage-1"` — fractional stage keys occur). Each represented stage maps to an array of `{ name, link }` entries; use the language tables for the complete implemented proposal surface. |
 | `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. Import-only `goccia:` modules are not listed as globals. |
 | `shims` | `string[]` | Names of registered ECMAScript shims installed by the engine |
-| `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). Allocations exceeding the ceiling throw a `RangeError`. |
+| `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). An allocation exceeding the ceiling is refused one of two ways, both of which collect and re-test first unless no collection could help: a charged allocation (string payload, `ArrayBuffer` backing store) throws a catchable `RangeError`, while a gated growth point (array element storage, object property storage) ends the run with the uncatchable `MemoryLimitError`. See [Garbage Collector](garbage-collector.md#gated-growth-points). |
 
 **Goccia.shims**
 
@@ -334,7 +337,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 | Function | Description |
 |----------|-------------|
 | `queueMicrotask(callback)` | Enqueue a callback to run as a microtask. Throws `TypeError` if the argument is not callable. |
-| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, and circular references. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`). |
+| `structuredClone(value)` | Deep-clone a value using the structured clone algorithm. Handles objects, arrays, `Map`, `Set`, errors, and circular references. An error carries its name, message and stack only — the property walk does not run for errors, so own properties are dropped (including `AggregateError.errors` and any self-reference) and a name outside the seven standard ones becomes `"Error"`, matching the HTML algorithm. Throws `DOMException` with name `"DataCloneError"` (code 25) for non-cloneable types (functions, symbols, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`). |
 | `btoa(data)` | Encode a binary string (each character code ≤ U+00FF) to base64. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) if any character code exceeds U+00FF. |
 | `atob(data)` | Decode a base64 string to a binary string. Uses WHATWG forgiving-base64-decode: strips ASCII whitespace, tolerates missing `=` padding. Throws `DOMException` with name `"InvalidCharacterError"` (code 5) for invalid base64 input. |
 | `encodeURI(uriString)` | Encode a complete URI, preserving reserved characters (`;/?:@&=+$,#`) and unreserved characters. Multi-byte characters are UTF-8 encoded. Throws `URIError` for lone surrogates. |
@@ -344,7 +347,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `queueMicrotask` shares the same microtask queue used by Promise reactions. Callbacks run after the current synchronous code completes but before the engine returns control. If a callback throws, the error is surfaced as an uncaught host callback error.
 
-`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols, WeakMaps, WeakSets, WeakRefs, FinalizationRegistries) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned as a data property on the clone.
+`structuredClone` creates a deep copy following the HTML spec's structured clone algorithm. Primitives are returned as-is. Objects, arrays, Maps, and Sets are recursively cloned. Circular references and shared references within the object graph are preserved (the same cloned object is reused). Non-serializable values (functions, symbols, WeakMaps, WeakSets, WeakRefs, FinalizationRegistries) throw a `DOMException` with `name: "DataCloneError"` and `code: 25`, matching browser and Node.js behavior. Properties are enumerated the way `StructuredSerialize` does, with [`EnumerableOwnPropertyNames`](https://tc39.es/ecma262/#sec-enumerableownproperties) (ECMA-262 §7.3.23): own, enumerable, string-keyed, each value taken with `Get`. Non-enumerable own properties are therefore skipped. Accessor properties (getters/setters) are read via the getter and the resulting value is cloned — the accessor itself is never preserved, so a getter that throws propagates out of `structuredClone` and one that returns an unserializable value raises `DataCloneError`. This applies to array indices exactly as it does to ordinary keys, and non-index own properties of an array are cloned too. Because deserialization installs each property with `CreateDataProperty`, descriptor flags do not survive the round trip: every property on the clone is a writable, enumerable, configurable data property, and a frozen source yields an unfrozen clone. Array holes are preserved, and the length is snapshotted before any getter runs.
 
 `btoa` encodes a string to base64 following the WHATWG HTML spec §8.3. Each character in the input must have a code point ≤ U+00FF (Latin-1 range); characters outside this range throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The input is interpreted as a byte sequence where each code point maps 1:1 to a byte value.
 
@@ -352,7 +355,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling specification. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
 
-**Error constructors:** `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `DOMException`
+**Error constructors:** `Error`, `EvalError`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, `DOMException`
 
 **Prototype chain:** All error types follow the standard prototype hierarchy. `TypeError.prototype`, `RangeError.prototype`, etc. inherit from `Error.prototype`. Each error prototype has a `constructor` property pointing back to its constructor (e.g., `Error.prototype.constructor === Error`), so `new TypeError("x").constructor.name === "TypeError"`. `instanceof` checks and cross-type checks also work correctly: `new TypeError("msg") instanceof TypeError` is `true`, `new TypeError("msg") instanceof Error` is `true`, and `new TypeError("msg") instanceof RangeError` is `false`.
 
@@ -389,7 +392,7 @@ ErrorName: message
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
-Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 3 Joint Iteration proposal (`Iterator.zip`), and the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
+Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 4 Joint Iteration proposal (`Iterator.zip`), and the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -752,13 +755,31 @@ The `"goccia"` module exposes sandbox runner orchestration helpers.
 | Export | Description |
 |--------|-------------|
 | `$` | Bun-like shell tagged template / command factory. Commands run against the sandbox filesystem and return a lazy command object with `.run()`, `.text()`, `.json()`, `.quiet()`, and `.nothrow()` |
-| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff }` |
+| `runScript(path, options?)` | Execute another sandbox entry path with the same execution mode. Shared VFS is the default; `{ sandbox: true }` creates a child VFS. Returns `{ ok, exitCode, stdout, stderr, result, error, diff, failureKind }` |
 
 `$` accepts tagged templates or command strings. Tagged-template substitutions are shell-quoted before command parsing.
 
 ```javascript
 const name = "hello world";
 console.log(await $`echo ${name}`.text());
+```
+
+`failureKind` says **why** a run ended, so an orchestrating script does not have to match on `error` text to tell a buggy child from one that hit a ceiling:
+
+| `failureKind` | Meaning |
+|---------------|---------|
+| `"none"` | The run completed. `ok` is `true` and `error` is `null` |
+| `"script-error"` | The child failed: it threw, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a seed source |
+| `"resource-limit"` | A host-set ceiling refused the run: `--max-memory`, `--max-instructions`, the sandbox filesystem quota, or the `runScript` nesting depth |
+| `"timeout"` | The `--timeout` deadline elapsed |
+| `"host-error"` | The runner itself could not carry the run out. Nothing the child does produces this |
+| `"child-process-crash"` | Reserved for out-of-process execution; never produced in-process |
+
+```javascript
+const child = runScript("/child.js");
+if (child.failureKind === "resource-limit") {
+  // Raise the ceiling or split the work; retrying unchanged will not help.
+}
 ```
 
 By default, nested execution shares the current virtual filesystem:
@@ -798,6 +819,65 @@ const out = await $`goccia --sandbox --seed /child.js --seed /lib=/lib --diff /c
 
 Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, `--diff-metadata`, and `--diff-format json|unified`. `--diff-metadata` implies a diff. Child diffs are appended to command stdout only when a diff is requested.
 
+### AST — experimental (`Goccia.Builtins.AST.pas`)
+
+Only available when the host passes `--experimental-ast`. `goccia:ast` makes
+the parse result reachable from JavaScript, so a tool that asks questions
+about source — a lint rule, a codemod, a metric — can be a GocciaScript
+program instead of a Pascal one. It is a read: there is no write-back.
+
+```javascript
+import { parse } from "goccia:ast";
+
+const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" });
+```
+
+| Option | Meaning |
+|--------|---------|
+| `jsx` | Run the JSX preprocessor before parsing (default `false`) |
+| `module` | Parse as module source rather than script source (default `true`) |
+| `fileName` | Name used in a syntax error's position (default `<source>`) |
+
+The *language* is the host's, not a second one configured here: the
+compatibility flags in force for the run are the ones `parse` accepts, exactly
+as `eval` and the `Function` constructor inherit them. A file that needs
+`--compat-asi` to parse needs the host to have been given `--compat-asi`.
+
+`parse` returns `{ source, root, comments }`:
+
+| Property | Description |
+|----------|-------------|
+| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
+| `root` | The `Program` node |
+| `comments` | Every comment, in source order |
+
+Every node is `{ kind, start, end, loc, children }`, and every comment is
+`{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
+`start` and `end` are zero-based offsets into `source`, `end` exclusive;
+`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
+
+The tree holds statements only — no expressions, names, or literal values.
+`children` are the statements nested immediately beneath a node, reached
+through expressions where it has to be, so the block of an arrow function
+assigned to a `const` is a child of that declaration. Three kinds own a
+statement *list*, whose children are siblings of one another: `Program`,
+`BlockStatement`, and `SwitchCase`.
+
+A syntax error in the parsed text is a `SyntaxError` naming its position; it
+does not abort the caller's own run unless the caller lets it.
+
+With `jsx` on, the text is rewritten before it is parsed, but nothing in the
+result is measured in that rewrite: offsets and positions alike are mapped back
+to the file as written, so `source.slice(node.start, node.end)` is the node's
+own text. Comments the transformer removes — one between JSX attributes, or a
+child container holding nothing else — are not in `comments`, because the
+parser never sees them.
+
+See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
+exposes, what it withholds, and why, and
+[ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
+system.
+
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 
 See [FFI Built-ins](built-ins-ffi.md) for the complete native-library,
@@ -817,7 +897,7 @@ describe("group name", () => {
 });
 ```
 
-**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`
+**Functions:** `describe`, `describe.skip`, `describe.skipIf`, `describe.runIf`, `describe.only`, `describe.each`, `test`, `it` (alias for `test`), `test.skip`, `test.skipIf`, `test.runIf`, `test.only`, `it.only`, `test.each`, `test.todo`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`
 
 **Vitest-style structure helpers:**
 
@@ -924,73 +1004,13 @@ Implements the [WHATWG URLSearchParams](https://developer.mozilla.org/en-US/docs
 
 **GocciaScript differences:** None -- full standard compliance.
 
-### fetch (`Goccia.Builtins.GlobalFetch.pas`)
+### Fetch runtime APIs
 
-Implements a subset of the [WHATWG Fetch Standard](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API). Only `GET` and `HEAD` methods are supported; other methods throw `TypeError`.
+The focused WHATWG `fetch`, `Headers`, `Response`, `AbortController`, `AbortSignal`, `EventTarget`, and `Event` surface is documented in [Fetch Runtime APIs](built-ins-fetch.md). `AbortSignal` inherits from `EventTarget`, so `addEventListener`, `onabort`, and the one-shot `abort` event are available; see [ADR 0104](adr/0104-whatwg-eventtarget-base.md).
 
-| Function / Property | Description |
-|---------------------|-------------|
-| `fetch(url, options?)` | Perform an HTTP request, returns `Promise<Response>` |
+### Async context (`node:async_hooks`)
 
-The `options` object supports `method` (`"GET"` or `"HEAD"`) and `headers` (plain object or `Headers` instance). Redirects (301/302/303/307/308) are followed automatically up to 20 hops. HTTPS uses the platform TLS backend: SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. macOS and Windows builds do not require OpenSSL libraries for HTTPS; Linux supports OpenSSL 3 runtime-only installs as well as compatible older OpenSSL library names.
-
-**Allowed hosts** — `fetch` requires an explicit allowlist of hostnames. Without `--allowed-host` or an `"allowed-hosts"` config key in `goccia.json`, any call to `fetch` throws `TypeError`. Add one or more allowed hosts via CLI or config:
-
-```bash
-./build/GocciaScriptLoader example.js --allowed-host=api.example.com --allowed-host=cdn.example.com
-```
-
-```json
-{ "allowed-hosts": ["api.example.com", "cdn.example.com"] }
-```
-
-Host matching is case-insensitive and ignores port, path, and userinfo. Only the hostname portion of the URL is checked.
-
-**GocciaScript differences:** GocciaScript implements a focused subset of `fetch`:
-
-- **HTTP methods:** only `GET` and `HEAD` are supported.
-- **Absent features:** no `Request` object, `AbortSignal`, streaming body, or CORS.
-- **Runtime behavior:** requests run on fetch-specific background workers and settle their Promise on the owning runtime thread. `await fetch(...)` still synchronously waits by pumping fetch completions.
-- **Concurrency cap:** each runtime caps active fetch workers at 16; additional calls reject their returned Promise with `TypeError` until a worker finishes.
-- **Configuration:** requires `--allowed-host` or an `"allowed-hosts"` config key in `goccia.json`.
-
-### Headers (`Goccia.Values.HeadersValue.pas`)
-
-Implements the [WHATWG Fetch Headers](https://developer.mozilla.org/en-US/docs/Web/API/Headers) interface.
-
-| Method / Property | Description |
-|-------------------|-------------|
-| `new Headers()` | Create empty headers |
-| `new Headers(object)` | Create from plain object or another `Headers` |
-| `headers.get(name)` | Get header value (case-insensitive), or `null` |
-| `headers.has(name)` | Check if header exists (case-insensitive) |
-| `headers.forEach(callback)` | Iterate entries as `callback(value, name, headers)` |
-| `headers.entries()` | Iterator of `[name, value]` pairs |
-| `headers.keys()` | Iterator of header names |
-| `headers.values()` | Iterator of header values |
-| `headers[Symbol.iterator]()` | Same as `entries()` |
-
-**GocciaScript differences:** Read-only on Response headers. No `append`, `set`, or `delete` mutations.
-
-### Response (`Goccia.Values.ResponseValue.pas`)
-
-Implements the [WHATWG Fetch Response](https://developer.mozilla.org/en-US/docs/Web/API/Response) interface.
-
-| Method / Property | Description |
-|-------------------|-------------|
-| `response.status` | HTTP status code (e.g. `200`) |
-| `response.statusText` | HTTP status text (e.g. `"OK"`) |
-| `response.ok` | `true` if status is 200–299 |
-| `response.url` | Final URL after redirects |
-| `response.headers` | `Headers` object |
-| `response.type` | Always `"basic"` |
-| `response.redirected` | `true` if any redirect was followed |
-| `response.bodyUsed` | `true` after a body method is called |
-| `response.text()` | Returns `Promise<string>` (UTF-8 decoded body) |
-| `response.json()` | Returns `Promise<any>` (parsed JSON body) |
-| `response.arrayBuffer()` | Returns `Promise<ArrayBuffer>` (raw bytes) |
-
-**GocciaScript differences:** No `Response.body` (ReadableStream), `blob()`, `formData()`, or `clone()`. Body is fully buffered. Each body method can only be called once.
+`AsyncLocalStorage` and `AsyncResource` are provided by the loader runtime profile as the import-only module `node:async_hooks`, at Node's own address and with Node's named plus default exports. The engine propagates the async context, so a store survives `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the full surface and [ADR 0112](adr/0112-native-async-local-storage.md) for the mechanism and the scope cuts.
 
 ### DisposableStack / AsyncDisposableStack (`Goccia.Builtins.DisposableStack.pas`)
 

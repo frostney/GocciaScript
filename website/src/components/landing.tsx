@@ -30,6 +30,7 @@ import {
   PlayIcon,
   RunIcon,
   ShieldIcon,
+  TestTubeIcon,
 } from "@/components/icons";
 import { LatestVersion } from "@/components/latest-version";
 import { QuickInstall } from "@/components/quick-install";
@@ -53,6 +54,8 @@ import {
   NODE_COMPATIBILITY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   TYPE_ANNOTATIONS_QUESTION,
+  VITEST_COMPATIBILITY_ANSWER,
+  VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
 
 const FEATURE_ICONS: Record<
@@ -63,6 +66,7 @@ const FEATURE_ICONS: Record<
   shield: ShieldIcon,
   leaf: LeafIcon,
   clock: ClockIcon,
+  test: TestTubeIcon,
 };
 
 function HeroRunnableCard({ code }: { code: string }) {
@@ -491,7 +495,7 @@ console.log("total:", total);`;
     {
       id: "source",
       label: "Source",
-      small: ".js · .ts · .jsx · .tsx · .mjs",
+      small: ".js · .ts · .jsx · .tsx · .mjs · .mts",
       overview:
         "Every supported extension enters the same source pipeline. GocciaScript implements the TC39 Type Annotations proposal, so supported annotations have no runtime effect by default; --strict-types optionally adds runtime contracts. JSX is rewritten to function calls in a preprocessing pass before lexing.",
       docId: "language",
@@ -823,6 +827,10 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     answer: NODE_COMPATIBILITY_ANSWER,
   },
   {
+    question: VITEST_COMPATIBILITY_QUESTION,
+    answer: VITEST_COMPATIBILITY_ANSWER,
+  },
+  {
     question: "Is GocciaScript a browser runtime?",
     answer:
       "No. It implements selected web-standard APIs where they fit the sandboxed runtime and embeddable-platform goals, but it does not provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
@@ -840,7 +848,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
         <Link href="/compatibility" className="link-button">
           test262 results
         </Link>{" "}
-        already makes it suitable for serious experiments and bounded production
+        already make it suitable for serious experiments and bounded production
         use where the supported surface matches your needs.
       </>
     ),
@@ -907,12 +915,10 @@ export function Landing({
           <div className="hero-grid">
             <div>
               <h1>
-                A <span className="drop">drop</span> of
-                <br />
-                Java<span className="script">Script</span>, sandboxed.
+                A Java<span className="script">Script</span> engine.
               </h1>
               <p className="hero-lede">
-                A sandbox-first{" "}
+                A JavaScript engine: a sandbox-first{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"

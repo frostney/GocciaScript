@@ -16,14 +16,17 @@ uses
 
   Goccia.Builtins.Atomics,
   Goccia.Constants.ErrorNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.Timeout,
+  Goccia.Timers,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.PromiseValue,
@@ -47,6 +50,41 @@ begin
   while Assigned(APromise) and (APromise.State = gpsPending) and
         Assigned(Queue) and Queue.HasPending do
     Queue.DrainOneJob;
+end;
+
+{ A real-mode timer is the one continuation an await can be waiting on that no
+  amount of microtask draining will produce. GocciaScript has no host event
+  loop to hand control back to, so the awaiting frame runs the timer queue
+  itself: the virtual clock jumps to the next due timer, the timer fires, its
+  microtasks drain, and the loop asks again. No real time passes.
+
+  Three things it deliberately does not do. Under fake timers it runs nothing —
+  a suite that turned the clock over to `vi` decides when timers run, and an
+  await that silently advanced it would take that decision away. It runs
+  nothing for a queue belonging to another realm, so a ShadowRealm child's await
+  cannot execute its parent's callbacks. And an exception a callback throws does
+  not surface here: it is parked for the host, because in Node the awaiting
+  frame is not the one that sees it. }
+procedure RunTimersUntilPromiseSettled(const APromise: TGocciaPromiseValue);
+var
+  Iterations: Integer;
+begin
+  Iterations := 0;
+  while Assigned(APromise) and (APromise.State = gpsPending) and
+        (Iterations < TIMER_LOOP_LIMIT) do
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+    if not RunOneRealTimer then
+      Exit;
+    Inc(Iterations);
+    DrainMicrotasksUntilPromiseSettled(APromise);
+  end;
+  { The budget ran out with timers still runnable: name that rather than let it
+    reach the caller as an ordinary unsettled promise. }
+  if Assigned(APromise) and (APromise.State = gpsPending) and
+     (Iterations >= TIMER_LOOP_LIMIT) and HasRunnableRealTimers then
+    RaiseRealTimerLoopLimit;
 end;
 
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
@@ -100,8 +138,14 @@ begin
           raise;
         on E: TGocciaInstructionLimitError do
           raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           RejectPromiseWithException(Promise, E);
+        end;
       end;
     end;
 
@@ -125,6 +169,8 @@ begin
       WaitForAtomicsPromise(Promise);
     if Promise.State = gpsPending then
       DrainMicrotasksUntilPromiseSettled(Promise);
+    if Promise.State = gpsPending then
+      RunTimersUntilPromiseSettled(Promise);
 
     if Promise.State = gpsFulfilled then
       Result := Promise.PromiseResult

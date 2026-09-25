@@ -101,6 +101,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.URI,
   Goccia.Values.ArrayBufferValue,
@@ -445,27 +446,38 @@ function TGocciaGlobals.BuildErrorObject(const AName: string; const AProto: TGoc
 var
   MessageText: string;
   MessageValue: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaObjectValue.Create(AProto);
-  Result.HasErrorData := True;
-  MessageText := '';
+  { ToStringLiteral below can run a user toString, and the message string is
+    charged against the memory ceiling — both GC safe points — so the error
+    under construction needs a temp root. }
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaErrorObjectValue.Create(AProto);
+    AddTempRootIfNeeded(ResultRoot, Result);
+    Result.HasErrorData := True;
+    MessageText := '';
 
-  if (AArgs.Length > 0) and
-     not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-  begin
-    MessageText := AArgs.GetElement(0).ToStringLiteral.Value;
-    MessageValue := TGocciaStringLiteralValue.Create(
-      MessageText);
-    Result.DefineProperty(PROP_MESSAGE,
-      TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
+    if (AArgs.Length > 0) and
+       not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+    begin
+      MessageText := AArgs.GetElement(0).ToStringLiteral.Value;
+      MessageValue := TGocciaStringLiteralValue.Create(
+        MessageText);
+      Result.DefineProperty(PROP_MESSAGE,
+        TGocciaPropertyDescriptorData.Create(MessageValue, [pfConfigurable, pfWritable]));
+    end;
+
+    if (TGocciaCallStack.Instance <> nil) then
+      Result.ErrorStack :=
+        TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
+    AttachErrorSourceProvenance(Result, 1);
+
+    if AArgs.Length > 1 then
+      InstallErrorCause(Result, AArgs.GetElement(1));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
-
-  if (TGocciaCallStack.Instance <> nil) then
-    Result.ErrorStack :=
-      TGocciaCallStack.Instance.CaptureStackTrace(AName, MessageText, 1);
-
-  if AArgs.Length > 1 then
-    InstallErrorCause(Result, AArgs.GetElement(1));
 end;
 
 function TGocciaGlobals.ErrorStackGetter(const AArgs: TGocciaArgumentsCollection;
@@ -637,7 +649,7 @@ begin
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(ErrorsArrayRoot);
 
-  Result := TGocciaObjectValue.Create(AProto);
+  Result := TGocciaErrorObjectValue.Create(AProto);
   AddTempRootIfNeeded(ResultRoot, Result);
   try
     Result.HasErrorData := True;
@@ -645,6 +657,7 @@ begin
       Result.ErrorStack :=
         TGocciaCallStack.Instance.CaptureStackTrace(AGGREGATE_ERROR_NAME,
           Message, 1);
+    AttachErrorSourceProvenance(Result, 1);
 
     if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
       Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
@@ -704,6 +717,7 @@ function TGocciaGlobals.BuildSuppressedError(const AArgs: TGocciaArgumentsCollec
 var
   ErrorArg, SuppressedArg: TGocciaValue;
   Message: string;
+  ResultRoot: TGocciaTempRoot;
 begin
   if AArgs.Length > 0 then
     ErrorArg := AArgs.GetElement(0)
@@ -720,12 +734,18 @@ begin
   else
     Message := '';
 
-  Result := TGocciaObjectValue.Create(AProto);
+  { The message string below is a GC safe point; root the error while it
+    fills. }
+  InitializeTempRoot(ResultRoot);
+  try
+  Result := TGocciaErrorObjectValue.Create(AProto);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.HasErrorData := True;
   if (TGocciaCallStack.Instance <> nil) then
     Result.ErrorStack :=
       TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME,
         Message, 1);
+  AttachErrorSourceProvenance(Result, 1);
 
   if (AArgs.Length > 2) and not (AArgs.GetElement(2) is TGocciaUndefinedLiteralValue) then
     Result.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(
@@ -738,6 +758,9 @@ begin
 
   if AArgs.Length > 3 then
     InstallErrorCause(Result, AArgs.GetElement(3));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaGlobals.SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -751,16 +774,6 @@ end;
   3. Set this.name to name.
   4. Set this.message to message.
   5. Set this.code to the legacy code for name (e.g. DataCloneError -> 25), or 0. }
-function DOMExceptionLegacyCode(const AName: string): Integer;
-begin
-  if AName = DATA_CLONE_ERROR_NAME then
-    Result := 25
-  else if AName = INVALID_CHARACTER_ERROR_NAME then
-    Result := 5
-  else
-    Result := 0;
-end;
-
 function TGocciaGlobals.BuildDOMException(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
 var
   Message, Name: string;
@@ -775,15 +788,8 @@ begin
   else
     Name := ERROR_NAME;
 
-  Result := CreateErrorObject(Name, Message, 1);
-  Result.HasErrorData := False;
+  Result := CreateDOMExceptionObject(Name, Message, 1);
   Result.Prototype := AProto;
-  if Result.ErrorStack <> '' then
-    Result.DefineProperty(PROP_STACK,
-      TGocciaPropertyDescriptorData.Create(
-        TGocciaStringLiteralValue.Create(Result.ErrorStack),
-        [pfConfigurable, pfWritable]));
-  Result.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(DOMExceptionLegacyCode(Name)));
 end;
 
 function TGocciaGlobals.DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -901,57 +907,245 @@ end;
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue; forward;
 
+{ Registers a clone against its original and keeps it alive for the rest of the
+  walk.
+
+  AMemory is a plain hash map the collector cannot see, so a half-built clone is
+  otherwise referenced only by a native local — and the walk re-enters user code
+  at every accessor property, which is a GC safe point. Rooting on registration
+  pairs with the sweep in StructuredCloneCallback, which drops the root for every
+  memory entry once the clone finishes or throws. }
+procedure RegisterClone(const AOriginal, AClone: TGocciaValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>);
+begin
+  AMemory.Add(AOriginal, AClone);
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.AddTempRoot(AClone);
+end;
+
+{ Flags every deserialized property carries. StructuredDeserialize installs each
+  one with CreateDataProperty, so how the source defined it — non-writable,
+  non-configurable, or an accessor — never survives the round trip. }
+const
+  STRUCTURED_CLONE_PROPERTY_FLAGS = [pfEnumerable, pfConfigurable, pfWritable];
+
+{ Canonical array index test for the clone walk. The walk only ever sees keys
+  the array itself produced, so this needs to recognise "0", "1", "42" and
+  reject everything else, including anything past the dense store's range. }
+function TryParseCloneElementIndex(const AKey: string; out AIndex: Integer): Boolean;
+var
+  I: Integer;
+  Value: Int64;
+begin
+  Result := False;
+  AIndex := 0;
+
+  if (AKey = '') or (Length(AKey) > 10) then
+    Exit;
+  if (AKey[1] = '0') and (Length(AKey) > 1) then
+    Exit;
+
+  Value := 0;
+  for I := 1 to Length(AKey) do
+  begin
+    if (AKey[I] < '0') or (AKey[I] > '9') then
+      Exit;
+    Value := Value * 10 + Int64(Ord(AKey[I]) - Ord('0'));
+    if Value > MaxInt then
+      Exit;
+  end;
+
+  AIndex := Integer(Value);
+  Result := True;
+end;
+
+{ Reads one own property of the source the way StructuredSerialize does.
+
+  The serializer enumerates with EnumerableOwnPropertyNames (ECMA-262 §7.3.23),
+  which skips non-enumerable own properties and takes each value with Get. Get
+  on an accessor runs the getter, and it is the getter's RESULT that gets
+  serialized — accessors themselves are never preserved. A getter that throws
+  therefore propagates out of structuredClone, and one that returns something
+  unserializable raises DataCloneError. Verified against node 24 and bun 1.3.
+
+  Returns False when the key has no own descriptor (a getter earlier in the walk
+  may have deleted it) or is not enumerable; in both cases the clone omits it. }
+function TryCloneOwnProperty(const ASource: TGocciaObjectValue; const AKey: string;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>;
+  out AClonedValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  RawValue: TGocciaValue;
+  RawRoot: TGocciaTempRoot;
+begin
+  Result := False;
+  AClonedValue := nil;
+
+  Descriptor := ASource.GetOwnPropertyDescriptor(AKey);
+  if not Assigned(Descriptor) then
+    Exit;
+  if not (pfEnumerable in Descriptor.Flags) then
+    Exit;
+
+  if Descriptor is TGocciaPropertyDescriptorData then
+    RawValue := TGocciaPropertyDescriptorData(Descriptor).Value
+  else
+    RawValue := ASource.GetPropertyWithContext(AKey, ASource);
+
+  if RawValue = nil then
+    RawValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+  // A getter is user code and therefore a GC safe point, and its result is
+  // reachable from nowhere else while the recursive clone below allocates.
+  InitializeTempRoot(RawRoot);
+  try
+    AddTempRootIfNeeded(RawRoot, RawValue);
+    AClonedValue := StructuredCloneValue(RawValue, AMemory);
+  finally
+    RemoveTempRootIfNeeded(RawRoot);
+  end;
+
+  Result := True;
+end;
+
 function CloneObject(const AObj: TGocciaObjectValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
   I: Integer;
   Keys: TArray<string>;
-  Descriptor: TGocciaPropertyDescriptor;
   ClonedValue: TGocciaValue;
 begin
   Result := TGocciaObjectValue.Create;
-  AMemory.Add(AObj, Result);
+  RegisterClone(AObj, Result, AMemory);
 
   Keys := AObj.GetOwnPropertyKeys;
   for I := 0 to Length(Keys) - 1 do
-  begin
-    Descriptor := AObj.GetOwnPropertyDescriptor(Keys[I]);
-    if not Assigned(Descriptor) then
-      Continue;
-
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      ClonedValue := StructuredCloneValue(TGocciaPropertyDescriptorData(Descriptor).Value, AMemory);
+    if TryCloneOwnProperty(AObj, Keys[I], AMemory, ClonedValue) then
       Result.DefineProperty(Keys[I],
-        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags));
-    end
-    // HTML spec §2.7.3: accessor properties are read via getter and cloned as data properties
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      ClonedValue := StructuredCloneValue(AObj.GetProperty(Keys[I]), AMemory);
-      Result.DefineProperty(Keys[I],
-        TGocciaPropertyDescriptorData.Create(ClonedValue, Descriptor.Flags - [pfConfigurable, pfWritable] + [pfEnumerable]));
-    end;
-  end;
+        TGocciaPropertyDescriptorData.Create(ClonedValue,
+          STRUCTURED_CLONE_PROPERTY_FLAGS));
 end;
 
+{ The error names StructuredSerializeInternal preserves. Anything else — an
+  Error subclass, a `this.name = "BatchError"`, and also AggregateError and
+  SuppressedError, which postdate the list — deserializes as a plain Error.
+  Verified against node 24 and bun 1.3, which agree on every one of these. }
+function SerializedErrorName(const AName: string): string;
+begin
+  if (AName = ERROR_NAME) or (AName = EVAL_ERROR_NAME) or
+    (AName = RANGE_ERROR_NAME) or (AName = REFERENCE_ERROR_NAME) or
+    (AName = SYNTAX_ERROR_NAME) or (AName = TYPE_ERROR_NAME) or
+    (AName = URI_ERROR_NAME) then
+    Result := AName
+  else
+    Result := ERROR_NAME;
+end;
+
+{ An error clones as an error, not as an ordinary object.
+
+  A value with an [[ErrorData]] internal slot is serializable, and the HTML
+  algorithm gives it its own branch: the serialized form carries the name, the
+  message and — as the implementation-defined "interesting accompanying data" —
+  the stack, and nothing else. Own properties are deliberately NOT copied, since
+  the property walk only runs for the Map, Set, Array and Object serialization
+  types. Taking the ordinary-object path instead produced a plain object that
+  had lost name, message and stack and had gained the source's own enumerable
+  properties: `structuredClone(new Error("x")).message` was undefined, and
+  nothing threw to say so.
+
+  The message is read from the own property, not through Get, and an accessor
+  there serializes as no message at all. The name is read through Get, so it may
+  come from the prototype — which is how an Error subclass reports "Error".
+
+  DOMException is excluded by construction: it is a platform object with its own
+  serialization steps, and GocciaScript models that by leaving HasErrorData
+  False on it, so it keeps taking the ordinary-object path. }
+function CloneError(const AError: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  ErrorName: string;
+  NameValue: TGocciaValue;
+  Prototype: TGocciaObjectValue;
+begin
+  NameValue := AError.GetProperty(PROP_NAME);
+  if NameValue is TGocciaStringLiteralValue then
+    ErrorName := SerializedErrorName(TGocciaStringLiteralValue(NameValue).Value)
+  else
+    ErrorName := ERROR_NAME;
+
+  Prototype := GetErrorPrototype(ErrorName);
+  if Assigned(Prototype) then
+    Result := TGocciaObjectValue.Create(Prototype)
+  else
+    Result := TGocciaObjectValue.Create;
+  Result.HasErrorData := True;
+  RegisterClone(AError, Result, AMemory);
+
+  Descriptor := AError.GetOwnPropertyDescriptor(PROP_MESSAGE);
+  if (Descriptor is TGocciaPropertyDescriptorData) and
+    Assigned(TGocciaPropertyDescriptorData(Descriptor).Value) then
+    { Non-enumerable, matching both an ordinary error's own message and what
+      node and bun put on the clone. }
+    Result.DefineProperty(PROP_MESSAGE,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(
+          TGocciaPropertyDescriptorData(Descriptor).Value.ToStringLiteral.Value),
+        [pfConfigurable, pfWritable]));
+
+  { The source's stack text, not a fresh capture: node and bun both hand back a
+    stack identical to the original's. `stack` is an accessor on Error.prototype
+    backed by this field, so the clone reads it exactly as any other error. }
+  Result.ErrorStack := AError.ErrorStack;
+end;
+
+{ Arrays serialize through the same property walk as objects rather than through
+  the dense element store, because the store is only half the picture: an index
+  defined as an accessor lives in the property map with a hole left behind in the
+  store, and so do sparse indices and any non-index key. Reading the store alone
+  silently dropped all of those. }
 function CloneArray(const AArr: TGocciaArrayValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayValue;
 var
   I: Integer;
-  Element: TGocciaValue;
+  Index: Integer;
+  SourceLength: Integer;
+  Keys: TArray<string>;
+  ClonedValue: TGocciaValue;
 begin
   Result := TGocciaArrayValue.Create;
-  AMemory.Add(AArr, Result);
+  RegisterClone(AArr, Result, AMemory);
 
-  for I := 0 to AArr.Elements.Count - 1 do
+  // Both snapshotted before the first getter can run, so a getter that resizes
+  // the source cannot change which keys are visited or how long the clone ends
+  // up — matching node and bun.
+  SourceLength := AArr.GetLength;
+  Keys := AArr.GetOwnPropertyKeys;
+
+  for I := 0 to Length(Keys) - 1 do
   begin
-    Element := AArr.Elements[I];
-    if Element = TGocciaHoleValue.HoleValue then
-      Result.Elements.Add(TGocciaHoleValue.HoleValue)
-    else
-      Result.Elements.Add(StructuredCloneValue(Element, AMemory));
+    // Length is not serialized; it is restored from the snapshot below.
+    if Keys[I] = PROP_LENGTH then
+      Continue;
+
+    if TryParseCloneElementIndex(Keys[I], Index) and
+       (Index < AArr.Elements.Count) and
+       (AArr.Elements[Index] <> TGocciaHoleValue.HoleValue) then
+      // Plain dense element: always enumerable, never an accessor, and reading
+      // it runs no user code. Kept off the descriptor path because that path
+      // materializes a fresh descriptor for every dense index.
+      ClonedValue := StructuredCloneValue(AArr.Elements[Index], AMemory)
+    else if not TryCloneOwnProperty(AArr, Keys[I], AMemory, ClonedValue) then
+      Continue;
+
+    Result.DefineProperty(Keys[I],
+      TGocciaPropertyDescriptorData.Create(ClonedValue,
+        STRUCTURED_CLONE_PROPERTY_FLAGS));
   end;
+
+  // Trailing holes carry no keys, so the length has to be restored explicitly.
+  if Result.GetLength < SourceLength then
+    Result.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(SourceLength));
 end;
 
 function CloneMap(const AMap: TGocciaMapValue;
@@ -961,7 +1155,7 @@ var
   Key, Value: TGocciaValue;
 begin
   Result := TGocciaMapValue.Create;
-  AMemory.Add(AMap, Result);
+  RegisterClone(AMap, Result, AMemory);
 
   // StructuredCloneValue can run user getters that mutate AMap; retain it so
   // compaction cannot renumber entries mid-walk and invalidate Cursor.
@@ -984,7 +1178,7 @@ var
   Item: TGocciaValue;
 begin
   Result := TGocciaSetValue.Create;
-  AMemory.Add(ASet, Result);
+  RegisterClone(ASet, Result, AMemory);
 
   // StructuredCloneValue can run user getters that mutate ASet; retain it so
   // compaction cannot renumber entries mid-walk and invalidate Cursor.
@@ -1005,9 +1199,7 @@ var
 begin
   Len := Length(ABuf.Data);
   Result := TGocciaArrayBufferValue.Create(Len);
-  AMemory.Add(ABuf, Result);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Result);
+  RegisterClone(ABuf, Result, AMemory);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -1020,9 +1212,7 @@ var
 begin
   Len := Length(ABuf.Data);
   Result := TGocciaSharedArrayBufferValue.Create(Len);
-  AMemory.Add(ABuf, Result);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Result);
+  RegisterClone(ABuf, Result, AMemory);
 
   if Len > 0 then
     Move(ABuf.Data[0], Result.Data[0], Len);
@@ -1033,8 +1223,11 @@ function StructuredCloneValue(const AValue: TGocciaValue;
 var
   Existing: TGocciaValue;
 begin
-  if AValue = nil then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  EnterNativeDataDepth('structured clone');
+  try
+    CheckNativeWork;
+    if AValue = nil then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
   if AValue is TGocciaSymbolValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [TGocciaSymbolValue(AValue).ToDisplayString.Value]), SSuggestStructuredClone);
@@ -1066,10 +1259,15 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_REF]), SSuggestStructuredClone)
   else if AValue is TGocciaFinalizationRegistryValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
+  else if IsErrorObject(AValue) then
+    Result := CloneError(TGocciaObjectValue(AValue), AMemory)
   else if AValue is TGocciaObjectValue then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
-  else
-    ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
+    else
+      ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 function TGocciaGlobals.StructuredCloneCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

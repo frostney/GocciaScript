@@ -10,7 +10,14 @@
  */
 
 import { $ } from "bun";
-import { writeFileSync, readFileSync, existsSync } from "fs";
+import {
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  symlinkSync,
+  linkSync,
+} from "fs";
 import { join } from "path";
 import {
   LOADER,
@@ -467,7 +474,7 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const shadowWarningProc = await $`${BARE} --print ${shadowWarningSrc} --unsafe-shadowrealm --test262-host --warning-unsupported-features 2>&1`.nothrow();
     const shadowWarningOut = shadowWarningProc.text();
     if (shadowWarningProc.exitCode !== 0 ||
-        !shadowWarningOut.replace(/\r/g, "").split("\n").includes("47"))
+        !containsLine(shadowWarningOut, "47"))
       throw new Error(`ShadowRealm child realm should inherit warning-unsupported-features, got: ${shadowWarningOut}`);
 
     const forSrc = join(tmp, "use-for.js");
@@ -777,8 +784,13 @@ console.log("--timeout (native sparse-array fill, interpreted)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 lifts the budget: 2**30 pointers is exactly the 8 GiB
+  // default cap, so the allocation gate would otherwise refuse the request
+  // up front and this would assert the memory limit instead of the deadline.
+  // The stall is still bounded — hole extension polls the deadline as it
+  // grows, so only the fraction allocated within 50ms is ever committed.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -787,8 +799,9 @@ console.log("--timeout (native sparse-array fill, bytecode)...");
 {
   // Far single-index writes route to sparse storage and complete instantly;
   // the Array constructor still materializes dense holes, so it stalls.
+  // --max-memory=0 for the same reason as the interpreted case above.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--mode=bytecode"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0", "--mode=bytecode"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Bytecode array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -854,6 +867,39 @@ console.log("--max-instructions (bytecode)...");
   if (json.error?.type !== "InstructionLimitError") throw new Error(`Expected InstructionLimitError, got ${json.error?.type}`);
 }
 
+// -- super-constructor resolution terminates without the sandbox limits --------
+//
+// ES2026 §13.3.7.3 GetSuperConstructor resolves super() through the
+// constructor's [[Prototype]]. A resolver that fell back to the declared
+// superclass when that hop landed on a non-constructor walked the union of two
+// relations: each is acyclic on its own, their union is not. The union spun
+// forever inside one native call, so neither --timeout nor --max-instructions
+// could interrupt it. It has to terminate on its own.
+
+const retargetCycle =
+  "class Base { b = 1; }\n" +
+  "class Middle extends Base { m = 2; }\n" +
+  "class Leaf extends Middle { l = 3; }\n" +
+  "Object.setPrototypeOf(Leaf, {});\n" +
+  "Object.setPrototypeOf(Middle, Leaf);\n" +
+  "new Leaf();\n";
+
+for (const mode of ["interpreted", "bytecode"] as const) {
+  console.log(`super-constructor cycle terminates (${mode})...`);
+  const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+  const { exitCode, json } = runLoaderJson(retargetCycle, modeArgs, { timeout: 20_000 });
+  if (exitCode !== 1) throw new Error(`Retarget cycle exit code should be 1, got ${exitCode} (${mode})`);
+  if (json.error?.type !== "TypeError") {
+    throw new Error(`Expected TypeError for the retarget cycle, got ${json.error?.type} (${mode})`);
+  }
+  // The instruction limit must not change the outcome for this program: it
+  // terminates on its own, so the TypeError is reported either way.
+  const bounded = runLoaderJson(retargetCycle, [...modeArgs, "--max-instructions=5000000"], { timeout: 20_000 });
+  if (bounded.json.error?.type !== "TypeError") {
+    throw new Error(`Retarget cycle should still be a TypeError under a limit, got ${bounded.json.error?.type} (${mode})`);
+  }
+}
+
 // -- --max-memory (Loader) ------------------------------------------------------
 
 console.log("--max-memory (default positive)...");
@@ -874,6 +920,1996 @@ console.log("--max-memory (OOM triggers RangeError)...");
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
+}
+
+console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
+{
+  // Enumerating a large property map allocates one string per key, and every
+  // string allocation is charged against the ceiling — so it is a GC safe
+  // point. The half-built result array must stay rooted across the loop or the
+  // collection sweeps it and the builtin writes through a dangling pointer
+  // (bus error / nil dereference, depending on build flags).
+  const src = [
+    "const outer = Array.from({ length: 30 }, (_, i) => i);",
+    "const inner = Array.from({ length: 1000 }, (_, i) => i);",
+    "const o = {};",
+    "for (const a of outer) { for (const b of inner) { o['k' + (a * 1000 + b)] = b; } }",
+    "const total = Object.keys(o).length + Object.values(o).length + Object.entries(o).length +",
+    "  Object.getOwnPropertyNames(o).length + Reflect.ownKeys(o).length;",
+    "console.log('total', total);",
+    "total;",
+    "",
+  ].join("\n");
+
+  // The window in which a collection lands mid-enumeration moves with the
+  // build's object sizes, so sweep limits rather than pinning one value.
+  for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608]) {
+    const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, "--compat-asi"], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+    });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    // The engine has two memory limiters and they surface differently, which is
+    // why the clauses below excuse one text and reject every other fatal. A
+    // charged allocation (string payload, buffer) raises a script-catchable
+    // RangeError. The growth gate (RequireNativeBytes, Goccia.MemoryLimit.pas)
+    // raises TGocciaMemoryLimitError, which is deliberately opaque to the guest:
+    // every boundary re-raises it, it escapes to the host, and the loader reports
+    // it as "Fatal error: ... would exceed the memory budget" with exit 1. That
+    // text is a refusal by design, not a crash — do not tighten these clauses
+    // into failures. Any other fatal — bus error, access violation, nil object
+    // check — is the heap corruption this test guards against.
+    if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} crashed: ${out}`);
+    if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+    // A run that completes under pressure must also have enumerated
+    // correctly — a wrong count here is silent heap corruption.
+    if (proc.exitCode === 0 && !out.includes("total 150000"))
+      throw new Error(`Own-key enumeration at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+  }
+
+  // With headroom the enumeration must complete and return every key.
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=134217728", "--compat-asi"], { timeout: 60_000 });
+  if (exitCode !== 0) throw new Error(`Own-key enumeration exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
+  if (json.files?.[0]?.result !== 150000) throw new Error(`Own-key enumeration should return 150000, got ${json.files?.[0]?.result}`);
+}
+
+// Parking is measured, never assumed. A fixed ballast cap fails silently in
+// both directions: at a tight ceiling the loop stops while the budget still has
+// room to spare, and at a wide one the cap runs out long before the ceiling is
+// in reach — either way the probe runs unparked and passes without ever entering
+// the window it exists to test. This grows ballast in bounded passes, collecting
+// between them so each measurement counts live bytes only, and reports the
+// outcome for the assertions to insist on.
+//
+// Shared by every parked-heap block below (parser probes, parse ceiling, parse
+// gate, stringify gate) so the calibration is defined once: they differ only in
+// the slack they park at, which is measured per block and passed in here.
+const parkingPreamble = (slackTarget: number): string[] => [
+  `const SLACK = ${slackTarget};`,
+  // Sized from the ceiling so it cannot run out, and materialised before the
+  // first measurement so it counts as baseline live set instead of quietly
+  // defeating the parking it is driving.
+  "const iters = Array.from({ length: Math.ceil(Goccia.gc.maxBytes / 4096) + 64 }, (_, j) => j);",
+  "const ballast = [];",
+  "let slack = Goccia.gc.maxBytes;",
+  "Goccia.gc();",
+  // Each pass adds only live ballast and then collects, so the post-collection
+  // slack falls monotonically and a handful of passes converges. Measuring
+  // before the collection is what let the old loop stop early: it was reading
+  // garbage the next collection would hand straight back.
+  //
+  // The push threshold sits one ballast chunk below the target because each
+  // collection hands back a little transient garbage: pushing to exactly SLACK
+  // lets the post-collection measurement bounce back just above it and stall
+  // there for every remaining pass (CI stalled 116 bytes short of a 600000
+  // target this way — the baseline live set differs per platform, so the
+  // convergence point does too). The pass cap is a generous termination bound,
+  // not a calibration: parking breaks out early on the first pass that lands.
+  "for (const pass of Array.from({ length: 32 }, (_, p) => p)) {",
+  "  for (const i of iters) {",
+  "    if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= SLACK - 8192) break;",
+  '    ballast.push("x".repeat(4096));',
+  "  }",
+  "  Goccia.gc();",
+  "  slack = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+  "  if (slack <= SLACK) break;",
+  "}",
+  // Every caller asserts on "parked true"; the trailing numbers are diagnostics
+  // for when a calibration drifts and the assertion starts failing.
+  'console.log("parked", slack <= SLACK, "slack", slack, "ballast", ballast.length);',
+];
+
+console.log("--max-memory (builtin result builders survive mid-build collections)...");
+{
+  // Same defect class as own-key enumeration: any builtin that fills a result
+  // container across string allocations (each charged against the ceiling and
+  // therefore a GC safe point) must keep that container rooted. This exercises
+  // the CSV/TSV parsers and revivers, URLSearchParams, RegExp match arrays,
+  // and the Intl resolved-options/parts builders under a sweep of limits.
+  const src = [
+    'import * as CSVNS from "goccia:csv"; const CSV = CSVNS.CSV ?? CSVNS;',
+    'import * as TSVNS from "goccia:tsv"; const TSV = TSVNS.TSV ?? TSVNS;',
+    'const rows = Array.from({ length: 3000 }, (_, i) => "a" + i + ",b" + i + ",c" + i).join("\\n");',
+    'const parsedCsv = CSV.parse("h1,h2,h3\\n" + rows);',
+    'const trows = Array.from({ length: 3000 }, (_, i) => "a" + i + "\\tb" + i).join("\\n");',
+    'const params = new URLSearchParams(Array.from({ length: 2000 }, (_, i) => "k=v" + i).join("&"));',
+    'const m = "x123y456z".match(/(?<a>\\d+)y(?<b>\\d+)/d);',
+    "const total = parsedCsv.length +",
+    '  CSV.parse("h1,h2,h3\\n" + rows, {}, (k, v) => v).length +',
+    '  CSV.parseChunk("h1,h2,h3\\n" + rows, {}, 0, -1).values.length +',
+    '  TSV.parse("h1\\th2\\n" + trows).length +',
+    '  params.getAll("k").length + [...params.entries()].length +',
+    "  m.indices.groups.b[0] +",
+    '  Intl.getCanonicalLocales(["en-US", "de-DE"]).length +',
+    '  new Intl.PluralRules("en").resolvedOptions().pluralCategories.length +',
+    '  new Intl.ListFormat("en").formatToParts(["a", "b", "c"]).length;',
+    "console.log('total', total);",
+    "",
+  ].join("\n");
+  const tmp = mkdtemp("goccia-memroot-");
+  const srcPath = join(tmp, "sweep.mjs");
+  writeFileSync(srcPath, src);
+  try {
+    for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      // Budget-text fatal = the uncatchable growth gate refusing; see the
+      // two-limiter note on the own-key enumeration sweep above.
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("total 16014"))
+        throw new Error(`Builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+    }
+
+    // With headroom the builders must complete and produce the exact total —
+    // an all-RangeError sweep would otherwise verify nothing.
+    {
+      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
+      if (!out.includes("total 16014"))
+        throw new Error(`Builder sweep headroom run should report total 16014: ${out}`);
+    }
+
+    // Second wave of the same defect class, in builders the first sweep does not
+    // reach: the JSONL chunk-result object and its error object, the JSON5
+    // reviver context/holder plus the replacer's partially built copies, and the
+    // Promise.allSettled entries — each is filled across a string allocation or
+    // a property write, and each of those is charged against the ceiling and so
+    // is a collecting safe point.
+    const wave2Src = [
+      'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+      'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+      'const lines = Array.from({ length: 800 }, (_, i) => \'{"k":"v\' + i + \'","n":\' + i + \'}\').join("\\n");',
+      'const chunk = JSONL.parseChunk(lines + "\\n");',
+      // An unterminated record makes parseChunk build the SyntaxError object too.
+      "const badChunk = JSONL.parseChunk('{\"k\":1}\\n{\"k\":\\n');",
+      'const json5Text = "{" + Array.from({ length: 500 }, (_, i) => "k" + i + ": \'v" + i + "\'").join(", ") + "}";',
+      "const revived = JSON5.parse(json5Text, (k, v) => v);",
+      'const nested = JSON5.parse("[" + Array.from({ length: 400 }, (_, i) => "{a: " + i + "}").join(", ") + "]", (k, v) => v);',
+      "const replaced = JSON5.stringify(nested, (k, v) => v);",
+      "const sync = chunk.values.length + badChunk.values.length +",
+      "  (badChunk.error === null ? 0 : 1) + Object.keys(revived).length +",
+      "  nested.length + replaced.length;",
+      "Promise.allSettled(Array.from({ length: 500 }, (_, i) =>",
+      '  i % 2 === 0 ? Promise.resolve("v" + i) : Promise.reject(new Error("e" + i)),',
+      ")).then((rs) => {",
+      "  console.log('total', sync + rs.length +",
+      '    rs.filter((r) => r.status === "fulfilled").length +',
+      '    rs.filter((r) => r.status === "rejected").length);',
+      "});",
+      "",
+    ].join("\n");
+    const wave2Path = join(tmp, "sweep-wave2.mjs");
+    writeFileSync(wave2Path, wave2Src);
+    for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, wave2Path], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      // Budget-text fatal = the uncatchable growth gate refusing, as above.
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("total 5793"))
+        throw new Error(`Wave-2 builder sweep at --max-memory=${maxMemory} completed with wrong total: ${out}`);
+    }
+
+    // As above, one guaranteed-success run so an all-refusals sweep cannot pass
+    // vacuously.
+    {
+      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", wave2Path], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 120_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0)
+        throw new Error(`Wave-2 builder sweep headroom run should exit 0, got ${proc.exitCode}: ${out}`);
+      if (!out.includes("total 5793"))
+        throw new Error(`Wave-2 builder sweep headroom run should report total 5793: ${out}`);
+    }
+
+    // A ceiling sweep only lands in the collecting window by luck: the pressure
+    // collection runs inside the allocation that would cross the ceiling, so the
+    // heap has to already sit right below it. This shape parks it there on
+    // purpose — ballast is grown until the remaining budget is a fixed slack,
+    // after which nearly every builder allocation collects — and then keeps the
+    // reviver/replacer results alive so a swept container's slot is reused (that
+    // reuse is what turns the dangling pointer into an observable fault). With
+    // the JSON5 holder/context/copy roots removed this faults within seconds
+    // ("Object reference is Nil", "Invalid type cast"); with them it either
+    // completes or refuses cleanly.
+    const parkedSrc = [
+      'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+      "const ballast = [];",
+      "for (const i of Array.from({ length: 20000 }, (_, j) => j)) {",
+      "  if (Goccia.gc.maxBytes - Goccia.gc.bytesAllocated <= 262144) break;",
+      '  ballast.push("x".repeat(2048));',
+      "}",
+      "const kept = [];",
+      "let n = 0;",
+      "for (const i of Array.from({ length: 600 }, (_, j) => j)) {",
+      "  const revived = JSON5.parse(\"{a: 1, b: 'two'}\", (k, v) => v);",
+      "  const text = JSON5.stringify({ a: 1, b: [2, 3] }, (k, v) => v);",
+      "  kept.push(revived, text);",
+      "  n += Object.keys(revived).length + text.length;",
+      "}",
+      "console.log('parked', n, ballast.length > 0, kept.length);",
+      "",
+    ].join("\n");
+    const parkedPath = join(tmp, "sweep-parked.mjs");
+    writeFileSync(parkedPath, parkedSrc);
+    for (const maxMemory of [2_097_152, 3_145_728, 4_194_304]) {
+      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, parkedPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      // A parked heap makes the growth gate far more likely to be the limiter
+      // that fires, and its refusal is uncatchable by design: the budget text is
+      // a legitimate outcome here, anything else fatal is not. See the
+      // two-limiter note on the own-key enumeration sweep above.
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} crashed: ${out}`);
+      if (proc.exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} failed without a clean refusal (exitCode=${proc.exitCode}): ${out}`);
+      if (proc.exitCode === 0 && !out.includes("parked 9000 true 1200"))
+        throw new Error(`Parked-heap builder run at --max-memory=${maxMemory} completed with wrong result: ${out}`);
+    }
+
+    // The same defect class in the recursive parsers, which build their trees in
+    // plain Pascal fields and locals (JSON's visitor stack, YAML's key/value
+    // locals and anchor map, JSONL's record accumulator, TOML's node tree) that
+    // the collector cannot see. The shape below parks the heap right under the
+    // ceiling with no other garbage available, so the parse crosses the ceiling
+    // partway through and the only thing the pressure collection can free is the
+    // in-progress tree itself — after which the parse keeps writing into swept
+    // containers and the remaining values reuse their memory.
+    //
+    // The parse is wrapped in try/catch because a refused allocation surfaces as a
+    // catchable JS RangeError. A crash used to be indistinguishable from a clean
+    // refusal — both arrived as a caught SyntaxError, because the builtins
+    // converted every exception out of the parser into one — so the assertions
+    // read the whole line rather than just its shape.
+    const USE_AFTER_FREE_SIGNATURES = [
+      "Access violation",
+      "Invalid type cast",
+      "Object reference is Nil",
+      "SIGSEGV",
+      "Segmentation fault",
+      "EAccessViolation",
+      // FPC runtime errors for a nil-object call and an invalid typecast, as
+      // reported when no handler formats them.
+      "Runtime error 210",
+      "Runtime error 216",
+      "Runtime error 219",
+      "Runtime error 204",
+    ];
+
+    // A refusal whose message is empty: the shape a blanket `on E: Exception`
+    // handler produces when it relabels an engine failure, since the Pascal
+    // Message of a thrown JS value is empty by construction. `SyntaxError: ` with
+    // nothing after it is a resource ceiling the guest can mistake for bad input,
+    // so it is a failure, not a refusal.
+    const EMPTY_REFUSAL = /^refused \S+ ::\s*$/m;
+
+    // `expect` is the exact line the parse must produce when it completes.
+    // "ok " on its own proves nothing: a container that was swept and had its
+    // memory reused almost always yields silently wrong data rather than a crash,
+    // so every length and count is read back and compared.
+    //
+    // `windowCeiling` / `windowSlack` override the collecting-window run for
+    // probes whose parse cannot finish in the default window. Every probe must
+    // have one configuration that completes while parked, or the read-back check
+    // only ever runs unballasted and the window run proves nothing; the values
+    // are measured per probe, not guessed. Slack alone was enough for all nine
+    // here — no probe needs a different ceiling — but both knobs are exposed
+    // because which one moves a stuck probe into its window is a measurement.
+    // See the window run below.
+    const parserProbes: Array<{
+      name: string;
+      setup: string[];
+      parse: string;
+      check: string;
+      expect: string;
+      windowCeiling?: number;
+      windowSlack?: number;
+    }> = [
+      {
+        name: "json-flat",
+        setup: [
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => \'"\' + S + i + \'"\').join(",") + "]";',
+        ],
+        parse: "JSON.parse(doc)",
+        check: "'ok', b.length, b[0].length, b[600].length, b[1199].length",
+        expect: "ok 1200 201 203 204",
+      },
+      {
+        name: "json-nested",
+        setup: [
+          'const doc = "[" + Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + i + \'","b":["\' + S + \'","\' + S + \'"]}\').join(",") + "]";',
+        ],
+        parse: "JSON.parse(doc)",
+        check: "'ok', b.length, b[0].a.length, b[399].b[1].length",
+        expect: "ok 400 201 200",
+        // Measured: at the default 600000 the parse only ever refuses; it first
+        // completes at 650000 and 800000 leaves margin over that threshold.
+        windowSlack: 800_000,
+      },
+      {
+        name: "json5",
+        setup: [
+          'import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;',
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => "\'" + S + i + "\'").join(",") + "]";',
+        ],
+        parse: "JSON5.parse(doc)",
+        check: "'ok', b.length, b[0].length, b[600].length, b[1199].length",
+        expect: "ok 1200 201 203 204",
+      },
+      {
+        // The JSONL accumulator: one array collecting every parsed record while
+        // each line's parse builds strings that can collect. Only the caller's
+        // hand-off window was rooted, not the loop that fills it.
+        name: "jsonl-chunk",
+        setup: [
+          'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+          'const doc = Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + \'","b":"\' + S + i + \'"}\').join("\\n") + "\\n";',
+        ],
+        parse: "JSONL.parseChunk(doc)",
+        check: "'ok', b.values.length, b.values[0].a.length, b.values[399].b.length, b.done, b.error === null",
+        expect: "ok 400 200 203 true true",
+      },
+      {
+        // The same accumulator reached through the whole-input entry point, which
+        // returns the array directly instead of a chunk record.
+        name: "jsonl-parse",
+        setup: [
+          'import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;',
+          'const doc = Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + \'","b":"\' + S + i + \'"}\').join("\\n") + "\\n";',
+        ],
+        parse: "JSONL.parse(doc)",
+        check: "'ok', b.length, b[0].a.length, b[399].b.length",
+        expect: "ok 400 200 203",
+      },
+      {
+        name: "yaml-block-and-flow",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const doc = Array.from({ length: 300 }, (_, i) => "k" + i + ":\\n  a: \'" + S + i + "\'\\n  b: [\'" + S + "\', \'" + S + "\']\\n  c:\\n    - \'" + S + "\'\\n    - \'" + S + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.k0.a.length, b.k299.b[1].length, b.k299.c[1].length",
+        expect: "ok 300 201 200 200",
+        // Measured: refuses through 750000, first completes at 800000.
+        windowSlack: 900_000,
+      },
+      {
+        // Explicit `? key` / `: value` entries: the key survives a full nested
+        // node parse before it is canonicalised, and the value survives the
+        // canonicalisation. Long keys make both windows wide.
+        name: "yaml-explicit-keys",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const K = "k".repeat(200);',
+          'const doc = Array.from({ length: 200 }, (_, i) => "? " + K + i + "\\n:\\n  - \'" + S + "\'\\n  - \'" + S + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b[K + 0].length, b[K + 199][1].length",
+        expect: "ok 200 2 200",
+      },
+      {
+        // Anchors and aliases specifically: a value referenced only by the anchor
+        // map is invisible to the collector without a root over that map.
+        name: "yaml-anchors",
+        setup: [
+          'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+          'const doc = Array.from({ length: 250 }, (_, i) => "a" + i + ": &anc" + i + "\\n  x: \'" + S + i + "\'\\n  y: [\'" + S + "\', \'" + S + "\']\\nb" + i + ": *anc" + i + "\\nc" + i + ":\\n  <<: *anc" + i + "\\n  z: \'" + S + i + "\'").join("\\n") + "\\n";',
+        ],
+        parse: "YAML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.a0.x.length, b.b249.y[1].length, b.c249.z.length, b.c249.x.length",
+        expect: "ok 750 201 200 203 203",
+      },
+      {
+        name: "toml",
+        setup: [
+          'import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;',
+          'const doc = Array.from({ length: 300 }, (_, i) => "k" + i + \' = "\' + S + i + \'"\\narr\' + i + \' = ["\' + S + \'", "\' + S + \'"]\\ninl\' + i + \' = { x = "\' + S + \'", y = "\' + S + \'" }\').join("\\n") + "\\n";',
+        ],
+        parse: "TOML.parse(doc)",
+        check: "'ok', Object.keys(b).length, b.k0.length, b.arr299[1].length, b.inl299.y.length",
+        expect: "ok 900 201 200 200",
+        // Measured: refuses through 750000, first completes at 800000.
+        windowSlack: 900_000,
+      },
+    ];
+
+    // Shared verdict for every parked-parse run. `requireParked` is off only for
+    // the headroom run, which deliberately carries no ballast. `requireExpect`
+    // is on for the calibrated window run, where a refusal is not an acceptable
+    // outcome — see there.
+    const assertProbeRun = (
+      label: string,
+      out: string,
+      exitCode: number | null,
+      expect: string,
+      requireParked: boolean,
+      requireExpect: boolean,
+    ): void => {
+      const signature = USE_AFTER_FREE_SIGNATURES.find((text) => out.includes(text));
+      if (signature) throw new Error(`${label} hit a use-after-free (${signature}): ${out}`);
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`${label} crashed: ${out}`);
+      if (requireParked && !out.includes("parked true"))
+        throw new Error(
+          `${label} never got the heap under the ceiling, so it exercised no collecting window: ${out}`,
+        );
+      if (EMPTY_REFUSAL.test(out))
+        throw new Error(
+          `${label} refused with an empty message — an engine failure relabelled as a syntax error: ${out}`,
+        );
+      if (out.includes("refused ") && !out.includes("refused RangeError"))
+        throw new Error(
+          `${label} refused with something other than the RangeError a memory ceiling raises: ${out}`,
+        );
+      if (requireExpect) {
+        // No `|| refused` escape: this run is calibrated to finish, and a
+        // refusal means the calibration drifted rather than that the ceiling
+        // did its job. Accepting one here would silently retire the only check
+        // that reads the parsed values back under collection pressure.
+        if (exitCode !== 0 || !out.includes(expect))
+          throw new Error(
+            `${label} did not complete with "${expect}" while parked (exitCode=${exitCode}): ${out}`,
+          );
+        return;
+      }
+      if (exitCode !== 0 && !out.includes("RangeError") && !out.includes("would exceed the memory budget"))
+        throw new Error(`${label} failed without a clean refusal (exitCode=${exitCode}): ${out}`);
+      if (exitCode === 0 && !out.includes(expect) && !out.includes("refused RangeError"))
+        throw new Error(`${label} produced neither "${expect}" nor a clean refusal: ${out}`);
+    };
+
+    for (const probe of parserProbes) {
+      const buildSrc = (preamble: string[]): string =>
+        [
+          ...probe.setup.filter((line) => line.startsWith("import ")),
+          'const S = "s".repeat(200);',
+          ...probe.setup.filter((line) => !line.startsWith("import ")),
+          ...preamble,
+          "try {",
+          `  const b = ${probe.parse};`,
+          `  console.log(${probe.check});`,
+          "} catch (e) {",
+          "  console.log('refused', e.name, '::', e.message);",
+          "}",
+          "",
+        ].join("\n");
+
+      // A tight window puts the crossing early in the parse, where the most
+      // allocation still follows to reuse whatever the sweep freed — 100 KiB is
+      // where the YAML explicit-key and JSONL accumulator defects reproduce, and
+      // a wider one lets several of them through. The window is that slack, not
+      // the ceiling: the ceiling only has to be wide enough that building the
+      // document cannot refuse before there is a heap to park at all.
+      //
+      // That floor is higher than it looks. Every setup ends in one `join` that
+      // asks for the whole document as a single charged string — 617 KiB for
+      // yaml-block-and-flow, 620 KiB for toml — on top of whatever transient
+      // garbage the setup is holding when it lands.
+      //
+      // It used to be worse than high: it was not even monotonic. A reservation
+      // R was refused *without* any collection whenever the heap sat in
+      // (maxBytes - R, maxBytes - maxBytes/8), so which ceilings survived
+      // depended on where the setup's garbage happened to sit and the refusals
+      // came in bands — the old 3 MiB first ceiling sat 54 KB below one on this
+      // machine and inside one on i386-win32, which is how a document that never
+      // got parsed failed as "exercised no collecting window".
+      // TryReserveExternalBytes now forces the collection and re-tests before
+      // refusing, so the bands are gone (see the reserve-band probe below).
+      //
+      // The 6 and 8 MiB ceilings are kept, and for a structural reason rather
+      // than a historical one: these probes must not depend on a last-resort
+      // collection for their own setup, or the state they park from is the state
+      // that collection happened to leave. That interval was non-empty only when
+      // R > maxBytes/8, and the largest setup reservation is toml's 634,520 B —
+      // below maxBytes/8 at 6 MiB (786,432) and 8 MiB (1,048,576) — so at these
+      // ceilings the document is built without a forced collection ever being
+      // load-bearing for it. The last-resort branch is still entered if a
+      // reservation misses; what these ceilings buy is that the setup never
+      // depends on it. R is pure charged string payload (length * SizeOf(Char), 2
+      // bytes/char on every target under delphiunicode), so that holds on i386
+      // unchanged; per-object InstanceSize is the only pointer-size-sensitive
+      // heap term and it only makes i386 smaller. Which of the two accepted
+      // terminal outcomes a probe lands on (refused RangeError vs the tolerated
+      // growth-gate fatal) can still shift with the ceiling — yaml-anchors takes
+      // the RangeError path at 4 MiB but the growth gate here — and
+      // assertProbeRun accepts both.
+      const tightPath = join(tmp, `parser-parked-${probe.name}.mjs`);
+      writeFileSync(tightPath, buildSrc(parkingPreamble(100_000)));
+      for (const maxMemory of [6_291_456, 8_388_608]) {
+        const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, tightPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        assertProbeRun(
+          `Parked-heap ${probe.name} parse at --max-memory=${maxMemory}`,
+          proc.stdout.toString() + proc.stderr.toString(),
+          proc.exitCode,
+          probe.expect,
+          true,
+          false,
+        );
+      }
+
+      // A wider window: parked enough that the parse collects repeatedly, with
+      // enough left over that it can still finish. This is the
+      // only shape that can observe a swept container being written into and then
+      // read back, which is how a missing root shows up as wrong data rather than
+      // as a fault — so this run has to complete, and a refusal fails it.
+      //
+      // The window is per probe because the documents differ by an order of
+      // magnitude in what they need to finish: the default pair completes for six
+      // of the nine, while json-nested, yaml-block-and-flow and toml only refuse
+      // there and carry a measured `windowSlack` instead. Each override sits above
+      // the smallest slack at which that probe was observed to complete, and the
+      // slack the preamble converges to is deterministic for a given build, so
+      // "completes while parked" is a property of the calibration, not luck.
+      {
+        const windowCeiling = probe.windowCeiling ?? 6_291_456;
+        const windowPath = join(tmp, `parser-window-${probe.name}.mjs`);
+        writeFileSync(windowPath, buildSrc(parkingPreamble(probe.windowSlack ?? 600_000)));
+        const proc = Bun.spawnSync([LOADER, `--max-memory=${windowCeiling}`, windowPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        assertProbeRun(
+          `Collecting-window ${probe.name} parse at --max-memory=${windowCeiling}`,
+          proc.stdout.toString() + proc.stderr.toString(),
+          proc.exitCode,
+          probe.expect,
+          true,
+          true,
+        );
+      }
+
+      // One run with room to spare and no ballast at all, so a probe that only
+      // ever refuses cannot pass vacuously: the parse has to complete and every
+      // value has to read back exactly.
+      {
+        const headroomPath = join(tmp, `parser-headroom-${probe.name}.mjs`);
+        writeFileSync(headroomPath, buildSrc([]));
+        const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", headroomPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0)
+          throw new Error(`Headroom ${probe.name} run should exit 0, got ${proc.exitCode}: ${out}`);
+        if (!out.includes(probe.expect))
+          throw new Error(`Headroom ${probe.name} run should report "${probe.expect}": ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// A refused allocation is a resource ceiling, not an in-language error: a
+// ceiling the guest can catch is a ceiling it can ignore in a loop. Every
+// shape below wraps the refusal in the handler that used to swallow it, so
+// each one fails if a re-raise allowlist ever drops the memory limit again.
+// Both execution modes must agree — the interpreter used to let the script
+// catch and continue while the VM treated the same refusal as fatal.
+//
+// The Promise.all/race shapes additionally guard the combinator error path:
+// a refusal escaping iteration was re-raised by name from inside the active
+// handler (PromiseRejectionReasonFromException), which dereferenced the
+// exception object the handler had already freed and surfaced as a spurious
+// "Access violation" (exit 1 with the wrong message) instead of the ceiling.
+{
+  const combinatorIterator =
+    "{ [Symbol.iterator]: () => ({ next: () => { const a = new Array(100000000); return { done: true, value: a.length }; } }) }";
+  const shapes: Array<[string, string]> = [
+    ["sync try/catch", "try { const a = new Array(100000000); a.length; } catch (e) {}\n"],
+    [
+      "async function body",
+      [
+        "const grow = async () => { const a = new Array(100000000); return a.length; };",
+        "const main = async () => { try { await grow(); } catch (e) {} };",
+        "main();",
+        "",
+      ].join("\n"),
+    ],
+    [
+      "promise executor",
+      "try { new Promise((r) => { const a = new Array(100000000); r(a.length); }).catch(() => {}); } catch (e) {}\n",
+    ],
+    [
+      "Promise.all iterator allocation",
+      `Promise.all(${combinatorIterator}).then(() => {}, () => {});\n`,
+    ],
+    [
+      "Promise.race iterator allocation",
+      `Promise.race(${combinatorIterator}).then(() => {}, () => {});\n`,
+    ],
+    // `for await ... break` runs the async generator's .return(), executing the
+    // body's finally as guest code. A refusal there was folded into a catchable
+    // rejection by the interpreter (guest caught it, kept running) while the VM
+    // was fatal — a swallow and a mode divergence. Both must be fatal now.
+    [
+      "async generator return/finally",
+      [
+        "const obj = { async *g() { try { yield 1; } finally { const a = new Array(100000000); a.length; } } };",
+        "const main = async () => { try { for await (const v of obj.g()) { break; } } catch (e) {} };",
+        "main();",
+        "",
+      ].join("\n"),
+    ],
+  ];
+
+  for (const [shape, src] of shapes) {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const label = `${shape} ${modeArgs.length > 0 ? "bytecode" : "interpreted"}`;
+      console.log(`--max-memory (refusal is not catchable: ${label})...`);
+      const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", ...modeArgs], { timeout: 30_000 });
+      if (exitCode !== 1) throw new Error(`Memory limit refusal (${label}) should exit 1, got ${exitCode}: ${JSON.stringify(json)}`);
+      if (json.error?.type !== "MemoryLimitError") throw new Error(`Memory limit refusal (${label}) should report MemoryLimitError, got ${json.error?.type}`);
+    }
+  }
+}
+
+// The data-format parse builtins are the other half of that convention. Their
+// handlers used to catch every Pascal exception out of the parser and re-throw it
+// as a SyntaxError, which is the same swallow in a different disguise: the
+// ceiling still reached the guest, but wearing a name that says "your input is
+// malformed" and carrying no message at all (a thrown JS value's Pascal Message
+// is empty by construction, so the conversion produced `SyntaxError: ` and
+// nothing else). Each handler now names only its own parse-error class, so a
+// refusal keeps its RangeError identity and its message.
+//
+// TOML is included even though its handler was already narrow — it is the
+// reference shape the others were brought in line with, and it should stay that
+// way. Both execution modes run, because a handler that only the VM path reaches
+// is a handler that can diverge.
+{
+  const ceilingTmp = mkdtemp("goccia-parse-ceiling-");
+  try {
+    const parkedParse: Array<[string, string[], string]> = [
+      ["JSON.parse", [], "JSON.parse(doc)"],
+      [
+        "JSON5.parse",
+        ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        "JSON5.parse(doc)",
+      ],
+      [
+        "YAML.parse",
+        ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
+        'YAML.parse(Array.from({ length: 400 }, (_, i) => "k" + i + ": \'" + S + i + "\'").join("\\n") + "\\n")',
+      ],
+      [
+        "JSONL.parse",
+        ['import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;'],
+        'JSONL.parse(Array.from({ length: 400 }, (_, i) => \'{"a":"\' + S + i + \'"}\').join("\\n") + "\\n")',
+      ],
+      [
+        "TOML.parse",
+        ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
+        'TOML.parse(Array.from({ length: 400 }, (_, i) => "k" + i + \' = "\' + S + i + \'"\').join("\\n") + "\\n")',
+      ],
+    ];
+
+    for (const [label, imports, parse] of parkedParse) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (parse refusal keeps its RangeError: ${label} ${modeLabel})...`);
+        const src = [
+          ...imports,
+          'const S = "s".repeat(200);',
+          'const doc = "[" + Array.from({ length: 1200 }, (_, i) => \'"\' + S + i + \'"\').join(",") + "]";',
+          // Same measured parking as the parser probes above, at the slack this
+          // block was calibrated against.
+          ...parkingPreamble(300_000),
+          "try {",
+          `  const value = ${parse};`,
+          '  console.log("completed", value === null || value === undefined ? "empty" : "value");',
+          "} catch (e) {",
+          "  console.log('caught', e.name, '::', e.message);",
+          "}",
+          "",
+        ].join("\n");
+        const srcPath = join(ceilingTmp, `parse-ceiling-${label.replace(".", "-")}-${modeLabel}.mjs`);
+        writeFileSync(srcPath, src);
+        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 180_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (!out.includes("parked true"))
+          throw new Error(`Parse-ceiling ${label} (${modeLabel}) never parked the heap: ${out}`);
+        if (/^caught \S+ ::\s*$/m.test(out))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) surfaced a refusal with an empty message: ${out}`,
+          );
+        if (out.includes("caught SyntaxError"))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) relabelled a memory ceiling as a SyntaxError: ${out}`,
+          );
+        if (!out.includes("caught RangeError") && !out.includes("completed"))
+          throw new Error(
+            `Parse-ceiling ${label} (${modeLabel}) produced neither a RangeError refusal nor a completed parse: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(ceilingTmp);
+  }
+}
+
+// --- Growth-gate family -----------------------------------------------------
+//
+// The convention these blocks pin: the growth gate (RequireNativeBytes,
+// Goccia.MemoryLimit.pas) raises TGocciaMemoryLimitError, which is opaque to
+// the guest by design — it passes straight through every builtin's handler,
+// escapes to the host, and the loader reports it as "Fatal error: ... would
+// exceed the memory budget" with a nonzero exit. A guest catch marker carrying
+// that text would mean a builtin had converted the ceiling into something
+// script code can absorb and retry in a loop.
+//
+// Goccia.MemoryLimit.Test.pas guards the same convention at the executor
+// boundaries; this lives here because the gate has to be reached inside a
+// builtin, and because the assertion is host-level (exit code plus the
+// loader's report).
+//
+// WHY THIS IS NOT A CALIBRATED PROBE ANY MORE.
+//
+// The engine has two memory limiters with two different contracts, and for a
+// fixed script WHICH one refuses first is a race:
+//
+//   * The gated request is one storage doubling of a property map.
+//     TOrderedStringMap grows the entry array C -> 2C + 2 and gates the
+//     transient old + new = (3C + 2) * SizeOf(TEntry) — 24 bytes per entry on a
+//     64-bit target, 16 on i386, so every request there is two thirds the size.
+//     The bucket array is gated too, at 12 * B bytes, and that one is Int32 on
+//     every width.
+//   * The charged side — string payloads and GC-registered values — reserves
+//     through the garbage collector, which collects and re-tests before it
+//     refuses, and then raises the script-CATCHABLE RangeError.
+//
+// The gate refuses at the FIRST doubling whose request exceeds what is left of
+// the budget, so the loser of the race is decided by the charge the builtin has
+// piled up by the time that doubling is reached — a per-parser trajectory, not
+// a constant. Measured over a 4000-key document of `true` values: JSON, JSON5
+// and TOML charge 104 bytes for the whole parse (0.026 B per property), while
+// YAML holds 165,884 bytes of live intermediates mid-parse (41.5 B per
+// property). Cross that spread with the two-thirds width factor on the request
+// side and the crossing point moves by parser AND by pointer width. The i386
+// CI failure that produced this rework was exactly that: JSON.parse and
+// JSON5.parse refused through the gate on i386 as intended, and only
+// YAML.parse lost the race — by about 1% of the parked slack — and surfaced
+// the catchable RangeError instead.
+//
+// One further source of drift, recorded because it was a live defect here: an
+// assertion that itself allocates inside the region under test (this block used
+// to call Object.keys there) can be the allocation that decides the outcome.
+//
+// A second one has been REMOVED rather than worked around, and the difference
+// matters to anyone re-tuning these constants. The gate used to compare against
+// instantaneous BytesAllocated without collecting first, so a doubling was
+// refused or permitted depending on how much collectable garbage happened to be
+// on the heap at that instant — which made every rung here sensitive to
+// transient allocation the probe does not control. It now forces a collection
+// and re-tests before refusing (ADR 0110), so the crossing a parked run reaches
+// is a property of its LIVE set. The parking loop already parks with live
+// ballast and collects before measuring, so the slack it reports is what the
+// gate now sees; that is why the rungs below did not have to move. What did
+// move is which doubling is reached: a probe whose transients used to push it
+// over the line now gets one or more doublings further, so a rung that stops
+// reaching a limiter is re-tuned by walking the ladder, not by adding garbage.
+//
+// So no constant can make "the gate refuses first" true on every width for
+// every parser, and picking one by margin arithmetic is how this block broke.
+// The rework instead:
+//
+//   1. carries the contract assertion in a probe that needs no parking at all
+//      (below): a single doubling whose request exceeds the WHOLE ceiling is
+//      refused by CanAllocateNativeBytes' own arithmetic, independent of the
+//      heap, the collector, the parser and the pointer width;
+//   2. derives every parked probe's slack from what THIS build on THIS
+//      architecture actually refuses, instead of from arithmetic written down
+//      here;
+//   3. measures each builtin's charged footprint in-guest — as a peak, with a
+//      collection canary that says whether the number is a peak at all — and
+//      lets that MEASUREMENT decide which assertion applies, so a width where
+//      the race goes the other way is classified rather than failed, and a
+//      measurement that cannot support the strong claim does not get to make it;
+//   4. checks that a refusal really came from property-map growth, so a probe
+//      cannot pass on a refusal from some unrelated allocation.
+
+// The ceiling the parked probes run under. The constructed probe below sets its
+// own, because its whole point is a request that outgrows the ceiling.
+const GATE_CEILING = 4_194_304;
+// The charge measurements run under their own, far larger ceiling, so neither
+// the workload nor the collection canary they carry can come near it.
+const CHARGE_MEASURE_CEILING = 134_217_728;
+
+// The byte counts the two ENUMERABLE property-map growth shapes can ask the gate
+// for, across every plausible entry size (source/shared/OrderedStringMap.pas):
+//   entry array   C -> 2C + 2, transient (3C + 2) * SizeOf(TEntry)
+//   bucket array  B -> 2B,     transient 12 * B (Int32 on every width)
+// SizeOf(TEntry) is 24 on a 64-bit target and 16 on i386 today; it is swept
+// rather than pinned because the assertion this set backs is "the refusal came
+// from property-map growth", which must not need re-tuning when a field is
+// added to TEntry.
+//
+// Compact is the third gated shape and is deliberately absent: it reports
+// (FEntryCount + FCount) * SizeOf(TEntry), a pair that depends on how many
+// entries have been deleted, so it cannot be enumerated. It also cannot run
+// here — Compact is reached only through a delete, or through a load factor a
+// delete produced, and no probe in this family deletes a property. A refusal
+// carrying a Compact-shaped size is therefore a probe that has drifted into a
+// shape it was never meant to test, which is what this set exists to catch.
+const gatedStorageRequests: Set<number> = (() => {
+  const sizes = new Set<number>();
+  for (let entrySize = 8; entrySize <= 64; entrySize += 4) {
+    let capacity = 0;
+    for (let step = 0; step < 32; step += 1) {
+      sizes.add((3 * capacity + 2) * entrySize);
+      capacity = capacity * 2 + 2;
+    }
+  }
+  let buckets = 16;
+  for (let step = 0; step < 24; step += 1) {
+    sizes.add(12 * buckets);
+    buckets *= 2;
+  }
+  return sizes;
+})();
+
+const refusedRequestBytes = (out: string): number | null => {
+  const m = out.match(/Allocation of (\d+) bytes would exceed the memory budget/);
+  return m === null ? null : Number(m[1]);
+};
+
+type GateRun = {
+  outcome: "gate" | "charged" | "completed" | "unparked" | "other";
+  refused: number | null;
+  parkedSlack: number | null;
+  charge: number | null;
+  caught: string | null;
+  exitCode: number | null;
+  out: string;
+};
+
+// Classification is deliberately mechanical: every later assertion reads these
+// fields rather than re-matching the output, so "which limiter refused" is
+// decided in one place.
+const runGateCase = (
+  srcPath: string,
+  src: string,
+  modeArgs: readonly string[],
+  ceiling: number = GATE_CEILING,
+): GateRun => {
+  writeFileSync(srcPath, src);
+  const proc = Bun.spawnSync([LOADER, `--max-memory=${ceiling}`, ...modeArgs, srcPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 180_000,
+  });
+  const out = proc.stdout.toString() + proc.stderr.toString();
+  const parked = out.match(/parked (?:true|false) slack (\d+)/);
+  // Signed: a negative delta is not noise, it is the canary telling us a
+  // collection ran inside the call (see measureCallCharge).
+  const charge = out.match(/^charge (-?\d+)/m);
+  const caught = out.match(/^guest-caught .*$/m);
+  const refused = refusedRequestBytes(out);
+  let outcome: GateRun["outcome"];
+  if (src.includes("parked") && !out.includes("parked true")) outcome = "unparked";
+  else if (caught !== null) outcome = "charged";
+  else if (out.includes("guest-completed")) outcome = "completed";
+  else if (refused !== null && proc.exitCode !== 0) outcome = "gate";
+  else outcome = "other";
+  return {
+    outcome,
+    refused,
+    parkedSlack: parked === null ? null : Number(parked[1]),
+    charge: charge === null ? null : Number(charge[1]),
+    caught: caught === null ? null : caught[0],
+    exitCode: proc.exitCode,
+    out,
+  };
+};
+
+// The assertions every gate probe shares, whichever limiter it ends up
+// reaching. None of them depends on a slack, a width or a parser: they say
+// that a gate refusal never becomes guest-visible, that a refusal is never
+// relabelled or emptied on its way out, and that a "budget" fatal really is
+// one — not a crash wearing the same exit code.
+const assertGateContract = (what: string, run: GateRun): void => {
+  // Most specific first, so the message names the actual failure mode: a relabel
+  // is a SyntaxError or TypeError that still carries the ceiling's text. A
+  // genuine parse or serializer error must not abort this family as a
+  // misdiagnosis — and the historical relabel that carried NO message at all is
+  // caught by the empty-message check below, not by this one.
+  if (/^guest-caught (?:SyntaxError|TypeError) ::.*would exceed the memory budget/m.test(run.out))
+    throw new Error(`${what} relabelled a memory ceiling as a parse or serializer error: ${run.out}`);
+  // Every caught line, not just the first: the guarantee must not depend on
+  // which refusal the guest happened to print first.
+  if (/^guest-caught .*would exceed the memory budget/m.test(run.out))
+    throw new Error(`${what} let the guest catch a growth-gate refusal: ${run.out}`);
+  if (/^guest-caught \S+ ::\s*$/m.test(run.out))
+    throw new Error(`${what} surfaced a refusal with an empty message: ${run.out}`);
+  // Line-wise, not whole-output: a crash fatal alongside a budget refusal is
+  // exactly the case a substring test would mask.
+  const foreignFatal = run.out
+    .split("\n")
+    .find((line) => line.includes("Fatal error") && !line.includes("would exceed the memory budget"));
+  if (foreignFatal !== undefined)
+    throw new Error(`${what} produced a fatal that is not a budget refusal (${foreignFatal.trim()}): ${run.out}`);
+  if (run.outcome === "gate") {
+    if (run.exitCode === 0)
+      throw new Error(`${what} reported a budget refusal but exited 0: ${run.out}`);
+    if (run.refused === null || !gatedStorageRequests.has(run.refused))
+      throw new Error(
+        `${what} was refused ${run.refused} bytes, which is not a property-map storage growth ` +
+          `((3C + 2) * SizeOf(TEntry), or 12 * B buckets) — the probe is passing on a refusal from ` +
+          `somewhere else and is no longer testing what it claims: ${run.out}`,
+      );
+  }
+};
+
+// The contract assertion, with no slack to calibrate — but one sizing decision,
+// stated with its margin rather than called free.
+//
+// CanAllocateNativeBytes refuses whenever the request alone exceeds MaxBytes,
+// whatever BytesAllocated happens to be — so a run that reaches a doubling
+// bigger than the entire ceiling is refused on every pointer width, at every
+// heap position, with no parking, no ballast and no slack. The live set is kept
+// near zero (the keys are Pascal strings inside the map and the values are the
+// boolean singletons, neither of which is charged; the transient key strings are
+// collected each pass), so the whole ceiling is available and the crossing is
+// decided by the request size alone.
+//
+// This is also the one probe the collecting gate (ADR 0110) leaves exactly as
+// it was, and for a reason worth stating rather than assuming: a request larger
+// than the WHOLE budget is the first of the three shapes
+// ShouldForceLimitCollection refuses without walking the heap, so this probe
+// still measures pure arithmetic. Its periodic Goccia.gc() is now belt and
+// braces — the gate would collect for itself at any earlier doubling — and it
+// is kept because the sizing argument above is stated in terms of a near-zero
+// live set, and a probe whose premise is maintained by the code under test is a
+// probe that stops being independent of it.
+//
+// The sizing: under a 1 MiB ceiling the entry array's transient (3C + 2) * E
+// first exceeds the ceiling at
+//   E = 24 (64-bit today)  C = 16,382, 1,179,552 B, at property 16,383
+//   E = 16 (i386 today)    C = 32,766, 1,572,800 B, at property 32,767
+//   E = 12                 C = 32,766, 1,179,600 B, at property 32,767
+//   E =  8                 C = 65,534, 1,572,832 B, at property 65,535
+// so 300 * 300 = 90,000 properties crosses for any entry size down to 8 bytes —
+// 1.4x the properties the narrowest of those needs, and 5.5x what the current
+// 64-bit build needs. Below 8 bytes a TEntry cannot hold a string reference and
+// a pointer on any target this builds for. The two widths refuse at different
+// points, which is the part that cannot be made width-independent; the contract
+// they refuse under is identical, which is the part that must be.
+const CONSTRUCTED_GATE_CEILING = 1_048_576;
+{
+  const constructedTmp = mkdtemp("goccia-gate-constructed-");
+  try {
+    const src = [
+      // Both loop bounds are materialised before the region under test, so the
+      // only growth left inside it is the property map's.
+      "const outer = Array.from({ length: 300 }, (_, i) => i);",
+      "const inner = Array.from({ length: 300 }, (_, j) => j);",
+      "let built = false;",
+      "try {",
+      "  const o = {};",
+      "  for (const i of outer) {",
+      '    for (const j of inner) o["k" + i + "_" + j] = true;',
+      // Keeps the transient key strings from inflating BytesAllocated, so the
+      // near-zero live set the sizing above assumes is maintained by the probe
+      // rather than by the gate's own collection.
+      "    Goccia.gc();",
+      "  }",
+      "  built = true;",
+      "} catch (e) {",
+      "  console.log('guest-caught', e.name, '::', e.message);",
+      "}",
+      // Outside the try and allocating nothing beyond the call itself: an
+      // assertion that allocates inside the region under test can be the
+      // allocation that decides the outcome.
+      "if (built) console.log('guest-completed');",
+      "",
+    ].join("\n");
+
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(`--max-memory (growth gate refuses a request larger than the whole ceiling: ${modeLabel})...`);
+      const what = `Constructed gate probe (${modeLabel})`;
+      const run = runGateCase(
+        join(constructedTmp, `gate-constructed-${modeLabel}.mjs`),
+        src,
+        modeArgs,
+        CONSTRUCTED_GATE_CEILING,
+      );
+      assertGateContract(what, run);
+      if (run.outcome !== "gate")
+        throw new Error(
+          `${what} did not reach the growth gate (outcome: ${run.outcome}). This probe cannot be ` +
+            `raced by the charged path — it allocates nothing charged — so this means the map never ` +
+            `reached a doubling larger than the ceiling: ${run.out}`,
+        );
+      if (run.refused === null || run.refused <= CONSTRUCTED_GATE_CEILING)
+        throw new Error(
+          `${what} was refused ${run.refused} bytes against a ${CONSTRUCTED_GATE_CEILING}-byte ceiling. The point ` +
+            `of this probe is that the request alone exceeds the budget, so the refusal cannot depend ` +
+            `on the heap: a smaller request means it does: ${run.out}`,
+        );
+    }
+  } finally {
+    clean(constructedTmp);
+  }
+}
+
+// The capacity result — the reason ADR 0110 exists, asserted as a differential
+// rather than as a number.
+//
+// The gate used to answer from instantaneous BytesAllocated without collecting,
+// so which doubling was refused depended on how much collectable garbage
+// happened to be resident. That made the ceiling a measure of the collector's
+// recent luck rather than of the program, and it made the two execution modes
+// disagree — automatic collection is disabled during bytecode execution, so the
+// compiled run reached the gate with a dirtier heap and was refused a doubling
+// EARLIER. Measured on this workload at a 4 MiB ceiling, before the change:
+//
+//              plain loop                     with a periodic Goccia.gc()
+//   interp.    2,359,200 B  (C = 32,766)      4,718,496 B  (C = 65,534)
+//   bytecode   1,179,552 B  (C = 16,382)      4,718,496 B  (C = 65,534)
+//
+// The assertion is that the two columns are now the SAME: the same workload,
+// with and without the guest collecting for itself, must be refused the same
+// byte count. That is sharper than pinning either number and it needs no
+// re-tuning per pointer width — the equality holds for any SizeOf(TEntry),
+// while 4,718,496 is a 64-bit fact. Both modes are asserted because the
+// pre-change gap differed per mode, so a fix that only reached one of them
+// would pass a single-mode test.
+//
+// Two supporting checks, each closing a way this could pass while proving
+// nothing. Both runs must actually reach the gate — a workload that completed,
+// or that lost to the charged limiter, would make the equality vacuous. And the
+// refused request must exceed the whole ceiling, which is what pins it as the
+// ARITHMETIC crossing rather than merely a shared one: consecutive doublings
+// roughly double, so the first request that does not fit beside a
+// freshly-collected live set is above the ceiling, while any earlier doubling
+// (the pre-change answers above, both under 4 MiB) is not.
+//
+// Sizing: 400 * 400 = 160,000 properties. Reaching the crossing under a 4 MiB
+// ceiling needs 65,535 properties at SizeOf(TEntry) = 24 (64-bit today) and
+// 131,071 at 16 (i386 today) or 12, so this clears the narrowest real width by
+// 1.2x. It does not cover a hypothetical 8-byte TEntry, which would need
+// 262,143 — an entry cannot hold a string reference and a pointer in 8 bytes on
+// any 32-bit target this builds for, and the non-vacuity check below turns that
+// case into a clear failure rather than a silent pass.
+const CAPACITY_GATE_CEILING = 4_194_304;
+{
+  const capacityTmp = mkdtemp("goccia-gate-capacity-");
+  const capacityWorkload = (collectPerPass: boolean): string =>
+    [
+      // Both loop bounds are materialised before the region under test, so the
+      // only growth left inside it is the property map's.
+      "const outer = Array.from({ length: 400 }, (_, i) => i);",
+      "const inner = Array.from({ length: 400 }, (_, j) => j);",
+      "let built = false;",
+      "try {",
+      "  const o = {};",
+      "  for (const i of outer) {",
+      '    for (const j of inner) o["k" + i + "_" + j] = true;',
+      ...(collectPerPass ? ["    Goccia.gc();"] : []),
+      "  }",
+      "  built = true;",
+      "} catch (e) {",
+      "  console.log('guest-caught', e.name, '::', e.message);",
+      "}",
+      // Outside the try and allocating nothing beyond the call itself.
+      "if (built) console.log('guest-completed');",
+      "",
+    ].join("\n");
+  try {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(
+        `--max-memory (a gated growth is refused at the same doubling with or without guest collection: ${modeLabel})...`,
+      );
+      const what = `Gate capacity probe (${modeLabel})`;
+      const runs = (["plain", "collected"] as const).map((variant) => ({
+        variant,
+        run: runGateCase(
+          join(capacityTmp, `gate-capacity-${variant}-${modeLabel}.mjs`),
+          capacityWorkload(variant === "collected"),
+          modeArgs,
+          CAPACITY_GATE_CEILING,
+        ),
+      }));
+
+      for (const { variant, run } of runs) {
+        assertGateContract(`${what} [${variant}]`, run);
+        if (run.outcome !== "gate")
+          throw new Error(
+            `${what} [${variant}] did not reach the growth gate (outcome: ${run.outcome}). The ` +
+              `equality below is vacuous unless both runs are refused by the gate — either the ` +
+              `workload no longer reaches a doubling this ceiling cannot fit, or the charged ` +
+              `limiter won the race: ${run.out}`,
+          );
+        if (run.refused === null || run.refused <= CAPACITY_GATE_CEILING)
+          throw new Error(
+            `${what} [${variant}] was refused ${run.refused} bytes against a ${CAPACITY_GATE_CEILING}-byte ` +
+              `ceiling. A refusal BELOW the ceiling is a doubling that only failed because the heap ` +
+              `was dirty, which is exactly what the gate's forced collection is supposed to have ` +
+              `stopped happening: ${run.out}`,
+          );
+      }
+
+      const [plain, collected] = runs;
+      if (plain.run.refused !== collected.run.refused)
+        throw new Error(
+          `${what} refused ${plain.run.refused} B without a periodic Goccia.gc() and ` +
+            `${collected.run.refused} B with one. The gate is meant to force a collection and ` +
+            `re-test before refusing, so a guest that collects for itself must not get more ` +
+            `capacity out of the same budget (ADR 0110):\n${plain.run.out}\n${collected.run.out}`,
+        );
+      console.log(`  (${what}: both variants refused ${plain.run.refused} B)`);
+    }
+  } finally {
+    clean(capacityTmp);
+  }
+}
+
+// The parked half: per-builtin coverage. The probe above proves the gate stays
+// opaque; these prove it for each builtin's own handler, which is where the
+// leak this family was written for actually lived (a handler that catches every
+// Pascal exception and re-throws it as SyntaxError or TypeError swallows the
+// ceiling too). Reaching a handler needs the gate to fire INSIDE the builtin,
+// which needs a parked heap — so this half keeps the parking, and derives
+// everything it would otherwise have had to assume.
+type ParkedGateCase = {
+  label: string;
+  imports: string[];
+  setup: string;
+  call: string;
+  // Printed once the call has returned, so nothing on the success path
+  // allocates inside the region under test.
+  completedGuard: string;
+};
+
+// Bytecode string + (#1235) may leave `doc` as a deferred concatenation that
+// still charges its prefix. Parking against that live set, then reading Value
+// inside the builtin, Flattens and lets the gate's collect reclaim the prefix —
+// expanding slack by roughly the document size. On i386 that reclaimed headroom
+// covers every property-map doubling a 4000-key parse requests, so every slack
+// rung completes and the probe proves nothing. Force a content read (and let
+// parking's opening Goccia.gc() drop the orphaned prefix) so the parked slack
+// matches the live set the builtin actually sees.
+const materializeParkedDoc = (buildExpr: string): string =>
+  `const doc = ${buildExpr};\ndoc.charCodeAt(0);`;
+
+// Source shared by the parse and stringify halves. Nothing but the call itself
+// runs inside the try — not even the success guard — because an assertion that
+// allocates inside the region under test can be the allocation that decides
+// which limiter refuses.
+const parkedGateSource = (probe: ParkedGateCase, slackTarget: number): string =>
+  [
+    ...probe.imports,
+    probe.setup,
+    ...parkingPreamble(slackTarget),
+    "let produced = undefined;",
+    "let completed = false;",
+    "try {",
+    `  produced = ${probe.call};`,
+    "  completed = true;",
+    "} catch (e) {",
+    "  console.log('guest-caught', e.name, '::', e.message);",
+    "}",
+    `if (completed && ${probe.completedGuard}) console.log('guest-completed');`,
+    "",
+  ].join("\n");
+
+type ChargeMeasurement = {
+  bytes: number;
+  // True only when the number is a genuine PEAK bound: no collection ran inside
+  // the call, so BytesAllocated rose monotonically and its end value is its
+  // high-water mark. False means the number is a lower bound and nothing may be
+  // inferred from it.
+  peakKnown: boolean;
+  note: string;
+};
+
+// What a call charges, measured as a peak instead of inferred from a delta.
+//
+// A post-call delta of BytesAllocated is not a peak: a collection inside the
+// call reclaims transients, and the delta then understates the high-water mark
+// by whatever it freed — which would put the architecture race back into the
+// probe, relocated into an inference. The canary makes the difference
+// observable from inside the guest. Unreferenced strings are allocated and
+// dropped, still counted, immediately before the call; any collection during the
+// call must reclaim them, because they are unreachable, so the delta falls by at
+// least the canary and goes negative:
+//
+//   delta >= 0  =>  nothing was reclaimed  =>  BytesAllocated only rose
+//                                          =>  the delta IS the peak increment
+//   delta <  0  =>  a collection ran       =>  lower bound only
+//
+// `armed` closes the last hole: if something collected between dropping the
+// canary and reading the baseline, the detector was disarmed before the call,
+// and that result is reported as a lower bound too.
+//
+// The canary is far above any charge these workloads produce (the largest
+// measured is ~1 MB) and far below both the measurement ceiling and
+// EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL (256 MiB), so arming it cannot
+// provoke the collection it exists to detect. The measurement runs in its own
+// process at its own ceiling, and a peak measured with nothing reclaimed is an
+// upper bound on what the parked run — which may collect — can hold at once, so
+// using it below is conservative in the direction that matters.
+const CHARGE_CANARY_BYTES = 4_194_304;
+
+const measureCallCharge = (
+  probe: ParkedGateCase,
+  modeArgs: readonly string[],
+  srcPath: string,
+): ChargeMeasurement => {
+  const src = [
+    ...probe.imports,
+    probe.setup,
+    "Goccia.gc();",
+    "const canaryBase = Goccia.gc.bytesAllocated;",
+    `let canary = Array.from({ length: ${CHARGE_CANARY_BYTES / 8192} }, () => "x".repeat(4096));`,
+    "canary = null;",
+    "const before = Goccia.gc.bytesAllocated;",
+    `const armed = before - canaryBase >= ${CHARGE_CANARY_BYTES - 65_536};`,
+    `let produced = ${probe.call};`,
+    "const delta = Goccia.gc.bytesAllocated - before;",
+    "produced = null;",
+    'console.log("charge", delta, "armed", armed);',
+    "",
+  ].join("\n");
+  writeFileSync(srcPath, src);
+  const proc = Bun.spawnSync([LOADER, `--max-memory=${CHARGE_MEASURE_CEILING}`, ...modeArgs, srcPath], {
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 180_000,
+  });
+  const out = proc.stdout.toString() + proc.stderr.toString();
+  const m = out.match(/^charge (-?\d+) armed (true|false)/m);
+  if (proc.exitCode !== 0 || m === null)
+    throw new Error(
+      `Charge measurement for ${probe.label} did not complete (exit ${proc.exitCode}). The parked ` +
+        `probes below classify themselves from this number, so a missing measurement is a failure, ` +
+        `not a default: ${out}`,
+    );
+  const bytes = Number(m[1]);
+  const armed = m[2] === "true";
+  if (!armed) return { bytes, peakKnown: false, note: "canary was already gone before the call" };
+  if (bytes < 0) return { bytes, peakKnown: false, note: "a collection ran inside the call" };
+  return { bytes, peakKnown: true, note: "no collection ran inside the call" };
+};
+
+// The parked slack is searched for, not chosen.
+//
+// A parked probe needs a slack tight enough that the builtin's own storage
+// growth crosses it, and the tightest one that works is a property of the
+// build, the architecture and the parser — SizeOf(TEntry) alone moves every
+// request by a third. So the ladder is walked from tight to loose and the first
+// rung at which THIS build refuses through the growth gate is the probe. The
+// rungs are search positions, not calibrations: their only requirement is that
+// the parking loop can converge to one of them, and the error below fires if
+// none of them reaches a limiter at all.
+//
+// Walking upward matters: the tightest rung that works crosses at the earliest
+// storage doubling, which is the point at which the builtin has charged the
+// least, so it is also the rung least able to lose the race to the charged
+// limiter.
+const GATE_SLACK_LADDER = [16_384, 32_768, 65_536, 131_072] as const;
+
+// One parked case, end to end. Everything that used to be a constant is either
+// searched for (the slack) or measured (the charge), and the measurement
+// decides which assertion applies rather than a comment claiming one holds.
+const runParkedGateProbe = (
+  kind: string,
+  probe: ParkedGateCase,
+  modeArgs: readonly string[],
+  tmpDir: string,
+): GateRun => {
+  const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+  const what = `${kind} ${probe.label} (${modeLabel})`;
+  const srcPath = join(tmpDir, `${kind.replace(" ", "-")}-${probe.label.replace(".", "-")}-${modeLabel}.mjs`);
+  const charge = measureCallCharge(probe, modeArgs, `${srcPath}.charge.mjs`);
+  const attempts: string[] = [];
+  // The FIRST — tightest — rung that reached the charged limiter instead. Kept
+  // as the fallback so a width or a parser that genuinely cannot win the race is
+  // still held to the contract assertions rather than failing for losing a race
+  // no constant can win. First-wins, not last: the tightest racing rung is the
+  // one the tightest-rung rationale above argues for, and last-wins would keep
+  // the loosest one — the rung most likely to trip the hard throw below, which
+  // is exactly backwards. YAML.parse is the live example: it holds ~166 KB of
+  // intermediates for a 4000-key document, more than any rung here parks at.
+  let raced: GateRun | null = null;
+  let racedSeed: number | null = null;
+
+  for (const seed of GATE_SLACK_LADDER) {
+    const run = runGateCase(srcPath, parkedGateSource(probe, seed), modeArgs);
+    // Every rung is held to the contract, whatever it reached.
+    assertGateContract(`${what} at slack rung ${seed}`, run);
+    attempts.push(
+      `${seed} -> ${run.outcome}${run.refused === null ? "" : ` (${run.refused} B)`}` +
+        `${run.parkedSlack === null ? "" : ` [parked ${run.parkedSlack}]`}`,
+    );
+    if (run.outcome === "unparked") continue; // tighter than this build's parking loop converges
+    if (run.outcome === "completed") continue; // looser than this builtin's largest storage growth
+    if (run.outcome === "gate") {
+      // A tighter rung that lost the race is the under-reporting signal this
+      // family is here to surface: the gate result below is real, but on a
+      // narrower pointer width the tighter rung is the one that would be
+      // reached. Log it rather than discarding it.
+      if (racedSeed !== null)
+        console.log(
+          `  (${what}: slack rung ${racedSeed} refused through the charged limiter while rung ${seed} ` +
+            `reached the gate — a width whose requests are smaller may see the charged path here)`,
+        );
+      return assertParkedGateOutcome(what, run, attempts, charge);
+    }
+    if (run.outcome === "charged" && raced === null) {
+      raced = run;
+      racedSeed = seed;
+    }
+  }
+
+  if (raced !== null) return assertParkedGateOutcome(what, raced, attempts, charge);
+  throw new Error(
+    `${what} reached no limiter at any slack rung (${attempts.join("; ")}), so it proved nothing. ` +
+      `Either the builtin no longer grows a property map, or the parking loop can no longer converge ` +
+      `tightly enough to reach one.`,
+  );
+};
+
+// The checked precondition, applied to whichever rung the search settled on.
+//
+// The hard form holds only when the measurement is a genuine peak bound: if the
+// whole call's PEAK charge is below the parked slack then the charged limiter is
+// unreachable for this run, "the gate refuses first" is a fact about measured
+// bytes, and anything else is a regression. Two cases fall out of it, and both
+// route to the same softer classification rather than to a throw:
+//
+//   * the peak is not known (a collection ran inside the measured call, so the
+//     number is a lower bound) — inferring from it would be the architecture
+//     race back again, wearing an inference;
+//   * the peak is known and is at or above the parked slack — the two limiters
+//     genuinely race, and which one wins moves with SizeOf(TEntry).
+//
+// A note on the second: it is a bound on the WHOLE call, so it says only that
+// one-sidedness cannot be proven — the crossing may still happen long before the
+// charge arrives, and on this build it does. It is reported either way so a
+// width that flips is visible in the log instead of silent.
+const assertParkedGateOutcome = (
+  what: string,
+  run: GateRun,
+  attempts: string[],
+  charge: ChargeMeasurement,
+): GateRun => {
+  if (run.parkedSlack === null)
+    throw new Error(`${what} did not report its parked slack: ${run.out}`);
+  if (charge.peakKnown && charge.bytes < run.parkedSlack) {
+    if (run.outcome !== "gate")
+      throw new Error(
+        `${what} charges at most ${charge.bytes} B (measured peak, ${charge.note}) against ` +
+          `${run.parkedSlack} B of parked slack, so the growth gate is the only limiter it can ` +
+          `reach — but the run refused through "${run.outcome}" (rungs: ${attempts.join("; ")}): ${run.out}`,
+      );
+  } else {
+    const why = charge.peakKnown
+      ? `measured peak charge ${charge.bytes} B >= parked slack ${run.parkedSlack} B`
+      : `charge is a lower bound only (${charge.note}), so ${charge.bytes} B proves nothing`;
+    console.log(
+      `  (${what}: ${why} — one-sidedness not provable, so only the contract assertions apply here; ` +
+        `refused through "${run.outcome}")`,
+    );
+  }
+  return run;
+};
+
+// A 4000-key document of `true` values: the boolean singletons are not charged
+// and the keys are Pascal strings inside the map, so for every parser except
+// YAML the parse charges essentially nothing and the one-sidedness above is
+// measured to hold. The document is built before the charge measurement and
+// before parking, or building it — not parsing it — is what would cross the
+// ceiling.
+{
+  const gateTmp = mkdtemp("goccia-parse-gate-");
+  // Counted per execution mode, not per family: a mode whose gate is never
+  // reached is a mode whose contract assertions are all running against
+  // refusals that never involve the gate, and a single gate hit anywhere would
+  // hide that.
+  const reachedGate: Record<string, number> = { interpreted: 0, bytecode: 0 };
+  try {
+    const gatedParses: ParkedGateCase[] = [
+      {
+        label: "JSON.parse",
+        imports: [],
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}"',
+        ),
+        call: "JSON.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "JSON5.parse",
+        imports: ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join(",") + "}"',
+        ),
+        call: "JSON5.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "YAML.parse",
+        imports: ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
+        setup: materializeParkedDoc(
+          'Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join("\\n") + "\\n"',
+        ),
+        call: "YAML.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "JSONL.parse",
+        imports: ['import * as JSONLNS from "goccia:jsonl"; const JSONL = JSONLNS.JSONL ?? JSONLNS;'],
+        // One line holding the whole wide object: the map that has to double is
+        // per record, so splitting it across lines would only build 4000 small
+        // maps that never reach the gate.
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}\\n"',
+        ),
+        call: "JSONL.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+      {
+        label: "TOML.parse",
+        imports: ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
+        setup: materializeParkedDoc(
+          'Array.from({ length: 4000 }, (_, i) => "k" + i + " = true").join("\\n") + "\\n"',
+        ),
+        call: "TOML.parse(doc)",
+        completedGuard: "produced !== undefined",
+      },
+    ];
+
+    for (const probe of gatedParses) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
+        if (runParkedGateProbe("Parse gate", probe, modeArgs, gateTmp).outcome === "gate")
+          reachedGate[modeLabel] += 1;
+      }
+    }
+
+    // Non-vacuity, per mode: the contract assertions accept a charged refusal
+    // wherever the race is real, so a mode in which no parse reached the gate is
+    // a mode asserting the contract against refusals that never involve the gate.
+    for (const [modeLabel, hits] of Object.entries(reachedGate))
+      if (hits === 0)
+        throw new Error(
+          `No parse gate case reached the growth gate in ${modeLabel} mode on this build, so the ` +
+            `parse half of this family is asserting the contract against refusals that never ` +
+            `involve the gate there.`,
+        );
+  } finally {
+    clean(gateTmp);
+  }
+}
+
+// The stringify half of the same convention, and the same treatment. JSON.stringify
+// and JSON5.stringify wrap their whole body in a handler that converts a Pascal
+// exception into a script-visible TypeError ("JSON.stringify error: ..."), and that
+// handler had no re-raise allowlist: a growth-gate refusal arrived at the guest as a
+// catchable TypeError carrying the budget text, which is the ceiling-you-can-ignore-
+// in-a-loop this whole convention exists to prevent. Both handlers now name the limit
+// family (timeout, instruction limit, memory limit) ahead of the generic arm, as
+// Goccia.Builtins.GlobalFetch.pas and Goccia.Interpreter.pas do.
+//
+// Reaching the gate from a stringify needs a replacer: the plain serializer writes
+// into a native buffer and only the result string is charged, while the replacer walk
+// rebuilds every object property-by-property, so the property map's storage doubling
+// is what asks for a block larger than the parked slack.
+//
+// What the measurement can and cannot say here. It measures the peak charge of the
+// WHOLE call, and that necessarily includes the result string — around a megabyte for
+// a 4000-key object, far above any slack rung. So these cases can never satisfy the
+// one-sidedness precondition and always classify as "not provable", on every
+// architecture; a comment arguing that the result string is reserved too late to beat
+// the gate would be claiming something no assertion here checks. What IS checked is
+// the contract on every rung, plus the per-mode requirement below that a stringify
+// actually reaches the gate — which is what keeps this half pointed at the thing it
+// names.
+{
+  const stringifyGateTmp = mkdtemp("goccia-stringify-gate-");
+  const reachedGate: Record<string, number> = { interpreted: 0, bytecode: 0 };
+  try {
+    // The object is built before the charge measurement and before parking, or
+    // building it — not stringifying it — is what would cross the ceiling.
+    const wideObject =
+      'const obj = Object.fromEntries(Array.from({ length: 4000 }, (_, i) => ["k" + i, true]));';
+    const gatedStringifies: ParkedGateCase[] = [
+      {
+        label: "JSON.stringify",
+        imports: [],
+        setup: wideObject,
+        call: "JSON.stringify(obj, (k, v) => v)",
+        completedGuard: "produced.length > 0",
+      },
+      {
+        label: "JSON5.stringify",
+        imports: ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
+        setup: wideObject,
+        call: "JSON5.stringify(obj, (k, v) => v)",
+        completedGuard: "produced.length > 0",
+      },
+    ];
+
+    for (const probe of gatedStringifies) {
+      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+        console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
+        if (runParkedGateProbe("Stringify gate", probe, modeArgs, stringifyGateTmp).outcome === "gate")
+          reachedGate[modeLabel] += 1;
+      }
+    }
+
+    // Per mode, and it carries more weight here than in the parse half: a
+    // stringify's measured charge always includes the result string, so no
+    // stringify case can ever prove one-sidedness from its measurement and this
+    // is the only assertion that keeps the half pointed at the gate.
+    for (const [modeLabel, hits] of Object.entries(reachedGate))
+      if (hits === 0)
+        throw new Error(
+          `No stringify gate case reached the growth gate in ${modeLabel} mode on this build, so the ` +
+            `stringify half of this family is asserting the contract against refusals that never ` +
+            `involve the gate there.`,
+        );
+
+    // Vacuity control for the "no guest-caught gate text" assertion above. The
+    // other limiter — a charged string allocation — is script-visible by design
+    // and always was, so the same harness pointed at a shape that only ever
+    // crosses the charge (no replacer, one oversized string) MUST print the
+    // marker the gate cases forbid. If this stops catching, the assertions above
+    // are passing because nothing reaches any limiter, not because the ceiling is
+    // opaque.
+    //
+    // This half needs no calibration on any width: the result string reserves
+    // 800,004 bytes (length * SizeOf(Char), 2 bytes per char under delphiunicode
+    // everywhere), more than 20x the parked slack whichever seed is used, and no
+    // property map is touched at all — so there is no gate request for it to
+    // race.
+    console.log("--max-memory (stringify gate vacuity control: a charged refusal is still catchable)...");
+    {
+      const control: ParkedGateCase = {
+        label: "control",
+        imports: [],
+        setup: 'const big = "y".repeat(400000);',
+        call: "JSON.stringify(big)",
+        completedGuard: "produced.length > 0",
+      };
+      const run = runGateCase(
+        join(stringifyGateTmp, "stringify-gate-control.mjs"),
+        parkedGateSource(control, 32_768),
+        [],
+      );
+      if (run.outcome === "unparked")
+        throw new Error(`Stringify gate control never parked the heap: ${run.out}`);
+      if (run.caught === null || !/^guest-caught RangeError/.test(run.caught))
+        throw new Error(
+          `Stringify gate control should let the guest catch the charged RangeError, making the gate assertions non-vacuous: ${run.out}`,
+        );
+      if (run.exitCode !== 0)
+        throw new Error(`Stringify gate control should exit 0, got ${run.exitCode}: ${run.out}`);
+    }
+  } finally {
+    clean(stringifyGateTmp);
+  }
+}
+
+// The same growth gate reached from plain guest code rather than a builtin, and
+// the reason this block exists at all: under a parked heap the tree-walking
+// interpreter used to answer `Error :: Object reference is Nil` where the VM
+// answered the uncatchable refusal. That was not a limiter disagreement — it was
+// a use-after-free surfacing as a guest-catchable error. `o["k" + i] = V(i)`
+// holds three GC-managed values in native Pascal locals (base, key, assigned
+// value) while `V(i)` pushes a call frame; that allocation charges the ceiling,
+// trips CollectForMemoryPressure, and the collector marks explicit roots only,
+// so the key was swept and ToPropertyKeyForBase then dispatched a virtual call
+// through it (EObjectCheck under `$OBJECTCHECKS ON`, a silent read into freed
+// memory in a production build). Two defences now stand behind this probe: the
+// temporaries are rooted (Goccia.AST.Expressions.pas) and integrity faults are
+// re-raised ahead of every generic conversion arm (Goccia.EngineFault.pas).
+//
+// One-sided by construction, unlike the parse and stringify gates above. Those
+// pin `true` values so nothing charged can refuse first, which is what lets them
+// insist the gate fires. This shape cannot: `"k" + i` builds a charged string
+// per iteration, and the GROWTH_GATE_SLACK note explains why a charged side that
+// scales with property count turns which-limiter-first into a per-width race.
+// So all three survivable outcomes are accepted — the loop completing, the host
+// reporting the growth-gate refusal, or the guest catching the charged
+// RangeError that has always been catchable by design — and only the outcomes
+// that mean the engine ran on freed memory are rejected: any integrity-fault
+// text, and any guest catch that is not that one charged RangeError. A
+// `guest-caught Error :: Object reference is Nil` is exactly what the
+// interpreter printed here before the fix.
+//
+// Parked wider than GROWTH_GATE_SLACK, and that is the calibration. At 48,000
+// the charged string keys exhaust the slack before the property map doubles
+// (measured: both modes end in the catchable RangeError), so the growth-gate
+// path — the one that was faulting — is never entered and the probe proves
+// nothing. 147,000 sits between the 64-bit C = 1022 doubling (73,632) and the
+// C = 2046 one (147,360): measured, the run parks at ~133,800 of real slack and
+// the gate refuses the 73,632-byte request, which is where the fault reproduced.
+// On i386 the largest reachable doubling for a 4000-key map is 98,240, below
+// this slack, so the gate cannot fire there at all and the run ends in one of
+// the other two outcomes — which is the reason this probe is one-sided rather
+// than a re-tuned two-sided one. `parked true` keeps it from passing without
+// ever entering the window.
+//
+// RE-DERIVED when the gate learned to collect (ADR 0110), because a collecting
+// gate is exactly the kind of change that silently moves a crossing. The
+// constants did not have to move, and the reason is worth recording rather than
+// leaving as a lucky pass. Measured on the same shape, before and after:
+//
+//   before   interpreted  parked slack 136,498   refused 73,632
+//            bytecode     parked slack 136,804   refused 73,632
+//   after    interpreted  parked slack 133,802   refused 73,632
+//            bytecode     parked slack 134,124   refused 73,632
+//
+// The crossing is unmoved because almost nothing here is reclaimable at the
+// moment the gate fires: the parked ballast is live by construction, and the
+// 4000-element iterable the loop walks is live for the whole loop, so the
+// forced collection finds little and the fit test lands where it landed
+// before. That is the opposite of the capacity probe above — where the live set
+// really is near zero and the collection moves the crossing by two doublings —
+// and having both shapes in the suite is what distinguishes "the gate collects"
+// from "the gate collects and that always buys capacity". The ~2.7 KB of slack
+// difference between the columns is run-to-run baseline noise, not behaviour:
+// it is well inside the 60 KB margin between the parked slack and the refused
+// request.
+const ASSIGNMENT_FAULT_SLACK = 147_000;
+{
+  const assignGateTmp = mkdtemp("goccia-assign-gate-");
+  try {
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      console.log(
+        `--max-memory (computed property assignment never faults into the guest: ${modeLabel})...`,
+      );
+      const src = [
+        "const V = (i) => true;",
+        ...parkingPreamble(ASSIGNMENT_FAULT_SLACK),
+        "try {",
+        "  const o = {};",
+        "  for (const i of Array.from({ length: 4000 }, (_, j) => j)) o['k' + i] = V(i);",
+        '  console.log("guest-completed", Object.keys(o).length);',
+        "} catch (e) {",
+        // The marker an internal fault must never reach.
+        "  console.log('guest-caught', e.name, '::', e.message);",
+        "}",
+        "",
+      ].join("\n");
+      const srcPath = join(assignGateTmp, `assign-gate-${modeLabel}.mjs`);
+      writeFileSync(srcPath, src);
+      const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 180_000,
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (!out.includes("parked true"))
+        throw new Error(`Assignment gate (${modeLabel}) never parked the heap: ${out}`);
+      // The fault text itself, wherever it lands — caught by the guest or
+      // reported by the host. Either way the engine touched freed memory.
+      if (/Object reference is Nil|Access violation|Bus error|Invalid pointer/i.test(out))
+        throw new Error(
+          `Assignment gate (${modeLabel}) hit an engine-integrity fault under memory pressure: ${out}`,
+        );
+      if (out.includes("Fatal error") && !out.includes("would exceed the memory budget"))
+        throw new Error(`Assignment gate (${modeLabel}) crashed: ${out}`);
+      if (out.includes("guest-caught")) {
+        // The charged limiter is script-visible by design and always was; every
+        // other guest catch here is the engine handing script code a failure of
+        // its own, which is what this block exists to forbid.
+        if (!out.includes("guest-caught RangeError :: Allocation failed"))
+          throw new Error(
+            `Assignment gate (${modeLabel}) let the guest catch something other than the charged RangeError: ${out}`,
+          );
+        if (proc.exitCode !== 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) caught the charged RangeError but exited ${proc.exitCode}: ${out}`,
+          );
+      } else if (out.includes("guest-completed")) {
+        if (!out.includes("guest-completed 4000"))
+          throw new Error(
+            `Assignment gate (${modeLabel}) completed with the wrong key count, which is silent corruption: ${out}`,
+          );
+        if (proc.exitCode !== 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) completed but exited ${proc.exitCode}: ${out}`,
+          );
+      } else if (out.includes("would exceed the memory budget")) {
+        if (proc.exitCode === 0)
+          throw new Error(
+            `Assignment gate (${modeLabel}) reported the budget refusal but exited 0: ${out}`,
+          );
+      } else {
+        throw new Error(
+          `Assignment gate (${modeLabel}) produced none of the permitted outcomes: ${out}`,
+        );
+      }
+    }
+  } finally {
+    clean(assignGateTmp);
+  }
+}
+
+// An ordinary failing test file is still an ordinary failing test file. The
+// runner now aborts the whole run — exit 70, no summary — when an engine
+// integrity fault reaches one of its per-file arms (ADR 0109, "Host tier: the
+// test runner"), and the failure mode worth guarding against is that policy
+// widening to catch things it was never meant to. A failed assertion is a
+// verdict on one file delivered by a sound heap: it stays exit 1, the passing
+// file beside it still runs and still counts, and the summary is unchanged.
+//
+// The abort path itself is not reachable from here. Raising a genuine
+// EObjectCheck inside a test file would take an injection hook in the runner —
+// a switch whose only purpose is to corrupt a production binary on request —
+// and that is not worth shipping for a test; the abort was verified by hand
+// against a temporary build instead. What this block locks is the contract the
+// abort must not disturb, in both execution modes and both --jobs shapes,
+// since the sequential and parallel paths reach the arms differently.
+console.log("TestRunner (a failing file stays exit 1, not an integrity abort)...");
+{
+  const failTmp = mkdtemp("goccia-runner-fail-");
+  try {
+    writeFileSync(
+      join(failTmp, "failing.test.js"),
+      'describe("d", () => {\n  test("fails", () => {\n    expect(1).toBe(2);\n  });\n});\n',
+    );
+    // The console.log marker proves the passing FILE executed — the count
+    // assertions below prove one test passed, but only the marker ties that
+    // pass to this file rather than to some shape change in the failing one.
+    writeFileSync(
+      join(failTmp, "passing.test.js"),
+      'console.log("RAN: passing.test.js");\ndescribe("d", () => {\n  test("passes", () => {\n    expect(1).toBe(1);\n  });\n});\n',
+    );
+    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+      for (const jobsArg of ["--jobs=1", "--jobs=2"]) {
+        const label = `${modeArgs.length > 0 ? "bytecode" : "interpreted"} ${jobsArg}`;
+        const proc = Bun.spawnSync(
+          [TESTRUNNER, failTmp, "--no-progress", jobsArg, ...modeArgs],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (out.includes("Integrity fault:"))
+          throw new Error(`TestRunner (${label}) treated a failed assertion as an integrity fault: ${out}`);
+        if (proc.exitCode !== 1)
+          throw new Error(`TestRunner (${label}) should exit 1 on a failed test, got ${proc.exitCode}: ${out}`);
+        // The report shape the abort must leave alone: the failing file counted
+        // once, the file beside it still executed, and the failure named.
+        for (const expected of [
+          "Test Results Test Files: 2",
+          "Test Results Run Tests: 2",
+          "Test Results Passed: 1 (50.00%)",
+          "Test Results Failed: 1 (50.00%)",
+          'Test "fails" in suite "d": Expected 1 to be 2',
+          // The guest marker directly proves the passing FILE executed. The
+          // parallel workers capture guest console output, so the marker is
+          // only observable sequentially; the jobs=2 shape keeps the count
+          // assertions, which pin the same fact arithmetically.
+          ...(jobsArg === "--jobs=1" ? ["RAN: passing.test.js"] : []),
+        ]) {
+          if (!out.includes(expected))
+            throw new Error(`TestRunner (${label}) report lost "${expected}": ${out}`);
+        }
+      }
+    }
+  } finally {
+    clean(failTmp);
+  }
+}
+
+console.log("--max-memory (a charged reservation collects before it refuses)...");
+{
+  // A charged reservation R used to be refused without collecting at all
+  // whenever the live set sat below the pressure trigger, which fires only
+  // once BytesAllocated reaches maxBytes - maxBytes/8 (clamped to
+  // 16 KiB..16 MiB). Any R larger than that reserve therefore had a whole
+  // interval of heap positions in which it was refused with megabytes of
+  // reclaimable garbage still on the heap, and which positions those were
+  // depended on where a script's transient garbage happened to sit — so the
+  // refusals came in bands rather than at a floor. TryReserveExternalBytes now
+  // forces the collection and re-tests once before refusing, through the shared
+  // TryCollectForLimitedBytes that the uncharged growth gate also uses (ADR
+  // 0110) — including the shared floor that keeps a retry at O(1). This probe
+  // covers the charged half of that routine; the capacity probe above covers
+  // the gated half.
+  //
+  // The shape is constructed rather than sampled, because a band's position is
+  // a property of a particular machine's live set and would not survive CI.
+  // Under a 64 MiB ceiling the pressure reserve is 8,388,608 B. Park to 22 MB
+  // of slack, then drop ~10.5 MB of reclaimable garbage: the heap sits at
+  // ~11.5 MB of slack, still clear of the trigger by ~3 MB, so the heuristic
+  // declines. An 18 MB reservation is over that slack and over the reserve —
+  // squarely in the old refusal interval — and fits comfortably once the
+  // garbage goes. `band true` pins that the probe really is in the interval;
+  // if the margins ever drift the diagnostics say which one.
+  const reserveTmp = mkdtemp("goccia-reserve-collect-");
+  try {
+    const RESERVE_CEILING = 67_108_864;
+    const parkedReservationSource = (repeatChars: number): string =>
+      [
+        ...parkingPreamble(22_000_000),
+        "let garbage = [];",
+        'for (const g of Array.from({ length: 320 }, (_, j) => j)) garbage.push("g".repeat(16384));',
+        "garbage = null;",
+        "const floor = Goccia.gc.maxBytes / 8;",
+        "const slackBefore = Goccia.gc.maxBytes - Goccia.gc.bytesAllocated;",
+        'console.log("band", slackBefore > floor, "slack", slackBefore, "floor", floor);',
+        "try {",
+        `  const big = "b".repeat(${repeatChars});`,
+        '  console.log("reserved", big.length);',
+        "} catch (e) {",
+        "  console.log('refused', e.name, '::', e.message);",
+        "}",
+        "",
+      ].join("\n");
+
+    // 18,000,000 charged bytes: over the ~11.5 MB of slack the reservation
+    // sees, over the 8,388,608 B reserve, and under the ~22 MB a collection
+    // gives back. Before the fix this refused; it must now succeed.
+    const bandPath = join(reserveTmp, "reserve-band.mjs");
+    writeFileSync(bandPath, parkedReservationSource(9_000_000));
+    const bandProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, bandPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
+    });
+    const bandOut = bandProc.stdout.toString() + bandProc.stderr.toString();
+    if (!bandOut.includes("parked true"))
+      throw new Error(`Reserve-band probe never parked the heap: ${bandOut}`);
+    if (!bandOut.includes("band true"))
+      throw new Error(
+        `Reserve-band probe did not land below the pressure trigger, so it proves nothing: ${bandOut}`,
+      );
+    if (bandProc.exitCode !== 0)
+      throw new Error(`Reserve-band probe should exit 0, got ${bandProc.exitCode}: ${bandOut}`);
+    if (!bandOut.includes("reserved 9000000"))
+      throw new Error(
+        `A reservation larger than the pressure reserve must succeed after the forced collection: ${bandOut}`,
+      );
+
+    // The floor is still a floor. 48,000,000 charged bytes fits the ceiling on
+    // its own but not beside a live set the collection cannot reclaim, so the
+    // collect-then-retry path has to end in the refusal it always did.
+    const floorPath = join(reserveTmp, "reserve-floor.mjs");
+    writeFileSync(floorPath, parkedReservationSource(24_000_000));
+    const floorProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, floorPath], {
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 180_000,
+    });
+    const floorOut = floorProc.stdout.toString() + floorProc.stderr.toString();
+    if (!floorOut.includes("parked true"))
+      throw new Error(`Reserve-floor probe never parked the heap: ${floorOut}`);
+    if (floorProc.exitCode !== 0)
+      throw new Error(`Reserve-floor probe should exit 0, got ${floorProc.exitCode}: ${floorOut}`);
+    if (!floorOut.includes("refused RangeError"))
+      throw new Error(
+        `A reservation a collection cannot make room for must still be refused: ${floorOut}`,
+      );
+  } finally {
+    clean(reserveTmp);
+  }
+}
+
+console.log("goccia:yaml (deep flow nesting reports a named, non-empty error)...");
+{
+  // Depth refusals out of the data-format parsers do not agree on a class, and
+  // that split is pre-existing and deliberate here: JSON, JSON5 and JSONL hit
+  // their own parser-internal nesting cap and report SyntaxError, while YAML and
+  // TOML hit the shared native depth guard (EnterNativeDataDepth) and report
+  // RangeError "Maximum call stack size exceeded". Documented, not changed.
+  //
+  // For YAML this is a reclassification the except-narrowing brought about: the
+  // blanket handler used to relabel the depth guard's RangeError as a SyntaxError
+  // with an empty message, so the guest could not tell a resource ceiling from
+  // malformed input. The message being non-empty is the half that regressed.
+  const depthTmp = mkdtemp("goccia-parse-depth-");
+  try {
+    const src = [
+      'import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;',
+      'const deep = "[".repeat(5000) + "]".repeat(5000);',
+      "const report = (label, parse) => {",
+      "  try {",
+      "    parse();",
+      '    console.log(label, "no-throw", "::", "no-throw");',
+      "  } catch (e) {",
+      "    console.log(label, e.name, '::', e.message);",
+      "  }",
+      "};",
+      'report("yaml", () => YAML.parse(deep));',
+      'report("json", () => JSON.parse(deep));',
+      "",
+    ].join("\n");
+    const srcPath = join(depthTmp, "parse-depth.mjs");
+    writeFileSync(srcPath, src);
+    const proc = Bun.spawnSync([LOADER, srcPath], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode !== 0) throw new Error(`Parse depth run should exit 0, got ${proc.exitCode}: ${out}`);
+    if (!/^yaml RangeError :: .+$/m.test(out))
+      throw new Error(`YAML deep flow nesting should report a named RangeError with a message: ${out}`);
+    if (!out.includes("yaml RangeError :: Maximum call stack size exceeded"))
+      throw new Error(`YAML deep flow nesting should report the native depth guard's message: ${out}`);
+    if (!/^json SyntaxError :: .+$/m.test(out))
+      throw new Error(`JSON deep nesting should report a SyntaxError with a message: ${out}`);
+  } finally {
+    clean(depthTmp);
+  }
+}
+
+console.log("--max-memory (ordinary script errors stay catchable under a budget)...");
+{
+  // The counterweight: the same budget must not turn an in-language error
+  // into a host-level failure.
+  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+    const label = modeArgs.length > 0 ? "bytecode" : "interpreted";
+    const src = "let caught = false; try { null.property; } catch (e) { caught = true; } caught\n";
+    const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", "--compat-asi", ...modeArgs], { timeout: 30_000 });
+    if (exitCode !== 0) throw new Error(`Catchable script error (${label}) should exit 0, got ${exitCode}: ${JSON.stringify(json)}`);
+    if (json.files?.[0]?.result !== true) throw new Error(`Catchable script error (${label}) should be caught by the script, got ${json.files?.[0]?.result}`);
+  }
 }
 
 console.log("--max-memory (manual gc reclaims inside active calls)...");
@@ -1189,6 +3225,928 @@ console.log("--log option...");
           throw new Error(`Log file ${label} should contain [${method}], got: ${content}`);
       }
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Assertion failure text (TestRunner) ---------------------------------------
+
+// A failed assertion is recorded rather than thrown, so its message cannot be
+// observed from inside a test. These properties are load-bearing enough to pin
+// from the outside: toBeInstanceOf naming what it compared, a rejected returned
+// Promise naming the error it rejected with, and the vitest shim keeping a
+// named, actionable error for every member it does not provide.
+console.log("Assertion failure text...");
+{
+  const tmp = mkdtemp("goccia-assertion-text-");
+  try {
+    const instanceOfSrc = join(tmp, "instance-of.test.js");
+    writeFileSync(
+      instanceOfSrc,
+      [
+        "class BatchError extends Error {}",
+        "class NamedError extends Error {}",
+        "class Plain {}",
+        "class Sibling {}",
+        'describe("rendering", () => {',
+        '  test("error subject", () => {',
+        '    expect(new BatchError("boom")).toBeInstanceOf(NamedError);',
+        "  });",
+        '  test("plain subject", () => {',
+        "    expect(new Plain()).toBeInstanceOf(Sibling);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const instanceOf = await $`${TESTRUNNER} ${instanceOfSrc} --no-progress 2>&1`.nothrow();
+    const instanceOfOut = instanceOf.text();
+    // The class object serializes as "{}", so a message built from the values
+    // alone said "Expected {} to be an instance of {}" and named neither side.
+    for (const expected of [
+      "Expected Error: boom to be an instance of NamedError",
+      "Expected Plain{} to be an instance of Sibling",
+    ]) {
+      if (!instanceOfOut.includes(expected))
+        throw new Error(`toBeInstanceOf should report ${expected}, got: ${instanceOfOut}`);
+    }
+
+    // The reason a returned Promise rejected with is the whole failure report,
+    // and an Error keeps "name" on its prototype and "message" non-enumerable,
+    // so serializing the value reported `new Error("boom")` as "{}" — the one
+    // shape a debugging session most needs named. A class extending Error
+    // inherits Error.prototype.name, so its identity is read off the
+    // constructor, while an explicitly assigned name still wins.
+    const rejectionSrc = join(tmp, "rejection.test.js");
+    writeFileSync(
+      rejectionSrc,
+      [
+        "class MyErr extends Error {}",
+        "class NamedErr extends Error {",
+        "  constructor(message) { super(message); this.name = 'ValidationFailure'; }",
+        "}",
+        "class ProtoNamed extends Error {}",
+        "ProtoNamed.prototype.name = 'ProtoAssigned';",
+        // An explicit prototype name that happens to spell "Error" is still
+        // the author's answer, so the constructor name must not displace it.
+        "class ProtoErrorNamed extends Error {}",
+        "ProtoErrorNamed.prototype.name = 'Error';",
+        'test("plain error", () => Promise.reject(new Error("boom")));',
+        'test("subclass error", () => Promise.reject(new MyErr("boom")));',
+        'test("named subclass error", () => Promise.reject(new NamedErr("boom")));',
+        'test("prototype-named subclass error", () => Promise.reject(new ProtoNamed("boom")));',
+        'test("prototype-named Error subclass", () => Promise.reject(new ProtoErrorNamed("boom")));',
+        'test("native error", () => Promise.reject(new TypeError("bad")));',
+        'test("plain object", () => Promise.reject({ code: 42 }));',
+        'test("message only", () => Promise.reject({ message: "hi" }));',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const rejection = await $`${TESTRUNNER} ${rejectionSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const rejectionOut = rejection.text();
+      for (const expected of [
+        "Returned Promise rejected: Error: boom",
+        "Returned Promise rejected: MyErr: boom",
+        "Returned Promise rejected: ValidationFailure: boom",
+        "Returned Promise rejected: ProtoAssigned: boom",
+        "Returned Promise rejected: TypeError: bad",
+        "Returned Promise rejected: { code: 42 }",
+        "Returned Promise rejected: { message: 'hi' }",
+      ]) {
+        if (!rejectionOut.includes(expected))
+          throw new Error(
+            `TestRunner (${mode}) should report "${expected}", got: ${rejectionOut}`,
+          );
+      }
+      // ProtoErrorNamed spells its prototype name "Error" on purpose, which
+      // reads identically to the inherited default; only the absence of the
+      // constructor name tells the two apart.
+      if (rejectionOut.includes("ProtoErrorNamed: boom"))
+        throw new Error(
+          `TestRunner (${mode}) must keep an explicitly assigned "Error" prototype name, got: ${rejectionOut}`,
+        );
+    }
+
+    // Every member the shim does not implement must keep throwing by name. The
+    // contract is what tells a suite author which member to work around, so
+    // silently degrading one to a no-op is worse than not having it.
+    const unsupported: Array<[string, string]> = [
+      ["vi.hoisted(() => ({}))", "vi.hoisted is not supported"],
+      ["vi.importMock('./x.js')", "vi.importMock is not supported"],
+      ["vi.setConfig({})", "vi.setConfig is not supported"],
+      // The fake-timer family is implemented, but three of its members are not
+      // and must keep saying so by name rather than becoming absent properties:
+      // no requestAnimationFrame, no process.nextTick, and no real elapsed time
+      // for an auto-advancing clock to track. `setTimerTickMode("manual")` is
+      // accepted — it names the only behaviour there is — so the unsupported
+      // case has to ask for one of the others.
+      [
+        "vi.advanceTimersToNextFrame()",
+        "vi.advanceTimersToNextFrame is not supported",
+      ],
+      ["vi.runAllTicks()", "vi.runAllTicks is not supported"],
+      [
+        "vi.setTimerTickMode('interval')",
+        "vi.setTimerTickMode is not supported",
+      ],
+      ["vi.importActual('./x.js')", "vi.importActual is not supported"],
+      ["vi.resetModules()", "vi.resetModules is not supported"],
+      ["vi.doMock('./x.js')", "vi.doMock is not supported"],
+    ];
+    const shimSrc = join(tmp, "shim.test.js");
+    writeFileSync(
+      shimSrc,
+      [
+        'import { vi } from "vitest";',
+        'describe("unsupported", () => {',
+        ...unsupported.map(
+          ([call], index) =>
+            `  test("case ${index}", () => { try { ${call}; console.log("NO-THROW ${index}"); } catch (e) { console.log("THREW ${index}: " + e.message); } });`,
+        ),
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const shim = await $`${TESTRUNNER} ${shimSrc} --source-type=module --no-progress 2>&1`.nothrow();
+    const shimOut = shim.text();
+    unsupported.forEach(([call, message], index) => {
+      if (shimOut.includes(`NO-THROW ${index}`))
+        throw new Error(`${call} must keep throwing its named error, got: ${shimOut}`);
+      // The whole capture would pass the docs-link check as soon as any one
+      // member carried the link, so each case is matched on its own line.
+      const line = shimOut
+        .split("\n")
+        .find((entry) => entry.includes(`THREW ${index}: `));
+      if (line === undefined || !line.includes(`THREW ${index}: ${message}`))
+        throw new Error(`${call} should report "${message}", got: ${shimOut}`);
+      if (!line.includes("docs/testing-api.md"))
+        throw new Error(`${call} should point at the docs, got: ${line}`);
+    });
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Runtime diagnostic parity (TestRunner) ------------------------------------
+
+// An uncaught runtime fault is reported by the runner, not by the suite, so the
+// rendered diagnostic is only observable from outside. It used to be a
+// different diagnostic per execution mode: interpreted runs printed the named
+// callee, a suggestion, a `--> file:line:column` header and a code frame, while
+// bytecode runs printed a bare "Fatal error: TypeError: undefined is not a
+// function". The two renderings are pinned together here — byte-for-byte
+// equality is the contract, because any drift in either mode is the defect.
+console.log("Runtime diagnostic parity...");
+{
+  const tmp = mkdtemp("goccia-diagnostic-parity-");
+  // The diagnostic (header + code frame) is everything before the results
+  // block. Guard the marker: if a run ever stops emitting it, slice(0, -1)
+  // would silently compare truncated output, so treat its absence as a failure
+  // rather than let the equality check pass on a coincidence.
+  const RESULTS_MARKER = "Test Results Test Files:";
+  const diagnosticPrefix = (out: string, label: string): string => {
+    const at = out.indexOf(RESULTS_MARKER);
+    if (at < 0)
+      throw new Error(`${label} produced no results block, got: ${out}`);
+    return out.slice(0, at);
+  };
+  try {
+    const calleeSrc = join(tmp, "callee.test.js");
+    writeFileSync(calleeSrc, ["const obj = {};", "obj.missingMethod();", ""].join("\n"));
+
+    const renderings: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${calleeSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      // A file whose top level throws is a failed file: the runner exits 1.
+      if (run.exitCode !== 1)
+        throw new Error(
+          `TestRunner (${mode}) should exit 1 on an uncaught throw, got ${run.exitCode}: ${out}`,
+        );
+      for (const expected of [
+        "TypeError: obj.missingMethod is not a function",
+        "Suggestion: 'obj' is of type 'object' which does not have method 'missingMethod'",
+        "callee.test.js:2:18",
+        "2 | obj.missingMethod();",
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(
+            `TestRunner (${mode}) should report "${expected}", got: ${out}`,
+          );
+      }
+      if (out.includes("Fatal error"))
+        throw new Error(
+          `TestRunner (${mode}) must render a thrown value as a diagnostic, not a fatal error, got: ${out}`,
+        );
+      // The header and code frame are the part that must match across modes;
+      // the results block below carries mode-specific timing lines.
+      renderings[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (renderings["--mode=interpreted"] !== renderings["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical diagnostic.\ninterpreted:\n${renderings["--mode=interpreted"]}\nbytecode:\n${renderings["--mode=bytecode"]}`,
+      );
+
+    // The code frame is read from a file, and the file it was read from used to
+    // be the entry every time: a module that threw while evaluating produced a
+    // header naming the module and an excerpt quoting whatever the entry file
+    // happened to have at that line number.
+    const dep = join(tmp, "dep.js");
+    writeFileSync(
+      dep,
+      [
+        "// dep filler 1",
+        "// dep filler 2",
+        "// dep filler 3",
+        "// dep filler 4",
+        "export const boom = (() => { throw new Error('dep exploded'); })();",
+        "",
+      ].join("\n"),
+    );
+    const entry = join(tmp, "entry.test.js");
+    writeFileSync(
+      entry,
+      [
+        "// entry filler 1",
+        "// entry filler 2",
+        "// entry filler 3",
+        "// entry filler 4",
+        "import { boom } from './dep.js';",
+        "console.log(boom);",
+        "",
+      ].join("\n"),
+    );
+
+    const frames: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${entry} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (run.exitCode !== 1)
+        throw new Error(
+          `TestRunner (${mode}) should exit 1 on a module that throws, got ${run.exitCode}: ${out}`,
+        );
+      if (!out.includes("Error: dep exploded"))
+        throw new Error(`TestRunner (${mode}) should report the module's error, got: ${out}`);
+      if (!out.includes("dep.js:5:"))
+        throw new Error(`TestRunner (${mode}) should locate the fault in dep.js, got: ${out}`);
+      if (!out.includes("throw new Error('dep exploded')"))
+        throw new Error(
+          `TestRunner (${mode}) should quote dep.js in the code frame, got: ${out}`,
+        );
+      if (out.includes("entry filler") || out.includes("import { boom }"))
+        throw new Error(
+          `TestRunner (${mode}) must not quote the entry file for a fault in dep.js, got: ${out}`,
+        );
+      frames[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (frames["--mode=interpreted"] !== frames["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical module diagnostic.\ninterpreted:\n${frames["--mode=interpreted"]}\nbytecode:\n${frames["--mode=bytecode"]}`,
+      );
+
+    // A `new` before an unrelated throw must not drag its location onto the
+    // throw: the constructor-site stamp is scoped to the construction, so
+    // `m.missing.x` reports its own line in both modes, identically.
+    const precedingNewSrc = join(tmp, "preceding-new.test.js");
+    writeFileSync(
+      precedingNewSrc,
+      [
+        "const make = () => {",
+        "  const m = new Map();",
+        "  return m.missing.x;",
+        "};",
+        "make();",
+        "",
+      ].join("\n"),
+    );
+    const precedingNew: Record<string, string> = {};
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${precedingNewSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("preceding-new.test.js:3:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the fault at the m.missing.x line (3), not the new Map() line, got: ${out}`,
+        );
+      if (out.includes("preceding-new.test.js:2:"))
+        throw new Error(
+          `TestRunner (${mode}) leaked the new Map() location (line 2) onto a later throw, got: ${out}`,
+        );
+      precedingNew[mode] = diagnosticPrefix(out, `TestRunner (${mode})`);
+    }
+    if (precedingNew["--mode=interpreted"] !== precedingNew["--mode=bytecode"])
+      throw new Error(
+        `Both modes must render an identical preceding-new diagnostic.\ninterpreted:\n${precedingNew["--mode=interpreted"]}\nbytecode:\n${precedingNew["--mode=bytecode"]}`,
+      );
+
+    // A successful construct must not leave its constructor's position stamped
+    // on the caller frame: a later native error reports its own line, not the
+    // `new`'s. `new Map()` on line 1, `JSON.parse("{")` on line 2 — the syntax
+    // error must locate to line 2 in both modes (the bytecode twin of the
+    // round-2 `new`-stamp finding).
+    const constructSrc = join(tmp, "construct-stamp.test.js");
+    writeFileSync(
+      constructSrc,
+      ['new Map();', 'JSON.parse("{");', ""].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${constructSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("construct-stamp.test.js:2:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the JSON error at line 2 (JSON.parse), got: ${out}`,
+        );
+      if (out.includes("construct-stamp.test.js:1:"))
+        throw new Error(
+          `TestRunner (${mode}) leaked the new Map() position (line 1) onto the JSON error: ${out}`,
+        );
+    }
+
+    // The automatic SuppressedError from a block+disposer double-throw carries
+    // genuine provenance (built as an error object, not a bare object): both
+    // modes render a "SuppressedError" diagnostic with a location, and the
+    // interpreter shows the source frame.
+    const suppSrc = join(tmp, "suppressed.test.js");
+    writeFileSync(
+      suppSrc,
+      [
+        "const run = () => {",
+        '  { using d = { [Symbol.dispose]() { throw new Error("disposer boom"); } }; throw new Error("body boom"); }',
+        "};",
+        "run();",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${suppSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (!out.includes("SuppressedError"))
+        throw new Error(`TestRunner (${mode}) should report a SuppressedError, got: ${out}`);
+      if (!out.includes("suppressed.test.js:"))
+        throw new Error(
+          `TestRunner (${mode}) should locate the SuppressedError, not print it bare, got: ${out}`,
+        );
+    }
+    {
+      const run = await $`${TESTRUNNER} ${suppSrc} --mode=interpreted --no-progress 2>&1`.nothrow();
+      if (!run.text().includes("throw new Error(\"body boom\")"))
+        throw new Error(
+          `TestRunner (interpreted) should render the SuppressedError's source frame, got: ${run.text()}`,
+        );
+    }
+
+    // A non-constructable super() reaches the class-construction machinery, not
+    // the ordinary call guard, so its message/location parity is governed there
+    // (a separate concern from these diagnostics). Pin only what this change
+    // owns: both modes render a TypeError diagnostic rather than a bare
+    // "Fatal error". Byte-level super() parity is tracked with the construction
+    // path, not here.
+    const superSrc = join(tmp, "super-call.test.js");
+    writeFileSync(
+      superSrc,
+      [
+        "class B extends null {",
+        "  constructor() {",
+        "    super();",
+        "  }",
+        "}",
+        "new B();",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${superSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes("Fatal error"))
+        throw new Error(
+          `TestRunner (${mode}) must render the super() fault as a diagnostic, not a fatal error, got: ${out}`,
+        );
+      if (!out.includes("TypeError"))
+        throw new Error(
+          `TestRunner (${mode}) should report a TypeError for a non-constructable super(), got: ${out}`,
+        );
+    }
+
+    // Security: a code frame is rendered only from provenance the engine
+    // recorded on a genuine error at creation, never from the thrown value's
+    // guest-writable `stack` string. A forged `{ stack: "...at f (FILE:1:1)" }`
+    // object carries no provenance, so no host opens FILE and no frame is shown.
+    const secretPath = join(tmp, "SECRET_MUST_NOT_APPEAR.txt");
+    const secretMarker = "TOP_SECRET_FILE_CONTENTS_LEAKED";
+    writeFileSync(secretPath, `${secretMarker}\nline two of the secret file\n`);
+    const attackSrc = join(tmp, "attack.test.js");
+    // Point the forged frame at the secret file. If a host reads it, the marker
+    // (its line 1) shows up in the rendered code frame.
+    writeFileSync(
+      attackSrc,
+      [
+        `const forged = { name: "Error", message: "forged", stack: "Error: forged\\n    at f (${secretPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${attackSrc} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(secretMarker))
+        throw new Error(
+          `SECURITY: TestRunner (${mode}) read a file named by a thrown stack: ${out}`,
+        );
+    }
+    // Same attack through the loader and the sandbox runner (the sandbox path
+    // is the one that would otherwise bypass the sandbox.fs.path gate).
+    for (const bin of [LOADER, BARE]) {
+      const run = await $`${bin} ${attackSrc} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(secretMarker))
+        throw new Error(
+          `SECURITY: ${bin} read a file named by a thrown stack: ${out}`,
+        );
+    }
+
+    // A frame naming a FIFO must not make any host block on open(); the registry
+    // lookup misses and no filesystem call is made. Guard with a hard timeout so
+    // a regression hangs the suite visibly rather than silently.
+    if (process.platform !== "win32") {
+      const fifoPath = join(tmp, "frame.fifo");
+      const mk = await $`mkfifo ${fifoPath}`.nothrow();
+      if (mk.exitCode === 0) {
+        const fifoSrc = join(tmp, "fifo.test.js");
+        writeFileSync(
+          fifoSrc,
+          [
+            `const forged = { name: "Error", message: "f", stack: "Error: f\\n    at g (${fifoPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+            "throw forged;",
+            "",
+          ].join("\n"),
+        );
+        const proc = Bun.spawnSync(
+          [TESTRUNNER, fifoSrc, "--mode=bytecode", "--no-progress"],
+          { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+        );
+        // spawnSync kills a run that exceeds the timeout with a signal; a clean
+        // exit means the diagnostic rendered without ever opening the FIFO.
+        if (proc.signalCode)
+          throw new Error(
+            `SECURITY: TestRunner hung rendering a frame that names a FIFO (${proc.signalCode})`,
+          );
+      }
+    }
+
+    // Host-preload disclosure: a module the HOST preloaded (which the guest
+    // never imported) must not be readable through a forged frame. The guest
+    // never throws from it, so it is never a genuine error's provenance; the
+    // forged object has none. The preloaded module's private source must not
+    // appear.
+    const preloadMarker = "HOST_PRELOAD_PRIVATE_SOURCE_MARKER";
+    const preloadSrc = join(tmp, "preload.js");
+    writeFileSync(
+      preloadSrc,
+      [
+        `// ${preloadMarker}`,
+        "export const hostValue = 42;",
+        "",
+      ].join("\n"),
+    );
+    const preloadAttack = join(tmp, "preload-attack.js");
+    writeFileSync(
+      preloadAttack,
+      [
+        `const forged = { name: "Error", message: "p", stack: "Error: p\\n    at f (${preloadSrc.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${preloadAttack} --globals ${preloadSrc} ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(preloadMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host-preloaded module via a forged frame: ${out}`,
+        );
+    }
+
+    // Cross-run stale disclosure: in one TestRunner invocation over two files,
+    // file A loads a module carrying a secret; file B forges a frame naming that
+    // module. Each file runs in its own engine scope, and B's forged object has
+    // no provenance, so B must not surface A's module source.
+    const staleMarker = "PRIOR_RUN_MODULE_SOURCE_MARKER";
+    const staleDir = join(tmp, "stale");
+    mkdirSync(staleDir, { recursive: true });
+    writeFileSync(
+      join(staleDir, "secret-mod.js"),
+      [`// ${staleMarker}`, "export const v = 1;", ""].join("\n"),
+    );
+    writeFileSync(
+      join(staleDir, "a.test.js"),
+      ['import { v } from "./secret-mod.js";', "void v;", ""].join("\n"),
+    );
+    const secretModPath = join(staleDir, "secret-mod.js");
+    writeFileSync(
+      join(staleDir, "b.test.js"),
+      [
+        `const forged = { name: "Error", message: "b", stack: "Error: b\\n    at f (${secretModPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+        "throw forged;",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
+      const run = await $`${TESTRUNNER} ${join(staleDir, "a.test.js")} ${join(staleDir, "b.test.js")} ${mode} --no-progress 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(staleMarker))
+        throw new Error(
+          `SECURITY: TestRunner (${mode}) disclosed a prior run's module source via a forged frame: ${out}`,
+        );
+    }
+
+    // Host-preload GENUINE-error exclusion: a real error thrown INSIDE a
+    // host-preloaded module (not forged) must still withhold that module's
+    // source from the guest — location line yes, source lines no. The guest
+    // calls a host global whose body throws; the host module's own source lines
+    // must not appear.
+    const hostBodyMarker = "HOST_MODULE_BODY_SOURCE_LINE";
+    const hostThrower = join(tmp, "host-thrower.js");
+    writeFileSync(
+      hostThrower,
+      [
+        `// ${hostBodyMarker}`,
+        "export const boom = () => {",
+        `  const secret = "${hostBodyMarker}";`,
+        "  return secret.length.toFixed.call(null).nope();",
+        "};",
+        "",
+      ].join("\n"),
+    );
+    const hostThrowerMain = join(tmp, "host-thrower-main.js");
+    writeFileSync(hostThrowerMain, ["boom();", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${hostThrowerMain} --globals ${hostThrower} --compat-asi ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(hostBodyMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host module's source for an error thrown inside it: ${out}`,
+        );
+    }
+
+    // Held-error exclusion: a host-preloaded factory creates an Error; the guest
+    // throws it later. The excerpt (host module source) must not be shown.
+    const heldMarker = "HOST_HELD_FACTORY_SOURCE";
+    const heldHost = join(tmp, "held-host.js");
+    writeFileSync(
+      heldHost,
+      [`// ${heldMarker}`, 'export const makeHeld = () => new Error("held");', ""].join("\n"),
+    );
+    const heldMain = join(tmp, "held-main.js");
+    writeFileSync(heldMain, ["const e = makeHeld();", "throw e;", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${heldMain} --globals ${heldHost} --compat-asi ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(heldMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host factory's source via a held error: ${out}`,
+        );
+    }
+
+    // Deferred import-chain ownership: the host-injected module has finished
+    // loading before guest execution starts. Calling its exported function
+    // later must still carry host ownership into import(), transitively; a
+    // synchronous host-preload depth counter cannot protect this shape.
+    const deferredMarker = "DEFERRED_HOST_IMPORT_PRIVATE_SOURCE_XZ";
+    const deferredSecret = join(tmp, "deferred-host-secret.js");
+    writeFileSync(
+      deferredSecret,
+      [
+        `// ${deferredMarker}`,
+        `throw new Error("deferred host import failed"); // ${deferredMarker}`,
+        "export const never = 1;",
+        "",
+      ].join("\n"),
+    );
+    const deferredGlobals = join(tmp, "deferred-globals.js");
+    writeFileSync(
+      deferredGlobals,
+      [
+        'export const loadDeferredHostModule = () => import("./deferred-host-secret.js");',
+        "",
+      ].join("\n"),
+    );
+    const deferredMain = join(tmp, "deferred-main.js");
+    writeFileSync(deferredMain, ["await loadDeferredHostModule();", ""].join("\n"));
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${deferredMain} --globals ${deferredGlobals} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (run.exitCode === 0 || !out.includes("deferred-host-secret.js:2:"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should locate the deferred host import failure, got: ${out}`,
+        );
+      if (out.includes(deferredMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a deferred host import's source: ${out}`,
+        );
+    }
+
+    // Memory bound: a guest module of long lines whose factory throws a genuine
+    // TypeError, held many times, must not retain diagnostic excerpts past the
+    // --max-memory ceiling. At a tight budget the run must hit the ceiling
+    // (RangeError or the uncatchable "exceed the memory budget"), never
+    // HELD:500 (unbounded retention) and never a nil-deref crash.
+    const memDir = join(tmp, "mem");
+    mkdirSync(memDir, { recursive: true });
+    const longLine = "// " + "é😀".repeat(700);
+    const memLines: string[] = [];
+    for (let i = 0; i < 9; i++) memLines.push(longLine);
+    memLines.push("export const boom = () => { const z = null; return z.x; };");
+    for (let i = 0; i < 9; i++) memLines.push("// " + "B".repeat(2000));
+    writeFileSync(join(memDir, "mod.js"), memLines.join("\n") + "\n");
+    writeFileSync(
+      join(memDir, "main.js"),
+      [
+        'import { boom } from "./mod.js";',
+        "const held = [];",
+        "Array.from({ length: 500 }).forEach(() => { try { boom(); } catch (e) { held.push(e); } });",
+        'console.log("HELD:" + held.length);',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${join(memDir, "main.js")} --max-memory=262144 --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes("Object reference is Nil") || out.includes("Range check"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) crashed under a diagnostic memory bound: ${out}`,
+        );
+      if (out.includes("HELD:500"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) retained 500 diagnostic excerpts past --max-memory (unbounded): ${out}`,
+        );
+      if (!out.includes("RangeError") && !out.includes("exceed the memory budget"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should hit the memory ceiling, got: ${out}`,
+        );
+    }
+
+    // Virtual-module ownership: a module the HOST injected (`--module`) is
+    // host-owned even though the GUEST imports it and a genuine error is thrown
+    // from inside it. The guest must see the fault's location but never the
+    // module's source text. (The guest has no API to inject a virtual module, so
+    // every virtual module is host-provided; ownership is decided at load, not
+    // inferred from who is running when the frame is captured.)
+    const vmMarker = "VIRTUAL_MODULE_BODY_SOURCE_XZ";
+    const vmMain = join(tmp, "vmodule-main.js");
+    writeFileSync(vmMain, ['import { boom } from "virtual:secret";', "boom();", ""].join("\n"));
+    const vmDef =
+      `virtual:secret=// ${vmMarker}\n` +
+      "export const boom = () => { const z = null; return z.x; };";
+    for (const mode of ["", "--mode=bytecode"]) {
+      const run = await $`${LOADER} ${vmMain} --module ${vmDef} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const out = run.text();
+      if (out.includes(vmMarker))
+        throw new Error(
+          `SECURITY: Loader (${mode || "interpreted"}) disclosed a host --module's source to a guest: ${out}`,
+        );
+      if (!out.includes("virtual:secret:"))
+        throw new Error(
+          `Loader (${mode || "interpreted"}) should still locate the fault in the virtual module, got: ${out}`,
+        );
+    }
+
+    // Canonical-identity ownership: a second spelling of a host-preloaded file
+    // must resolve to its first, host-owned entry. POSIX uses device+inode;
+    // Windows uses volume serial + file index from the already-open handle.
+    const aliasMarker = "HOST_FILE_VIA_ALIAS_SOURCE_XZ";
+    const aliasChildMarker = "HOST_ALIAS_TRANSITIVE_IMPORT_SOURCE_XZ";
+    const hostDirectory = join(tmp, "canonical-host");
+    mkdirSync(hostDirectory, { recursive: true });
+    const aliasChildSource = [
+      `// ${aliasChildMarker}`,
+      `throw new Error("alias child failed"); // ${aliasChildMarker}`,
+      "export const never = 1;",
+      "",
+    ].join("\n");
+    writeFileSync(join(hostDirectory, "alias-child.js"), aliasChildSource);
+    // A symlink/hardlink module resolves a relative child beside the alias;
+    // a directory junction resolves it inside hostDirectory. Populate both
+    // locations with the same source so each platform exercises its real rule.
+    writeFileSync(join(tmp, "alias-child.js"), aliasChildSource);
+    const realHost = join(hostDirectory, "real-host.js");
+    writeFileSync(
+      realHost,
+      [
+        `// ${aliasMarker}`,
+        "export const boom = () => { const z = null; return z.x; };",
+        'export const loadAliasChild = () => import("./alias-child.js");',
+        "",
+      ].join("\n"),
+    );
+    const aliases: Array<{ path: string; label: string }> = [];
+    if (process.platform === "win32") {
+      const hardlink = join(tmp, "hardlink-host.js");
+      try {
+        linkSync(realHost, hardlink);
+        aliases.push({ path: hardlink, label: "hardlink" });
+      } catch {
+        // The filesystem may not support hardlinks in the CI workspace.
+      }
+      const junctionDirectory = join(tmp, "junction-host");
+      try {
+        symlinkSync(hostDirectory, junctionDirectory, "junction");
+        aliases.push({
+          path: join(junctionDirectory, "real-host.js"),
+          label: "junction",
+        });
+      } catch {
+        // Junction creation can be disabled by the runner's filesystem policy.
+      }
+    } else {
+      const symlink = join(tmp, "symlink-host.js");
+      try {
+        symlinkSync(realHost, symlink);
+        aliases.push({ path: symlink, label: "symlink" });
+      } catch {
+        // Some filesystems disallow symlinks; skip rather than false-fail.
+      }
+    }
+    for (const alias of aliases) {
+      if (!existsSync(alias.path)) continue;
+      const aliasMain = join(tmp, `${alias.label}-main.js`);
+      const relativeAlias = `./${alias.path
+        .slice(tmp.length + 1)
+        .replace(/\\/g, "/")}`;
+      writeFileSync(
+        aliasMain,
+        [`import { boom } from "${relativeAlias}";`, "boom();", ""].join("\n"),
+      );
+      for (const mode of ["", "--mode=bytecode"]) {
+        const run = await $`${LOADER} ${aliasMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const out = run.text();
+        if (out.includes(aliasMarker))
+          throw new Error(
+            `SECURITY: Loader (${mode || "interpreted"}) disclosed a host file's source via a Windows/POSIX ${alias.label}: ${out}`,
+          );
+      }
+
+      const transitiveMain = join(tmp, `${alias.label}-transitive-main.js`);
+      writeFileSync(
+        transitiveMain,
+        [
+          `import { loadAliasChild } from "${relativeAlias}";`,
+          "await loadAliasChild();",
+          "",
+        ].join("\n"),
+      );
+      for (const mode of ["", "--mode=bytecode"]) {
+        const run = await $`${LOADER} ${transitiveMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const out = run.text();
+        if (run.exitCode === 0 || !out.includes("alias-child.js:2:"))
+          throw new Error(
+            `Loader (${mode || "interpreted"}) should locate the ${alias.label} host child failure, got: ${out}`,
+          );
+        if (out.includes(aliasChildMarker))
+          throw new Error(
+            `SECURITY: Loader (${mode || "interpreted"}) disclosed source imported through a host ${alias.label}: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Timers: containment and uncaught attribution ------------------------------
+
+// Two properties that only show up in the runner's output, so neither can be
+// asserted from inside a suite.
+console.log("Timers (containment and uncaught attribution)...");
+{
+  const tmp = mkdtemp("goccia-timers-");
+  try {
+    // A timer callback that throws is an uncaught error in Node, not something
+    // the frame that happened to be awaiting can catch. It must therefore leave
+    // the await alone AND still fail the test that scheduled it — reporting it
+    // at the await made an unrelated try/catch swallow it and left the awaited
+    // promise pending on top of that.
+    const uncaught = join(tmp, "uncaught.test.js");
+    writeFileSync(
+      uncaught,
+      [
+        'test("a throwing timer does not surface at an unrelated await", async () => {',
+        "  let caughtHere = null;",
+        "  setTimeout(() => { throw new Error('from-the-timer'); }, 0);",
+        "  try {",
+        "    const value = await new Promise((resolve) => setTimeout(() => resolve('resolved'), 5));",
+        "    console.log('AWAIT-RESULT: ' + value);",
+        "  } catch (error) {",
+        "    caughtHere = error.message;",
+        "  }",
+        "  console.log('CAUGHT-AT-AWAIT: ' + caughtHere);",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const out = (
+      await $`${TESTRUNNER} ${uncaught} --no-progress 2>&1`.nothrow()
+    ).text();
+
+    if (!out.includes("AWAIT-RESULT: resolved"))
+      throw new Error(
+        `a throwing timer must not disturb the awaiting frame, got: ${out}`,
+      );
+    if (!out.includes("CAUGHT-AT-AWAIT: null"))
+      throw new Error(
+        `a throwing timer must not be catchable at the await, got: ${out}`,
+      );
+    if (!out.includes("uncaught exception in a timer callback"))
+      throw new Error(
+        `a throwing timer must fail the test that scheduled it, got: ${out}`,
+      );
+    if (!out.includes("from-the-timer"))
+      throw new Error(`the timer's own error must be named, got: ${out}`);
+
+    // The timer surface is the runner's alone. The loader gets neither the
+    // globals nor the module, so a sandboxed script cannot schedule anything.
+    const probe = join(tmp, "probe.js");
+    writeFileSync(
+      probe,
+      [
+        'console.log("setTimeout=" + typeof setTimeout);',
+        'console.log("setInterval=" + typeof setInterval);',
+        'console.log("clearTimeout=" + typeof clearTimeout);',
+        "",
+      ].join("\n"),
+    );
+    const loaderOut = (await $`${LOADER} ${probe} 2>&1`.nothrow()).text();
+    for (const absent of [
+      "setTimeout=undefined",
+      "setInterval=undefined",
+      "clearTimeout=undefined",
+    ]) {
+      if (!loaderOut.includes(absent))
+        throw new Error(
+          `GocciaScriptLoader must not expose the timer globals (${absent}), got: ${loaderOut}`,
+        );
+    }
+
+    const moduleProbe = join(tmp, "module-probe.js");
+    writeFileSync(
+      moduleProbe,
+      [
+        'import * as timers from "goccia:timers";',
+        "console.log(typeof timers);",
+        "",
+      ].join("\n"),
+    );
+    const moduleOut = (
+      await $`${LOADER} ${moduleProbe} --source-type=module 2>&1`.nothrow()
+    ).text();
+    if (moduleOut.includes("object"))
+      throw new Error(
+        `GocciaScriptLoader must not resolve goccia:timers, got: ${moduleOut}`,
+      );
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Global injection (TestRunner) ---------------------------------------------
+
+// The runner grew --global/--globals so a suite can be handed a host global it
+// needs. `process` is the case that forced it: GocciaScript has none, and
+// vi.stubEnv has nowhere to write without one.
+console.log("Global injection (TestRunner)...");
+{
+  const tmp = mkdtemp("goccia-testrunner-globals-");
+  try {
+    const suite = join(tmp, "globals.test.js");
+    writeFileSync(
+      suite,
+      [
+        'describe("injected", () => {',
+        '  test("reads the injected global", () => {',
+        '    expect(process.env.PRESET).toBe("from-host");',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    const inline = await $`${TESTRUNNER} ${suite} --no-progress --global ${'process={"env":{"PRESET":"from-host"}}'} 2>&1`.nothrow();
+    if (inline.exitCode !== 0)
+      throw new Error(`--global should inject process, got: ${inline.text()}`);
+
+    const globalsFile = join(tmp, "env.json");
+    writeFileSync(globalsFile, JSON.stringify({ process: { env: { PRESET: "from-host" } } }));
+    const fromFile = await $`${TESTRUNNER} ${suite} --no-progress --globals=${globalsFile} 2>&1`.nothrow();
+    if (fromFile.exitCode !== 0)
+      throw new Error(`--globals should inject process, got: ${fromFile.text()}`);
+
+    // Without the injection the suite must fail on the missing global rather
+    // than quietly reading undefined.
+    const without = await $`${TESTRUNNER} ${suite} --no-progress 2>&1`.nothrow();
+    if (without.exitCode === 0)
+      throw new Error("Suite should fail when process is not injected");
+    if (!without.text().includes("process"))
+      throw new Error(`Missing-global failure should name process, got: ${without.text()}`);
   } finally {
     clean(tmp);
   }

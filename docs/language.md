@@ -117,7 +117,7 @@ class C {
 - Static properties.
 - Static blocks (`static { ... }`).
 - Inheritance with `extends` and `super`.
-- Decorators (see [Decorators](#decorators-stage-3) in TC39 Proposals below).
+- Decorators (see [Decorators](#decorators-stage-27) in TC39 Proposals below).
 
 ```javascript
 class Counter {
@@ -162,7 +162,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 [Explicit Resource Management](https://tc39.es/ecma262/#sec-using-declaration)) are supported in interpreter and bytecode mode.
+`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in interpreter and bytecode mode.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -184,7 +184,7 @@ const fn = async () => {
 
 ### Modules
 
-ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`; `.mjs` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery.
+ES module syntax with default, named, and namespace imports/exports. Project code convention prefers named exports for internal modules, but default imports and exports are language-supported. Supported source file extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`; `.mjs` and `.mts` entry files default to module source. Structured-data imports are also supported for `.json`, `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`, and text-asset imports are supported for `.txt` and `.md`. Module paths are resolved relative to the importing file. File extensions can be omitted — the resolver tries source, structured-data, and text-asset extensions in order. Directory imports resolve to `index` files. The CLI tools support WHATWG-style import maps through `--import-map=<file.json>`, `--alias key=value`, and implicit `goccia.json` discovery. Bare specifiers such as `import "zod"` resolve against `node_modules` only under the explicit `--allow-node-modules` opt-in; see [Module Resolution](module-resolution.md) for the resolution order, the supported `exports` subset, and the deviations from Node.
 
 Hosts can supply ordinary ES modules through virtual-module configuration. See
 [Virtual Module Configuration](virtual-modules.md) for the complete reference.
@@ -192,7 +192,7 @@ Hosts can supply ordinary ES modules through virtual-module configuration. See
 ```javascript
 // Named imports (with or without extension)
 import { add, multiply } from "./math.js";
-import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, or .mjs
+import { add, multiply } from "./math";      // resolves to ./math.js, .jsx, .ts, .tsx, .mjs, or .mts
 import { "foo-bar" as fooBar } from "./config.json";
 // Default imports
 import add from "./math.js";
@@ -413,13 +413,15 @@ const el = <div className="active">Hello {name}</div>;
 // Transformed to: createElement("div", { className: "active" }, "Hello ", name)
 ```
 
-**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`).
+**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`). Namespaced attribute names (`xlink:href`) and non-ASCII attribute names are **not** supported; both are reported as an unsupported-attribute-syntax `SyntaxError`.
 
 Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
 
 **Custom factory:** The factory and fragment function names can be overridden per-file using pragma comments (`@jsxFactory`, `@jsxFragment`) at the top of the file, before any code.
 
-The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`.
+The transformer generates an internal source map for accurate error line/column reporting. JSX is enabled by default via `DefaultPreprocessors`; embedders can disable it with `Engine.Preprocessors := Engine.Preprocessors - [ppJSX]`. Opening-tag detection is a heuristic, so source that merely looks like JSX — a TypeScript type annotation such as `: <T>(x: T) => T`, for example — can start a JSX scan; when that scan stalls on a character no branch consumes, exceeds the nesting bound, or reaches the end of input inside an opening tag, the transformer reports a `SyntaxError` positioned in the original source rather than scanning on.
+
+**Extensions:** the transformer runs for `.js`, `.jsx`, `.tsx`, and `.mjs`. It never runs for `.ts` or `.mts`, where a leading `<` is type syntax rather than a tag — see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx). `.js` and `.mjs` sources containing JSX are still transformed, and report a "JSX syntax found in source with a non-JSX extension" warning.
 
 ### Regular Expressions
 
@@ -448,9 +450,9 @@ Current gaps from full ECMAScript RegExp semantics:
 
 GocciaScript implements several active TC39 proposals alongside core ECMAScript support.
 
-### Decorators (Stage 3)
+### Decorators (Stage 2.7)
 
-TC39 Stage 3 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
+TC39 Stage 2.7 decorators ([proposal-decorators](https://github.com/tc39/proposal-decorators)) and decorator metadata ([proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata)) are fully supported.
 
 **Supported decorator targets:**
 
@@ -508,72 +510,17 @@ The computed key `[context.name]` preserves the wrapper's `.name` for stack trac
 
 **Not supported:** Parameter decorators.
 
-### Decorator Metadata (Stage 3)
+### Decorator Metadata (Stage 2.7)
 
-Decorator metadata works as described in [Decorators](#decorators-stage-3) — each decorated class receives a `Symbol.metadata` property with prototype-chain inheritance. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
+Decorator metadata works as described in [Decorators](#decorators-stage-27) — each decorated class receives a `Symbol.metadata` property with prototype-chain inheritance. See [proposal-decorator-metadata](https://github.com/tc39/proposal-decorator-metadata).
 
 ### Type Annotations (Stage 1)
 
-GocciaScript implements the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal. Supported annotations follow its types-as-comments model and have no runtime effect by default. Raw type strings are preserved on AST nodes for potential future optimization.
-
-**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime in both interpreter and bytecode modes. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
-
-#### Supported Syntax
-
-```javascript
-// Variable type annotations
-let x: number = 42;
-const name: string = "hello";
-let value: string | number = "test";
-
-// Parameter type annotations (simple, optional, rest, destructuring)
-const add = (a: number, b: number): number => a + b;
-const greet = (name?: string) => name === undefined ? "hi" : "hi " + name;
-const sum = (...nums: number[]) => nums.reduce((a, b) => a + b, 0);
-const first = ({ name, age }: { name: string, age: number }) => name;
-
-// Return type annotations
-const double = (x: number): number => x * 2;
-
-// Type and interface declarations (skipped entirely)
-type Point = { x: number, y: number };
-interface Animal { name: string; speak(): string; }
-
-// import type / export type (skipped entirely)
-import type { Foo } from './types.js';
-export type { Bar };
-
-// Mixed type/value named bindings keep runtime imports/exports for value bindings
-import { parseSourceFile, type SourceFile } from "./parser.js";
-export { value, type ValueShape };
-
-// export interface declarations are skipped entirely
-export interface Serializable {
-  toJSON(): string;
-}
-
-// as Type and as const assertions
-const x = 42 as number;
-const colors = ["red", "green"] as const;
-
-// Class annotations: field types, generics, implements, access modifiers
-class Box<T> implements Container {
-  public value: T;
-  private label?: string;
-  readonly id: number = 1;
-  constructor(value: T) { this.value = value; }
-  get(): T { return this.value; }
-}
-
-// Catch parameter type annotation
-try { throw new Error("oops"); } catch (e: Error) { }
-```
-
-#### Not Supported
-
-- Namespaces (`namespace Foo { ... }`).
-- Parameter properties in constructors (`constructor(public x: number)`).
-- Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
+Supported — the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/)
+proposal's types-as-comments semantics by default, with the optional
+`--strict-types` runtime extension adding enforcement in both execution modes.
+See [Type Annotations](type-annotations.md) for the supported syntax, the
+extension-driven `<` disambiguation, and the unsupported forms.
 
 ### Pattern Matching (Stage 1)
 
@@ -612,7 +559,7 @@ try {
 
 The filtered `for...of` form currently requires an identifier subject before `is`; destructuring subjects before `is` are rejected. Pattern catches cannot be combined with catch type annotations.
 
-### Enum Declarations (Stage 0)
+### Enum Declarations (Stage 1)
 
 GocciaScript supports the [TC39 proposal-enum](https://github.com/tc39/proposal-enum) `enum` declaration. Enums create frozen, null-prototype objects with typed member values.
 
@@ -657,9 +604,9 @@ enum Tokens { Alpha = Symbol("alpha") }
 - Enum decorators.
 - `enum` expressions.
 
-### Temporal (ES2027)
+### Temporal (Stage 4)
 
-Modern date/time API. See [Built-in Objects](built-ins.md) for the full Temporal API reference. See [Temporal specification](https://tc39.es/ecma262/#sec-temporal-objects).
+Modern date/time API. Temporal is a finished (Stage 4) TC39 proposal that has not yet been merged into a ratified ECMA-262 edition. See [Built-in Objects](built-ins.md) for the full Temporal API reference. See [proposal-temporal](https://tc39.es/proposal-temporal/).
 
 ### Math.clamp (Stage 2)
 
@@ -667,7 +614,7 @@ Clamp a value to a range: `Math.clamp(value, min, max)`. See [proposal-math-clam
 
 ### Math.sumPrecise (ES2026)
 
-Precise summation of iterables using exact finite accumulation and final double rounding: `Math.sumPrecise(iterable)`. See [ES2026 §21.3.2.33](https://tc39.es/ecma262/#sec-math.sumprecise).
+Precise summation of iterables using exact finite accumulation and final double rounding: `Math.sumPrecise(iterable)`. See [ES2026 §21.3.2.34](https://tc39.es/ecma262/#sec-math.sumprecise).
 
 ### Map.prototype.getOrInsert (ES2026)
 
@@ -685,7 +632,7 @@ Weak references and finalization registries are supported for objects and non-re
 
 ### Error.isError (ES2026)
 
-Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.3.2](https://tc39.es/ecma262/#sec-error.iserror).
+Reliable brand check for error objects: `Error.isError(value)`. See [ES2026 §20.5.2.1](https://tc39.es/ecma262/#sec-error.iserror).
 
 ## Recommended Profile and Compatibility Paths
 
@@ -728,9 +675,9 @@ GocciaScript provides two function definition styles that cover most use cases w
 
 When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Engine.Compatibility`, config: `{"compat-function": true}`), `function` declarations and expressions are supported. Their implicit `arguments` object still requires `--compat-arguments-object`.
 
-- **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.6 semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
+- **Function declarations** (`function name(params) { body }`) parse as `TGocciaFunctionDeclaration` nodes whose body is backed by `TGocciaFunctionExpression`, which produces call-site `this` binding (not lexical). Declarations are hoisted: both the name and the function value are available before the declaration is reached, matching ES2026 §15.2.4 (InstantiateOrdinaryFunctionObject) / §10.2.11 (FunctionDeclarationInstantiation) semantics. Uses the same var binding infrastructure (`DefineVariableBinding`) as `--compat-var`.
 - **Sloppy block-level function declarations** follow Annex B web-compatibility semantics only when both `--compat-function` and `--compat-non-strict-mode` are active for script source. In that mode, entering a block or switch case initializes the block lexical binding, and reaching an ordinary `function` declaration updates the nearest var binding. Strict code, module source, `async function`, `function*`, and `async function*` keep GocciaScript's block-scoped behavior.
-- **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.4 semantics.
+- **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.5 (InstantiateOrdinaryFunctionExpression) semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
 - **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and `{ writable: false, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is inherited from `%GeneratorFunction.prototype.prototype%` / `%AsyncGeneratorFunction.prototype.prototype%` (resolving to the corresponding non-callable function prototype object), not the specific generator function — so an own back-reference would be incorrect. Generator prototype objects inherit from `%GeneratorPrototype%`, and async-generator prototype objects inherit from `%AsyncGeneratorPrototype%`; those intrinsic prototype objects are realm-owned and shared by interpreter and bytecode execution.
@@ -793,6 +740,8 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 ./build/GocciaREPL --compat-asi
 ```
 
+ASI also interacts with the type syntax; see [Type Annotations](type-annotations.md#automatic-semicolon-insertion-and-type-syntax).
+
 ```pascal
 // Enable ASI via the engine API
 Executor := TGocciaInterpreterExecutor.Create;
@@ -821,7 +770,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 
 When disabled (default), `for(init; test; update)` is a `SyntaxError`. With `--warning-unsupported-features`, the parser emits the historical warning and recovers by treating the loop as a no-op. When enabled, `for(init; test; update) body` is fully supported in both interpreter and bytecode modes:
 
-- `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.4](https://tc39.es/ecma262/#sec-runtime-semantics-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
+- `let`/`const` in init create a fresh per-iteration lexical environment per [ES2026 §14.7.4.3](https://tc39.es/ecma262/#sec-forbodyevaluation), so closures captured during iteration N pin to that iteration's binding (the textbook `fns.push(() => i)` case yields `[0, 1, 2]`, not `[3, 3, 3]`).
 - `var` in init requires both `--compat-var` and `--compat-traditional-for-loop`, hoists out of the loop, and is shared across iterations (closures all see the final value).
 - All header parts are optional (`for(;;){…break}`, `for(;c;){…}`, `for(i;;u)`); comma expressions and destructuring are supported in init/update; `break`/`continue`/`return` unwind as in `for...of`.
 - The bytecode compiler reuses the counted-loop pattern from `CompileCountedForOf` for `for(let i = N; i <op> M; i++ | i--)` shapes (rejecting `var`/`const` and bodies that mutate the loop var); the general path uses an outer scope for the canonical slot plus a per-iteration `BeginScope`/`EndScope` cycle with `OP_CLOSE_UPVALUE` for captures.

@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
-- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; the one residual coupling is direct `eval`, which the VM still delegates to the tree-walk evaluator
+- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; two residual couplings remain — direct `eval`, and a module's top-level function declarations, which are created and run by the tree-walk evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
@@ -18,6 +18,8 @@ GocciaScript has two execution modes:
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
 Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM; the VM it drives, however, still calls the tree-walk evaluator for direct `eval` (`TGocciaVM.ExecuteDirectEval` → `EvaluateEvalProgram`), so the bytecode path is not yet fully independent of the evaluator.
+
+An imported module adds a second such coupling. Its environment is initialized while linking (ES2026 §16.2.1.7.3.1 InitializeEnvironment), and the module loader creates the top-level function declarations there with the tree-walk evaluator (`HoistFunctionDeclarations`). Bytecode compilation of that module therefore reuses those preinitialized bindings for exported declarations instead of compiling them (`PreinitializedTopLevelFunctions`), and their bodies keep running under the evaluator in bytecode mode. Everything an evaluator path can be handed from such a body — including a compiled `TGocciaVMClassValue` reached by `new`, `super()`, or a bound wrapper — must therefore work in both directions; `TGocciaClassValue.UsesOwnInstantiation` and `TryConstructOnReceiver` are what route construction of a compiled class back to the VM. `scripts/differential/l-modulefndecl.test.js` gates this split.
 
 ## Pipeline
 
@@ -117,23 +119,45 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - pre-size argument collections for calls and construction
 - hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying
 - defer stack-trace frames on the hot call path: push the function-template pointer rather than copying its name/source strings, and materialise them only when a trace is captured (see [ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md))
+- keep `TGocciaExecutionContext` unmanaged on `Push`/`Pop`: intern source paths as pointers instead of copying a `UnicodeString` on every call (see [ADR 0114](adr/0114-unmanaged-execution-context-records.md))
 - execute compiler-proven closed-world numeric self-calls through `OP_CALL_SELF_NUM`: recursive calls with one to three scalar arguments use a compact register frame while sharing the generic entry frame's closure, lexical environment, local-cell and argument windows, realm, and execution context (see [ADR 0101](adr/0101-closed-numeric-scalar-self-call-frames.md))
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch
+- fuse for/if/conditional `A < B` as `OP_JUMP_IF_NOT_LT` so the compare and `JUMP_IF_FALSE` share one dispatch; the opcode keeps generic `<` semantics (Number, BigInt, ToPrimitive/valueOf) and is not a Number-only shortcut
+- fuse `local.ident` as `OP_GET_LOCAL_PROP_CONST`: one instruction that reads the local slot (including the `OP_GET_LOCAL` TDZ hole check) and then the existing `OP_GET_PROP_CONST` shape-lite IC; computed keys, optional chaining, `with` lookups, import bindings, and global-backed identifiers keep the unfused path
 - retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup
 - read standalone `this` properties directly from a non-captured local register, preserving the derived-constructor guard while avoiding a temporary-register move; captured, top-level, and method-call receiver paths retain their existing lowering
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 - the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
 
+### Growing String Accumulators
+
+Primitive string additions and `OP_CONCAT` can retain an immutable prefix
+instead of copying it on every append. Prefixes shorter than 256 UTF-16 code
+units stay flat; a deferred chain has at most 32 links. Reading the native
+`TGocciaStringLiteralValue.Value` property materializes the chain, and reaching
+the depth limit materializes the prefix before appending. Earlier aliases keep
+their original contents. Object coercions retain the existing `ToPrimitive`
+ordering and rooted arithmetic path.
+
+Materialization never collects or calls guest code: append creation reserves
+the eventual flat buffer in advance. This preserves the existing rooting
+contract of primitive comparisons and other string reads. The representation
+reduces copying, while its reserved capacity still counts against the memory
+limit. See [ADR 0116](adr/0116-bounded-string-prefixes.md) for the measurements
+and [GC accounting](garbage-collector.md#what-bytesallocated-tracks) for the
+reservation lifetime.
+
 ### Inline Caches
 
-Three per-site inline caches live on `TGocciaFunctionTemplate`, all indexed by the instruction's name-constant index, all runtime-only (never serialised to `.gbc`):
+Four per-site inline caches live on `TGocciaFunctionTemplate`, all indexed by the instruction's name-constant index, all runtime-only (never serialised to `.gbc`):
 
 - **Global reads** (`OP_GET_GLOBAL`) — `TGocciaGlobalReadCacheEntry` validates `(scope identity, binding-map entry version)` and re-reads the binding by entry index, skipping the name hash.
-- **Own property reads** (`OP_GET_PROP_CONST`) — `TGocciaPropertyReadCacheEntry` validates the receiver's interned **shape** (`Goccia.Values.Shape`): same shape implies the same key at the cached entry index, so one site hits across many same-layout receivers. The descriptor kind is re-checked on every hit because data-to-accessor redefinition keeps the entry index.
-- **Prototype-resolved reads** (`OP_GET_PROP_CONST`, after an own miss) — `TGocciaProtoReadCacheEntry` proves continued *absence* of the name on the receiver and intermediate levels and *presence* at the holder, all by fresh shape identity per level, then re-reads the holder descriptor by entry index. The live chain is re-walked per hit, so `setPrototypeOf` is followed inherently; chain levels must be exact `TGocciaObjectValue`; chains deeper than two levels and accessor holders stay generic. Class instance methods (data properties on the class prototype object) are the dominant beneficiary.
+- **Own property reads** (`OP_GET_PROP_CONST`, `OP_GET_LOCAL_PROP_CONST`) — `TGocciaPropertyReadCacheEntry` validates the receiver's interned **shape** (`Goccia.Values.Shape`): same shape implies the same key at the cached entry index, so one site hits across many same-layout receivers. The descriptor kind is re-checked on every hit because data-to-accessor redefinition keeps the entry index.
+- **Prototype-resolved reads** (`OP_GET_PROP_CONST`, `OP_GET_LOCAL_PROP_CONST`, after an own miss) — `TGocciaProtoReadCacheEntry` proves continued *absence* of the name on the receiver and intermediate levels and *presence* at the holder, all by fresh shape identity per level, then re-reads the holder descriptor by entry index. The live chain is re-walked per hit, so `setPrototypeOf` is followed inherently; chain levels must be exact `TGocciaObjectValue`; chains deeper than two levels and accessor holders stay generic. Class instance methods (data properties on the class prototype object) are the dominant beneficiary.
+- **Own property writes** (`OP_SET_PROP_CONST`) — `TGocciaPropertyWriteCacheEntry` is the write-side counterpart of the own-read cache: same `(shape, entry index)` validation, storing only own writable data properties. `Writable` and the descriptor kind are re-checked on every hit. Accessors, proxies, private fields, deletion, prototype mutation, non-writable descriptors, and non-ordinary receivers take `AssignProperty`. This cache is independent of the read/proto slot map so the read-side PIC is not expanded ([ADR 0088](adr/0088-reject-broader-property-inline-caches.md)).
 
-Hits and fills serve only exact-class `TGocciaObjectValue` / `TGocciaVMLiteralObjectValue` / `TGocciaInstanceValue` receivers, so overridden lookup semantics (proxies, exotic objects, private names) always take the generic path. Shapes are computed lazily at fill time (`EnsureShape`), not eagerly at property-append time: a stale shape is a true prefix description of an append-only layout, so the hit path may read it raw and at worst misses. Delete/clear flip a map to dictionary mode (a sentinel shape that never matches a cache entry). A map also flips to dictionary mode when `EnsureShape` runs from a non-owner realm, so cross-realm property reads never intern one realm's layout into another realm's shape table. After `PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT` consecutive misses-with-refill or fill declines a site is megamorphic: it stops probing and serves gated receivers through the uncached own-data fast path.
+Hits and fills serve only exact-class `TGocciaObjectValue` / `TGocciaVMLiteralObjectValue` / `TGocciaInstanceValue` receivers, so overridden lookup semantics (proxies, exotic objects, private names) always take the generic path. Shapes are computed lazily at fill time (`EnsureShape`), not eagerly at property-append time: a stale shape is a true prefix description of an append-only layout, so the hit path may read it raw and at worst misses. Delete/clear flip a map to dictionary mode (a sentinel shape that never matches a cache entry). A map also flips to dictionary mode when `EnsureShape` runs from a non-owner realm, so cross-realm property reads never intern one realm's layout into another realm's shape table. After `PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT` (reads) or `PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT` (writes) consecutive misses-with-refill or fill declines a site is megamorphic: it stops probing and serves gated receivers through the uncached own-data fast path.
 
 Cached pointers (scope, shape) are compared for identity only and never dereferenced. Scope cache entries carry an entry-version stamp against allocator address reuse; shape entries need none, because shapes are never freed within an engine's lifetime, function templates never outlive their engine, and cross-realm maps stop shape tracking before a foreign realm can cache their owner layout.
 
@@ -162,11 +186,119 @@ The `--profile` option on GocciaScriptLoader enables language-level profiling of
 - `--profile=all` — both
 - `--profile-output=path.json` — JSON export
 
-The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). When profiling is disabled, a predictable boolean guard remains in the dispatch loop. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
+The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Coverage.pas`). `ExecuteClosureRegistersInternal` selects a production dispatch loop when coverage, opcode profiling, stop-IP, and the instruction limit are all inactive; that loop omits those per-instruction checks. Any of them being active selects the instrumented loop, which keeps the previous guards. Enabled-mode overhead depends on the workload and profiling mode, so measure it on the corpus being investigated rather than relying on a fixed percentage.
+
+## Runtime Error Diagnostics
+
+A runtime fault must read identically in both execution modes. Three pieces of
+machinery keep that true:
+
+- **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
+  table mapping a call/construct instruction's start PC to the callee as the
+  author wrote it (a `TGocciaCalleeDescriptor` from `Goccia.Error.CallDiagnostics`)
+  plus the call expression's own line and column. The compiler fills it while
+  emitting `OP_CALL`, `OP_CALL_METHOD`, `OP_CONSTRUCT`, `OP_CONSTRUCT_SPREAD`
+  and tagged-template calls — a **compile-time cost paid once per call site** (a
+  descriptor copy plus a whitespace-normalising pass over the callee's source
+  text), not a per-instruction runtime cost. The VM reads the table only when
+  the callee turns out not to be callable or constructable, so
+  `obj.missingMethod()` reports `obj.missingMethod is not a function` rather
+  than `undefined is not a function`. The evaluator derives the same descriptor
+  straight from the AST, and both modes format the message and suggestion
+  through the same functions. The table is **not** serialised to `.gbc`: a
+  module loaded from binary bytecode falls back to the runtime-type-name form of
+  the message (see the note below).
+- **Throw-path source positions.** Deferred call frames carry no position
+  ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
+  every bytecode-mode stack frame at `file:0:0` and the runner with no line to
+  render a code frame for. `TGocciaCallStack.SetTopFrameLocation` stamps the
+  executing frame with a position. The dispatch loop's ordinary
+  call/property/index instructions never call it, so their throughput is
+  unchanged; it runs on the failure paths (a fault about to be raised) and, in
+  addition, once per `new` reaching `ConstructValue` — a native constructor such
+  as `new Error(...)` captures its trace *during* construction, before any
+  throw, so its caller frame must be stamped up front (a small per-`new` cost: a
+  binary search over the function's call-site table plus two string
+  assignments). `TGocciaVM.StampThrowLocation` recovers the current instruction
+  for throw paths outside the dispatch loop through a pointer probe into the
+  innermost loop's `Template`/`InstructionStartIP` locals, saved and restored
+  once per native re-entry.
+- **Frame source is provenance-bound, not `stack`-selected.** A code frame is
+  rendered only from provenance the engine records on a genuine error *when it
+  is created* — the top call frame's source location, plus a ±context excerpt of
+  that module captured from the engine's own per-scope source store. Both are
+  carried on the error object (`TGocciaErrorObjectValue`, an error-only subclass
+  so the fields never enlarge the base object's GC-charged size). The thrown
+  value's `stack` string is guest-writable and is never parsed to choose a file,
+  a line, or an excerpt: a forged `throw { stack: "…at f (/etc/passwd:2:1)" }`
+  object is not engine-created, carries no provenance, and renders no code frame
+  at all — so no host ever opens a guest-named path and the sandbox's
+  `sandbox.fs.path` gate cannot be bypassed through diagnostics. See
+  `Goccia.Values.ErrorHelper.AttachErrorSourceProvenance`,
+  `Goccia.Diagnostics.SourceRegistry`, and docs/module-resolution.md
+  "Runtime code frames".
+- **Principal exclusion — no host source to a guest.** Ownership is decided at
+  load, not inferred at capture. Host enrollment (`--globals`,
+  `--host-environment`, `--module`, `--modules`, manifests/configs, and embedding
+  injection) stamps the root module host-owned. Static, dynamic, and deferred
+  imports inherit that ownership transitively from the importing module, even
+  when the load begins later from a host-exported function called by the guest.
+  A host-injected virtual module is host-owned; imports reached only from a guest
+  module are guest-owned. Entries use file identity from the handle that read
+  the content: POSIX device+inode or Windows volume-serial+file-index. Symlinks,
+  junctions, hardlinks, and case aliases therefore cannot mint a guest-owned
+  second copy. If identity lookup fails, there is no lexical-path fallback and
+  source disclosure for the scope fails closed. An excerpt is captured only
+  from guest-owned source, so a genuine error thrown inside a host module —
+  including a transitive import, a `--module` the guest imported, or a held
+  `Error` the host created — shows its location but no source excerpt.
+- **Executing-engine scope, enforced again at render.** Each engine's module
+  loader owns one scope, identified by a durable process-monotonic principal;
+  registration targets the loader's own scope, and capture targets the scope the
+  engine activates around its execution (`RunModuleForSourceType` for bytecode,
+  `Execute`/`ExecuteProgram` for the interpreter) — and around every cross-engine
+  transition (`ActivateRealmExecutionContext` for a ShadowRealm `evaluate`/
+  `importValue`/wrapped function activates the child scope and restores it on
+  return). The excerpt is additionally stamped with its principal and re-checked
+  when rendered: each host explicitly passes its expected principal to
+  `Goccia.Error.Detail`, which renders source only when the two values match.
+  Zero/no supplied principal means location-only; no active execution scope is
+  never treated as authorization. A child's error formatted by a resumed parent
+  is therefore refused the child's source even though the object crossed the
+  boundary. Because the excerpt is captured while its scope is live, a host may
+  still render it after `Engine.Free` only if it retained and supplies the
+  originating engine's principal.
+- **Byte-accurate diagnostic memory.** Retained module source is accounted as
+  its actual UTF-16 line representation, including entry/list storage, pointer
+  slots, and separately allocated line strings. A captured excerpt is charged
+  as its retained UTF-16 string allocation. The identical byte figure is used
+  for caps, `--max-memory` reservation, and release. Reservation refusal yields
+  location-only, and transactional registry insertion rolls back partial map
+  keys and the reservation if allocation fails during commit.
+- **Construct/native-call frame stamping.** A successful `OP_CONSTRUCT` /
+  `OP_CONSTRUCT_SPREAD` snapshots and restores the caller frame around
+  `ConstructValue`, so a constructor's position does not leak onto a later throw
+  (`new Map(); JSON.parse("{")` reports the JSON fault at its own line, not the
+  `new`). Native calls stamp the call site around the invoke, likewise restored,
+  so a native callee's error carries a location rather than `0:0`.
+
+### `.gbc` parity note
+
+The call-site descriptor table is intentionally runtime-only, so a module
+executed straight from a compiled `.gbc` (rather than compiled in-process from
+source) has no descriptors: its non-callable/non-constructor faults fall back to
+the runtime-type-name form (`undefined is not a function`) and carry no
+suggestion, whereas an in-process compile would name the callee. This is the one
+diagnostic-parity gap left open. Serialising the table would close it at the
+cost of a new bytecode-format section (callee text, object/property text, kind,
+line, column per call site) and its verifier; that is a bounded but real format
+change, deferred rather than taken here because the `.gbc` path is not on the
+default runner or test surface. Revisit if binary modules become a primary
+execution path.
 
 ## Instruction Limit
 
-The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When disabled, only the guard read of the limit threadvar remains on the hot path. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
+The dispatch loop supports an optional instruction counter (`Goccia.InstructionLimit.pas`). When armed, execution uses the instrumented loop: the counter increments on every dispatched instruction and the limit is checked at the top of each iteration. When the budget is inactive, production dispatch omits that poll entirely. See [Embedding — Execution Limits](embedding.md#execution-limits) for the full API and interpreter-mode behavior.
 
 ## Binary Format
 
@@ -174,6 +306,14 @@ The dispatch loop supports an optional instruction counter (`Goccia.InstructionL
 - Version constant: `GOCCIA_FORMAT_VERSION`
 - Endianness: little-endian
 - File extension: `.gbc`
+
+Binary loading is a validation boundary. The reader rejects oversized files,
+declared strings or tables that exceed the remaining stream, excessive nested
+function templates, invalid enum tags, and trailing data. Before a module can
+execute, the verifier checks opcodes, register destinations, constant and
+function references, control-flow targets, and exception-handler metadata.
+The VM retains bounds checks on instruction, constant, and function access as
+defense in depth.
 
 ## Current Status
 

@@ -33,13 +33,14 @@ uses
 
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -60,9 +61,6 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
 
 type
   TArrayFromAsyncSyncIteratorJob = class(TGocciaObjectValue)
@@ -89,11 +87,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
   end;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TArrayFromAsyncSyncIteratorJob.Create(
   const APromise: TGocciaPromiseValue; const AResultObj: TGocciaObjectValue;
@@ -222,8 +215,23 @@ begin
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+    begin
+      // Memory-limit is uncatchable and must re-raise to the host, but the host
+      // can recover and keep running (see runScript result conversion), so the
+      // iterator must still be closed. Use the file's abrupt-close convention so
+      // the memory-limit error survives even if return() also throws.
+      if Assigned(FIterator) then
+      begin
+        PreserveCurrentExceptionAcrossNestedHandler;
+        CloseIteratorPreservingError(FIterator);
+      end;
+      raise;
+    end;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       if Assigned(FIterator) then
       begin
         try
@@ -231,6 +239,8 @@ begin
         except
           on CloseError: Exception do
           begin
+            if IsEngineIntegrityFault(CloseError) then
+              raise;
             RejectWithException(CloseError);
             Exit;
           end;
@@ -271,11 +281,10 @@ begin
     Members.AddMethod(ArrayFrom, 1, gmkStaticMethod);
     Members.AddMethod(ArrayFromAsync, 1, gmkStaticMethod);
     Members.AddMethod(ArrayOf, -1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 end;
 
 // ES2026 §23.1.2.2 Array.isArray(arg)
@@ -925,8 +934,5 @@ begin
   ResultObj.SetProperty(PROP_LENGTH, TGocciaNumberLiteralValue.Create(Len));
   Result := ResultObj;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

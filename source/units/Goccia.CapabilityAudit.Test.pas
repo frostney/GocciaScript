@@ -39,7 +39,9 @@ type
   private
     FRootClampCount: Integer;
     FSinkInvocationCount: Integer;
+    FRecordedEvents: TStringList;
     procedure FailingSink(const AEvent: TGocciaCapabilityAuditEvent);
+    procedure RecordingSink(const AEvent: TGocciaCapabilityAuditEvent);
     procedure RootClampSentinel(const APath, ABase,
       ACanonicalPath: string);
     procedure TestSerializesStructuredEvent;
@@ -49,6 +51,7 @@ type
     procedure TestVMAsyncIteratorCannotCatchSinkFailure;
     procedure TestFailedRuntimeInstallRestoresRootClampCallback;
     procedure TestSandboxDetachRestoresExistingModules;
+    procedure TestEmbeddedNodeModulesGrantEmitsAudit;
   public
     procedure SetupTests; override;
   end;
@@ -68,6 +71,8 @@ begin
     TestFailedRuntimeInstallRestoresRootClampCallback);
   Test('Sandbox detach restores existing runtime modules',
     TestSandboxDetachRestoresExistingModules);
+  Test('An embedded node_modules grant emits the capability audit event',
+    TestEmbeddedNodeModulesGrantEmitsAudit);
 end;
 
 constructor TFailingRootClampRuntimeExtension.Create(
@@ -103,6 +108,13 @@ procedure TCapabilityAuditTests.FailingSink(
 begin
   Inc(FSinkInvocationCount);
   raise ECapabilityAuditSinkFailure.Create(AEvent.Subject);
+end;
+
+procedure TCapabilityAuditTests.RecordingSink(
+  const AEvent: TGocciaCapabilityAuditEvent);
+begin
+  FRecordedEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
+    CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
 end;
 
 procedure TCapabilityAuditTests.RootClampSentinel(
@@ -352,6 +364,34 @@ begin
     Context.Free;
     Executor.Free;
     Source.Free;
+  end;
+end;
+
+{ TGocciaEngine.AllowNodeModules is the embedding host's entry point for the
+  capability. The CLI emits its own event around its direct resolver call, so
+  an embedder that never touches the CLI has to get one from here or the grant
+  is invisible to an auditor. }
+procedure TCapabilityAuditTests.TestEmbeddedNodeModulesGrantEmitsAudit;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  FRecordedEvents := TStringList.Create;
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create('audit-node-modules.js', Source, Executor);
+  try
+    Engine.CapabilityAuditSink := RecordingSink;
+    Engine.AllowNodeModules;
+    Expect<Integer>(FRecordedEvents.Count).ToBe(1);
+    Expect<string>(FRecordedEvents[0]).ToBe('modules.node-modules|allow|');
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    FRecordedEvents.Free;
+    FRecordedEvents := nil;
   end;
 end;
 

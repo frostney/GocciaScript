@@ -47,6 +47,7 @@ uses
   IntlTypes,
 
   Goccia.Error.Messages,
+  Goccia.GarbageCollector,
   Goccia.Intl.CLDRData,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
@@ -408,9 +409,17 @@ var
   Obj: TGocciaObjectValue;
   Rules: TIntlPluralRuleSet;
   CatArr: TGocciaArrayValue;
+  ObjRoot: TGocciaTempRoot;
+  CatArrRoot: TGocciaTempRoot;
 begin
   PR := AsPluralRules(AThisValue, 'Intl.PluralRules.prototype.resolvedOptions');
+  { The option strings below are charged against the memory ceiling — GC safe
+    points — so the objects under construction need temp roots. }
+  InitializeTempRoot(ObjRoot);
+  InitializeTempRoot(CatArrRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   DefinePluralRulesDataProperty(Obj, 'locale',
     TGocciaStringLiteralValue.Create(PR.FLocale));
   DefinePluralRulesDataProperty(Obj, 'type',
@@ -436,6 +445,7 @@ begin
       TGocciaNumberLiteralValue.Create(PR.FMaximumSignificantDigits));
 
   CatArr := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(CatArrRoot, CatArr);
   if TryGetPluralRules(PR.FLocale, PluralTypeStringToEnum(PR.FType) = iptCardinal, Rules) then
   begin
     if Rules.Zero <> '' then
@@ -453,6 +463,10 @@ begin
   DefinePluralRulesDataProperty(Obj, 'pluralCategories', CatArr);
 
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(CatArrRoot);
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 initialization

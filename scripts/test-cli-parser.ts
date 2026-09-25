@@ -16,9 +16,15 @@ function assertSyntaxErrorInBothModes(
   source: string,
   desc: string,
   args: readonly string[] = [],
+  opts?: { timeout?: number; messageIncludes?: string; line?: number },
 ): void {
-  assertSyntaxError(source, desc, [...args]);
-  assertSyntaxError(source, `${desc} (bytecode)`, [...args, "--mode=bytecode"]);
+  assertSyntaxError(source, desc, [...args], opts);
+  assertSyntaxError(
+    source,
+    `${desc} (bytecode)`,
+    [...args, "--mode=bytecode"],
+    opts,
+  );
 }
 
 // -- Error display (SyntaxError with caret and suggestion) ----------------------
@@ -352,6 +358,16 @@ console.log("Language early errors use the CLI parser...");
     {
       desc: "type assertion without a type before is",
       source: "const value = 1; value as is 1;\n",
+      args: [],
+    },
+    {
+      desc: "chained as assertion without a type",
+      source: '"value" as string as;\n',
+      args: [],
+    },
+    {
+      desc: "satisfies suffix without a type",
+      source: '"value" as string satisfies;\n',
       args: [],
     },
     {
@@ -777,6 +793,466 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
     if (diagOut.includes("Unterminated template literal"))
       throw new Error(`${desc}: diagnostic should not mention an unterminated template literal, got: ${diagOut}`);
   }
+}
+
+// -- JSX preprocessor termination and error positions --------------------------
+
+console.log("JSX preprocessor termination...");
+{
+  // Every case here must be proven to *terminate*: the JSX preprocessor scans
+  // source character by character, and a branch that consumes nothing used to
+  // spin forever at 100% CPU. A regression therefore hangs the loader instead
+  // of failing an assertion, so each run is bounded by an explicit timeout.
+  // Cases carrying `line` additionally pin where the error is reported, since
+  // nested attribute expressions are transformed from a copied slice whose
+  // positions have to be rebased onto the enclosing source.
+  const JSX_SCAN_TIMEOUT_MS = 30_000;
+
+  const cases: readonly {
+    desc: string;
+    source: string;
+    messageIncludes: string;
+    line?: number;
+  }[] = [
+    {
+      desc: "unterminated JSX opening tag",
+      source: 'const element = <div className="a"\n',
+      messageIncludes: "Unterminated opening tag",
+    },
+    {
+      desc: "mismatched JSX closing tag",
+      source: "const element = <div></span>;\n",
+      messageIncludes: "Expected closing tag",
+    },
+    {
+      desc: "JSX nesting beyond the depth bound",
+      source: `const element = ${"<a>".repeat(300)};\n`,
+      messageIncludes: "Nesting depth exceeded",
+    },
+    {
+      desc: "error inside a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b></c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 2,
+    },
+    {
+      desc: "error inside a nested attribute expression starting on a later line",
+      source: [
+        "const first = 1;",
+        "const element = <div a={",
+        "  <b></c>",
+        "} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "error on a later line of a nested attribute expression",
+      source: [
+        "const first = 1;",
+        "const element = <div a={<b>",
+        "</c>} />;",
+        "",
+      ].join("\n"),
+      messageIncludes: "Expected closing tag",
+      line: 3,
+    },
+    {
+      desc: "namespaced attribute name is reported as unsupported, not as non-JSX",
+      source: 'const element = <svg xlink:href="a" />;\n',
+      messageIncludes: "Unsupported attribute syntax",
+      line: 1,
+    },
+  ];
+
+  for (const { desc, source, messageIncludes, line } of cases)
+    assertSyntaxErrorInBothModes(source, desc, [], {
+      timeout: JSX_SCAN_TIMEOUT_MS,
+      messageIncludes,
+      line,
+    });
+
+  // A byte at or above #128 is one byte of a multi-byte character. Embedding it
+  // literally would put a truncated sequence into the diagnostic and from there
+  // into the JSON error envelope, so the transformer renders it as '\xNN'.
+  // The stall needs a preceding well-formed attribute: a non-ASCII byte in the
+  // first attribute position makes IsJSXStart reject the construct as non-JSX
+  // before the attribute scan ever begins.
+  {
+    const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "non-ASCII attribute byte (bytecode)"
+        : "non-ASCII attribute byte";
+      const res = runLoaderJson(nonAsciiSource, modeArgs, {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      const message = String(res.json.error?.message ?? "");
+      if (res.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected a SyntaxError, got ${JSON.stringify(res.json.error)}`);
+      if (!/Unsupported attribute syntax at "\\x[0-9a-f]{2}"/.test(message))
+        throw new Error(`${label}: the stalled byte should be reported as a complete lowercase hex escape, got ${message}`);
+      // The whole point of the escape: nothing outside printable ASCII may
+      // reach the envelope, because a lone high byte is not valid UTF-8.
+      if (/[^\x09\x0a\x0d\x20-\x7e]/.test(message))
+        throw new Error(`${label}: the diagnostic should stay ASCII-only, got ${JSON.stringify(message)}`);
+    }
+  }
+
+  // The attribute-list stall is extension-sensitive, so it is pinned to real
+  // files instead of extensionless stdin. `: <T>` looks like a JSX opening tag,
+  // so the children scan runs on the rest of the file and reaches `<T,`, where
+  // no attribute branch consumes the ','.
+  const angleBracketSource = [
+    "const g: <T>(x: T) => T = (x) => x;",
+    "const w = <T,>(v: T): T => v;",
+    "console.log(g('a') + w('b'));",
+    "",
+  ].join("\n");
+
+  const tmp = mkdtemp("goccia-parser-jsx-");
+  try {
+    // A JSX-processed extension still runs the transformer, so the
+    // zero-progress guard must still turn the stall into a clean error rather
+    // than spinning.
+    const jsxFile = join(tmp, "stall.jsx");
+    writeFileSync(jsxFile, angleBracketSource);
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "attribute list stall in .jsx (bytecode)"
+        : "attribute list stall in .jsx";
+      const res = runLoaderJson("", [...modeArgs, jsxFile], {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      if (res.exitCode !== 1)
+        throw new Error(`${label}: should exit 1, got ${res.exitCode}`);
+      if (res.json.ok !== false || res.json.error?.type !== "SyntaxError")
+        throw new Error(`${label}: expected SyntaxError, got ${JSON.stringify(res.json.error)}`);
+      if (!String(res.json.error?.message ?? "").includes("attribute list"))
+        throw new Error(`${label}: expected an attribute-list stall, got ${res.json.error?.message}`);
+    }
+
+    // The same source in a '.ts' file is never handed to the transformer, so
+    // '<' stays type syntax and the annotations parse and run.
+    const tsFile = join(tmp, "annotations.ts");
+    writeFileSync(tsFile, angleBracketSource);
+
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length
+        ? "angle-bracket type syntax in .ts (bytecode)"
+        : "angle-bracket type syntax in .ts";
+      const res = runLoaderJson("", [...modeArgs, tsFile], {
+        timeout: JSX_SCAN_TIMEOUT_MS,
+      });
+      if (res.exitCode !== 0)
+        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== "ab\n")
+        throw new Error(`${label}: expected "ab", got ${JSON.stringify(res.json.output)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Malformed type annotations --------------------------------------------------
+
+console.log("Malformed type annotations...");
+{
+  // Types are erased, so a malformed annotation used to run to completion with
+  // nothing to show for it: `const x: string number = "a"` exited 0. Silence is
+  // the whole problem — a typo in an annotation had no way of being noticed,
+  // and --strict-types can only enforce what was parsed. These are parse
+  // errors, so they cannot be asserted from a JS test file; the accepted forms
+  // live in tests/language/types-as-comments/.
+  const malformed = [
+    {
+      desc: "annotation with no type",
+      source: "const a: = 1;\n",
+      messageIncludes: "Expected a type annotation",
+    },
+    {
+      desc: "empty type parameter slot",
+      source: "const y = <T,,>(v) => v;\n",
+      messageIncludes: 'Expected a type before ","',
+    },
+    {
+      desc: "'<<' in a type argument list",
+      source: "const b: NotAType<<> = 1;\n",
+      messageIncludes: "not valid type syntax",
+    },
+    {
+      desc: "object type member with no type",
+      source: "const f = (): { a: ; } => 1;\n",
+      messageIncludes: 'Expected a type after ":"',
+    },
+    {
+      desc: "two type names side by side",
+      source: 'const x: string number = "a";\n',
+      messageIncludes: 'Unexpected "number" after the type "string"',
+    },
+    {
+      desc: "two type names side by side in a parameter",
+      source: "const f = (a: string number) => a;\n",
+      messageIncludes: "Unexpected",
+    },
+    {
+      desc: "empty slot in a type argument list",
+      source: "const c: Array<,string> = [];\n",
+      messageIncludes: 'Expected a type before ","',
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes } of malformed)
+    assertSyntaxErrorInBothModes(source, desc, [], { messageIncludes });
+
+  // assertSyntaxErrorInBothModes feeds the source over stdin, which the
+  // pipeline names `<stdin>`; the accepted forms below are written to a `.ts`
+  // file. Those are different parser paths — JSX preprocessing is skipped only
+  // for TypeScript extensions — so the rejections are repeated as real `.ts`
+  // files rather than being asserted on one path and trusted on the other.
+  {
+    const tmp = mkdtemp("goccia-type-annotations-rejected-");
+    try {
+      for (const { desc, source, messageIncludes } of malformed) {
+        const path = join(tmp, "malformed.ts");
+        writeFileSync(path, source);
+        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          const out = res.text();
+          if (res.exitCode === 0)
+            throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
+          if (!out.includes(messageIncludes))
+            throw new Error(
+              `${desc} (.ts file) should mention "${messageIncludes}", got: ${out}`,
+            );
+        }
+      }
+    } finally {
+      clean(tmp);
+    }
+  }
+
+  // The other half of the contract: the shapes that look adjacent but are real
+  // type syntax must keep parsing. A false rejection here fails a program that
+  // runs correctly, which is worse than the silence being fixed.
+  const accepted = [
+    'const a: string = "x";',
+    "const b: string | number = 1;",
+    "const c: Array<Map<string, number>> = [];",
+    "const d = <T,>(v: T): T => v;",
+    'const e: keyof { a: 1 } = "a";',
+    "const g: readonly string[] = [];",
+    'const h = (x: unknown): x is string => typeof x === "string";',
+    'const i: { a: string; b: number } = { a: "1", b: 2 };',
+    "const j: (a: string, b: number) => void = () => {};",
+    "const k: -1 | 1 = 1;",
+    "type M = A extends B ? C : D;",
+    "const n: unique symbol | null = null;",
+    "const o: [first: string, second: number] = [\"a\", 1];",
+    "const p: typeof globalThis | undefined = undefined;",
+    // The speculative probes run the annotation collector over source whose
+    // shape is not decided yet and back out of it. The arrow-return-type probe
+    // reaches this ternary, collects `d << 2` as a would-be return type, and
+    // rewinds; validating there rejected valid JavaScript, which is how a
+    // minified bundle in the Web Tooling suite stopped parsing.
+    "const f = (c, a, b, d) => (c ? (a, b) : d << 2);",
+    "const q = (x) => (x ? (1, 2) : 3 >> 4);",
+    "const r = (x) => (x ? (1, 2) : 3 >>> 4);",
+  ] as const;
+
+  {
+    const tmp = mkdtemp("goccia-type-annotations-");
+    try {
+      for (const source of accepted) {
+        const path = join(tmp, "accepted.ts");
+        writeFileSync(path, `${source}\n`);
+        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          if (res.exitCode !== 0)
+            throw new Error(
+              `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,
+            );
+        }
+      }
+    } finally {
+      clean(tmp);
+    }
+  }
+}
+
+// -- Definite assignment assertion rules ----------------------------------------
+
+console.log("Definite assignment assertion rules...");
+{
+  // TypeScript's three rules for `!` on a variable declaration. These are parse
+  // errors, so they cannot be asserted from a JS test file — see
+  // tests/language/types-as-comments/definite-assignment.js for the accepted
+  // forms.
+  const cases = [
+    {
+      desc: "definite assignment without a type annotation",
+      source: "let x!;\n",
+      messageIncludes: "must also have type annotations",
+    },
+    {
+      desc: "definite assignment with an initializer",
+      source: "let x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+    },
+    {
+      desc: "definite assignment on a const declaration",
+      source: "const x!: number;\n",
+      messageIncludes: "not permitted on a const declaration",
+    },
+    {
+      desc: "definite assignment without an annotation on var",
+      source: "var x!;\n",
+      messageIncludes: "must also have type annotations",
+      args: ["--compat-var"],
+    },
+    {
+      desc: "definite assignment with an initializer on var",
+      source: "var x!: number = 1;\n",
+      messageIncludes: "cannot also have definite assignment assertions",
+      args: ["--compat-var"],
+    },
+    {
+      // The colon is consumed but there is no type after it, so the empty
+      // annotation is reported before the definite-assignment rule is reached.
+      // tsc reports the same source as "Type expected." for the same reason.
+      desc: "definite assignment with an empty annotation",
+      source: "let x!:;\n",
+      messageIncludes: "Expected a type annotation",
+    },
+    {
+      desc: "definite assignment with an empty annotation on var",
+      source: "var x!:;\n",
+      messageIncludes: "Expected a type annotation",
+      args: ["--compat-var"],
+    },
+  ] as const;
+
+  for (const { desc, source, messageIncludes, args } of cases)
+    assertSyntaxErrorInBothModes(source, desc, args ?? [], { messageIncludes });
+
+  // The '!' is a restricted production: on the next line it starts a new
+  // expression statement rather than being absorbed as an assertion.
+  const asiSource = [
+    "let x",
+    "!(() => { console.log('ran'); })()",
+    "console.log(typeof x)",
+    "",
+  ].join("\n");
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
+    const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "ran\nundefined\n")
+      throw new Error(`${label}: expected "ran\\nundefined", got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
+// -- Type alias skipping across line breaks under ASI ---------------------------
+
+console.log("Type alias skipping under ASI...");
+{
+  // A skipped `type` alias may wrap its type argument list across lines. The
+  // skipper does not depth-count '<' / '>', so it relies on the line break
+  // never being a legal ASI point: it follows a '<' or ',', or precedes a '>'.
+  const source = [
+    "type Handler = Map<",
+    "  string,",
+    "  number",
+    ">;",
+    "const after = 2",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "multi-line type alias (bytecode)" : "multi-line type alias";
+    const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "2\n")
+      throw new Error(`${label}: expected "2", got ${JSON.stringify(res.json.output)}`);
+  }
+
+  // The complementary guarantee: a relational expression in a skipped statement
+  // still ends at its own line break instead of swallowing what follows.
+  const relationalSource = [
+    "var skipped = 1 < 2",
+    "const after = 3",
+    "console.log(after)",
+    "",
+  ].join("\n");
+
+  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+    const label = modeArgs.length ? "relational in skipped var (bytecode)" : "relational in skipped var";
+    const res = runLoaderJson(relationalSource, [
+      "--warning-unsupported-features",
+      "--compat-asi",
+      ...modeArgs,
+    ]);
+    if (res.exitCode !== 0)
+      throw new Error(`${label}: should recover, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+    if (normalizeLineEndings(res.json.output) !== "3\n")
+      throw new Error(`${label}: expected "3", got ${JSON.stringify(res.json.output)}`);
+  }
+}
+
+// -- Parenthesized ternary consequent in minified bundles -----------------------
+
+console.log("Parenthesized ternary consequent...");
+{
+  // Regression from the v8 web-tooling prettier bundle: `cond?(a):b` enters the
+  // speculative arrow-function probe as "parenthesized group followed by ':'".
+  // The probe scanned for a '=>' with no bound and latched onto an unrelated
+  // arrow later in the file, so the ternary was parsed as an arrow function and
+  // the conditional reported a missing ':'. These shapes need the web-tooling
+  // compatibility flags, so they cannot live in the JS suite.
+  const COMPAT = ["--compat-asi", "--compat-var", "--compat-function"];
+
+  const cases = [
+    {
+      desc: "ternary and a later arrow in the same statement list",
+      source: "var c=1,a=2,b=3;var x=c?(a):b;var f=v=>v;console.log(x,f(9));\n",
+      output: "2 9\n",
+    },
+    {
+      desc: "ternary inside a function body with a later arrow",
+      source:
+        "var c=1,a=2,b=3;function g(){var x=c?(a):b;return x}var f=v=>v;console.log(g(),f(9));\n",
+      output: "2 9\n",
+    },
+    {
+      desc: "both branches parenthesized with a later arrow",
+      source: "var c=0,a=2,b=3;var x=c?(a):(b);var f=v=>v;console.log(x,f(1));\n",
+      output: "3 1\n",
+    },
+    {
+      desc: "arrow return type annotations still parse",
+      source: "var f=(v: number): number => v*2;console.log(f(4));\n",
+      output: "8\n",
+    },
+  ] as const;
+
+  for (const { desc, source, output } of cases)
+    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
+      const label = modeArgs.length ? `${desc} (bytecode)` : desc;
+      const res = runLoaderJson(source, [...COMPAT, ...modeArgs]);
+      if (res.exitCode !== 0)
+        throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+      if (normalizeLineEndings(res.json.output) !== output)
+        throw new Error(`${label}: expected ${JSON.stringify(output)}, got ${JSON.stringify(res.json.output)}`);
+    }
 }
 
 console.log("\nAll test-cli-parser.ts tests passed.");

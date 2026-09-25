@@ -45,11 +45,14 @@ uses
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.FetchManager,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
+  Goccia.Values.AbortValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.NativeFunction,
@@ -57,47 +60,8 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.Values.URLValue;
 
-{ Host extraction }
-
-function ExtractHostFromURL(const AURL: string): string;
-var
-  SchemeEnd, HostStart, HostEnd, AtPos, ColonPos: Integer;
-begin
-  Result := '';
-  SchemeEnd := Pos('://', AURL);
-  if SchemeEnd = 0 then
-    Exit;
-
-  HostStart := SchemeEnd + 3;
-
-  // Find the end of the authority component
-  AtPos := HostStart;
-  HostEnd := HostStart;
-  while (HostEnd <= Length(AURL)) and
-        not (AURL[HostEnd] in ['/', '?', '#']) do
-  begin
-    if AURL[HostEnd] = '@' then
-      AtPos := HostEnd + 1;
-    Inc(HostEnd);
-  end;
-  HostStart := AtPos;
-
-  Result := LowerCase(Copy(AURL, HostStart, HostEnd - HostStart));
-
-  // Strip port (but preserve IPv6 bracket notation)
-  if (Length(Result) > 0) and (Result[1] <> '[') then
-  begin
-    ColonPos := Pos(':', Result);
-    if ColonPos > 0 then
-      Result := Copy(Result, 1, ColonPos - 1);
-  end
-  else if (Length(Result) > 0) and (Result[1] = '[') then
-  begin
-    ColonPos := Pos(']:', Result);
-    if ColonPos > 0 then
-      Result := Copy(Result, 1, ColonPos);
-  end;
-end;
+const
+  INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
 
 { TGocciaGlobalFetch }
 
@@ -136,7 +100,23 @@ procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
 var
   Host: string;
 begin
-  Host := ExtractHostFromURL(AURLStr);
+  try
+    Host := HTTPURLHost(AURLStr);
+  except
+    on E: EHTTPError do
+    begin
+      try
+        Host := HTTPURLAuditHost(AURLStr);
+      except
+        on EAudit: EHTTPError do
+          Host := INVALID_FETCH_AUDIT_SUBJECT;
+      end;
+      if Assigned(FCapabilityAuditEmitter) then
+        FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
+          'fetch URL is invalid');
+      ThrowTypeError('Invalid fetch URL: ' + E.Message);
+    end;
+  end;
   if FAllowedHosts.Count = 0 then
   begin
     if Assigned(FCapabilityAuditEmitter) then
@@ -163,10 +143,11 @@ function TGocciaGlobalFetch.FetchCallback(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  URLArg, OptionsArg, MethodVal, HeadersVal: TGocciaValue;
+  URLArg, OptionsArg, MethodVal, HeadersVal, SignalVal: TGocciaValue;
   URLStr, Method: string;
   RequestHeaders: THTTPHeaders;
   Promise: TGocciaPromiseValue;
+  Signal: TGocciaAbortSignalValue;
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I: Integer;
@@ -186,6 +167,7 @@ begin
 
   // Extract options
   Method := 'GET';
+  Signal := nil;
   SetLength(RequestHeaders, 0);
 
   if AArgs.Length >= 2 then
@@ -227,6 +209,17 @@ begin
           end;
         end;
       end;
+
+      // Read cancellation signal
+      SignalVal := Obj.GetProperty(PROP_SIGNAL);
+      if Assigned(SignalVal) and
+         not (SignalVal is TGocciaUndefinedLiteralValue) and
+         not (SignalVal is TGocciaNullLiteralValue) then
+      begin
+        if not (SignalVal is TGocciaAbortSignalValue) then
+          ThrowTypeError('fetch signal must be an AbortSignal');
+        Signal := TGocciaAbortSignalValue(SignalVal);
+      end;
     end;
   end;
 
@@ -244,14 +237,20 @@ begin
       'fetch dispatch is allowed');
   try
     TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      Promise);
+      FAllowedHosts, Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;
     on E: TGocciaInstructionLimitError do
       raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
+    begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       Promise.Reject(CreateErrorObject('TypeError', 'fetch failed: ' + E.Message));
+    end;
   end;
 
   Result := Promise;

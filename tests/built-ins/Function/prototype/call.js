@@ -57,4 +57,55 @@ describe("Function.prototype.call", () => {
     expect(Boolean.call(null, 1)).toBe(true);
     expect(Boolean.call(null, 0)).toBe(false);
   });
+
+  test("forwards every argument count", () => {
+    const collect = ({
+      m(...args) {
+        return `${this.tag}:${args.join(",")}`;
+      },
+    }).m;
+    const receiver = { tag: "r" };
+
+    expect(collect.call(receiver)).toBe("r:");
+    expect(collect.call(receiver, 1)).toBe("r:1");
+    expect(collect.call(receiver, 1, 2)).toBe("r:1,2");
+    expect(collect.call(receiver, 1, 2, 3)).toBe("r:1,2,3");
+    expect(collect.call(receiver, 1, 2, 3, 4)).toBe("r:1,2,3,4");
+    expect(collect.call(...[receiver, 1, 2])).toBe("r:1,2");
+  });
+
+  test("an own call property is invoked instead of the intrinsic", () => {
+    const host = () => "host";
+    host.call = (...args) => `own call(${args.join(",")})`;
+
+    expect(host.call()).toBe("own call()");
+    expect(host.call("t")).toBe("own call(t)");
+    expect(host.call("t", 1, 2)).toBe("own call(t,1,2)");
+    expect(host()).toBe("host");
+    expect(Function.prototype.call.call(host, undefined)).toBe("host");
+  });
+
+  test("a call inherited from the function's prototype chain is invoked", () => {
+    const behaviour = {
+      call(tag) {
+        return `inherited call(${tag})`;
+      },
+    };
+    const host = () => "host";
+    Object.setPrototypeOf(host, behaviour);
+
+    expect(host.call("t")).toBe("inherited call(t)");
+  });
+
+  test("a class static named call is the class's own method", () => {
+    class Registry {
+      static call(name, ...rest) {
+        return `Registry.call(${name})[${rest.join(",")}]`;
+      }
+    }
+
+    expect(Registry.call("a")).toBe("Registry.call(a)[]");
+    expect(Registry.call("a", 1, 2)).toBe("Registry.call(a)[1,2]");
+    expect(Registry.call).not.toBe(Function.prototype.call);
+  });
 });

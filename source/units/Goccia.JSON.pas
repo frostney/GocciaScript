@@ -13,6 +13,7 @@ uses
   StringBuffer,
   UnicodeStringList,
 
+  Goccia.GarbageCollector,
   Goccia.Values.ArrayValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -37,6 +38,20 @@ type
     function EntryForKey(const AKey: string): TGocciaJSONParseRecord;
     property SourceText: string read FSourceText;
     property Value: TGocciaValue read FValue;
+  end;
+
+  // Roots the values a detached parse-record tree points at. The record tree
+  // survives the visitor that built it (ReleaseRootRecord hands it to the
+  // reviver walk), and it stores raw TGocciaValue pointers: once a reviver
+  // overwrites or deletes the property a parsed value came from, the record is
+  // the only thing still pointing at it, and the walk reads that pointer back.
+  // Instantiate for as long as a released record tree is consulted.
+  TGocciaJSONParseRecordRoots = class(TGCRootSource)
+  private
+    FRecord: TGocciaJSONParseRecord;
+  public
+    constructor Create(const ARecord: TGocciaJSONParseRecord);
+    procedure MarkRootReferences; override;
   end;
 
   TGocciaJSONParser = class
@@ -95,6 +110,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.JSON.Utils,
+  Goccia.NativeLimits,
   Goccia.Utils,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -108,8 +124,28 @@ uses
   Goccia.Values.WrapperPrimitives;
 
 type
+  TGocciaJSONVisitor = class;
+
+  // The visitor builds its tree in FStack and FResult, both plain Pascal fields
+  // the collector cannot see, and the native stack is never scanned. Every
+  // non-empty string the visitor creates charges the memory ceiling, and
+  // crossing it collects with only the new string protected — which would sweep
+  // the whole in-progress tree. This root source marks that tree instead, for as
+  // long as the visitor it belongs to is alive.
+  //
+  // The visitor cannot be a TGCRootSource itself: TAbstractJSONParser is already
+  // its ancestor.
+  TGocciaJSONVisitorRoots = class(TGCRootSource)
+  private
+    FVisitor: TGocciaJSONVisitor;
+  public
+    constructor Create(const AVisitor: TGocciaJSONVisitor);
+    procedure MarkRootReferences; override;
+  end;
+
   TGocciaJSONVisitor = class(TAbstractJSONParser)
   private
+    FRoots: TGocciaJSONVisitorRoots;
     FCollectRecords: Boolean;
     FCollectSources: Boolean;
     FKeyStack: TUnicodeStringList;
@@ -118,6 +154,9 @@ type
     FRootRecord: TGocciaJSONParseRecord;
     FSourceTexts: TUnicodeStringList;
     FStack: TList<TGocciaValue>;
+    // The value an in-flight emit has taken off FStack (or freshly built) and
+    // not yet handed to its parent container. See EmitValueAndRecord.
+    FPendingValue: TGocciaValue;
     FValueStartPosition: Integer;
     procedure RecordSourceText;
     function MakePrimitiveRecord(const AValue: TGocciaValue): TGocciaJSONParseRecord;
@@ -373,6 +412,92 @@ begin
   end;
 end;
 
+// Marks every value a parse-record subtree points at. Records form a tree, not
+// a graph — each is owned by exactly one parent list — so no visited set is
+// needed; MarkReferences itself is idempotent for the values.
+procedure MarkParseRecordTree(const ARecord: TGocciaJSONParseRecord);
+var
+  I: Integer;
+begin
+  if not Assigned(ARecord) then
+    Exit;
+  if Assigned(ARecord.FValue) then
+    ARecord.FValue.MarkReferences;
+  if Assigned(ARecord.FElements) then
+    for I := 0 to ARecord.FElements.Count - 1 do
+      MarkParseRecordTree(ARecord.FElements[I]);
+  if Assigned(ARecord.FEntries) then
+    for I := 0 to ARecord.FEntries.Count - 1 do
+      MarkParseRecordTree(ARecord.FEntries[I]);
+end;
+
+{ TGocciaJSONVisitorRoots }
+
+constructor TGocciaJSONVisitorRoots.Create(const AVisitor: TGocciaJSONVisitor);
+begin
+  inherited Create;
+  FVisitor := AVisitor;
+end;
+
+procedure TGocciaJSONVisitorRoots.MarkRootReferences;
+var
+  I: Integer;
+begin
+  if not Assigned(FVisitor) then
+    Exit;
+
+  // Every open container on the stack, from the document root down to the one
+  // currently being filled. Only the innermost one is attached to nothing, but
+  // none of the outer ones is reachable from a real root either until the parse
+  // finishes and the caller takes ownership.
+  if Assigned(FVisitor.FStack) then
+    for I := 0 to FVisitor.FStack.Count - 1 do
+      if Assigned(FVisitor.FStack[I]) then
+        FVisitor.FStack[I].MarkReferences;
+
+  // A finished container is popped off FStack before it is handed to its
+  // parent, so for the length of that hand-off it is held by one native local
+  // and nothing else — not even by the stack this root source walks. The
+  // store on the far side of it can collect (a growth gate consults the
+  // budget there), and its own gate-side rooting covers only the arm it runs
+  // on: the property arm's pending descriptor, not the array arm's element
+  // append. Marking the pending value here makes the visitor's coverage local
+  // to the visitor and independent of which arm the parent container takes.
+  if Assigned(FVisitor.FPendingValue) then
+    FVisitor.FPendingValue.MarkReferences;
+
+  // Set once the outermost value is emitted, and the only reference to the
+  // finished tree until the caller stores it.
+  if Assigned(FVisitor.FResult) then
+    FVisitor.FResult.MarkReferences;
+
+  // The parse-record tree points at the same values the value tree does, but
+  // it outlives the property that produced them: a reviver that overwrites a
+  // parsed primitive leaves the record holding the only pointer to it, and
+  // ApplyReviver reads that pointer back (IsSameValue) after further guest
+  // code has run. Marking the records keeps that read from touching freed
+  // memory. Ownership of the root record transfers out through
+  // ReleaseRootRecord, and TGocciaJSONParseRecordRoots covers it from there.
+  MarkParseRecordTree(FVisitor.FRootRecord);
+  if Assigned(FVisitor.FRecordStack) then
+    for I := 0 to FVisitor.FRecordStack.Count - 1 do
+      MarkParseRecordTree(FVisitor.FRecordStack[I]);
+end;
+
+{ TGocciaJSONParseRecordRoots }
+
+constructor TGocciaJSONParseRecordRoots.Create(
+  const ARecord: TGocciaJSONParseRecord);
+begin
+  inherited Create;
+  FRecord := ARecord;
+end;
+
+procedure TGocciaJSONParseRecordRoots.MarkRootReferences;
+begin
+  MarkParseRecordTree(FRecord);
+end;
+
 { TGocciaJSONVisitor }
 
 constructor TGocciaJSONVisitor.Create;
@@ -390,12 +515,19 @@ begin
   FSourceTexts := TUnicodeStringList.Create;
   FResult := nil;
   FRootRecord := nil;
+  FPendingValue := nil;
   FCollectRecords := False;
   FCollectSources := False;
+  // Last, so the collector never sees a root source over a half-built visitor.
+  FRoots := TGocciaJSONVisitorRoots.Create(Self);
 end;
 
 destructor TGocciaJSONVisitor.Destroy;
 begin
+  // First, so no collection can reach FStack after it is freed. This also runs on
+  // the parse-error path, where the stack is still holding open containers.
+  FRoots.Free;
+  FRoots := nil;
   FRootRecord.Free;
   while FRecordStack.Count > 0 do
   begin
@@ -423,6 +555,7 @@ end;
 
 procedure TGocciaJSONVisitor.OnValueStart;
 begin
+  CheckNativeWork;
   FValueStartPosition := CurrentPosition;
 end;
 
@@ -456,35 +589,47 @@ var
   Key: string;
   ParentRecord: TGocciaJSONParseRecord;
 begin
-  if FStack.Count = 0 then
-  begin
-    FResult := AValue;
-    if FCollectRecords then
-      FRootRecord := ARecord;
-  end
-  else
-  begin
-    Container := FStack[FStack.Count - 1];
-    if FCollectRecords and (FRecordStack.Count > 0) then
-      ParentRecord := FRecordStack[FRecordStack.Count - 1]
-    else
-      ParentRecord := nil;
-    if Container is TGocciaArrayValue then
+  // AValue is held by this call and by nothing the collector can see: a
+  // primitive was just built, and a container was popped off FStack by
+  // OnEndObject/OnEndArray before it got here. The store below reaches a
+  // growth gate, which is a prospective collection point. Two pointer writes
+  // put it under the root source for the width of the hand-off; releasing on
+  // the exception path matters too, because a failed store must not leave the
+  // visitor pinning the value for the rest of the parse.
+  FPendingValue := AValue;
+  try
+    if FStack.Count = 0 then
     begin
-      TGocciaArrayValue(Container).Elements.Add(AValue);
-      if Assigned(ParentRecord) then
-        ParentRecord.AddElement(ARecord);
+      FResult := AValue;
+      if FCollectRecords then
+        FRootRecord := ARecord;
     end
-    else if Container is TGocciaObjectValue then
+    else
     begin
-      Key := FKeyStack[FKeyStack.Count - 1];
-      FKeyStack.Delete(FKeyStack.Count - 1);
-      TGocciaObjectValue(Container).DefineProperty(Key,
-        TGocciaPropertyDescriptorData.Create(AValue,
-          [pfWritable, pfEnumerable, pfConfigurable]));
-      if Assigned(ParentRecord) then
-        ParentRecord.AddEntry(Key, ARecord);
+      Container := FStack[FStack.Count - 1];
+      if FCollectRecords and (FRecordStack.Count > 0) then
+        ParentRecord := FRecordStack[FRecordStack.Count - 1]
+      else
+        ParentRecord := nil;
+      if Container is TGocciaArrayValue then
+      begin
+        TGocciaArrayValue(Container).Elements.Add(AValue);
+        if Assigned(ParentRecord) then
+          ParentRecord.AddElement(ARecord);
+      end
+      else if Container is TGocciaObjectValue then
+      begin
+        Key := FKeyStack[FKeyStack.Count - 1];
+        FKeyStack.Delete(FKeyStack.Count - 1);
+        TGocciaObjectValue(Container).DefineProperty(Key,
+          TGocciaPropertyDescriptorData.Create(AValue,
+            [pfWritable, pfEnumerable, pfConfigurable]));
+        if Assigned(ParentRecord) then
+          ParentRecord.AddEntry(Key, ARecord);
+      end;
     end;
+  finally
+    FPendingValue := nil;
   end;
 end;
 
@@ -909,12 +1054,15 @@ procedure TGocciaJSONStringifier.WriteValue(var ABuffer: TStringBuffer;
 var
   EffectiveValue: TGocciaValue;
 begin
-  // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], write its raw text verbatim.
-  if AValue is TGocciaRawJSONValue then
-  begin
-    ABuffer.Append(TGocciaRawJSONValue(AValue).RawText);
-    Exit;
-  end;
+  EnterNativeDataDepth('JSON serialization');
+  try
+    CheckNativeWork;
+    // ES2026 §25.5.2.2 step 4a: If value has [[IsRawJSON]], write its raw text verbatim.
+    if AValue is TGocciaRawJSONValue then
+    begin
+      ABuffer.Append(TGocciaRawJSONValue(AValue).RawText);
+      Exit;
+    end;
 
   // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
   EffectiveValue := CoerceWrappedPrimitive(AValue);
@@ -978,8 +1126,11 @@ begin
     WriteArray(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
   else if EffectiveValue is TGocciaObjectValue then
     WriteObject(ABuffer, TGocciaObjectValue(EffectiveValue), AIndent)
-  else
-    ABuffer.Append('null');
+    else
+      ABuffer.Append('null');
+  finally
+    LeaveNativeDataDepth;
+  end;
 end;
 
 procedure TGocciaJSONStringifier.WriteObject(var ABuffer: TStringBuffer;

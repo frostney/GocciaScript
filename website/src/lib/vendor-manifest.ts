@@ -45,6 +45,11 @@ export const EMPTY_MANIFEST: VendorManifest = {
   versions: [],
 };
 
+/** Extract the long-option names advertised by a binary's help text. */
+export function parseAdvertisedFlags(helpText: string): string[] {
+  return [...new Set(helpText.match(/--[a-z][a-z0-9-]*/g) ?? [])];
+}
+
 /** Coerce arbitrary JSON into a `VendorManifest`, dropping malformed entries
  *  and supplying defaults. Exposed so the server-side loader and tests both
  *  go through the same validation path. */
@@ -111,6 +116,87 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
+/** Public execute/test endpoints accept attacker-controlled source, so a
+ * vendored engine is selectable only when both binaries advertise the
+ * fail-closed host-filesystem capability. Missing probe data is unsafe here:
+ * it cannot prove that the boundary exists. */
+export function isPublicExecutionSafe(entry: VendorEntry): boolean {
+  return (
+    entry.features?.loader.includes("--no-host-filesystem") === true &&
+    entry.features.testRunner.includes("--no-host-filesystem")
+  );
+}
+
+/** Why a freshly vendored manifest is not fit to deploy. Each code is a
+ *  state that used to ship silently and surface as a playground offering
+ *  nothing but `nightly`. */
+export type VendorManifestFloorViolation = {
+  code:
+    | "NO_STABLE_VENDORED"
+    | "NO_PUBLIC_SAFE_ENGINE"
+    | "NO_PUBLIC_SAFE_STABLE";
+  message: string;
+};
+
+/** The deployable floor for a vendored manifest, checked by
+ *  `scripts/fetch-binaries.ts` before the build is allowed to continue.
+ *
+ *  Per-tag fetch failures stay warnings — losing one of three precedence
+ *  picks still leaves a usable playground. These three states do not:
+ *  every one of them leaves the version picker with no released engine in
+ *  it, which is indistinguishable from "the playground is broken".
+ *
+ *  Returns `null` when the manifest is fit to deploy. */
+export function checkVendorManifestFloor(
+  manifest: VendorManifest,
+): VendorManifestFloorViolation | null {
+  const stable = manifest.versions.filter((entry) => !entry.isPrerelease);
+  if (stable.length === 0) {
+    return {
+      code: "NO_STABLE_VENDORED",
+      message:
+        "no stable release could be vendored — the playground would offer only prereleases",
+    };
+  }
+  if (!manifest.versions.some(isPublicExecutionSafe)) {
+    return {
+      code: "NO_PUBLIC_SAFE_ENGINE",
+      message:
+        "no vendored engine advertises --no-host-filesystem on both binaries — the playground version picker would be empty",
+    };
+  }
+  if (!stable.some(isPublicExecutionSafe)) {
+    return {
+      code: "NO_PUBLIC_SAFE_STABLE",
+      message:
+        "no vendored *stable* engine advertises --no-host-filesystem on both binaries — the playground would offer only nightly",
+    };
+  }
+  return null;
+}
+
+/** Choose between the manifest read from `vendor/manifest.json` on disk and
+ *  the one bundled at `src/generated/vendor-manifest.json`.
+ *
+ *  Both are written by the same `scripts/fetch-binaries.ts` run, so they agree
+ *  on content; they differ in *reachability*. `vendor/` is traced into the
+ *  API route bundles only (`next.config.mjs` → `outputFileTracingIncludes`),
+ *  so a `process.cwd()` read returns nothing when the playground page renders
+ *  in its own bundle. The generated JSON is a static import, so bundling
+ *  includes it by construction, everywhere.
+ *
+ *  Disk wins when it has entries: it is the literal truth about which
+ *  binaries are spawnable, and it stays correct for hand-populated `vendor/`
+ *  trees built with `SKIP_VENDOR_FETCH=1`. */
+export function pickVendorManifestSource(
+  disk: unknown,
+  generated: unknown,
+): VendorManifest {
+  const fromDisk = normalizeManifest(disk);
+  if (fromDisk.versions.length > 0) return fromDisk;
+  return normalizeManifest(generated);
+}
+
 /** The ASI flag the API actually sends for a binary, or `null` when it sends
  *  none. The flag was renamed `--asi` -> `--compat-asi` after 0.7.x (aligning it
  *  with the other `--compat-*` flags): vendored 0.7.x binaries advertise
@@ -153,5 +239,16 @@ export function findVersion(
 /** The tag list rendered in the playground's version dropdown.
  *  Preserves the manifest's order (newest stable first, `nightly` last). */
 export function listPlaygroundVersions(manifest: VendorManifest): string[] {
-  return manifest.versions.map((entry) => entry.tag);
+  return manifest.versions
+    .filter(isPublicExecutionSafe)
+    .map((entry) => entry.tag);
+}
+
+export function resolvePublicDefaultVersion(manifest: VendorManifest): string {
+  const configured = findVersion(manifest, manifest.defaultVersion);
+  if (configured && isPublicExecutionSafe(configured)) return configured.tag;
+  return (
+    manifest.versions.find(isPublicExecutionSafe)?.tag ??
+    manifest.defaultVersion
+  );
 }

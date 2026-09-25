@@ -1,15 +1,15 @@
 ---
 name: gocciascript-issue-validation
-description: Validate GocciaScript engine issues against the project-specific test262 harness. Use alongside implement-issue for GocciaScript issues that mention test262, ECMA-262/ECMA-402 conformance, Intl, or parser compatibility flags.
+description: Validate GocciaScript engine issues against the project-specific test262 harness. Use alongside implement for GocciaScript issues that mention test262, ECMA-262/ECMA-402 conformance, Intl, or parser compatibility flags.
 ---
 
 # GocciaScript Issue Validation
 
-Project-specific validation rules for GocciaScript issues. Use this skill with the generic `implement-issue` workflow when the issue references test262, ECMAScript/ECMA-402 behavior, or compatibility flags.
+Project-specific validation rules for GocciaScript issues. Use this skill with the generic `implement` workflow when the issue references test262, ECMAScript/ECMA-402 behavior, or compatibility flags.
 
 ## Spec Lookup
 
-For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.6.1` server from the project MCP config under `.agents/mcp/` when it is available. `tc39-mcp` spec-reading tools default to ECMA-262, so pass the spec explicitly for the standard you are checking:
+For ECMA-262 or ECMA-402 semantics, use the pinned `tc39-mcp@0.6.3` server from the project MCP config under `.agents/mcp/` when it is available. `tc39-mcp` spec-reading tools default to ECMA-262, so pass the spec explicitly for the standard you are checking:
 
 - ECMA-262 language/core built-ins: `spec: "262"`
 - ECMA-402 Intl behavior: `spec: "402"`

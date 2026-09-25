@@ -6,6 +6,34 @@ features: [Array.prototype.map, Array.from, TypedArray, Iterator, Map, Set, Obje
 const hasGoccia = typeof Goccia !== "undefined";
 
 describe.runIf(hasGoccia)("native callback GC roots", () => {
+  test("nested proxy array callbacks keep receivers and arguments alive after throw", () => {
+    const receiver = { tag: "receiver" };
+    const callback = {
+      visit(value, index, array) {
+        try {
+          [value].forEach(() => {
+            Goccia.gc();
+            throw new Error("inner callback");
+          });
+        } catch (error) {
+          expect(error.message).toBe("inner callback");
+        }
+        Goccia.gc();
+        expect(this).toBe(receiver);
+        expect(array[index]).toBe(value);
+        return value.tag + this.tag;
+      },
+    };
+    const proxy = new Proxy(callback.visit, {
+      apply(target, thisArg, args) {
+        Goccia.gc();
+        return Reflect.apply(target, thisArg, args);
+      },
+    });
+    expect([{ tag: "first" }, { tag: "second" }].map(proxy, receiver))
+      .toEqual(["firstreceiver", "secondreceiver"]);
+  });
+
   test("Array prototype callbacks survive explicit GC across iterations", () => {
     let sum = 0;
     [1, 2].forEach((value) => {
@@ -262,5 +290,91 @@ describe.runIf(hasGoccia)("native callback GC roots", () => {
     expect(upsertMap.get(key)).toBe(3);
     expect(headersJoined).toBe("a1");
     expect(paramsJoined).toBe("a1");
+  });
+
+  // A live argument collection roots its elements. Without that contract an
+  // argument the caller never stored anywhere else — in bytecode, a number the
+  // VM boxed out of a raw scalar register purely to build the call — is
+  // reachable only from that collection, so a builtin that re-enters user code
+  // and then reads the argument back reads freed memory. split's @@split lookup
+  // runs an accessor before it reads its limit argument, which is exactly that
+  // shape. The allocation churn after gc() is what makes the freed slot
+  // observable; a bare gc() usually leaves it readable.
+  test("argument collection elements survive a GC from re-entered user code", () => {
+    const churn = () => {
+      Goccia.gc();
+      let total = 0;
+      for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+        const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+        total += scratch.a + scratch.b[0];
+      }
+      return total;
+    };
+
+    const separator = {
+      get [Symbol.split]() {
+        churn();
+        return (target, limit) => [target, String(limit)];
+      },
+    };
+
+    expect("abc".split(separator, 7)).toEqual(["abc", "7"]);
+  });
+
+  // Holes in an argument array are resolved with Get (ES2026 §7.3.19 step 6b),
+  // so an inherited index accessor is user code running in the middle of
+  // building the argument list. Every argument already materialized has to stay
+  // rooted across that call: an argument the caller never stored anywhere else
+  // is reachable only from the list being built, and the churn after gc() is
+  // what makes a freed slot observable — the earlier argument comes back as
+  // whatever object landed in its memory.
+  test("argument list elements survive a GC run from an inherited index getter", () => {
+    const churn = (tag) => {
+      Goccia.gc();
+      Goccia.gc();
+      let total = 0;
+      for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+        const scratch = { a: i * 7.5, b: [i, i + 1], c: tag + i };
+        total += scratch.a + scratch.b[0];
+      }
+      return total;
+    };
+    const tags = (...args) =>
+      args.map((value) => (value && value.tag) || String(value)).join("|");
+
+    Object.defineProperty(Array.prototype, 0, {
+      get() {
+        return { tag: "first", pad: ["first", "first"] };
+      },
+      configurable: true,
+    });
+    Object.defineProperty(Array.prototype, 1, {
+      get() {
+        churn("second");
+        return { tag: "second", pad: ["second", "second"] };
+      },
+      configurable: true,
+    });
+
+    try {
+      expect(tags.apply(undefined, [,])).toBe("first");
+      expect(tags.apply(undefined, [, ,])).toBe("first|second");
+      expect(tags.apply(undefined, [, , 3])).toBe("first|second|3");
+      expect(tags.apply(undefined, [, , 3, 4])).toBe("first|second|3|4");
+      expect(tags.bind(undefined).apply(undefined, [, ,])).toBe("first|second");
+      expect(Reflect.apply(tags, undefined, [, ,])).toBe("first|second");
+
+      class Box {
+        constructor(...args) {
+          this.tag = tags(...args);
+        }
+      }
+
+      expect(Reflect.construct(Box, [, ,]).tag).toBe("first|second");
+      expect(new Box(...[, ,]).tag).toBe("first|second");
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+    }
   });
 });

@@ -14,6 +14,10 @@ _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 The recommended out-of-the-box way to use GocciaScript: sandbox-first, modern, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support when a host opts into compatibility or custom runtime capabilities.
 _Avoid_: Language ceiling, hard limit.
 
+**Recommended profile**:
+The default-on feature configuration that realises the recommended defaults: the forms and globals GocciaScript exposes without a compatibility or unsafe opt-in. Also written _recommended language profile_. See [Language](docs/language.md) for the profile and its compatibility paths.
+_Avoid_: Language ceiling, hard limit, runtime profile.
+
 **Engine**:
 The core language execution layer. It owns language semantics, source type, execution mode dispatch, and core language built-ins.
 _Avoid_: Runtime when referring only to core language behavior.
@@ -38,6 +42,10 @@ _Avoid_: Global module, runtime module when the module is registered directly by
 An import-only module installed by a runtime extension, such as a `goccia:` data-format module.
 _Avoid_: Runtime global, host module.
 
+**Module content provider**:
+The host-installed component that retrieves a module's text or bytes once an address has been resolved. Resolution and retrieval are separate concerns: a resolver decides which address to load, a content provider decides how its content is obtained. An engine with no provider installed is not a broken engine — it refuses every retrieval with a script-catchable error carrying a stable code, which is a different condition both from an installed provider that cannot produce a particular module and from a specifier that never resolved, since resolution runs first and fails on its own terms.
+_Avoid_: Module resolver, module loader, filesystem when the retrieval mechanism is the defining property.
+
 **Runtime profile**:
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
@@ -55,12 +63,24 @@ A versioned structured host event emitted when source reaches a capability bound
 _Avoid_: Console log, operation result, security policy callback.
 
 **Capability audit sink**:
-The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`.
-_Avoid_: Runtime extension, script-visible logger, best-effort telemetry.
+The engine-owned host callback that receives capability audit events synchronously. Sink failures propagate and stop execution; CLI hosts provide a thread-safe JSONL sink through `--audit-log`. A sink is one delivery route for capability audit events, not the only one: sandbox hosts may also receive the same events in the structured run result alongside the filesystem diff.
+_Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
+
+**Resource limit**:
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
+_Avoid_: Sandbox permission, capability, quota, script error.
+
+**Memory budget**:
+The per-thread ceiling on allocated bytes, configured through `--max-memory`. The collector instance is thread-local, so engines that share a thread share one `MaxBytes` and one `BytesAllocated` — the ceiling is not isolated per engine. It is enforced two ways, with different failure semantics: allocation sites whose owner can reserve and release the native storage through a reliable hook charge against it and release on destruction, and a refused charge surfaces as an ordinary catchable `RangeError`; growth points that have a container owner but no such release hook — array element buffers and object property storage — are gated instead — checked before allocating, never charged — and a refused gate raises the uncatchable resource-limit ceiling. Gating bounds any single allocation but not the aggregate of many small ones, so a memory budget bounds peak allocation requests rather than guaranteeing steady-state residency.
+_Avoid_: GC heap size, resident set limit, virtual filesystem quota.
+
+**Capability budget**:
+A bound on how often or how much an installed capability may be exercised — at most N invocations, or up to M bytes — after which further use is refused. It narrows a grant that would otherwise be unlimited once installed, and is distinct from whether the capability is installed at all.
+_Avoid_: Capability audit event, rate limit, allowlist.
 
 **Seed baseline**:
 An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
-_Avoid_: Mount, host filesystem access.
+_Avoid_: Mount, host filesystem access, import baseline.
 
 **Metadata diff**:
 An opt-in sandbox diff dimension that reports timestamp changes independently from content and namespace changes. It compares a path's access, modification, change, and birth timestamps against the seed baseline without turning timestamp-only activity into a content modification.
@@ -69,6 +89,14 @@ _Avoid_: Default diff, content diff.
 **Sandbox filesystem error**:
 A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
 _Avoid_: Raw virtual filesystem exception, host filesystem error.
+
+**Out-of-process sandbox**:
+An isolation mode in which an isolated sandbox run executes the engine in a separate child process reached over stdio, instead of in the host process. Process separation buys crash containment and turns a wedged native loop into a parent-enforced deadline and hard kill; it is not a syscall jail, which is deferred. The parent materialises the seed baseline into bytes and sends it in the run request, so the child is given no host paths and a well-behaved run needs no host-filesystem access; OS-level confinement that would stop a compromised child from reaching the host filesystem remains deferred.
+_Avoid_: Sandbox jail, syscall confinement, worker thread.
+
+**Child run**:
+One entry program executed in one out-of-process sandbox child, under the child-per-run model where each isolated run spawns a fresh child that runs exactly one program and exits. A child run reports its own outcome in-band as a failure kind; only the parent, observing the child process, sets the reserved child-process-crash classification.
+_Avoid_: Nested sandbox run, pooled child, worker task.
 
 **WinterTC compatibility**:
 The open product direction of aligning selected runtime globals and host behavior with web-interoperable server runtime standards, especially WinterTC's Minimum Common Web API. It is distinct from Node.js host compatibility, CommonJS support, and `node:` built-ins.
@@ -342,9 +370,45 @@ _Avoid_: Script executor.
 The CLI host that executes through the core engine without attaching the runtime surface.
 _Avoid_: Loader profile.
 
+**Sandbox Runner**:
+The CLI host (`GocciaSandboxRunner`) that executes an entry file inside an isolated sandbox virtual filesystem populated from a seed baseline, and reports a structured run result. See [Architecture](docs/architecture.md) and [Build System](docs/build-system.md).
+_Avoid_: Script Loader, sandbox mode.
+
+**Test Runner**:
+The CLI host (`GocciaTestRunner`) that discovers and runs GocciaScript test files against the built-in Vitest-compatible testing API and reports per-file and aggregate results. See [Testing](docs/testing.md).
+_Avoid_: Compliance runner, test harness.
+
+**Benchmark Runner**:
+The CLI host (`GocciaBenchmarkRunner`) that runs benchmark files and reports timing and score measurements for one or more suites. See [Benchmarks](docs/benchmarks.md).
+_Avoid_: Performance Barometer, profiler.
+
+**REPL**:
+The interactive CLI host (`GocciaREPL`) that evaluates entered source in one persistent realm across inputs.
+_Avoid_: Script Loader, shell.
+
+**Differential suite**:
+A shared test suite executed both on GocciaScript and on an external runtime in continuous integration, so a behavioral disagreement in either direction fails the build. See [Differential Testing](docs/differential-testing.md).
+_Avoid_: Conformance suite, compatibility test.
+
+**Semantics oracle**:
+The external runtime whose observed behavior decides the expected result for a differential suite — Vitest for the testing-API suites, Bun for the language suites. An advisory runtime informs a suite without deciding it.
+_Avoid_: Reference engine, baseline runtime.
+
+**Drop-in replacement**:
+The stated direction of the testing API: that existing Vitest suites run unchanged on the Test Runner. It is the direction, not a finished claim — the current divergences are recorded in [Test Framework API](docs/testing-api.md).
+_Avoid_: Vitest compatible as an unqualified claim, full parity.
+
 **Test262 host capability**:
 A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
+
+**Compatibility dashboard**:
+The `/compatibility` page on the project website, rendered from the generated test262 reports. It is the canonical home of conformance figures; documentation and website copy link to it instead of quoting a pass rate.
+_Avoid_: Conformance table, hand-typed pass rate, Performance Barometer.
+
+**Wrapper infrastructure failure**:
+A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a Pascal-side error, or a negative-runtime path that emitted no marker at all. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
+_Avoid_: Conformance fail, flaky test, harness error.
 
 **Performance Barometer**:
 The public, directional view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. It is a north-star aid, not a product ranking.
@@ -362,17 +426,13 @@ _Avoid_: Speedup, ranking score.
 The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
 _Avoid_: Release gate, competitive ranking.
 
+**Profile report**:
+A retained performance-review artifact published by main-branch test262 and benchmark runs. It pairs an aggregate entry point — provenance, rollups, ranked hotspots — with detailed per-area profiles that explain a ranked row. A profile report is review material, not conformance evidence and not a gate. See [Profiling](docs/profiling.md) and [test262](docs/test262.md).
+_Avoid_: Conformance report, benchmark result, compatibility dashboard input.
+
 **Bundler**:
 The CLI host that compiles source to `.gbc` artifacts without executing the program.
 _Avoid_: Compiler when referring to the user-facing tool.
-
-**Bundle Builder**:
-The CLI host that packages a resolved module graph into a single multi-module `.gcbundle` artifact (bytecode modules, JSON modules, and explicit assets). Distinct from the Bundler, which compiles individual source files to single-module `.gbc` artifacts.
-_Avoid_: Bundler when a multi-module package is meant.
-
-**Bundle**:
-A multi-module `.gcbundle` artifact produced by the Bundle Builder: a versioned container with its own magic, distinct from a single-module `.gbc` artifact so it cannot be loaded as one.
-_Avoid_: `.gbc` artifact, single-module bytecode.
 
 ### Values And Bindings
 

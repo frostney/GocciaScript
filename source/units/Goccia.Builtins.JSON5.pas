@@ -71,9 +71,13 @@ uses
   TextSemantics,
 
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
+  Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -85,14 +89,6 @@ uses
   Goccia.Values.ToObject,
   Goccia.Values.WrapperPrimitives,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 function CopyByCodePoints(const AText: string;
   const AMaxChars: Integer): string;
@@ -138,12 +134,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSON5'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -168,55 +162,85 @@ var
   Obj: TGocciaObjectValue;
   PropKey: string;
   Value: TGocciaValue;
+  ValueRoot, ContextRoot: TGocciaTempRoot;
+  NewValueRoots: TGocciaActiveRootFrame;
 begin
   Value := AHolder.GetProperty(AKey);
 
-  if Value is TGocciaObjectValue then
-  begin
-    Obj := TGocciaObjectValue(Value);
-    if Obj is TGocciaArrayValue then
+  InitializeTempRoot(ValueRoot);
+  InitializeTempRoot(ContextRoot);
+  NewValueRoots.Initialize;
+  try
+    // Every recursion below ends in a reviver call, and the reviver is arbitrary
+    // user code — a GC safe point that can also delete the holder property this
+    // value came from. Between the read above and the call at the end, this
+    // frame is the only thing holding it.
+    AddTempRootIfNeeded(ValueRoot, Value);
+
+    if Value is TGocciaObjectValue then
     begin
-      Arr := TGocciaArrayValue(Obj);
-      for I := 0 to Arr.Elements.Count - 1 do
+      Obj := TGocciaObjectValue(Value);
+      if Obj is TGocciaArrayValue then
       begin
-        NewValue := ApplyReviver(Arr, IntToStr(I), AReviver);
-        if NewValue is TGocciaUndefinedLiteralValue then
-          Arr.Elements[I] := TGocciaHoleValue.HoleValue
-        else
-          Arr.Elements[I] := NewValue;
-      end;
-    end
-    else
-    begin
-      for PropKey in Obj.GetEnumerablePropertyNames do
+        Arr := TGocciaArrayValue(Obj);
+        for I := 0 to Arr.Elements.Count - 1 do
+        begin
+          NewValue := ApplyReviver(Arr, IntToStr(I), AReviver);
+          // The reviver's return value is reachable only from this local
+          // between the recursion releasing its roots and the store below,
+          // and the store can collect. A frame and not a re-pointed temp
+          // root: a temp root is a set, so a reviver returning one object for
+          // two keys would have the first store's release unroot it for the
+          // second. See the JSON builtin's twin for the full argument.
+          NewValueRoots.Add(NewValue);
+          if NewValue is TGocciaUndefinedLiteralValue then
+            Arr.Elements[I] := TGocciaHoleValue.HoleValue
+          else
+            Arr.Elements[I] := NewValue;
+        end;
+      end
+      else
       begin
-        NewValue := ApplyReviver(Obj, PropKey, AReviver);
-        if NewValue is TGocciaUndefinedLiteralValue then
-          Obj.DeleteProperty(PropKey)
-        else
-          Obj.AssignProperty(PropKey, NewValue);
+        for PropKey in Obj.GetEnumerablePropertyNames do
+        begin
+          NewValue := ApplyReviver(Obj, PropKey, AReviver);
+          // Same window as the array arm above.
+          NewValueRoots.Add(NewValue);
+          if NewValue is TGocciaUndefinedLiteralValue then
+            Obj.DeleteProperty(PropKey)
+          else
+            Obj.AssignProperty(PropKey, NewValue);
+        end;
       end;
     end;
-  end;
 
-  // Build the context object for source text access.
-  Context := TGocciaObjectValue.Create;
-  if not (Value is TGocciaObjectValue) and Assigned(FReviverSourceTexts) and
-    (FReviverSourceIndex < FReviverSourceTexts.Count) then
-  begin
-    Context.AssignProperty(PROP_SOURCE,
-      TGocciaStringLiteralValue.Create(FReviverSourceTexts[FReviverSourceIndex]));
-    Inc(FReviverSourceIndex);
-  end;
+    // Build the context object for source text access.
+    Context := TGocciaObjectValue.Create;
+    // Nothing references the context until it enters the argument list below,
+    // and the source-text property write plus the argument allocations in
+    // between are all allocation points that can collect it.
+    AddTempRootIfNeeded(ContextRoot, Context);
+    if not (Value is TGocciaObjectValue) and Assigned(FReviverSourceTexts) and
+      (FReviverSourceIndex < FReviverSourceTexts.Count) then
+    begin
+      Context.AssignProperty(PROP_SOURCE,
+        TGocciaStringLiteralValue.Create(FReviverSourceTexts[FReviverSourceIndex]));
+      Inc(FReviverSourceIndex);
+    end;
 
-  Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
-  try
-    Args.Add(TGocciaStringLiteralValue.Create(AKey));
-    Args.Add(Value);
-    Args.Add(Context);
-    Result := InvokeCallable(AReviver, Args, AHolder);
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(3);
+    try
+      Args.Add(TGocciaStringLiteralValue.Create(AKey));
+      Args.Add(Value);
+      Args.Add(Context);
+      Result := InvokeCallable(AReviver, Args, AHolder);
+    finally
+      Args.Free;
+    end;
   finally
-    Args.Free;
+    NewValueRoots.Clear;
+    RemoveTempRootIfNeeded(ContextRoot);
+    RemoveTempRootIfNeeded(ValueRoot);
   end;
 end;
 
@@ -224,6 +248,7 @@ function TGocciaJSON5Builtin.ApplyToJSON(const AValue: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Args: TGocciaArgumentsCollection;
+  MethodRoot: TGocciaTempRoot;
   ToJSONMethod: TGocciaValue;
 begin
   Result := AValue;
@@ -236,12 +261,20 @@ begin
   if not Assigned(ToJSONMethod) or not ToJSONMethod.IsCallable then
     Exit;
 
-  Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  InitializeTempRoot(MethodRoot);
   try
-    Args.Add(TGocciaStringLiteralValue.Create(AKey));
-    Result := InvokeCallable(ToJSONMethod, Args, AValue);
+    // An accessor can hand back a function that lives nowhere else, and both
+    // allocations below happen before the call that finally uses it.
+    AddTempRootIfNeeded(MethodRoot, ToJSONMethod);
+    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+    try
+      Args.Add(TGocciaStringLiteralValue.Create(AKey));
+      Result := InvokeCallable(ToJSONMethod, Args, AValue);
+    finally
+      Args.Free;
+    end;
   finally
-    Args.Free;
+    RemoveTempRootIfNeeded(MethodRoot);
   end;
 end;
 
@@ -281,72 +314,102 @@ var
   Replaced: TGocciaValue;
   TransformedProp: TGocciaValue;
   Len: Integer;
+  ReplacedRoot, ResultRoot, PropValueRoot, TransformedPropRoot: TGocciaTempRoot;
 begin
-  Replaced := ApplyToJSON(AValue, AKey);
-  Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
-  // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
-  Replaced := CoerceWrappedPrimitive(Replaced);
+  // The replacer is user code and so is every accessor this walk reads through,
+  // which makes each of them a GC safe point. Nothing in this frame is reachable
+  // from a real root while that code runs: the value the replacer returned, the
+  // partially built copy, and the property being transformed all live only in
+  // these locals. FReplacerTraversalStack is a plain TList and is not a root
+  // either, so the entry this frame pushes onto it is rooted here as well — that
+  // is what keeps the whole ancestor chain alive across a nested replacer call.
+  // The nest-safe TGocciaTempRoot form is used because the roots are re-pointed
+  // as the walk proceeds, and the finally releases whatever is left rooted.
+  InitializeTempRoot(ReplacedRoot);
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(PropValueRoot);
+  InitializeTempRoot(TransformedPropRoot);
+  try
+    Replaced := ApplyToJSON(AValue, AKey);
+    AddTempRootIfNeeded(ReplacedRoot, Replaced);
+    Replaced := ApplyReplacer(AHolder, AKey, Replaced, AReplacer);
+    AddTempRootIfNeeded(ReplacedRoot, Replaced);
+    // ES2026 §25.5.4.2 steps 4.b-4.d: unwrap boxed primitives.
+    Replaced := CoerceWrappedPrimitive(Replaced);
+    AddTempRootIfNeeded(ReplacedRoot, Replaced);
 
-  if Replaced is TGocciaUndefinedLiteralValue then
-  begin
-    Result := Replaced;
-    Exit;
-  end;
-
-  if Replaced.IsCallable or (Replaced is TGocciaSymbolValue) then
-  begin
-    Result := Replaced;
-    Exit;
-  end;
-
-  if Replaced is TGocciaArrayValue then
-  begin
-    if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
-      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
-
-    FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
-    Arr := TGocciaArrayValue(Replaced);
-    NewArr := TGocciaArrayValue.Create;
-    try
-      Len := LengthOfArrayLike(Arr);
-      for I := 0 to Len - 1 do
-      begin
-        PropValue := Arr.GetProperty(IntToStr(I));
-        TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue,
-          AReplacer);
-        NewArr.Elements.Add(TransformedProp);
-      end;
-    finally
-      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+    if Replaced is TGocciaUndefinedLiteralValue then
+    begin
+      Result := Replaced;
+      Exit;
     end;
-    Result := NewArr;
-  end
-  else if (Replaced is TGocciaObjectValue) and
-    not (Replaced is TGocciaArrayValue) then
-  begin
-    if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
-      ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
 
-    FReplacerTraversalStack.Add(TGocciaObjectValue(Replaced));
-    Obj := TGocciaObjectValue(Replaced);
-    NewObj := TGocciaObjectValue.Create;
-    try
-      for Key in Obj.GetEnumerablePropertyNames do
-      begin
-        PropValue := Obj.GetProperty(Key);
-        TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
-        if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
-          TransformedProp.IsCallable or
-          (TransformedProp is TGocciaSymbolValue)) then
-          NewObj.AssignProperty(Key, TransformedProp);
-      end;
-    finally
-      FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+    if Replaced.IsCallable or (Replaced is TGocciaSymbolValue) then
+    begin
+      Result := Replaced;
+      Exit;
     end;
-    Result := NewObj;
-  end
-  else
-    Result := Replaced;
+
+    if Replaced is TGocciaArrayValue then
+    begin
+      if FReplacerTraversalStack.IndexOf(TGocciaArrayValue(Replaced)) <> -1 then
+        ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
+
+      FReplacerTraversalStack.Add(TGocciaArrayValue(Replaced));
+      Arr := TGocciaArrayValue(Replaced);
+      NewArr := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(ResultRoot, NewArr);
+      try
+        Len := LengthOfArrayLike(Arr);
+        for I := 0 to Len - 1 do
+        begin
+          PropValue := Arr.GetProperty(IntToStr(I));
+          AddTempRootIfNeeded(PropValueRoot, PropValue);
+          TransformedProp := TransformWithReplacer(Arr, IntToStr(I), PropValue,
+            AReplacer);
+          AddTempRootIfNeeded(TransformedPropRoot, TransformedProp);
+          NewArr.Elements.Add(TransformedProp);
+        end;
+      finally
+        FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+      end;
+      Result := NewArr;
+    end
+    else if (Replaced is TGocciaObjectValue) and
+      not (Replaced is TGocciaArrayValue) then
+    begin
+      if FReplacerTraversalStack.IndexOf(TGocciaObjectValue(Replaced)) <> -1 then
+        ThrowTypeError(SErrorCircularStructureToJSON5, SSuggestJSONFormat);
+
+      FReplacerTraversalStack.Add(TGocciaObjectValue(Replaced));
+      Obj := TGocciaObjectValue(Replaced);
+      NewObj := TGocciaObjectValue.Create;
+      AddTempRootIfNeeded(ResultRoot, NewObj);
+      try
+        for Key in Obj.GetEnumerablePropertyNames do
+        begin
+          PropValue := Obj.GetProperty(Key);
+          AddTempRootIfNeeded(PropValueRoot, PropValue);
+          TransformedProp := TransformWithReplacer(Obj, Key, PropValue, AReplacer);
+          AddTempRootIfNeeded(TransformedPropRoot, TransformedProp);
+          if not ((TransformedProp is TGocciaUndefinedLiteralValue) or
+            TransformedProp.IsCallable or
+            (TransformedProp is TGocciaSymbolValue)) then
+            NewObj.AssignProperty(Key, TransformedProp);
+        end;
+      finally
+        FReplacerTraversalStack.Delete(FReplacerTraversalStack.Count - 1);
+      end;
+      Result := NewObj;
+    end
+    else
+      Result := Replaced;
+  finally
+    RemoveTempRootIfNeeded(TransformedPropRoot);
+    RemoveTempRootIfNeeded(PropValueRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
+    RemoveTempRootIfNeeded(ReplacedRoot);
+  end;
 end;
 
 // The upstream json5 stringifier never coerces quote explicitly, but every
@@ -441,24 +504,38 @@ var
   PreviousTraversalStack: TList<TGocciaObjectValue>;
   Root: TGocciaObjectValue;
   Transformed: TGocciaValue;
+  HolderRoot, TransformedRoot: TGocciaTempRoot;
 begin
-  Root := TGocciaObjectValue.Create;
-  Root.AssignProperty('', AValue);
-  PreviousTraversalStack := FReplacerTraversalStack;
-  FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
+  InitializeTempRoot(HolderRoot);
+  InitializeTempRoot(TransformedRoot);
   try
-    Transformed := TransformWithReplacer(Root, '', AValue, AReplacer);
+    Root := TGocciaObjectValue.Create;
+    // The wrapper exists only for this call and is the replacer's `this`, so
+    // this local is its only reference for as long as user code can run.
+    AddTempRootIfNeeded(HolderRoot, Root);
+    Root.AssignProperty('', AValue);
+    PreviousTraversalStack := FReplacerTraversalStack;
+    FReplacerTraversalStack := TList<TGocciaObjectValue>.Create;
+    try
+      Transformed := TransformWithReplacer(Root, '', AValue, AReplacer);
 
-    if RootResultShouldBeUndefined(Transformed) then
-    begin
-      Result := '';
-      Exit;
+      if RootResultShouldBeUndefined(Transformed) then
+      begin
+        Result := '';
+        Exit;
+      end;
+
+      // The transformed tree is freshly built and reachable from nothing else;
+      // serializing it allocates the result string's intermediate values.
+      AddTempRootIfNeeded(TransformedRoot, Transformed);
+      Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
+    finally
+      FReplacerTraversalStack.Free;
+      FReplacerTraversalStack := PreviousTraversalStack;
     end;
-
-    Result := FStringifier.Stringify(Transformed, AGap, APreferredQuoteChar);
   finally
-    FReplacerTraversalStack.Free;
-    FReplacerTraversalStack := PreviousTraversalStack;
+    RemoveTempRootIfNeeded(TransformedRoot);
+    RemoveTempRootIfNeeded(HolderRoot);
   end;
 end;
 
@@ -505,6 +582,7 @@ var
   Reviver: TGocciaValue;
   Root: TGocciaObjectValue;
   SourceTexts: TUnicodeStringList;
+  ParsedRoot, HolderRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 1, 'JSON5.parse', ThrowError);
 
@@ -517,16 +595,31 @@ begin
   begin
     Reviver := AArgs.GetElement(1);
     SourceTexts := TUnicodeStringList.Create;
+    InitializeTempRoot(ParsedRoot);
+    InitializeTempRoot(HolderRoot);
     try
+      // EGocciaJSON5ParseError descends from EGocciaJSONParseError, and the
+      // reviver path goes through the inherited ParseWithSources, which raises the
+      // base class — so one arm covers both. A blanket Exception arm here also
+      // swallowed the engine's own failures: a refused allocation
+      // (TGocciaThrowValue carrying a RangeError, whose Pascal Message is empty by
+      // construction) became `SyntaxError: ` with no message, and a ceiling the
+      // guest can mistake for a syntax error is a ceiling it can retry in a loop.
       try
         FParser.ParseWithSources(
           AArgs.GetElement(0).ToStringLiteral.Value, Result, SourceTexts);
       except
-        on E: Exception do
+        on E: EGocciaJSONParseError do
           ThrowSyntaxError(E.Message, SSuggestJSONFormat);
       end;
 
+      // The parsed tree is held only by this frame until the wrapper's property
+      // write below, and creating the wrapper allocates.
+      AddTempRootIfNeeded(ParsedRoot, Result);
       Root := TGocciaObjectValue.Create;
+      // The wrapper is the reviver's `this` and exists solely for this call, so
+      // nothing else keeps it alive while the reviver runs user code.
+      AddTempRootIfNeeded(HolderRoot, Root);
       Root.AssignProperty('', Result);
 
       // Save/restore for reentrancy (reviver may call JSON5.parse).
@@ -541,6 +634,8 @@ begin
         FReviverSourceIndex := PreviousSourceIndex;
       end;
     finally
+      RemoveTempRootIfNeeded(HolderRoot);
+      RemoveTempRootIfNeeded(ParsedRoot);
       SourceTexts.Free;
     end;
   end
@@ -549,7 +644,7 @@ begin
     try
       Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
     except
-      on E: Exception do
+      on E: EGocciaJSONParseError do
         ThrowSyntaxError(E.Message, SSuggestJSONFormat);
     end;
   end;
@@ -639,15 +734,24 @@ begin
   except
     on E: TGocciaThrowValue do
       raise;
+    // Same allowlist as JSON.stringify, and for the same reason: the generic arm
+    // is for the serializer's own native failures, while the deadline poll, the
+    // instruction counter and the property-storage growth gate all reach here
+    // too. A ceiling the guest can catch is a ceiling it can ignore in a loop.
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       ReraiseBytecodeThrow(E);
       ThrowTypeError(Format(SErrorJSON5StringifyError, [E.Message]), SSuggestJSONFormat);
     end;
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

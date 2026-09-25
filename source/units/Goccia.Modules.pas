@@ -86,6 +86,7 @@ type
     FExportBindings: TGocciaModuleExportBindingMap;
     FExportsTable: TGocciaValueMap;
     FLastModified: TDateTime;
+    FIsHostOwned: Boolean;
     FNamespaceObject: TGocciaObjectValue;
     FEvaluationPromise: TGocciaValue;
     FAsyncCycleRoot: TGocciaModule;
@@ -143,6 +144,9 @@ type
     property AsyncCycleRoot: TGocciaModule read FAsyncCycleRoot
       write FAsyncCycleRoot;
     property LastModified: TDateTime read FLastModified write FLastModified;
+    { Diagnostic ownership stamped at host enrollment and inherited by every
+      module this module imports, including later dynamic/deferred imports. }
+    property IsHostOwned: Boolean read FIsHostOwned write FIsHostOwned;
   end;
 
   TGocciaModuleNamespaceObject = class(TGocciaObjectValue)

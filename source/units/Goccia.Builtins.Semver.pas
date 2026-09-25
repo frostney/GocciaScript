@@ -24,6 +24,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.GarbageCollector,
   Goccia.ObjectModel,
   Goccia.Semver,
   Goccia.ThreadCleanupRegistry,
@@ -293,34 +294,58 @@ begin
     Result := TGocciaStringLiteralValue.Create(AIdentifier.TextValue);
 end;
 
+{ Element strings are charged against the memory ceiling, so their
+  construction is a GC safe point; the array under construction is reachable
+  only from this frame and needs a temp root. }
 function TGocciaSemverNamespaceHost.IdentifierArrayValue(
   const AIdentifiers: TGocciaSemverIdentifierArray): TGocciaArrayValue;
 var
   I: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to High(AIdentifiers) do
-    Result.Elements.Add(IdentifierValue(AIdentifiers[I]));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for I := 0 to High(AIdentifiers) do
+      Result.Elements.Add(IdentifierValue(AIdentifiers[I]));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.StringArrayValue(
   const AValues: TGocciaSemverStringArray): TGocciaArrayValue;
 var
   I: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to High(AValues) do
-    Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[I]));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for I := 0 to High(AValues) do
+      Result.Elements.Add(TGocciaStringLiteralValue.Create(AValues[I]));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.StringMatrixValue(
   const AValues: TGocciaSemverStringMatrix): TGocciaArrayValue;
 var
   I: Integer;
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaArrayValue.Create;
-  for I := 0 to High(AValues) do
-    Result.Elements.Add(StringArrayValue(AValues[I]));
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    for I := 0 to High(AValues) do
+      Result.Elements.Add(StringArrayValue(AValues[I]));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.StringListArgument(
@@ -401,17 +426,33 @@ begin
   ATarget.AssignProperty(PROP_BUILD, StringArrayValue(ASemver.Build));
 end;
 
+{ The property strings written below are charged against the memory ceiling,
+  so their construction is a GC safe point; the host object under
+  construction is reachable only from this frame and needs a temp root. }
 function TGocciaSemverNamespaceHost.CreateSemverObject(
   const ASemver: TGocciaSemver): TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaObjectValue.Create(FSemverPrototype);
-  WriteSemverProperties(Result, ASemver);
+  InitializeTempRoot(ResultRoot);
+  try
+    Result := TGocciaObjectValue.Create(FSemverPrototype);
+    AddTempRootIfNeeded(ResultRoot, Result);
+    WriteSemverProperties(Result, ASemver);
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.CreateComparatorObject(
   const AComparator: TGocciaSemverComparator): TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
+  InitializeTempRoot(ResultRoot);
+  try
   Result := TGocciaObjectValue.Create(FComparatorPrototype);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.AssignProperty(PROP_OPTIONS, BuildOptionsObject(AComparator.Semver.Options));
   Result.AssignProperty(PROP_LOOSE, BooleanValue(AComparator.Semver.Options.Loose));
   Result.AssignProperty(PROP_OPERATOR,
@@ -421,6 +462,9 @@ begin
   else
     Result.AssignProperty(PROP_SEMVER, CreateSemverObject(AComparator.Semver));
   Result.AssignProperty(PROP_VALUE, TGocciaStringLiteralValue.Create(AComparator.Value));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.CreateRangeObject(
@@ -429,8 +473,16 @@ var
   I, J: Integer;
   SetArray: TGocciaArrayValue;
   ComparatorArray: TGocciaArrayValue;
+  ResultRoot: TGocciaTempRoot;
+  SetArrayRoot: TGocciaTempRoot;
+  ComparatorArrayRoot: TGocciaTempRoot;
 begin
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(SetArrayRoot);
+  InitializeTempRoot(ComparatorArrayRoot);
+  try
   Result := TGocciaObjectValue.Create(FRangePrototype);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.AssignProperty(PROP_OPTIONS, BuildOptionsObject(ARange.Options));
   Result.AssignProperty(PROP_LOOSE, BooleanValue(ARange.Options.Loose));
   Result.AssignProperty(PROP_INCLUDE_PRERELEASE,
@@ -439,14 +491,21 @@ begin
   Result.AssignProperty(PROP_RANGE, TGocciaStringLiteralValue.Create(RangeToString(ARange)));
 
   SetArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(SetArrayRoot, SetArray);
   for I := 0 to High(ARange.SetOfComparators) do
   begin
     ComparatorArray := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ComparatorArrayRoot, ComparatorArray);
     for J := 0 to High(ARange.SetOfComparators[I]) do
       ComparatorArray.Elements.Add(CreateComparatorObject(ARange.SetOfComparators[I][J]));
     SetArray.Elements.Add(ComparatorArray);
   end;
   Result.AssignProperty(PROP_SET_OF_COMPARATORS, SetArray);
+  finally
+    RemoveTempRootIfNeeded(ComparatorArrayRoot);
+    RemoveTempRootIfNeeded(SetArrayRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSemverNamespaceHost.WrapNullReturningString(
@@ -462,8 +521,17 @@ begin
     ThrowTypeError(E.Message, SSuggestSemverUsage)
   else if E is EGocciaSemverError then
     ThrowError(E.Message, SSuggestSemverUsage)
+  { Anything that is not a semver error — a resource ceiling, an audit delivery
+    failure — is not this host's to translate; it keeps unwinding to the host
+    with its exact type intact. This runs inside the caller's `on E: Exception`
+    handler but not lexically, so a bare `raise` will not compile. `raise E`
+    re-raised the object by name, starting a second propagation of an exception
+    the enclosing handler still owns and frees on exit — the dangling re-raise
+    that surfaces as a spurious access violation. AcquireExceptionObject
+    references the in-flight exception so the enclosing handler no longer frees
+    it under this re-raise. }
   else
-    raise E;
+    raise Exception(AcquireExceptionObject);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 

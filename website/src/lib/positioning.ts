@@ -1,8 +1,8 @@
 export const GOCCIASCRIPT_SUMMARY =
-  "GocciaScript is a sandbox-first ECMAScript runtime and toolchain for AI agents. Hosts define the available capabilities, runtime surface, and execution limits. It uses modern recommended defaults while tracking ECMAScript compatibility through generated test262 reports. GocciaScript is implemented in FreePascal, supports Delphi, and can also be embedded in native applications.";
+  "GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime and toolchain for AI agents. Hosts define the available capabilities, runtime surface, and execution limits. It uses modern recommended defaults while tracking ECMAScript compatibility through generated test262 reports. GocciaScript is implemented in FreePascal, supports Delphi, and can also be embedded in native applications.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
-  "Sandbox-first ECMAScript runtime and toolchain for AI agents, with host-defined capabilities, test262-tracked compatibility, and native application embedding.";
+  "GocciaScript is a JavaScript engine: a sandbox-first ECMAScript runtime for AI agents with host-defined capabilities, test262-tracked compatibility, and native application embedding.";
 
 export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";
@@ -20,6 +20,12 @@ export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 
 export const NODE_COMPATIBILITY_ANSWER =
   "GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm package resolution, process, Buffer, or the general node: module set. GocciaSandboxRunner does provide a Node-compatible fs API over its virtual filesystem, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the sandbox and does not expose the ambient host filesystem.";
+
+export const VITEST_COMPATIBILITY_QUESTION =
+  "Can I run my Vitest tests on GocciaScript?";
+
+export const VITEST_COMPATIBILITY_ANSWER =
+  'GocciaScript\'s built-in runner uses the Vitest and Jest test API: describe, test, expect, lifecycle hooks, and mocks. Matcher and comparison semantics — equality, Set and Map, errors, and toThrow — are probed against a pinned Vitest release and reconciled against it, and shared differential suites run in CI against whichever runtime is the semantics oracle for each one: Vitest for the testing-API suites, Bun for the language suites, with Bun advisory on matcher and lifecycle behaviour rather than deciding it. Being a drop-in replacement is the direction, not a finished claim: importing vi from "vitest" resolves to a bundled compatibility shim that covers vi.fn, vi.spyOn, factory-form vi.mock (a synchronous arrow factory returning an object literal, with no automock and no spread-based partial mock), vi.unmock, vi.mocked, the global stubs (vi.stubGlobal, vi.unstubAllGlobals), and the bulk mock helpers (vi.clearAllMocks, vi.resetAllMocks, vi.restoreAllMocks), so suites built on those run unchanged; vi.stubEnv and vi.unstubAllEnvs work over a host-injected process.env, since the engine has no process of its own, and members the shim does not implement — the fake-timer family, vi.waitFor, vi.waitUntil, vi.hoisted, vi.doMock, vi.doUnmock, vi.resetModules, vi.importActual, vi.importMock, vi.setConfig, and vi.resetConfig — throw a named error instead of failing quietly; vi is reached through that import rather than as an ambient global, and a few divergences are deliberate. Suites run as a single native binary with no Node.js installation or transform step in front of them, which is a statement about what a run has to do rather than about raw engine throughput.';
 
 export const COMPILER_SUPPORT_QUESTION =
   "Does GocciaScript support FreePascal and Delphi?";
@@ -43,6 +49,10 @@ export const POSITIONING_FAQS = [
   {
     question: NODE_COMPATIBILITY_QUESTION,
     answer: NODE_COMPATIBILITY_ANSWER,
+  },
+  {
+    question: VITEST_COMPATIBILITY_QUESTION,
+    answer: VITEST_COMPATIBILITY_ANSWER,
   },
   {
     question: COMPILER_SUPPORT_QUESTION,

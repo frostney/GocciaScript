@@ -239,3 +239,69 @@ test("Promise.all skips IteratorClose when an iterator result accessor throws", 
     }
   }
 });
+
+// The capability triple comes out of a user subclass constructor, the resolve
+// method out of a user getter, and both — along with the iterator and the
+// shared element state — sit in native locals across the iterator's next and
+// every thenable's then. Each of those is a GC safe point.
+describe.runIf(typeof Goccia !== "undefined")("Promise.all under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("survives a collection inside a subclass constructor", () => {
+    class P extends Promise {
+      constructor(executor) {
+        gcChurn();
+        super(executor);
+      }
+    }
+
+    return P.all([Promise.resolve(1), Promise.resolve(2)]).then((values) => {
+      expect(values).toEqual([1, 2]);
+    });
+  });
+
+  test("survives a collection inside the resolve getter", () => {
+    class P extends Promise {
+      static get resolve() {
+        gcChurn();
+        return (value) => Promise.resolve(value);
+      }
+    }
+
+    return P.all([1, 2]).then((values) => {
+      expect(values).toEqual([1, 2]);
+    });
+  });
+
+  test("survives a collection inside the iterator's next", () => {
+    const iterable = {
+      [Symbol.iterator]() {
+        let index = 0;
+        return {
+          next() {
+            gcChurn();
+            index++;
+            if (index > 3) {
+              return { done: true };
+            }
+            return { value: index, done: false };
+          },
+        };
+      },
+    };
+
+    return Promise.all(iterable).then((values) => {
+      expect(values).toEqual([1, 2, 3]);
+    });
+  });
+});

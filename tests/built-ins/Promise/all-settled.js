@@ -236,3 +236,35 @@ test("Promise.allSettled skips IteratorClose when an iterator result accessor th
     }
   }
 });
+
+// Same rooting exposure as Promise.all: see that file for the rationale.
+describe.runIf(typeof Goccia !== "undefined")("Promise.allSettled under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("survives a collection inside a subclass constructor", () => {
+    class P extends Promise {
+      constructor(executor) {
+        gcChurn();
+        super(executor);
+      }
+    }
+
+    return P.allSettled([Promise.resolve(1), Promise.reject(2)]).then((results) => {
+      expect(results.length).toBe(2);
+      expect(results[0].status).toBe("fulfilled");
+      expect(results[0].value).toBe(1);
+      expect(results[1].status).toBe("rejected");
+      expect(results[1].reason).toBe(2);
+    });
+  });
+});

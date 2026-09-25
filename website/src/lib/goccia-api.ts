@@ -26,7 +26,10 @@ import {
 import {
   findVersion,
   isFlagSupported,
+  isPublicExecutionSafe,
+  parseAdvertisedFlags,
   resolveAsiFlag,
+  resolvePublicDefaultVersion,
   type VendorFeatureSet,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
@@ -38,6 +41,17 @@ const MAX_MEMORY_BYTES = 32 * 1024 * 1024;
 const MAX_INSTRUCTIONS = 50_000_000;
 const STACK_SIZE = 2_000;
 const ALLOWED_HOSTS = ["icanhazdadjoke.com"];
+const FEATURE_PROBE_TIMEOUT_MS = 2_000;
+const MAX_FEATURE_PROBE_OUTPUT_BYTES = 64 * 1024;
+const ALLOWED_CHILD_ENV = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "TZ",
+  "NODE_ENV",
+];
 
 type GocciaRequestBody = {
   code: string;
@@ -90,7 +104,8 @@ type TransportError = {
     | "CODE_TOO_LARGE"
     | "SPAWN_FAILED"
     | "ABORTED"
-    | "UNKNOWN_VERSION";
+    | "UNKNOWN_VERSION"
+    | "UNSAFE_ENGINE";
 };
 
 type TimingJson = {
@@ -181,6 +196,66 @@ type ResolvedBinary =
     }
   | { ok: false; error: TransportError };
 
+function childEnvironment(): NodeJS.ProcessEnv {
+  const childEnv: Record<string, string | undefined> = { NO_COLOR: "1" };
+  for (const key of ALLOWED_CHILD_ENV) {
+    const value = process.env[key];
+    if (typeof value === "string") childEnv[key] = value;
+  }
+  return childEnv as NodeJS.ProcessEnv;
+}
+
+async function probeBinaryFeatures(
+  binary: string,
+  kind: "loader" | "testRunner",
+): Promise<VendorFeatureSet | null> {
+  return await new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    const child = spawn(binary, ["--help"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: childEnvironment(),
+    });
+    const finish = (features: VendorFeatureSet | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve(features);
+    };
+    const append = (chunk: Buffer) => {
+      if (outputBytes + chunk.length > MAX_FEATURE_PROBE_OUTPUT_BYTES) {
+        child.kill("SIGKILL");
+        finish(null);
+        return;
+      }
+      chunks.push(chunk);
+      outputBytes += chunk.length;
+    };
+    const killTimer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(null);
+    }, FEATURE_PROBE_TIMEOUT_MS);
+
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
+    child.on("error", () => finish(null));
+    child.on("close", () => {
+      const flags = parseAdvertisedFlags(
+        Buffer.concat(chunks).toString("utf8"),
+      );
+      if (!flags.includes("--no-host-filesystem")) {
+        finish(null);
+        return;
+      }
+      finish({
+        loader: kind === "loader" ? flags : [],
+        testRunner: kind === "testRunner" ? flags : [],
+      });
+    });
+  });
+}
+
 // Resolution order, first existing path wins:
 //   1. endpoint-specific env var (deploy / debug override)
 //   2. `vendor/<entry.binaries.*>` for the requested release tag — populated
@@ -197,9 +272,8 @@ function resolveBinaryPath(
 ): ResolvedBinary {
   const override = process.env[config.binaryEnvVar];
   if (override) {
-    // Override path bypasses the manifest entirely — caller assumes the
-    // binary is current. Skipping feature filtering preserves the legacy
-    // "I know what I'm doing" debug semantics.
+    // Override paths bypass the manifest, so runHandler probes their actual
+    // help output before they may receive untrusted source.
     return {
       ok: true,
       path: override,
@@ -211,6 +285,15 @@ function resolveBinaryPath(
   const manifest = getVendorManifest();
   const entry = findVersion(manifest, requestedVersion);
   if (entry) {
+    if (!isPublicExecutionSafe(entry)) {
+      return {
+        ok: false,
+        error: {
+          message: `version ${entry.tag} cannot safely run untrusted modules`,
+          code: "UNSAFE_ENGINE",
+        },
+      };
+    }
     const rel =
       config.kind === "execute"
         ? entry.binaries.loader
@@ -240,8 +323,8 @@ function resolveBinaryPath(
       localName,
     );
     if (existsSync(/* turbopackIgnore: true */ localPath)) {
-      // Locally compiled engine: no probe, no filtering — the developer is
-      // running whatever they just built.
+      // Locally compiled engines are not manifested; runHandler probes the
+      // selected binary before constructing its sandbox flags.
       return {
         ok: true,
         path: localPath,
@@ -281,6 +364,7 @@ function buildEngineArgs(
   const accept = (arg: string) => {
     if (isFlagSupported(features, arg, kind)) args.push(arg);
   };
+  accept("--no-host-filesystem");
   accept(`--timeout=${TIMEOUT_MS}`);
   accept(`--max-memory=${MAX_MEMORY_BYTES}`);
   accept(`--max-instructions=${MAX_INSTRUCTIONS}`);
@@ -784,7 +868,9 @@ async function runHandler(
   }
 
   const { asi, compatVar, compatFunction } = body;
-  const requestedVersion = body.version ?? getVendorManifest().defaultVersion;
+  const manifest = getVendorManifest();
+  const requestedVersion =
+    body.version ?? resolvePublicDefaultVersion(manifest);
   const resolved = resolveBinaryPath(config, requestedVersion);
   if (!resolved.ok) {
     captureServerEvent(`${config.eventPrefix}_unknown_version`, {
@@ -795,6 +881,29 @@ async function runHandler(
     return transportError(resolved.error, { status: 400 });
   }
   const resolvedVersion = resolved.resolvedVersion;
+  let features = resolved.features;
+  if (!features) {
+    const kind = config.kind === "execute" ? "loader" : "testRunner";
+    const probedFeatures = await probeBinaryFeatures(resolved.path, kind);
+    if (!probedFeatures) {
+      captureServerEvent(`${config.eventPrefix}_unsafe_engine`, {
+        distinctId,
+        path: config.path,
+        properties: {
+          binaryName: basename(resolved.path),
+          requestedVersion,
+        },
+      });
+      return transportError(
+        {
+          message: `version ${resolvedVersion} cannot safely run untrusted modules`,
+          code: "UNSAFE_ENGINE",
+        },
+        { status: 400 },
+      );
+    }
+    features = probedFeatures;
+  }
 
   // Same input -> same response within the cache TTL. A client mashing the
   // "Run" button on the playground can short-circuit here without spawning
@@ -851,7 +960,7 @@ async function runHandler(
     compatVar,
     compatFunction,
     resolved.path,
-    resolved.features,
+    features,
   );
   const startedAt = Date.now();
 
@@ -880,27 +989,9 @@ async function runHandler(
       resolve(res);
     };
 
-    // Build a minimal allowlisted env so we don't forward server secrets
-    // (DB URLs, API tokens, deploy-platform vars, etc.) into the sandboxed
-    // binaries. Only variables the binaries themselves need are passed through.
-    const ALLOWED_ENV = [
-      "PATH",
-      "HOME",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "TZ",
-      "NODE_ENV",
-    ];
-    const childEnv: Record<string, string | undefined> = { NO_COLOR: "1" };
-    for (const key of ALLOWED_ENV) {
-      const value = process.env[key];
-      if (typeof value === "string") childEnv[key] = value;
-    }
-
     const child = spawn(invocation.binary, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childEnv as NodeJS.ProcessEnv,
+      env: childEnvironment(),
     });
 
     abortHandler = () => {

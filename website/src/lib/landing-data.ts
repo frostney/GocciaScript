@@ -221,9 +221,17 @@ export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
     standardsSource: "ECMA-262 core",
     why: "dynamic source construction is an explicit unsafe opt-in",
   },
+  {
+    name: "ShadowRealm",
+    implemented: true,
+    defaultProfile: "Not installed",
+    enablement: "--unsafe-shadowrealm",
+    standardsSource: "TC39 Stage 2.7",
+    why: "evaluates dynamic source and imports modules",
+  },
 ];
 
-export type FeatureIcon = "drop" | "shield" | "leaf" | "clock";
+export type FeatureIcon = "drop" | "shield" | "leaf" | "clock" | "test";
 
 export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
@@ -245,5 +253,10 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
     icon: "clock",
     title: "A modern standard library, batteries included",
     body: "Temporal for dates, and direct module imports of JSON, JSON5, TOML, YAML, CSV, TSV, JSONL and Markdown.",
+  },
+  {
+    icon: "test",
+    title: "Vitest-compatible testing",
+    body: "Write tests the way you already do — describe/test/expect, lifecycle hooks, and mocks — with semantics probed against a pinned Vitest release, in a single native binary.",
   },
 ];

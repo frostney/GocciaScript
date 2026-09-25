@@ -22,6 +22,10 @@ type
     FResults: TGocciaValueList;
     FContexts: TGocciaValueList;
     FImplementation: TGocciaValue;
+    { The implementation the mock was created with — the argument to
+      `mock(impl)`, or the method a spy replaced. mockReset restores this rather
+      than clearing the implementation outright, which is what Vitest does. }
+    FOriginalImplementation: TGocciaValue;
     FOnceQueue: TGocciaValueList;
     FOnceIsImpl: array of Boolean;
     FDefaultReturnValue: TGocciaValue;
@@ -62,6 +66,14 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockReturnValueOnce(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockResolvedValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockResolvedValueOnce(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockRejectedValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function DoMockRejectedValueOnce(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockReset(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function DoMockClear(const AArgs: TGocciaArgumentsCollection;
@@ -91,12 +103,77 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.PromiseValue;
+
+type
+  TGocciaMockPromiseFactoryValue = class(TGocciaFunctionBase)
+  private
+    FValue: TGocciaValue;
+    FReject: Boolean;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const AValue: TGocciaValue; const AReject: Boolean);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
 
 const
   MOCK_DEFAULT_NAME = 'mock';
   RESULT_TYPE_RETURN = 'return';
   RESULT_TYPE_THROW = 'throw';
+
+{ TGocciaMockPromiseFactoryValue }
+
+constructor TGocciaMockPromiseFactoryValue.Create(const AValue: TGocciaValue;
+  const AReject: Boolean);
+begin
+  inherited Create;
+  FValue := AValue;
+  FReject := AReject;
+end;
+
+function TGocciaMockPromiseFactoryValue.GetFunctionLength: Integer;
+begin
+  Result := 0;
+end;
+
+function TGocciaMockPromiseFactoryValue.GetFunctionName: string;
+begin
+  Result := '';
+end;
+
+function TGocciaMockPromiseFactoryValue.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  if TGarbageCollector.Instance <> nil then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
+    if FReject then
+      Promise.Reject(FValue)
+    else
+      Promise.Resolve(FValue);
+    Result := Promise;
+  finally
+    if TGarbageCollector.Instance <> nil then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
+  end;
+end;
+
+procedure TGocciaMockPromiseFactoryValue.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FValue) then
+    FValue.MarkReferences;
+end;
 
 function ClonePropertyDescriptor(const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
 begin
@@ -127,6 +204,7 @@ begin
   FOnceQueue := TGocciaValueList.Create(False);
   SetLength(FOnceIsImpl, 0);
   FImplementation := AImplementation;
+  FOriginalImplementation := AImplementation;
   FHasDefaultReturnValue := False;
   FDefaultReturnValue := nil;
   FSpyTarget := nil;
@@ -157,7 +235,10 @@ begin
 
   // Spy passes through to original by default
   if Assigned(OriginalValue) and (OriginalValue is TGocciaFunctionBase) then
+  begin
     FImplementation := OriginalValue;
+    FOriginalImplementation := OriginalValue;
+  end;
 
   // Replace the method on the target object with this spy
   ATarget.DefineProperty(AMethodName,
@@ -188,6 +269,18 @@ begin
   DefineProperty('mockReturnValueOnce', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(DoMockReturnValueOnce, 'mockReturnValueOnce', 1),
     [pfConfigurable, pfWritable]));
+  DefineProperty('mockResolvedValue', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockResolvedValue, 'mockResolvedValue', 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty('mockResolvedValueOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockResolvedValueOnce,
+      'mockResolvedValueOnce', 1), [pfConfigurable, pfWritable]));
+  DefineProperty('mockRejectedValue', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockRejectedValue, 'mockRejectedValue', 1),
+    [pfConfigurable, pfWritable]));
+  DefineProperty('mockRejectedValueOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(DoMockRejectedValueOnce,
+      'mockRejectedValueOnce', 1), [pfConfigurable, pfWritable]));
   DefineProperty('mockReset', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(DoMockReset, 'mockReset', 0),
     [pfConfigurable, pfWritable]));
@@ -217,16 +310,26 @@ end;
 
 function TGocciaMockFunctionValue.CreateResultEntry(const AResultType: string;
   const AValue: TGocciaValue): TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
+  ValueRoot: TGocciaTempRoot;
 begin
-  Result := TGocciaObjectValue.Create;
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Result);
+  { AValue may itself be freshly allocated and otherwise unreachable (e.g.
+    the message string built at a throw site), and the type-string creation
+    below is a GC safe point — root both. AddTempRootIfNeeded records whether
+    this frame added each root, so a root the caller already holds on AValue
+    is left in place. }
+  InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ValueRoot);
   try
+    Result := TGocciaObjectValue.Create;
+    AddTempRootIfNeeded(ResultRoot, Result);
+    AddTempRootIfNeeded(ValueRoot, AValue);
     Result.AssignProperty(PROP_TYPE, TGocciaStringLiteralValue.Create(AResultType));
     Result.AssignProperty(PROP_VALUE, AValue);
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Result);
+    RemoveTempRootIfNeeded(ValueRoot);
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 
@@ -415,6 +518,9 @@ begin
   if Assigned(FImplementation) then
     FImplementation.MarkReferences;
 
+  if Assigned(FOriginalImplementation) then
+    FOriginalImplementation.MarkReferences;
+
   if Assigned(FDefaultReturnValue) then
     FDefaultReturnValue.MarkReferences;
 
@@ -497,6 +603,52 @@ begin
   Result := Self;
 end;
 
+function TGocciaMockFunctionValue.DoMockResolvedValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FImplementation := TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), False);
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockResolvedValueOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
+begin
+  FOnceQueue.Add(TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), False));
+  Len := Length(FOnceIsImpl);
+  SetLength(FOnceIsImpl, Len + 1);
+  FOnceIsImpl[Len] := True;
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockRejectedValue(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FImplementation := TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), True);
+  Result := Self;
+end;
+
+function TGocciaMockFunctionValue.DoMockRejectedValueOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Len: Integer;
+begin
+  FOnceQueue.Add(TGocciaMockPromiseFactoryValue.Create(
+    AArgs.GetElement(0), True));
+  Len := Length(FOnceIsImpl);
+  SetLength(FOnceIsImpl, Len + 1);
+  FOnceIsImpl[Len] := True;
+  Result := Self;
+end;
+
 // mockClear() — clears tracking data, preserves implementation
 function TGocciaMockFunctionValue.DoMockClear(
   const AArgs: TGocciaArgumentsCollection;
@@ -509,7 +661,11 @@ begin
   Result := Self;
 end;
 
-// mockReset() — clears everything including implementation
+// mockReset() — clears recorded calls and every implementation added after
+// creation, then reinstates the implementation the mock was created with: the
+// argument to `mock(impl)`, or the method a spy replaced. Vitest 4 defines it
+// that way, so `vi.fn(impl)` followed by mockReset still calls impl; only a
+// mock created without one is left returning undefined.
 function TGocciaMockFunctionValue.DoMockReset(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -519,7 +675,7 @@ begin
   FContexts.Clear;
   FOnceQueue.Clear;
   SetLength(FOnceIsImpl, 0);
-  FImplementation := nil;
+  FImplementation := FOriginalImplementation;
   FDefaultReturnValue := nil;
   FHasDefaultReturnValue := False;
   InvalidateMockObject;
@@ -542,7 +698,12 @@ begin
       FSpyTarget.DeleteProperty(FSpyMethodName);
   end;
 
-  // Also reset tracking
+  { Direct mockRestore() also clears the recorded calls: Vitest 4 leaves a
+    restored spy reporting zero calls. That is NOT what vi.restoreAllMocks()
+    does — measured against the pinned release, the bulk member restores the
+    descriptor and leaves the history intact — so the two cannot share this
+    path. The vitest shim restores the target descriptor itself rather than
+    calling through here. }
   DoMockReset(AArgs, AThisValue);
   Result := Self;
 end;

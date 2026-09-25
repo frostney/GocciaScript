@@ -178,7 +178,7 @@ console.log('web-tooling-ci-report: validation...');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'acorn'), 300000, 'ci uses the five-minute workload timeout');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'coffeescript'), 900000, 'ci applies the CoffeeScript timeout override');
   assertEqual(workloadTimeoutMs(manifest.ciReport, 'postcss'), 3600000, 'ci applies the PostCSS timeout override');
-  validateReport({
+  const okReport = () => ({
     metadata: { driver: { version: 4 }, options: { repetitions: 1 } },
     summary: { workloadCount: 2 },
     targets: [
@@ -192,11 +192,72 @@ console.log('web-tooling-ci-report: validation...');
         kind: 'web-tooling',
         name: 'coffeescript',
         build: { outcome: 'ok' },
-        summary: { ok: 0, syntaxError: 1 },
+        summary: { ok: 1 },
       },
     ],
-  }, manifest);
-  assert(true, 'ci report validation accepts complete workload reports with recorded failures');
+  });
+
+  validateReport(okReport(), manifest);
+  assert(true, 'ci report validation accepts workload reports whose samples are all ok');
+
+  function assertRejects(mutate, expectedFragment, message) {
+    const report = okReport();
+    mutate(report);
+    let error = null;
+    try {
+      validateReport(report, manifest);
+    } catch (e) {
+      error = e;
+    }
+    assert(error !== null, `${message} (expected a throw)`);
+    assert(
+      String(error.message).includes(expectedFragment),
+      `${message} (expected message containing ${JSON.stringify(expectedFragment)}, got ${JSON.stringify(String(error?.message))})`,
+    );
+  }
+
+  // Outcome gating: any non-ok sample outcome must fail the job rather than
+  // being recorded and reported as a passing run.
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, syntaxError: 1 }; },
+    'non-ok sample outcomes (syntaxError=1)',
+    'ci report validation rejects syntax-error samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, timeout: 1 }; },
+    'non-ok sample outcomes (timeout=1)',
+    'ci report validation rejects timeout samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, runtimeError: 1 }; },
+    'non-ok sample outcomes (runtimeError=1)',
+    'ci report validation rejects runtime-error samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, crash: 1 }; },
+    'non-ok sample outcomes (crash=1)',
+    'ci report validation rejects crash samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, oom: 1 }; },
+    'non-ok sample outcomes (oom=1)',
+    'ci report validation rejects oom samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0, missingResult: 1 }; },
+    'non-ok sample outcomes (missingResult=1)',
+    'ci report validation rejects missing-result samples',
+  );
+  assertRejects(
+    (report) => { report.targets[1].build = { outcome: 'build-failed' }; },
+    'build outcome build-failed',
+    'ci report validation rejects failed builds',
+  );
+  assertRejects(
+    (report) => { report.targets[1].summary = { ok: 0 }; },
+    'expected 1 ok samples, report recorded 0',
+    'ci report validation rejects a workload with no ok samples',
+  );
 
   const shardMetadata = {
     driver: { version: 4 },

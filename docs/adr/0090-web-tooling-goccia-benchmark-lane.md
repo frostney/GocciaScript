@@ -42,10 +42,16 @@ uses a 25 MB managed-heap ceiling so bytecode memory-pressure collections run
 before a constrained CI host can terminate the process.
 
 The report is normalized JSON with one target entry per workload. A build
-failure, timeout, crash, OOM, or missing `runs/s` line is recorded as a
-first-class target outcome instead of failing the whole report. The job fails
-only when the driver cannot produce a structurally complete report for every
-manifest workload. CI runs one workload per matrix job, then validates and
+failure, timeout, crash, OOM, syntax error, or missing `runs/s` line is recorded
+as a first-class target outcome so the report stays structurally complete and
+diagnosable. Those outcomes also **gate the job**: `web-tooling-ci-report.js`
+exits nonzero when a workload's build outcome is not `ok` or when any sample
+outcome is not `ok`. Correctness regressions — a workload that stops parsing or
+running — therefore fail CI instead of being visible only in the PR comment.
+Performance stays non-gating: no `runs/s` threshold is enforced, and a workload
+that runs to completion passes however slow it is. The job also fails when the
+driver cannot produce a structurally complete report for every manifest
+workload. CI runs one workload per matrix job, then validates and
 merges those shards into one report. PR CI uploads the `web-tooling-report`
 artifact and posts a Goccia-only comment. Main CI uploads the same artifact and, when
 `BLOB_READ_WRITE_TOKEN` is configured, publishes the compressed report plus a

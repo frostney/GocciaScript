@@ -17,7 +17,8 @@ type
     gckFFIOpen,
     gckFunctionConstructor,
     gckShadowRealm,
-    gckSandboxFileSystem
+    gckSandboxFileSystem,
+    gckNodeModulesResolution
   );
 
   TGocciaCapabilityDecision = (
@@ -74,6 +75,8 @@ begin
       Result := 'shadow-realm.construct';
     gckSandboxFileSystem:
       Result := 'sandbox.fs.path';
+    gckNodeModulesResolution:
+      Result := 'modules.node-modules';
   end;
 end;
 

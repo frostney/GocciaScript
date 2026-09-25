@@ -12,6 +12,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Error.ThrowErrorCallback,
   Goccia.GarbageCollector,
   Goccia.Modules,
@@ -137,6 +138,7 @@ uses
   Goccia.FetchManager,
   Goccia.FloatingPoint,
   Goccia.MicrotaskQueue,
+  Goccia.UncatchableFault,
   Goccia.Values.ArrayValue,
   Goccia.Values.Await,
   Goccia.Values.Error,
@@ -218,13 +220,21 @@ begin
 end;
 
 function BenchmarkExceptionMessage(const AException: Exception): string;
+var
+  Scope: TGocciaDiagnosticSourceScope;
+  ExpectedPrincipal: Int64;
 begin
+  Scope := TGocciaDiagnosticSourceRegistry.Current;
+  if Assigned(Scope) then
+    ExpectedPrincipal := Scope.Principal
+  else
+    ExpectedPrincipal := 0;
   if AException is TGocciaThrowValue then
     Exit(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, False,
-      TGocciaThrowValue(AException).Suggestion));
+      ExpectedPrincipal, TGocciaThrowValue(AException).Suggestion));
   if AException is EGocciaBytecodeThrow then
     Exit(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '',
-      nil, False));
+      nil, False, ExpectedPrincipal, EGocciaBytecodeThrow(AException).Suggestion));
   Result := AException.Message;
 end;
 
@@ -776,11 +786,19 @@ begin
   SetupResult := nil;
   RunFunction := ABenchCase.RunFunction;
   GeneratorIterator := nil;
+  { Initialize records the floor; the pushes belong inside the try that
+    releases them. Anything between a push and the guarding try leaks the
+    entries permanently if it raises — the frame is a stack record, so nothing
+    downstream ever releases them, and the objects stay pinned for the life of
+    the thread. Both the second Add (the root stack can grow) and the
+    arguments collection can raise, so both move inside. RunArgs is nil'd
+    first because the finally now runs on paths that never reached it. }
   ActiveRoots.Initialize;
-  ActiveRoots.Add(ABenchCase.RunFunction);
-  ActiveRoots.Add(ABenchCase.GeneratorFunction);
-  RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  RunArgs := nil;
   try
+    ActiveRoots.Add(ABenchCase.RunFunction);
+    ActiveRoots.Add(ABenchCase.GeneratorFunction);
+    RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
     try
       if Assigned(ABenchCase.GeneratorFunction) then
       begin
@@ -981,11 +999,13 @@ begin
   SetupResult := nil;
   RunFunction := ABenchCase.RunFunction;
   GeneratorIterator := nil;
+  // Pushes inside the try that releases them; see RunSingleBenchmark.
   ActiveRoots.Initialize;
-  ActiveRoots.Add(ABenchCase.RunFunction);
-  ActiveRoots.Add(ABenchCase.GeneratorFunction);
-  RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
+  RunArgs := nil;
   try
+    ActiveRoots.Add(ABenchCase.RunFunction);
+    ActiveRoots.Add(ABenchCase.GeneratorFunction);
+    RunArgs := TGocciaArgumentsCollection.CreateWithCapacity(1);
     try
       if Assigned(ABenchCase.GeneratorFunction) then
         RunFunction := CreateRunFunctionFromGenerator(ABenchCase, ActiveRoots,
@@ -1062,9 +1082,19 @@ begin
       except
         on E: Exception do
         begin
+          { Pending host work is cleared before either outcome: on the recorded
+            path the next case must not inherit this one's microtasks, and on
+            the unwind path the host catches the fault and keeps running. }
           if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
+
+          { A benchmark loop is the worst place to absorb an uncatchable fault:
+            recording it as this case's `error` string starts the next case
+            immediately, so a ceiling is re-tripped case after case and an
+            integrity fault keeps the process measuring on freed memory. }
+          if IsUncatchableFault(E) then
+            raise;
 
           SingleResult := TGocciaObjectValue.Create;
           if Assigned(GC) then
@@ -1160,9 +1190,19 @@ begin
       except
         on E: Exception do
         begin
+          { Pending host work is cleared before either outcome: on the recorded
+            path the next case must not inherit this one's microtasks, and on
+            the unwind path the host catches the fault and keeps running. }
           if (TGocciaMicrotaskQueue.Instance <> nil) then
             TGocciaMicrotaskQueue.Instance.ClearQueue;
           DiscardFetchCompletions;
+
+          { A benchmark loop is the worst place to absorb an uncatchable fault:
+            recording it as this case's `error` string starts the next case
+            immediately, so a ceiling is re-tripped case after case and an
+            integrity fault keeps the process measuring on freed memory. }
+          if IsUncatchableFault(E) then
+            raise;
 
           SingleResult := TGocciaObjectValue.Create;
           if Assigned(GC) then

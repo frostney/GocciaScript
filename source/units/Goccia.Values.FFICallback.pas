@@ -77,7 +77,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFIPointer,
   Goccia.Values.FFIType,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.VM.Exception;
 
 const
   FFI_CALLBACK_TAG = 'FFICallback';
@@ -718,13 +719,22 @@ begin
 end;
 
 procedure TGocciaFFICallbackValue.MarkReferences;
+var
+  PendingThrown: TGocciaValue;
 begin
   if GCMarked then Exit;
   inherited;
   if Assigned(FCallable) then FCallable.MarkReferences;
   if Assigned(FCloseFunction) then FCloseFunction.MarkReferences;
-  if FPendingException is TGocciaThrowValue then
-    TGocciaThrowValue(FPendingException).Value.MarkReferences;
+  { FPendingException is parked from Exception(AcquireExceptionObject) for ANY
+    exception a compiled callback body raises, including EGocciaBytecodeThrow.
+    Its ThrownValue is reachable from nothing else the collector scans, so an
+    allocation-triggered GC between the park and the re-raise (RaisePendingFailure
+    / Close) would sweep it and hand the guest a freed object. UnwrapThrownValue
+    covers every boundary exception class that carries a live TGocciaValue. }
+  if UnwrapThrownValue(FPendingException, PendingThrown) and
+     Assigned(PendingThrown) then
+    PendingThrown.MarkReferences;
 end;
 
 procedure DispatchCallbackHook(const AContext: Pointer;

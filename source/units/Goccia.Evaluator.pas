@@ -24,12 +24,6 @@ uses
 
 type
   PGocciaValue = ^TGocciaValue;
-  TGocciaInstanceInitializationMode = (
-    iimFirstPass,
-    iimEagerReplacement,
-    iimReplay
-  );
-
 function Evaluate(const ANode: TGocciaASTNode; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateExpression(const AExpression: TGocciaExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluateStatement(const AStatement: TGocciaStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -57,7 +51,10 @@ function EvaluateObjectMethodDefinition(
 function EvaluateGetter(const AGetterExpression: TGocciaGetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateSetter(const ASetterExpression: TGocciaSetterExpression; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil; const AAsMethod: Boolean = False): TGocciaValue;
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean = True): TGocciaValue;
 function EvaluateBlock(const ABlockStatement: TGocciaBlockStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateIf(const AIfStatement: TGocciaIfStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -106,7 +103,7 @@ procedure StampRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
   const AAccessClass: TGocciaClassValue);
 
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode = iimFirstPass);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 function InstantiateClass(const AClassValue: TGocciaClassValue; const AArguments: TGocciaArgumentsCollection; const AContext: TGocciaEvaluationContext; const ANewTarget: TGocciaValue = nil): TGocciaValue;
 procedure ValidateClassConstructorReturn(const AClassValue: TGocciaClassValue; const AValue: TGocciaValue);
 
@@ -203,7 +200,9 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.DisposalTracker,
+  Goccia.EngineFault,
   Goccia.Error,
+  Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator.Assignment,
@@ -216,10 +215,13 @@ uses
   Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
   Goccia.Keywords.Reserved,
+  Goccia.MemoryLimit,
+  Goccia.Realm,
   Goccia.SourcePipeline,
   Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Token,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.AsyncFunctionValue,
@@ -243,12 +245,12 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject,
   Goccia.Values.ToPrimitive,
-  Goccia.Values.TypedArrayValue;
+  Goccia.Values.TypedArrayValue,
+  Goccia.VM.Exception;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext;
-  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
+  const AContext: TGocciaEvaluationContext); forward;
 function DisposeTrackedResources(const ATracker: TGocciaDisposalTracker;
   const AExistingError: TGocciaValue): TGocciaValue; forward;
 function DisposeTrackedResourcesAsync(const ATracker: TGocciaDisposalTracker;
@@ -257,11 +259,41 @@ function HasAsyncDisposals(const ATracker: TGocciaDisposalTracker): Boolean; for
 function CollectDeclaredPrivateNames(
   const AContext: TGocciaEvaluationContext): TStringList; forward;
 
+// Stamp the executing call-stack frame with a runtime fault's own source
+// position, so an error created here traces to the failing expression rather
+// than to the enclosing function's call site. The bytecode VM does the same on
+// its throw paths (Goccia.VM.StampThrowLocation); doing it here keeps a nested
+// runtime error's `--> file:line:column` and code frame identical between the
+// two executors. Called only on throw paths, where the frame is about to unwind.
+procedure StampInterpreterThrowLocation(
+  const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if TGocciaCallStack.Instance <> nil then
+    TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
+      ALine, AColumn);
+end;
+
+// The position the bytecode line map resolves a member-read fault to: the
+// base-most expression of the access chain. The compiler emits a line-map entry
+// as it descends to the base and none for the individual property reads, so a
+// read anywhere along `a.b.c` traces to `a`'s column. Walking to the same base
+// here keeps the interpreter's code-frame caret byte-identical with the VM's.
+function MemberChainBaseExpression(
+  const AExpr: TGocciaExpression): TGocciaExpression;
+begin
+  Result := AExpr;
+  while Result is TGocciaMemberExpression do
+    Result := TGocciaMemberExpression(Result).ObjectExpr;
+end;
+
+// A class value that carries its own [[Construct]] implementation — a typed
+// array, or a bytecode-compiled class whose constructor is a closure rather
+// than an AST method — cannot be built by InstantiateClass, which drives
+// construction from the AST constructor method and field tables.
 function ShouldUseNativeClassInstantiation(
   const AClassValue: TGocciaClassValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := (AClassValue is TGocciaTypedArrayClassValue) or
-    (AClassValue is TGocciaTypedArrayIntrinsicClassValue);
+  Result := AClassValue.UsesOwnInstantiation;
 end;
 
 const
@@ -270,11 +302,6 @@ const
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 type
-  TForInArrayIndexKey = record
-    Key: string;
-    Index: Int64;
-  end;
-
   TGocciaTemplateObjectArrayValue = class(TGocciaArrayValue)
   public
     function GetOwnPropertyDescriptor(
@@ -373,88 +400,6 @@ begin
   Result := inherited TryDefineProperty(AName, ADescriptor);
 end;
 
-function TryParseForInArrayIndex(const AKey: string; out AIndex: Int64): Boolean;
-var
-  I, J, K: Integer;
-  Digit: Int64;
-  MaxIndex: Int64;
-begin
-  AIndex := 0;
-  Result := False;
-  if AKey = '' then
-    Exit;
-  if (AKey[1] = '0') and (Length(AKey) > 1) then
-    Exit;
-
-  MaxIndex := MAX_ARRAY_LENGTH - 1;
-  for I := 1 to Length(AKey) do
-  begin
-    if (AKey[I] < '0') or (AKey[I] > '9') then
-      Exit;
-    Digit := Ord(AKey[I]) - Ord('0');
-    if AIndex > (MaxIndex - Digit) div 10 then
-      Exit;
-    AIndex := AIndex * 10 + Digit;
-  end;
-
-  Result := True;
-end;
-
-function OrderForInPropertyKeys(const AKeys: TArray<string>): TArray<string>;
-var
-  IndexKeys: TArray<TForInArrayIndexKey>;
-  OtherKeys: TArray<string>;
-  IndexCount, OtherCount: Integer;
-  I, J, ResultIndex: Integer;
-  Index: Int64;
-  Current: TForInArrayIndexKey;
-begin
-  SetLength(IndexKeys, Length(AKeys));
-  SetLength(OtherKeys, Length(AKeys));
-  IndexCount := 0;
-  OtherCount := 0;
-
-  for I := 0 to High(AKeys) do
-  begin
-    if TryParseForInArrayIndex(AKeys[I], Index) then
-    begin
-      IndexKeys[IndexCount].Key := AKeys[I];
-      IndexKeys[IndexCount].Index := Index;
-      Inc(IndexCount);
-    end
-    else
-    begin
-      OtherKeys[OtherCount] := AKeys[I];
-      Inc(OtherCount);
-    end;
-  end;
-
-  for I := 1 to IndexCount - 1 do
-  begin
-    Current := IndexKeys[I];
-    J := I - 1;
-    while (J >= 0) and (IndexKeys[J].Index > Current.Index) do
-    begin
-      IndexKeys[J + 1] := IndexKeys[J];
-      Dec(J);
-    end;
-    IndexKeys[J + 1] := Current;
-  end;
-
-  SetLength(Result, IndexCount + OtherCount);
-  ResultIndex := 0;
-  for I := 0 to IndexCount - 1 do
-  begin
-    Result[ResultIndex] := IndexKeys[I].Key;
-    Inc(ResultIndex);
-  end;
-  for I := 0 to OtherCount - 1 do
-  begin
-    Result[ResultIndex] := OtherKeys[I];
-    Inc(ResultIndex);
-  end;
-end;
-
 procedure EnsureObjectPrototypeInitialized; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TGocciaObjectValue.SharedObjectPrototype = nil then
@@ -476,104 +421,6 @@ begin
     (AExcludedStringKeys.IndexOf(AKey.ToStringLiteral.Value) >= 0);
 end;
 
-function TryParseArrayPropertyIndex(const AKey: string;
-  out AIndex: Int64): Boolean;
-var
-  Digit: Int64;
-  I: Integer;
-begin
-  AIndex := 0;
-  Result := False;
-  if AKey = '' then
-    Exit;
-  if (AKey[1] = '0') and (Length(AKey) > 1) then
-    Exit;
-
-  for I := 1 to Length(AKey) do
-  begin
-    if (AKey[I] < '0') or (AKey[I] > '9') then
-      Exit;
-    Digit := Ord(AKey[I]) - Ord('0');
-    if AIndex > (MAX_SAFE_INTEGER - Digit) div 10 then
-      Exit;
-    AIndex := AIndex * 10 + Digit;
-  end;
-
-  Result := AIndex < MAX_ARRAY_LENGTH;
-end;
-
-function OrderOwnPropertyStringKeys(const AKeys: TArray<string>):
-  TArray<string>;
-var
-  ParsedIndex, TempIndex: Int64;
-  NumericKeys: TArray<Int64>;
-  OtherKeys: TArray<string>;
-  I, J, K, Count: Integer;
-begin
-  SetLength(NumericKeys, Length(AKeys));
-  SetLength(OtherKeys, Length(AKeys));
-  Count := 0;
-  J := 0;
-
-  for I := 0 to High(AKeys) do
-  begin
-    if TryParseArrayPropertyIndex(AKeys[I], ParsedIndex) then
-    begin
-      NumericKeys[Count] := ParsedIndex;
-      Inc(Count);
-    end
-    else
-    begin
-      OtherKeys[J] := AKeys[I];
-      Inc(J);
-    end;
-  end;
-
-  for I := 1 to Count - 1 do
-  begin
-    TempIndex := NumericKeys[I];
-    K := I - 1;
-    while (K >= 0) and (NumericKeys[K] > TempIndex) do
-    begin
-      NumericKeys[K + 1] := NumericKeys[K];
-      Dec(K);
-    end;
-    NumericKeys[K + 1] := TempIndex;
-  end;
-
-  SetLength(Result, Count + J);
-  for I := 0 to Count - 1 do
-    Result[I] := IntToStr(NumericKeys[I]);
-  for I := 0 to J - 1 do
-    Result[Count + I] := OtherKeys[I];
-end;
-
-function OwnPropertyKeysAsValues(const ASource: TGocciaObjectValue):
-  TArray<TGocciaValue>;
-var
-  I, Count: Integer;
-  StringKeys: TArray<string>;
-  SymbolKeys: TArray<TGocciaSymbolValue>;
-begin
-  if ASource is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(ASource).GetOwnPropertyKeyValues);
-
-  StringKeys := OrderOwnPropertyStringKeys(ASource.GetAllPropertyNames);
-  SymbolKeys := ASource.GetOwnSymbols;
-  SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
-  Count := 0;
-  for I := 0 to High(StringKeys) do
-  begin
-    Result[Count] := TGocciaStringLiteralValue.Create(StringKeys[I]);
-    Inc(Count);
-  end;
-  for I := 0 to High(SymbolKeys) do
-  begin
-    Result[Count] := SymbolKeys[I];
-    Inc(Count);
-  end;
-end;
-
 // ES2026 §7.3.25 CopyDataProperties(target, source, excludedItems).
 procedure CopyDataProperties(const ATarget: TGocciaObjectValue;
   const ASource: TGocciaValue;
@@ -585,22 +432,39 @@ var
   Keys: TArray<TGocciaValue>;
   KeyName: string;
   SourceObject: TGocciaObjectValue;
-  SourceRooted: Boolean;
   SymbolKey: TGocciaSymbolValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (ASource is TGocciaUndefinedLiteralValue) or
      (ASource is TGocciaNullLiteralValue) then
     Exit;
 
   SourceObject := ToObject(ASource);
-  SourceRooted := (TGarbageCollector.Instance <> nil) and
-    not (ASource is TGocciaObjectValue);
-  if SourceRooted then
-    TGarbageCollector.Instance.AddTempRoot(SourceObject);
 
+  { The key list is the exposure this loop is built around. OwnPropertyKeyValues
+    hands back freshly created string values (and the source's symbols) in a plain
+    Pascal array, which is not a root, and the very next thing the loop does is
+    call a guest getter — arbitrary collecting script code. Without the frame the
+    keys this iteration has not reached yet are reachable from nowhere, so a
+    collection taken inside the *first* getter frees the *second* key and the
+    loop then dispatches ToStringLiteral through freed memory.
+
+    Target and source join them because both must outlive the same getters:
+    ToObject returns the source unchanged when it is already an object, so a
+    spread of a value held only in an evaluator local — a spread of the result
+    of a call — has no root either, and the target is only reachable through the
+    caller's own local until the store lands. The frame replaces the AddTempRoot pair
+    this path used to take on the boxing case for the reason the GC docs give:
+    temp roots are a set, so spreading the same source twice into one literal
+    would have the inner removal unroot the outer copy's source. }
+  Roots.Initialize;
   try
-    Keys := OwnPropertyKeysAsValues(SourceObject);
+    Roots.Add(ATarget);
+    Roots.Add(SourceObject);
+    Keys := SourceObject.OwnPropertyKeyValues;
+    for Key in Keys do
+      Roots.Add(Key);
     for Key in Keys do
     begin
       if CopyDataPropertyKeyExcluded(Key, AExcludedStringKeys,
@@ -629,8 +493,7 @@ begin
       end;
     end;
   finally
-    if SourceRooted then
-      TGarbageCollector.Instance.RemoveTempRoot(SourceObject);
+    Roots.Clear;
   end;
 end;
 
@@ -788,24 +651,6 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     GC.CollectForMemoryPressure(AProtect);
-end;
-
-procedure QueueInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and Assigned(AValue) then
-    GC.AddQueuedRoot(AValue);
-end;
-
-procedure ClearInterpreterResultHandoff(const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
-var
-  GC: TGarbageCollector;
-begin
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and Assigned(AValue) then
-    GC.RemoveQueuedRoot(AValue);
 end;
 
 function VarBindingNameCollectionMode(
@@ -1112,12 +957,13 @@ begin
   if not Assigned(FuncExpr) then
     Exit;
 
-  Value := FuncExpr.Evaluate(AContext);
+  Value := EvaluateFunctionExpression(FuncExpr, AContext, False);
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.AddTempRoot(Value);
   try
-    if (Value is TGocciaFunctionValue) and (TGocciaFunctionValue(Value).Name = '') then
-      TGocciaFunctionValue(Value).Name := Name;
+    if (Value is TGocciaFunctionValue) and
+       (TGocciaFunctionValue(Value).Name = '') then
+      TGocciaFunctionValue(Value).SetInferredName(Name);
     if AContext.Scope.ContainsOwnLexicalBinding(Name) then
       AContext.Scope.ForceUpdateBinding(Name, Value)
     else if ABlockScoped then
@@ -2951,7 +2797,8 @@ begin
     begin
       FuncDecl := FunctionsToInitialize[I];
       Name := FuncDecl.Name;
-      FunctionValue := FuncDecl.FunctionExpression.Evaluate(FunctionContext);
+      FunctionValue := EvaluateFunctionExpression(FuncDecl.FunctionExpression,
+        FunctionContext, False);
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.AddTempRoot(FunctionValue);
       try
@@ -3682,9 +3529,7 @@ end;
 function ClassRequiresObjectConstructorReturn(
   const AClassValue: TGocciaClassValue): Boolean;
 begin
-  Result := Assigned(AClassValue) and
-    (Assigned(AClassValue.SuperClass) or
-     Assigned(AClassValue.NativeSuperConstructor));
+  Result := Assigned(AClassValue) and AClassValue.HasDerivedConstructorKind;
 end;
 
 procedure ValidateClassConstructorReturn(
@@ -3696,6 +3541,47 @@ begin
     ThrowTypeError(
       'Derived constructor returned non-object',
       SSuggestNotConstructorType);
+end;
+
+{ ES2026 §10.2.2 [[Construct]] step 5b: a ~base~ constructor initializes its
+  instance elements between binding `this` and evaluating its body. A ~derived~
+  constructor does not — §13.3.7.1 SuperCall step 11 initializes them when its
+  own super() returns. So invoking a superclass constructor body directly must
+  pre-initialize only when that superclass is a base class; doing it
+  unconditionally is what put a subclass's fields ahead of its base's
+  constructor assignments. }
+procedure RunBaseSuperclassInitializers(const AClassValue: TGocciaClassValue;
+  const AReceiver: TGocciaValue; const AContext: TGocciaEvaluationContext);
+begin
+  if ClassRequiresObjectConstructorReturn(AClassValue) then
+    Exit;
+  if not (AReceiver is TGocciaObjectValue) then
+    Exit;
+  RunClassInstanceInitializers(AClassValue, TGocciaObjectValue(AReceiver),
+    AContext);
+end;
+
+{ ES2026 §10.2.2 [[Construct]] step 13.c: a ~derived~ constructor whose body
+  returned undefined must have initialized `this`, which only super() does.
+  LastSuperConstructorCalled is the record the method value keeps of the call
+  that just returned, so this has to run immediately after CallWithThisValue.
+
+  An implicit constructor is never a candidate: §15.7.14 step 15a synthesizes
+  one that forwards to super unconditionally, and it has no method value to
+  ask. }
+procedure RequireDerivedConstructorThisInitialized(
+  const AClassValue: TGocciaClassValue; const AResult: TGocciaValue);
+begin
+  if not ClassRequiresObjectConstructorReturn(AClassValue) then
+    Exit;
+  if Assigned(AResult) and not (AResult is TGocciaUndefinedLiteralValue) then
+    Exit;
+  if not Assigned(AClassValue.ConstructorMethod) then
+    Exit;
+  if AClassValue.ConstructorMethod.LastSuperConstructorCalled then
+    Exit;
+  ThrowReferenceError(
+    SErrorSuperConstructorNotCalled);
 end;
 
 function InvokeConstructableWithReceiver(const AConstructor: TGocciaValue;
@@ -3717,6 +3603,7 @@ var
     NativeInstance: TGocciaObjectValue;
     NativeInstanceRooted: Boolean;
     ReceiverPrototype: TGocciaObjectValue;
+    ImplicitSuper: TGocciaObjectValue;
   begin
     NativeInstance := nil;
     NativeInstanceRooted := False;
@@ -3740,24 +3627,35 @@ var
           TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
         Result := NativeInstance;
       end
-      else if Assigned(ClassConstructor.SuperClass) then
-        Result := InvokeConstructableWithReceiver(ClassConstructor.SuperClass,
-          AArguments, AReceiver, AContext, EffectiveNewTarget)
-      else if Assigned(ClassConstructor.NativeSuperConstructor) then
-        Result := InvokeConstructableWithReceiver(
-          ClassConstructor.NativeSuperConstructor, AArguments, AReceiver,
-          AContext, EffectiveNewTarget)
-      else if AReceiver is TGocciaInstanceValue then
-        TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+      else
+      begin
+        { §13.3.7.3 GetSuperConstructor: the implicit constructor's super()
+          resolves through this class's own [[Prototype]] at call time, so a
+          retargeted class forwards to what it now points at rather than to the
+          superclass it was declared with. }
+        if ImplicitSuperConstructorIsAbsent(ClassConstructor) then
+          ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+        ImplicitSuper := ImplicitSuperConstructorTarget(ClassConstructor);
+        if Assigned(ImplicitSuper) then
+        begin
+          if (ImplicitSuper = TGocciaFunctionBase.GetSharedPrototype) or
+             (not ImplicitSuper.IsConstructable) then
+            ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+          Result := InvokeConstructableWithReceiver(ImplicitSuper,
+            AArguments, AReceiver, AContext, EffectiveNewTarget);
+        end
+        else if AReceiver is TGocciaInstanceValue then
+          TGocciaInstanceValue(AReceiver).InitializeNativeFromArguments(AArguments);
+      end;
 
       ValidateClassConstructorReturn(ClassConstructor, Result);
       if Result is TGocciaObjectValue then
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(Result), AContext, iimFirstPass)
+          TGocciaObjectValue(Result), AContext)
       else if AReceiver is TGocciaObjectValue then
       begin
         RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+          TGocciaObjectValue(AReceiver), AContext);
         Result := AReceiver;
       end;
     finally
@@ -3797,32 +3695,36 @@ begin
   begin
     if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
       ThrowTypeError(
-        Format(SErrorNotConstructor,
+        Format(SErrorValueNotConstructor,
           [TGocciaNativeFunctionValue(AConstructor).Name]),
-        Format('''%s'' is not a constructor',
-          [TGocciaNativeFunctionValue(AConstructor).Name]));
+        SSuggestNotConstructorType);
     SuperResult := TGocciaNativeFunctionValue(AConstructor).Construct(
       AArguments, EffectiveNewTarget);
   end
   else if AConstructor is TGocciaClassValue then
   begin
     ClassConstructor := TGocciaClassValue(AConstructor);
-    if Assigned(ClassConstructor.ConstructorMethod) then
+    // A compiled class runs its own field initializers and constructor body;
+    // the AST tables this branch otherwise drives are empty for it.
+    if ClassConstructor.TryConstructOnReceiver(AArguments, AReceiver,
+       EffectiveNewTarget, SuperResult) then
+      ValidateClassConstructorReturn(ClassConstructor, SuperResult)
+    else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
-      if AReceiver is TGocciaObjectValue then
-        RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(AReceiver), AContext, iimFirstPass);
+      RunBaseSuperclassInitializers(ClassConstructor, AReceiver, AContext);
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
+      // ES2026 §10.2.2 step 13.c: a derived constructor returning undefined
+      // must have initialized `this`. The same check the `new` operator makes
+      // in InstantiateClass, so every route into a derived constructor body
+      // reports the missing super() rather than handing back a bare receiver.
+      RequireDerivedConstructorThisInitialized(ClassConstructor, SuperResult);
       if not (SuperResult is TGocciaObjectValue) and
          (ConstructorThisValue is TGocciaObjectValue) then
         SuperResult := ConstructorThisValue;
-      if (SuperResult is TGocciaObjectValue) and
-         (SuperResult <> AReceiver) and
-         (SuperResult = ConstructorThisValue) then
-        RunClassInstanceInitializers(ClassConstructor,
-          TGocciaObjectValue(SuperResult), AContext, iimFirstPass);
+      { No initializer pass on a replaced `this`: only a derived constructor
+        can have one, and its own super() already ran them there. }
     end
     else
       SuperResult := InvokeImplicitClassConstructor;
@@ -4033,8 +3935,7 @@ end;
 function EvaluateCallWithOptionalShortCircuit(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
-  out AShortCircuited: Boolean;
-  const AQueueResultHandoff: Boolean = False): TGocciaValue;
+  out AShortCircuited: Boolean): TGocciaValue;
 var
   Callee: TGocciaValue;
   Arguments: TGocciaArgumentsCollection;
@@ -4052,9 +3953,12 @@ var
   ConstructorThisValue: TGocciaValue;
   CurrentCtorClassValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
+  ResolvedSuperConstructor: TGocciaObjectValue;
   Roots: TGocciaActiveRootFrame;
   DirectEvalResult: TGocciaValue;
   PreviousCallSite: TGocciaCallSite;
+  CalleeDescriptor: TGocciaCalleeDescriptor;
+  CalleeTypeName, ReceiverTypeName: string;
   function TryGetParenthesizedMemberReference(
     const AExpression: TGocciaExpression;
     out AMemberExpression: TGocciaMemberExpression): Boolean;
@@ -4088,17 +3992,22 @@ var
       Sequence.Expressions[0]);
     Result := True;
   end;
-  procedure InitializeReplacementThis(const AReplacement: TGocciaObjectValue;
-    const APreviousThis: TGocciaValue);
+  { ES2026 §13.3.7.1 SuperCall steps 7-11: once the super construction has
+    produced the receiver and it has been bound as `this`, the constructor's
+    own class initializes its instance elements against it. This is the point
+    at which a derived class's fields land — after everything the base
+    constructor assigned, and before the rest of the derived body. }
+  procedure InitializeOwnInstanceElementsAfterSuper(
+    const AFinalThis: TGocciaValue);
   begin
-    if (not Assigned(AReplacement)) or (AReplacement = APreviousThis) then
+    if not (AFinalThis is TGocciaObjectValue) then
       Exit;
     CurrentCtorClassValue := AContext.Scope.FindOwningClass;
     if not (CurrentCtorClassValue is TGocciaClassValue) then
       Exit;
     CurrentCtorClass := TGocciaClassValue(CurrentCtorClassValue);
-    RunClassInstanceInitializers(CurrentCtorClass, AReplacement, AContext,
-      iimEagerReplacement);
+    RunClassInstanceInitializers(CurrentCtorClass,
+      TGocciaObjectValue(AFinalThis), AContext);
   end;
   procedure MarkSuperConstructorCalled;
   var
@@ -4121,9 +4030,27 @@ begin
   // Handle super() calls specially
   if ACallExpression.Callee is TGocciaSuperExpression then
   begin
+    ResolvedSuperConstructor := nil;
     SuperClassValue := AContext.Scope.FindSuperConstructor;
     if not Assigned(SuperClassValue) then
       SuperClassValue := EvaluateExpression(ACallExpression.Callee, AContext);
+    { ES2026 §13.3.7.3 GetSuperConstructor reads the active function object's
+      [[GetPrototypeOf]] when super() runs, not the superclass the class was
+      declared with. The scope binding was captured at class-definition time,
+      so an Object.setPrototypeOf on the constructor since then has to be
+      picked up here — otherwise an explicit constructor over a retargeted
+      class calls the old superclass while an implicit one calls the new. }
+    CurrentCtorClassValue := AContext.Scope.FindOwningClass;
+    if CurrentCtorClassValue is TGocciaClassValue then
+    begin
+      if ImplicitSuperConstructorIsAbsent(
+           TGocciaClassValue(CurrentCtorClassValue)) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
+      ResolvedSuperConstructor := ImplicitSuperConstructorTarget(
+        TGocciaClassValue(CurrentCtorClassValue));
+      if Assigned(ResolvedSuperConstructor) then
+        SuperClassValue := ResolvedSuperConstructor;
+    end;
     AddValueRoot(Roots, SuperClassValue);
     if SuperClassValue is TGocciaClassValue then
       SuperClass := TGocciaClassValue(SuperClassValue)
@@ -4132,6 +4059,12 @@ begin
     if (not Assigned(SuperClass)) and
        (not ((SuperClassValue is TGocciaObjectValue) and SuperClassValue.IsConstructable)) then
     begin
+      { §13.3.7.1 SuperCall step 3: a super constructor that is not a
+        constructor is a TypeError, which is what Object.setPrototypeOf onto a
+        plain object produces. A method with no superclass at all never parses
+        to a reachable super() and keeps the older diagnostic. }
+      if Assigned(ResolvedSuperConstructor) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
       AContext.OnError('super() can only be called within a method with a superclass',
         ACallExpression.Line, ACallExpression.Column);
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -4160,15 +4093,35 @@ begin
         end;
       end;
 
-      if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
+      // A compiled superclass runs its own field initializers and constructor
+      // body against the receiver; ConstructorMethod is nil for it, so without
+      // this the base initialization would be skipped silently.
+      if Assigned(SuperClass) and
+         SuperClass.TryConstructOnReceiver(Arguments, AContext.Scope.ThisValue,
+           AContext.Scope.FindNewTarget, SuperResult) then
       begin
+        if SuperResult is TGocciaObjectValue then
+        begin
+          AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+          ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+          if Assigned(ThisScope) then
+            ThisScope.ThisValue := AContext.Scope.ThisValue;
+        end;
+        Result := AContext.Scope.ThisValue;
+      end
+      else if Assigned(SuperClass) and Assigned(SuperClass.ConstructorMethod) then
+      begin
+        RunBaseSuperclassInitializers(SuperClass, AContext.Scope.ThisValue,
+          AContext);
         SuperResult := SuperClass.ConstructorMethod.CallWithThisValue(
           Arguments, AContext.Scope.ThisValue, ConstructorThisValue,
           AContext.Scope.FindNewTarget);
+        // §10.2.2 step 13.c again: the superclass constructor this super()
+        // just entered is itself derived, so returning without calling its own
+        // super() leaves `this` uninitialized.
+        RequireDerivedConstructorThisInitialized(SuperClass, SuperResult);
         if SuperResult is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4184,8 +4137,6 @@ begin
             SSuggestNotConstructorType)
         else if ConstructorThisValue is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(ConstructorThisValue),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(ConstructorThisValue);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4197,8 +4148,34 @@ begin
       end
       else if Assigned(SuperClass) then
       begin
-        if AContext.Scope.ThisValue is TGocciaInstanceValue then
-          TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
+        if (SuperClass.NativeInstanceDefaultPrototype = nil) and
+           (Assigned(SuperClass.SuperClass) or
+            Assigned(SuperClass.NativeSuperConstructor)) then
+        begin
+          // The superclass declares no constructor, so its implicit default
+          // constructor (§15.7.14 step 15a) still has to forward to the rest
+          // of the chain and then initialize its own instance elements.
+          // Skipping that dropped every ancestor constructor sitting below an
+          // intermediate class with no constructor of its own.
+          SuperResult := InvokeConstructableWithReceiver(SuperClass, Arguments,
+            AContext.Scope.ThisValue, AContext, AContext.Scope.FindNewTarget);
+          if (SuperResult is TGocciaObjectValue) and
+             (SuperResult <> AContext.Scope.ThisValue) then
+          begin
+            AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
+            ThisScope := AContext.Scope.FindFunctionOrModuleScope;
+            if Assigned(ThisScope) then
+              ThisScope.ThisValue := AContext.Scope.ThisValue;
+          end;
+        end
+        else
+        begin
+          if AContext.Scope.ThisValue is TGocciaInstanceValue then
+            TGocciaInstanceValue(AContext.Scope.ThisValue).InitializeNativeFromArguments(Arguments);
+          if AContext.Scope.ThisValue is TGocciaObjectValue then
+            RunClassInstanceInitializers(SuperClass,
+              TGocciaObjectValue(AContext.Scope.ThisValue), AContext);
+        end;
         Result := AContext.Scope.ThisValue;
       end
       else if SuperClassValue is TGocciaObjectValue then
@@ -4208,8 +4185,6 @@ begin
           AContext.Scope.FindNewTarget);
         if SuperResult is TGocciaObjectValue then
         begin
-          InitializeReplacementThis(TGocciaObjectValue(SuperResult),
-            AContext.Scope.ThisValue);
           AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
           ThisScope := AContext.Scope.FindFunctionOrModuleScope;
           if Assigned(ThisScope) then
@@ -4229,10 +4204,16 @@ begin
     end;
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
-    CollectInterpreterMemoryPressure(Result);
-    if AQueueResultHandoff then
-      QueueInterpreterResultHandoff(Result);
-    Roots.Clear;
+    { The field initializers below are guest code and can throw, and the
+      pressure check can raise a RangeError, so the root frame has to be
+      released from a finally — TGocciaActiveRootFrame.Clear is a count
+      rollback that must run on the exception path too. }
+    try
+      InitializeOwnInstanceElementsAfterSuper(Result);
+      CollectInterpreterMemoryPressure(Result);
+    finally
+      Roots.Clear;
+    end;
     Exit;
   end;
 
@@ -4289,12 +4270,8 @@ begin
   begin
     Callee := EvaluateCallWithOptionalShortCircuit(
       TGocciaCallExpression(ACallExpression.Callee), AContext,
-      AShortCircuited, True);
-    try
-      AddValueRoot(Roots, Callee);
-    finally
-      ClearInterpreterResultHandoff(Callee);
-    end;
+      AShortCircuited);
+    AddValueRoot(Roots, Callee);
     ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     if AShortCircuited then
     begin
@@ -4363,8 +4340,6 @@ begin
       Result := DirectEvalResult;
       AddValueRoot(Roots, Result);
       CollectInterpreterMemoryPressure(Result);
-      if AQueueResultHandoff then
-        QueueInterpreterResultHandoff(Result);
       Exit;
     end;
 
@@ -4396,35 +4371,25 @@ begin
       end
       else
       begin
-        MemberExpr := nil;
-        if ACallExpression.Callee is TGocciaMemberExpression then
-          MemberExpr := TGocciaMemberExpression(ACallExpression.Callee);
-
-        if Assigned(MemberExpr) and (MemberExpr.ObjectExpr is TGocciaIdentifierExpression) then
-          ThrowTypeError(
-            Format(SErrorMemberNotFunction,
-              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-               MemberExpr.PropertyName]),
-            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
-              [TGocciaIdentifierExpression(MemberExpr.ObjectExpr).Name,
-               ThisValue.TypeName,
-               MemberExpr.PropertyName]))
-        else if Assigned(MemberExpr) then
-          ThrowTypeError(
-            Format(SErrorMemberNotFunction,
-              [ThisValue.TypeName, MemberExpr.PropertyName]),
-            Format('''%s'' is of type ''%s'' which does not have method ''%s''',
-              [ThisValue.TypeName, ThisValue.TypeName, MemberExpr.PropertyName]))
-        else if ACallExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(
-            Format(SErrorNotFunction,
-              [TGocciaIdentifierExpression(ACallExpression.Callee).Name]),
-            Format('''%s'' is of type ''%s'' and cannot be called as a function',
-              [TGocciaIdentifierExpression(ACallExpression.Callee).Name,
-               Callee.TypeName]))
+        { Same descriptor the bytecode compiler records per call site, so both
+          executors name the callee identically (Goccia.Error.CallDiagnostics).
+          A non-callable callee reaches here as its runtime value (normally the
+          undefined value); the Assigned() check is a defensive nil guard only,
+          mirroring the VM's ValueTypeNameOrUndefined, so a raw nil from an
+          internal invariant violation degrades to "undefined". }
+        CalleeDescriptor := CalleeDescriptorFor(ACallExpression.Callee);
+        if Assigned(Callee) then
+          CalleeTypeName := Callee.TypeName
         else
-          ThrowTypeError(Format(SErrorValueNotFunction, [Callee.TypeName]),
-            SSuggestNotFunctionType);
+          CalleeTypeName := 'undefined';
+        if Assigned(ThisValue) then
+          ReceiverTypeName := ThisValue.TypeName
+        else
+          ReceiverTypeName := CalleeTypeName;
+        ThrowTypeError(
+          NotCallableMessage(CalleeDescriptor, CalleeTypeName),
+          NotCallableSuggestion(CalleeDescriptor, ReceiverTypeName,
+            CalleeTypeName));
       end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
@@ -4432,8 +4397,6 @@ begin
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
-    if AQueueResultHandoff then
-      QueueInterpreterResultHandoff(Result);
 
   finally
     Arguments.Free;
@@ -4517,7 +4480,7 @@ begin
          Assigned(TGocciaMethodCallScope(ScopeCursor).SuperClass) and
          not TGocciaMethodCallScope(ScopeCursor).SuperConstructorCalled then
         ThrowReferenceError(
-          'Must call super constructor before accessing this',
+          SErrorSuperConstructorNotCalled,
           'call super() before reading this or super properties');
       Break;
     end;
@@ -4627,6 +4590,9 @@ var
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
   Roots: TGocciaActiveRootFrame;
+  MemberBaseExpr: TGocciaExpression;
+  SavedFrame: TGocciaCallFrame;
+  FrameStamped: Boolean;
 begin
   Roots.Initialize;
   try
@@ -4638,12 +4604,8 @@ begin
   begin
     CallExpr := TGocciaCallExpression(AMemberExpression.ObjectExpr);
     Obj := EvaluateCallWithOptionalShortCircuit(CallExpr, AContext,
-      ShortCircuited, True);
-    try
-      AddValueRoot(Roots, Obj);
-    finally
-      ClearInterpreterResultHandoff(Obj);
-    end;
+      ShortCircuited);
+    AddValueRoot(Roots, Obj);
     ObjectEvaluated := True;
     if Assigned(AOutObjectValue) then
       AOutObjectValue^ := Obj;
@@ -4730,20 +4692,18 @@ begin
 
   // Determine the property name. ES2026 §7.1.19 ToPropertyKey on the
   // computed expression: symbols pass through; otherwise coerce via
-  // ToPrimitive(string) → ToString.
+  // ToPrimitive(string) → ToString. ToPropertyKeyForBase applies §6.2.5.5
+  // GetValue step 3.a first, so a nullish base throws a TypeError before the key
+  // is coerced (its toString/valueOf must not run).
   if AMemberExpression.Computed and Assigned(AMemberExpression.PropertyExpression) then
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
     AddValueRoot(Roots, PropertyValue);
-    PropertyKey := ToPropertyKey(PropertyValue);
+    PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
     AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
     begin
-      if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
-        ThrowTypeError(Format(SErrorCannotReadPropertiesOf, [Obj.ToStringLiteral.Value, 'Symbol()']),
-          SSuggestCheckNullBeforeAccess);
-
       if Obj is TGocciaClassValue then
       begin
         Result := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKey));
@@ -4801,25 +4761,35 @@ begin
     end
     else if (Obj is TGocciaNullLiteralValue) or (Obj is TGocciaUndefinedLiteralValue) then
     begin
-      if AMemberExpression.ObjectExpr is TGocciaMemberExpression then
-        ThrowTypeError(
-          Format(SErrorCannotReadPropertyOf,
-            [PropertyName, Obj.ToStringLiteral.Value]),
-          Format('''%s'' evaluated to %s and does not have property ''%s''',
-            [TGocciaMemberExpression(AMemberExpression.ObjectExpr).PropertyName,
-             Obj.ToStringLiteral.Value, PropertyName]))
-      else if AMemberExpression.ObjectExpr is TGocciaIdentifierExpression then
-        ThrowTypeError(
-          Format(SErrorCannotReadPropertyOf,
-            [PropertyName, Obj.ToStringLiteral.Value]),
-          Format('''%s'' is %s and does not have property ''%s''',
-            [TGocciaIdentifierExpression(AMemberExpression.ObjectExpr).Name,
-             Obj.ToStringLiteral.Value, PropertyName]))
-      else
-        ThrowTypeError(Format(
-          SErrorCannotReadPropertyOf,
-          [PropertyName, Obj.ToStringLiteral.Value]),
-          SSuggestCheckNullBeforeAccess);
+      { Node's wording, shared with the bytecode VM's nullish-base path
+        (Goccia.VM.ThrowNullishBasePropertyAccess) so the two executors report
+        an identical message and suggestion for the same fault. Stamp the
+        executing frame with the access chain's base-most position so the trace
+        points at the access rather than the enclosing function's call site, and
+        so the caret column matches the VM's line map (MemberChainBaseExpression). }
+      MemberBaseExpr := MemberChainBaseExpression(AMemberExpression);
+      { Snapshot the top frame before stamping and restore it as the throw
+        unwinds: the error captures the stamped position at creation, but
+        SetTopFrameLocation persists, so a try/catch that swallows this throw
+        would otherwise leave the stale member-access location on the frame for a
+        later unstamped ThrowTypeError to capture. Mirrors EvaluateNewExpression. }
+      FrameStamped := (TGocciaCallStack.Instance <> nil) and
+        TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
+      StampInterpreterThrowLocation(AContext, MemberBaseExpr.Line,
+        MemberBaseExpr.Column);
+      try
+        if Obj is TGocciaNullLiteralValue then
+          ThrowTypeError(
+            Format(SErrorCannotReadPropertiesOfNull, [PropertyName]),
+            SSuggestCheckNullBeforeAccess)
+        else
+          ThrowTypeError(
+            Format(SErrorCannotReadPropertiesOfUndefined, [PropertyName]),
+            SSuggestCheckNullBeforeAccess);
+      finally
+        if FrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedFrame);
+      end;
     end
     else
     begin
@@ -4941,8 +4911,9 @@ begin
   end
   else
     MethodValue.StrictCode := True;
-  MethodValue.SourceFilePath := AContext.CurrentFilePath;
-  MethodValue.SourceLine := FunctionExpression.Line;
+  MethodValue.SetSourceLocation(AContext.CurrentFilePath,
+    FunctionExpression.Line, FunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     MethodValue.SourceText := FunctionExpression.SourceText;
 end;
@@ -4965,12 +4936,21 @@ var
   ExistingSetter: TGocciaValue;
   ExistingGetter: TGocciaValue;
   IsProtoSetter: Boolean;
+  Roots: TGocciaActiveRootFrame;
+  KeyRoots: TGocciaActiveRootFrame;
 begin
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(Obj);
 
+  { Obj is under construction and reachable from nothing else for the whole
+    literal; a property value that runs guest code — a method's default, a
+    spread source's getter — can collect while it is still only a local here.
+    The frame replaces the AddTempRoot pair for the reason the GC docs give for
+    the assignment family: temp roots are a set, so a nested literal that
+    somehow reached the same object would unroot it for the outer one on the
+    inner removal. }
+  Roots.Initialize;
   try
+    Roots.Add(Obj);
     // Process all properties in source order
     for I := 0 to High(AObjectExpression.PropertySourceOrder) do
     begin
@@ -5028,22 +5008,36 @@ begin
               PropertyValue := EvaluateExpression(ComputedPair.Key, AContext);
               PropertyKey := ToPropertyKey(PropertyValue);
               PropertyExpression := ComputedPair.Value;
-              if PropertyExpression is TGocciaObjectMethodDefinition then
-                PropertyValue := EvaluateObjectMethodDefinition(
-                  TGocciaObjectMethodDefinition(PropertyExpression), AContext,
-                  Obj, FunctionNameFromPropertyKey(PropertyKey))
-              else
-              begin
-                PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-                ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
-                  FunctionNameFromPropertyKey(PropertyKey));
-              end;
-              if PropertyKey is TGocciaSymbolValue then
-                Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
-              else
-              begin
-                ComputedKey := TGocciaStringLiteralValue(PropertyKey).Value;
-                Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+              { §13.2.5.5 converts the key before the value is evaluated, so the
+                converted key is held in a native local across the value
+                expression — arbitrary guest code, and the collector marks
+                explicit roots only. A key produced by conversion — an object
+                with a toString, or a concatenated string — is referenced from
+                nowhere else, so a collection inside the value expression frees
+                it and the store below reads a freed instance. The per-property
+                frame closes at the store: the key is dead after it. }
+              KeyRoots.Initialize;
+              try
+                KeyRoots.Add(PropertyKey);
+                if PropertyExpression is TGocciaObjectMethodDefinition then
+                  PropertyValue := EvaluateObjectMethodDefinition(
+                    TGocciaObjectMethodDefinition(PropertyExpression), AContext,
+                    Obj, FunctionNameFromPropertyKey(PropertyKey))
+                else
+                begin
+                  PropertyValue := EvaluateExpression(PropertyExpression, AContext);
+                  ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
+                    FunctionNameFromPropertyKey(PropertyKey));
+                end;
+                if PropertyKey is TGocciaSymbolValue then
+                  Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
+                else
+                begin
+                  ComputedKey := TGocciaStringLiteralValue(PropertyKey).Value;
+                  Obj.DefineProperty(ComputedKey, TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]));
+                end;
+              finally
+                KeyRoots.Clear;
               end;
             end;
           end;
@@ -5176,8 +5170,7 @@ begin
 
   Result := Obj;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Obj);
+    Roots.Clear;
   end;
 end;
 
@@ -5208,8 +5201,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AGetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AGetterExpression.Line, AGetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AGetterExpression.SourceText;
 end;
@@ -5240,8 +5234,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := ASetterExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    ASetterExpression.Line, ASetterExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := ASetterExpression.SourceText;
 end;
@@ -5283,6 +5278,7 @@ var
   ShouldCloseIterator: Boolean;
   IterationTracker: TGocciaDisposalTracker;
   DisposalError: TGocciaValue;
+  HeadRoots: TGocciaActiveRootFrame;
 
   procedure RegisterForOfUsingResource;
   var
@@ -5455,13 +5451,35 @@ begin
         HeadCompleted := False;
         HeadYielding := False;
         ShouldCloseIterator := True;
+        { The iteration head is the one stretch where the per-iteration values
+          are held by native locals alone. The value read out of the guest
+          `next` result crosses it, and the binding scope is freshly created
+          here — a scope is a managed object, and CreateChild does not root it.
+          The body is safe because EvaluateLoopBodyStatement pushes
+          IterContext.Scope as an active root and scope marking walks the parent
+          chain; between them sits AssignPattern, which runs guest code for a
+          destructuring default, a computed key or an assignment target. The
+          frame closes in the head's own finally, before the body pushes.
+
+          IterResult is deliberately *not* pushed. It is dead here — both reads
+          of it happen above, before this frame exists, and every later mention
+          is a reassignment — and pushing it would be actively unsafe: on a
+          resume into the head (a yield or await inside a destructuring default)
+          HasSavedLoopState skips the AdvanceNext assignment, so the local holds
+          stack garbage that the next collection would virtual-dispatch through.
+          The two reads it does have are safe on their own account: IterResult is
+          the receiver of both GetProperty calls, so a collecting `done` or
+          `value` getter has it rooted through the call scope. }
+        HeadRoots.Initialize;
         try
           try
             CheckExecutionTimeout;
             IncrementInstructionCounter;
             CheckInstructionLimit;
 
+            HeadRoots.Add(CurrentValue);
             IterScope := AContext.Scope.CreateChild(skBlock);
+            HeadRoots.Add(IterScope);
             IterContext := AContext;
             IterContext.Scope := IterScope;
 
@@ -5534,6 +5552,7 @@ begin
             ClearSavedLoopState;
             Continuation.ClearExpressionValues;
           end;
+          HeadRoots.Clear;
         end;
       end;
 
@@ -5642,8 +5661,7 @@ begin
     if Assigned(GC) then
       GC.AddTempRoot(Obj);
     // Dedup keys across the prototype chain via O(1) hash-set membership
-    // (native case-sensitive string equality); OrderForInPropertyKeys
-    // (above) owns per-level enumeration order.
+    // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
       Current := Obj;
@@ -5655,7 +5673,7 @@ begin
           ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
             SSuggestPrototypeChainTooDeep);
 
-        Keys := OrderForInPropertyKeys(Current.GetAllPropertyNames);
+        Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
           if Visited.ContainsKey(Key) then
@@ -5740,6 +5758,7 @@ var
   SavedIteratorValue, SavedCurrentValue, SavedNextMethod: TGocciaValue;
   SavedIterScope, SavedActiveScope: TGocciaScope;
   HasSavedLoopState: Boolean;
+  HeadRoots: TGocciaActiveRootFrame;
 begin
   LoopValue := UndefinedCompletionValue;
   Result := TGocciaControlFlow.Normal(LoopValue);
@@ -5818,7 +5837,17 @@ begin
       end
       else
       begin
+        { The key string is constructed here and the binding scope right after
+          it, and both are held by native locals alone until the body runs and
+          EvaluateLoopBodyStatement pushes the scope. `for (o[f()] in src)` and
+          a destructuring head put guest code in between; a plain binding name
+          reaches no safe point at all, so this costs two pushes only on the
+          iterations that need them. }
+        HeadRoots.Initialize;
+        try
+        HeadRoots.Add(CurrentValue);
         IterScope := AContext.Scope.CreateChild(skBlock);
+        HeadRoots.Add(IterScope);
         IterContext := AContext;
         IterContext.Scope := IterScope;
 
@@ -5861,6 +5890,9 @@ begin
           Continuation.SaveLoopState(AForInStatement, EntriesArray, CurrentValue,
             TGocciaNumberLiteralValue.Create(EntryIndex), IterScope,
             IterContext.Scope);
+        finally
+          HeadRoots.Clear;
+        end;
       end;
 
       try
@@ -6543,6 +6575,18 @@ var
     try
       CloseAsyncIterator(AIter);
     except
+      on E: Exception do
+        { ES2026 §7.4.15 AsyncIteratorClose step 5 (the async analogue of
+        §7.4.11 IteratorClose): when the body completed abruptly, that
+        completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+        if IsUncatchableFault(E) then
+          raise;
     end;
   end;
 
@@ -7010,13 +7054,17 @@ begin
     (not AContext.NonStrictMode) or
     HasUseStrictDirective(AArrowFunctionExpression.Body);
   TGocciaFunctionValue(Result).IsExpressionBody := not (AArrowFunctionExpression.Body is TGocciaBlockStatement);
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AArrowFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AArrowFunctionExpression.Line, AArrowFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AArrowFunctionExpression.SourceText;
 end;
 
-function EvaluateFunctionExpression(const AFunctionExpression: TGocciaFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateFunctionExpression(
+  const AFunctionExpression: TGocciaFunctionExpression;
+  const AContext: TGocciaEvaluationContext;
+  const ABindOwnName: Boolean): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
   ClosureScope: TGocciaScope;
@@ -7037,8 +7085,10 @@ begin
   end;
 
   // ES2026 §15.2.5: Named function expressions get an intermediate scope
-  // with a read-only binding of the function name visible inside the body
-  if AFunctionExpression.Name <> '' then
+  // with a read-only binding of the function name visible inside the body.
+  // Declaration instantiation passes False so the body resolves the mutable
+  // declaration binding in the enclosing environment instead.
+  if ABindOwnName and (AFunctionExpression.Name <> '') then
   begin
     NameScope := TGocciaFunctionNameScope.Create(AContext.Scope,
       AFunctionExpression.Name);
@@ -7072,8 +7122,9 @@ begin
   end
   else
     TGocciaFunctionValue(Result).StrictCode := True;
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AFunctionExpression.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AFunctionExpression.Line, AFunctionExpression.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AFunctionExpression.SourceText;
 
@@ -7110,9 +7161,18 @@ var
   CallArgs: TGocciaArgumentsCollection;
   CurrentError: TGocciaValue;
   HasError: Boolean;
+  ThrownVal: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
+
+  { The accumulated error and each extracted thrown value live only in Pascal
+    locals; a later disposer runs guest code that can collect, so keep them
+    rooted across the remaining disposal calls until this returns. }
+  Roots.Initialize;
+  try
+    AddValueRoot(Roots, CurrentError);
 
   // Dispose in reverse order (LIFO)
   for I := ATracker.Count - 1 downto 0 do
@@ -7128,16 +7188,32 @@ begin
           CallArgs.Free;
         end;
       except
-        on E: TGocciaThrowValue do
+        { A compiled [Symbol.dispose] throwing crosses the boundary as
+          EGocciaBytecodeThrow, a tree-walk dispose as TGocciaThrowValue;
+          UnwrapThrownValue yields the thrown value for either so disposal
+          records the guest's identity, not a synthesized Error. (The
+          SuppressedError-chaining behavior below is preserved verbatim from
+          the TGocciaThrowValue-only handler; its pre-existing chaining
+          semantics are out of scope here.) Anything that is not a boundary
+          throw re-raises unchanged, exactly as the narrower handler let it
+          propagate. }
+        on E: Exception do
         begin
+          if not UnwrapThrownValue(E, ThrownVal) then
+            raise;
+          AddValueRoot(Roots, ThrownVal);
           if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
+            CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
-            CurrentError := E.Value;
+            CurrentError := ThrownVal;
           HasError := True;
+          AddValueRoot(Roots, CurrentError);
         end;
       end;
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 
   if HasError then
@@ -7156,9 +7232,18 @@ var
   CurrentError: TGocciaValue;
   HasError: Boolean;
   CallResult: TGocciaValue;
+  ThrownVal: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   CurrentError := AExistingError;
   HasError := Assigned(AExistingError);
+
+  { The accumulated error and each extracted thrown value live only in Pascal
+    locals; a later disposer or AwaitValue runs guest code that can collect, so
+    keep them rooted across the remaining disposal calls and awaits. }
+  Roots.Initialize;
+  try
+    AddValueRoot(Roots, CurrentError);
 
   // Dispose in reverse order (LIFO)
   for I := ATracker.Count - 1 downto 0 do
@@ -7181,13 +7266,22 @@ begin
             AwaitValue(CallResult);
         end;
       except
-        on E: TGocciaThrowValue do
+        { A compiled [Symbol.asyncDispose] throwing crosses the boundary as
+          EGocciaBytecodeThrow, a tree-walk dispose as TGocciaThrowValue;
+          UnwrapThrownValue yields the thrown value for either. Chaining and
+          re-raise semantics mirror the sync DisposeTrackedResources verbatim;
+          the pre-existing SuppressedError-chaining gap is out of scope. }
+        on E: Exception do
         begin
+          if not UnwrapThrownValue(E, ThrownVal) then
+            raise;
+          AddValueRoot(Roots, ThrownVal);
           if HasError then
-            CurrentError := CreateSuppressedErrorObject(E.Value, CurrentError)
+            CurrentError := CreateSuppressedErrorObject(ThrownVal, CurrentError)
           else
-            CurrentError := E.Value;
+            CurrentError := ThrownVal;
           HasError := True;
+          AddValueRoot(Roots, CurrentError);
         end;
       end;
     end
@@ -7196,6 +7290,9 @@ begin
       // Null/undefined value in await using — ensure at least one await point
       AwaitValue(TGocciaUndefinedLiteralValue.UndefinedValue);
     end;
+  end;
+  finally
+    Roots.Clear;
   end;
 
   if HasError then
@@ -7326,6 +7423,18 @@ begin
         CaughtError := E.Value;
         HasCaughtError := True;
         // Protect the caught error value from GC during disposal
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
+        Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        { A compiled callee's throw leaving the VM carries the guest completion,
+          exactly like TGocciaThrowValue. Capture it so a disposer that also
+          throws chains into a SuppressedError instead of the disposal error
+          replacing (and losing) this original throw during the finally. }
+        CaughtError := E.ThrownValue;
+        HasCaughtError := True;
         if Assigned(GC) and Assigned(CaughtError) then
           GC.AddTempRoot(CaughtError);
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -7558,7 +7667,17 @@ end;
 
 function PascalExceptionToErrorObject(const E: Exception): TGocciaValue;
 begin
-  if E is TGocciaTypeError then
+  { A JS throw that left an executor boundary already carries the guest's
+    completion value. Synthesizing a fresh Error from the Pascal message would
+    hand `catch` a different object whose `message` is the "Name: message"
+    rendering; the thrown value itself is what ES2026 §14.15.3 binds.
+    UnwrapThrownValue centralizes the boundary-exception class list; callers
+    here only ever reach this with a non-TGocciaThrowValue (their `catch` arms
+    handle TGocciaThrowValue first), so its TGocciaThrowValue branch is inert
+    at this site. }
+  if UnwrapThrownValue(E, Result) then
+    Exit
+  else if E is TGocciaTypeError then
     Result := CreateErrorObject(TYPE_ERROR_NAME, E.Message)
   else if E is TGocciaReferenceError then
     Result := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message)
@@ -7629,10 +7748,14 @@ var
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         Result := TGocciaControlFlow.Normal(TGocciaUndefinedLiteralValue.UndefinedValue);
         HasUnhandledThrow := True;
         ThrownValue := PascalExceptionToErrorObject(E);
@@ -7695,10 +7818,20 @@ begin
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
       on E: Exception do
       begin
+        { This is the arm a guest `catch` is made of: everything unlisted above
+          becomes an Error object the script receives. An engine-integrity fault
+          must not — it means the heap or a pointer is already unsound, so
+          handing it to the script would let the script keep running on top of
+          it. See Goccia.EngineFault.pas for the family and the reasoning; every
+          other conversion boundary in the engine opens the same way. }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if Assigned(ATryStatement.CatchBlock) then
           ExecuteCatchWithState(PascalExceptionToErrorObject(E))
         else
@@ -7782,8 +7915,9 @@ begin
   if AClassMethod.IsGenerator then
     InstallFunctionOwnPrototypeProperty(Result,
       FunctionIntrinsicKind(AClassMethod.IsAsync, AClassMethod.IsGenerator));
-  TGocciaFunctionValue(Result).SourceFilePath := AContext.CurrentFilePath;
-  TGocciaFunctionValue(Result).SourceLine := AClassMethod.Line;
+  TGocciaFunctionValue(Result).SetSourceLocation(AContext.CurrentFilePath,
+    AClassMethod.Line, AClassMethod.Column,
+    AContext.CoverageEnabled);
   if not AContext.HideFunctionSourceText then
     TGocciaFunctionValue(Result).SourceText := AClassMethod.SourceText;
 end;
@@ -7867,6 +8001,66 @@ begin
   Result := EnumValue;
 end;
 
+// ES2026 §15.7.10 ClassFieldDefinitionEvaluation step 2b: an instance field
+// initializer is a function whose [[Environment]] is the class environment
+// captured at ClassDefinitionEvaluation time, so its scope chain must hang off
+// that, never off the scope that happens to be running `new`. Classes built by
+// paths that do not record a definition scope (native classes, bytecode class
+// values reaching the tree-walk evaluator) fall back to the caller's scope.
+function ClassInitializerScopeParent(const AClassValue: TGocciaClassValue;
+  const AFallbackScope: TGocciaScope): TGocciaScope;
+begin
+  if Assigned(AClassValue) and Assigned(AClassValue.DefinitionScope) then
+    Result := AClassValue.DefinitionScope
+  else
+    Result := AFallbackScope;
+end;
+
+// ES2026 §15.7.1: a ClassBody is always strict-mode code — "All parts of a
+// ClassDeclaration or a ClassExpression are strict mode code" — regardless of
+// how the enclosing script was configured. Strictness is therefore another
+// thing a class body takes from its own text rather than from wherever it is
+// evaluated: the construction routes hand an initializer the *caller's*
+// context, which under the non-strict compatibility profile still carries the
+// script's sloppy flags, and an initializer assigning to an undeclared name
+// then created a global instead of raising ReferenceError.
+//
+// Both flags are cleared, not only NonStrictMode: every behavioral gate ANDs
+// the pair (VarBindingNameCollectionMode, the identifier-assignment paths in
+// Goccia.AST.Expressions), so leaving the compatibility half set keeps part of
+// the sloppy semantics alive inside the class body.
+procedure ApplyClassBodyStrictness(var AContext: TGocciaEvaluationContext); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  AContext.NonStrictMode := False;
+  AContext.CompatibilityNonStrictMode := False;
+end;
+
+// The scope is not the only thing a field initializer inherits from the class
+// definition rather than from the construction site. `import()` resolves its
+// specifier against, and `import.meta.url` reports, the module the code was
+// written in — TGocciaFunctionValue gets that from its own FSourceFilePath
+// rather than from its caller, and a class body is code outside any method,
+// so it needs the same treatment. Constructing a class exported by another
+// module otherwise resolved its field initializers' imports against the
+// importing file.
+procedure ApplyClassDefinitionSourceContext(
+  const AClassValue: TGocciaClassValue;
+  var AContext: TGocciaEvaluationContext);
+begin
+  if not Assigned(AClassValue) then
+    Exit;
+  if AClassValue.DefinitionSourcePath <> '' then
+    AContext.CurrentFilePath := AClassValue.DefinitionSourcePath;
+  if Assigned(AClassValue.DefinitionScope) then
+  begin
+    AContext.LoadModule := AClassValue.DefinitionScope.LoadModule;
+    AContext.LoadModuleSource := AClassValue.DefinitionScope.LoadModuleSource;
+    AContext.LoadDeferredModule :=
+      AClassValue.DefinitionScope.LoadDeferredModule;
+    AContext.ResolveModuleURL := AClassValue.DefinitionScope.ResolveModuleURL;
+  end;
+end;
+
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
@@ -7878,12 +8072,17 @@ var
   LocalScope: TGocciaScope;
 begin
   LocalContext := AContext;
-  LocalScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  LocalScope := TGocciaClassInitScope.Create(
+    ClassInitializerScopeParent(AClassValue, AContext.Scope), AClassValue);
   LocalScope.ThisValue := AInstance;
   LocalContext.Scope := LocalScope;
+  ApplyClassBodyStrictness(LocalContext);
+  ApplyClassDefinitionSourceContext(AClassValue, LocalContext);
 
-  if Assigned(AClassValue.SuperClass) then
-    InitializeInstanceProperties(AInstance, AClassValue.SuperClass, LocalContext);
+  { ES2026 §7.3.33 InitializeInstanceElements only ever defines the fields of
+    the one class it is handed. A superclass initializes its own fields inside
+    its own [[Construct]] — §10.2.2 step 5b for a base class, §13.3.7.1
+    SuperCall step 11 for a derived one — so this must not walk the chain. }
 
   if AClassValue.HasPrivateInstanceElements then
     StampRawPrivateInstanceBrand(AInstance, AClassValue);
@@ -7945,29 +8144,25 @@ end;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const AInitializationMode: TGocciaInstanceInitializationMode); forward;
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue); forward;
 
-procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
+procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
-  SuperInitContext: TGocciaEvaluationContext;
-  SuperInitScope: TGocciaScope;
+  LocalContext: TGocciaEvaluationContext;
 begin
-  if (AInitializationMode <> iimEagerReplacement) and
-     Assigned(AClassValue.SuperClass) then
-  begin
-    SuperInitContext := AContext;
-    SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue.SuperClass);
-    SuperInitScope.ThisValue := AInstance;
-    SuperInitContext.Scope := SuperInitScope;
-    InitializeObjectInstanceProperties(AInstance, AClassValue.SuperClass,
-      SuperInitContext, AInitializationMode);
-  end;
+  LocalContext := AContext;
+  ApplyClassBodyStrictness(LocalContext);
+
+  { §7.3.33 InitializeInstanceElements defines this class's fields only — each
+    superclass initializes its own inside its own [[Construct]]. Walking the
+    chain here re-ran an ancestor's private field initializers on a receiver
+    that already had them, which is a "Cannot initialize private elements
+    twice" TypeError. }
 
   if AClassValue.HasPrivateInstanceElements then
     StampRawPrivateInstanceBrand(AInstance, AClassValue);
@@ -7981,7 +8176,7 @@ begin
       if FOEntry.IsComputed then
       begin
         if Assigned(FOEntry.Initializer) then
-          PropertyValue := EvaluateExpression(FOEntry.Initializer, AContext)
+          PropertyValue := EvaluateExpression(FOEntry.Initializer, LocalContext)
         else
           PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
         if FOEntry.ComputedKey is TGocciaSymbolValue then
@@ -8000,18 +8195,18 @@ begin
           FOEntry.Name, Expr) then
         begin
           if Assigned(Expr) then
-            PropertyValue := EvaluateExpression(Expr, AContext)
+            PropertyValue := EvaluateExpression(Expr, LocalContext)
           else
             PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
           InitializeRawPrivateInstanceProperty(AInstance, FOEntry.Name,
-            PropertyValue, AClassValue, AInitializationMode);
+            PropertyValue, AClassValue);
         end;
       end
       else
       begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
-          PropertyValue := EvaluateExpression(Expr, AContext);
+          PropertyValue := EvaluateExpression(Expr, LocalContext);
           AInstance.AssignProperty(FOEntry.Name, PropertyValue);
         end;
       end;
@@ -8021,11 +8216,10 @@ begin
   begin
     for Entry in AClassValue.InstancePropertyDefs do
     begin
-      PropertyValue := EvaluateExpression(Entry.Value, AContext);
+      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
       AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
-    InitializePrivateInstanceProperties(AInstance, AClassValue, AContext,
-      AInitializationMode);
+    InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
   end;
 end;
 
@@ -8278,6 +8472,20 @@ begin
         Result := TGocciaControlFlow.Normal(
           TGocciaUndefinedLiteralValue.UndefinedValue);
       end;
+      on E: EGocciaBytecodeThrow do
+      begin
+        { A compiled callee's throw carries the guest completion like
+          TGocciaThrowValue; capture it so a disposer that also throws chains a
+          SuppressedError rather than replacing (losing) this original throw. }
+        if not HasUsingDeclarations then
+          raise;
+        CaughtError := E.ThrownValue;
+        HasCaughtError := True;
+        if Assigned(GC) and Assigned(CaughtError) then
+          GC.AddTempRoot(CaughtError);
+        Result := TGocciaControlFlow.Normal(
+          TGocciaUndefinedLiteralValue.UndefinedValue);
+      end;
     end;
   finally
     if HasUsingDeclarations then
@@ -8377,10 +8585,9 @@ begin
     begin
       if TGocciaNativeFunctionValue(Target).NotConstructable then
         ThrowTypeError(
-          Format(SErrorNotConstructor,
+          Format(SErrorValueNotConstructor,
             [TGocciaNativeFunctionValue(Target).Name]),
-          Format('''%s'' is not a constructor',
-            [TGocciaNativeFunctionValue(Target).Name]));
+          SSuggestNotConstructorType);
       Result := TGocciaNativeFunctionValue(Target).Construct(BoundArgs,
         Target);
     end
@@ -8419,6 +8626,9 @@ var
   ReceiverInstance: TGocciaObjectValue;
   Roots: TGocciaActiveRootFrame;
   PreviousCallSite: TGocciaCallSite;
+  NewCalleeDescriptor: TGocciaCalleeDescriptor;
+  SavedCallerFrame: TGocciaCallFrame;
+  CallerFrameStamped: Boolean;
 begin
   Roots.Initialize;
   CheckExecutionTimeout;
@@ -8456,8 +8666,25 @@ begin
     else
       CalleeName := '';
 
+    { One descriptor for every not-a-constructor throw below, so the message and
+      suggestion match the bytecode VM's construct-site diagnostics for the same
+      fault (Goccia.Error.CallDiagnostics). }
+    NewCalleeDescriptor := CalleeDescriptorFor(ANewExpression.Callee);
+
     if (TGocciaCallStack.Instance <> nil) then
     begin
+      { A constructor that captures a stack trace (`new Error(...)`) skips its
+        own frame, so the position the diagnostic ends up showing comes from
+        the caller's frame. Point that frame at the `new` expression for the
+        duration of the construction, matching what the bytecode VM stamps at
+        its construct site — but snapshot it first and restore it in the
+        finally, so the stamp does not leak into a later throw in the same
+        function (AE.g. `const m = new Map(); AReturn m.missing.x;`). }
+      CallerFrameStamped := TGocciaCallStack.Instance.TryGetTopFrame(
+        SavedCallerFrame);
+      if CallerFrameStamped then
+        TGocciaCallStack.Instance.SetTopFrameLocation(AContext.CurrentFilePath,
+          ANewExpression.Line, ANewExpression.Column);
       TGocciaCallStack.Instance.Push(CalleeName, AContext.CurrentFilePath,
         ANewExpression.Line, ANewExpression.Column);
     end;
@@ -8492,10 +8719,8 @@ begin
       begin
         if TGocciaNativeFunctionValue(Callee).NotConstructable then
           ThrowTypeError(
-            Format(SErrorNotConstructor,
-              [TGocciaNativeFunctionValue(Callee).Name]),
-            Format('''%s'' is not a constructor',
-              [TGocciaNativeFunctionValue(Callee).Name]));
+            NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+            NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
         EnterGocciaCallSite(AContext.CurrentFilePath,
           ANewExpression.Line, ANewExpression.Column, PreviousCallSite);
         try
@@ -8516,8 +8741,9 @@ begin
         // the bound wrapper itself has no own `prototype` data property.
         FunctionCallee := TGocciaFunctionBase(Callee);
         if not FunctionCallee.IsConstructable then
-          ThrowTypeError(Format(SErrorNotConstructor, [CalleeName]),
-            SSuggestNotConstructorType);
+          ThrowTypeError(
+            NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+            NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
         PrototypeTarget := FunctionCallee;
         while PrototypeTarget is TGocciaBoundFunctionValue do
           PrototypeTarget := TGocciaBoundFunctionValue(PrototypeTarget).OriginalFunction;
@@ -8552,23 +8778,18 @@ begin
         end
       end
       else
-      begin
-        if ANewExpression.Callee is TGocciaIdentifierExpression then
-          ThrowTypeError(
-            Format(SErrorNotConstructor,
-              [TGocciaIdentifierExpression(ANewExpression.Callee).Name]),
-            Format('''%s'' is of type ''%s'' and cannot be used with ''new''',
-              [TGocciaIdentifierExpression(ANewExpression.Callee).Name,
-               Callee.TypeName]))
-        else
-          ThrowTypeError(
-            Format(SErrorValueNotConstructor, [Callee.TypeName]),
-            Format('values of type ''%s'' cannot be used with ''new''',
-              [Callee.TypeName]));
-      end;
+        ThrowTypeError(
+          NotConstructorMessage(NewCalleeDescriptor, Callee.TypeName),
+          NotConstructorSuggestion(NewCalleeDescriptor, Callee.TypeName));
     finally
       if (TGocciaCallStack.Instance <> nil) then
+      begin
         TGocciaCallStack.Instance.Pop;
+        // Restore the caller frame's own location; the stamp above was scoped
+        // to this construction only.
+        if CallerFrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedCallerFrame);
+      end;
     end;
     AddValueRoot(Roots, Result);
     CollectInterpreterMemoryPressure(Result);
@@ -8610,12 +8831,24 @@ procedure ExecuteStaticBlock(const ABody: TGocciaBlockStatement;
 var
   BlockScope: TGocciaClassInitScope;
   BlockContext: TGocciaEvaluationContext;
+  Roots: TGocciaActiveRootFrame;
 begin
   BlockScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
   BlockScope.ThisValue := AClassValue;
   BlockContext := AContext;
   BlockContext.Scope := BlockScope;
-  EvaluateBlock(ABody, BlockContext);
+  { The block's own scope is the only thing binding `this` to the class, and a
+    scope is a managed object that nothing points *down* to — EvaluateBlock
+    roots the child scope it creates for declarations, not the one handed to
+    it. A static block that collects therefore frees the scope it is running
+    in, and the next `this` read dereferences it. }
+  Roots.Initialize;
+  try
+    Roots.Add(BlockScope);
+    EvaluateBlock(ABody, BlockContext);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 procedure AddClassCallableEvalEntry(var AEntries: TClassCallableEvalEntries;
@@ -8755,6 +8988,8 @@ var
   StaticFieldScope: TGocciaScope;
   HeritageContext: TGocciaEvaluationContext;
   ClassStrictContext: TGocciaEvaluationContext;
+  ClassRoots: TGocciaActiveRootFrame;
+  FieldRoots: TGocciaActiveRootFrame;
 
   function BuildClassGetter(const AGetterExpression: TGocciaGetterExpression): TGocciaFunctionValue;
   begin
@@ -9057,7 +9292,18 @@ var
         Continuation.SaveCompletedExpressionValue(
           Elem.ComputedKeyExpression, ComputedKey);
 
+      { The cache is a plain Pascal array the collector does not trace, and it
+        is read back long after this pass: a computed field's key is stored
+        when the static-field loop reaches it, and the auto-accessor and
+        decorator passes read it later still. Every static field initializer
+        and static block between here and those reads is arbitrary guest code,
+        so a key resolved for a *later* element is reachable from nothing at
+        all while an *earlier* one collects — `static early = (gc(), 1)` ahead
+        of a computed field loses the key outright. It joins the class frame
+        for the same reason the static-field scope does: one push per computed
+        element key, released when the class is installed. }
       ResolvedComputedElementKeys[Entry.ElementIndex] := ComputedKey;
+      ClassRoots.Add(ComputedKey);
 
       case Elem.Kind of
         cekField:
@@ -9175,14 +9421,14 @@ var
 begin
   Continuation := CurrentGeneratorContinuation;
   ClassStrictContext := AContext;
-  ClassStrictContext.NonStrictMode := False;
+  ApplyClassBodyStrictness(ClassStrictContext);
   SuperClass := nil;
   SuperClassValue := nil;
   MethodSuperClass := nil;
   if Assigned(AClassDef.SuperClassExpression) then
   begin
     HeritageContext := AContext;
-    HeritageContext.NonStrictMode := False;
+    ApplyClassBodyStrictness(HeritageContext);
     SuperClassValue := EvaluateExpression(AClassDef.SuperClassExpression,
       HeritageContext);
     if SuperClassValue is TGocciaClassValue then
@@ -9223,7 +9469,38 @@ begin
   else
     ClassName := '<anonymous>';
 
+  { Everything from here to the returned class runs with the class object held
+    by a native local and, for an anonymous class, by nothing else at all: a
+    class *declaration* is bound into the scope at ForceUpdateBinding below,
+    but an anonymous class expression with a static field has no binding until
+    this function returns. Guest code runs in between at every interesting
+    point — computed element keys go through ToPropertyKey, static field
+    initializers and static blocks are arbitrary script, and decorators are
+    guest calls — so a collection taken inside any of them frees the class the
+    very next DefineProperty writes into. The static-field scope does not save it: its
+    ThisValue is the class, but the scope itself is only reachable from this
+    frame's locals too.
+
+    The try spans the rest of the function rather than each guest-code region
+    because there are a dozen of them; the body below is unchanged and
+    deliberately not re-indented, so the diff stays reviewable. }
+  ClassRoots.Initialize;
+  try
   ClassValue := TGocciaClassValue.Create(ClassName, SuperClass);
+  { ES2026 §15.7.14 ClassDefinitionEvaluation steps 14-15 run the class
+    elements with the LexicalEnvironment set to _classEnv_, and §15.7.10
+    ClassFieldDefinitionEvaluation step 2b captures that environment as the
+    initializer function's [[Environment]]. AContext.Scope is that
+    environment here (EvaluateClass/EvaluateClassExpression create it for a
+    named class), so remember it: the initializers must see it later, no
+    matter which scope calls `new`. }
+  ClassValue.DefinitionScope := AContext.Scope;
+  { And the defining file alongside it, for the same reason a function value
+    keeps FSourceFilePath: `import()` and `import.meta` in a field initializer
+    resolve against the file the class was written in, not against whatever
+    file is running the construction. }
+  ClassValue.DefinitionSourcePath := AContext.CurrentFilePath;
+  ClassRoots.Add(ClassValue);
   if not AContext.HideFunctionSourceText then
     ClassValue.SetSourceText(AClassDef.SourceText);
   if SuperClassValue is TGocciaNullLiteralValue then
@@ -9399,18 +9676,25 @@ begin
   begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
-      ExecuteStaticBlock(Elem.StaticBlockBody, AContext, ClassValue)
+      ExecuteStaticBlock(Elem.StaticBlockBody, ClassStrictContext, ClassValue)
     else if ((Elem.Kind = cekField) or
              ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
             Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
-        StaticFieldContext := AContext;
+        StaticFieldContext := ClassStrictContext;
         StaticFieldScope := TGocciaClassInitScope.Create(AContext.Scope,
           ClassValue);
         StaticFieldScope.ThisValue := ClassValue;
         StaticFieldContext.Scope := StaticFieldScope;
+        { The initializer's own scope binds `this` and nothing points down to
+          it; see ExecuteStaticBlock for the same hazard. It joins the class
+          frame rather than taking one of its own — that costs one push per
+          static field, released with the class frame, and a nested frame here
+          would have to be a third variable to avoid re-Initializing the
+          computed-key frame below. }
+        ClassRoots.Add(StaticFieldScope);
         PropertyValue := EvaluateExpression(Elem.FieldInitializer,
           StaticFieldContext);
       end
@@ -9420,12 +9704,24 @@ begin
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
+        { The key was resolved during class definition, before any static field
+          initializer ran, and is read back out of the cache here — the class
+          frame is what kept it alive across the initializers in between. The
+          fallback below is the case this frame covers: when the cache holds no
+          key for this element the conversion happens here instead, and the
+          guest `toString`/`@@toPrimitive` it runs would otherwise collect the
+          field's value out of the native local above. Both halves stay rooted
+          across the store either way. }
+        FieldRoots.Initialize;
+        try
+        FieldRoots.Add(PropertyValue);
         ComputedKey := nil;
         if I <= High(ResolvedComputedElementKeys) then
           ComputedKey := ResolvedComputedElementKeys[I];
         if not Assigned(ComputedKey) then
           ComputedKey := ToPropertyKey(EvaluateExpression(
             Elem.ComputedKeyExpression, ClassStrictContext));
+        FieldRoots.Add(ComputedKey);
         if ComputedKey is TGocciaSymbolValue then
           ClassValue.DefineSymbolProperty(
             TGocciaSymbolValue(ComputedKey),
@@ -9435,6 +9731,9 @@ begin
           ClassValue.DefineProperty(ComputedKey.ToStringLiteral.Value,
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]));
+        finally
+          FieldRoots.Clear;
+        end;
       end
       else
         ClassValue.DefineProperty(Elem.Name,
@@ -9477,8 +9776,12 @@ begin
     for I := 0 to High(AClassDef.FElements) do
     begin
       SetLength(EvaluatedElementDecorators[I], Length(AClassDef.FElements[I].Decorators));
+      { A per-element decorator sits inside the class body, so it evaluates in the
+        class's always-strict context (as the computed keys above do); a
+        top-level class decorator sits outside the body and keeps the enclosing
+        context's strictness. }
       for J := 0 to High(AClassDef.FElements[I].Decorators) do
-        EvaluatedElementDecorators[I][J] := EvaluateExpression(AClassDef.FElements[I].Decorators[J], AContext);
+        EvaluatedElementDecorators[I][J] := EvaluateExpression(AClassDef.FElements[I].Decorators[J], ClassStrictContext);
     end;
 
     SetLength(EvaluatedClassDecorators, Length(AClassDef.FDecorators));
@@ -9898,6 +10201,9 @@ begin
           AClassDef.FElements[I].ComputedKeyExpression);
 
   Result := ClassValue;
+  finally
+    ClassRoots.Clear;
+  end;
 end;
 
 function ResolveLexicalPrivateAccessClass(
@@ -10073,11 +10379,6 @@ begin
   Result := '#slot:' + AAccessClass.PrivateBrandToken + ':' + APrivateName;
 end;
 
-function RawPrivateInitializedKey(const AAccessClass: TGocciaClassValue): string;
-begin
-  Result := '#initialized:' + AAccessClass.PrivateBrandToken;
-end;
-
 function TryGetRawObjectPrivateDescriptor(const AReceiver: TGocciaObjectValue;
   const AKey: string; out ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
@@ -10102,35 +10403,6 @@ begin
     ExistingDescriptor.Free;
   AReceiver.Properties.Add(AKey,
     TGocciaPropertyDescriptorData.Create(AValue, AFlags));
-end;
-
-function HasRawPrivateInstanceInitializersApplied(
-  const AReceiver: TGocciaObjectValue;
-  const AAccessClass: TGocciaClassValue): Boolean;
-var
-  Descriptor: TGocciaPropertyDescriptor;
-begin
-  Result := False;
-  if not Assigned(AAccessClass) then
-    Exit;
-  TryGetRawObjectPrivateDescriptor(AReceiver,
-    RawPrivateInitializedKey(AAccessClass), Descriptor);
-  Result := Descriptor is TGocciaPropertyDescriptorData;
-end;
-
-procedure StampRawPrivateInstanceInitializersApplied(
-  const AReceiver: TGocciaObjectValue;
-  const AAccessClass: TGocciaClassValue);
-begin
-  if not Assigned(AAccessClass) then
-    Exit;
-  if not AAccessClass.HasInstanceInitializerWork then
-    Exit;
-  if HasRawPrivateInstanceInitializersApplied(AReceiver, AAccessClass) then
-    Exit;
-  DefineRawObjectPrivateDataProperty(AReceiver,
-    RawPrivateInitializedKey(AAccessClass),
-    TGocciaBooleanLiteralValue.TrueValue, []);
 end;
 
 function HasRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
@@ -10213,8 +10485,7 @@ end;
 
 procedure InitializeRawPrivateInstanceProperty(
   const AReceiver: TGocciaObjectValue; const APrivateName: string;
-  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue;
-  const AInitializationMode: TGocciaInstanceInitializationMode);
+  const AValue: TGocciaValue; const AAccessClass: TGocciaClassValue);
 var
   PrivateSlotKey: string;
   Descriptor: TGocciaPropertyDescriptor;
@@ -10225,21 +10496,10 @@ begin
   PrivateSlotKey := RawPrivateInstanceKey(AAccessClass, APrivateName);
   if TryGetRawObjectPrivateDescriptor(AReceiver, PrivateSlotKey,
      Descriptor) then
-  begin
-    if AInitializationMode = iimReplay then
-      Exit;
-    if (AInitializationMode = iimEagerReplacement) and
-       not HasRawPrivateInstanceInitializersApplied(AReceiver,
-         AAccessClass) then
-    begin
-      if not AReceiver.Extensible then
-        ThrowTypeError('Cannot add private elements to a non-extensible object',
-          SSuggestObjectNotExtensible);
-    end
-    else
-      ThrowTypeError('Cannot initialize private elements twice',
-        SSuggestPrivateFieldAccess);
-  end;
+    // ES2026 §7.3.28 PrivateFieldAdd step 2: a private field may only be
+    // added once per receiver.
+    ThrowTypeError('Cannot initialize private elements twice',
+      SSuggestPrivateFieldAccess);
   DefineRawObjectPrivateDataProperty(AReceiver, PrivateSlotKey, AValue,
     [pfWritable, pfConfigurable]);
 end;
@@ -10725,12 +10985,24 @@ var
   Instance: TGocciaInstanceValue;
   ClassValue: TGocciaClassValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  { `box().#slot = f()` holds the receiver in a native local across the
+    right-hand side — arbitrary guest code — and then dispatches a class test
+    and a private store through it. Nothing else references a receiver produced
+    by a call, so a collection inside the right-hand side frees it and the `is`
+    below reads a freed vtable. The assigned value is carried across the store,
+    which can run a private setter. This is the same protection the increment
+    sibling already takes on its private arm. }
+  Roots.Initialize;
+  try
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyAssignmentExpression.ObjectExpr, AContext);
+  Roots.Add(ObjectValue);
 
   // Evaluate the value to assign
   Value := EvaluateExpression(APrivatePropertyAssignmentExpression.Value, AContext);
+  Roots.Add(Value);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
@@ -10759,6 +11031,9 @@ begin
   end;
 
   Result := Value;
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??= AssignmentExpression
@@ -10769,9 +11044,18 @@ var
   ClassValue: TGocciaClassValue;
   CurrentValue: TGocciaValue;
   Value: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
+  { Same exposure as the plain private store, plus the read-back current value:
+    a private *getter* produces it, and it then has to survive the right-hand
+    side and the arithmetic — which can run a guest `valueOf` — before the store
+    consumes it. The short-circuit forms exit before any of that, so only the
+    values actually read after a safe point are pushed. }
+  Roots.Initialize;
+  try
   // Evaluate the object expression
   ObjectValue := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.ObjectExpr, AContext);
+  Roots.Add(ObjectValue);
 
   if ObjectValue is TGocciaInstanceValue then
   begin
@@ -10826,6 +11110,7 @@ begin
 
     Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
     Result := Value;
+    Roots.Add(Result);
 
     if ObjectValue is TGocciaInstanceValue then
       AssignPrivateMemberOnInstance(
@@ -10843,12 +11128,17 @@ begin
     Exit;
   end;
 
+  // The current value has to outlive the right-hand side and the arithmetic.
+  Roots.Add(CurrentValue);
+
   // Evaluate the value to operate with
   Value := EvaluateExpression(APrivatePropertyCompoundAssignmentExpression.Value, AContext);
+  Roots.Add(Value);
 
   // Use shared compound operation function
   Result := Goccia.Arithmetic.CompoundOperations(
     CurrentValue, Value, APrivatePropertyCompoundAssignmentExpression.Operator);
+  Roots.Add(Result);
 
   // Set the new value
   if ObjectValue is TGocciaInstanceValue then
@@ -10864,17 +11154,23 @@ begin
       TGocciaObjectValue(ObjectValue),
       APrivatePropertyCompoundAssignmentExpression.PrivateName, Result,
       AContext);
+  finally
+    Roots.Clear;
+  end;
 end;
 
-procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext; const AInitializationMode: TGocciaInstanceInitializationMode);
+procedure InitializePrivateInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
   Entry: TGocciaExpressionMap.TKeyValuePair;
+  LocalContext: TGocciaEvaluationContext;
 begin
+  LocalContext := AContext;
+  ApplyClassBodyStrictness(LocalContext);
   for Entry in AClassValue.PrivateInstancePropertyDefs do
   begin
     if Assigned(Entry.Value) then
-      PropertyValue := EvaluateExpression(Entry.Value, AContext)
+      PropertyValue := EvaluateExpression(Entry.Value, LocalContext)
     else
       PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
     if AInstance is TGocciaInstanceValue then
@@ -10882,60 +11178,55 @@ begin
         Entry.Key, PropertyValue, AClassValue, True)
     else
       InitializeRawPrivateInstanceProperty(
-        AInstance, Entry.Key, PropertyValue, AClassValue,
-        AInitializationMode);
+        AInstance, Entry.Key, PropertyValue, AClassValue);
   end;
 end;
 
 procedure RunClassInstanceInitializers(const AClassValue: TGocciaClassValue;
   const AInstance: TGocciaObjectValue;
-  const AContext: TGocciaEvaluationContext;
-  const AInitializationMode: TGocciaInstanceInitializationMode);
+  const AContext: TGocciaEvaluationContext);
 var
-  InitContext, SuperInitContext: TGocciaEvaluationContext;
-  InitScope, SuperInitScope: TGocciaScope;
-  WalkClass: TGocciaClassValue;
+  InitContext: TGocciaEvaluationContext;
+  InitScope: TGocciaScope;
+  Roots: TGocciaActiveRootFrame;
 begin
   InitContext := AContext;
-  InitScope := TGocciaClassInitScope.Create(AContext.Scope, AClassValue);
+  InitScope := TGocciaClassInitScope.Create(
+    ClassInitializerScopeParent(AClassValue, AContext.Scope), AClassValue);
   InitScope.ThisValue := AInstance;
   InitContext.Scope := InitScope;
+  ApplyClassDefinitionSourceContext(AClassValue, InitContext);
+
+  { Field initializers are arbitrary guest code and they run against this
+    scope, which binds `this` to the instance and is pointed at by nothing —
+    the same hazard ExecuteStaticBlock has. The instance and class join it:
+    the instance is still inside construction, so a `new` whose field
+    initializer collects has nothing else holding it. }
+  Roots.Initialize;
+  try
+  Roots.Add(InitScope);
+  Roots.Add(AInstance);
+  Roots.Add(AClassValue);
 
   if AInstance is TGocciaInstanceValue then
   begin
     InitializeInstanceProperties(TGocciaInstanceValue(AInstance), AClassValue, InitContext);
 
+    { A class whose fields never made it into the field-order table still has
+      its private fields to initialize; the superclasses do their own. }
     if AClassValue.FieldOrderCount = 0 then
-    begin
-      WalkClass := AClassValue.SuperClass;
-      while Assigned(WalkClass) do
-      begin
-        CheckExecutionTimeout;
-        IncrementInstructionCounter;
-        CheckInstructionLimit;
-        SuperInitContext := AContext;
-        SuperInitScope := TGocciaClassInitScope.Create(AContext.Scope, WalkClass);
-        SuperInitScope.ThisValue := AInstance;
-        SuperInitContext.Scope := SuperInitScope;
-        if WalkClass.FieldOrderCount = 0 then
-          InitializePrivateInstanceProperties(
-            AInstance, WalkClass, SuperInitContext, AInitializationMode);
-        WalkClass := WalkClass.SuperClass;
-      end;
-
-      InitializePrivateInstanceProperties(AInstance, AClassValue, InitContext,
-        AInitializationMode);
-    end;
+      InitializePrivateInstanceProperties(AInstance, AClassValue,
+        InitContext);
   end
   else
-    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext,
-      AInitializationMode);
+    InitializeObjectInstanceProperties(AInstance, AClassValue, InitContext);
 
   AClassValue.RunMethodInitializers(AInstance);
   AClassValue.RunFieldInitializers(AInstance);
   AClassValue.RunDecoratorFieldInitializers(AInstance);
-  if AInitializationMode = iimEagerReplacement then
-    StampRawPrivateInstanceInitializersApplied(AInstance, AClassValue);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function InstantiateClass(const AClassValue: TGocciaClassValue;
@@ -10952,7 +11243,7 @@ var
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
   InstancePrototype: TGocciaObjectValue;
-  InitializerReplayReceiver: TGocciaObjectValue;
+  Chain: TGocciaImplicitConstructorChain;
   function ConstructNativeSuperInstance(
     const AConstructor: TGocciaObjectValue): TGocciaObjectValue;
   var
@@ -10964,10 +11255,9 @@ var
     begin
       if TGocciaNativeFunctionValue(AConstructor).NotConstructable then
         ThrowTypeError(
-          Format(SErrorNotConstructor,
+          Format(SErrorValueNotConstructor,
             [TGocciaNativeFunctionValue(AConstructor).Name]),
-          Format('''%s'' is not a constructor',
-            [TGocciaNativeFunctionValue(AConstructor).Name]));
+          SSuggestNotConstructorType);
       ConstructedValue := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
     end
@@ -11018,18 +11308,13 @@ var
     begin
       ThisObject := TGocciaObjectValue(AConstructorThisValue);
       SetFinalInstance(ThisObject);
-      InitializerReplayReceiver := ThisObject;
     end;
 
     if AValue is TGocciaObjectValue then
     begin
       ReturnObject := TGocciaObjectValue(AValue);
       if ReturnObject <> Instance then
-      begin
         SetFinalInstance(ReturnObject);
-        if ReturnObject <> InitializerReplayReceiver then
-          InitializerReplayReceiver := nil;
-      end;
     end
     else if HasDerivedConstructorReturnRestriction and
             not IsUndefinedConstructedValue(AValue) then
@@ -11044,14 +11329,18 @@ var
       if TGocciaObjectValue(AValue) = Instance then
         Exit;
       SetFinalInstance(TGocciaObjectValue(AValue));
-      InitializerReplayReceiver := Instance;
     end;
   end;
-  procedure RunInstanceInitializers(
-    const AInitializationMode: TGocciaInstanceInitializationMode);
+  procedure RunInstanceInitializers;
   begin
-    RunClassInstanceInitializers(AClassValue, Instance, AContext,
-      AInitializationMode);
+    RunClassInstanceInitializers(AClassValue, Instance, AContext);
+  end;
+  procedure RunCollapsedInstanceInitializers;
+  var
+    Index: Integer;
+  begin
+    for Index := High(Chain.Collapsed) downto 0 do
+      RunClassInstanceInitializers(Chain.Collapsed[Index], Instance, AContext);
   end;
 begin
   CheckExecutionTimeout;
@@ -11080,7 +11369,19 @@ begin
       Exit(AArguments.GetElement(0).Box);
   end;
 
+  { §15.7.14 step 15a: this class runs an implicit constructor, and so does
+    every class between it and the first ancestor that has a constructor body
+    of its own. The chain has to be resolved before the receiver is allocated,
+    because which constructor it selects decides whether allocating one here is
+    right at all. }
+  ResolveImplicitConstructorChain(AClassValue, Chain);
+  ImplicitSuperClass := Chain.HostClass;
+
   NativeInstance := nil;
+  { Only a class-value built-in — Array, Map, Set — is initialized in place by
+    a later super(); the walk pre-creates one because the receiver has to exist
+    before any constructor body runs. Every hop is §13.3.7.3 GetSuperConstructor
+    so that a retargeted constructor allocates from what it now points at. }
   WalkClass := AClassValue;
   while Assigned(WalkClass) do
   begin
@@ -11088,15 +11389,24 @@ begin
     IncrementInstructionCounter;
     CheckInstructionLimit;
     NativeInstance := WalkClass.CreateNativeInstance(AArguments);
-    if (not Assigned(NativeInstance)) and
-       Assigned(WalkClass.NativeSuperConstructor) then
-      // The explicit super() path reuses this precreated native receiver.
-      NativeInstance := ConstructNativeSuperInstance(
-        WalkClass.NativeSuperConstructor);
     if Assigned(NativeInstance) then
       Break;
-    WalkClass := WalkClass.SuperClass;
+    WalkClass := ImplicitSuperConstructorClass(WalkClass);
   end;
+
+  { A native super *constructor* — a built-in exposed as a function value,
+    which is what Promise, Error and their subclasses are — is invoked again by
+    an explicit super(), and the receiver it returns replaces this one
+    wholesale. So it may only be pre-created when no constructor body stands
+    between this class and it: Chain.SuperConstructor is set only when the walk
+    reached it without passing one, and this class must not declare one either.
+    Pre-creating regardless ran the Promise executor twice. }
+  if (not Assigned(NativeInstance)) and
+     Assigned(Chain.SuperConstructor) and
+     (not ImplicitSuperConstructorIsUnusable(Chain)) and
+     (not Assigned(AClassValue.ConstructorMethod)) then
+    // The implicit super() path reuses this precreated native receiver.
+    NativeInstance := ConstructNativeSuperInstance(Chain.SuperConstructor);
 
   if Assigned(NativeInstance) then
   begin
@@ -11112,10 +11422,15 @@ begin
   end;
 
   RootedInstance := Instance;
-  InitializerReplayReceiver := nil;
   TGarbageCollector.Instance.AddTempRoot(RootedInstance);
   try
-    RunInstanceInitializers(iimFirstPass);
+    // ES2026 §10.2.2 [[Construct]] step 5b: only a ~base~ constructor
+    // initializes its instance elements before the constructor body runs. A
+    // ~derived~ one initializes them when its super() returns (§13.3.7.1
+    // SuperCall step 11), which is what puts a subclass's own fields after
+    // everything its base constructor assigned.
+    if not HasDerivedConstructorReturnRestriction then
+      RunInstanceInitializers;
 
     if Assigned(AClassValue.ConstructorMethod) then
     begin
@@ -11126,20 +11441,47 @@ begin
          IsUndefinedConstructedValue(ConstructedValue) and
          not AClassValue.ConstructorMethod.LastSuperConstructorCalled then
         ThrowReferenceError(
-          'Must call super constructor before returning from derived constructor');
+          SErrorSuperConstructorNotCalled);
     end
     else
     begin
-      ImplicitSuperClass := AClassValue.SuperClass;
-      if AClassValue.GetConstructorPrototype is TGocciaClassValue then
-        ImplicitSuperClass := TGocciaClassValue(AClassValue.GetConstructorPrototype);
+      { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
+        constructor is a TypeError, and Object.setPrototypeOf is the only way
+        to put one there. }
+      if ImplicitSuperConstructorIsUnusable(Chain) then
+        ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-      if Assigned(ImplicitSuperClass) and
+      { A super constructor Object.setPrototypeOf moved there is not the one
+        the class was declared with, so none of the declared-native branches
+        below apply: §13.3.7.3 sends super() to the new target, and what it
+        returns becomes the receiver. Probed against Node v24.0.1 — retargeting
+        onto Error sets the message and never runs the declared superclass. }
+      if ImplicitSuperConstructorIsRetargeted(Chain) then
+        ApplyReplacementResult(InvokeConstructableWithReceiver(
+          Chain.SuperConstructor, AArguments, Instance, AContext,
+          EffectiveNewTarget))
+      // A compiled superclass has no AST ConstructorMethod; it runs its own
+      // field initializers and constructor body against the instance.
+      else if Assigned(ImplicitSuperClass) and
+         ImplicitSuperClass.TryConstructOnReceiver(AArguments, Instance,
+           EffectiveNewTarget, ConstructedValue) then
+      begin
+        ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
+        ApplyReplacementResult(ConstructedValue);
+      end
+      else if Assigned(ImplicitSuperClass) and
          Assigned(ImplicitSuperClass.ConstructorMethod) then
       begin
+        RunBaseSuperclassInitializers(ImplicitSuperClass, Instance, AContext);
         ConstructedValue := ImplicitSuperClass.ConstructorMethod.CallWithThisValue(
           AArguments, Instance, ConstructorThisValue, EffectiveNewTarget);
         ValidateClassConstructorReturn(ImplicitSuperClass, ConstructedValue);
+        { §10.2.2 step 13.c applies to the constructor that returned, and the
+          borrowed one is exactly that: a subclass with no constructor of its
+          own, extending a class whose constructor never calls super(), still
+          finishes with `this` uninitialized. }
+        RequireDerivedConstructorThisInitialized(ImplicitSuperClass,
+          ConstructedValue);
         if IsUndefinedConstructedValue(ConstructedValue) then
           ApplyReplacementResult(ConstructorThisValue)
         else
@@ -11151,7 +11493,7 @@ begin
       begin
         if AClassValue.NativeSuperConstructor =
            TGocciaFunctionBase.GetSharedPrototype then
-          ThrowTypeError('Super constructor is not a constructor',
+          ThrowTypeError(SErrorSuperNotConstructor,
             SSuggestNotConstructorType);
         ConstructedValue := InvokeConstructableWithReceiver(
           AClassValue.NativeSuperConstructor, AArguments, Instance, AContext,
@@ -11162,18 +11504,230 @@ begin
       begin
         TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
         TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
-      end;
+      end
+      else if Assigned(ImplicitSuperClass) then
+        // The superclass declares no constructor either, so its own implicit
+        // default constructor has to carry the chain further up before this
+        // class initializes its instance elements below.
+        ApplyReplacementResult(InvokeConstructableWithReceiver(
+          ImplicitSuperClass, AArguments, Instance, AContext,
+          EffectiveNewTarget));
+
+      // The implicit derived constructor (§15.7.14 step 15a) forwards to
+      // super and then initializes its instance elements — so they run once
+      // the super construction above has completed, against whatever receiver
+      // it left behind. Every class the chain walk collapsed owes the same
+      // step, base-most first, before this class's own fields land.
+      RunCollapsedInstanceInitializers;
+      if HasDerivedConstructorReturnRestriction then
+        RunInstanceInitializers;
     end;
 
-    if Assigned(InitializerReplayReceiver) and
-       (Instance = InitializerReplayReceiver) and
-       not HasRawPrivateInstanceInitializersApplied(Instance, AClassValue) then
-      RunInstanceInitializers(iimReplay);
+    { No replay pass: the initializers now run once, on the receiver super()
+      settled on, so a constructor that replaces `this` never leaves them
+      applied to the wrong object for a later pass to redo. }
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RootedInstance);
   end;
 
   Result := Instance;
+end;
+
+// Reports whether constructing this class ends up allocating a built-in
+// receiver: a native intrinsic prototype or a linked native super constructor
+// anywhere up the superclass chain.
+//
+// The walk reads FSuperClass, which is resolved once at
+// ClassDefinitionEvaluation time, and deliberately does not follow
+// GetConstructorPrototype: this only decides which [[Construct]]
+// implementation runs, and both of them now agree about a retargeted
+// constructor. ResolveImplicitConstructorChain is where §13.3.7.3
+// GetSuperConstructor is applied — a ~derived~ class's super() follows the
+// mutated chain, a ~base~ class has no super() to follow it with — so a guard
+// that moved with the mutation would only decline classes that must keep being
+// redirected.
+function ClassChainReachesNativeConstruction(
+  const AClassValue: TGocciaClassValue): Boolean;
+var
+  WalkClass: TGocciaClassValue;
+begin
+  WalkClass := AClassValue;
+  while Assigned(WalkClass) do
+  begin
+    if Assigned(WalkClass.NativeInstanceDefaultPrototype) or
+       Assigned(WalkClass.NativeSuperConstructor) then
+      Exit(True);
+    WalkClass := WalkClass.SuperClass;
+  end;
+  Result := False;
+end;
+
+{ The evaluation context a class's own definition environment supplies.
+
+  Every field is filled the way TGocciaFunctionValue builds a call context out
+  of its closure: a field initializer is guest code, so a context missing a
+  host callback is not a degraded context but a crashing one —
+  TGocciaImportCallExpression calls AContext.LoadModule with no assigned-check,
+  and CurrentFilePath is what `import()` and `import.meta` resolve against and
+  what coverage and call-stack frames are attributed to. }
+function BuildClassDefinitionContext(const AClassValue: TGocciaClassValue;
+  const ADefinitionScope: TGocciaScope): TGocciaEvaluationContext;
+begin
+  Result := Default(TGocciaEvaluationContext);
+  Result.Realm := AClassValue.CreationRealm;
+  Result.Scope := ADefinitionScope;
+  Result.OnError := ADefinitionScope.OnError;
+  Result.LoadModule := ADefinitionScope.LoadModule;
+  Result.LoadModuleSource := ADefinitionScope.LoadModuleSource;
+  Result.LoadDeferredModule := ADefinitionScope.LoadDeferredModule;
+  Result.ResolveModuleURL := ADefinitionScope.ResolveModuleURL;
+  Result.CurrentFilePath := AClassValue.DefinitionSourcePath;
+  Result.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
+  Result.StrictTypes := ADefinitionScope.EffectiveStrictTypes;
+  // The synthesized context stands in for the class's own definition context,
+  // so it is subject to the same rule as every other piece of class-body code:
+  // strict, whatever the defining scope's mode was.
+  ApplyClassBodyStrictness(Result);
+end;
+
+// ES2026 §7.3.14 Construct(F, argumentsList, newTarget) for a class the
+// tree-walk evaluator built. Reflect.construct (§28.1.2), the proxy
+// [[Construct]] fallback (§10.5.13), construction through a bound wrapper
+// (§10.4.1.2), and species construction all funnel through the shared
+// ConstructValue, which cannot reach the AST field tables that §7.3.33
+// InitializeInstanceElements needs — it has no evaluation context to run them
+// in. Left alone they land on TGocciaClassValue.Instantiate, which runs the
+// constructor body and nothing else, so every field, private field, and
+// method initializer is dropped. Redirect them into the same InstantiateClass
+// the `new` operator uses, which initializes instance elements at the §10.2.2
+// step 5b (base) and §13.3.7.1 step 11 (derived) points.
+//
+// DefinitionScope selects exactly the evaluator-built classes: §15.7.14
+// ClassDefinitionEvaluation records the class environment there, and nothing
+// else does — built-in class values and bytecode class values carry none, so
+// they keep their own [[Construct]]. UsesOwnInstantiation is the same guard
+// the `new` operator applies, so both entry points agree on which classes
+// InstantiateClass may drive.
+//
+// TGocciaVM.ConstructValue makes this same decision for bytecode `new`, with a
+// guard that differs on three axes — eligibility, how far up the chain native
+// markers are looked for, and which environment the context is anchored to.
+// They are documented at that hook, together with the measurement showing why
+// tightening it to match this one would make bytecode worse rather than
+// better.
+//
+// A chain that reaches a built-in constructor stays on Instantiate, which is
+// what TGocciaVM.ConstructValue already does for the same shapes. Only
+// Instantiate implements the §10.1.13 GetPrototypeFromConstructor ordering
+// those constructors need: ArrayBuffer, SharedArrayBuffer and DataView
+// validate their arguments before newTarget.prototype may be observed, which
+// tests/built-ins/ArrayBuffer/constructor.js asserts through exactly this
+// route.
+//
+// Declining used to cost such a class every instance element on EVERY route
+// through ConstructValue — Reflect.construct, a proxy without a construct
+// trap, a bound class, and every species construction (Array.from,
+// Array.prototype.map, Promise.prototype.then, ...) handed back an instance
+// whose own fields were undefined, while `new` was unaffected. It no longer
+// does: TGocciaClassValue.Instantiate runs those elements itself through the
+// TGocciaClassInstanceElementsHook the evaluator registers, at the §13.3.7.1
+// step 11 point, so declining here now costs nothing observable. The agreement
+// between all of these routes is pinned in
+// tests/built-ins/Reflect/construct/native-chain-instance-elements.js.
+function RedirectEvaluatorClassConstruct(const ATarget: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+var
+  ClassValue: TGocciaClassValue;
+  DefinitionScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+  PreviousRealm: TGocciaRealm;
+  SwapRealm: Boolean;
+begin
+  Result := False;
+  AResult := nil;
+
+  if not (ATarget is TGocciaClassValue) then
+    Exit;
+
+  ClassValue := TGocciaClassValue(ATarget);
+  if ClassValue.UsesOwnInstantiation then
+    Exit;
+  if ClassChainReachesNativeConstruction(ClassValue) then
+    Exit;
+
+  DefinitionScope := ClassValue.DefinitionScope;
+  if not Assigned(DefinitionScope) then
+    Exit;
+
+  { The class environment is the only context this construction can be
+    anchored to — the caller is a native function with none of its own — and
+    it is the one §15.7.10 ClassFieldDefinitionEvaluation step 2b names as the
+    initializers' [[Environment]] anyway.
+
+    ApplyClassDefinitionSourceContext repairs the same four callbacks and the
+    file path again around each initializer run, so removing either half alone
+    leaves the tests passing — the crash needs both gone. Neither is therefore
+    dead code to be tidied away: this one covers everything InstantiateClass
+    does with the context outside an initializer run, and that one covers a
+    superclass initialized from a context this function never built. }
+  EvalContext := BuildClassDefinitionContext(ClassValue, DefinitionScope);
+
+  { Same realm discipline as TGocciaClassValue.Instantiate: the intrinsics a
+    field initializer allocates (object and array literals, errors) come from
+    the realm the class was defined in, not from whichever realm called
+    Reflect.construct. }
+  PreviousRealm := CurrentRealm;
+  SwapRealm := Assigned(ClassValue.CreationRealm) and
+    (ClassValue.CreationRealm <> PreviousRealm);
+  if SwapRealm then
+    SetCurrentRealm(ClassValue.CreationRealm);
+  try
+    AResult := InstantiateClass(ClassValue, AArguments, EvalContext,
+      ANewTarget);
+  finally
+    if SwapRealm then
+      SetCurrentRealm(PreviousRealm);
+  end;
+  Result := True;
+end;
+
+// The evaluator's half of TryRunASTInstanceElements: a class whose instance
+// elements are AST expressions can only have them run here, and a holder that
+// is not the evaluator — the bytecode VM driving a compiled subclass's super()
+// into a superclass the evaluator built, which is what a module's top-level
+// function declarations produce even in bytecode mode — has no context of its
+// own to run them in. Without this the fields are silently dropped in bytecode
+// mode and present in interpreted mode.
+procedure RunEvaluatorClassInstanceElements(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
+var
+  DefinitionScope: TGocciaScope;
+  EvalContext: TGocciaEvaluationContext;
+  PreviousRealm: TGocciaRealm;
+  SwapRealm: Boolean;
+begin
+  if not (AInstance is TGocciaObjectValue) then
+    Exit;
+  DefinitionScope := AClassValue.DefinitionScope;
+  if not Assigned(DefinitionScope) then
+    Exit;
+
+  EvalContext := BuildClassDefinitionContext(AClassValue, DefinitionScope);
+  PreviousRealm := CurrentRealm;
+  SwapRealm := Assigned(AClassValue.CreationRealm) and
+    (AClassValue.CreationRealm <> PreviousRealm);
+  if SwapRealm then
+    SetCurrentRealm(AClassValue.CreationRealm);
+  try
+    RunClassInstanceInitializers(AClassValue,
+      TGocciaObjectValue(AInstance), EvalContext);
+  finally
+    if SwapRealm then
+      SetCurrentRealm(PreviousRealm);
+  end;
 end;
 
 // Template literals without real interpolations are returned as static strings.
@@ -11221,6 +11775,8 @@ var
   I: Integer;
   CalleeName: string;
   TemplateKey: string;
+  TagCalleeDescriptor: TGocciaCalleeDescriptor;
+  TagCalleeTypeName: string;
 begin
   CheckExecutionTimeout;
   IncrementInstructionCounter;
@@ -11325,9 +11881,29 @@ begin
       if Assigned(Callee) and Callee.IsCallable then
         Result := DispatchCall(Callee, Arguments, ThisValue)
       else
+      begin
+        { Same descriptor the bytecode compiler records for a tagged-template
+          call site, so both executors name the tag and share the
+          tag-must-be-callable suggestion (Goccia.Error.CallDiagnostics). }
+        TagCalleeDescriptor := CalleeDescriptorFor(
+          ATaggedTemplateExpression.Tag, cckTaggedTemplate);
+        { A non-callable tag reaches here as its runtime value — normally the
+          undefined value (a missing property, symbol-keyed or not, reads as
+          `undefined`, never raw Pascal nil: GetSymbolPropertyWithReceiver and
+          GetPropertyWithContext both return TGocciaUndefinedLiteralValue for an
+          absent property). The Assigned() check is a defensive nil guard only,
+          mirroring EvaluateCallWithOptionalShortCircuit and the VM's
+          ValueTypeNameOrUndefined, so a raw nil from an internal invariant
+          violation degrades to "undefined" rather than dereferencing nil. }
+        if Assigned(Callee) then
+          TagCalleeTypeName := Callee.TypeName
+        else
+          TagCalleeTypeName := 'undefined';
         ThrowTypeError(
-          Format(SErrorValueNotFunction, [Callee.TypeName]),
-          SSuggestTaggedTemplateCallable);
+          NotCallableMessage(TagCalleeDescriptor, TagCalleeTypeName),
+          NotCallableSuggestion(TagCalleeDescriptor, TagCalleeTypeName,
+            TagCalleeTypeName));
+      end;
     finally
       if (TGocciaCallStack.Instance <> nil) then
         TGocciaCallStack.Instance.Pop;
@@ -11843,7 +12419,10 @@ begin
         AContext.NonStrictMode);
     pdrComputedProperty:
       begin
-        PropValue := ToPropertyKey(AReference.ComputedKeyValue);
+        // ES2026 §6.2.5.6 PutValue step 3.a before step 3.c: a nullish base
+        // throws a TypeError before the stored key value is coerced.
+        PropValue := ToPropertyKeyForBase(AReference.ObjectValue,
+          AReference.ComputedKeyValue, True);
         if PropValue is TGocciaSymbolValue then
           AssignSymbolProperty(AReference.ObjectValue,
             TGocciaSymbolValue(PropValue), AValue, AContext.OnError,
@@ -11934,6 +12513,7 @@ var
   DoneFlag: Boolean;
   ShouldCloseIterator: Boolean;
   Key: string;
+  Roots: TGocciaActiveRootFrame;
 
   function DirectNextClosingOnThrow(out ADone: Boolean): TGocciaValue;
   begin
@@ -11974,6 +12554,13 @@ begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     UsedKeys := TStringList.Create;
     UsedSymbolKeys := TList<TGocciaSymbolValue>.Create;
+    { Same window as the lexical twin AssignObjectPattern: the source is read
+      once per property and has to survive computed keys, getters and default
+      initializers in between, and a computed symbol key survives only in a
+      plain TList. }
+    Roots.Initialize;
+    try
+      Roots.Add(ObjectValue);
     try
       for I := 0 to ObjPat.Properties.Count - 1 do
       begin
@@ -11981,17 +12568,17 @@ begin
         begin
           RestObject := TGocciaObjectValue.Create(
             TGocciaObjectValue.SharedObjectPrototype);
-          TGarbageCollector.Instance.AddTempRoot(RestObject);
-          try
-            CopyDataProperties(RestObject, ObjectValue, UsedKeys,
-              UsedSymbolKeys);
-            AssignVariablePattern(
-              TGocciaRestDestructuringPattern(ObjPat.Properties[I].Pattern).
-                Argument,
-              RestObject, AContext);
-          finally
-            TGarbageCollector.Instance.RemoveTempRoot(RestObject);
-          end;
+          { On the frame rather than a temp-root pair, matching the
+            AssignObjectPattern twin: the frame is nil-collector-safe by
+            construction, where the unguarded AddTempRoot this replaced would
+            have dereferenced a nil Instance. }
+          Roots.Add(RestObject);
+          CopyDataProperties(RestObject, ObjectValue, UsedKeys,
+            UsedSymbolKeys);
+          AssignVariablePattern(
+            TGocciaRestDestructuringPattern(ObjPat.Properties[I].Pattern).
+              Argument,
+            RestObject, AContext);
         end
         else
         begin
@@ -12003,6 +12590,7 @@ begin
             // ToPropertyKey on the evaluated expression, dispatch by type.
             PropertyKey := ToPropertyKey(EvaluateExpression(
               ObjPat.Properties[I].KeyExpression, AContext));
+            Roots.Add(PropertyKey);
             if PropertyKey is TGocciaSymbolValue then
             begin
               SymbolKey := TGocciaSymbolValue(PropertyKey);
@@ -12041,6 +12629,9 @@ begin
       UsedSymbolKeys.Free;
       UsedKeys.Free;
     end;
+    finally
+      Roots.Clear;
+    end;
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
@@ -12056,7 +12647,8 @@ begin
       ThrowTypeError(
         Format(SErrorNotIterable, [AValue.TypeName]),
         SSuggestDestructureRequiresIterable);
-    TGarbageCollector.Instance.AddTempRoot(Iterator);
+    if (TGarbageCollector.Instance <> nil) then
+      TGarbageCollector.Instance.AddTempRoot(Iterator);
     try
       Exhausted := False;
       for I := 0 to ArrPat.Elements.Count - 1 do
@@ -12146,7 +12738,8 @@ begin
       end;
       CloseIterator(Iterator);
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Iterator);
+      if (TGarbageCollector.Instance <> nil) then
+        TGarbageCollector.Instance.RemoveTempRoot(Iterator);
     end;
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
@@ -12192,8 +12785,11 @@ begin
   if MemberExpr.Computed then
   begin
     // ES2026 §13.5.1.2 PropertyDestructuringAssignmentEvaluation step 5:
-    // ToPropertyKey on the computed key.
-    PropValue := ToPropertyKey(EvaluateExpression(MemberExpr.PropertyExpression, AContext));
+    // ToPropertyKey on the computed key — but the store goes through §6.2.5.6
+    // PutValue, whose step 3.a base check precedes step 3.c, so a nullish base
+    // throws before the key is coerced.
+    PropValue := ToPropertyKeyForBase(Obj,
+      EvaluateExpression(MemberExpr.PropertyExpression, AContext), True);
     if PropValue is TGocciaSymbolValue then
       AssignSymbolProperty(Obj, TGocciaSymbolValue(PropValue), AValue,
         AContext.OnError, APattern.Line, APattern.Column,
@@ -12445,6 +13041,7 @@ var
   UsedSymbolKeys: TList<TGocciaSymbolValue>;
   I: Integer;
   PreparedReference: TPreparedDestructuringReference;
+  Roots: TGocciaActiveRootFrame;
 begin
   if (AValue is TGocciaNullLiteralValue) or
      (AValue is TGocciaUndefinedLiteralValue) then
@@ -12456,6 +13053,21 @@ begin
   UsedKeys := TStringList.Create;
   UsedSymbolKeys := TList<TGocciaSymbolValue>.Create;
 
+  { The source object is read once per pattern property and lives in a native
+    local across everything in between: a computed key expression, the guest
+    `toString`/`@@toPrimitive` ToPropertyKey runs on it, a getter behind the
+    property read, and a default initializer. Destructuring `a` with a default
+    and then `b`, out of the result of a call, is the minimal shape — the source
+    is reachable from nothing once the call returns, so a collection inside the
+    default frees it before `b` is read.
+
+    Symbol keys join it because `UsedSymbolKeys` is a plain TList: a symbol
+    produced by a computed key and used only as a rest-pattern exclusion is
+    otherwise unreachable across the same guest code. The rest target is rooted
+    where it is built, matching the var-pattern twin. }
+  Roots.Initialize;
+  try
+    Roots.Add(ObjectValue);
   try
     // Use indexed for loop to ensure properties are processed in source order
     for I := 0 to APattern.Properties.Count - 1 do
@@ -12466,6 +13078,7 @@ begin
         // Rest pattern: collect remaining properties
         RestObject := TGocciaObjectValue.Create(
           TGocciaObjectValue.SharedObjectPrototype);
+        Roots.Add(RestObject);
         CopyDataProperties(RestObject, ObjectValue, UsedKeys, UsedSymbolKeys);
         AssignPattern(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, RestObject, AContext, AIsDeclaration, ADeclarationType);
       end
@@ -12480,6 +13093,7 @@ begin
           begin
             ComputedPropertyKey := ToPropertyKey(
               EvaluateExpression(Prop.KeyExpression, AContext));
+            Roots.Add(ComputedPropertyKey);
             if ComputedPropertyKey is TGocciaSymbolValue then
             begin
               SymbolKey := TGocciaSymbolValue(ComputedPropertyKey);
@@ -12519,6 +13133,9 @@ begin
   finally
     UsedSymbolKeys.Free;
     UsedKeys.Free;
+  end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -12594,6 +13211,7 @@ var
   Index: Integer;
   ShortCircuited: Boolean;
   ReferencedObject: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   IsSymbolKey := False;
   SymbolKey := nil;
@@ -12611,6 +13229,15 @@ begin
       Exit;
     end;
 
+    { §13.5.1.2 resolves the base before the key, so the base is held in a
+      native local across the key expression and across ToPropertyKeyForBase,
+      which runs a guest `@@toPrimitive`/`toString`. A base that came from a
+      call is referenced from nowhere else, and every arm below dereferences it
+      — the nullish tests, the array-index arm, the object arm. The converted
+      key joins it because a Proxy `deleteProperty` trap is guest code too, and
+      the symbol arm still holds the key across it. }
+    Roots.Initialize;
+    try
     ShortCircuited := False;
     if MemberExpr.ObjectExpr is TGocciaMemberExpression then
       ObjValue := EvaluateMember(
@@ -12622,6 +13249,7 @@ begin
         ShortCircuited)
     else
       ObjValue := EvaluateExpression(MemberExpr.ObjectExpr, AContext);
+    Roots.Add(ObjValue);
 
     if ShortCircuited then
     begin
@@ -12643,31 +13271,11 @@ begin
     begin
       PropertyKey := EvaluateExpression(MemberExpr.PropertyExpression, AContext);
 
-      if (ObjValue is TGocciaNullLiteralValue) or
-         (ObjValue is TGocciaUndefinedLiteralValue) then
-      begin
-        if PropertyKey is TGocciaSymbolValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             TGocciaSymbolValue(PropertyKey).ToDisplayString.Value]),
-            SSuggestCheckNullBeforeAccess)
-        else if PropertyKey is TGocciaStringLiteralValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             TGocciaStringLiteralValue(PropertyKey).Value]),
-            SSuggestCheckNullBeforeAccess)
-        else if PropertyKey is TGocciaNumberLiteralValue then
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value,
-             FormatDouble(TGocciaNumberLiteralValue(PropertyKey).Value)]),
-            SSuggestCheckNullBeforeAccess)
-        else
-          ThrowTypeError(Format(SErrorCannotReadPropertiesOf,
-            [ObjValue.ToStringLiteral.Value, '<computed>']),
-            SSuggestCheckNullBeforeAccess);
-      end;
-
-      PropertyKey := ToPropertyKey(PropertyKey);
+      // ES2026 §13.5.1.2 delete on a property reference resolves the base through
+      // ToObject before the key is converted, so the nullish-base TypeError wins
+      // over any key-coercion side effect.
+      PropertyKey := ToPropertyKeyForBase(ObjValue, PropertyKey);
+      Roots.Add(PropertyKey);
       if PropertyKey is TGocciaSymbolValue then
       begin
         IsSymbolKey := True;
@@ -12754,6 +13362,9 @@ begin
       // Other primitive property references have no own property to remove.
       Result := TGocciaBooleanLiteralValue.TrueValue;
     end;
+    finally
+      Roots.Clear;
+    end;
   end
   else
   begin
@@ -12783,5 +13394,9 @@ begin
     end;
   end;
 end;
+
+initialization
+  RegisterClassConstructRedirectHook(RedirectEvaluatorClassConstruct);
+  RegisterClassInstanceElementsHook(RunEvaluatorClassInstanceElements);
 
 end.

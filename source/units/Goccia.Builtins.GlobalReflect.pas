@@ -45,7 +45,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
+  Goccia.GarbageCollector,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -55,14 +55,6 @@ uses
   Goccia.Values.ProxyValue,
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 { Helper: validate target is an object, throw TypeError if not }
 
@@ -101,11 +93,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('Reflect'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
 
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtConst, True);
@@ -495,6 +486,7 @@ var
   Target: TGocciaValue;
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeysRoot: TGocciaTempRoot;
   KeyValues: TArray<TGocciaValue>;
   PropertyNames: TArray<string>;
   OwnSymbols: TArray<TGocciaSymbolValue>;
@@ -508,29 +500,38 @@ begin
   RequireObjectTarget(Target, 'Reflect.ownKeys');
 
   Obj := TGocciaObjectValue(Target);
-  Keys := TGocciaArrayValue.Create;
+  InitializeTempRoot(KeysRoot);
+  try
+    Keys := TGocciaArrayValue.Create;
+    { The ownKeys trap and the key strings below are both GC safe points — a
+      string allocation can trip the memory ceiling and collect — so the
+      half-built result array needs a root. }
+    AddTempRootIfNeeded(KeysRoot, Keys);
 
-  // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
-  if Obj is TGocciaProxyValue then
-  begin
-    KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
-    for I := 0 to High(KeyValues) do
-      Keys.Elements.Add(KeyValues[I]);
+    // Step 2: Let keys be ? target.[[OwnPropertyKeys]]()
+    if Obj is TGocciaProxyValue then
+    begin
+      KeyValues := TGocciaProxyValue(Obj).GetOwnPropertyKeyValues;
+      for I := 0 to High(KeyValues) do
+        Keys.Elements.Add(KeyValues[I]);
+      Result := Keys;
+      Exit;
+    end;
+
+    // String keys first, then symbol keys (per spec ordering)
+    PropertyNames := Obj.GetAllPropertyNames;
+    for I := 0 to High(PropertyNames) do
+      Keys.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
+
+    OwnSymbols := Obj.GetOwnSymbols;
+    for I := 0 to High(OwnSymbols) do
+      Keys.Elements.Add(OwnSymbols[I]);
+
+    // Step 3: Return CreateArrayFromList(keys)
     Result := Keys;
-    Exit;
+  finally
+    RemoveTempRootIfNeeded(KeysRoot);
   end;
-
-  // String keys first, then symbol keys (per spec ordering)
-  PropertyNames := Obj.GetAllPropertyNames;
-  for I := 0 to High(PropertyNames) do
-    Keys.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
-
-  OwnSymbols := Obj.GetOwnSymbols;
-  for I := 0 to High(OwnSymbols) do
-    Keys.Elements.Add(OwnSymbols[I]);
-
-  // Step 3: Return CreateArrayFromList(keys)
-  Result := Keys;
 end;
 
 // ES2026 §28.1.11 Reflect.preventExtensions(target)
@@ -673,8 +674,5 @@ begin
 
   Result := TGocciaBooleanLiteralValue.TrueValue;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

@@ -5,6 +5,7 @@ Endpoints:
   GET  /json          — 200 {"url":"/json","method":"GET"} (application/json)
   GET  /echo-headers  — 200 {"headers":{...}} reflecting request headers
   GET  /redirect      — 302 → /json
+  GET  /redirect-external — 302 → http://10.255.255.1:1/json (private, off-allowlist)
   GET  /status/<code> — responds with <code> and empty body
   GET  /              — 200 "ok"
   HEAD *              — 200 with Content-Length but no body
@@ -43,6 +44,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/json")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path == "/redirect-external":
+            # Absolute redirect to a private, non-allowlisted address. The
+            # initial hop (loopback) is allowed; only per-hop revalidation can
+            # catch that the redirect target is not. Lets the E2E prove the hop
+            # itself is policy-checked rather than just the first request.
+            self.send_response(302)
+            self.send_header("Location", "http://10.255.255.1:1/json")
             self.send_header("Content-Length", "0")
             self.end_headers()
         elif self.path.startswith("/status/"):

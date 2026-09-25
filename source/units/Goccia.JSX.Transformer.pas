@@ -10,14 +10,20 @@ uses
 
   StringBuffer,
 
+  Goccia.Error,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
+  Goccia.OriginMap,
   Goccia.SourceMap;
 
 type
   TGocciaJSXTransformResult = record
     Source: string;
     SourceMap: TGocciaSourceMap;
+    { Which bytes of the output are which bytes of the input. The source map
+      answers the debugger's question; this answers the editor's. See
+      [ADR 0118](../../docs/adr/0118-original-file-source-ranges.md). }
+    OriginMap: TGocciaOriginMap;
   end;
 
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
@@ -27,6 +33,11 @@ type
   private
     type
       TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
+      TScanContext = (scSource, scAttributes, scChildren, scExpression);
+      TForHeader = record
+        Depth: Integer;
+        SawOf: Boolean;
+      end;
   private
     FSource: string;
     FPos: Integer;
@@ -36,9 +47,15 @@ type
     FOutputColumn: Integer;
     FOutput: TStringBuffer;
     FSourceMap: TGocciaSourceMap;
+    FOriginRuns: TGocciaOriginRuns;
     FFactoryName: string;
     FFragmentName: string;
     FLastTokenKind: TLastTokenKind;
+    // Parenthesis nesting, and the `for (...)` headers open within it,
+    // innermost last: `of` is a keyword only at the top level of one.
+    FParenDepth: Integer;
+    FForHeaders: array of TForHeader;
+    FForPending: Boolean;
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
@@ -49,11 +66,20 @@ type
     procedure AdvanceInput; {$IFDEF FPC}inline;{$ENDIF}
     function CurrentChar: Char; {$IFDEF FPC}inline;{$ENDIF}
 
+    procedure RaiseJSXError(const AMessage: string);
+    procedure RequireScanProgress(var AGuardPosition: Integer;
+      const AContext: TScanContext);
+    function ScanContextName(const AContext: TScanContext): string;
+    function IsUnsupportedAttributeChar(const AChar: Char): Boolean;
+    function DescribeOffenderChar(const AChar: Char): string;
+    procedure RebaseNestedExpressionError(const AError: TGocciaError;
+      const ARawExpression: string; const AStartLine, AStartColumn: Integer);
+
     procedure Emit(const AText: string);
     procedure EmitMapped(const AText: string; const ASourceLine, ASourceColumn: Integer);
-    procedure EmitChar(const AChar: Char); {$IFDEF FPC}inline;{$ENDIF}
-    procedure EmitNewline;
+    procedure EmitSourceChar; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddIdentityMapping;
+    procedure AnchorOrigin; {$IFDEF FPC}inline;{$ENDIF}
 
     procedure CopyChar;
     procedure CopyString(const AQuote: Char);
@@ -62,8 +88,14 @@ type
     procedure CopyLineComment;
     procedure CopyBlockComment;
     function CopyIdentifierOrKeyword: string;
+    function TokenKindAfterWord(const AWord: string;
+      const AStart: Integer): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
+    procedure OpenParen;
+    procedure CloseParen;
+    function IsForOfKeyword(const AStart: Integer): Boolean;
+    function InForHeader: Boolean;
 
     function IsJSXContext: Boolean;
     function IsJSXStart: Boolean;
@@ -72,9 +104,11 @@ type
 
     procedure TransformJSXElement;
     function ReadJSXTagName: string;
-    procedure EmitJSXAttributes(out AHadAttributes: Boolean);
+    procedure EmitJSXAttributes(const ALeadingNewlines: Integer;
+      out AHadAttributes: Boolean);
     procedure EmitJSXChildren(const ATagName: string);
     function CollectJSXText: string;
+    function IsCommentOnlyJSXExpression(out AClosingBrace: Integer): Boolean;
     procedure CopyJSXExpression;
     procedure ExpectJSXClosingTag(const ATagName: string);
     function TrimJSXWhitespace(const AText: string): string;
@@ -82,10 +116,12 @@ type
     function FormatPropertyKey(const AName: string): string;
 
     procedure SkipWhitespace;
+    procedure SkipJSXAttributeTrivia;
     procedure ScanPragmas;
     procedure TransformSource;
   public
     class function Transform(const ASource: string;
+      const AFileName: string = '';
       const AFactoryName: string = 'createElement';
       const AFragmentName: string = 'Fragment'): TGocciaJSXTransformResult;
   end;
@@ -106,6 +142,19 @@ const
   // watchdog has to orphan the worker.
   MAX_JSX_DEPTH = 256;
 
+  // Scan contexts reported by RequireScanProgress, so a stalled loop names the
+  // construct it was scanning rather than a bare position.
+  JSX_CONTEXT_SOURCE = 'source';
+  JSX_CONTEXT_ATTRIBUTES = 'attribute list';
+  JSX_CONTEXT_CHILDREN = 'children';
+  JSX_CONTEXT_EXPRESSION = 'expression';
+
+  // Rendering for an offending byte that cannot be embedded literally. Two hex
+  // digits cover the whole Char range, and the prefix matches the JavaScript
+  // escape the reader would type to reproduce the byte.
+  JSX_BYTE_ESCAPE_PREFIX = '\x';
+  JSX_BYTE_ESCAPE_DIGITS = 2;
+
 procedure WarnIfJSXExtensionMismatch(const AFilePath: string);
 begin
   if not IsJSXNativeExtension(ExtractFileExt(AFilePath)) then
@@ -113,6 +162,7 @@ begin
 end;
 
 class function TGocciaJSXTransformer.Transform(const ASource: string;
+  const AFileName: string;
   const AFactoryName: string;
   const AFragmentName: string): TGocciaJSXTransformResult;
 var
@@ -120,6 +170,7 @@ var
 begin
   Transformer := TGocciaJSXTransformer.Create;
   try
+    Transformer.FFileName := AFileName;
     Transformer.FSource := ASource;
     Transformer.FPos := 1;
     Transformer.FLine := 1;
@@ -137,16 +188,24 @@ begin
     try
       Transformer.ScanPragmas;
       Transformer.TransformSource;
+      // The end of the input is a position every map needs and no copy
+      // records: a file whose last construct is JSX ends in synthesized text.
+      Transformer.AnchorOrigin;
       Result.Source := Transformer.FOutput.ToString;
       if Transformer.FHasJSX then
       begin
         Result.SourceMap := Transformer.FSourceMap;
         Transformer.FSourceMap := nil;
+        Result.OriginMap := TGocciaOriginMap.Create(Transformer.FOriginRuns,
+          Length(ASource));
       end
       else
       begin
+        // Nothing was rewritten, so the output is the input and every offset
+        // already is an original one. A map would say only that.
         Result.Source := ASource;
         Result.SourceMap := nil;
+        Result.OriginMap := nil;
       end;
     finally
       Transformer.FSourceMap.Free;
@@ -197,6 +256,112 @@ begin
   Result := FSource[FPos];
 end;
 
+// Every transformer diagnostic goes through here, so preprocessor failures
+// reach the host as ordinary positioned syntax errors instead of a bare
+// Exception the CLI can only print as "Error: <message>".
+procedure TGocciaJSXTransformer.RaiseJSXError(const AMessage: string);
+begin
+  raise TGocciaSyntaxError.Create(AMessage, FLine, FColumn, FFileName, nil);
+end;
+
+function TGocciaJSXTransformer.ScanContextName(
+  const AContext: TScanContext): string;
+begin
+  case AContext of
+    scAttributes: Result := JSX_CONTEXT_ATTRIBUTES;
+    scChildren: Result := JSX_CONTEXT_CHILDREN;
+    scExpression: Result := JSX_CONTEXT_EXPRESSION;
+  else
+    Result := JSX_CONTEXT_SOURCE;
+  end;
+end;
+
+// ':' opens a JSXNamespacedName (`xlink:href`) and bytes at or above #128 are
+// the lead bytes of a non-ASCII identifier. Both are legitimate JSX that this
+// transformer does not implement yet, so a stall on one is a missing feature
+// rather than evidence that the source was never JSX.
+function TGocciaJSXTransformer.IsUnsupportedAttributeChar(
+  const AChar: Char): Boolean;
+begin
+  Result := (AChar = ':') or (AChar >= #128);
+end;
+
+// A byte at or above #128 is one byte of a multi-byte UTF-8 sequence, so
+// embedding it literally would put a truncated sequence into the diagnostic and
+// from there into the CLI's JSON error envelope. Render those as '\xNN' so the
+// message stays valid UTF-8 while still naming the exact offending byte.
+function TGocciaJSXTransformer.DescribeOffenderChar(const AChar: Char): string;
+begin
+  if AChar >= #128 then
+    Result := JSX_BYTE_ESCAPE_PREFIX +
+      LowerCase(IntToHex(Ord(AChar), JSX_BYTE_ESCAPE_DIGITS))
+  else
+    Result := AChar;
+end;
+
+// Progress guard for the scanning loops. Each loop that can reach a character
+// none of its branches consume calls this once per iteration with its own guard
+// variable, initialised to 0 (FPos is 1-based, so the first iteration always
+// passes). A stalled FPos means the transformer is scanning input that only
+// looked like JSX — a TypeScript type annotation such as `: <T>(x: T) => T` is
+// enough to get here — and without the guard the loop spins forever at 100% CPU
+// instead of reporting the error.
+procedure TGocciaJSXTransformer.RequireScanProgress(var AGuardPosition: Integer;
+  const AContext: TScanContext);
+var
+  Offender: Char;
+  Rendered: string;
+begin
+  if FPos > AGuardPosition then
+  begin
+    AGuardPosition := FPos;
+    Exit;
+  end;
+
+  Offender := Peek;
+  Rendered := DescribeOffenderChar(Offender);
+  if (AContext = scAttributes) and IsUnsupportedAttributeChar(Offender) then
+    RaiseJSXError(Format('JSX: Unsupported attribute syntax at "%s"',
+      [Rendered]))
+  else
+    RaiseJSXError(Format(
+      'JSX: Unexpected character "%s" in %s (likely runaway scan on non-JSX input)',
+      [Rendered, ScanContextName(AContext)]));
+end;
+
+// A nested attribute expression is transformed from a copied slice, so the
+// sub-transformer's positions are relative to that slice. Rebase them onto the
+// slice's position in this source before the error propagates — the slice's
+// leading whitespace is dropped by Trim, so it is skipped here too.
+procedure TGocciaJSXTransformer.RebaseNestedExpressionError(
+  const AError: TGocciaError; const ARawExpression: string;
+  const AStartLine, AStartColumn: Integer);
+var
+  Line, Column, I: Integer;
+begin
+  Line := AStartLine;
+  Column := AStartColumn;
+  I := 1;
+  while (I <= Length(ARawExpression)) and (ARawExpression[I] <= ' ') do
+  begin
+    if ARawExpression[I] = #10 then
+    begin
+      Inc(Line);
+      Column := 1;
+    end
+    else
+      Inc(Column);
+    Inc(I);
+  end;
+
+  // Only the slice's first line is column-shifted; every later line begins at
+  // column 1 in this source exactly as it does in the slice.
+  if AError.Line = 1 then
+    AError.TranslatePosition(Line, Column + AError.Column - 1, nil)
+  else
+    AError.TranslatePosition(Line + AError.Line - 1, AError.Column, nil);
+end;
+
 procedure TGocciaJSXTransformer.Emit(const AText: string);
 var
   I: Integer;
@@ -222,10 +387,20 @@ begin
   Emit(AText);
 end;
 
-procedure TGocciaJSXTransformer.EmitChar(const AChar: Char);
+{ The one way a character of the input reaches the output. Every copy this
+  transformer makes goes through here, which is what lets the origin map claim
+  that the bytes it records are byte-for-byte the input's: the claim is
+  structural rather than a convention every call site has to keep. Advancing
+  is the caller's, because several of them copy a character and then look at
+  it again. }
+procedure TGocciaJSXTransformer.EmitSourceChar;
+var
+  C: Char;
 begin
-  FOutput.AppendChar(AChar);
-  if AChar = #10 then
+  C := FSource[FPos];
+  FOriginRuns.NoteCopy(FOutput.Length, FPos - 1, 1);
+  FOutput.AppendChar(C);
+  if C = #10 then
   begin
     Inc(FOutputLine);
     FOutputColumn := 1;
@@ -234,23 +409,24 @@ begin
     Inc(FOutputColumn);
 end;
 
-procedure TGocciaJSXTransformer.EmitNewline;
-begin
-  EmitChar(#10);
-end;
-
 procedure TGocciaJSXTransformer.AddIdentityMapping;
 begin
   FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
     FLine - 1, FColumn - 1);
 end;
 
-procedure TGocciaJSXTransformer.CopyChar;
-var
-  C: Char;
+{ Ties the current output position to the current input position without
+  claiming any text between them. Placed at the edges of a construct that is
+  rewritten whole, so a range ending there still ends where the construct did
+  rather than at the last character that happened to be copied. }
+procedure TGocciaJSXTransformer.AnchorOrigin;
 begin
-  C := CurrentChar;
-  EmitChar(C);
+  FOriginRuns.NoteAnchor(FOutput.Length, FPos - 1);
+end;
+
+procedure TGocciaJSXTransformer.CopyChar;
+begin
+  EmitSourceChar;
   AdvanceInput;
 end;
 
@@ -394,14 +570,108 @@ begin
   while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     CopyChar;
   Result := Copy(FSource, Start, FPos - Start);
+  FLastTokenKind := TokenKindAfterWord(Result, Start);
+end;
 
-  if (Result = KEYWORD_RETURN) or (Result = KEYWORD_THROW) or (Result = KEYWORD_CASE) or
-     (Result = KEYWORD_NEW) or (Result = KEYWORD_TYPEOF) or (Result = KEYWORD_VOID) or
-     (Result = KEYWORD_DELETE) or (Result = KEYWORD_IN) or (Result = KEYWORD_INSTANCEOF) or
-     (Result = KEYWORD_OF) or (Result = KEYWORD_YIELD) or (Result = KEYWORD_AWAIT) then
-    FLastTokenKind := ltkOperator
+// What a '/' after AWord would be: a regex after a word that expects an
+// operand, a division after one that ends an expression. Reads FLastTokenKind
+// as the token before AWord; AStart is the word's position in FSource.
+//
+// `of` is the one contextual word here: a keyword, which a regex can follow,
+// only in a for-of header, and an ordinary identifier everywhere else, where
+// `of / 2` divides.
+function TGocciaJSXTransformer.TokenKindAfterWord(const AWord: string;
+  const AStart: Integer): TLastTokenKind;
+begin
+  if AWord = KEYWORD_FOR then
+    FForPending := True
+  else if AWord <> KEYWORD_AWAIT then
+    FForPending := False;
+
+  if (AWord = KEYWORD_RETURN) or (AWord = KEYWORD_THROW) or (AWord = KEYWORD_CASE) or
+     (AWord = KEYWORD_NEW) or (AWord = KEYWORD_TYPEOF) or (AWord = KEYWORD_VOID) or
+     (AWord = KEYWORD_DELETE) or (AWord = KEYWORD_IN) or (AWord = KEYWORD_INSTANCEOF) or
+     (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
+    Result := ltkOperator
+  else if (AWord = KEYWORD_OF) and IsForOfKeyword(AStart) then
+    Result := ltkOperator
   else
-    FLastTokenKind := ltkExpressionEnd;
+    Result := ltkExpressionEnd;
+end;
+
+// The `of` at AStart is the for-of keyword when it sits at the top level of
+// the innermost open `for (...)` header, is that header's first, and follows
+// the end of a binding. The token kind says whether a binding just ended — a
+// name, `]`, `}`, or `)` — and comments leave it as it was. The word before
+// rules out a declaration keyword: in `for (const of of xs)` the first `of`
+// is the binding.
+function TGocciaJSXTransformer.IsForOfKeyword(const AStart: Integer): Boolean;
+var
+  Header, Index, WordEnd: Integer;
+  Word: string;
+begin
+  Result := False;
+  Header := High(FForHeaders);
+  if (Header < 0) or (FForHeaders[Header].Depth <> FParenDepth) or
+     FForHeaders[Header].SawOf or (FLastTokenKind <> ltkExpressionEnd) then
+    Exit;
+
+  // Back over whitespace and block comments to the word before, if any.
+  Index := AStart - 1;
+  while Index >= 1 do
+    if FSource[Index] in [' ', #9, #10, #13] then
+      Dec(Index)
+    else if (Index >= 2) and (FSource[Index] = '/') and
+            (FSource[Index - 1] = '*') then
+    begin
+      Dec(Index, 2);
+      while (Index >= 2) and
+            not ((FSource[Index - 1] = '/') and (FSource[Index] = '*')) do
+        Dec(Index);
+      Dec(Index, 2);
+    end
+    else
+      Break;
+  Word := '';
+  if (Index >= 1) and IsIdentifierPart(FSource[Index]) then
+  begin
+    WordEnd := Index;
+    while (Index >= 1) and IsIdentifierPart(FSource[Index]) do
+      Dec(Index);
+    Word := Copy(FSource, Index + 1, WordEnd - Index);
+  end;
+
+  Result := (Word <> KEYWORD_CONST) and (Word <> KEYWORD_LET) and
+    (Word <> KEYWORD_VAR) and (Word <> KEYWORD_USING);
+  if Result then
+    FForHeaders[Header].SawOf := True;
+end;
+
+function TGocciaJSXTransformer.InForHeader: Boolean;
+begin
+  Result := (Length(FForHeaders) > 0) and
+    (FForHeaders[High(FForHeaders)].Depth = FParenDepth);
+end;
+
+procedure TGocciaJSXTransformer.OpenParen;
+begin
+  Inc(FParenDepth);
+  if FForPending then
+  begin
+    SetLength(FForHeaders, Length(FForHeaders) + 1);
+    FForHeaders[High(FForHeaders)].Depth := FParenDepth;
+    FForHeaders[High(FForHeaders)].SawOf := False;
+    FForPending := False;
+  end;
+end;
+
+procedure TGocciaJSXTransformer.CloseParen;
+begin
+  if (Length(FForHeaders) > 0) and
+     (FForHeaders[High(FForHeaders)].Depth = FParenDepth) then
+    SetLength(FForHeaders, Length(FForHeaders) - 1);
+  if FParenDepth > 0 then
+    Dec(FParenDepth);
 end;
 
 procedure TGocciaJSXTransformer.CopyNumber;
@@ -484,6 +754,10 @@ begin
 
   CopyChar;
 
+  if C = '(' then
+    OpenParen
+  else if C = ')' then
+    CloseParen;
   if C in [')', ']', '}'] then
     FLastTokenKind := ltkExpressionEnd
   else
@@ -554,6 +828,44 @@ procedure TGocciaJSXTransformer.SkipWhitespace;
 begin
   while not IsAtEnd and (CurrentChar in [' ', #9, #13, #10]) do
     AdvanceInput;
+end;
+
+// Whitespace and comments between attributes. TSX allows a comment wherever
+// an attribute name could go, and `// biome-ignore ...` on the line above the
+// attribute it covers is the everyday case. Neither the comment nor the
+// whitespace around it reaches the output: an attribute list is collapsed
+// into one object literal, so this region carries no positions of its own.
+procedure TGocciaJSXTransformer.SkipJSXAttributeTrivia;
+begin
+  while not IsAtEnd do
+  begin
+    SkipWhitespace;
+    if IsAtEnd or (CurrentChar <> '/') then
+      Exit;
+
+    if PeekAt(1) = '/' then
+    begin
+      while not IsAtEnd and (CurrentChar <> #10) do
+        AdvanceInput;
+    end
+    else if PeekAt(1) = '*' then
+    begin
+      AdvanceInput;
+      AdvanceInput;
+      while not IsAtEnd and
+            not ((CurrentChar = '*') and (PeekAt(1) = '/')) do
+        AdvanceInput;
+      if not IsAtEnd then
+      begin
+        AdvanceInput;
+        AdvanceInput;
+      end;
+    end
+    else
+      // A lone '/' is the '/>' of a self-closing tag, or an error the
+      // attribute scan reports with its own position.
+      Exit;
+  end;
 end;
 
 function TGocciaJSXTransformer.ReadJSXTagName: string;
@@ -675,17 +987,19 @@ var
   IsFragment, IsSelfClosing: Boolean;
   HadAttributes: Boolean;
   TagIsLowercase: Boolean;
+  TagEndLine, StartOffset: Integer;
 begin
   Inc(FJSXDepth);
   try
     if FJSXDepth > MAX_JSX_DEPTH then
-      raise Exception.CreateFmt(
-        'JSX nesting depth exceeded %d at line %d, column %d (likely runaway scan on non-JSX input)',
-        [MAX_JSX_DEPTH, FLine, FColumn]);
+      RaiseJSXError(Format(
+        'JSX: Nesting depth exceeded %d (likely runaway scan on non-JSX input)',
+        [MAX_JSX_DEPTH]));
 
     FHasJSX := True;
     StartLine := FLine;
     StartColumn := FColumn;
+    StartOffset := FPos;
 
     AdvanceInput;
 
@@ -701,6 +1015,12 @@ begin
       TagName := ReadJSXTagName;
     end;
 
+    { An element is rewritten whole, so nothing inside the factory call is a
+      copy of anything. Its two edges still correspond exactly, and anchoring
+      them is what lets a statement whose text ends at an element — a `const`
+      with no semicolon, an expression statement closed by ASI — report the
+      range it actually covers. }
+    FOriginRuns.NoteAnchor(FOutput.Length, StartOffset - 1);
     EmitMapped(FFactoryName + '(', StartLine, StartColumn);
 
     if IsFragment then
@@ -709,6 +1029,7 @@ begin
       Emit(', null');
       EmitJSXChildren('');
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -719,6 +1040,10 @@ begin
     else
       Emit(TagName);
 
+    // The gap between the tag name and the first attribute belongs to the
+    // attribute list's line accounting, so its line terminators are counted
+    // here and handed on rather than silently dropped.
+    TagEndLine := FLine;
     SkipWhitespace;
 
     IsSelfClosing := False;
@@ -728,6 +1053,7 @@ begin
       AdvanceInput;
       AdvanceInput;
       Emit(', null)');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -738,12 +1064,13 @@ begin
       Emit(', null');
       EmitJSXChildren(TagName);
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
 
     Emit(', ');
-    EmitJSXAttributes(HadAttributes);
+    EmitJSXAttributes(FLine - TagEndLine, HadAttributes);
 
     SkipWhitespace;
     if not IsAtEnd and (CurrentChar = '/') and (PeekAt(1) = '>') then
@@ -753,6 +1080,7 @@ begin
       if not HadAttributes then
         Emit('null');
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
@@ -764,33 +1092,75 @@ begin
         Emit('null');
       EmitJSXChildren(TagName);
       Emit(')');
+      AnchorOrigin;
       FLastTokenKind := ltkExpressionEnd;
       Exit;
     end;
+
+    // Only reachable at end of input: EmitJSXAttributes stops at '>', '/>' or
+    // end of input, so falling through here means the opening tag was never
+    // closed. Report it instead of leaving an unbalanced factory call behind.
+    RaiseJSXError(Format('JSX: Unterminated opening tag <%s>', [TagName]));
   finally
     Dec(FJSXDepth);
   end;
 end;
 
-procedure TGocciaJSXTransformer.EmitJSXAttributes(out AHadAttributes: Boolean);
+procedure TGocciaJSXTransformer.EmitJSXAttributes(
+  const ALeadingNewlines: Integer; out AHadAttributes: Boolean);
 type
   TAttrSegmentKind = (askObject, askSpread);
   TAttrSegment = record
     Kind: TAttrSegmentKind;
     Content: string;
+    { Where this segment's text came from, in the segment's own coordinates.
+      An attribute list is accumulated into a buffer and emitted only once the
+      whole list has been read — the spreads in it decide whether it becomes
+      one object literal or an `Object.assign` — so the correspondences are
+      collected buffer-relative and shifted into the output when it lands. }
+    Runs: TGocciaOriginRuns;
   end;
 var
   Segments: array of TAttrSegment;
   SegmentCount: Integer;
   CurrentObjAttrs: TStringBuffer;
+  CurrentObjRuns: TGocciaOriginRuns;
   AttrCount: Integer;
   AttrName: string;
   Depth: Integer;
   ValueStart: Integer;
+  ValueLine, ValueColumn: Integer;
   I: Integer;
+  GuardPosition: Integer;
   HasSpread: Boolean;
-  RawExpr: string;
+  PendingNewlines, TriviaLine: Integer;
+  ValuePrefix, RawExpr, RawSlice: string;
   SubResult: TGocciaJSXTransformResult;
+
+  { Line terminators the trivia scan consumed are replayed into the object
+    literal the attribute list becomes. Without them the whole list collapses
+    onto one generated line, and since no source-map mapping is added inside
+    an attribute value, every position in a multi-line attribute expression —
+    the body of an inline event handler, most often — resolves back to the
+    tag's own line instead of the line it was written on. A newline inside an
+    object literal is insignificant, so replaying costs nothing. }
+  procedure AppendPendingNewlines;
+  var
+    Index: Integer;
+  begin
+    for Index := 1 to PendingNewlines do
+      CurrentObjAttrs.AppendChar(#10);
+    PendingNewlines := 0;
+  end;
+
+  procedure AppendAttributeSeparator;
+  begin
+    if AttrCount > 0 then
+      CurrentObjAttrs.AppendChar(',')
+    else
+      CurrentObjAttrs.AppendChar('{');
+    AppendPendingNewlines;
+  end;
 
   procedure FlushObjectAttrs;
   begin
@@ -801,9 +1171,25 @@ var
       SetLength(Segments, SegmentCount);
       Segments[SegmentCount - 1].Kind := askObject;
       Segments[SegmentCount - 1].Content := CurrentObjAttrs.ToString;
+      Segments[SegmentCount - 1].Runs := CurrentObjRuns;
+      CurrentObjRuns.Reset;
       CurrentObjAttrs.Clear;
       AttrCount := 0;
     end;
+  end;
+
+  { An attribute value reaches the output unchanged apart from the JSX inside
+    it, so its own map is the sub-transform's — or, when there was no JSX to
+    rewrite, one run over the whole slice. }
+  procedure NoteAttributeValue(const ABufferOffset, AOriginalOffset: Integer;
+    const AResult: TGocciaJSXTransformResult);
+  begin
+    if Assigned(AResult.OriginMap) then
+      CurrentObjRuns.AppendShifted(AResult.OriginMap.Runs, ABufferOffset,
+        AOriginalOffset)
+    else
+      CurrentObjRuns.NoteCopy(ABufferOffset, AOriginalOffset,
+        Length(AResult.Source));
   end;
 
 begin
@@ -811,19 +1197,33 @@ begin
   HasSpread := False;
   SegmentCount := 0;
   AttrCount := 0;
+  PendingNewlines := ALeadingNewlines;
   CurrentObjAttrs := TStringBuffer.Create;
+  // A local record's unmanaged fields start as whatever was on the stack.
+  CurrentObjRuns.Reset;
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
-    SkipWhitespace;
+    RequireScanProgress(GuardPosition, scAttributes);
+    TriviaLine := FLine;
+    SkipJSXAttributeTrivia;
+    Inc(PendingNewlines, FLine - TriviaLine);
     if IsAtEnd or (CurrentChar = '>') or ((CurrentChar = '/') and (PeekAt(1) = '>')) then
+    begin
+      if AttrCount > 0 then
+        AppendPendingNewlines;
       Break;
+    end;
 
     AHadAttributes := True;
 
     if (CurrentChar = '{') and (PeekAt(1) = '.') and (PeekAt(2) = '.') and (PeekAt(3) = '.') then
     begin
       HasSpread := True;
+      if AttrCount > 0 then
+        AppendPendingNewlines;
       FlushObjectAttrs;
+      PendingNewlines := 0;
 
       AdvanceInput;
       AdvanceInput;
@@ -844,7 +1244,12 @@ begin
       Inc(SegmentCount);
       SetLength(Segments, SegmentCount);
       Segments[SegmentCount - 1].Kind := askSpread;
-      Segments[SegmentCount - 1].Content := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
+      RawSlice := Copy(FSource, ValueStart, FPos - ValueStart);
+      Segments[SegmentCount - 1].Content := Trim(RawSlice);
+      // A spread is copied through untouched, so the whole segment is one run.
+      Segments[SegmentCount - 1].Runs.NoteCopy(0,
+        ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
+        Length(Segments[SegmentCount - 1].Content));
       if not IsAtEnd then
         AdvanceInput;
       Continue;
@@ -861,10 +1266,7 @@ begin
       end;
       if not IsAtEnd and (CurrentChar = '}') then
         AdvanceInput;
-      if AttrCount > 0 then
-        CurrentObjAttrs.AppendChar(',')
-      else
-        CurrentObjAttrs.AppendChar('{');
+      AppendAttributeSeparator;
       CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + AttrName);
       Inc(AttrCount);
       Continue;
@@ -887,10 +1289,7 @@ begin
       end;
     end;
 
-    if AttrCount > 0 then
-      CurrentObjAttrs.AppendChar(',')
-    else
-      CurrentObjAttrs.AppendChar('{');
+    AppendAttributeSeparator;
 
     SkipWhitespace;
 
@@ -934,6 +1333,8 @@ begin
         AdvanceInput;
         Depth := 1;
         ValueStart := FPos;
+        ValueLine := FLine;
+        ValueColumn := FColumn;
         while not IsAtEnd and (Depth > 0) do
         begin
           if CurrentChar = '{' then
@@ -943,11 +1344,28 @@ begin
           if Depth > 0 then
             AdvanceInput;
         end;
-        RawExpr := Trim(Copy(FSource, ValueStart, FPos - ValueStart));
-        SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFactoryName, FFragmentName);
-        if Assigned(SubResult.SourceMap) then
+        RawSlice := Copy(FSource, ValueStart, FPos - ValueStart);
+        RawExpr := Trim(RawSlice);
+        try
+          SubResult := TGocciaJSXTransformer.Transform(RawExpr, FFileName,
+            FFactoryName, FFragmentName);
+        except
+          on E: TGocciaError do
+          begin
+            RebaseNestedExpressionError(E, RawSlice, ValueLine, ValueColumn);
+            raise;
+          end;
+        end;
+        try
+          ValuePrefix := ' ' + FormatPropertyKey(AttrName) + ': ';
+          NoteAttributeValue(CurrentObjAttrs.Length + Length(ValuePrefix),
+            ValueStart - 1 + (Length(RawSlice) - Length(TrimLeft(RawSlice))),
+            SubResult);
+          CurrentObjAttrs.Append(ValuePrefix + SubResult.Source);
+        finally
           SubResult.SourceMap.Free;
-        CurrentObjAttrs.Append(' ' + FormatPropertyKey(AttrName) + ': ' + SubResult.Source);
+          SubResult.OriginMap.Free;
+        end;
         if not IsAtEnd then
           AdvanceInput;
       end;
@@ -967,13 +1385,17 @@ begin
   end;
 
   if not HasSpread and (SegmentCount = 1) and (Segments[0].Kind = askObject) then
-    Emit(Segments[0].Content)
+  begin
+    FOriginRuns.AppendShifted(Segments[0].Runs, FOutput.Length, 0);
+    Emit(Segments[0].Content);
+  end
   else
   begin
     Emit('Object.assign({}');
     for I := 0 to SegmentCount - 1 do
     begin
       Emit(', ');
+      FOriginRuns.AppendShifted(Segments[I].Runs, FOutput.Length, 0);
       Emit(Segments[I].Content);
     end;
     Emit(')');
@@ -984,9 +1406,13 @@ procedure TGocciaJSXTransformer.EmitJSXChildren(const ATagName: string);
 var
   Text: string;
   ChildStartLine, ChildStartColumn: Integer;
+  ContainerEnd: Integer;
+  GuardPosition: Integer;
 begin
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, scChildren);
     if CurrentChar = '<' then
     begin
       if PeekAt(1) = '/' then
@@ -1015,6 +1441,16 @@ begin
       ChildStartLine := FLine;
       ChildStartColumn := FColumn;
       AdvanceInput;
+      // A container holding nothing but comments is how JSX writes a comment
+      // between children. It has no child, so it contributes no argument: an
+      // emitted `, ` would leave an elision (`createElement("div", null, , x)`)
+      // that fails to parse.
+      if IsCommentOnlyJSXExpression(ContainerEnd) then
+      begin
+        while FPos <= ContainerEnd do
+          AdvanceInput;
+        Continue;
+      end;
       Emit(', ');
       FSourceMap.AddMapping(FOutputLine, FOutputColumn - 1, 0,
         ChildStartLine - 1, ChildStartColumn - 1);
@@ -1048,24 +1484,77 @@ begin
   Result := SB.ToString;
 end;
 
+// Looks ahead from just inside a child expression container for one whose
+// whole content is whitespace and comments — a block comment, a line comment,
+// or nothing at all. TSX gives such a container no child, and this decides
+// that before any output is produced, so the caller can drop the container
+// whole. AClosingBrace returns the position of the container's closing brace.
+//
+// The scan reads FSource directly instead of advancing the transformer: a
+// container that turns out to hold an expression must still be copied from its
+// first character, comments included.
+function TGocciaJSXTransformer.IsCommentOnlyJSXExpression(
+  out AClosingBrace: Integer): Boolean;
+var
+  Scan: Integer;
+begin
+  Result := False;
+  AClosingBrace := 0;
+  Scan := FPos;
+  while Scan <= Length(FSource) do
+  begin
+    if FSource[Scan] <= ' ' then
+      Inc(Scan)
+    else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
+            (FSource[Scan + 1] = '/') then
+    begin
+      while (Scan <= Length(FSource)) and (FSource[Scan] <> #10) do
+        Inc(Scan);
+    end
+    else if (FSource[Scan] = '/') and (Scan < Length(FSource)) and
+            (FSource[Scan + 1] = '*') then
+    begin
+      Inc(Scan, 2);
+      while (Scan < Length(FSource)) and
+            not ((FSource[Scan] = '*') and (FSource[Scan + 1] = '/')) do
+        Inc(Scan);
+      // Unterminated block comment: leave it to the ordinary copy path, which
+      // reports the container as unterminated where it actually opened.
+      if Scan >= Length(FSource) then
+        Exit;
+      Inc(Scan, 2);
+    end
+    else
+    begin
+      Result := FSource[Scan] = '}';
+      if Result then
+        AClosingBrace := Scan;
+      Exit;
+    end;
+  end;
+end;
+
 procedure TGocciaJSXTransformer.CopyJSXExpression;
 var
   Depth: Integer;
   Quote: Char;
   SavedTokenKind: TLastTokenKind;
   IdStart: Integer;
+  GuardPosition: Integer;
   Ident: string;
 begin
   Depth := 0;
+  GuardPosition := 0;
   SavedTokenKind := FLastTokenKind;
   FLastTokenKind := ltkOperator;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, scExpression);
     case CurrentChar of
       '{':
       begin
         Inc(Depth);
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
@@ -1074,63 +1563,67 @@ begin
         if Depth = 0 then
           Break;
         Dec(Depth);
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '''', '"':
       begin
         Quote := CurrentChar;
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         while not IsAtEnd and (CurrentChar <> Quote) do
         begin
           if CurrentChar = '\' then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
           if not IsAtEnd then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
         end;
         if not IsAtEnd then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '`':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         while not IsAtEnd and (CurrentChar <> '`') do
         begin
           if CurrentChar = '\' then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end
           else if (CurrentChar = '$') and (PeekAt(1) = '{') then
           begin
-            EmitChar(CurrentChar);
+            // The substitution's own '}' is copied by this same loop, which
+            // runs to the closing backtick — so it never reaches the '}' arm
+            // below, and counting it as an open brace here left the container
+            // one level deep. Its real '}' was then swallowed as a close,
+            // and the scan ran on past the end of the container.
+            EmitSourceChar;
             AdvanceInput;
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
-            Inc(Depth);
           end;
           if not IsAtEnd and (CurrentChar <> '`') then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
         end;
         if not IsAtEnd then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
@@ -1141,7 +1634,7 @@ begin
           TransformJSXElement
         else
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           FLastTokenKind := ltkOperator;
         end;
@@ -1152,15 +1645,27 @@ begin
         // exactly the same false-positive trigger as in TransformSource.
         // Without this case, '<name>' inside a regex body would be picked up
         // by the '<' arm above and recurse on non-JSX content.
-        if FLastTokenKind in [ltkNone, ltkOperator] then
+        //
+        // Comment leads are filtered first, as TransformSource does and as
+        // CopyRegexLiteral's contract assumes. A comment is neither operand
+        // nor operator, so FLastTokenKind carries across it and the token
+        // after the comment is still classified against the token before it.
+        // Without this, `{/* c */ value}` read the comment as a regex body
+        // and scanned on for a closing '/', and `{value /* c */}` read it as
+        // a division — either way swallowing the container's own '}'.
+        if PeekAt(1) = '/' then
+          CopyLineComment
+        else if PeekAt(1) = '*' then
+          CopyBlockComment
+        else if FLastTokenKind in [ltkNone, ltkOperator] then
           CopyRegexLiteral
         else
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           if not IsAtEnd and (CurrentChar = '=') then
           begin
-            EmitChar(CurrentChar);
+            EmitSourceChar;
             AdvanceInput;
           end;
           FLastTokenKind := ltkOperator;
@@ -1168,23 +1673,27 @@ begin
       end;
       ')', ']':
       begin
-        EmitChar(CurrentChar);
+        if CurrentChar = ')' then
+          CloseParen;
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '(', '[', ',', ':', '?', ';', '~', '!':
       begin
-        EmitChar(CurrentChar);
+        if CurrentChar = '(' then
+          OpenParen;
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
       '+', '-':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         if not IsAtEnd and (CurrentChar = PeekAt(-1)) then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
           FLastTokenKind := ltkExpressionEnd;
         end
@@ -1193,18 +1702,18 @@ begin
       end;
       '=':
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         if not IsAtEnd and (CurrentChar = '>') then
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkOperator;
       end;
       ' ', #9, #13, #10:
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
       end;
     else
@@ -1213,30 +1722,24 @@ begin
         IdStart := FPos;
         while not IsAtEnd and IsIdentifierPart(CurrentChar) do
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
-        if (Ident = KEYWORD_RETURN) or (Ident = KEYWORD_THROW) or (Ident = KEYWORD_CASE) or
-           (Ident = KEYWORD_NEW) or (Ident = KEYWORD_TYPEOF) or (Ident = KEYWORD_VOID) or
-           (Ident = KEYWORD_DELETE) or (Ident = KEYWORD_IN) or (Ident = KEYWORD_INSTANCEOF) or
-           (Ident = KEYWORD_OF) or (Ident = KEYWORD_YIELD) or (Ident = KEYWORD_AWAIT) then
-          FLastTokenKind := ltkOperator
-        else
-          FLastTokenKind := ltkExpressionEnd;
+        FLastTokenKind := TokenKindAfterWord(Ident, IdStart);
       end
       else if CurrentChar in ['0'..'9'] then
       begin
         while not IsAtEnd and (CurrentChar in ['0'..'9', '.', '_', 'a'..'f', 'A'..'F', 'n']) do
         begin
-          EmitChar(CurrentChar);
+          EmitSourceChar;
           AdvanceInput;
         end;
         FLastTokenKind := ltkExpressionEnd;
       end
       else
       begin
-        EmitChar(CurrentChar);
+        EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
       end;
@@ -1257,7 +1760,8 @@ begin
   if not IsAtEnd and (CurrentChar = '>') then
     AdvanceInput;
   if ClosingTag <> ATagName then
-    raise Exception.CreateFmt('JSX: Expected closing tag </%s> but found </%s> at line %d', [ATagName, ClosingTag, FLine]);
+    RaiseJSXError(Format('JSX: Expected closing tag </%s> but found </%s>',
+      [ATagName, ClosingTag]));
 end;
 
 procedure TGocciaJSXTransformer.ScanPragmas;
@@ -1366,10 +1870,13 @@ end;
 procedure TGocciaJSXTransformer.TransformSource;
 var
   C: Char;
+  GuardPosition: Integer;
 begin
   AddIdentityMapping;
+  GuardPosition := 0;
   while not IsAtEnd do
   begin
+    RequireScanProgress(GuardPosition, scSource);
     C := CurrentChar;
 
     if (C = '/') and (PeekAt(1) = '/') then
@@ -1408,11 +1915,15 @@ begin
       Continue;
     end;
 
+    // A line break may start a statement, so it reads as an operator —
+    // except at the top level of a for header, where none can start and the
+    // token before still decides what `of` is.
     if C = #10 then
     begin
       CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 
@@ -1422,7 +1933,8 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 

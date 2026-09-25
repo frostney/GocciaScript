@@ -57,10 +57,9 @@ procedure PopTimeoutScope;
   reads to one per ~4.2M iterations and let deadlines overshoot by seconds.
   Loops that mutate JS-visible state must restore consistency before the
   raise propagates (see ExtendElementsWithHoles in Goccia.Values.HoleValue
-  for the rollback pattern).  Known not-yet-covered stalls: TypedArray
-  sort/fill over huge views, JSON parse/stringify of huge structures, and
-  String.prototype.repeat/pad building multi-GB strings in one call. }
+  for the rollback pattern). }
 procedure CheckExecutionTimeout;
+function RemainingExecutionTimeoutMilliseconds: Integer;
 
 implementation
 
@@ -180,6 +179,20 @@ begin
 
   if GetNanoseconds >= GMinDeadlineNs then
     raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+end;
+
+function RemainingExecutionTimeoutMilliseconds: Integer;
+var
+  RemainingNs: Int64;
+begin
+  if GMinDeadlineNs = 0 then
+    Exit(0);
+  RemainingNs := GMinDeadlineNs - GetNanoseconds;
+  if RemainingNs <= 0 then
+    raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+  if RemainingNs >= Int64(High(Integer)) * 1000000 then
+    Exit(High(Integer));
+  Result := Integer((RemainingNs + 999999) div 1000000);
 end;
 
 end.

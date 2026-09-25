@@ -3,36 +3,43 @@ import "server-only";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+import generatedManifest from "@/generated/vendor-manifest.json";
 import {
-  EMPTY_MANIFEST,
-  normalizeManifest,
+  pickVendorManifestSource,
   type VendorManifest,
 } from "@/lib/vendor-manifest";
 
 let cached: VendorManifest | null = null;
 
-/** Read `vendor/manifest.json`, cached for the lifetime of the Node module
- *  (Vercel reuses module state across warm function invocations, so the JSON
- *  parse happens once per cold start). Returns an empty manifest when the file
- *  is missing — local dev without `prebuild` shouldn't 500. */
-export function getVendorManifest(): VendorManifest {
-  if (cached) return cached;
+/** Read `vendor/manifest.json` from the working directory, or `null` when it
+ *  is absent or unparseable. Only the API route bundles trace `vendor/**`
+ *  (see `next.config.mjs`), so this returns `null` in the playground page's
+ *  bundle, and during `next dev` before any vendoring run. */
+function readDiskManifest(): unknown {
   const file = path.join(
     /* turbopackIgnore: true */ process.cwd(),
     "vendor",
     "manifest.json",
   );
-  if (!existsSync(/* turbopackIgnore: true */ file)) {
-    cached = EMPTY_MANIFEST;
-    return cached;
-  }
+  if (!existsSync(/* turbopackIgnore: true */ file)) return null;
   try {
-    cached = normalizeManifest(
-      JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8")),
-    );
+    return JSON.parse(readFileSync(/* turbopackIgnore: true */ file, "utf8"));
   } catch {
-    cached = EMPTY_MANIFEST;
+    return null;
   }
+}
+
+/** The vendored engine set, cached for the lifetime of the Node module
+ *  (Vercel reuses module state across warm function invocations, so the work
+ *  happens once per cold start).
+ *
+ *  Resolution order is `vendor/manifest.json` on disk, then the statically
+ *  imported `src/generated/vendor-manifest.json` — see
+ *  `pickVendorManifestSource` for why both exist. Never throws: a checkout
+ *  that has not run `prebuild` gets the empty manifest instead of a 500. */
+export function getVendorManifest(): VendorManifest {
+  if (cached) return cached;
+  cached = pickVendorManifestSource(readDiskManifest(), generatedManifest);
   return cached;
 }
 

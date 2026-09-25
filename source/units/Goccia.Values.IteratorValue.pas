@@ -107,9 +107,11 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.NumericLimits,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -402,7 +404,17 @@ begin
   try
     AIterator.Close;
   except
-    // Preserve the original abrupt-completion error when cleanup also throws.
+    on E: Exception do
+      { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
+        that completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
+        raise;
   end;
 end;
 
@@ -610,7 +622,17 @@ begin
   try
     CloseDirectIterator(AIteratorObject);
   except
-    // An existing abrupt completion takes precedence over close failures.
+    on E: Exception do
+      { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,
+        that completion wins over an error from iterator.return(). The
+        suppression is defined over Completion Records — guest completions — and
+        a host fault never becomes one. A resource ceiling and an
+        engine-integrity fault are not close errors the clause is speaking
+        about, so re-raising them is orthogonal to the contract rather than a
+        breach of it; the ceiling argument is in Goccia.MemoryLimit.pas and the
+        family in Goccia.UncatchableFault.pas. }
+      if IsUncatchableFault(E) then
+        raise;
   end;
 end;
 
@@ -1769,10 +1791,17 @@ begin
         Item := OuterIterator.DirectNext(OuterDone);
       except
         PreserveCurrentExceptionAcrossNestedHandler;
-        for J := Acquired - 1 downto 0 do
-        begin
-          CloseIteratorPreservingError(Iterators[J]);
-          GC.RemoveTempRoot(Iterators[J]);
+        { Each close runs a guest return() body, so the iterators have to stay
+          rooted across the whole pass — and an engine-integrity fault raised in
+          one of those bodies now re-raises out of CloseIteratorPreservingError.
+          Unrooting in a finally is what keeps that re-raise from stranding the
+          rest of them on the root set. }
+        try
+          for J := Acquired - 1 downto 0 do
+            CloseIteratorPreservingError(Iterators[J]);
+        finally
+          for J := Acquired - 1 downto 0 do
+            GC.RemoveTempRoot(Iterators[J]);
         end;
         raise;
       end;
@@ -1783,10 +1812,16 @@ begin
         InnerIterator := GetIteratorFlattenable(Item, iphRejectPrimitives);
       except
         PreserveCurrentExceptionAcrossNestedHandler;
-        for J := Acquired - 1 downto 0 do
-        begin
-          CloseIteratorPreservingError(Iterators[J]);
-          GC.RemoveTempRoot(Iterators[J]);
+        { Same shape as the close pass above: rooted across every guest
+          return(), unrooted in a finally so a re-raised integrity fault cannot
+          skip the removals. The outer iterator's own removal already sits in
+          the enclosing finally. }
+        try
+          for J := Acquired - 1 downto 0 do
+            CloseIteratorPreservingError(Iterators[J]);
+        finally
+          for J := Acquired - 1 downto 0 do
+            GC.RemoveTempRoot(Iterators[J]);
         end;
         CloseIteratorPreservingError(OuterIterator);
         raise;
@@ -1840,17 +1875,22 @@ begin
     Result := TGocciaZipIteratorValue.Create(Iterators, Padding, Mode);
     Success := True;
   finally
-    // On error, close all iterators so generator finally blocks run
-    if not Success then
-    begin
-      for I := Count - 1 downto 0 do
-        CloseIteratorPreservingError(Iterators[I]);
+    try
+      // On error, close all iterators so generator finally blocks run
+      if not Success then
+      begin
+        for I := Count - 1 downto 0 do
+          CloseIteratorPreservingError(Iterators[I]);
+      end;
+    finally
+      // Unroot iterators — the zip iterator now owns them via MarkReferences.
+      // In a finally of its own: a close runs guest return(), and an
+      // engine-integrity fault raised there re-raises past this point.
+      for I := 0 to Count - 1 do
+        GC.RemoveTempRoot(Iterators[I]);
+      for I := 0 to Count - 1 do
+        RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
     end;
-    // Unroot iterators — the zip iterator now owns them via MarkReferences
-    for I := 0 to Count - 1 do
-      GC.RemoveTempRoot(Iterators[I]);
-    for I := 0 to Count - 1 do
-      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 
@@ -1974,11 +2014,18 @@ begin
   except
     // Close and unroot already-acquired iterators before re-raising
     PreserveCurrentExceptionAcrossNestedHandler;
-    for J := Acquired - 1 downto 0 do
-    begin
-      CloseIteratorPreservingError(Iterators[J]);
-      GC.RemoveTempRoot(Iterators[J]);
-      RemoveTempRootIfNeeded(Keys[J], KeyRoots[J]);
+    { The iterators and their keys stay rooted for the whole close pass, since
+      each close runs a guest return(); the unrooting is a finally so a
+      re-raised engine-integrity fault cannot skip it. }
+    try
+      for J := Acquired - 1 downto 0 do
+        CloseIteratorPreservingError(Iterators[J]);
+    finally
+      for J := Acquired - 1 downto 0 do
+      begin
+        GC.RemoveTempRoot(Iterators[J]);
+        RemoveTempRootIfNeeded(Keys[J], KeyRoots[J]);
+      end;
     end;
     raise;
   end;
@@ -2009,19 +2056,24 @@ begin
     Result := TGocciaZipKeyedIteratorValue.Create(Keys, Iterators, Padding, Mode);
     Success := True;
   finally
-    // On error, close all iterators so generator finally blocks run
-    if not Success then
-    begin
-      for I := Count - 1 downto 0 do
-        CloseIteratorPreservingError(Iterators[I]);
+    try
+      // On error, close all iterators so generator finally blocks run
+      if not Success then
+      begin
+        for I := Count - 1 downto 0 do
+          CloseIteratorPreservingError(Iterators[I]);
+      end;
+    finally
+      // Unroot iterators — the zipKeyed iterator now owns them via
+      // MarkReferences. In a finally of its own: a close runs guest return(),
+      // and an engine-integrity fault raised there re-raises past this point.
+      for I := 0 to Count - 1 do
+        GC.RemoveTempRoot(Iterators[I]);
+      for I := 0 to Count - 1 do
+        RemoveTempRootIfNeeded(Keys[I], KeyRoots[I]);
+      for I := 0 to Count - 1 do
+        RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
     end;
-    // Unroot iterators — the zipKeyed iterator now owns them via MarkReferences
-    for I := 0 to Count - 1 do
-      GC.RemoveTempRoot(Iterators[I]);
-    for I := 0 to Count - 1 do
-      RemoveTempRootIfNeeded(Keys[I], KeyRoots[I]);
-    for I := 0 to Count - 1 do
-      RemoveTempRootIfNeeded(Padding[I], PaddingRoots[I]);
   end;
 end;
 

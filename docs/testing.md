@@ -1,3 +1,4 @@
+<!-- doc-length-limit: 1000 -->
 # Testing
 
 *For contributors writing, running, or debugging tests.*
@@ -15,7 +16,7 @@
 GocciaScript uses three testing layers in priority order:
 
 1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreter mode** and **bytecode mode**. Every new feature or bug fix should include tests at this layer.
-2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-embedded-resources.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope, in both modes), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading.
+2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-embedded-resources.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope, in both modes), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading. The matchers these scripts share live in `scripts/test-cli/assertions.ts` and are themselves unit-tested by `scripts/test-cli-assertions.ts`, which spawns no binaries — a defect in a shared matcher silently weakens every harness that uses it, so its contract is locked by its own test.
 3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
 When choosing where to add coverage, prefer the most public entry point — and match the **kind** of check to the layer that can actually express it:
@@ -103,7 +104,7 @@ tests/
 └── language/               # Core language feature tests
     ├── classes/            # Class declarations, inheritance, private fields/methods/getters/setters
     ├── declarations/       # let, const
-    ├── decorators/         # TC39 Stage 3 decorators and decorator metadata
+    ├── decorators/         # TC39 Stage 2.7 decorators and decorator metadata
     ├── expressions/        # Arithmetic, comparison, logical, destructuring, trailing commas, etc.
     │   ├── addition/       # Addition with ToPrimitive
     │   ├── arithmetic/     # Division (IEEE-754 signed zeros, Infinity), exponentiation (Infinity edge cases)
@@ -331,15 +332,36 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 |------|-------------|
 | `--no-progress` | Suppress per-file progress output |
 | `--no-results` | Suppress test results summary |
-| `--exit-on-first-failure` | Stop on first test failure |
+| `--exit-on-first-failure` | Stop on the first test failure **or suite error** (a throwing `describe`, a failed `beforeAll`/`afterAll`). Under `--jobs` the worker queue is cancelled too; files that never ran are omitted from the report rather than counted as failures. It stops the queue, not the run — see [Stopping behaviour](#--exit-on-first-failure-stopping-behaviour) |
 | `--silent` | Suppress all console output from test scripts |
 | `--jobs=N` / `-j N` | Number of parallel worker threads (default: CPU count) |
 | `--update-snapshots` / `-u` | Create, update, and prune snapshots |
 | `--update` | Vitest-compatible alias for `--update-snapshots` |
 
+#### `--exit-on-first-failure` stopping behaviour
+
+The flag stops the **file queue**, not the run in progress:
+
+- **Sequential (`--jobs=1`)** — execution stops at the failing file; no file
+  after it runs.
+- **Parallel (`--jobs=N`, `N > 1`)** — the queue is cancelled, but files a
+  worker already picked up run to completion, and a worker reaching for its
+  next file before the cancellation is visible starts that one too. Files after
+  the failure can therefore still execute: expect roughly the failing file's
+  position plus about one file per worker. The exact count depends on
+  scheduling and is **not** reproducible between runs — do not assert on it.
+
+Files the queue never reached are omitted from the report rather than counted
+as failures, so reported totals shrink as workers are added. For a
+deterministic "everything up to the failure and nothing after" run — bisecting,
+or a reproducible failure list — use `--jobs=1`.
+
 ```bash
 # CI-friendly: no progress, stop on first failure
 ./build/GocciaTestRunner tests --no-progress --exit-on-first-failure
+
+# Deterministic stop: nothing after the failing file runs
+./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --jobs=1
 
 # Silent mode: only show results, suppress script console output
 ./build/GocciaTestRunner tests --silent
@@ -347,6 +369,41 @@ Both execution modes must pass. Test subtrees that require opt-in parser or runt
 # Run tests with 4 parallel workers; --jobs=1 forces sequential execution
 ./build/GocciaTestRunner tests --jobs=4
 ```
+
+#### Engine-integrity faults abort the run
+
+There is one stop the runner makes on its own, without being asked for it. An
+**engine-integrity fault** — a use-after-free, an invalid dereference, a heap
+whose own bookkeeping is destroyed — unwinds past every guest `catch` to the
+host ([ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)), and when
+one escapes a test file's execution or the end-of-run inline-snapshot
+write-back, the whole run stops instead of the file being recorded as one more
+failure. Every later file would be executing on state the engine has already
+lost track of, so whatever it reported would mean nothing. (Those are the paths
+that abort. A fault from the runner's own setup — argument parsing, path
+expansion, config discovery — still lands in the shared CLI error handler that
+every Goccia binary uses, and exits `1` with no `Integrity fault:` line.)
+
+The runner names the faulting file and the exception class on stderr under a
+fixed prefix, stops dispatching files, and exits **70**:
+
+```text
+Integrity fault: EObjectCheck in tests/some/file.js: Object reference is Nil
+Integrity fault: the engine can no longer vouch for its own state, so the run is aborted and the remaining files were not executed.
+```
+
+No summary and no JSON envelope follow — a run that stopped mid-way has no total
+worth reporting. Grep CI logs for `Integrity fault:` to find these. Unlike
+`--exit-on-first-failure`, this does not let in-flight files finish: under
+`--jobs` the process ends as soon as the faulting worker has written its
+diagnostic, because a worker the watchdog has abandoned outlives the run and
+could otherwise fault after the main thread has stopped listening. The exit
+code is distinct from the ordinary failure exit `1` on purpose, so a harness can
+tell a suite that failed from a suite that stopped being trustworthy; see [CLI
+Conventions](contributing/cli-conventions.md#exit-codes). A refused allocation
+under `--max-memory` is deliberately **not** one of these: it is a verdict on
+one file delivered by an intact heap, so it stays a per-file failure and the run
+carries on.
 
 ### Snapshot Testing
 
@@ -427,7 +484,7 @@ For TOML 1.1.0 checks against a prepared checkout of the official `toml-test` co
 ./build/GocciaTOMLComplianceRunner --suite-dir=/path/to/toml-test --output=tmp/toml-suite-results.json
 ```
 
-The runner verifies the checkout against `tests/compliance/toml-test.pin` without fetching or cloning. It launches its private worker mode once per case, applies a bounded `--jobs` limit, and classifies mismatches, false accepts, false rejects, timeouts, crashes, and infrastructure failures. Valid cases are compared with the official tagged JSON fixtures through `TGocciaTOMLParser.ParseDocument(...)`, preserving scalar distinctions such as `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local`.
+The runner verifies the checkout against `tests/compliance/toml-test.pin` without fetching or cloning. It launches its private worker mode once per case, applies a bounded `--jobs` limit (defaulting to the online processor count through the same detector as TestRunner), and classifies mismatches, false accepts, false rejects, timeouts, crashes, and infrastructure failures. Valid cases are compared with the official tagged JSON fixtures through `TGocciaTOMLParser.ParseDocument(...)`, preserving scalar distinctions such as `integer`, `float`, `datetime`, `datetime-local`, `date-local`, and `time-local`.
 
 The runner prints a human summary, optionally writes the shared compliance JSON envelope with `--output`, and exits non-zero for compliance or infrastructure failures.
 
@@ -528,8 +585,8 @@ Pascal unit tests (`*.Test.pas`) exist as a tertiary layer for behavior that can
 
 The `GocciaTestRunner` program:
 
-1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, and `.mjs` files.
-2. For each file, creates a fresh `TGocciaEngine`, applies source type from CLI/config or `.mjs` inference, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when `--unsafe-ffi` or the file's `goccia.json` enables it.
+1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, and `.mts` files. A directory named `node_modules` is never descended into: a committed `node_modules` tree is a module-resolution fixture the suites beside it import (see [Module Resolution](module-resolution.md)), not a suite of its own.
+2. For each file, creates a fresh `TGocciaEngine`, applies source type from CLI/config or `.mjs`/`.mts` inference, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when `--unsafe-ffi` or the file's `goccia.json` enables it.
 3. Loads the source and appends a `runTests()` call.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
@@ -559,6 +616,7 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | Global injection | `--global`, `--globals` file/module injection, collision detection |
 | Stdin smoke tests | Piped input executes correctly in interpreter mode and bytecode mode |
 | GocciaBenchmarkRunner output | `--format=json` produces valid JSON with benchmark structure |
+| Differential suites | `test-cli-differential.ts` runs each `scripts/differential/` suite under interpreter, bytecode, and the external runtimes its classification names, requiring both modes to agree on failed-test **name** sets and counts; vitest gates the testing-API suites (matchers, lifecycle, mocks) and bun gates the language ones, with bun advisory on matcher and lifecycle suites, skipped outright on mock suites, and `*.goccia.test.js` suites left to mode parity alone; a per-file timeout counts as a divergence. See [Differential Testing](differential-testing.md) |
 
 This table is non-exhaustive — the `scripts/test-cli-*.ts` scripts that the `cli` job runs are the source of truth. The intent is to check all CLI options, all parser/lexer error paths, and all output-format correctness. To add a new check, add a case to the matching `scripts/test-cli-*.ts` (parser/lexer rejection → `test-cli-parser.ts` / `test-cli-lexer.ts`; CLI flags/output → `test-cli.ts` / `test-cli-apps.ts`); the `cli` job already invokes these scripts, so no workflow change is needed.
 
@@ -741,12 +799,16 @@ The runner clones test262 into a tempdir on first use, or accepts an existing ch
 
 ## Coverage
 
-The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines and branches of JavaScript source code are executed at runtime.
+The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime.
+
+### Coverage implies `--mode=bytecode`
+
+Enabling coverage — via `--coverage`, `--coverage-format`, or `--coverage-output` — switches the engine to bytecode mode automatically, overriding any `--mode` from the command line or a config file, exactly as [`--profile`](profiling.md) does. The implication is silent: `--mode=interpreted --coverage` is not an error, it simply produces the bytecode report, and no flag combination yields an interpreter-mode one. The reason is that the interpreter's coverage path is structurally incomplete and unmaintained — it instruments only the entry file (imported modules run with coverage disabled, so their lines, branches, and functions never appear) and counts a statement hit per executed AST node rather than per executed source line, so its counts are not comparable to bytecode's. Coverage therefore always reports through the bytecode path, over the entry file and every module it imports. The switch is applied in each application's `Validate` (`TTestRunnerApp.Validate`, `TScriptLoaderApp.Validate`), after config-file application and before the tracker is initialized.
 
 ### Usage
 
 ```bash
-# Console summary (printed after test results)
+# Console summary (printed after execution)
 ./build/GocciaTestRunner tests --coverage
 
 # lcov output (for Codecov, Coveralls, or genhtml)
@@ -761,7 +823,7 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 
 ### What is Tracked
 
-**Line coverage:** Which source lines were executed and how many times. Instrumented in both the tree-walk interpreter (`EvaluateStatement`/`EvaluateExpression`) and the bytecode VM (main dispatch loop with line-change deduplication).
+**Line coverage:** Which source lines were executed and how many times. Instrumented in the bytecode VM's main dispatch loop, with per-frame line-change deduplication so several instructions on one source line count as one hit.
 
 **Branch coverage:** Which branch arms were taken at:
 
@@ -770,22 +832,61 @@ The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level cove
 - Short-circuit operators (`&&`, `||`, `??`)
 - `switch` statement case clauses
 
+**Function coverage:** Which user-defined functions were created and called. A function is registered when its definition is evaluated and is reported at its declaration line (what LCOV's `FN:` means), not at the first line of its body; created-but-uncalled functions are retained with zero hits, and repeated calls increment the function hit count. Definitions inside untaken control flow are never created and therefore do not appear.
+
+**Parallel runs:** `--jobs=N` does not change any of these numbers. Each worker collects into its own tracker and the counts are added together at the end, so line, branch, and function hit counts for a given run are identical whatever `--jobs` is set to.
+
 ### Output Formats
 
 | Format | Flag | Description |
 |--------|------|-------------|
-| Console | `--coverage` | Summary table printed to stdout after test results |
-| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:` and `BRDA:` entries |
-| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON for tooling integration |
+| Console | `--coverage` | Summary table with line, branch, and function totals printed to stdout after execution |
+| lcov | `--coverage-format=lcov --coverage-output=<file>` | Standard lcov tracefile with `DA:`, `BRDA:`, `FN:`, and `FNDA:` entries |
+| JSON | `--coverage-format=json --coverage-output=<file>` | Istanbul-compatible JSON including `f` and `fnMap` function data |
+
+### Report Path Keys
+
+Every file gets exactly **one** record per run, under one canonical path,
+however it was reached. A file can enter a run by two routes at once — named on
+the command line, and imported by another file — and each route knows it by a
+different spelling: the command line supplies whatever the user typed, import
+resolution produces an absolute path. Keying by the incoming spelling used to
+split such a file into two records whose hits were never added together.
+
+The canonical form, applied uniformly to the console summary, the lcov `SF:`
+records, and the JSON keys and `"path"` fields:
+
+- **repo-relative** when the file is under a repository root — the nearest
+  ancestor directory holding a `.git` entry (a directory in a normal clone, a
+  file in a linked worktree or submodule);
+- **absolute** when the file is outside any repository;
+- **`/` as the separator, on every platform**, including Windows.
+
+Repo-relative is what the consumers want: Codecov matches report paths against
+repository paths, so a build machine's absolute paths need a `fixes` mapping
+while repo-relative paths match directly, and genhtml resolves relative paths
+against its working directory. Forward slashes matter because imports resolve
+through FPC's `ExpandFileName` — on Windows the raw paths carry backslashes,
+which genhtml and Codecov commonly mishandle in an `SF:` record.
+
+Canonicalization is textual (`ExpandFileName` plus the repo-root trim), so it
+does not resolve symlinks: two spellings that differ by a symlinked ancestor —
+macOS's `/var` → `/private/var`, say — still produce separate records. Reaching
+the same file by two genuinely different real paths is not something normal
+entry-plus-import runs do.
+
+Paths with no on-disk backing are identities, not files — `<stdin>`, and
+multifile section names such as `<stdin>[part1]` — and are left verbatim. Report
+keys are never used to read source: the tracker remembers the native on-disk
+path behind each key, so reports still render source when the process runs from
+outside the repository.
 
 ### JSX Source Map Integration
 
 When coverage is used with `.jsx`/`.tsx` files, the JSX transformer produces a source map that maps transformed (post-JSX) coordinates back to the original source. The coverage system integrates this source map so that lcov and JSON reports reference **original** JSX source positions, not transformed positions. This ensures downstream tools (Codecov, genhtml, Istanbul) display accurate line and branch locations.
 
-The source map is registered with `TGocciaCoverageTracker` during file registration and applied at report generation time — the recording hot path is unaffected.
-
 ### Architecture
 
-Coverage uses a runtime boolean check (`CoverageEnabled` on `TGocciaEvaluationContext` for the interpreter, `FCoverageEnabled` on `TGocciaVM` for bytecode). When `--coverage` is not passed, the boolean is `False` and branch prediction makes the check effectively free — no separate build is needed.
+Coverage is recorded on the instrumented bytecode dispatch loop (`FCoverageEnabled` on `TGocciaVM`). When `--coverage` is not passed, production dispatch omits line-hit recording; enabling coverage, opcode profiling, stop-IP, or an instruction limit selects the instrumented loop. No separate build is needed.
 
-Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker that follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. During parallel test runs each worker thread initializes its own thread-local instance; after all workers complete, `TGocciaThreadPool.MergeCoverageInto` merges their data into the main thread's tracker via `TGocciaCoverageTracker.MergeFrom`. Output formatting is in `Goccia.Coverage.Report.pas`. When a JSX source map is available for a file, `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.
+Data is collected by `TGocciaCoverageTracker` (`Goccia.Coverage.pas`), a per-thread tracker that follows the same Initialize/Shutdown pattern as `TGarbageCollector` and `TGocciaCallStack`. During parallel test runs each worker thread initializes its own thread-local instance; after all workers complete, `TGocciaThreadPool.MergeCoverageInto` merges their data into the main thread's tracker via `TGocciaCoverageTracker.MergeFrom`, which adds the source hit *counts* into the destination (via `AddLineHits` / `AddBranchHits`) rather than registering a single hit per covered entry. Output formatting is in `Goccia.Coverage.Report.pas`. A JSX source map is registered with `TGocciaCoverageTracker` during file registration and applied only at report generation time, so the recording hot path is unaffected: `BuildTranslatedLineHits` translates transformed line hits back to original coordinates, and branch positions are translated via `TGocciaSourceMap.Translate` during report emission.

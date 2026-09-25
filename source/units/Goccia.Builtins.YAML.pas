@@ -37,18 +37,9 @@ uses
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaYAMLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
@@ -68,12 +59,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('YAML'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -95,7 +84,13 @@ begin
   try
     Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
   except
-    on E: Exception do
+    // Only the parser's own error means "this text is not YAML", and every
+    // diagnostic it raises is one of these. A blanket Exception arm also
+    // swallowed the engine's own failures: a refused allocation
+    // (TGocciaThrowValue carrying a RangeError, whose Pascal Message is empty by
+    // construction) became `SyntaxError: ` with no message, and a ceiling the
+    // guest can mistake for a syntax error is a ceiling it can retry in a loop.
+    on E: EGocciaYAMLParseError do
       ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);
   end;
 end;
@@ -111,12 +106,9 @@ begin
   try
     Result := FParser.ParseDocuments(AArgs.GetElement(0).ToStringLiteral.Value);
   except
-    on E: Exception do
+    on E: EGocciaYAMLParseError do
       ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

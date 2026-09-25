@@ -72,6 +72,17 @@ function parsePositiveInteger(value, optionName) {
   return parsed;
 }
 
+// Sample outcome counters that must all be zero for a workload to pass. These
+// mirror the counters produced by summarizeSamples in web-tooling-driver.js.
+const NON_OK_SAMPLE_COUNTS = [
+  'timeout',
+  'crash',
+  'syntaxError',
+  'runtimeError',
+  'oom',
+  'missingResult',
+];
+
 function reportConfig(manifest) {
   return manifest.ciReport || {};
 }
@@ -114,9 +125,26 @@ function validateReport(report, manifest, expectedWorkloads = null) {
     if (target.kind !== 'web-tooling') failures.push(`${workload}: wrong kind ${target.kind}`);
     if (!target.build || typeof target.build.outcome !== 'string') {
       failures.push(`${workload}: missing build outcome`);
+    } else if (target.build.outcome !== 'ok') {
+      // Outcome gating: a workload that cannot be built or run is a hard
+      // failure, not a report footnote. Performance figures stay non-gating —
+      // nothing here looks at runs/s.
+      failures.push(`${workload}: build outcome ${target.build.outcome}`);
     }
     if (!target.summary || typeof target.summary.ok !== 'number') {
       failures.push(`${workload}: missing sample summary`);
+    } else {
+      const nonOk = NON_OK_SAMPLE_COUNTS
+        .filter((key) => Number(target.summary[key]) > 0)
+        .map((key) => `${key}=${target.summary[key]}`);
+      if (nonOk.length > 0) {
+        failures.push(`${workload}: non-ok sample outcomes (${nonOk.join(', ')})`);
+      }
+      if (target.summary.ok !== expectedRepetitions) {
+        failures.push(
+          `${workload}: expected ${expectedRepetitions} ok samples, report recorded ${target.summary.ok}`,
+        );
+      }
     }
   }
 

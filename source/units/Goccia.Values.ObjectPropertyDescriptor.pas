@@ -7,6 +7,7 @@ interface
 uses
   OrderedStringMap,
 
+  Goccia.GarbageCollector,
   Goccia.Values.Primitives;
 
 type
@@ -40,6 +41,21 @@ type
       const AFields: TPropertyDescriptorFields);
     procedure MarkValues; virtual;
 
+    // Root what this descriptor points at RIGHT NOW for the lifetime of
+    // AFrame. MarkValues answers the collector's question — "what does this
+    // descriptor reach?" — from inside a collection; this answers the
+    // caller's — "what must survive the safe point I am about to cross?" —
+    // from outside one. A descriptor read out of a property map is a plain
+    // class, not a managed object, so nothing roots the values it points at
+    // once the map entry it came from can be replaced.
+    //
+    // "Right now" is load-bearing for lazy descriptors: they push their
+    // pinned placeholder, not the value their factory would produce, so a
+    // caller must Materialize BEFORE PushRoots — push-then-materialize
+    // leaves the freshly built value unrooted, which is the exact hazard
+    // this method exists to close.
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); virtual;
+
     property Flags: TPropertyFlags read FFlags;
     property Fields: TPropertyDescriptorFields read FFields;
     property Enumerable: Boolean read GetEnumerable;
@@ -61,6 +77,7 @@ type
     constructor CreatePartial(const AValue: TGocciaValue;
       const AFlags: TPropertyFlags; const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); override;
 
     property Value: TGocciaValue read FValue write FValue;
   end;
@@ -102,6 +119,7 @@ type
       const ASetter: TGocciaValue; const AFlags: TPropertyFlags;
       const AFields: TPropertyDescriptorFields);
     procedure MarkValues; override;
+    procedure PushRoots(var AFrame: TGocciaActiveRootFrame); override;
 
     property Getter: TGocciaValue read FGetter;
     property Setter: TGocciaValue read FSetter;
@@ -186,6 +204,13 @@ begin
   // No-op base: subclasses override to mark their value references
 end;
 
+procedure TGocciaPropertyDescriptor.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // No-op base: a descriptor with neither a value nor an accessor pair holds
+  // nothing to root. Subclasses override to push what they hold.
+end;
+
 constructor TGocciaPropertyDescriptorData.Create(const AValue: TGocciaValue; const AFlags: TPropertyFlags);
 begin
   inherited Create(AFlags,
@@ -205,6 +230,15 @@ procedure TGocciaPropertyDescriptorData.MarkValues;
 begin
   if Assigned(FValue) then
     FValue.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorData.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // Deliberately not materialized: a lazy descriptor's placeholder is what is
+  // reachable right now, and forcing the factory here would allocate on a path
+  // whose only job is to protect what already exists.
+  AFrame.Add(FValue);
 end;
 
 constructor TGocciaLazyPropertyDescriptorData.Create(
@@ -264,6 +298,15 @@ begin
     FGetter.MarkReferences;
   if Assigned(FSetter) then
     FSetter.MarkReferences;
+end;
+
+procedure TGocciaPropertyDescriptorAccessor.PushRoots(
+  var AFrame: TGocciaActiveRootFrame);
+begin
+  // Either half may be nil — a getter-only or setter-only accessor is the
+  // ordinary case, and the frame drops nil without pushing.
+  AFrame.Add(FGetter);
+  AFrame.Add(FSetter);
 end;
 
 function TGocciaPropertyDescriptorAccessor.GetWritable: Boolean;
@@ -327,6 +370,7 @@ var
   DescriptorFields: TPropertyDescriptorFields;
   HasValue, HasGet, HasSet, HasWritableField: Boolean;
   HasEnumerableField, HasConfigurableField: Boolean;
+  Roots: TGocciaActiveRootFrame;
 begin
   // ES2026 §6.2.5.5 step 1: If Desc is not an Object, throw a TypeError
   if not (ADescriptorObject is TGocciaObjectValue) then
@@ -341,83 +385,119 @@ begin
   Getter := nil;
   Setter := nil;
 
-  // ES2026 §6.2.5.5 steps 3-9: extract descriptor fields in observable order.
-  HasEnumerableField := DescObj.HasProperty(PROP_ENUMERABLE);
-  if HasEnumerableField then
-    Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
+  // Every read below is a guest-code safe point. The spec fixes the order of
+  // six field reads, and each one can run an accessor or a Proxy has/get trap;
+  // a descriptor object whose value getter returns a fresh object and whose
+  // writable getter collects is enough to sweep that object while the only
+  // reference to it is the Value local here. The same holds for the getter
+  // across the set reads, and for DescObj itself: it may be a fresh object a
+  // caller's getter just produced (Object.defineProperties reads it out of the
+  // properties object), reachable from nothing between the traps it is the
+  // receiver of.
+  //
+  // A frame rather than per-value temp roots: two of these locals can hold the
+  // same object -- one function used as both get and set -- and a temp-root
+  // set collapses that pair into one entry whose first release unroots both.
+  //
+  // The frame closes before the built descriptor is returned. What the caller
+  // then holds is a plain class the collector does not trace, so the window on
+  // the other side belongs to the caller, and which caller it is decides what
+  // closes it. For an ordinary object the store reaches the property map and
+  // the growth gate roots the pending descriptor there. For a PROXY target
+  // there is no map and no gate at all: the descriptor is read into a trap
+  // descriptor object and re-read after the trap returns, so
+  // TGocciaProxyValue's define paths root it themselves. And
+  // Object.defineProperties holds its whole staged batch rooted because the
+  // batch outlives every individual store.
+  Roots.Initialize;
+  try
+    Roots.Add(DescObj);
 
-  HasConfigurableField := DescObj.HasProperty(PROP_CONFIGURABLE);
-  if HasConfigurableField then
-    Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
+    // ES2026 §6.2.5.5 steps 3-9: extract descriptor fields in observable order.
+    HasEnumerableField := DescObj.HasProperty(PROP_ENUMERABLE);
+    if HasEnumerableField then
+      Enumerable := DescObj.GetProperty(PROP_ENUMERABLE).ToBooleanLiteral.Value;
 
-  HasValue := DescObj.HasProperty(PROP_VALUE);
-  if HasValue then
-    Value := DescObj.GetProperty(PROP_VALUE);
+    HasConfigurableField := DescObj.HasProperty(PROP_CONFIGURABLE);
+    if HasConfigurableField then
+      Configurable := DescObj.GetProperty(PROP_CONFIGURABLE).ToBooleanLiteral.Value;
 
-  HasWritableField := DescObj.HasProperty(PROP_WRITABLE);
-  if HasWritableField then
-    Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
+    HasValue := DescObj.HasProperty(PROP_VALUE);
+    if HasValue then
+    begin
+      Value := DescObj.GetProperty(PROP_VALUE);
+      Roots.Add(Value);
+    end;
 
-  // ES2026 §6.2.5.5 step 7: validate getter
-  HasGet := DescObj.HasProperty(PROP_GET);
-  if HasGet then
-  begin
-    Getter := DescObj.GetProperty(PROP_GET);
-    if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
-      ThrowTypeError(SErrorGetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
-    if Getter is TGocciaUndefinedLiteralValue then
-      Getter := nil;
+    HasWritableField := DescObj.HasProperty(PROP_WRITABLE);
+    if HasWritableField then
+      Writable := DescObj.GetProperty(PROP_WRITABLE).ToBooleanLiteral.Value;
+
+    // ES2026 §6.2.5.5 step 7: validate getter
+    HasGet := DescObj.HasProperty(PROP_GET);
+    if HasGet then
+    begin
+      Getter := DescObj.GetProperty(PROP_GET);
+      Roots.Add(Getter);
+      if not (Getter is TGocciaUndefinedLiteralValue) and not Getter.IsCallable then
+        ThrowTypeError(SErrorGetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
+      if Getter is TGocciaUndefinedLiteralValue then
+        Getter := nil;
+    end;
+
+    // ES2026 §6.2.5.5 step 8: validate setter
+    HasSet := DescObj.HasProperty(PROP_SET);
+    if HasSet then
+    begin
+      Setter := DescObj.GetProperty(PROP_SET);
+      Roots.Add(Setter);
+      if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
+        ThrowTypeError(SErrorSetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
+      if Setter is TGocciaUndefinedLiteralValue then
+        Setter := nil;
+    end;
+
+    // ES2026 §6.2.5.5 step 10: mixed data+accessor is invalid
+    if (HasValue or HasWritableField) and (HasGet or HasSet) then
+      ThrowTypeError(SErrorDescriptorMixedAccessorData, SSuggestPropertyDescriptorObject);
+
+    // Build flags
+    PropertyFlags := [];
+    if Enumerable then
+      Include(PropertyFlags, pfEnumerable);
+    if Configurable then
+      Include(PropertyFlags, pfConfigurable);
+    if Writable then
+      Include(PropertyFlags, pfWritable);
+
+    DescriptorFields := [];
+    if HasEnumerableField then
+      Include(DescriptorFields, pdfEnumerable);
+    if HasConfigurableField then
+      Include(DescriptorFields, pdfConfigurable);
+    if HasValue then
+      Include(DescriptorFields, pdfValue);
+    if HasWritableField then
+      Include(DescriptorFields, pdfWritable);
+    if HasGet then
+      Include(DescriptorFields, pdfGet);
+    if HasSet then
+      Include(DescriptorFields, pdfSet);
+
+    if HasValue or HasWritableField then
+      Result := TGocciaPropertyDescriptorData.CreatePartial(Value,
+        PropertyFlags, DescriptorFields)
+    else if HasGet or HasSet then
+    begin
+      Exclude(PropertyFlags, pfWritable);
+      Result := TGocciaPropertyDescriptorAccessor.CreatePartial(Getter,
+        Setter, PropertyFlags, DescriptorFields);
+    end
+    else
+      Result := TGocciaPropertyDescriptor.Create(PropertyFlags, DescriptorFields);
+  finally
+    Roots.Clear;
   end;
-
-  // ES2026 §6.2.5.5 step 8: validate setter
-  HasSet := DescObj.HasProperty(PROP_SET);
-  if HasSet then
-  begin
-    Setter := DescObj.GetProperty(PROP_SET);
-    if not (Setter is TGocciaUndefinedLiteralValue) and not Setter.IsCallable then
-      ThrowTypeError(SErrorSetterMustBeFunctionOrUndefined, SSuggestNotFunctionType);
-    if Setter is TGocciaUndefinedLiteralValue then
-      Setter := nil;
-  end;
-
-  // ES2026 §6.2.5.5 step 10: mixed data+accessor is invalid
-  if (HasValue or HasWritableField) and (HasGet or HasSet) then
-    ThrowTypeError(SErrorDescriptorMixedAccessorData, SSuggestPropertyDescriptorObject);
-
-  // Build flags
-  PropertyFlags := [];
-  if Enumerable then
-    Include(PropertyFlags, pfEnumerable);
-  if Configurable then
-    Include(PropertyFlags, pfConfigurable);
-  if Writable then
-    Include(PropertyFlags, pfWritable);
-
-  DescriptorFields := [];
-  if HasEnumerableField then
-    Include(DescriptorFields, pdfEnumerable);
-  if HasConfigurableField then
-    Include(DescriptorFields, pdfConfigurable);
-  if HasValue then
-    Include(DescriptorFields, pdfValue);
-  if HasWritableField then
-    Include(DescriptorFields, pdfWritable);
-  if HasGet then
-    Include(DescriptorFields, pdfGet);
-  if HasSet then
-    Include(DescriptorFields, pdfSet);
-
-  if HasValue or HasWritableField then
-    Result := TGocciaPropertyDescriptorData.CreatePartial(Value,
-      PropertyFlags, DescriptorFields)
-  else if HasGet or HasSet then
-  begin
-    Exclude(PropertyFlags, pfWritable);
-    Result := TGocciaPropertyDescriptorAccessor.CreatePartial(Getter,
-      Setter, PropertyFlags, DescriptorFields);
-  end
-  else
-    Result := TGocciaPropertyDescriptor.Create(PropertyFlags, DescriptorFields);
 end;
 
 end.

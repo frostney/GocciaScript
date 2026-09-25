@@ -14,6 +14,7 @@ uses
   Goccia.Bytecode.Module,
   CLI.ConfigFile,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
@@ -56,6 +57,7 @@ type
   protected
     procedure Configure; override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
@@ -65,6 +67,11 @@ type
 function TBundlerApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
+end;
+
+function TBundlerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
 end;
 
 procedure TBundlerApp.Configure;

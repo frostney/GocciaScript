@@ -27,6 +27,8 @@ type
     FClosure: TGocciaScope;
     FSourceFilePath: string;
     FSourceLine: Integer;
+    FSourceColumn: Integer;
+    FTrackCoverage: Boolean;
     FSourceText: string;
     FHideNestedFunctionSourceText: Boolean;
     FIsExpressionBody: Boolean;
@@ -46,6 +48,7 @@ type
     procedure PredeclareParameterBindings(const ACallScope: TGocciaScope);
     function BuildParameterEvalVarDeclarationRejectNames(
       const AIncludeArgumentsObject: Boolean): TGocciaEvalRejectNameArray;
+    procedure RecordCoverageCall;
     procedure PrepareCallContext(const ACallScope: TGocciaScope;
       const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
       var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -64,6 +67,8 @@ type
       const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
     procedure SetInferredName(const AName: string);
+    procedure SetSourceLocation(const AFilePath: string;
+      const ALine, AColumn: Integer; const ATrackCoverage: Boolean);
 
     property Parameters: TGocciaParameterArray read FParameters;
     property BodyStatements: TObjectList<TGocciaASTNode> read FBodyStatements;
@@ -73,6 +78,7 @@ type
     property HideNestedFunctionSourceText: Boolean read FHideNestedFunctionSourceText write FHideNestedFunctionSourceText;
     property SourceFilePath: string read FSourceFilePath write FSourceFilePath;
     property SourceLine: Integer read FSourceLine write FSourceLine;
+    property SourceColumn: Integer read FSourceColumn write FSourceColumn;
     property SourceText: string read FSourceText write SetSourceText;
   end;
 
@@ -133,7 +139,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
-  Goccia.Values.ToObject;
+  Goccia.Values.ToObject,
+  Goccia.VM.Exception;
 
 type
   TGocciaAsyncFunctionEvaluation = class(TGocciaObjectValue)
@@ -147,7 +154,7 @@ type
     FRealm: TGocciaRealm;
     FSettled: Boolean;
     procedure AttachAwait(const ASuspension: EGocciaAsyncAwaitSuspend);
-    procedure RejectWithException(const AException: Exception);
+    function RejectWithException(const AException: Exception): Boolean;
     procedure Resume(const AKind: TGocciaGeneratorResumeKind;
       const AValue: TGocciaValue);
   public
@@ -165,11 +172,33 @@ type
     procedure MarkReferences; override;
   end;
 
-procedure RejectAsyncPromiseWithException(const APromise: TGocciaPromiseValue;
-  const AException: Exception);
+{ True when AException is a script-level failure and the promise now carries
+  it. False means the exception is not the guest's to observe, and the caller
+  — which is inside the handler that owns it — must let it continue with a
+  bare `raise`.
+
+  The bare raise at the call site is the whole point of the Boolean. This
+  used to end in `raise AException`, which re-raises the very object the RTL
+  is already unwinding: the original handler frees it on the way out, so the
+  second raise carries a dangling reference and the async path surfaced a
+  spurious "Access violation" instead of the limit that actually fired. }
+function TryRejectAsyncPromiseWithException(
+  const APromise: TGocciaPromiseValue;
+  const AException: Exception): Boolean;
+var
+  ThrownVal: TGocciaValue;
 begin
-  if AException is TGocciaThrowValue then
-    APromise.Reject(TGocciaThrowValue(AException).Value)
+  Result := True;
+  { A hoisted module-level `async function` is an interpreter closure even
+    under the bytecode executor (the module loader creates it during linking),
+    so its body can call a compiled function whose JS throw leaves the VM as
+    EGocciaBytecodeThrow. That is a guest completion carrying the thrown value,
+    exactly like TGocciaThrowValue; without this the resume path treated it as
+    an engine fault, re-raised it into the microtask queue, and left the async
+    function's promise forever pending. UnwrapThrownValue handles both boundary
+    classes, identity preserved. }
+  if UnwrapThrownValue(AException, ThrownVal) then
+    APromise.Reject(ThrownVal)
   else if AException is TGocciaTypeError then
     APromise.Reject(CreateErrorObject(TYPE_ERROR_NAME, AException.Message))
   else if AException is TGocciaReferenceError then
@@ -179,7 +208,7 @@ begin
   else if AException is TGocciaRuntimeError then
     APromise.Reject(CreateErrorObject(ERROR_NAME, AException.Message))
   else
-    raise AException;
+    Result := False;
 end;
 
 { TGocciaAsyncFunctionEvaluation }
@@ -241,13 +270,17 @@ begin
   end;
 end;
 
-procedure TGocciaAsyncFunctionEvaluation.RejectWithException(
-  const AException: Exception);
+function TGocciaAsyncFunctionEvaluation.RejectWithException(
+  const AException: Exception): Boolean;
 begin
   if FSettled then
-    Exit;
-  FSettled := True;
-  RejectAsyncPromiseWithException(FPromise, AException);
+    Exit(True);
+  Result := TryRejectAsyncPromiseWithException(FPromise, AException);
+  { Only a rejection settles the evaluation. Marking it settled for an
+    exception that keeps unwinding would leave a promise that can never be
+    resolved and silence the later resume paths. }
+  if Result then
+    FSettled := True;
 end;
 
 procedure TGocciaAsyncFunctionEvaluation.Resume(
@@ -279,7 +312,8 @@ begin
       on E: EGocciaAsyncAwaitSuspend do
         AttachAwait(E);
       on E: Exception do
-        RejectWithException(E);
+        if not RejectWithException(E) then
+          raise;
     end;
   finally
     PopAsyncAwaitSuspension;
@@ -318,6 +352,14 @@ begin
   inherited;
   if Assigned(FFunction) then
     FFunction.MarkReferences;
+  { Resume publishes FFunction and FCallScope to the function-execution-context
+    facade, which holds both as raw pointers for the length of the resumption
+    (see the rooting note on GCurrentFunctionContextStack in Goccia.Realm.pas).
+    FContinuation marks the same scope, but that is its bookkeeping, not this
+    one's: mark it here so the facade's contract does not depend on the
+    continuation's internals. }
+  if Assigned(FCallScope) then
+    FCallScope.MarkReferences;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
   if Assigned(FContinuation) then
@@ -334,6 +376,8 @@ begin
   FBodyStatements := ABodyStatements;
   FClosure := AClosure;
   FName := AName;
+  FSourceColumn := 0;
+  FTrackCoverage := False;
 
   // Pre-compute whether all parameters are simple named params (no rest, no destructuring, no defaults)
   FIsSimpleParams := True;
@@ -517,6 +561,18 @@ begin
   end;
 end;
 
+procedure TGocciaFunctionValue.RecordCoverageCall;
+begin
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and (FSourceLine > 0) and
+     (FSourceFilePath <> '') then
+  begin
+    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
+  end;
+end;
+
 procedure TGocciaFunctionValue.PrepareCallContext(const ACallScope: TGocciaScope;
   const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue;
   var AContext: TGocciaEvaluationContext; out ABodyScope: TGocciaScope;
@@ -574,8 +630,9 @@ begin
   AContext.LoadModuleSource := FClosure.LoadModuleSource;
   AContext.ResolveModuleURL := FClosure.ResolveModuleURL;
   AContext.CurrentFilePath := FSourceFilePath;
-  AContext.CoverageEnabled := (TGocciaCoverageTracker.Instance <> nil)
-    and TGocciaCoverageTracker.Instance.Enabled;
+  AContext.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   AContext.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
   ArgumentsObjectEnabled := FClosure.EffectiveArgumentsObjectEnabled;
@@ -591,9 +648,7 @@ begin
   else
     EvalRejectNames := nil;
 
-  if AContext.CoverageEnabled and (FSourceLine > 0) and
-     (FSourceFilePath <> '') then
-    TGocciaCoverageTracker.Instance.RecordLineHit(FSourceFilePath, FSourceLine);
+  RecordCoverageCall;
 
   BindThis(ACallScope, AThisValue);
   AContext.Scope := ACallScope;
@@ -828,6 +883,7 @@ var
   AsyncBodyStatements: TObjectList<TGocciaASTNode>;
   SyntheticReturn: TGocciaReturnStatement;
   RejectedPromise: TGocciaPromiseValue;
+  Rejected: Boolean;
 begin
   GC := TGarbageCollector.Instance;
   BodyScopeRooted := False;
@@ -911,12 +967,17 @@ begin
       if Assigned(GC) then
         GC.AddTempRoot(RejectedPromise);
       try
-        RejectAsyncPromiseWithException(RejectedPromise, E);
-        Result := RejectedPromise;
+        Rejected := TryRejectAsyncPromiseWithException(RejectedPromise, E);
+        if Rejected then
+          Result := RejectedPromise;
       finally
         if Assigned(GC) then
           GC.RemoveTempRoot(RejectedPromise);
       end;
+      { Outside the temp-root frame: FPC rejects a re-raise inside a nested
+        try/finally, and the root has to come off either way. }
+      if not Rejected then
+        raise;
     end;
   end;
 
@@ -1028,6 +1089,25 @@ procedure TGocciaFunctionValue.SetInferredName(const AName: string);
 begin
   if FName = '' then
     FName := AName;
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and
+     (FSourceFilePath <> '') and (FSourceLine > 0) then
+    TGocciaCoverageTracker.Instance.RegisterFunction(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
+end;
+
+procedure TGocciaFunctionValue.SetSourceLocation(const AFilePath: string;
+  const ALine, AColumn: Integer; const ATrackCoverage: Boolean);
+begin
+  FSourceFilePath := AFilePath;
+  FSourceLine := ALine;
+  FSourceColumn := AColumn;
+  FTrackCoverage := ATrackCoverage;
+  if FTrackCoverage and (TGocciaCoverageTracker.Instance <> nil) and
+     TGocciaCoverageTracker.Instance.Enabled and
+     (FSourceFilePath <> '') and (FSourceLine > 0) then
+    TGocciaCoverageTracker.Instance.RegisterFunction(FSourceFilePath,
+      GetFunctionName, FSourceLine, FSourceColumn);
 end;
 
 { TGocciaArrowFunctionValue }

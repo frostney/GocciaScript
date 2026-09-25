@@ -13,6 +13,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Node,
+  Goccia.Error.CallDiagnostics,
   Goccia.Evaluator.Context,
   Goccia.Modules,
   Goccia.Scope.BindingMap,
@@ -887,6 +888,14 @@ type
 
   TGocciaDecoratorList = array of TGocciaExpression;
 
+{ Describes a call/new callee for the shared "not callable"/"not a constructor"
+  diagnostics. The tree-walk evaluator calls this at the throw site; the
+  bytecode compiler calls it once per call site and stores the result on the
+  function template, so the VM produces the same text without the AST. AKind
+  carries a tagged-template site through to the shared suggestion. }
+function CalleeDescriptorFor(const ACallee: TGocciaExpression;
+  const AKind: TGocciaCalleeKind = cckPlain): TGocciaCalleeDescriptor;
+
 implementation
 
 uses
@@ -896,6 +905,7 @@ uses
   Goccia.AST.Statements,
   Goccia.Constants.ErrorNames,
   Goccia.Coverage,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -905,6 +915,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.RegExp.Runtime,
   Goccia.Scope,
   Goccia.Timeout,
@@ -918,7 +929,8 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue,
   Goccia.Values.SymbolValue,
-  Goccia.Values.ToPrimitive;
+  Goccia.Values.ToPrimitive,
+  Goccia.VM.Exception;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
@@ -932,6 +944,48 @@ begin
     Result := GNextTemplateSiteId;
   finally
     CriticalSectionLeave(GTemplateSiteIdLock);
+  end;
+end;
+
+{ A member expression's own span starts at the '.' or '[' — the parser hangs
+  the accessor off the object expression rather than re-spanning the pair — so
+  naming `obj.method` back to the author means covering the object's span too,
+  recursively for a chain like `o.a.b`. }
+function FullCalleeSpan(const AExpression: TGocciaExpression): TGocciaSourceSpan;
+begin
+  Result := AExpression.Span;
+  if AExpression is TGocciaMemberExpression then
+    Result := FullCalleeSpan(
+      TGocciaMemberExpression(AExpression).ObjectExpr).Cover(Result)
+  else if AExpression is TGocciaPrivateMemberExpression then
+    Result := FullCalleeSpan(
+      TGocciaPrivateMemberExpression(AExpression).ObjectExpr).Cover(Result);
+end;
+
+function CalleeDescriptorFor(const ACallee: TGocciaExpression;
+  const AKind: TGocciaCalleeKind = cckPlain): TGocciaCalleeDescriptor;
+var
+  Member: TGocciaMemberExpression;
+begin
+  Result := EmptyCalleeDescriptor;
+  Result.Kind := AKind;
+  if not Assigned(ACallee) then
+    Exit;
+  Result.CalleeText := NormalizeCalleeText(FullCalleeSpan(ACallee).Text);
+  // A tagged template's fault is "the tag is not callable", not a missing
+  // method, so its member shape is not carried — the shared suggestion keys on
+  // Kind alone.
+  if (AKind = cckPlain) and (ACallee is TGocciaMemberExpression) then
+  begin
+    Member := TGocciaMemberExpression(ACallee);
+    // Only a non-computed member has a statically known method name, and only
+    // an identifier object can be named back to the author verbatim.
+    if not Member.Computed then
+    begin
+      Result.PropertyName := Member.PropertyName;
+      if Member.ObjectExpr is TGocciaIdentifierExpression then
+        Result.ObjectText := TGocciaIdentifierExpression(Member.ObjectExpr).Name;
+    end;
   end;
 end;
 
@@ -994,7 +1048,8 @@ begin
   if Assigned(FValue)
      and (FValue <> TGocciaUndefinedLiteralValue.UndefinedValue)
      and (FValue <> TGocciaBooleanLiteralValue.TrueValue)
-     and (FValue <> TGocciaBooleanLiteralValue.FalseValue) then
+     and (FValue <> TGocciaBooleanLiteralValue.FalseValue)
+     and (FValue <> TGocciaNullLiteralValue.NullValue) then
     FValue.Free;
   inherited;
 end;
@@ -1810,45 +1865,101 @@ end;
 function TGocciaPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  if ObjectExpr is TGocciaSuperExpression then
-  begin
-    Result := Value.Evaluate(AContext);
-    AssignSuperProperty(AContext,
-      TGocciaStringLiteralValue.Create(PropertyName), Result);
-    Exit;
-  end;
+  { Every value below outlives at least one collecting safe point while it is
+    held only in a native Pascal local, and the collector marks explicit roots —
+    never the native stack. See the block comment on the computed sibling for
+    the full argument; the shape is identical. }
+  Roots.Initialize;
+  try
+    if ObjectExpr is TGocciaSuperExpression then
+    begin
+      Result := Value.Evaluate(AContext);
+      { The key literal is constructed after the RHS exists, and constructing it
+        can collect. }
+      Roots.Add(Result);
+      AssignSuperProperty(AContext,
+        TGocciaStringLiteralValue.Create(PropertyName), Result);
+      Exit;
+    end;
 
-  Obj := ObjectExpr.Evaluate(AContext);
-  Result := Value.Evaluate(AContext);
-  AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-    AContext.NonStrictMode);
+    Obj := ObjectExpr.Evaluate(AContext);
+    Roots.Add(Obj);
+    Result := Value.Evaluate(AContext);
+    Roots.Add(Result);
+    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+      AContext.NonStrictMode);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function TGocciaComputedPropertyAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, PropertyValue: TGocciaValue;
   PropName: string;
+  Roots: TGocciaActiveRootFrame;
 begin
-  if ObjectExpr is TGocciaSuperExpression then
-  begin
-    PropertyValue := PropertyExpression.Evaluate(AContext);
-    Result := Value.Evaluate(AContext);
-    AssignSuperProperty(AContext, PropertyValue, Result);
-    Exit;
-  end;
+  { Rooting, not bookkeeping. `a[b] = c` holds three GC-managed values in native
+    Pascal locals across code that can allocate: the base, the unconverted key,
+    and the assigned value. Evaluating `c` pushes a call frame, a scope and an
+    arguments object, all of which charge the memory ceiling and can trip
+    CollectForMemoryPressure — and the collector marks explicit roots only, so a
+    key such as `"k" + i` with no other reference is swept while the local still
+    points at it. ToPropertyKeyForBase then dispatches a virtual call through the
+    freed instance: EObjectCheck under `$OBJECTCHECKS ON`, an unchecked read into
+    reclaimed memory in a production build. The value has the same exposure — the
+    property map grows through the gate before the store completes, and
+    ToPropertyKeyForBase can run a guest [Symbol.toPrimitive], which is arbitrary
+    collecting script code.
 
-  Obj := ObjectExpr.Evaluate(AContext);
-  PropertyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
-  Result := Value.Evaluate(AContext);
-  if PropertyValue is TGocciaSymbolValue then
-    AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
-      Result, AContext.OnError, Line, Column, AContext.NonStrictMode)
-  else
-  begin
-    PropName := TGocciaStringLiteralValue(PropertyValue).Value;
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
+    The frame, not one TGocciaTempRoot per value: temp roots are a set, so two
+    locals holding the *same* object share a single entry and whichever record
+    drops it first unroots it for both. `p[tmp[0]] = tmp.pop()` makes the key and
+    the value that same object. The frame is a stack of pushes, so duplicates
+    cost an entry each and nothing is released before Clear. }
+  Roots.Initialize;
+  try
+    if ObjectExpr is TGocciaSuperExpression then
+    begin
+      PropertyValue := PropertyExpression.Evaluate(AContext);
+      Roots.Add(PropertyValue);
+      Result := Value.Evaluate(AContext);
+      Roots.Add(Result);
+      AssignSuperProperty(AContext, PropertyValue, Result);
+      Exit;
+    end;
+
+    Obj := ObjectExpr.Evaluate(AContext);
+    Roots.Add(Obj);
+    // ES2026 §13.3.3 stores the UNCONVERTED key in the Reference Record, and its
+    // NOTE calls out this exact form: for `a[b] = c`, ToPropertyKey is not performed
+    // until after evaluation of `c`. So evaluate the key expression, then the RHS,
+    // and only then apply §6.2.5.6 PutValue step 3.a (nullish base throws) followed
+    // by step 3.c (ToPropertyKey).
+    PropertyValue := PropertyExpression.Evaluate(AContext);
+    Roots.Add(PropertyValue);
+    Result := Value.Evaluate(AContext);
+    Roots.Add(Result);
+    PropertyValue := ToPropertyKeyForBase(Obj, PropertyValue, True);
+    if PropertyValue is TGocciaSymbolValue then
+    begin
+      { The symbol has to survive the store: assigning to an accessor property
+        runs a guest setter. The string branch below needs no root — PropName is
+        extracted with no safe point in between. }
+      Roots.Add(PropertyValue);
+      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyValue),
+        Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
+    end
+    else
+    begin
+      PropName := TGocciaStringLiteralValue(PropertyValue).Value;
+      AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -1858,6 +1969,7 @@ var
   CurrentValue, RhsValue: TGocciaValue;
   ObjectBinding: TGocciaObjectValue;
   ScopeBinding: TGocciaScope;
+  Roots: TGocciaActiveRootFrame;
 
   procedure AssignResolvedTarget(const AValue: TGocciaValue);
   begin
@@ -1922,101 +2034,150 @@ begin
     Exit;
   end;
 
-  Result := CurrentValue;
-  RhsValue := Value.Evaluate(AContext);
-  Result := Goccia.Arithmetic.CompoundOperations(
-      Result, RhsValue, Operator);
-  AssignResolvedTarget(Result);
+  { The old value is only reachable through the binding it was read from, and
+    the RHS can rebind it: `x += (x = 0, "c".repeat(9000))` overwrites the slot
+    and then allocates, so without a root the operand of the addition is swept
+    before CompoundOperations reads it. The RHS and the result need the same
+    protection across the arithmetic — which can run a guest `valueOf` — and
+    across the store, which can run a guest setter. }
+  Roots.Initialize;
+  try
+    Roots.Add(CurrentValue);
+    RhsValue := Value.Evaluate(AContext);
+    Roots.Add(RhsValue);
+    Result := Goccia.Arithmetic.CompoundOperations(
+        CurrentValue, RhsValue, Operator);
+    Roots.Add(Result);
+    AssignResolvedTarget(Result);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
 function TGocciaPropertyCompoundAssignmentExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
-  if ObjectExpr is TGocciaSuperExpression then
-  begin
-    PropertyKeyValue := TGocciaStringLiteralValue.Create(PropertyName);
-    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
-      PropertyKeyValue));
+  { Same exposure as TGocciaComputedPropertyAssignmentExpression: the base, the
+    key literal, the read-back current value and the RHS sit in native locals
+    across `Value.Evaluate`, a getter call, or a property-map growth — each a
+    collecting safe point that marks explicit roots only. Only the values still
+    read after such a point are rooted: the short-circuit predicates consume the
+    current value before anything can collect, while the arithmetic branches
+    carry it across the RHS and hand it to the store. }
+  Roots.Initialize;
+  try
+    if ObjectExpr is TGocciaSuperExpression then
+    begin
+      PropertyKeyValue := TGocciaStringLiteralValue.Create(PropertyName);
+      Roots.Add(PropertyKeyValue);
+      CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+        PropertyKeyValue));
+      { Unlike the non-super paths, the arithmetic branch below still holds the
+        current value across `Value.Evaluate`. }
+      Roots.Add(CurrentValue);
+      if Operator = gttNullishCoalescingAssign then
+      begin
+        if not IsNullishAssignmentValue(CurrentValue) then
+          Exit(CurrentValue);
+
+        Result := Value.Evaluate(AContext);
+        Roots.Add(Result);
+        AssignSuperProperty(AContext, PropertyKeyValue, Result);
+        Exit;
+      end;
+
+      if Operator = gttLogicalAndAssign then
+      begin
+        if not CurrentValue.ToBooleanLiteral.Value then
+          Exit(CurrentValue);
+
+        Result := Value.Evaluate(AContext);
+        Roots.Add(Result);
+        AssignSuperProperty(AContext, PropertyKeyValue, Result);
+        Exit;
+      end;
+
+      if Operator = gttLogicalOrAssign then
+      begin
+        if CurrentValue.ToBooleanLiteral.Value then
+          Exit(CurrentValue);
+
+        Result := Value.Evaluate(AContext);
+        Roots.Add(Result);
+        AssignSuperProperty(AContext, PropertyKeyValue, Result);
+        Exit;
+      end;
+
+      RhsValue := Value.Evaluate(AContext);
+      Roots.Add(RhsValue);
+      Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+        Operator);
+      Roots.Add(Result);
+      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Exit;
+    end;
+
+    Obj := ObjectExpr.Evaluate(AContext);
+    Roots.Add(Obj);
+    // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before the
+    // RHS, and feeds both the short-circuit predicates and the arithmetic.
+    if not ReadPropertyCompoundAssignmentValue(Obj, PropertyName,
+      AContext.OnError, Line, Column, CurrentValue) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+
+    // ES2026 §13.15.2 step 3: ??=
     if Operator = gttNullishCoalescingAssign then
     begin
       if not IsNullishAssignmentValue(CurrentValue) then
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
-      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Roots.Add(Result);
+      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
       Exit;
     end;
 
+    // ES2026 §13.15.2 step 3: &&=
     if Operator = gttLogicalAndAssign then
     begin
       if not CurrentValue.ToBooleanLiteral.Value then
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
-      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Roots.Add(Result);
+      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
       Exit;
     end;
 
+    // ES2026 §13.15.2 step 3: ||=
     if Operator = gttLogicalOrAssign then
     begin
       if CurrentValue.ToBooleanLiteral.Value then
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
-      AssignSuperProperty(AContext, PropertyKeyValue, Result);
+      Roots.Add(Result);
+      AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
       Exit;
     end;
 
+    { The current value is now the only copy of what step 3 read — a getter's
+      result is reachable from nothing else, and the RHS can overwrite the
+      property — so it has to survive `Value.Evaluate` and the arithmetic. }
+    Roots.Add(CurrentValue);
     RhsValue := Value.Evaluate(AContext);
-    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
-      Operator);
-    AssignSuperProperty(AContext, PropertyKeyValue, Result);
-    Exit;
+    Roots.Add(RhsValue);
+    Result := PerformPropertyCompoundAssignment(Obj, PropertyName, CurrentValue,
+      RhsValue, Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
+  finally
+    Roots.Clear;
   end;
-
-  Obj := ObjectExpr.Evaluate(AContext);
-  CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropertyName));
-  // ES2026 §13.15.2 step 3: ??=
-  if Operator = gttNullishCoalescingAssign then
-  begin
-    if not IsNullishAssignmentValue(CurrentValue) then
-      Exit(CurrentValue);
-
-    Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-    Exit;
-  end;
-
-  // ES2026 §13.15.2 step 3: &&=
-  if Operator = gttLogicalAndAssign then
-  begin
-    if not CurrentValue.ToBooleanLiteral.Value then
-      Exit(CurrentValue);
-
-    Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-    Exit;
-  end;
-
-  // ES2026 §13.15.2 step 3: ||=
-  if Operator = gttLogicalOrAssign then
-  begin
-    if CurrentValue.ToBooleanLiteral.Value then
-      Exit(CurrentValue);
-
-    Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropertyName, Result, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-    Exit;
-  end;
-
-  RhsValue := Value.Evaluate(AContext);
-  Result := PerformPropertyCompoundAssignment(Obj, PropertyName, RhsValue,
-    Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
 // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression AssignmentOperator AssignmentExpression
@@ -2025,6 +2186,7 @@ var
   Obj, PropertyKeyValue, CurrentValue, RhsValue: TGocciaValue;
   BoxedValue: TGocciaObjectValue;
   PropName: string;
+  Roots: TGocciaActiveRootFrame;
 
   function ShortCircuits: Boolean;
   begin
@@ -2044,11 +2206,15 @@ var
 
   function ReadSymbolProperty(const AObj: TGocciaValue; const ASymbol: TGocciaSymbolValue): TGocciaValue;
   begin
+    { This is the read step, so a nullish base fails as a read — the store's
+      set-flavored message would misattribute the failure (and diverge from the
+      VM, which reports the read). Matches ReadPropertyCompoundAssignmentValue
+      on the string-key path. }
     if AObj is TGocciaNullLiteralValue then
-      ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [ASymbol.ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else if AObj is TGocciaUndefinedLiteralValue then
-      ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
+      ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [ASymbol.ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess);
 
     if AObj is TGocciaClassValue then
@@ -2074,35 +2240,91 @@ var
   end;
 
 begin
-  if ObjectExpr is TGocciaSuperExpression then
-  begin
-    PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
-    CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
-      PropertyKeyValue));
-
-    if IsShortCircuitOperator then
+  { Same exposure as TGocciaComputedPropertyAssignmentExpression, with one extra
+    crossing: the key is converted before the RHS is evaluated here, so the
+    converted key — not just the raw one — has to survive `Value.Evaluate`. The
+    raw key is rooted before the conversion as well: ToPropertyKey's first call
+    allocates the hint string it passes to a guest [Symbol.toPrimitive], and
+    that allocation can collect the key it is about to convert. }
+  Roots.Initialize;
+  try
+    if ObjectExpr is TGocciaSuperExpression then
     begin
-      if ShortCircuits then
-        Exit(CurrentValue);
+      PropertyKeyValue := PropertyExpression.Evaluate(AContext);
+      Roots.Add(PropertyKeyValue);
+      PropertyKeyValue := ToPropertyKey(PropertyKeyValue);
+      Roots.Add(PropertyKeyValue);
+      CurrentValue := NormalizeAssignmentValue(GetSuperProperty(AContext,
+        PropertyKeyValue));
+      { The arithmetic branch below holds the current value across
+        `Value.Evaluate`; the non-super branches do not (see below). }
+      Roots.Add(CurrentValue);
 
-      Result := Value.Evaluate(AContext);
+      if IsShortCircuitOperator then
+      begin
+        if ShortCircuits then
+          Exit(CurrentValue);
+
+        Result := Value.Evaluate(AContext);
+        Roots.Add(Result);
+        AssignSuperProperty(AContext, PropertyKeyValue, Result);
+        Exit;
+      end;
+
+      RhsValue := Value.Evaluate(AContext);
+      Roots.Add(RhsValue);
+      Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
+        Operator);
+      Roots.Add(Result);
       AssignSuperProperty(AContext, PropertyKeyValue, Result);
       Exit;
     end;
 
-    RhsValue := Value.Evaluate(AContext);
-    Result := Goccia.Arithmetic.CompoundOperations(CurrentValue, RhsValue,
-      Operator);
-    AssignSuperProperty(AContext, PropertyKeyValue, Result);
-    Exit;
-  end;
+    Obj := ObjectExpr.Evaluate(AContext);
+    Roots.Add(Obj);
+    // ES2026 §13.15.2 compound assignment reads through §6.2.5.5 GetValue, whose
+    // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
+    PropertyKeyValue := PropertyExpression.Evaluate(AContext);
+    Roots.Add(PropertyKeyValue);
+    PropertyKeyValue := ToPropertyKeyForBase(Obj, PropertyKeyValue);
+    if PropertyKeyValue is TGocciaSymbolValue then
+    begin
+      { A symbol key survives the read, the RHS and the store; a string key is
+        consumed by the PropName extraction below with nothing collecting in
+        between. The current value is only rooted on the arithmetic branches:
+        the short-circuit predicates read it before anything can collect, while
+        the arithmetic carries it across the RHS and hands it to the store. }
+      Roots.Add(PropertyKeyValue);
+      // ES2026 §13.15.2 step 3: GetValue(lref) runs exactly once here, before
+      // the RHS, and feeds both the short-circuit predicates and the arithmetic.
+      CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
+        TGocciaSymbolValue(PropertyKeyValue)));
 
-  Obj := ObjectExpr.Evaluate(AContext);
-  PropertyKeyValue := ToPropertyKey(PropertyExpression.Evaluate(AContext));
-  if PropertyKeyValue is TGocciaSymbolValue then
-  begin
-    CurrentValue := NormalizeAssignmentValue(ReadSymbolProperty(Obj,
-      TGocciaSymbolValue(PropertyKeyValue)));
+      if IsShortCircuitOperator then
+      begin
+        if ShortCircuits then
+          Exit(CurrentValue);
+
+        Result := Value.Evaluate(AContext);
+        Roots.Add(Result);
+        AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
+          Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
+        Exit;
+      end;
+
+      Roots.Add(CurrentValue);
+      RhsValue := Value.Evaluate(AContext);
+      Roots.Add(RhsValue);
+      Result := PerformSymbolPropertyCompoundAssignment(Obj,
+        TGocciaSymbolValue(PropertyKeyValue), CurrentValue, RhsValue, Operator,
+        AContext.OnError, Line, Column, AContext.NonStrictMode);
+      Exit;
+    end;
+
+    PropName := TGocciaStringLiteralValue(PropertyKeyValue).Value;
+    if not ReadPropertyCompoundAssignmentValue(Obj, PropName, AContext.OnError,
+      Line, Column, CurrentValue) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
 
     if IsShortCircuitOperator then
     begin
@@ -2110,34 +2332,21 @@ begin
         Exit(CurrentValue);
 
       Result := Value.Evaluate(AContext);
-      AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
-        Result, AContext.OnError, Line, Column, AContext.NonStrictMode);
+      Roots.Add(Result);
+      AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
       Exit;
     end;
 
+    Roots.Add(CurrentValue);
     RhsValue := Value.Evaluate(AContext);
-    Result := PerformSymbolPropertyCompoundAssignment(Obj,
-      TGocciaSymbolValue(PropertyKeyValue), RhsValue, Operator,
-      AContext.OnError, Line, Column, AContext.NonStrictMode);
-    Exit;
-  end;
-
-  PropName := TGocciaStringLiteralValue(PropertyKeyValue).Value;
-  CurrentValue := NormalizeAssignmentValue(Obj.GetProperty(PropName));
-  if IsShortCircuitOperator then
-  begin
-    if ShortCircuits then
-      Exit(CurrentValue);
-
-    Result := Value.Evaluate(AContext);
-    AssignProperty(Obj, PropName, Result, AContext.OnError, Line, Column,
+    Roots.Add(RhsValue);
+    Result := PerformPropertyCompoundAssignment(Obj, PropName, CurrentValue,
+      RhsValue, Operator, AContext.OnError, Line, Column,
       AContext.NonStrictMode);
-    Exit;
+  finally
+    Roots.Clear;
   end;
-
-  RhsValue := Value.Evaluate(AContext);
-  Result := PerformPropertyCompoundAssignment(Obj, PropName, RhsValue,
-    Operator, AContext.OnError, Line, Column, AContext.NonStrictMode);
 end;
 
 function ToNumericValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
@@ -2153,96 +2362,131 @@ var
   MemberExpr: TGocciaMemberExpression;
   PrivateExpr: TGocciaPrivateMemberExpression;
   PropName: string;
+  Roots: TGocciaActiveRootFrame;
 begin
-  if Operand is TGocciaIdentifierExpression then
-  begin
-    PropName := TGocciaIdentifierExpression(Operand).Name;
-    OldValue := ToNumericValue(AContext.Scope.GetValue(PropName));
-    NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AContext.Scope.AssignBinding(PropName, NewValue, Line, Column,
-      AContext.NonStrictMode);
-    if IsPrefix then
-      Result := NewValue
-    else
-      Result := OldValue;
-  end
-  else if Operand is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(Operand);
-    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
+  { `makeObj()[f()]++` holds the base in a native local while the key expression
+    runs and while ToPropertyKeyForBase converts it — both arbitrary guest code —
+    and then holds the old value across the numeric conversion, the increment's
+    own allocation and the store. Nothing else references any of them, so each
+    has to be an explicit root; the identifier form below reads and writes a
+    binding that roots the value itself. }
+  Roots.Initialize;
+  try
+    if Operand is TGocciaIdentifierExpression then
     begin
-      if MemberExpr.Computed then
-        PropertyKeyValue := ToPropertyKey(
-          MemberExpr.PropertyExpression.Evaluate(AContext))
-      else
-        PropertyKeyValue := TGocciaStringLiteralValue.Create(
-          MemberExpr.PropertyName);
-      OldValue := ToNumericValue(NormalizeAssignmentValue(
-        GetSuperProperty(AContext, PropertyKeyValue)));
+      PropName := TGocciaIdentifierExpression(Operand).Name;
+      OldValue := ToNumericValue(AContext.Scope.GetValue(PropName));
       NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-      AssignSuperProperty(AContext, PropertyKeyValue, NewValue);
+      AContext.Scope.AssignBinding(PropName, NewValue, Line, Column,
+        AContext.NonStrictMode);
       if IsPrefix then
         Result := NewValue
       else
         Result := OldValue;
-      Exit;
-    end;
-
-    Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
-    if MemberExpr.Computed then
+    end
+    else if Operand is TGocciaMemberExpression then
     begin
-      PropertyKeyValue := ToPropertyKey(MemberExpr.PropertyExpression.Evaluate(AContext));
-      if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+      MemberExpr := TGocciaMemberExpression(Operand);
+      if MemberExpr.ObjectExpr is TGocciaSuperExpression then
       begin
-        if Obj is TGocciaClassValue then
-          OldValue := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue))
+        if MemberExpr.Computed then
+        begin
+          PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
+          Roots.Add(PropertyKeyValue);
+          PropertyKeyValue := ToPropertyKey(PropertyKeyValue);
+        end
         else
-          OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
-        if OldValue = nil then
-          OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        OldValue := ToNumericValue(OldValue);
+          PropertyKeyValue := TGocciaStringLiteralValue.Create(
+            MemberExpr.PropertyName);
+        Roots.Add(PropertyKeyValue);
+        OldValue := ToNumericValue(NormalizeAssignmentValue(
+          GetSuperProperty(AContext, PropertyKeyValue)));
+        Roots.Add(OldValue);
         NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-        AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
-          NewValue, AContext.OnError, Line, Column, AContext.NonStrictMode);
+        Roots.Add(NewValue);
+        AssignSuperProperty(AContext, PropertyKeyValue, NewValue);
         if IsPrefix then
           Result := NewValue
         else
           Result := OldValue;
         Exit;
       end;
-      PropName := PropertyKeyValue.ToStringLiteral.Value;
+
+      Obj := MemberExpr.ObjectExpr.Evaluate(AContext);
+      Roots.Add(Obj);
+      if MemberExpr.Computed then
+      begin
+        // ES2026 §13.4.2/§13.4.3 UpdateExpression reads via §6.2.5.5 GetValue, whose
+        // step 3.a base check precedes the step 3.c ToPropertyKey conversion.
+        PropertyKeyValue := MemberExpr.PropertyExpression.Evaluate(AContext);
+        Roots.Add(PropertyKeyValue);
+        PropertyKeyValue := ToPropertyKeyForBase(Obj, PropertyKeyValue);
+        Roots.Add(PropertyKeyValue);
+        if (PropertyKeyValue is TGocciaSymbolValue) and ((Obj is TGocciaClassValue) or (Obj is TGocciaObjectValue)) then
+        begin
+          if Obj is TGocciaClassValue then
+            OldValue := TGocciaClassValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue))
+          else
+            OldValue := TGocciaObjectValue(Obj).GetSymbolProperty(TGocciaSymbolValue(PropertyKeyValue));
+          if OldValue = nil then
+            OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          Roots.Add(OldValue);
+          OldValue := ToNumericValue(OldValue);
+          Roots.Add(OldValue);
+          NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+          Roots.Add(NewValue);
+          AssignSymbolProperty(Obj, TGocciaSymbolValue(PropertyKeyValue),
+            NewValue, AContext.OnError, Line, Column, AContext.NonStrictMode);
+          if IsPrefix then
+            Result := NewValue
+          else
+            Result := OldValue;
+          Exit;
+        end;
+        PropName := PropertyKeyValue.ToStringLiteral.Value;
+      end
+      else
+        PropName := MemberExpr.PropertyName;
+      OldValue := Obj.GetProperty(PropName);
+      if OldValue = nil then
+        OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Roots.Add(OldValue);
+      OldValue := ToNumericValue(OldValue);
+      Roots.Add(OldValue);
+      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+      Roots.Add(NewValue);
+      AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column,
+        AContext.NonStrictMode);
+      if IsPrefix then
+        Result := NewValue
+      else
+        Result := OldValue;
+    end
+    else if Operand is TGocciaPrivateMemberExpression then
+    begin
+      PrivateExpr := TGocciaPrivateMemberExpression(Operand);
+      OldValue := ToNumericValue(EvaluatePrivateMember(PrivateExpr, AContext,
+        Obj));
+      { The receiver comes back from the read and is used by the store, with the
+        increment's allocation in between. }
+      Roots.Add(Obj);
+      Roots.Add(OldValue);
+      NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
+      Roots.Add(NewValue);
+      AssignPrivateMemberValue(Obj, PrivateExpr.PrivateName, NewValue, AContext,
+        Line, Column);
+      if IsPrefix then
+        Result := NewValue
+      else
+        Result := OldValue;
     end
     else
-      PropName := MemberExpr.PropertyName;
-    OldValue := Obj.GetProperty(PropName);
-    if OldValue = nil then
-      OldValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    OldValue := ToNumericValue(OldValue);
-    NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AssignProperty(Obj, PropName, NewValue, AContext.OnError, Line, Column,
-      AContext.NonStrictMode);
-    if IsPrefix then
-      Result := NewValue
-    else
-      Result := OldValue;
-  end
-  else if Operand is TGocciaPrivateMemberExpression then
-  begin
-    PrivateExpr := TGocciaPrivateMemberExpression(Operand);
-    OldValue := ToNumericValue(EvaluatePrivateMember(PrivateExpr, AContext,
-      Obj));
-    NewValue := PerformIncrement(OldValue, Operator = gttIncrement);
-    AssignPrivateMemberValue(Obj, PrivateExpr.PrivateName, NewValue, AContext,
-      Line, Column);
-    if IsPrefix then
-      Result := NewValue
-    else
-      Result := OldValue;
-  end
-  else
-  begin
-    AContext.OnError('Invalid target for increment/decrement', Line, Column);
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    begin
+      AContext.OnError('Invalid target for increment/decrement', Line, Column);
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -2422,6 +2666,13 @@ begin
         Promise.Resolve(Module.GetNamespaceObject);
       end;
     except
+      { A module whose top-level compiled code throws surfaces here as
+        EGocciaBytecodeThrow; its ThrownValue is the guest completion, so
+        reject import() with that identity to match the VM twin
+        (TGocciaVMDynamicImportStartValue.Call) rather than a synthesized
+        Error. }
+      on E: EGocciaBytecodeThrow do
+        Promise.Reject(E.ThrownValue);
       on E: TGocciaThrowValue do
         Promise.Reject(E.Value);
       on E: TGocciaSyntaxError do
@@ -2434,8 +2685,14 @@ begin
         raise;
       on E: TGocciaInstructionLimitError do
         raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+      end;
     end;
     Result := Promise;
   finally

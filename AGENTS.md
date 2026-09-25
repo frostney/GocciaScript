@@ -35,7 +35,7 @@ For ECMAScript or ECMA-402 behavior, use the project TC39 MCP server before fall
   "mcpServers": {
     "tc39": {
       "command": "npx",
-      "args": ["-y", "tc39-mcp@0.6.1"]
+      "args": ["-y", "tc39-mcp@0.6.3"]
     }
   }
 }
@@ -64,3 +64,4 @@ runtime command lists here.
 - **Contribution requirements:** [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Engine shape:** [docs/architecture.md](docs/architecture.md), [docs/interpreter.md](docs/interpreter.md), [docs/bytecode-vm.md](docs/bytecode-vm.md), [docs/core-patterns.md](docs/core-patterns.md)
 - **Optional extended agent skills:** [.agents/skills/](.agents/skills/) (installable playbooks; not a substitute for CONTRIBUTING)
+- **Runtime optimization waves:** [.agents/skills/optimize-runtime/SKILL.md](.agents/skills/optimize-runtime/SKILL.md) — Use when closing the bytecode-vs-QuickJS gap or running a measured runtime optimization wave. Benchmark-gated; keep only measured wins

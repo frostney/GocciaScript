@@ -198,6 +198,16 @@ procedure RegisterProxyDispatchHooks(
   const AGetFunctionRealm: TGocciaProxyGetFunctionRealmHook);
 procedure RegisterFunctionConstructRedirectHook(
   const AHook: TGocciaFunctionConstructRedirectHook);
+// A class value built by the tree-walk evaluator keeps its instance elements
+// as AST field tables that only the evaluator can run, so its [[Construct]]
+// needs an evaluation context that TGocciaClassValue.Instantiate has no way
+// to produce. The evaluator registers this redirect so that every
+// Construct(F, args, newTarget) entry point — Reflect.construct, the proxy
+// [[Construct]] fallback, species construction — reaches the same
+// InstantiateClass the `new` operator does, instead of the initializer-less
+// fallback.
+procedure RegisterClassConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
 
 // ES2026 §10.2.9 SetFunctionName property-key formatting shared by
 // interpreter and bytecode named-evaluation paths.
@@ -241,6 +251,7 @@ var
   GProxyGetPrototypeHook: TGocciaProxyGetPrototypeHook;
   GProxyGetFunctionRealmHook: TGocciaProxyGetFunctionRealmHook;
   GFunctionConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
+  GClassConstructRedirectHook: TGocciaFunctionConstructRedirectHook;
 
 procedure RegisterProxyDispatchHooks(
   const APredicate: TGocciaProxyPredicate;
@@ -260,6 +271,12 @@ procedure RegisterFunctionConstructRedirectHook(
   const AHook: TGocciaFunctionConstructRedirectHook);
 begin
   GFunctionConstructRedirectHook := AHook;
+end;
+
+procedure RegisterClassConstructRedirectHook(
+  const AHook: TGocciaFunctionConstructRedirectHook);
+begin
+  GClassConstructRedirectHook := AHook;
 end;
 
 function IsRegisteredProxyValue(const AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -450,8 +467,19 @@ begin
       Result := GProxyConstructHook(EffectiveTarget, WorkingArgs,
         EffectiveNewTarget)
     else if EffectiveTarget is TGocciaClassValue then
-      Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
-        EffectiveNewTarget)
+    begin
+      // ES2026 §10.2.2 step 5b / §7.3.33 InitializeInstanceElements: the
+      // instance elements of a class defined in source have to be
+      // initialized here, and only the evaluator can run them. Without the
+      // redirect this fell through to an Instantiate that runs the
+      // constructor body alone, so every field, private field, and method
+      // initializer was silently dropped.
+      if not (Assigned(GClassConstructRedirectHook) and
+              GClassConstructRedirectHook(EffectiveTarget, WorkingArgs,
+                EffectiveNewTarget, Result)) then
+        Result := TGocciaClassValue(EffectiveTarget).Instantiate(WorkingArgs,
+          EffectiveNewTarget);
+    end
     else if EffectiveTarget is TGocciaNativeFunctionValue then
       Result := TGocciaNativeFunctionValue(EffectiveTarget).Construct(WorkingArgs,
         EffectiveNewTarget)
@@ -493,6 +521,8 @@ var
   ConstructorPrototype: TGocciaValue;
   CurrentObject: TGocciaObjectValue;
   CurrentPrototype: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
+  HopRoots: TGocciaActiveRootFrame;
 begin
   if not IsCallableForHasInstance(AConstructor) then
     Exit(False);
@@ -513,18 +543,37 @@ begin
     ThrowTypeError('Function has non-object prototype',
       'set the constructor prototype property to an object');
 
-  CurrentObject := TGocciaObjectValue(AInstance);
-  while True do
-  begin
-    CurrentPrototype := GetPrototypeOfObject(CurrentObject);
-    if (CurrentPrototype = nil) or
-       (CurrentPrototype is TGocciaNullLiteralValue) then
-      Exit(False);
-    if CurrentPrototype = ConstructorPrototype then
-      Exit(True);
-    if not (CurrentPrototype is TGocciaObjectValue) then
-      Exit(False);
-    CurrentObject := TGocciaObjectValue(CurrentPrototype);
+  // GetPrototypeOfObject can invoke a proxy getPrototypeOf trap — guest code
+  // that may force a collection. The walked prototype is held only in a Pascal
+  // local across that trap, and DispatchProxyGetPrototype dereferences the
+  // proxy's internal target for the post-trap invariant check, so an
+  // intermediate prototype reachable only through this walk (e.g. a fresh proxy
+  // returned by an outer trap) would be swept before use. Root the target
+  // prototype for the whole walk and the current object across each hop.
+  Roots.Initialize;
+  Roots.Add(ConstructorPrototype);
+  try
+    CurrentObject := TGocciaObjectValue(AInstance);
+    while True do
+    begin
+      HopRoots.Initialize;
+      HopRoots.Add(CurrentObject);
+      try
+        CurrentPrototype := GetPrototypeOfObject(CurrentObject);
+      finally
+        HopRoots.Clear;
+      end;
+      if (CurrentPrototype = nil) or
+         (CurrentPrototype is TGocciaNullLiteralValue) then
+        Exit(False);
+      if CurrentPrototype = ConstructorPrototype then
+        Exit(True);
+      if not (CurrentPrototype is TGocciaObjectValue) then
+        Exit(False);
+      CurrentObject := TGocciaObjectValue(CurrentPrototype);
+    end;
+  finally
+    Roots.Clear;
   end;
 end;
 
@@ -534,36 +583,49 @@ var
   Args: TGocciaArgumentsCollection;
   Handler: TGocciaValue;
   HandlerResult: TGocciaValue;
+  Roots: TGocciaActiveRootFrame;
 begin
   if not (ATarget is TGocciaObjectValue) then
     ThrowTypeError('Right-hand side of instanceof is not an object',
       'use a constructor function or an object with Symbol.hasInstance');
 
-  Handler := TGocciaObjectValue(ATarget).GetSymbolProperty(
-    TGocciaSymbolValue.WellKnownHasInstance);
-  if Assigned(Handler) and
-     not (Handler is TGocciaUndefinedLiteralValue) and
-     not (Handler is TGocciaNullLiteralValue) then
-  begin
-    if not Handler.IsCallable then
-      ThrowTypeError('Symbol.hasInstance must be callable',
-        'set Symbol.hasInstance to a function or remove it');
+  // The instance can be a boxed primitive — a fresh, native-only object — and
+  // the Symbol.hasInstance lookup below can run a user getter or proxy trap. Root
+  // the instance across that lookup so a collection forced from it cannot sweep
+  // the instance before it is handed to the handler. (The ordinary path exits via
+  // a fresh number never being TGocciaObjectValue, but the lookup itself is the
+  // re-entry point, so the root must span it.)
+  Roots.Initialize;
+  Roots.Add(AInstance);
+  try
+    Handler := TGocciaObjectValue(ATarget).GetSymbolProperty(
+      TGocciaSymbolValue.WellKnownHasInstance);
+    if Assigned(Handler) and
+       not (Handler is TGocciaUndefinedLiteralValue) and
+       not (Handler is TGocciaNullLiteralValue) then
+    begin
+      if not Handler.IsCallable then
+        ThrowTypeError('Symbol.hasInstance must be callable',
+          'set Symbol.hasInstance to a function or remove it');
 
-    Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
-    try
-      Args.Add(AInstance);
-      HandlerResult := DispatchCall(Handler, Args, ATarget);
-      Exit(HandlerResult.ToBooleanLiteral.Value);
-    finally
-      Args.Free;
+      Args := TGocciaArgumentsCollection.CreateWithCapacity(1);
+      try
+        Args.Add(AInstance);
+        HandlerResult := DispatchCall(Handler, Args, ATarget);
+        Exit(HandlerResult.ToBooleanLiteral.Value);
+      finally
+        Args.Free;
+      end;
     end;
+
+    if not IsCallableForHasInstance(ATarget) then
+      ThrowTypeError('Right-hand side of instanceof is not callable',
+        'use a constructor function or define Symbol.hasInstance');
+
+    Result := OrdinaryHasInstance(ATarget, AInstance);
+  finally
+    Roots.Clear;
   end;
-
-  if not IsCallableForHasInstance(ATarget) then
-    ThrowTypeError('Right-hand side of instanceof is not callable',
-      'use a constructor function or define Symbol.hasInstance');
-
-  Result := OrdinaryHasInstance(ATarget, AInstance);
 end;
 
 { TGocciaFunctionBase }
@@ -1001,6 +1063,29 @@ constructor TGocciaFunctionSharedPrototype.Create;
 var
   Members: array[0..4] of TGocciaMemberDefinition;
   Thrower: TGocciaNativeFunctionValue;
+
+  // Stamp the identity the bytecode VM's call fast paths match on, so they
+  // recognise the intrinsic itself rather than any callable sharing its name.
+  procedure MarkIntrinsic(const AName: string;
+    const AKind: TGocciaNativeIntrinsicKind);
+  var
+    Intrinsic: TGocciaValue;
+  begin
+    Intrinsic := GetProperty(AName);
+    // A miss here would silently disengage every fast path keyed on the
+    // kind — the slow path stays correct, so no test could notice.
+    Assert(Intrinsic is TGocciaNativeFunctionValue,
+      'Function.prototype.' + AName + ' must be a native function to carry ' +
+      'its intrinsic kind');
+    // Production builds define PRODUCTION and compile with {$C-}
+    // (source/shared/Shared.inc), so the assertion above is gone there. The
+    // type test has to stand on its own rather than let an unchecked cast
+    // write IntrinsicKind through whatever the property actually holds.
+    if not (Intrinsic is TGocciaNativeFunctionValue) then
+      Exit;
+    TGocciaNativeFunctionValue(Intrinsic).IntrinsicKind := AKind;
+  end;
+
 begin
   inherited Create;
 
@@ -1032,6 +1117,9 @@ begin
       1,
       []);
     RegisterMemberDefinitions(Self, Members);
+    MarkIntrinsic('call', nikFunctionCall);
+    MarkIntrinsic('apply', nikFunctionApply);
+    MarkIntrinsic('bind', nikFunctionBind);
   except
     if (CurrentRealm <> nil) and (CurrentRealm.GetSlot(GFunctionPrototypeSlot) = Self) then
       CurrentRealm.SetSlot(GFunctionPrototypeSlot, nil);
@@ -1233,8 +1321,16 @@ begin
   if TryCallStringFromCodePointApplyFast(AThisValue, ArgArray, Result) then
     Exit;
 
-  // Fast path: small arrays use specialized call methods (FunctionBase only)
-  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) then
+  // Fast path: small dense hole-free arrays use specialized call methods
+  // (FunctionBase only). The gate is what keeps the direct element reads legal:
+  // on a dense hole-free array no read can reach an accessor, so no guest code
+  // runs between the reads and the call and these plain locals cannot be
+  // invalidated by a collection. A hole (ES2026 §7.3.19 step 6b resolves it with
+  // Get, which can invoke an inherited accessor) or a length grown past the
+  // element count sends the call down CreateListFromArrayLike instead, where the
+  // arguments collection is itself a GC root source and the reads are ascending.
+  if (AThisValue is TGocciaFunctionBase) and (ArgArray is TGocciaArrayValue) and
+     IsDenseHoleFreeArgumentArray(TGocciaArrayValue(ArgArray)) then
   begin
     ArrVal := TGocciaArrayValue(ArgArray);
     case ArrVal.Elements.Count of

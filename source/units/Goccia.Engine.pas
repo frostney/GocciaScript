@@ -38,6 +38,7 @@ uses
   Goccia.Builtins.Temporal,
   Goccia.CapabilityAudit,
   Goccia.Constants,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
@@ -188,6 +189,9 @@ type
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FSuppressWarnings: Boolean;
+    { The async-context bracket this engine holds for its whole lifetime; see
+      EnterEngineAsyncContext. }
+    FAsyncContextToken: Integer;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
     procedure SetStrictTypes(const AValue: Boolean);
@@ -270,6 +274,12 @@ type
       AColumn: Integer);
 
     procedure AddAlias(const APattern, AReplacement: string);
+    { Grants bare-specifier resolution against node_modules. Off by default:
+      an embedded engine resolves only what its aliases and relative paths
+      name until a host asks for the ancestor walk. ACeilingDirectory bounds
+      that walk to itself and below; empty walks to the filesystem root.
+      See docs/module-resolution.md. }
+    procedure AllowNodeModules(const ACeilingDirectory: string = '');
     procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure EmitCapabilityAudit(const AKind: TGocciaCapabilityKind;
       const ADecision: TGocciaCapabilityDecision;
@@ -331,6 +341,13 @@ type
     property CapabilityAuditSink: TGocciaCapabilityAuditSink
       read FCapabilityAuditSink write FCapabilityAuditSink;
     property SourcePath: string read FSourcePath;
+    { Read-only view of the entry source. Runtime extensions attach after
+      Initialize has stored the source but before Execute parses it, which is
+      the only window in which an extension can rewrite the module graph for
+      the file it is about to run — the vitest compatibility shim uses it to
+      hoist `vi.mock` calls into virtual modules. Deliberately read-only: the
+      engine owns the list and callers must not mutate what it will parse. }
+    property SourceLines: TStringList read FSourceLines;
     property FunctionConstructor: TGocciaFunctionConstructorClassValue read FFunctionConstructor;
     property ObjectConstructor: TGocciaClassValue read FObjectConstructor;
     property Preprocessors: TGocciaPreprocessors read FPreprocessors write SetPreprocessors;
@@ -382,6 +399,7 @@ uses
   TimingUtils,
   UnicodeStringList,
 
+  Goccia.AsyncContext,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -604,7 +622,10 @@ var
   ExportValue: TGocciaValue;
   Module: TGocciaModule;
 begin
-  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  // Host enrollment is durable on the root module/address. Every static,
+  // dynamic or deferred import from it inherits host ownership regardless of
+  // when the import resolves.
+  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
   ExportNames := Module.GetExportNames;
   for ExportName in ExportNames do
     if Module.TryGetExportValue(ExportName, ExportValue) then
@@ -747,7 +768,9 @@ var
   DefaultValue: TGocciaValue;
   Module: TGocciaModule;
 begin
-  Module := FModuleLoader.LoadModule(APath, FSourcePath);
+  // The manifest module is host-provided config. Durable ownership also covers
+  // imports its exported code may initiate after manifest evaluation returns.
+  Module := FModuleLoader.LoadHostModule(APath, FSourcePath);
   if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
     raise EArgumentException.Create(
       'Virtual modules manifest module must have a default export.');
@@ -842,6 +865,10 @@ procedure TGocciaEngine.Initialize(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AOwnsModuleLoader: Boolean);
 begin
+  { Not a valid token until EnterEngineAsyncContext returns one, so a
+    constructor that fails before then cannot make Destroy unwind past an
+    enclosing engine's entry. }
+  FAsyncContextToken := -1;
   FSourcePath := AFileName;
   FSourceLines := ASourceLines;
   FModuleLoader := AModuleLoader;
@@ -857,6 +884,11 @@ begin
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
   TGocciaMicrotaskQueue.Initialize;
+
+  { Start on an empty async context and remember what this thread was holding,
+    so neither a reused worker-thread slot nor an enclosing engine leaks its
+    snapshot into this one. Destroy restores it. }
+  FAsyncContextToken := EnterEngineAsyncContext;
 
   // Per-realm intrinsic state (Array.prototype, ...) lives on FRealm.  The
   // execution-context stack makes it current after the global environment is
@@ -926,6 +958,13 @@ end;
 
 destructor TGocciaEngine.Destroy;
 begin
+  { Async-context snapshots hold this engine's objects, and `enterWith` can
+    leave one installed with no scope to unwind it. Drop everything this engine
+    left behind before anything else is torn down, and restore whatever was
+    current when it was constructed — engines nest on one thread, so clearing
+    the thread outright would strip an outer engine's context mid-run. }
+  LeaveEngineAsyncContext(FAsyncContextToken);
+
   if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);
 
@@ -1603,8 +1642,13 @@ end;
 function TGocciaEngine.ActivateRealmExecutionContext:
   TGocciaExecutionContextScope;
 begin
+  // Switching into this engine's realm (ShadowRealm evaluate/importValue/wrapped
+  // function) also makes this engine's diagnostic scope the active capture
+  // target, so a code frame captured while this engine runs comes from its own
+  // source — never the caller engine's — and is restored when the scope pops.
   Result := TGocciaExecutionContextScope.Create(
-    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath));
+    CreateExecutionContext(FRealm, FInterpreter.GlobalScope, FSourcePath),
+    FModuleLoader.DiagnosticScope);
 end;
 
 procedure TGocciaEngine.RegisterGocciaScriptGlobal;
@@ -1615,10 +1659,25 @@ var
   ShimsArray: TGocciaArrayValue;
   GCFunc: TGocciaNativeFunctionValue;
   I: Integer;
+  RuntimeGlobalsRoot: TGocciaTempRoot;
+  BuildRoot: TGocciaTempRoot;
+  ShimsRoot: TGocciaTempRoot;
+  GocciaRoot: TGocciaTempRoot;
 begin
+  { Registration runs before the Goccia object reaches the global scope, and
+    each version/os/shim string is charged against the memory ceiling — a GC
+    safe point under a tight --max-memory — so the objects under construction
+    need temp roots. }
+  InitializeTempRoot(RuntimeGlobalsRoot);
+  InitializeTempRoot(BuildRoot);
+  InitializeTempRoot(ShimsRoot);
+  InitializeTempRoot(GocciaRoot);
+  try
   RuntimeGlobalsArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(RuntimeGlobalsRoot, RuntimeGlobalsArray);
 
   BuildObj := TGocciaObjectValue.Create;
+  AddTempRootIfNeeded(BuildRoot, BuildObj);
   BuildObj.DefineProperty('os', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildOS), [pfEnumerable]));
   BuildObj.DefineProperty('arch', TGocciaPropertyDescriptorData.Create(
@@ -1627,10 +1686,12 @@ begin
     TGocciaStringLiteralValue.Create(GetBuildDate), [pfEnumerable]));
 
   ShimsArray := TGocciaArrayValue.Create;
+  AddTempRootIfNeeded(ShimsRoot, ShimsArray);
   for I := 0 to FShims.Count - 1 do
     ShimsArray.Elements.Add(TGocciaStringLiteralValue.Create(FShims[I]));
 
   GocciaObj := TGocciaObjectValue.Create;
+  AddTempRootIfNeeded(GocciaRoot, GocciaObj);
   GocciaObj.AssignProperty('version', TGocciaStringLiteralValue.Create(GetVersion));
   GocciaObj.AssignProperty('commit', TGocciaStringLiteralValue.Create(GetCommit));
   GocciaObj.AssignProperty(PROP_RUNTIME_GLOBALS, RuntimeGlobalsArray);
@@ -1661,6 +1722,12 @@ begin
 
   FGocciaGlobal := GocciaObj;
   FInterpreter.GlobalScope.DefineLexicalBinding(PROP_GOCCIA, FGocciaGlobal, dtConst, True);
+  finally
+    RemoveTempRootIfNeeded(GocciaRoot);
+    RemoveTempRootIfNeeded(ShimsRoot);
+    RemoveTempRootIfNeeded(BuildRoot);
+    RemoveTempRootIfNeeded(RuntimeGlobalsRoot);
+  end;
 end;
 
 function TGocciaEngine.GetResolver: TGocciaModuleResolver;
@@ -1671,6 +1738,21 @@ end;
 procedure TGocciaEngine.AddAlias(const APattern, AReplacement: string);
 begin
   Resolver.AddAlias(APattern, AReplacement);
+end;
+
+procedure TGocciaEngine.AllowNodeModules(const ACeilingDirectory: string);
+begin
+  Resolver.AllowNodeModules(ACeilingDirectory);
+  { The grant is a host decision, not a script action, so it is emitted once at
+    configuration time. The subject is the effective ceiling the resolver
+    normalized — empty when the walk is unbounded, which is the part an auditor
+    most needs to see. An embedding host that calls this API instead of going
+    through the CLI gets the same event; the CLI reaches the resolver directly,
+    so nothing is emitted twice. }
+  if Resolver.NodeModulesEnabled then
+    EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
+      Resolver.NodeModulesCeiling,
+      'bare specifiers resolve against node_modules');
 end;
 
 procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
@@ -1988,7 +2070,8 @@ begin
       if ExportDefaultDecl.IsDirectDeclaration and
          (ExportDefaultDecl.Expression is TGocciaFunctionExpression) then
       begin
-        Value := ExportDefaultDecl.Expression.Evaluate(AContext);
+        Value := EvaluateFunctionExpression(TGocciaFunctionExpression(
+          ExportDefaultDecl.Expression), AContext, False);
         if (Value is TGocciaFunctionValue) and
            (TGocciaFunctionValue(Value).Name = '') then
           TGocciaFunctionValue(Value).Name := KEYWORD_DEFAULT;
@@ -2309,19 +2392,28 @@ function TGocciaEngine.RunModuleForSourceType(
   const AFileName: string): TGocciaValue;
 var
   ModuleScope: TGocciaScope;
+  PrevScope: TGocciaDiagnosticSourceScope;
 begin
-  if FSourceType = stModule then
-  begin
-    ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
-      'Module:' + AFileName);
-    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    ModuleScope.NonStrictMode := False;
-    ModuleScope.ArgumentsObjectEnabled :=
-      cfArgumentsObject in FCompatibility;
-    Result := RunModuleInScope(AModule, ModuleScope);
-  end
-  else
-    Result := RunModule(AModule);
+  // Bytecode execution entry (the interpreter path uses Execute). Bind
+  // code-frame capture to this engine's own scope for the run, as Execute does.
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
+  try
+    if FSourceType = stModule then
+    begin
+      ModuleScope := FInterpreter.GlobalScope.CreateChild(skModule,
+        'Module:' + AFileName);
+      ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      ModuleScope.NonStrictMode := False;
+      ModuleScope.ArgumentsObjectEnabled :=
+        cfArgumentsObject in FCompatibility;
+      Result := RunModuleInScope(AModule, ModuleScope);
+    end
+    else
+      Result := RunModule(AModule);
+  finally
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
+  end;
 end;
 
 procedure TGocciaEngine.DiscardRuntimePending;
@@ -2343,6 +2435,7 @@ begin
     raise EInvalidOperation.CreateFmt(
       'Host module "%s" conflicts with a configured virtual module.',
       [AName]);
+  AModule.IsHostOwned := True;
   FInterpreter.GlobalModules.AddOrSetValue(AName, AModule);
 end;
 
@@ -2391,7 +2484,19 @@ var
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PrevDiagScope: TGocciaDiagnosticSourceScope;
 begin
+  // Bind runtime-error code-frame capture to THIS engine's source scope for the
+  // duration of its execution, restoring the caller's on exit. The previous
+  // scope is a per-invocation LOCAL (never an instance field): a host callback
+  // that re-enters this same engine's Execute must not overwrite an outer
+  // invocation's saved scope, or the outer restore would dangle after the
+  // engine is freed (use-after-free). Capture targets the active scope, so a
+  // nested (sandbox/ShadowRealm) child, a parent that resumes while a child
+  // stays alive, and a later sequential run each capture only their own guest
+  // source. See Goccia.Diagnostics.SourceRegistry.
+  PrevDiagScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
   FillChar(FLastTiming, SizeOf(FLastTiming), 0);
@@ -2597,6 +2702,7 @@ begin
   Result := FLastTiming;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevDiagScope);
   end;
 end;
 
@@ -2610,7 +2716,10 @@ function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaVa
 var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PrevScope: TGocciaDiagnosticSourceScope;
 begin
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
     Result := FExecutor.ExecuteProgram(AProgram);
@@ -2625,6 +2734,7 @@ begin
     end;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
 end;
 
@@ -2679,6 +2789,14 @@ begin
     WriteLn(Format('  --> %s:%d:%d', [FSourcePath, Warning.Line,
       Warning.Column]));
   end;
+  { Standard output is block-buffered when it is not a terminal, and the hosts
+    that print these warnings also write diagnostics to the unbuffered
+    ErrOutput. With both redirected to one file, whatever is still sitting in
+    the stdout buffer surfaces after the next stderr write — which is how a
+    warning's `--> <path>` line came out cut mid-path with other output spliced
+    into it. Flushing at the end of the block keeps a warning whole. }
+  if APipelineResult.WarningCount > 0 then
+    Flush(Output);
 end;
 
 function TGocciaEngine.SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

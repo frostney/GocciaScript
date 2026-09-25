@@ -130,17 +130,30 @@ begin
     ThrowTypeError(SErrorBigIntMixedTypes, SSuggestBigIntNoMixedArithmetic);
 end;
 
+// ES2026 §13.15.3 step 1 coerces the left operand before the right, and the
+// coercion of either one can re-enter guest code (valueOf / toString /
+// Symbol.toPrimitive). The left result is a fresh allocation whenever the hook
+// returned one or a primitive had to be boxed, and until the right operand is
+// coerced it lives only in a Pascal local that no root source walks — so a
+// collection driven from the right-hand hook would sweep it. Keep it on the
+// active-root stack across the second coercion.
+//
+// The active-root stack (rather than AddTempRoot) is what makes this reentrant:
+// it is a LIFO of pushes, so a nested operator inside one of the hooks cannot
+// drop a root an outer operator still depends on, whereas a bare
+// AddTempRoot/RemoveTempRoot pair on the same object would.
 procedure ToPrimitiveOperands(const ALeft, ARight: TGocciaValue;
-  out APrimitiveLeft, APrimitiveRight: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
+  out APrimitiveLeft, APrimitiveRight: TGocciaValue);
+var
+  Roots: TGocciaActiveRootFrame;
 begin
+  Roots.Initialize;
   APrimitiveLeft := ToPrimitive(ALeft);
-  if (TGarbageCollector.Instance <> nil) then
-    TGarbageCollector.Instance.AddTempRoot(APrimitiveLeft);
+  Roots.Add(APrimitiveLeft);
   try
     APrimitiveRight := ToPrimitive(ARight);
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(APrimitiveLeft);
+    Roots.Clear;
   end;
 end;
 
@@ -152,6 +165,23 @@ begin
   if Result is TGocciaBigIntValue then
     Exit;
   Result := Result.ToNumberLiteral;
+end;
+
+// ToNumericOperand twin of ToPrimitiveOperands: same rooting obligation, same
+// spec-mandated left-then-right order.
+procedure ToNumericOperands(const ALeft, ARight: TGocciaValue;
+  out ANumericLeft, ANumericRight: TGocciaValue);
+var
+  Roots: TGocciaActiveRootFrame;
+begin
+  Roots.Initialize;
+  ANumericLeft := ToNumericOperand(ALeft);
+  Roots.Add(ANumericLeft);
+  try
+    ANumericRight := ToNumericOperand(ARight);
+  finally
+    Roots.Clear;
+  end;
 end;
 
 function ToNumberPair(const ALeft, ARight: TGocciaValue;
@@ -213,8 +243,7 @@ var
   NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
 
   // ES2026 §6.1.6.2.2 BigInt::subtract
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
@@ -248,8 +277,7 @@ var
   LeftZero, RightZero: Boolean;
   SameSign: Boolean;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
 
   // ES2026 §6.1.6.2.3 BigInt::multiply
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
@@ -283,8 +311,7 @@ var
   LeftNum, RightNum: TGocciaNumberLiteralValue;
   SameSign: Boolean;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
 
   // ES2026 §6.1.6.2.6 BigInt::divide
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
@@ -341,8 +368,7 @@ var
   NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
 
   // ES2026 §6.1.6.2.7 BigInt::remainder
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
@@ -363,8 +389,7 @@ var
   NumericLeft, NumericRight: TGocciaValue;
   LeftNum, RightNum: TGocciaNumberLiteralValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
 
   // ES2026 §6.1.6.2.8 BigInt::exponentiate
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
@@ -384,8 +409,7 @@ function EvaluateBitwiseAnd(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(NumericLeft).Value.BitwiseAnd(
@@ -398,8 +422,7 @@ function EvaluateBitwiseOr(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(NumericLeft).Value.BitwiseOr(
@@ -412,8 +435,7 @@ function EvaluateBitwiseXor(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(NumericLeft).Value.BitwiseXor(
@@ -427,8 +449,7 @@ function EvaluateLeftShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(NumericLeft).Value.ShiftLeft(
@@ -443,8 +464,7 @@ function EvaluateRightShift(const ALeft, ARight: TGocciaValue): TGocciaValue;
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) and (NumericRight is TGocciaBigIntValue) then
     Exit(TGocciaBigIntValue.Create(
       TGocciaBigIntValue(NumericLeft).Value.ShiftRight(
@@ -460,8 +480,7 @@ function EvaluateUnsignedRightShift(const ALeft, ARight: TGocciaValue): TGocciaV
 var
   NumericLeft, NumericRight: TGocciaValue;
 begin
-  NumericLeft := ToNumericOperand(ALeft);
-  NumericRight := ToNumericOperand(ARight);
+  ToNumericOperands(ALeft, ARight, NumericLeft, NumericRight);
   if (NumericLeft is TGocciaBigIntValue) or (NumericRight is TGocciaBigIntValue) then
     ThrowTypeError(SErrorBigIntUnsignedRightShift,
       SSuggestBigIntNoMixedArithmetic);
@@ -860,14 +879,23 @@ begin
   Result := AValue.ToNumberLiteral;
 end;
 
-function CompareRelationalValues(const ALeft, ARight: TGocciaValue): Integer; {$IFDEF FPC}inline;{$ENDIF}
+function CompareRelationalValues(const ALeft, ARight: TGocciaValue): Integer;
 var
   PrimLeft, PrimRight: TGocciaValue;
   NumericLeft, NumericRight: TGocciaValue;
   Cmp: Integer;
+  Roots: TGocciaActiveRootFrame;
 begin
+  // Same rooting obligation as ToPrimitiveOperands, with the tphNumber hint
+  // ES2026 §7.2.12 IsLessThan requires.
+  Roots.Initialize;
   PrimLeft := ToPrimitive(ALeft, tphNumber);
-  PrimRight := ToPrimitive(ARight, tphNumber);
+  Roots.Add(PrimLeft);
+  try
+    PrimRight := ToPrimitive(ARight, tphNumber);
+  finally
+    Roots.Clear;
+  end;
 
   if (PrimLeft is TGocciaUndefinedLiteralValue) or
      (PrimRight is TGocciaUndefinedLiteralValue) then

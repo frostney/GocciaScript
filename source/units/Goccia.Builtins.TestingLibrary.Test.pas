@@ -193,6 +193,8 @@ type
     function RegisterFocusedSuiteCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RegisterNonFocusedSuiteCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function RegisterDescribeEachSuiteCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function RegisterCollectedFirstSuiteCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ThrowingSuiteCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 
     { describe.skip }
     procedure TestDescribeSkipRegistersSkippedSuite;
@@ -232,6 +234,9 @@ type
     procedure TestTestEachRegistersExpandedTests;
     procedure TestDescribeEachReturnsCallable;
     procedure TestDescribeEachRegistersExpandedSuites;
+
+    { collection abort }
+    procedure TestAbortedCollectionReportsNoRegisteredTests;
   public
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -297,6 +302,7 @@ type
     { mockClear / mockReset }
     procedure TestMockClearKeepsImplementation;
     procedure TestMockResetClearsImplementation;
+    procedure TestMockResetWithoutImplementation;
 
     { mockName / getMockName }
     procedure TestMockNameDefault;
@@ -2119,6 +2125,10 @@ begin
   Test('test.each expands tests for each row', TestTestEachRegistersExpandedTests);
   Test('describe.each returns a callable registration function', TestDescribeEachReturnsCallable);
   Test('describe.each expands suites for each row', TestDescribeEachRegistersExpandedSuites);
+
+  { collection abort }
+  Test('a throwing describe discards the tests collected before it',
+    TestAbortedCollectionReportsNoRegisteredTests);
 end;
 
 { describe.skip }
@@ -2456,6 +2466,77 @@ begin
   ResultObj := RunRegisteredTests;
   Expect<Double>(ResultObj.GetProperty('skipped').ToNumberLiteral.Value).ToBe(1);
   Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(1);
+end;
+
+{ Registers one ordinary test, standing in for a suite collected before a
+  later describe throws. }
+function TTestSkipAndConditionalAPIs.RegisterCollectedFirstSuiteCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+var
+  TestFunc: TGocciaFunctionBase;
+  TestArgs: TGocciaArgumentsCollection;
+begin
+  TestFunc := ResolveGlobalCallable('test');
+  TestArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('earlier'),
+    TGocciaNativeFunctionValue.Create(RecordTestBodyCallback, 'recordTest', 0)
+  ]);
+  try
+    TestFunc.Call(TestArgs, nil);
+  finally
+    TestArgs.Free;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TTestSkipAndConditionalAPIs.ThrowingSuiteCallback(
+  const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  raise Exception.Create('registration exploded');
+end;
+
+{ A throw inside a describe callback is a collection failure, and Vitest
+  discards the whole file for it — including suites collected before the
+  throwing one. The run counts already reflected that; `totalTests` did not,
+  so the result object still advertised a test the runner never intended to
+  run. }
+procedure TTestSkipAndConditionalAPIs.TestAbortedCollectionReportsNoRegisteredTests;
+var
+  DescribeFunc: TGocciaFunctionBase;
+  SuiteArgs: TGocciaArgumentsCollection;
+  ResultObj: TGocciaObjectValue;
+begin
+  DescribeFunc := ResolveGlobalCallable('describe');
+
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('collected first'),
+    TGocciaNativeFunctionValue.Create(RegisterCollectedFirstSuiteCallback,
+      'registerCollectedFirst', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  SuiteArgs := TGocciaArgumentsCollection.Create([
+    TGocciaStringLiteralValue.Create('boom'),
+    TGocciaNativeFunctionValue.Create(ThrowingSuiteCallback, 'throwingSuite', 0)
+  ]);
+  try
+    DescribeFunc.Call(SuiteArgs, nil);
+  finally
+    SuiteArgs.Free;
+  end;
+
+  ResultObj := RunRegisteredTests;
+  Expect<Double>(ResultObj.GetProperty('totalTests').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('totalRunTests').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('passed').ToNumberLiteral.Value).ToBe(0);
+  Expect<Double>(ResultObj.GetProperty('suiteErrors').ToNumberLiteral.Value).ToBe(1);
+  { The earlier suite's test never ran. }
+  Expect<String>(FRecordedEvents.CommaText).ToBe('');
 end;
 
 procedure TTestSkipAndConditionalAPIs.TestBeforeAllRunsOncePerSuite;
@@ -2925,7 +3006,8 @@ begin
 
   { mockClear / mockReset }
   Test('mockClear clears tracking but keeps implementation', TestMockClearKeepsImplementation);
-  Test('mockReset clears tracking and implementation', TestMockResetClearsImplementation);
+  Test('mockReset reinstates the creation implementation', TestMockResetClearsImplementation);
+  Test('mockReset leaves an implementation-less mock returning undefined', TestMockResetWithoutImplementation);
 
   { mockName / getMockName }
   Test('getMockName returns default name', TestMockNameDefault);
@@ -3328,15 +3410,62 @@ begin
   Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
 end;
 
+{ Vitest 4 semantics: mockReset drops the recorded calls and every
+  implementation added after creation, then reinstates the one the mock was
+  created with. Verified against the pinned Vitest release — `vi.fn(impl)`
+  followed by mockReset still calls impl. }
 procedure TTestMockAndSpyAPIs.TestMockResetClearsImplementation;
 var
   M: TGocciaMockFunctionValue;
-  EmptyArgs: TGocciaArgumentsCollection;
+  EmptyArgs, OverrideArgs: TGocciaArgumentsCollection;
   R: TGocciaValue;
-  ImplFn: TGocciaNativeFunctionValue;
+  ImplFn, OverrideFn: TGocciaNativeFunctionValue;
 begin
   ImplFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'impl', 0);
+  OverrideFn := TGocciaNativeFunctionValue.Create(CallbackReturn99, 'override', 0);
   M := TGocciaMockFunctionValue.Create(ImplFn);
+
+  OverrideArgs := TGocciaArgumentsCollection.Create;
+  try
+    OverrideArgs.Add(OverrideFn);
+    M.DoMockImplementation(OverrideArgs, nil);
+  finally
+    OverrideArgs.Free;
+  end;
+
+  CallMockFunction(M, []);
+
+  EmptyArgs := TGocciaArgumentsCollection.Create;
+  try
+    M.DoMockReset(EmptyArgs, nil);
+  finally
+    EmptyArgs.Free;
+  end;
+
+  Expect<Integer>(M.MockCalls.Count).ToBe(0);
+  R := CallMockFunction(M, []);
+  Expect<Double>(R.ToNumberLiteral.Value).ToBe(42);
+end;
+
+{ The other half: a mock created without an implementation has nothing to
+  reinstate, so it goes back to returning undefined. }
+procedure TTestMockAndSpyAPIs.TestMockResetWithoutImplementation;
+var
+  M: TGocciaMockFunctionValue;
+  EmptyArgs, OverrideArgs: TGocciaArgumentsCollection;
+  R: TGocciaValue;
+  OverrideFn: TGocciaNativeFunctionValue;
+begin
+  OverrideFn := TGocciaNativeFunctionValue.Create(CallbackReturn42, 'override', 0);
+  M := TGocciaMockFunctionValue.Create(nil);
+
+  OverrideArgs := TGocciaArgumentsCollection.Create;
+  try
+    OverrideArgs.Add(OverrideFn);
+    M.DoMockImplementation(OverrideArgs, nil);
+  finally
+    OverrideArgs.Free;
+  end;
 
   CallMockFunction(M, []);
 

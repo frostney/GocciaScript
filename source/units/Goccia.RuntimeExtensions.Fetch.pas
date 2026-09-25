@@ -7,12 +7,16 @@ interface
 uses
   Classes,
 
+  Goccia.Builtins.GlobalAbort,
+  Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
   Goccia.Runtime;
 
 type
   TGocciaFetchRuntimeExtension = class(TGocciaRuntimeExtension)
   private
+    FBuiltinAbort: TGocciaGlobalAbort;
+    FBuiltinEventTarget: TGocciaGlobalEventTarget;
     FBuiltinFetch: TGocciaGlobalFetch;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
@@ -55,6 +59,17 @@ var
 begin
   inherited Attach(ARuntime);
   TGocciaFetchManager.Initialize;
+  // EventTarget must exist before AbortSignal so the signal's prototype and
+  // constructor can be linked into the EventTarget chain (WHATWG DOM §3.2).
+  FBuiltinEventTarget := TGocciaGlobalEventTarget.Create('EventTarget',
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_EVENT_TARGET);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_EVENT);
+  FBuiltinAbort := TGocciaGlobalAbort.Create('Abort',
+    Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
+    FBuiltinEventTarget.EventTargetConstructor);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_CONTROLLER);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.EmitCapabilityAudit);
@@ -91,6 +106,10 @@ procedure TGocciaFetchRuntimeExtension.Detach;
 begin
   FBuiltinFetch.Free;
   FBuiltinFetch := nil;
+  FBuiltinAbort.Free;
+  FBuiltinAbort := nil;
+  FBuiltinEventTarget.Free;
+  FBuiltinEventTarget := nil;
   TGocciaFetchManager.Shutdown;
   inherited;
 end;

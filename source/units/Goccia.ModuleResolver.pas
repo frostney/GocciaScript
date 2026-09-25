@@ -9,6 +9,24 @@ uses
 
   OrderedStringMap;
 
+const
+  { Script-visible resolution failures name the specifier exactly as the import
+    statement wrote it. The expanded host candidate never enters the message —
+    it travels in EModuleNotFound.ResolvedCandidatePath instead (ADR 0108). }
+  MODULE_NOT_FOUND_MESSAGE_FORMAT = 'Module not found: "%s"';
+
+  { Raised for a bare specifier when node_modules resolution is not enabled.
+    Names no host path, so ADR 0108 leaves it as-is. }
+  BARE_SPECIFIER_MESSAGE_FORMAT =
+    'Cannot resolve bare module specifier "%s". Imports must start with "./" or "../"';
+
+  { The path in this message is the package-relative one. It describes the
+    package's own layout, never the host directory the package was found in,
+    so it stays inside the ADR 0108 boundary; the expanded path still travels
+    in ResolvedCandidatePath for host reporters. }
+  COMMONJS_MODULE_MESSAGE_FORMAT =
+    'Package "%s" resolved to a CommonJS file (%s); GocciaScript loads only ES modules';
+
 type
   TModuleResolverExtensionArray = array of string;
 
@@ -17,9 +35,16 @@ type
     FAliases: TStringStringMap;
     FBaseDirectory: string;
     FExtensions: TModuleResolverExtensionArray;
+    FNodeModulesEnabled: Boolean;
+    FNodeModulesCeiling: string;
   protected
     function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
     function TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
+    { Resolves a bare specifier against node_modules. The base implementation
+      is the host-filesystem one and returns False unless the capability was
+      granted; resolvers over a different filesystem override it. }
+    function TryResolveBareSpecifier(const AModulePath, AImportingFilePath: string;
+      out AResolvedPath: string): Boolean; virtual;
   public
     constructor Create(const ABaseDirectory: string = '');
     destructor Destroy; override;
@@ -27,6 +52,9 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     function ApplyAlias(const AModulePath,
       AImportingFilePath: string): string;
+    { Grants the node_modules capability. ACeilingDirectory bounds the ancestor
+      walk to that directory and below; empty walks to the filesystem root. }
+    procedure AllowNodeModules(const ACeilingDirectory: string = '');
     function GetExtensions: TModuleResolverExtensionArray;
     function HasAlias(const AModulePath: string): Boolean;
     procedure SetExtensions(const AExtensions: array of string);
@@ -34,14 +62,41 @@ type
 
     property Aliases: TStringStringMap read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
+    property NodeModulesEnabled: Boolean read FNodeModulesEnabled;
+    property NodeModulesCeiling: string read FNodeModulesCeiling;
   end;
 
-  EModuleNotFound = class(Exception);
+  { Raised when a specifier cannot be resolved. Message is safe to hand to
+    untrusted script code; ResolvedCandidatePath is host-only diagnostic
+    detail and is empty unless the constructor supplied one. }
+  EModuleNotFound = class(Exception)
+  private
+    FResolvedCandidatePath: string;
+  public
+    constructor CreateNotFound(const ASpecifier, AResolvedCandidatePath: string);
+    constructor CreateWithCandidate(const AMessage,
+      AResolvedCandidatePath: string);
+
+    property ResolvedCandidatePath: string read FResolvedCandidatePath;
+  end;
+
+  { A node_modules specifier that resolved to a file GocciaScript will not
+    load. Distinct from a missing module so a host can tell "the package is not
+    installed" from "the package is CommonJS", and so the failure never reaches
+    the parser as a SyntaxError. }
+  EModuleIsCommonJS = class(EModuleNotFound)
+  public
+    constructor CreateCommonJS(const APackageName, APackageRelativePath,
+      AResolvedCandidatePath: string);
+  end;
 
 implementation
 
 uses
-  FileUtils;
+  FileUtils,
+
+  Goccia.FileExtensions,
+  Goccia.Modules.NodeResolution;
 
 const
   ALIAS_SEGMENT_DELIMITER = '/';
@@ -130,6 +185,27 @@ begin
     Result := MatchPath = AAlias;
 end;
 
+constructor EModuleNotFound.CreateNotFound(const ASpecifier,
+  AResolvedCandidatePath: string);
+begin
+  inherited CreateFmt(MODULE_NOT_FOUND_MESSAGE_FORMAT, [ASpecifier]);
+  FResolvedCandidatePath := AResolvedCandidatePath;
+end;
+
+constructor EModuleNotFound.CreateWithCandidate(const AMessage,
+  AResolvedCandidatePath: string);
+begin
+  inherited Create(AMessage);
+  FResolvedCandidatePath := AResolvedCandidatePath;
+end;
+
+constructor EModuleIsCommonJS.CreateCommonJS(const APackageName,
+  APackageRelativePath, AResolvedCandidatePath: string);
+begin
+  inherited CreateWithCandidate(Format(COMMONJS_MODULE_MESSAGE_FORMAT,
+    [APackageName, APackageRelativePath]), AResolvedCandidatePath);
+end;
+
 constructor TModuleResolver.Create(const ABaseDirectory: string);
 begin
   FAliases := TStringStringMap.Create;
@@ -149,6 +225,16 @@ end;
 procedure TModuleResolver.AddAlias(const APattern, AReplacement: string);
 begin
   FAliases.AddOrSetValue(APattern, AReplacement);
+end;
+
+procedure TModuleResolver.AllowNodeModules(const ACeilingDirectory: string);
+begin
+  FNodeModulesEnabled := True;
+  if ACeilingDirectory <> '' then
+    FNodeModulesCeiling := ExcludeTrailingPathDelimiter(
+      ExpandHostFileName(ACeilingDirectory))
+  else
+    FNodeModulesCeiling := '';
 end;
 
 function TModuleResolver.ApplyAlias(const AModulePath,
@@ -230,11 +316,22 @@ end;
 function TModuleResolver.TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
 var
   I: Integer;
+  TypeScriptCandidates: TFileExtensionArray;
 begin
   if HostFileExists(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
+  end;
+
+  TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
+  for I := 0 to High(TypeScriptCandidates) do
+  begin
+    if HostFileExists(TypeScriptCandidates[I]) then
+    begin
+      AResolvedPath := TypeScriptCandidates[I];
+      Exit(True);
+    end;
   end;
 
   for I := 0 to High(FExtensions) do
@@ -258,26 +355,97 @@ begin
   Result := False;
 end;
 
+function TModuleResolver.TryResolveBareSpecifier(const AModulePath,
+  AImportingFilePath: string; out AResolvedPath: string): Boolean;
+var
+  Manifest: TGocciaPackageManifest;
+  ManifestPath, PackageDirectory, PackageName, StartDirectory: string;
+  Subpath, Target, TargetCandidate: string;
+begin
+  AResolvedPath := '';
+  if not FNodeModulesEnabled then
+    Exit(False);
+  if not SplitBareSpecifier(AModulePath, PackageName, Subpath) then
+    Exit(False);
+
+  StartDirectory := ExtractFilePath(AImportingFilePath);
+  if StartDirectory = '' then
+    StartDirectory := FBaseDirectory;
+
+  if not FindPackageDirectory(StartDirectory, FNodeModulesCeiling, PackageName,
+    PackageDirectory) then
+    raise EModuleNotFound.CreateNotFound(AModulePath,
+      IncludeTrailingPathDelimiter(ExpandHostFileName(StartDirectory)) +
+        NODE_MODULES_DIRECTORY_NAME + PathDelim + PackageName);
+
+  ManifestPath := IncludeTrailingPathDelimiter(PackageDirectory) +
+    PACKAGE_MANIFEST_FILE_NAME;
+  try
+    if not LoadPackageManifest(PackageDirectory, Manifest) then
+      raise EModuleNotFound.CreateNotFound(AModulePath, ManifestPath);
+  except
+    { A malformed manifest is a resolution failure like any other. Letting the
+      JSON parser's own exception escape would bypass the loader's rewrapping
+      and reach script as an uncatchable host error. }
+    on EModuleNotFound do
+      raise;
+    on Exception do
+      raise EModuleNotFound.CreateNotFound(AModulePath, ManifestPath);
+  end;
+
+  if not ResolvePackageSubpath(Manifest, Subpath, Target) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, PackageDirectory);
+
+  TargetCandidate := ExpandHostFileName(
+    IncludeTrailingPathDelimiter(PackageDirectory) +
+    StringReplace(Target, SPECIFIER_SEGMENT_SEPARATOR, PathDelim,
+      [rfReplaceAll]));
+  { Containment is checked before the extension probe as well as after it, so a
+    target that escaped the package is refused without the resolver stat-ing
+    paths outside it. The segment validation in Goccia.Modules.NodeResolution
+    rejects the specifiers and targets that are invalid on their face; this
+    catches whatever any combination of them still normalized into, and is what
+    makes the --allow-node-modules ceiling a real boundary (ADR 0111). }
+  if not IsPathInsideDirectory(TargetCandidate, PackageDirectory) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+
+  if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+
+  { The post-probe gate is the physical one. The candidate above is a name that
+    may not exist yet, so only its spelling can be judged; by here a real file
+    has been found, and a real file is what a symlinked child of the package
+    would have escaped through. }
+  if not IsPathPhysicallyInsideDirectory(AResolvedPath, PackageDirectory) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, AResolvedPath);
+
+  if IsCommonJSModuleFile(Manifest, AResolvedPath) then
+    raise EModuleIsCommonJS.CreateCommonJS(PackageName,
+      PackageRelativePath(PackageDirectory, AResolvedPath), AResolvedPath);
+
+  Result := True;
+end;
+
 function TModuleResolver.Resolve(const AModulePath, AImportingFilePath: string): string;
 var
-  AliasApplied, BaseDirectory: string;
+  AliasApplied, BaseDirectory, CandidatePath: string;
 begin
   AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
 
   if AliasApplied <> AModulePath then
   begin
-    if TryResolveWithExtensions(ExpandHostFileName(AliasApplied), Result) then
+    CandidatePath := ExpandHostFileName(AliasApplied);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (alias resolved to "%s")', [AModulePath, ExpandHostFileName(AliasApplied)]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
   if IsAbsolutePath(AModulePath) then
   begin
-    if TryResolveWithExtensions(ExpandHostFileName(AModulePath), Result) then
+    CandidatePath := ExpandHostFileName(AModulePath);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s"', [AModulePath]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
   if (Copy(AModulePath, 1, 2) = './') or (Copy(AModulePath, 1, 3) = '../') then
@@ -286,15 +454,18 @@ begin
     if BaseDirectory = '' then
       BaseDirectory := GetCurrentDir + PathDelim;
 
-    if TryResolveWithExtensions(ExpandHostFileName(BaseDirectory + AModulePath), Result) then
+    CandidatePath := ExpandHostFileName(BaseDirectory + AModulePath);
+    if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
 
-    raise EModuleNotFound.CreateFmt(
-      'Module not found: "%s" (resolved to "%s")', [AModulePath, ExpandHostFileName(BaseDirectory + AModulePath)]);
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
   end;
 
-  raise EModuleNotFound.CreateFmt(
-    'Cannot resolve bare module specifier "%s". Imports must start with "./" or "../"', [AModulePath]);
+  if TryResolveBareSpecifier(AModulePath, AImportingFilePath, Result) then
+    Exit;
+
+  raise EModuleNotFound.CreateFmt(BARE_SPECIFIER_MESSAGE_FORMAT,
+    [AModulePath]);
 end;
 
 end.

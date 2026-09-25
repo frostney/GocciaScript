@@ -259,7 +259,8 @@ begin
   if not Assigned(AEngine) then
     raise EArgumentNilException.Create('AEngine');
 
-  Module := AEngine.ModuleLoader.LoadModule(AModulePath, AEngine.SourcePath);
+  Module := AEngine.ModuleLoader.LoadHostModule(AModulePath,
+    AEngine.SourcePath);
   EpochNanosecondsProvider := RequireCallableExport(Module,
     'epochNanoseconds');
   MonotonicNanosecondsProvider := RequireCallableExport(Module,

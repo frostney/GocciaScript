@@ -15,6 +15,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Realm,
+  Goccia.Scope,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -71,6 +72,20 @@ type
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
+    // ES2026 §15.7.14 ClassDefinitionEvaluation steps 1-2 and §15.7.10
+    // ClassFieldDefinitionEvaluation step 2b: the class environment that was
+    // current when this class was evaluated. A field initializer is a function
+    // whose [[Environment]] is that environment, not the environment of
+    // whatever scope happens to run `new`.
+    FDefinitionScope: TGocciaScope;
+    // The script or module path that was current when this class was
+    // evaluated. TGocciaFunctionValue keeps the same thing as
+    // FSourceFilePath, for the same reasons: `import()` and `import.meta`
+    // resolve against the *defining* file, and coverage and call-stack frames
+    // are attributed to it. A class body runs code — field initializers and
+    // static blocks — outside any of its own methods, so the class value has
+    // to carry it too.
+    FDefinitionSourcePath: string;
     function GetPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetStaticPropertyGetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
@@ -125,7 +140,39 @@ type
       const ARealm: TGocciaRealm): TGocciaObjectValue; virtual;
     function Instantiate(const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue = nil): TGocciaValue; virtual;
+    // True when this class value carries its own [[Construct]] implementation
+    // instead of the AST constructor method and field tables that the
+    // tree-walk instantiation path drives. Typed arrays allocate an exotic
+    // receiver, and a bytecode-compiled class holds its constructor as a
+    // closure rather than a TGocciaMethodValue; for both, `new` must go
+    // through Instantiate. The tree-walk evaluator is handed such classes in
+    // bytecode mode, because a module's top-level function declarations are
+    // created by the evaluator while linking (ES2026 §16.2.1.7.3.1
+    // InitializeEnvironment) and keep running there.
+    function UsesOwnInstantiation: Boolean; virtual;
+    // Runs this class's own [[Construct]] steps — field initializers and
+    // constructor body — against an already-allocated receiver, and reports
+    // whether it did. This is what `super()` from a tree-walk subclass and
+    // `new` through a bound wrapper need: they own the receiver, so they
+    // cannot call Instantiate. Returns False for class values whose
+    // construction the tree-walk path drives from the AST constructor method.
+    function TryConstructOnReceiver(
+      const AArguments: TGocciaArgumentsCollection;
+      const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+      out AResult: TGocciaValue): Boolean; virtual;
     function EstimatedInstancePropertyCapacity: Integer;
+    // Approximates ES2026 §15.7.14 ClassDefinitionEvaluation step 19's
+    // [[ConstructorKind]] = ~derived~, which decides when instance elements
+    // are initialized: a ~base~ constructor does it before its body (§10.2.2
+    // step 5b), a ~derived~ one when super() returns (§13.3.7.1 step 11).
+    // Reports True when a resolved superclass or a linked native super
+    // constructor is present. `class A extends null {}` reports True, which is
+    // the spec-correct answer (§15.7.14 step 9a makes it ~derived~): the
+    // evaluator links Function.prototype as the native super constructor for
+    // it, and the construction paths recognise that sentinel and raise the
+    // TypeError §10.2.2 requires when the implicit derived constructor tries
+    // to call super().
+    function HasDerivedConstructorKind: Boolean;
     function HasInstanceInitializerWork: Boolean;
     // ECMAScript: number of expected constructor parameters before the first
     // default/rest. Built-in classes default to 0; user classes derive from
@@ -138,6 +185,7 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function GetAllPropertyNames: TArray<string>; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function DeleteProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -152,6 +200,10 @@ type
     function GetOwnStaticSymbolDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 
     property Name: string read FName;
+    property DefinitionScope: TGocciaScope read FDefinitionScope
+      write FDefinitionScope;
+    property DefinitionSourcePath: string read FDefinitionSourcePath
+      write FDefinitionSourcePath;
     property SourceText: string read FSourceText write FSourceText;
     property CreationRealm: TGocciaRealm read FCreationRealm;
     property PrivateBrandToken: string read FPrivateBrandToken;
@@ -374,6 +426,102 @@ function GetNativePrototypeFromConstructor(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
 
+type
+  { Runs a class's AST-declared instance elements against AInstance.
+
+    §15.7.10 ClassFieldDefinitionEvaluation records an evaluator-built class's
+    fields as expressions in InstancePropertyDefs, not as the closure-shaped
+    values RunFieldInitializers walks, and evaluating an expression needs an
+    evaluation context. Only the tree-walk evaluator has one, so it registers
+    this hook and every other holder of a TGocciaClassValue — including the
+    bytecode VM — reaches those elements through it. }
+  TGocciaClassInstanceElementsHook = procedure(
+    const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue);
+
+procedure RegisterClassInstanceElementsHook(
+  const AHook: TGocciaClassInstanceElementsHook);
+{ True when AClassValue's instance elements are AST-declared, which is exactly
+  the classes the evaluator built. A compiled class records field initializers
+  as closures instead and always reports False here. }
+function HasASTInstanceElements(
+  const AClassValue: TGocciaClassValue): Boolean;
+
+{ Runs them when there are any and an evaluator registered itself; reports
+  whether it ran anything. }
+function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
+  const AInstance: TGocciaValue): Boolean;
+
+type
+  TGocciaClassChain = array of TGocciaClassValue;
+
+  { What walking a class's implicit-constructor chain found. }
+  TGocciaImplicitConstructorChain = record
+    { Classes between the starting class and the constructor that actually
+      runs, derived-most first: §15.7.14 step 15a still owes each of them an
+      implicit constructor, so the caller owes their instance elements. }
+    Collapsed: TGocciaClassChain;
+    { The class whose constructor body the caller should run, or nil. }
+    HostClass: TGocciaClassValue;
+    { The object the chain's last super() reaches when it is not a class value
+      — a built-in constructor exposed as a function, or, after an
+      Object.setPrototypeOf, whatever the constructor was retargeted onto.
+      Nil when the chain ends at a class or at a ~base~ constructor. }
+    SuperConstructor: TGocciaObjectValue;
+    { The class whose super() reaches SuperConstructor. }
+    SuperConstructorOwner: TGocciaClassValue;
+    { Set when the chain stops at a ~derived~ class that has no [[Prototype]]
+      left at all — Object.setPrototypeOf(C, null). §13.3.7.3 hands super()
+      undefined and §13.3.7.1 step 3 rejects it. }
+    SuperConstructorAbsent: Boolean;
+  end;
+
+{ ES2026 §15.7.14 step 15a: a class with no constructor of its own runs an
+  implicit constructor that forwards its arguments to super and then, per
+  §13.3.7.1 step 11, initializes its own instance elements.
+
+  Every construction path collapses that recursion — it walks the superclass
+  chain in one go to find the built-in that has to allocate the receiver, then
+  runs one constructor against it — and each class the walk stepped over lost
+  both halves of its implicit constructor. A class extending Array with a field
+  of its own, subclassed again by a class with another field, produced an
+  instance carrying only the subclass's field.
+
+  Every hop is §13.3.7.3 GetSuperConstructor, so the walk follows one chain —
+  the constructor objects' [[Prototype]] — and never mixes it with the declared
+  superclass. Mixing them was unsound as well as wrong: each relation alone is
+  acyclic (ordinary [[SetPrototypeOf]] rejects a cycle), their union is not, and
+  a plain Object.setPrototypeOf pair could spin this walk forever. }
+procedure ResolveImplicitConstructorChain(
+  const AClassValue: TGocciaClassValue;
+  out AChain: TGocciaImplicitConstructorChain);
+
+{ True when AChain ends at an object that cannot be constructed — §13.3.7.1
+  SuperCall step 3 raises a TypeError for it. }
+function ImplicitSuperConstructorIsUnusable(
+  const AChain: TGocciaImplicitConstructorChain): Boolean;
+
+{ True when AChain's super constructor is one Object.setPrototypeOf moved there
+  rather than the one the class was declared with. The declared one is already
+  driven by the construction paths' native-super branches; a retargeted one has
+  to be constructed through instead of them. }
+function ImplicitSuperConstructorIsRetargeted(
+  const AChain: TGocciaImplicitConstructorChain): Boolean;
+
+{ The object an implicit super() reaches: §13.3.7.3 GetSuperConstructor reads
+  the active function object's [[GetPrototypeOf]], which Object.setPrototypeOf
+  moves. Nil for a ~base~ class, which has no super() at all. }
+function ImplicitSuperConstructorTarget(
+  const AClassValue: TGocciaClassValue): TGocciaObjectValue;
+
+{ The same hop, reported only when it lands on a class value. }
+function ImplicitSuperConstructorClass(
+  const AClassValue: TGocciaClassValue): TGocciaClassValue;
+
+{ True when AClassValue is ~derived~ yet has nothing to resolve super()
+  through, which only Object.setPrototypeOf(C, null) produces. }
+function ImplicitSuperConstructorIsAbsent(
+  const AClassValue: TGocciaClassValue): Boolean;
+
 implementation
 
 uses
@@ -389,7 +537,9 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
+  Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.AutoAccessor,
@@ -416,6 +566,166 @@ uses
   Goccia.Values.WeakMapValue,
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
+
+var
+  GClassInstanceElementsHook: TGocciaClassInstanceElementsHook;
+
+procedure RegisterClassInstanceElementsHook(
+  const AHook: TGocciaClassInstanceElementsHook);
+begin
+  GClassInstanceElementsHook := AHook;
+end;
+
+function HasASTInstanceElements(
+  const AClassValue: TGocciaClassValue): Boolean;
+begin
+  Result := Assigned(AClassValue) and
+    ((AClassValue.InstancePropertyDefs.Count > 0) or
+     (AClassValue.PrivateInstancePropertyDefs.Count > 0));
+end;
+
+function TryRunASTInstanceElements(const AClassValue: TGocciaClassValue;
+  const AInstance: TGocciaValue): Boolean;
+begin
+  Result := Assigned(GClassInstanceElementsHook) and
+    (AInstance is TGocciaObjectValue) and
+    HasASTInstanceElements(AClassValue);
+  if Result then
+    GClassInstanceElementsHook(AClassValue, AInstance);
+end;
+
+function ImplicitSuperConstructorTarget(
+  const AClassValue: TGocciaClassValue): TGocciaObjectValue;
+begin
+  Result := nil;
+  if not Assigned(AClassValue) then
+    Exit;
+  { §15.7.14 step 9 fixes [[ConstructorKind]] when the class is defined, and
+    §10.2.2 step 5 gives a ~base~ constructor no super() at all — so nothing
+    about its [[Construct]] follows the constructor object's [[Prototype]].
+    Probed against Node v24.0.1: an ordinary class retargeted with
+    Object.setPrototypeOf onto a class that has a constructor still constructs
+    a plain object and never runs it. }
+  if not AClassValue.HasDerivedConstructorKind then
+    Exit;
+  { §13.3.7.3 GetSuperConstructor: a ~derived~ constructor resolves super()
+    through the active function object's [[GetPrototypeOf]], which
+    Object.setPrototypeOf does move — including onto something that is not a
+    constructor at all, which §13.3.7.1 SuperCall step 3 rejects. Falling back
+    to the declared superclass here instead was wrong twice over: it ran a
+    constructor Node never runs, and it mixed two chains into a walk that could
+    cycle. }
+  Result := AClassValue.GetConstructorPrototype;
+end;
+
+function ImplicitSuperConstructorClass(
+  const AClassValue: TGocciaClassValue): TGocciaClassValue;
+var
+  Target: TGocciaObjectValue;
+begin
+  Target := ImplicitSuperConstructorTarget(AClassValue);
+  if Target is TGocciaClassValue then
+    Result := TGocciaClassValue(Target)
+  else
+    Result := nil;
+end;
+
+function ImplicitSuperConstructorIsAbsent(
+  const AClassValue: TGocciaClassValue): Boolean;
+begin
+  Result := Assigned(AClassValue) and AClassValue.HasDerivedConstructorKind and
+    (not Assigned(AClassValue.GetConstructorPrototype));
+end;
+
+function ImplicitSuperConstructorIsUnusable(
+  const AChain: TGocciaImplicitConstructorChain): Boolean;
+begin
+  Result := AChain.SuperConstructorAbsent or
+    (Assigned(AChain.SuperConstructor) and
+     ((AChain.SuperConstructor = TGocciaFunctionBase.GetSharedPrototype) or
+      (not AChain.SuperConstructor.IsConstructable)));
+end;
+
+function ImplicitSuperConstructorIsRetargeted(
+  const AChain: TGocciaImplicitConstructorChain): Boolean;
+begin
+  Result := Assigned(AChain.SuperConstructor) and
+    Assigned(AChain.SuperConstructorOwner) and
+    (AChain.SuperConstructor <>
+     AChain.SuperConstructorOwner.NativeSuperConstructor);
+end;
+
+procedure ResolveImplicitConstructorChain(
+  const AClassValue: TGocciaClassValue;
+  out AChain: TGocciaImplicitConstructorChain);
+var
+  Count, Index: Integer;
+  Current, Next: TGocciaClassValue;
+  Target: TGocciaObjectValue;
+  AlreadySeen: Boolean;
+begin
+  SetLength(AChain.Collapsed, 0);
+  AChain.HostClass := nil;
+  AChain.SuperConstructor := nil;
+  AChain.SuperConstructorOwner := nil;
+  AChain.SuperConstructorAbsent := False;
+  Count := 0;
+  Current := AClassValue;
+
+  while Assigned(Current) do
+  begin
+    { The same bounds the sibling walk in InstantiateClass applies. Following
+      one [[Prototype]] chain cannot cycle, so these are defence in depth
+      rather than the correctness argument. }
+    CheckExecutionTimeout;
+    IncrementInstructionCounter;
+    CheckInstructionLimit;
+
+    Target := ImplicitSuperConstructorTarget(Current);
+    if not Assigned(Target) then
+    begin
+      { Either a ~base~ constructor, which has no super() at all, or a derived
+        one whose [[Prototype]] was set to null and so has nothing to call. }
+      AChain.SuperConstructorAbsent := ImplicitSuperConstructorIsAbsent(Current);
+      if AChain.SuperConstructorAbsent then
+        AChain.SuperConstructorOwner := Current;
+      Break;
+    end;
+
+    if not (Target is TGocciaClassValue) then
+    begin
+      AChain.SuperConstructor := Target;
+      AChain.SuperConstructorOwner := Current;
+      Break;
+    end;
+
+    Next := TGocciaClassValue(Target);
+    if (Next.NativeInstanceDefaultPrototype <> nil) or
+       Next.UsesOwnInstantiation or
+       Assigned(Next.ConstructorMethod) then
+    begin
+      AChain.HostClass := Next;
+      Break;
+    end;
+
+    { Defence in depth again: a repeat means the walk stopped following one
+      chain, which should be impossible. Stopping beats spinning. }
+    AlreadySeen := Next = AClassValue;
+    for Index := 0 to Count - 1 do
+      if AChain.Collapsed[Index] = Next then
+        AlreadySeen := True;
+    if AlreadySeen then
+      Break;
+
+    if Count = Length(AChain.Collapsed) then
+      SetLength(AChain.Collapsed, Count * 2 + 4);
+    AChain.Collapsed[Count] := Next;
+    Inc(Count);
+    Current := Next;
+  end;
+
+  SetLength(AChain.Collapsed, Count);
+end;
 
 function ToNumberConstructorValue(
   const AValue: TGocciaValue): TGocciaNumberLiteralValue;
@@ -742,6 +1052,8 @@ begin
   FConstructorMethod := nil;
   FNameDeleted := False;
   FLengthDeleted := False;
+  FDefinitionScope := nil;
+  FDefinitionSourcePath := '';
   if Assigned(FSuperClass) then
     FClassPrototype.Prototype := FSuperClass.Prototype
   else if TGocciaObjectValue.SharedObjectPrototype <> nil then
@@ -781,6 +1093,12 @@ begin
 
   if Assigned(FSuperClass) then
     FSuperClass.MarkReferences;
+
+  { The class environment outlives the class definition exactly the way a
+    function's closure outlives its declaration: field initializers are
+    closures over it, so it is reachable for as long as the class is. }
+  if Assigned(FDefinitionScope) then
+    FDefinitionScope.MarkReferences;
 
   if Assigned(FNativeSuperConstructor) then
     FNativeSuperConstructor.MarkReferences;
@@ -1588,6 +1906,11 @@ begin
   end;
 end;
 
+function TGocciaClassValue.HasDerivedConstructorKind: Boolean;
+begin
+  Result := Assigned(FSuperClass) or Assigned(FNativeSuperConstructor);
+end;
+
 function TGocciaClassValue.HasInstanceInitializerWork: Boolean;
 var
   I: Integer;
@@ -1602,6 +1925,20 @@ begin
     if not FDecoratorFieldInitializers[I].IsStatic then
       Exit(True);
 
+  Result := False;
+end;
+
+function TGocciaClassValue.UsesOwnInstantiation: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaClassValue.TryConstructOnReceiver(
+  const AArguments: TGocciaArgumentsCollection;
+  const AReceiver: TGocciaValue; const ANewTarget: TGocciaValue;
+  out AResult: TGocciaValue): Boolean;
+begin
+  AResult := nil;
   Result := False;
 end;
 
@@ -1625,6 +1962,8 @@ var
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
+  Chain: TGocciaImplicitConstructorChain;
+  CollapsedIndex: Integer;
   function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or
@@ -1684,26 +2023,32 @@ begin
   DelayNativePrototypeLookup := False;
   NativeInstanceInitialized := False;
   NativeInstanceConstructedByNativeSuper := False;
+  ResolveImplicitConstructorChain(Self, Chain);
+  { Which built-in ends up allocating the receiver is decided by the same
+    §13.3.7.3 hops the chain walk takes, so this follows them rather than the
+    declared superclass: a retargeted constructor allocates from whatever it
+    was retargeted onto, and stops reaching the built-in it was declared with. }
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
+    CheckExecutionTimeout;
+    IncrementInstructionCounter;
+    CheckInstructionLimit;
     NativeIntrinsicPrototype := WalkClass.NativeInstanceDefaultPrototype;
     if Assigned(NativeIntrinsicPrototype) then
     begin
       NativeClass := WalkClass;
       Break;
     end;
-    if Assigned(WalkClass.NativeSuperConstructor) then
+    NativeSuperConstructor := ImplicitSuperConstructorTarget(WalkClass);
+    if Assigned(NativeSuperConstructor) and
+       not (NativeSuperConstructor is TGocciaClassValue) then
     begin
-      if WalkClass.NativeSuperConstructor is TGocciaClassValue then
-      begin
-        NativeClass := TGocciaClassValue(WalkClass.NativeSuperConstructor);
-        NativeIntrinsicPrototype := NativeClass.NativeInstanceDefaultPrototype;
-      end;
-      NativeSuperConstructor := WalkClass.NativeSuperConstructor;
+      NativeIntrinsicPrototype := nil;
       Break;
     end;
-    WalkClass := WalkClass.SuperClass;
+    NativeSuperConstructor := nil;
+    WalkClass := ImplicitSuperConstructorClass(WalkClass);
   end;
 
   // These constructors perform observable validation/coercion before
@@ -1772,11 +2117,16 @@ begin
   end;
 
   ConstructorToCall := FConstructorMethod;
-  ImplicitSuperClass := FSuperClass;
-  if GetConstructorPrototype is TGocciaClassValue then
-    ImplicitSuperClass := TGocciaClassValue(GetConstructorPrototype);
+  ImplicitSuperClass := Chain.HostClass;
   if not Assigned(ConstructorToCall) and Assigned(ImplicitSuperClass) then
     ConstructorToCall := ImplicitSuperClass.ConstructorMethod;
+
+  { §13.3.7.1 SuperCall step 3: super() reaching something that is not a
+    constructor is a TypeError, and Object.setPrototypeOf is the only way to
+    put one there. }
+  if (not Assigned(FConstructorMethod)) and
+     ImplicitSuperConstructorIsUnusable(Chain) then
+    ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
   if Assigned(ConstructorToCall) then
   begin
@@ -1790,28 +2140,44 @@ begin
 
     // ES2026 §10.2.2 step 11: explicit Object return replaces the receiver
     if ConstructResult is TGocciaObjectValue then
-      Exit(TGocciaObjectValue(ConstructResult));
-
+    begin
+      if ConstructorToCall = FConstructorMethod then
+        Exit(TGocciaObjectValue(ConstructResult));
+      { A borrowed superclass constructor is standing in for this class's
+        implicit `super(...args)`, so §13.3.7.1 step 11 binds what it returned
+        as `this` and this class's own instance elements still land on it. }
+      Instance := TGocciaObjectValue(ConstructResult);
+    end
     // ES2026 §10.2.2 step 12: derived constructors must return Object or
     // undefined — any other value is a TypeError
-    if Assigned(FSuperClass) or Assigned(FNativeSuperConstructor) then
+    else if Assigned(FSuperClass) or Assigned(FNativeSuperConstructor) then
     begin
       if Assigned(ConstructResult) and
          not (ConstructResult is TGocciaUndefinedLiteralValue) then
         ThrowTypeError('Derived constructor returned non-object',
           SSuggestNotConstructorType);
 
-      if (ConstructorToCall = FConstructorMethod) and
-         IsUndefinedConstructResult(ConstructResult) and
-         not ConstructorToCall.LastSuperConstructorCalled then
+      { §10.2.2 step 13.c belongs to the constructor that returned, which is
+        the borrowed one when this class declares none of its own: a subclass
+        with no constructor of its own, extending a class whose constructor
+        never calls super(), leaves `this` uninitialized just the same. }
+      if IsUndefinedConstructResult(ConstructResult) and
+         not ConstructorToCall.LastSuperConstructorCalled and
+         ((ConstructorToCall = FConstructorMethod) or
+          (Assigned(ImplicitSuperClass) and
+           ImplicitSuperClass.HasDerivedConstructorKind)) then
         ThrowReferenceError(
-          'Must call super constructor before returning from derived constructor');
+          SErrorSuperConstructorNotCalled);
 
       if (FinalThis is TGocciaObjectValue) then
-        Exit(TGocciaObjectValue(FinalThis));
-      if IsUndefinedConstructResult(ConstructResult) then
+      begin
+        if ConstructorToCall = FConstructorMethod then
+          Exit(TGocciaObjectValue(FinalThis));
+        Instance := TGocciaObjectValue(FinalThis);
+      end
+      else if IsUndefinedConstructResult(ConstructResult) then
         ThrowReferenceError(
-          'Must call super constructor before returning from derived constructor');
+          SErrorSuperConstructorNotCalled);
     end;
   end
   else
@@ -1819,7 +2185,7 @@ begin
     if (not Assigned(NativeInstance)) and Assigned(NativeSuperConstructor) then
     begin
       if NativeSuperConstructor = TGocciaFunctionBase.GetSharedPrototype then
-        ThrowTypeError('Super constructor is not a constructor',
+        ThrowTypeError(SErrorSuperNotConstructor,
           SSuggestNotConstructorType);
       NativeInstance := ConstructNativeSuperInstance(NativeSuperConstructor);
       NativeInstanceConstructedByNativeSuper := Assigned(NativeInstance);
@@ -1837,6 +2203,31 @@ begin
       if not NativeInstanceConstructedByNativeSuper then
         if not NativeInstanceInitialized then
           TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
+  end;
+
+  { §15.7.14 step 15a / §7.3.33 InitializeInstanceElements: the implicit
+    constructor this class ran above forwards to super and then initializes its
+    own instance elements, and so does every class the chain walk collapsed on
+    the way to the constructor that actually ran. A class with a constructor of
+    its own already did this from its super() and is skipped.
+
+    The elements are AST expressions that only the evaluator can evaluate, so
+    they go through the registered hook. Without this every route through
+    §7.3.14 Construct — Reflect.construct, a proxy with no construct trap, a
+    bound class, and every species construction — handed back an instance whose
+    declared fields were undefined whenever the superclass chain reached a
+    built-in, because those are the classes the evaluator's construct redirect
+    declines. }
+  if not Assigned(FConstructorMethod) then
+  begin
+    TGarbageCollector.Instance.AddTempRoot(Instance);
+    try
+      for CollapsedIndex := High(Chain.Collapsed) downto 0 do
+        TryRunASTInstanceElements(Chain.Collapsed[CollapsedIndex], Instance);
+      TryRunASTInstanceElements(Self, Instance);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(Instance);
+    end;
   end;
 
   Result := Instance;
@@ -2114,6 +2505,11 @@ begin
       AppendName(OwnNames[I]);
 
   SetLength(Result, Count);
+end;
+
+function TGocciaClassValue.GetOwnPropertyKeys: TArray<string>;
+begin
+  Result := GetAllPropertyNames;
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;

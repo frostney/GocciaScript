@@ -42,9 +42,16 @@ type
   EGocciaBytecodeThrow = class(Exception)
   private
     FThrownValue: TGocciaValue;
+    FSuggestion: string;
   public
-    constructor Create(const AThrownValue: TGocciaValue);
+    constructor Create(const AThrownValue: TGocciaValue;
+      const ASuggestion: string = '');
     property ThrownValue: TGocciaValue read FThrownValue;
+    { The engine-authored "Suggestion:" line of the diagnostic, carried across
+      the VM unwind so a throw that escapes to a host runner renders the same
+      hint the tree-walk evaluator's TGocciaThrowValue would. Empty for a
+      user-authored `throw`. }
+    property Suggestion: string read FSuggestion;
   end;
 
 // A JS throw escaping the bytecode VM through a native builtin arrives as
@@ -53,6 +60,19 @@ type
 // such handlers: it re-raises a bytecode throw as the catchable
 // TGocciaThrowValue and does nothing for any other exception.
 procedure ReraiseBytecodeThrow(const AException: Exception);
+
+// A JS throw that crosses an executor boundary arrives as a Pascal exception
+// carrying the guest's completion value: EGocciaBytecodeThrow (a compiled
+// callee's throw leaving the VM) or TGocciaThrowValue (the tree-walk
+// evaluator's throw). Both bind the thrown value itself — ES2026 §14.15.3 —
+// not a fresh Error synthesized from the Pascal message. This is the single
+// place that knows the boundary-exception class list, so every
+// exception→value/rejection/mark site can route through it: a new boundary
+// class is then covered everywhere by extending this one function instead of
+// every ladder by hand. Returns True and sets AValue to the identity-preserved
+// thrown value for such an exception; returns False (AValue := nil) otherwise.
+function UnwrapThrownValue(const AException: Exception;
+  out AValue: TGocciaValue): Boolean;
 
 implementation
 
@@ -64,7 +84,23 @@ uses
 procedure ReraiseBytecodeThrow(const AException: Exception);
 begin
   if AException is EGocciaBytecodeThrow then
-    raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue);
+    raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue,
+      EGocciaBytecodeThrow(AException).Suggestion);
+end;
+
+function UnwrapThrownValue(const AException: Exception;
+  out AValue: TGocciaValue): Boolean;
+begin
+  if AException is EGocciaBytecodeThrow then
+    AValue := EGocciaBytecodeThrow(AException).ThrownValue
+  else if AException is TGocciaThrowValue then
+    AValue := TGocciaThrowValue(AException).Value
+  else
+  begin
+    AValue := nil;
+    Exit(False);
+  end;
+  Result := True;
 end;
 
 procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
@@ -132,7 +168,8 @@ begin
   Result := FCount = 0;
 end;
 
-constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue);
+constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue;
+  const ASuggestion: string);
 var
   MessageText: string;
   ErrorObject: TGocciaObjectValue;
@@ -156,6 +193,7 @@ begin
   end;
   inherited Create(MessageText);
   FThrownValue := AThrownValue;
+  FSuggestion := ASuggestion;
 end;
 
 end.

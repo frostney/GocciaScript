@@ -9,10 +9,87 @@ test("counts up", () => {
   expect(result).toEqual([0, 1, 2, 3, 4]);
 });
 
+test("counts up with assign-add", () => {
+  const result = [];
+  for (let i = 0; i < 5; i = i + 1) result.push(i);
+  expect(result).toEqual([0, 1, 2, 3, 4]);
+});
+
+test("counts up with plus-assign", () => {
+  const result = [];
+  for (let i = 0; i < 5; i += 1) result.push(i);
+  expect(result).toEqual([0, 1, 2, 3, 4]);
+});
+
 test("counts down", () => {
   const result = [];
   for (let i = 5; i > 0; i--) result.push(i);
   expect(result).toEqual([5, 4, 3, 2, 1]);
+});
+
+test("counts down with assign-subtract", () => {
+  const result = [];
+  for (let i = 5; i > 0; i = i - 1) result.push(i);
+  expect(result).toEqual([5, 4, 3, 2, 1]);
+});
+
+test("counts down with minus-assign", () => {
+  const result = [];
+  for (let i = 5; i > 0; i -= 1) result.push(i);
+  expect(result).toEqual([5, 4, 3, 2, 1]);
+});
+
+test("assign-add matches increment with identifier limit", () => {
+  const n = 5;
+  const incremented = [];
+  for (let i = 0; i < n; i++) incremented.push(i);
+  const assigned = [];
+  for (let i = 0; i < n; i = i + 1) assigned.push(i);
+  expect(assigned).toEqual(incremented);
+  expect(assigned).toEqual([0, 1, 2, 3, 4]);
+});
+
+test("assign-add with parameter limit", () => {
+  const run = (n) => {
+    const result = [];
+    for (let i = 0; i < n; i = i + 1) result.push(i);
+    return result;
+  };
+  expect(run(4)).toEqual([0, 1, 2, 3]);
+});
+
+test("body write to counter matches increment without integer step", () => {
+  const incremented = [];
+  for (let i = 0; i < 5; i++) {
+    incremented.push(i);
+    if (i === 2) i = 10;
+  }
+  const assigned = [];
+  for (let i = 0; i < 5; i = i + 1) {
+    assigned.push(i);
+    if (i === 2) i = 10;
+  }
+  expect(assigned).toEqual(incremented);
+  expect(assigned).toEqual([0, 1, 2]);
+});
+
+test("body string write uses addition not integer step", () => {
+  const result = [];
+  for (let i = 0; i < 5; i = i + 1) {
+    result.push(i);
+    if (i === 1) i = "x";
+  }
+  expect(result).toEqual([0, 1]);
+});
+
+test("mutating the limit in the body is visible", () => {
+  let n = 5;
+  const result = [];
+  for (let i = 0; i < n; i = i + 1) {
+    result.push(i);
+    if (i === 1) n = 2;
+  }
+  expect(result).toEqual([0, 1]);
 });
 
 test("step by 2", () => {

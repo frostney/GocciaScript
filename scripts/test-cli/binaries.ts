@@ -12,3 +12,4 @@ export const REPL = `./build/GocciaREPL${ext}`;
 export const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
 export const BUNDLER = `./build/GocciaBundler${ext}`;
 export const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
+export const FUZZHARNESS = `./build/GocciaFuzzHarness${ext}`;
