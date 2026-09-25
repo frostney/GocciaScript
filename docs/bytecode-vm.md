@@ -130,6 +130,24 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 - the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
 
+### Growing String Accumulators
+
+Primitive string additions and `OP_CONCAT` can retain an immutable prefix
+instead of copying it on every append. Prefixes shorter than 256 UTF-16 code
+units stay flat; a deferred chain has at most 32 links. Reading the native
+`TGocciaStringLiteralValue.Value` property materializes the chain, and reaching
+the depth limit materializes the prefix before appending. Earlier aliases keep
+their original contents. Object coercions retain the existing `ToPrimitive`
+ordering and rooted arithmetic path.
+
+Materialization never collects or calls guest code: append creation reserves
+the eventual flat buffer in advance. This preserves the existing rooting
+contract of primitive comparisons and other string reads. The representation
+reduces copying, while its reserved capacity still counts against the memory
+limit. See [ADR 0116](adr/0116-bounded-string-prefixes.md) for the measurements
+and [GC accounting](garbage-collector.md#what-bytesallocated-tracks) for the
+reservation lifetime.
+
 ### Inline Caches
 
 Four per-site inline caches live on `TGocciaFunctionTemplate`, all indexed by the instruction's name-constant index, all runtime-only (never serialised to `.gbc`):

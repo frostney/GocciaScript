@@ -47,19 +47,10 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 constructor TGocciaJSONLBuiltin.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
@@ -78,12 +69,10 @@ begin
       TGocciaSymbolValue.WellKnownToStringTag,
       TGocciaStringLiteralValue.Create('JSONL'),
       [pfConfigurable]);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   if ADefineGlobalBinding then
     AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
@@ -290,8 +279,5 @@ begin
       ThrowSyntaxError(E.Message);
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.
