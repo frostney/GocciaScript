@@ -71,9 +71,11 @@ function ReadFileBytes(const APath: string): TBytes;
   exclusively: a symbolic link at that name is refused rather than followed,
   so a link planted beside the target cannot redirect the write. A regular
   file there is a leftover from an interrupted write and is removed first.
-  The temporary is flushed to disk and then replaces APath in one step —
-  rename(2) on POSIX, MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows —
-  without the original being deleted beforehand.
+  On POSIX and Windows the temporary is flushed to disk and then replaces
+  APath in one step — rename(2) on POSIX, MoveFileExW with
+  MOVEFILE_REPLACE_EXISTING on Windows — without the original being deleted
+  beforehand. The Lakon/WASI lane writes its in-memory filesystem, which has
+  nothing to flush, and replaces with a rename.
 
   Returns False with AError describing the failure; the temporary is removed
   whenever the replacement did not happen. }
