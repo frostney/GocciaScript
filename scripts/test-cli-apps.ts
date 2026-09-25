@@ -211,6 +211,23 @@ function readJsonLines(path: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
+/**
+ * Reads a capability audit log. Every root engine reports its effective
+ * capability set once, before any other event (ADR 0122); this checks that
+ * event and returns the ones after it.
+ */
+function readCapabilityEvents(path: string): { effective: any[]; events: any[] } {
+  const all = readJsonLines(path);
+  const effective = all.filter((event) => event.kind === "capabilities.effective");
+  if (all.length === 0 || all[0].kind !== "capabilities.effective")
+    throw new Error(`Audit log should open with capabilities.effective: ${JSON.stringify(all)}`);
+  for (const event of effective) {
+    if (event.decision !== "allow" || typeof JSON.parse(event.subject).layers !== "object")
+      throw new Error(`capabilities.effective should carry the set as JSON: ${JSON.stringify(event)}`);
+  }
+  return { effective, events: all.filter((event) => event.kind !== "capabilities.effective") };
+}
+
 function assertCommonJsonReport(json: any, label: string, expectedFileCount: number): void {
   if (json.fileName !== undefined) throw new Error(`${label} top-level fileName should be omitted`);
   if (typeof json.build?.version !== "string") throw new Error(`${label} build.version should be present`);
@@ -2131,7 +2148,10 @@ await section("Loader: --audit-log records capability decisions with source loca
       );
       if (proc.exitCode !== 0)
         throw new Error(`Loader audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const events = readJsonLines(audit);
+      const { effective, events } = readCapabilityEvents(audit);
+      const ffiLayer = JSON.parse(effective[0].subject).layers[0].ffi;
+      if (effective.length !== 1 || ffiLayer.allowAll !== true)
+        throw new Error(`Loader audit ${mode} effective set mismatch: ${JSON.stringify(effective)}`);
       const expected = [
         ["function.constructor", "deny", "Function", "<stdin>", 1],
         ["function.constructor", "deny", "Function", "<stdin>", 3],
@@ -2169,7 +2189,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       );
       if (allow.exitCode !== 0)
         throw new Error(`Loader Function audit ${mode} exited ${allow.exitCode}: ${allow.stderr.toString()}`);
-      const allowEvents = readJsonLines(allowAudit);
+      const allowEvents = readCapabilityEvents(allowAudit).events;
       if (allowEvents.length !== 1 ||
           allowEvents[0].kind !== "function.constructor" ||
           allowEvents[0].decision !== "allow" ||
@@ -2630,7 +2650,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
   }
 });
 
-await section("Loader: --allow-node-modules emits a capability-audit grant...", async () => {
+await section("Loader: --allow-node-modules audits every node_modules resolution...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
@@ -2647,22 +2667,19 @@ await section("Loader: --allow-node-modules emits a capability-audit grant...", 
     );
     if (proc.exitCode !== 0)
       throw new Error(`Audited run should still resolve: ${proc.stdout}${proc.stderr}`);
-    const events = readJsonLines(audit);
-    // The grant is a host decision made once at configuration time, so there
-    // is exactly one event no matter how many packages the run resolves. The
-    // subject is the *expanded* ceiling, which is why the expectation goes
-    // through realpathSync: the engine reports the path it will actually
-    // compare against, not the spelling the flag was given.
-    if (
-      events.length !== 1 ||
-      events[0].kind !== "modules.node-modules" ||
-      events[0].decision !== "allow" ||
-      events[0].subject !== realpathSync(project)
-    )
-      throw new Error(`node_modules grant audit event mismatch: ${JSON.stringify(events)}`);
+    // The grant is part of the effective set, as an import scope carrying the
+    // *expanded* ceiling — the path the resolver compares against. Each bare
+    // specifier the run resolves is then its own allow decision.
+    const { effective, events } = readCapabilityEvents(audit);
+    const importLayer = JSON.parse(effective[0].subject).layers[0].import;
+    if (JSON.stringify(importLayer.allow) !== JSON.stringify([`node_modules=${realpathSync(project)}`]))
+      throw new Error(`node_modules grant should be in the effective set: ${JSON.stringify(effective)}`);
+    if (events.length === 0 ||
+        events.some((event) => event.kind !== "import.node-modules" || event.decision !== "allow") ||
+        !events.some((event) => event.subject === "pkg-exports"))
+      throw new Error(`node_modules resolutions should each be audited: ${JSON.stringify(events)}`);
 
-    // The unbounded form reports an empty subject, which is how an auditor
-    // tells "walk the whole ancestor chain" from "confined to this tree".
+    // The unbounded form carries no ceiling.
     const unboundedAudit = join(tmp, "unbounded-audit.jsonl");
     const unbounded = Bun.spawnSync(
       [
@@ -2676,15 +2693,24 @@ await section("Loader: --allow-node-modules emits a capability-audit grant...", 
     );
     if (unbounded.exitCode !== 0)
       throw new Error(`Unbounded audited run should resolve: ${unbounded.stderr}`);
-    const unboundedEvents = readJsonLines(unboundedAudit);
-    if (
-      unboundedEvents.length !== 1 ||
-      unboundedEvents[0].kind !== "modules.node-modules" ||
-      unboundedEvents[0].subject !== ""
-    )
-      throw new Error(
-        `Unbounded grant should report an empty subject: ${JSON.stringify(unboundedEvents)}`,
-      );
+    const unboundedEffective = readCapabilityEvents(unboundedAudit).effective;
+    if (JSON.stringify(JSON.parse(unboundedEffective[0].subject).layers[0].import.allow) !==
+        JSON.stringify(["node_modules"]))
+      throw new Error(`Unbounded grant should carry no ceiling: ${JSON.stringify(unboundedEffective)}`);
+
+    // Without the grant a bare specifier stays sealed, and the refusal is
+    // audited as a deny.
+    const sealedAudit = join(tmp, "sealed-audit.jsonl");
+    const sealed = Bun.spawnSync(
+      [resolve(LOADER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (sealed.exitCode === 0) throw new Error("A bare specifier must fail without the grant");
+    const sealedEvents = readCapabilityEvents(sealedAudit).events;
+    if (sealedEvents.length !== 1 ||
+        sealedEvents[0].kind !== "import.node-modules" ||
+        sealedEvents[0].decision !== "deny")
+      throw new Error(`A sealed bare specifier should audit one deny: ${JSON.stringify(sealedEvents)}`);
   } finally {
     clean(tmp);
   }
@@ -6978,7 +7004,7 @@ await section("SandboxRunner: --audit-log reports root escapes without changing 
         throw new Error(`Sandbox audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
       if (!containsLine(proc.stdout.toString(), "inside-jail"))
         throw new Error(`Sandbox audit ${mode} changed clamped access: ${proc.stdout.toString()}`);
-      const events = readJsonLines(audit);
+      const { events } = readCapabilityEvents(audit);
       if (events.length !== 1 ||
           events[0].kind !== "sandbox.fs.path" ||
           events[0].decision !== "deny" ||
@@ -7172,9 +7198,9 @@ await section("Loader: --allowed-host blocks unlisted host...", async () => {
     const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
-    const events = readJsonLines(audit);
+    const { events } = readCapabilityEvents(audit);
     if (events.length !== 1 ||
-        events[0].kind !== "fetch.host" ||
+        events[0].kind !== "net.fetch" ||
         events[0].decision !== "deny" ||
         events[0].subject !== "blocked.test" ||
         JSON.stringify(events).includes("password") ||
@@ -7188,7 +7214,12 @@ await section("Loader: --allowed-host blocks unlisted host...", async () => {
 await section("Loader: no --allowed-host blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");
-  if (!res.text().includes("allowed hosts")) throw new Error(`Error should mention allowed hosts, got: ${res.text()}`);
+  // The denial names the capability and the host; the host-side suggestion
+  // names the option that grants it.
+  if (!res.text().includes("PermissionDenied: net: example.com"))
+    throw new Error(`Error should be a net PermissionDenied, got: ${res.text()}`);
+  if (!res.text().includes("--allowed-host"))
+    throw new Error(`Suggestion should name --allowed-host, got: ${res.text()}`);
 });
 
 await section("Loader: --allowed-host multiple hosts...", async () => {
@@ -7211,18 +7242,69 @@ await withFetchTestServer(async (baseUrl) => {
     if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
     if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
     if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
-    const events = readJsonLines(audit);
-    if (events.length !== 2 ||
-        events[0].kind !== "fetch.host" ||
+    const { events } = readCapabilityEvents(audit);
+    // The name is checked before dispatch; the resolved address is checked
+    // again by the request itself.
+    if (events.length !== 3 ||
+        events[0].kind !== "net.fetch" ||
         events[0].decision !== "allow" ||
         events[0].subject !== "127.0.0.1" ||
-        events[1].kind !== "fetch.dispatch" ||
-        events[1].decision !== "allow")
+        events[1].kind !== "net.dispatch" ||
+        events[1].decision !== "allow" ||
+        events[2].kind !== "net.fetch" ||
+        events[2].decision !== "allow" ||
+        events[2].subject !== "127.0.0.1")
       throw new Error(`Local fetch audit events mismatch: ${JSON.stringify(events)}`);
   } finally {
     clean(tmp);
   }
 });
+
+console.log("Loader: fetch re-checks the net capability on every redirect hop...");
+{
+  // The first hop names an allowed address; the redirect names a host the
+  // capability does not allow, so the request is refused mid-flight.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/redirect")
+        return new Response(null, {
+          status: 302,
+          headers: { location: `http://localhost:${server.port}/final` },
+        });
+      return new Response("final", { status: 200 });
+    },
+  });
+  const tmp = makeTmp();
+  const audit = join(tmp, "redirect-audit.jsonl");
+  try {
+    const { exitCode, json, stderr } = await runLoaderJsonAsync(
+      [
+        "globalThis.outcome = \"pending\";",
+        `await fetch("http://127.0.0.1:${server.port}/redirect").then(`,
+        "  () => { globalThis.outcome = \"followed\"; },",
+        "  (e) => { globalThis.outcome = e.name + \"|\" + e.message; });",
+        "globalThis.outcome;",
+        "",
+      ].join("\n"),
+      ["--compat-asi", "--allowed-host=127.0.0.1", `--audit-log=${audit}`],
+      { timeout: 10_000 },
+    );
+    if (exitCode !== 0) throw new Error(`Redirect run should exit 0, got ${exitCode}: ${stderr}`);
+    const outcome = json.files?.[0]?.result;
+    if (outcome !== `PermissionDenied|net: localhost:${server.port}`)
+      throw new Error(`Redirect to a denied host should reject with PermissionDenied, got ${outcome}`);
+    const { events } = readCapabilityEvents(audit);
+    if (!events.some((event) =>
+      event.kind === "net.fetch" && event.decision === "deny" && event.subject === "localhost"))
+      throw new Error(`The refused redirect hop should be audited: ${JSON.stringify(events)}`);
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+}
 
 // ============================================================================
 // --multifile (all runners)
@@ -8662,7 +8744,9 @@ await section("SandboxRunner: --fetch-deny-private-ranges reaches the sandboxed 
       stderr: "pipe",
     });
     const deniedOut = denied.stdout.toString() + denied.stderr.toString();
-    if (!deniedOut.includes("resolves to private address 127.0.0.1"))
+    // A private address literal is refused by the net capability before the
+    // request is dispatched, with the guest-visible scope as the message.
+    if (!deniedOut.includes("err:net: 127.0.0.1:1"))
       throw new Error(`Sandbox fetch should be refused by address policy, got:\n${deniedOut}`);
 
     // Asserted positively: the default arm has to prove the request reached

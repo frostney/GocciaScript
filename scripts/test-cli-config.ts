@@ -1172,7 +1172,8 @@ console.log("Config allowed-hosts empty array overrides parent via extends...");
 
     // Empty allowed-hosts in child should override parent — fetch blocked
     const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
-    if (!res.combined.includes("allowed hosts")) throw new Error(`Empty allowed-hosts should block fetch, got: ${res.combined}`);
+    if (!res.combined.includes("PermissionDenied: net: example.com"))
+      throw new Error(`Empty allowed-hosts should block fetch, got: ${res.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1188,7 +1189,7 @@ console.log("Config allowed-hosts TestRunner integration...");
       [
         'describe("allowed-hosts", () => {',
         '  test("blocks unlisted host", () => {',
-        '    expect(() => fetch("http://blocked.test")).toThrow(TypeError);',
+        '    expect(() => fetch("http://blocked.test")).toThrow(PermissionDenied);',
         "  });",
         "});",
       ].join("\n") + "\n",
