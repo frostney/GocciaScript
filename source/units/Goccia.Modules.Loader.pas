@@ -2023,6 +2023,10 @@ begin
   except
     on E: TGocciaRuntimeError do
       raise;
+    { A capability denial raised during resolution (node_modules) is already
+      the guest-visible PermissionDenied. }
+    on E: TGocciaThrowValue do
+      raise;
     on E: EGocciaModuleNotFound do
       raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
         E.ResolvedCandidatePath, ImportingFilePath);
@@ -2318,6 +2322,10 @@ begin
       AImportingFilePath);
   except
     on E: TGocciaRuntimeError do
+      raise;
+    { A capability denial raised during resolution (node_modules) is already
+      the guest-visible PermissionDenied. }
+    on E: TGocciaThrowValue do
       raise;
     on E: EGocciaModuleNotFound do
       raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
@@ -2730,6 +2738,8 @@ begin
           AImportingFilePath);
     except
       on E: TGocciaRuntimeError do
+        raise;
+      on E: TGocciaThrowValue do
         raise;
       on E: EGocciaModuleNotFound do
         raise TGocciaModuleResolutionError.CreateResolutionFailure(E.Message,
