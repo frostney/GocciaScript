@@ -35,9 +35,11 @@ type
   resolved-address restrictions and the response-body ceiling. The policy
   belongs to that engine alone, so engines on one thread — a sandbox parent
   and its runScript child — each keep their own. Call it after the fetch
-  runtime extension is installed; it does nothing on an engine without one. }
-procedure SetFetchRequestPolicy(const AEngine: TGocciaEngine;
-  const APolicy: THTTPRequestPolicy);
+  runtime extension is installed. Returns False, changing nothing, when the
+  engine has no fetch runtime extension: a later install starts from
+  DefaultHTTPPolicy, so a host that needs the policy must check the result. }
+function SetFetchRequestPolicy(const AEngine: TGocciaEngine;
+  const APolicy: THTTPRequestPolicy): Boolean;
 
 implementation
 
@@ -156,19 +158,22 @@ begin
     DiscardFetchCompletions(FBuiltinFetch.Realm);
 end;
 
-procedure SetFetchRequestPolicy(const AEngine: TGocciaEngine;
-  const APolicy: THTTPRequestPolicy);
+function SetFetchRequestPolicy(const AEngine: TGocciaEngine;
+  const APolicy: THTTPRequestPolicy): Boolean;
 var
   Runtime: TGocciaRuntimeCore;
   Extension: TGocciaFetchRuntimeExtension;
 begin
+  Result := False;
   Runtime := GetRuntime(AEngine);
   if not Assigned(Runtime) then
     Exit;
   Extension := TGocciaFetchRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaFetchRuntimeExtension));
-  if Assigned(Extension) and Assigned(Extension.BuiltinFetch) then
-    Extension.BuiltinFetch.RequestPolicy := APolicy;
+  if not Assigned(Extension) or not Assigned(Extension.BuiltinFetch) then
+    Exit;
+  Extension.BuiltinFetch.RequestPolicy := APolicy;
+  Result := True;
 end;
 
 end.

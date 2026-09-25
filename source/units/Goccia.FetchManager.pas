@@ -73,7 +73,7 @@ implementation
 // The DEFAULT WORKER BACKEND (TThread + HTTPClient + polling Sleep)
 // is gated on platforms with real threads and sockets; the Lakon
 // WASM lane compiles only the abstract manager and the drain/wait
-// helpers — Initialize leaves Instance nil there, so fetch() is
+// helpers — AcquireInstance leaves Instance nil there, so fetch() is
 // unavailable until a WASI backend exists (the host-integration
 // slice). Everything the shared helpers need stays outside the gate.
 
@@ -649,10 +649,17 @@ var
   I, CountBefore: Integer;
   Signal: TGocciaAbortSignalValue;
   AbortedSignals: TGocciaAbortSignalList;
+  SignalRealms: TList<TGocciaRealm>;
   SignalRoot: TGocciaTempRoot;
+  PreviousRealm: TGocciaRealm;
 begin
   CountBefore := FPending.Count;
+  // As in SettleCompletion: the abort reason and the "abort" event belong to
+  // the realm of the engine that started the request, not to whichever
+  // engine's drain observed the expired timeout.
+  PreviousRealm := CurrentRealm;
   AbortedSignals := TGocciaAbortSignalList.Create(False);
+  SignalRealms := TList<TGocciaRealm>.Create;
   try
     // Phase 1 flips expired timeouts only. RefreshTimeout deliberately does not
     // run abort algorithms, because an algorithm mutates FPending and this
@@ -662,11 +669,18 @@ begin
       Signal := FPending[I].Signal;
       if not Assigned(Signal) then
         Continue;
+      if Assigned(FPending[I].Realm) then
+        SetCurrentRealm(FPending[I].Realm)
+      else
+        SetCurrentRealm(PreviousRealm);
       Signal.RefreshTimeout;
       if not Signal.IsAborted then
         Continue;
       if AbortedSignals.IndexOf(Signal) < 0 then
+      begin
         AbortedSignals.Add(Signal);
+        SignalRealms.Add(CurrentRealm);
+      end;
     end;
 
     // Phase 2 runs with no walk in progress, so each signal may now run its
@@ -677,6 +691,7 @@ begin
     for I := 0 to AbortedSignals.Count - 1 do
     begin
       Signal := AbortedSignals[I];
+      SetCurrentRealm(SignalRealms[I]);
       Signal.RunPendingAbortAlgorithms;
       // Those algorithms dropped the pending entries that were rooting this
       // signal, so root it for the dispatch itself. AddTempRootIfNeeded is a
@@ -691,6 +706,8 @@ begin
       end;
     end;
   finally
+    SetCurrentRealm(PreviousRealm);
+    SignalRealms.Free;
     AbortedSignals.Free;
   end;
   Result := CountBefore - FPending.Count;

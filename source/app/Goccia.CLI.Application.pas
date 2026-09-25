@@ -723,6 +723,8 @@ begin
   if FetchPolicy.MaxResponseBytes < 0 then
     raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
 
+  { False only for an engine without the fetch runtime extension, which has
+    no fetch() for the policy to govern. }
   SetFetchRequestPolicy(AEngine, FetchPolicy);
 end;
 

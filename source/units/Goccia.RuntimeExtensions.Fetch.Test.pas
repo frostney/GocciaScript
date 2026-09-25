@@ -13,6 +13,7 @@ uses
   Goccia.Engine,
   Goccia.Executor.Interpreter,
   Goccia.FetchManager,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
@@ -28,9 +29,8 @@ const
   LOOPBACK_HOST = '127.0.0.1';
   CLOSED_LOOPBACK_URL = 'http://' + LOOPBACK_HOST + ':1/';
   PRIVATE_DENIAL_TEXT = 'resolves to private address';
-  // Long enough for the worker to refuse the request and post its completion,
-  // so the nested engine's own drain is what pumps it.
-  WORKER_COMPLETION_GRACE_MS = 250;
+  SETTLE_DEADLINE_MS = 10000;
+  POLL_INTERVAL_MS = 1;
 
 type
   { Engines on one thread share the fetch manager, and a sandbox runScript
@@ -39,6 +39,17 @@ type
     and the parent's in-flight requests. }
   TFetchRuntimeExtensionTests = class(TTestSuite)
   private
+    FOuterEngine: TGocciaEngine;
+    FOuterExecutor, FInnerExecutor: TGocciaInterpreterExecutor;
+    FOuterSource, FInnerSource: TStringList;
+    FOuterRealm: TGocciaRealm;
+    FPromise: TGocciaPromiseValue;
+    { An outer engine that denies private ranges and allows the loopback
+      host, and one outer request to a closed loopback port under it. }
+    procedure SetUpOuterEngine;
+    procedure TearDownOuterEngine;
+    procedure StartOuterRequest;
+    function RejectionMessage: string;
     function CreateFetchEngine(const AName: string;
       const AExecutor: TGocciaInterpreterExecutor;
       const ASource: TStringList): TGocciaEngine;
@@ -46,6 +57,7 @@ type
       const AEngine: TGocciaEngine): TGocciaFetchRuntimeExtension;
     procedure TestEachEngineKeepsItsOwnRequestPolicy;
     procedure TestNestedEngineEndKeepsOuterPendingRequest;
+    procedure TestOuterRequestSettlesInItsOwnRealm;
   public
     procedure SetupTests; override;
   end;
@@ -58,6 +70,9 @@ begin
   Test('a nested engine ending keeps the outer engine''s in-flight request ' +
     'and settles it under the outer policy',
     TestNestedEngineEndKeepsOuterPendingRequest);
+  Test('an outer request pumped while a nested engine is current settles in ' +
+    'the outer realm',
+    TestOuterRequestSettlesInItsOwnRealm);
 end;
 
 function TFetchRuntimeExtensionTests.CreateFetchEngine(const AName: string;
@@ -133,86 +148,144 @@ begin
   end;
 end;
 
-procedure TFetchRuntimeExtensionTests.TestNestedEngineEndKeepsOuterPendingRequest;
+procedure TFetchRuntimeExtensionTests.SetUpOuterEngine;
 var
-  OuterEngine, InnerEngine: TGocciaEngine;
-  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
-  OuterSource, InnerSource: TStringList;
-  OuterFetch: TGocciaFetchRuntimeExtension;
-  OuterRealm: TGocciaRealm;
-  Promise: TGocciaPromiseValue;
-  Headers: THTTPHeaders;
-  Manager: TGocciaFetchManager;
   OuterPolicy: THTTPRequestPolicy;
-  InnerTypeErrorPrototype: TGocciaObjectValue;
-  Rejection: TGocciaObjectValue;
   AllowedHosts: TStringList;
 begin
+  FOuterSource := TStringList.Create;
+  FInnerSource := TStringList.Create;
+  FOuterExecutor := TGocciaInterpreterExecutor.Create;
+  FInnerExecutor := TGocciaInterpreterExecutor.Create;
+  FOuterEngine := CreateFetchEngine('<outer>', FOuterExecutor, FOuterSource);
+  OuterPolicy := DefaultHTTPPolicy;
+  OuterPolicy.DenyPrivateRanges := True;
+  Expect<Boolean>(SetFetchRequestPolicy(FOuterEngine, OuterPolicy)).ToBe(True);
   AllowedHosts := TStringList.Create;
-  AllowedHosts.Add(LOOPBACK_HOST);
-  OuterSource := TStringList.Create;
-  InnerSource := TStringList.Create;
-  OuterExecutor := TGocciaInterpreterExecutor.Create;
-  InnerExecutor := TGocciaInterpreterExecutor.Create;
   try
-    OuterEngine := CreateFetchEngine('<outer>', OuterExecutor, OuterSource);
-    try
-      OuterPolicy := DefaultHTTPPolicy;
-      OuterPolicy.DenyPrivateRanges := True;
-      SetFetchRequestPolicy(OuterEngine, OuterPolicy);
-      OuterEngine.SetAllowedFetchHosts(AllowedHosts);
-      OuterFetch := FetchExtension(OuterEngine);
-      OuterRealm := OuterFetch.BuiltinFetch.Realm;
-      Expect<Boolean>(OuterRealm = OuterEngine.Realm).ToBe(True);
-
-      Manager := TGocciaFetchManager.Instance;
-      Expect<Boolean>(Manager <> nil).ToBe(True);
-      Promise := TGocciaPromiseValue.Create;
-      SetLength(Headers, 0);
-      Manager.StartFetch(CLOSED_LOOPBACK_URL, 'GET', Headers,
-        OuterFetch.BuiltinFetch.AllowedHosts,
-        OuterFetch.BuiltinFetch.RequestPolicy, OuterRealm, Promise);
-      Expect<Boolean>(Manager.HasPendingFor(OuterRealm)).ToBe(True);
-      Sleep(WORKER_COMPLETION_GRACE_MS);
-
-      // The inner engine keeps the default policy, which allows private
-      // ranges; the outer request must still settle under the outer policy.
-      InnerEngine := CreateFetchEngine('<inner>', InnerExecutor, InnerSource);
-      try
-        // Compared by identity only, after the inner realm is gone.
-        InnerTypeErrorPrototype := GetErrorPrototype('TypeError');
-        // A nested run ends by waiting for, then discarding, its own pending
-        // requests. Its drain may settle the outer request along the way.
-        InnerSource.Text := '';
-        InnerEngine.Execute;
-      finally
-        InnerEngine.Free;
-      end;
-
-      Expect<Boolean>(TGocciaFetchManager.Instance = Manager).ToBe(True);
-      Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
-
-      WaitForFetchIdle(OuterRealm);
-      Expect<Boolean>(Manager.HasPendingFor(OuterRealm)).ToBe(False);
-      Expect<Boolean>(Promise.State = gpsRejected).ToBe(True);
-      Rejection := TGocciaObjectValue(Promise.PromiseResult);
-      Expect<Boolean>(Pos(PRIVATE_DENIAL_TEXT,
-        Rejection.GetProperty('message').ToStringLiteral.Value) > 0).ToBe(True);
-      // Settled in the realm that started the request, whichever engine's
-      // drain pumped it.
-      Expect<Boolean>(Rejection.Prototype = GetErrorPrototype('TypeError'))
-        .ToBe(True);
-      Expect<Boolean>(Rejection.Prototype <> InnerTypeErrorPrototype)
-        .ToBe(True);
-    finally
-      OuterEngine.Free;
-    end;
+    AllowedHosts.Add(LOOPBACK_HOST);
+    FOuterEngine.SetAllowedFetchHosts(AllowedHosts);
   finally
-    InnerExecutor.Free;
-    OuterExecutor.Free;
-    InnerSource.Free;
-    OuterSource.Free;
     AllowedHosts.Free;
+  end;
+  FOuterRealm := FetchExtension(FOuterEngine).BuiltinFetch.Realm;
+  Expect<Boolean>(FOuterRealm = FOuterEngine.Realm).ToBe(True);
+  FPromise := nil;
+end;
+
+procedure TFetchRuntimeExtensionTests.TearDownOuterEngine;
+begin
+  if Assigned(FPromise) and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RemoveTempRoot(FPromise);
+  FPromise := nil;
+  FreeAndNil(FOuterEngine);
+  FreeAndNil(FInnerExecutor);
+  FreeAndNil(FOuterExecutor);
+  FreeAndNil(FInnerSource);
+  FreeAndNil(FOuterSource);
+end;
+
+procedure TFetchRuntimeExtensionTests.StartOuterRequest;
+var
+  OuterFetch: TGocciaFetchRuntimeExtension;
+  Headers: THTTPHeaders;
+begin
+  OuterFetch := FetchExtension(FOuterEngine);
+  FPromise := TGocciaPromiseValue.Create;
+  // Rooted for the whole test: the manager unroots it once it settles, and
+  // the test reads it after building and freeing another engine.
+  TGarbageCollector.Instance.AddTempRoot(FPromise);
+  SetLength(Headers, 0);
+  TGocciaFetchManager.Instance.StartFetch(CLOSED_LOOPBACK_URL, 'GET', Headers,
+    OuterFetch.BuiltinFetch.AllowedHosts,
+    OuterFetch.BuiltinFetch.RequestPolicy, FOuterRealm, FPromise);
+  Expect<Boolean>(TGocciaFetchManager.Instance.HasPendingFor(FOuterRealm))
+    .ToBe(True);
+end;
+
+function TFetchRuntimeExtensionTests.RejectionMessage: string;
+begin
+  Result := TGocciaObjectValue(FPromise.PromiseResult)
+    .GetProperty('message').ToStringLiteral.Value;
+end;
+
+procedure TFetchRuntimeExtensionTests.TestNestedEngineEndKeepsOuterPendingRequest;
+var
+  InnerEngine: TGocciaEngine;
+  Manager: TGocciaFetchManager;
+begin
+  SetUpOuterEngine;
+  try
+    StartOuterRequest;
+    Manager := TGocciaFetchManager.Instance;
+
+    // Nothing pumps between the dispatch and the check below, so the outer
+    // request is still pending however quickly its worker finishes.
+    InnerEngine := CreateFetchEngine('<inner>', FInnerExecutor, FInnerSource);
+    try
+      // What a nested run does when it ends: discard its own pending work,
+      // then release the fetch manager as its runtime detaches.
+      GetRuntime(InnerEngine).DiscardPending;
+    finally
+      InnerEngine.Free;
+    end;
+
+    Expect<Boolean>(TGocciaFetchManager.Instance = Manager).ToBe(True);
+    Expect<Boolean>(CurrentRealm = FOuterRealm).ToBe(True);
+    Expect<Boolean>(Manager.HasPendingFor(FOuterRealm)).ToBe(True);
+
+    // The inner engine kept the default policy, which allows private ranges;
+    // the outer request still settles under the outer policy.
+    WaitForFetchIdle(FOuterRealm);
+    Expect<Boolean>(Manager.HasPendingFor(FOuterRealm)).ToBe(False);
+    Expect<Boolean>(FPromise.State = gpsRejected).ToBe(True);
+    Expect<Boolean>(Pos(PRIVATE_DENIAL_TEXT, RejectionMessage) > 0).ToBe(True);
+  finally
+    TearDownOuterEngine;
+  end;
+end;
+
+procedure TFetchRuntimeExtensionTests.TestOuterRequestSettlesInItsOwnRealm;
+var
+  InnerEngine: TGocciaEngine;
+  Manager: TGocciaFetchManager;
+  InnerTypeErrorPrototype, Rejection: TGocciaObjectValue;
+  WaitedMilliseconds: Integer;
+begin
+  SetUpOuterEngine;
+  try
+    StartOuterRequest;
+    Manager := TGocciaFetchManager.Instance;
+
+    InnerEngine := CreateFetchEngine('<inner>', FInnerExecutor, FInnerSource);
+    try
+      // Compared by identity only, after the inner realm is gone.
+      InnerTypeErrorPrototype := GetErrorPrototype('TypeError');
+      // Pump while the inner engine's realm is current, as its own drain
+      // does, until the outer request settles.
+      WaitedMilliseconds := 0;
+      while (FPromise.State = gpsPending) and
+            (WaitedMilliseconds < SETTLE_DEADLINE_MS) do
+      begin
+        if Manager.PumpCompletions = 0 then
+        begin
+          Sleep(POLL_INTERVAL_MS);
+          Inc(WaitedMilliseconds, POLL_INTERVAL_MS);
+        end;
+      end;
+      Expect<Boolean>(FPromise.State = gpsRejected).ToBe(True);
+      Expect<Boolean>(CurrentRealm = InnerEngine.Realm).ToBe(True);
+    finally
+      InnerEngine.Free;
+    end;
+
+    Rejection := TGocciaObjectValue(FPromise.PromiseResult);
+    Expect<Boolean>(Pos(PRIVATE_DENIAL_TEXT, RejectionMessage) > 0).ToBe(True);
+    Expect<Boolean>(Rejection.Prototype = GetErrorPrototype('TypeError'))
+      .ToBe(True);
+    Expect<Boolean>(Rejection.Prototype <> InnerTypeErrorPrototype).ToBe(True);
+  finally
+    TearDownOuterEngine;
   end;
 end;
 

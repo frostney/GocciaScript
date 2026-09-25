@@ -8891,6 +8891,65 @@ await section("SandboxRunner: a failing nested runScript keeps the parent's in-f
   }
 });
 
+await section("SandboxRunner: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
+  // The child's end-of-run drain is what notices the parent's expired
+  // AbortSignal.timeout. The TimeoutError it creates must belong to the
+  // parent's realm: made in the child's, it failed instanceof in the parent
+  // and its constructor ran against the freed child realm.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      await Bun.sleep(3_000);
+      return new Response("late", { status: 200 });
+    },
+  });
+  try {
+    const url = `http://127.0.0.1:${server.port}/`;
+    // A busy wait long enough for the parent's 50 ms timeout to expire while
+    // the child runs. An iterator, because while and for(;;) are compat-only.
+    const child = [
+      "const start = Date.now();",
+      "const spin = { [Symbol.iterator]() {",
+      "  return { next: () => ({ done: Date.now() - start >= 300, value: 0 }) };",
+      "} };",
+      "for (const _ of spin) {}",
+      "console.log('child waited');",
+    ].join("\n");
+    const main = [
+      "import { runScript } from 'goccia';",
+      "const signal = AbortSignal.timeout(50);",
+      `const pending = fetch('${url}', { signal });`,
+      "const child = runScript('/child.js');",
+      "console.log('child ok ' + child.ok + ', parent signal aborted ' + signal.aborted);",
+      "try {",
+      "  await pending;",
+      "  console.log('parent:no-error');",
+      "} catch (error) {",
+      "  console.log('parent:' + error.name + ' ' + (error instanceof DOMException));",
+      "  const again = new (Object.getPrototypeOf(error).constructor)('again');",
+      "  console.log('again:' + (again instanceof DOMException));",
+      "}",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": child },
+        mode,
+        [],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      // The first line proves the child's drain is what observed the
+      // timeout; without it the rest would pass vacuously.
+      for (const expected of ["child ok true, parent signal aborted true", "parent:TimeoutError true", "again:true"])
+        if (!run.stdout.includes(expected))
+          throw new Error(`${mode}: the parent's timeout should abort in its own realm, expected ${JSON.stringify(expected)}, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+});
+
 // ── Sandbox run failure taxonomy (WP-5) ────────────────────────────────
 //
 // `runScript` reports why a nested run ended alongside the message that says
