@@ -32,7 +32,7 @@ type
   TGocciaJSXTransformer = class
   private
     type
-      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
+      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak);
       TScanContext = (scSource, scAttributes, scChildren, scExpression);
   private
     FSource: string;
@@ -79,7 +79,8 @@ type
     procedure CopyLineComment;
     procedure CopyBlockComment;
     function CopyIdentifierOrKeyword: string;
-    function TokenKindAfterWord(const AWord: string): TLastTokenKind;
+    function TokenKindAfterWord(const AWord: string;
+      const AStart: Integer): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
 
@@ -556,7 +557,7 @@ begin
   while not IsAtEnd and IsIdentifierPart(CurrentChar) do
     CopyChar;
   Result := Copy(FSource, Start, FPos - Start);
-  FLastTokenKind := TokenKindAfterWord(Result);
+  FLastTokenKind := TokenKindAfterWord(Result, Start);
 end;
 
 // What a '/' after AWord would be: a regex after a word that expects an
@@ -564,18 +565,32 @@ end;
 // as the token before AWord.
 //
 // `of` is the one contextual word here. It is a keyword only in a for-of
-// header, where it follows the end of a binding (`x`, `]`, `}`) and a regex
-// can follow it; everywhere else it is an ordinary identifier, and `of / 2`
-// divides.
-function TGocciaJSXTransformer.TokenKindAfterWord(
-  const AWord: string): TLastTokenKind;
+// header, where it follows the end of a binding (`x`, `]`, `}`) — or a line
+// break inside the header, or a binding itself named `of` — and a regex can
+// follow it; everywhere else it is an ordinary identifier, and `of / 2`
+// divides. AStart is the word's position in FSource.
+function TGocciaJSXTransformer.TokenKindAfterWord(const AWord: string;
+  const AStart: Integer): TLastTokenKind;
+
+  function FollowsWordOf: Boolean;
+  var
+    Index: Integer;
+  begin
+    Index := AStart - 1;
+    while (Index >= 1) and (FSource[Index] in [' ', #9, #10, #13]) do
+      Dec(Index);
+    Result := (Index >= 2) and (Copy(FSource, Index - 1, 2) = KEYWORD_OF) and
+      ((Index = 2) or not IsIdentifierPart(FSource[Index - 2]));
+  end;
+
 begin
   if (AWord = KEYWORD_RETURN) or (AWord = KEYWORD_THROW) or (AWord = KEYWORD_CASE) or
      (AWord = KEYWORD_NEW) or (AWord = KEYWORD_TYPEOF) or (AWord = KEYWORD_VOID) or
      (AWord = KEYWORD_DELETE) or (AWord = KEYWORD_IN) or (AWord = KEYWORD_INSTANCEOF) or
      (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
     Result := ltkOperator
-  else if (AWord = KEYWORD_OF) and (FLastTokenKind = ltkExpressionEnd) then
+  else if (AWord = KEYWORD_OF) and
+          ((FLastTokenKind in [ltkExpressionEnd, ltkLineBreak]) or FollowsWordOf) then
     Result := ltkOperator
   else
     Result := ltkExpressionEnd;
@@ -669,7 +684,7 @@ end;
 
 function TGocciaJSXTransformer.IsJSXContext: Boolean;
 begin
-  Result := FLastTokenKind in [ltkNone, ltkOperator];
+  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak];
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
@@ -1560,7 +1575,7 @@ begin
           CopyLineComment
         else if PeekAt(1) = '*' then
           CopyBlockComment
-        else if FLastTokenKind in [ltkNone, ltkOperator] then
+        else if FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak] then
           CopyRegexLiteral
         else
         begin
@@ -1625,7 +1640,7 @@ begin
           AdvanceInput;
         end;
         Ident := Copy(FSource, IdStart, FPos - IdStart);
-        FLastTokenKind := TokenKindAfterWord(Ident);
+        FLastTokenKind := TokenKindAfterWord(Ident, IdStart);
       end
       else if CurrentChar in ['0'..'9'] then
       begin
@@ -1818,7 +1833,7 @@ begin
     begin
       CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      FLastTokenKind := ltkLineBreak;
       Continue;
     end;
 
@@ -1828,7 +1843,7 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
-      FLastTokenKind := ltkOperator;
+      FLastTokenKind := ltkLineBreak;
       Continue;
     end;
 
