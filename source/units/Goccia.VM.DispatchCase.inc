@@ -3383,9 +3383,15 @@
         else
           SetRegister(A, TGocciaUndefinedLiteralValue.UndefinedValue);
 
+      // Marks the next dynamic import's specifier as computed (ADR 0122).
+      OP_COMPUTED_IMPORT_SPECIFIER:
+        FComputedDynamicImportPending := True;
+
       // ES2026 §13.3.10.1 ImportCall — import(specifier)
       OP_DYNAMIC_IMPORT:
       begin
+        DynImportComputed := FComputedDynamicImportPending;
+        FComputedDynamicImportPending := False;
         DynImportPromise := TGocciaPromiseValue.Create;
         if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
@@ -3398,6 +3404,8 @@
 
             SpecifierString := ToPrimitive(RegisterToValue(FRegisters[B]),
               tphString).ToStringLiteral.Value;
+            if DynImportComputed then
+              SpecifierString := MarkComputedImportSpecifier(SpecifierString);
             case C of
               Ord(icpEvaluation):
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
@@ -3465,6 +3473,8 @@
       OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
       OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
       begin
+        DynImportComputed := FComputedDynamicImportPending;
+        FComputedDynamicImportPending := False;
         DynImportPromise := TGocciaPromiseValue.Create;
         if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.AddTempRoot(DynImportPromise);
@@ -3481,6 +3491,8 @@
               RegisterToValue(FRegisters[C]));
             SpecifierString := EncodeImportSpecifierAttribute(
               SpecifierString, AttributeType);
+            if DynImportComputed then
+              SpecifierString := MarkComputedImportSpecifier(SpecifierString);
             case TGocciaOpCode(Op) of
               OP_DYNAMIC_IMPORT_OPTIONS:
                 if (TGocciaMicrotaskQueue.Instance <> nil) then

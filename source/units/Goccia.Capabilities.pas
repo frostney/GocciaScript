@@ -112,6 +112,10 @@ type
     function NodeModulesCeiling(const AImportingDirectory: string;
       out ACeiling: string): Boolean;
 
+    { import: true when node_modules resolution for AImportingDirectory is
+      denied outright, as opposed to merely never granted. }
+    function DeniesNodeModules(const AImportingDirectory: string): Boolean;
+
     { import: whether provider imports from AProvider (e.g. `github`) are
       allowed. Provider resolution itself is not implemented yet. }
     function AllowsProvider(const AProvider: string): Boolean;
@@ -962,6 +966,34 @@ begin
       ACeiling := LayerCeiling;
   end;
   Result := True;
+end;
+
+function TGocciaCapabilities.DeniesNodeModules(
+  const AImportingDirectory: string): Boolean;
+var
+  Directory: string;
+  I, J: Integer;
+  ImportScope: TGocciaImportScope;
+  Rule: TGocciaCapabilityRule;
+begin
+  if AImportingDirectory <> '' then
+    Directory := StripTrailingDelimiter(
+      ExpandHostFileName(AImportingDirectory))
+  else
+    Directory := '';
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    if Rule.DenyAll then
+      Exit(True);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
+         (ImportScope.Kind = iskNodeModules) and
+         ((ImportScope.Ceiling = '') or
+          IsPathWithinScope(Directory, ImportScope.Ceiling)) then
+        Exit(True);
+  end;
+  Result := False;
 end;
 
 function TGocciaCapabilities.AllowsProvider(const AProvider: string): Boolean;

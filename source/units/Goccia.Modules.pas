@@ -260,8 +260,18 @@ function EncodeImportSpecifierAttribute(const AModulePath,
 function DecodeImportSpecifierAttribute(const AEncodedModulePath: string;
   out AModulePath, AAttributeType: string): Boolean;
 
+{ Marks a module request whose specifier was computed at run time (a dynamic
+  import() whose specifier is not a string literal). Such a request is not
+  part of the module graph, so reading the host for it always needs a read
+  grant (ADR 0122). A guest that spells the marker itself only makes its own
+  request stricter. }
+function MarkComputedImportSpecifier(const AModulePath: string): string;
+{ Strips the computed marker; True when it was present. }
+function StripComputedImportSpecifier(var AModulePath: string): Boolean;
+
 const
   DEFERRED_EVALUATION_REFERRER_PREFIX = #1'goccia-defer:';
+  COMPUTED_IMPORT_SPECIFIER_PREFIX = #2'goccia-computed:';
   DEFERRED_MODULE_NOT_READY_MESSAGE =
     'Deferred module cannot be synchronously evaluated while it or one of its dependencies is evaluating';
 
@@ -1580,6 +1590,19 @@ begin
   if AAttributeType = '' then
     Exit(AModulePath);
   Result := AModulePath + IMPORT_ATTRIBUTE_SEPARATOR + AAttributeType;
+end;
+
+function MarkComputedImportSpecifier(const AModulePath: string): string;
+begin
+  Result := COMPUTED_IMPORT_SPECIFIER_PREFIX + AModulePath;
+end;
+
+function StripComputedImportSpecifier(var AModulePath: string): Boolean;
+begin
+  Result := Copy(AModulePath, 1, Length(COMPUTED_IMPORT_SPECIFIER_PREFIX)) =
+    COMPUTED_IMPORT_SPECIFIER_PREFIX;
+  if Result then
+    Delete(AModulePath, 1, Length(COMPUTED_IMPORT_SPECIFIER_PREFIX));
 end;
 
 function DecodeImportSpecifierAttribute(const AEncodedModulePath: string;

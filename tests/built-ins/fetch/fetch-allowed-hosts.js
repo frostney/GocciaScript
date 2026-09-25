@@ -7,8 +7,8 @@ describe("fetch allowed hosts", () => {
   // Blocked-host tests hit the real allowlist: ValidateHost throws
   // synchronously before any socket work, so no mock is needed.
   describe("blocked hosts (real fetch)", () => {
-    test("throws TypeError for host not in allowed list", () => {
-      expect(() => fetch("http://blocked.example.com")).toThrow(TypeError);
+    test("throws PermissionDenied for host not in allowed list", () => {
+      expect(() => fetch("http://blocked.example.com")).toThrow(PermissionDenied);
     });
 
     test("error message mentions blocked host", () => {
@@ -22,8 +22,19 @@ describe("fetch allowed hosts", () => {
       expect(caught).toBe(true);
     });
 
-    test("throws TypeError for HTTPS host not in allowed list", () => {
-      expect(() => fetch("https://not-allowed.test")).toThrow(TypeError);
+    test("throws PermissionDenied for HTTPS host not in allowed list", () => {
+      expect(() => fetch("https://not-allowed.test")).toThrow(PermissionDenied);
+    });
+
+    test("an allowed host on a denied scope is caught synchronously", () => {
+      let caught;
+      try {
+        fetch("http://blocked.example.com:8080/x");
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught instanceof PermissionDenied).toBe(true);
+      expect(caught.message).toBe("net: blocked.example.com:8080");
     });
   });
 

@@ -5,8 +5,6 @@ unit Goccia.RuntimeExtensions.Fetch;
 interface
 
 uses
-  Classes,
-
   Goccia.Builtins.GlobalAbort,
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
@@ -21,7 +19,6 @@ type
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
-    procedure ApplyHostRestrictions(const AAllowedHosts: TStrings); override;
     procedure WaitForIdle; override;
     procedure DiscardPending; override;
 
@@ -72,7 +69,7 @@ begin
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
-    Runtime.Engine.EmitCapabilityAudit);
+    Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -112,27 +109,6 @@ begin
   FBuiltinEventTarget := nil;
   TGocciaFetchManager.Shutdown;
   inherited;
-end;
-
-procedure TGocciaFetchRuntimeExtension.ApplyHostRestrictions(
-  const AAllowedHosts: TStrings);
-var
-  EmptyHosts: TStringList;
-begin
-  if not Assigned(FBuiltinFetch) then
-    Exit;
-
-  if Assigned(AAllowedHosts) then
-    FBuiltinFetch.SetAllowedHosts(AAllowedHosts)
-  else
-  begin
-    EmptyHosts := TStringList.Create;
-    try
-      FBuiltinFetch.SetAllowedHosts(EmptyHosts);
-    finally
-      EmptyHosts.Free;
-    end;
-  end;
 end;
 
 procedure TGocciaFetchRuntimeExtension.WaitForIdle;

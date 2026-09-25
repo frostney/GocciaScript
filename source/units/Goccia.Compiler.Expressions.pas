@@ -7230,6 +7230,10 @@ begin
   begin
     OptionsReg := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Options, OptionsReg);
+    { Emitted after the options have been evaluated, directly before the
+      import, so no guest code runs between the mark and its consumer. }
+    if not AExpr.HasLiteralSpecifier then
+      EmitInstruction(ACtx, EncodeABC(OP_COMPUTED_IMPORT_SPECIFIER, 0, 0, 0));
     case AExpr.Phase of
       icpEvaluation:
         EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT_OPTIONS, ADest,
@@ -7244,8 +7248,12 @@ begin
     ACtx.Scope.FreeRegister;
   end;
   if not Assigned(AExpr.Options) then
+  begin
+    if not AExpr.HasLiteralSpecifier then
+      EmitInstruction(ACtx, EncodeABC(OP_COMPUTED_IMPORT_SPECIFIER, 0, 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg,
       Ord(AExpr.Phase)));
+  end;
   ACtx.Scope.FreeRegister;
 end;
 

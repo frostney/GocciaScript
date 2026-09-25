@@ -36,6 +36,7 @@ uses
   Goccia.Builtins.JSON,
   Goccia.Builtins.Math,
   Goccia.Builtins.Temporal,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Diagnostics.SourceRegistry,
@@ -112,7 +113,6 @@ type
   public
     procedure WaitForIdle; virtual;
     procedure DiscardPending; virtual;
-    procedure SetAllowedFetchHosts(const AHosts: TStrings); virtual;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; virtual;
     function InjectGlobalsFromTOML(
@@ -161,6 +161,13 @@ type
     FLazyThunks: Contnrs.TObjectList;
     FHostEnvironment: TGocciaHostEnvironment;
     FCapabilityAuditSink: TGocciaCapabilityAuditSink;
+    { Fixed at construction and never replaced: the engine's authority over
+      the host (ADR 0122). }
+    FCapabilities: TGocciaCapabilities;
+    FProjectRoot: string;
+    FFetchMaxResponseBytes: Integer;
+    FIsCapabilityChild: Boolean;
+    FEffectiveCapabilitiesAudited: Boolean;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -218,7 +225,12 @@ type
     procedure RegisterGocciaScriptGlobal;
     procedure Initialize(const AFileName: string; const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader;
-      const AOwnsModuleLoader: Boolean);
+      const AOwnsModuleLoader: Boolean;
+      const ACapabilities: TGocciaCapabilities);
+    procedure SetProjectRoot(const AValue: string);
+    procedure ApplyCapabilityPolicy;
+    function GrantNodeModules(const ASpecifier, AImportingDirectory: string;
+      out ACeiling: string): Boolean;
     function GetResolver: TGocciaModuleResolver;
     function SpeciesGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function GocciaGC(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -256,6 +268,23 @@ type
       const ASourceLines: TStringList;
       const AModuleLoader: TGocciaModuleLoader;
       const AExecutor: TGocciaExecutor); overload;
+    { The capability set is fixed here for the engine's lifetime. The overloads
+      without one create an engine with TGocciaCapabilities.None: it reaches
+      nothing outside the process beyond the module-graph exemption. }
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
+      const AExecutor: TGocciaExecutor;
+      const ACapabilities: TGocciaCapabilities); overload;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
+      const AResolver: TGocciaModuleResolver;
+      const AExecutor: TGocciaExecutor;
+      const ACapabilities: TGocciaCapabilities); overload;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
+      const AModuleLoader: TGocciaModuleLoader;
+      const AExecutor: TGocciaExecutor;
+      const ACapabilities: TGocciaCapabilities); overload;
     destructor Destroy; override;
 
     function Execute: TGocciaScriptResult;
@@ -274,18 +303,16 @@ type
       AColumn: Integer);
 
     procedure AddAlias(const APattern, AReplacement: string);
-    { Grants bare-specifier resolution against node_modules. Off by default:
-      an embedded engine resolves only what its aliases and relative paths
-      name until a host asks for the ancestor walk. ACeilingDirectory bounds
-      that walk to itself and below; empty walks to the filesystem root.
-      See docs/module-resolution.md. }
-    procedure AllowNodeModules(const ACeilingDirectory: string = '');
-    procedure SetAllowedFetchHosts(const AHosts: TStrings);
     procedure EmitCapabilityAudit(const AKind: TGocciaCapabilityKind;
       const ADecision: TGocciaCapabilityDecision;
       const ASubject, AReason: string);
     procedure ConfigureCapabilityAuditAsChildOf(
       const AParent: TGocciaEngine);
+    { Emits the one capabilities.effective event for this engine: the set's
+      JSON. Hosts call it right after installing a sink; the engine also calls
+      it before the first other event reaches the sink. Idempotent, and a no-op
+      for child contexts, which inherit their parent's set. }
+    procedure AuditEffectiveCapabilities;
     procedure InjectGlobal(const AKey: string; const AValue: TGocciaValue);
     procedure RegisterGlobal(const AName: string; const AValue: TGocciaValue);
     procedure RegisterLazyGlobal(const AName: string;
@@ -340,6 +367,15 @@ type
     property HostEnvironment: TGocciaHostEnvironment read FHostEnvironment;
     property CapabilityAuditSink: TGocciaCapabilityAuditSink
       read FCapabilityAuditSink write FCapabilityAuditSink;
+    property Capabilities: TGocciaCapabilities read FCapabilities;
+    { The directory whose files static imports with literal specifiers may
+      read without a read grant: the nearest goccia.json/.json5/.toml above the
+      entry, else the entry's directory. Canonical. }
+    property ProjectRoot: string read FProjectRoot write SetProjectRoot;
+    { Response-body ceiling for fetch in bytes; zero selects the default.
+      A setting, not a capability (ADR 0122). }
+    property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes
+      write FFetchMaxResponseBytes;
     property SourcePath: string read FSourcePath;
     { Read-only view of the entry source. Runtime extensions attach after
       Initialize has stored the source but before Execute parses it, which is
@@ -448,10 +484,6 @@ begin
 end;
 
 procedure TGocciaEngineExtension.DiscardPending;
-begin
-end;
-
-procedure TGocciaEngineExtension.SetAllowedFetchHosts(const AHosts: TStrings);
 begin
 end;
 
@@ -804,14 +836,40 @@ begin
   Result := nil;
 end;
 
+const
+  PROJECT_CONFIG_FILE_NAMES: array[0..2] of string = ('goccia.json',
+    'goccia.json5', 'goccia.toml');
+
+{ The module-graph exemption's project: the directory of the nearest goccia
+  config above the entry, or the entry's own directory (ADR 0122). }
+function DiscoverCapabilityProjectRoot(const AEntryFileName: string): string;
+var
+  EntryDirectory, Directory, ParentDirectory: string;
+  I: Integer;
+begin
+  EntryDirectory := ExcludeTrailingPathDelimiter(
+    ExtractFilePath(ExpandFileName(AEntryFileName)));
+  if EntryDirectory = '' then
+    EntryDirectory := GetCurrentDir;
+  Directory := EntryDirectory;
+  while Directory <> '' do
+  begin
+    for I := Low(PROJECT_CONFIG_FILE_NAMES) to High(PROJECT_CONFIG_FILE_NAMES) do
+      if FileExists(IncludeTrailingPathDelimiter(Directory) +
+         PROJECT_CONFIG_FILE_NAMES[I]) then
+        Exit(CanonicalCapabilityPath(Directory));
+    ParentDirectory := ExtractFileDir(Directory);
+    if (ParentDirectory = '') or (ParentDirectory = Directory) then
+      Break;
+    Directory := ParentDirectory;
+  end;
+  Result := CanonicalCapabilityPath(EntryDirectory);
+end;
+
 constructor TGocciaEngine.Create(const AFileName: string;
   const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
 begin
-  if not Assigned(AExecutor) then
-    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
-  FExecutor := AExecutor;
-  Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
-    True);
+  Create(AFileName, ASourceLines, AExecutor, TGocciaCapabilities.None);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
@@ -819,21 +877,51 @@ constructor TGocciaEngine.Create(const AFileName: string;
   const AResolver: TGocciaModuleResolver;
   const AExecutor: TGocciaExecutor);
 begin
-  if not Assigned(AExecutor) then
-    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
-  FExecutor := AExecutor;
-  Initialize(AFileName, ASourceLines,
-    TGocciaModuleLoader.Create(AFileName, AResolver), True);
+  Create(AFileName, ASourceLines, AResolver, AExecutor,
+    TGocciaCapabilities.None);
 end;
 
 constructor TGocciaEngine.Create(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
   const AExecutor: TGocciaExecutor);
 begin
+  Create(AFileName, ASourceLines, AModuleLoader, AExecutor,
+    TGocciaCapabilities.None);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor;
+  const ACapabilities: TGocciaCapabilities);
+begin
   if not Assigned(AExecutor) then
     raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
   FExecutor := AExecutor;
-  Initialize(AFileName, ASourceLines, AModuleLoader, False);
+  Initialize(AFileName, ASourceLines, TGocciaModuleLoader.Create(AFileName),
+    True, ACapabilities);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList;
+  const AResolver: TGocciaModuleResolver;
+  const AExecutor: TGocciaExecutor;
+  const ACapabilities: TGocciaCapabilities);
+begin
+  if not Assigned(AExecutor) then
+    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
+  FExecutor := AExecutor;
+  Initialize(AFileName, ASourceLines,
+    TGocciaModuleLoader.Create(AFileName, AResolver), True, ACapabilities);
+end;
+
+constructor TGocciaEngine.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
+  const AExecutor: TGocciaExecutor;
+  const ACapabilities: TGocciaCapabilities);
+begin
+  if not Assigned(AExecutor) then
+    raise Exception.Create('TGocciaEngine.Create: AExecutor is required.');
+  FExecutor := AExecutor;
+  Initialize(AFileName, ASourceLines, AModuleLoader, False, ACapabilities);
 end;
 
 procedure TGocciaEngine.ExecuteShims;
@@ -863,8 +951,16 @@ end;
 
 procedure TGocciaEngine.Initialize(const AFileName: string;
   const ASourceLines: TStringList; const AModuleLoader: TGocciaModuleLoader;
-  const AOwnsModuleLoader: Boolean);
+  const AOwnsModuleLoader: Boolean;
+  const ACapabilities: TGocciaCapabilities);
 begin
+  { A set with no layers is None; normalize so ToJSON and the audit event show
+    the root layer. }
+  if ACapabilities.LayerCount = 0 then
+    FCapabilities := TGocciaCapabilities.None
+  else
+    FCapabilities := ACapabilities;
+  FProjectRoot := DiscoverCapabilityProjectRoot(AFileName);
   { Not a valid token until EnterEngineAsyncContext returns one, so a
     constructor that fails before then cannot make Destroy unwind past an
     enclosing engine's entry. }
@@ -952,6 +1048,60 @@ begin
     FFunctionConstructor.CompileDynamicFunction := CompileDynamicFunction;
     FFunctionConstructor.CapabilityAuditEmitter := EmitCapabilityAudit;
   end;
+  ApplyCapabilityPolicy;
+end;
+
+procedure TGocciaEngine.ApplyCapabilityPolicy;
+begin
+  if not Assigned(FModuleLoader) then
+    Exit;
+  FModuleLoader.ConfigureCapabilities(FCapabilities, FProjectRoot,
+    EmitCapabilityAudit);
+  if Assigned(FModuleLoader.Resolver) then
+    FModuleLoader.Resolver.NodeModulesGrant := GrantNodeModules;
+end;
+
+procedure TGocciaEngine.SetProjectRoot(const AValue: string);
+begin
+  if AValue = '' then
+    FProjectRoot := ''
+  else
+    FProjectRoot := CanonicalCapabilityPath(AValue);
+  ApplyCapabilityPolicy;
+end;
+
+function TGocciaEngine.GrantNodeModules(const ASpecifier,
+  AImportingDirectory: string; out ACeiling: string): Boolean;
+var
+  Reason: string;
+begin
+  Result := FCapabilities.NodeModulesCeiling(AImportingDirectory, ACeiling);
+  if Result then
+  begin
+    if ACeiling = '' then
+      Reason := 'node_modules walk is unbounded'
+    else
+      Reason := 'node_modules walk is bounded by ' + ACeiling;
+    EmitCapabilityAudit(gckImportNodeModules, gcdAllow, ASpecifier, Reason);
+    Exit;
+  end;
+  EmitCapabilityAudit(gckImportNodeModules, gcdDeny, ASpecifier,
+    'the import capability does not grant node_modules here');
+  { An outright deny is a PermissionDenied; a capability that was simply never
+    granted keeps the sealed-by-default resolution message. }
+  if FCapabilities.DeniesNodeModules(AImportingDirectory) then
+    ThrowPermissionDenied(CapabilityName(gcImport), ASpecifier,
+      'node_modules resolution is denied for ' + AImportingDirectory);
+end;
+
+procedure TGocciaEngine.AuditEffectiveCapabilities;
+begin
+  if (not Assigned(FCapabilityAuditSink)) or FIsCapabilityChild or
+     FEffectiveCapabilitiesAudited then
+    Exit;
+  FEffectiveCapabilitiesAudited := True;
+  EmitCapabilityAudit(gckCapabilitiesEffective, gcdAllow,
+    FCapabilities.ToJSON, 'effective capability set at engine start');
 end;
 
 destructor TGocciaEngine.Destroy;
@@ -1738,29 +1888,6 @@ begin
   Resolver.AddAlias(APattern, AReplacement);
 end;
 
-procedure TGocciaEngine.AllowNodeModules(const ACeilingDirectory: string);
-begin
-  Resolver.AllowNodeModules(ACeilingDirectory);
-  { The grant is a host decision, not a script action, so it is emitted once at
-    configuration time. The subject is the effective ceiling the resolver
-    normalized — empty when the walk is unbounded, which is the part an auditor
-    most needs to see. An embedding host that calls this API instead of going
-    through the CLI gets the same event; the CLI reaches the resolver directly,
-    so nothing is emitted twice. }
-  if Resolver.NodeModulesEnabled then
-    EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
-      Resolver.NodeModulesCeiling,
-      'bare specifiers resolve against node_modules');
-end;
-
-procedure TGocciaEngine.SetAllowedFetchHosts(const AHosts: TStrings);
-var
-  I: Integer;
-begin
-  for I := 0 to FExtensions.Count - 1 do
-    FExtensions[I].SetAllowedFetchHosts(AHosts);
-end;
-
 procedure TGocciaEngine.EmitCapabilityAudit(
   const AKind: TGocciaCapabilityKind;
   const ADecision: TGocciaCapabilityDecision;
@@ -1771,6 +1898,8 @@ var
 begin
   if not Assigned(FCapabilityAuditSink) then
     Exit;
+  if AKind <> gckCapabilitiesEffective then
+    AuditEffectiveCapabilities;
 
   AuditEvent.Kind := AKind;
   AuditEvent.Decision := ADecision;
@@ -1803,6 +1932,7 @@ end;
 procedure TGocciaEngine.ConfigureCapabilityAuditAsChildOf(
   const AParent: TGocciaEngine);
 begin
+  FIsCapabilityChild := True;
   if Assigned(AParent) then
     FCapabilityAuditSink := AParent.FCapabilityAuditSink
   else

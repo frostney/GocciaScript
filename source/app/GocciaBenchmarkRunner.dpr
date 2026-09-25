@@ -238,10 +238,9 @@ type
       const AReports: array of TReportSpec;
       const AMode: TGocciaExecutionMode; const AShowProgress: Boolean);
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
-    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
-    procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
   protected
+    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
     procedure Configure; override;
     procedure Validate; override;
     procedure AfterExecute; override;
@@ -995,10 +994,8 @@ begin
       for I := 0 to Files.Count - 1 do
         WorkerData[I] := nil;
 
-      if AnyFileConfigEnablesFlag(Files, EngineOptions.UnsafeFFI) then
-        EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
-      else
-        EnsureSharedPrototypesInitialized(WarmUpRuntime);
+      EnsureSharedPrototypesInitialized(WarmUpCapabilities(Files),
+        WarmUpRuntime);
 
       BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
       WallClockStart := GetNanoseconds;
@@ -1179,9 +1176,6 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
-  if Assigned(EngineOptions) and
-     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -1195,13 +1189,7 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   ApplyBenchmarkRunnerRuntimeProfile(Runtime);
-end;
-
-procedure TBenchmarkRunnerApp.InitializeRuntimeWithUnsafeFFI(
-  const AEngine: TGocciaEngine);
-begin
-  InitializeRuntime(AEngine);
-  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
+  InstallFFIIfGranted(Runtime);
 end;
 
 procedure TBenchmarkRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
@@ -1210,11 +1198,11 @@ begin
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
-procedure TBenchmarkRunnerApp.WarmUpRuntimeWithUnsafeFFI(
-  const AEngine: TGocciaEngine);
+{ The benchmark runner has never honored --no-host-filesystem. }
+function TBenchmarkRunnerApp.HonoredCapabilityOptions:
+  TGocciaCapabilityOptions;
 begin
-  InitializeRuntimeWithUnsafeFFI(AEngine);
-  WarmUpSharedLazyGlobals(AEngine);
+  Result := AllCapabilityOptions - [gcoNoHostFilesystem];
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

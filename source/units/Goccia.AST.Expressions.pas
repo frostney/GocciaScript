@@ -514,6 +514,10 @@ type
     property Specifier: TGocciaExpression read FSpecifier;
     property Options: TGocciaExpression read FOptions;
     property Phase: TGocciaImportCallPhase read FPhase;
+    { True when the specifier is a string literal: the request is then part of
+      the statically known module graph (ADR 0122). A computed specifier is
+      not, and reading the host for it needs a read grant. }
+    function HasLiteralSpecifier: Boolean;
   end;
 
   TGocciaHoleExpression = class(TGocciaExpression)
@@ -2597,10 +2601,17 @@ begin
   FPhase := APhase;
 end;
 
+function TGocciaImportCallExpression.HasLiteralSpecifier: Boolean;
+begin
+  Result := (FSpecifier is TGocciaLiteralExpression) and
+    (TGocciaLiteralExpression(FSpecifier).Value is TGocciaStringLiteralValue);
+end;
+
 // ES2026 §13.3.10.1 Runtime Semantics: Evaluation — ImportCall
 function TGocciaImportCallExpression.Evaluate(const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   AttributeType: string;
+  ModuleRequest: string;
   DeferredLoader: TLoadDeferredModuleCallback;
   HasAttributeType: Boolean;
   SourceLoader: TLoadModuleSourceCallback;
@@ -2632,6 +2643,11 @@ begin
           Line, Column, '', nil,
           'Use type "json", "text", or "bytes" for import attributes.');
 
+      ModuleRequest := EncodeImportSpecifierAttribute(SpecifierString,
+        AttributeType);
+      if not HasLiteralSpecifier then
+        ModuleRequest := MarkComputedImportSpecifier(ModuleRequest);
+
       case FPhase of
         icpSource:
           begin
@@ -2640,9 +2656,7 @@ begin
               SourceLoader := AContext.Scope.LoadModuleSource;
             if not Assigned(SourceLoader) then
               raise Exception.Create('Module source loader is not available.');
-            Promise.Resolve(SourceLoader(
-              EncodeImportSpecifierAttribute(
-              SpecifierString, AttributeType),
+            Promise.Resolve(SourceLoader(ModuleRequest,
               AContext.CurrentFilePath));
           end;
         icpDefer:
@@ -2652,15 +2666,12 @@ begin
               DeferredLoader := AContext.Scope.LoadDeferredModule;
             if not Assigned(DeferredLoader) then
               raise Exception.Create('Deferred module loader is not available.');
-            Promise.Resolve(DeferredLoader(
-              EncodeImportSpecifierAttribute(
-              SpecifierString, AttributeType),
+            Promise.Resolve(DeferredLoader(ModuleRequest,
               AContext.CurrentFilePath));
           end;
       else
         // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
-        Module := AContext.LoadModule(EncodeImportSpecifierAttribute(
-          SpecifierString, AttributeType),
+        Module := AContext.LoadModule(ModuleRequest,
           AContext.CurrentFilePath);
         // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
         Promise.Resolve(Module.GetNamespaceObject);

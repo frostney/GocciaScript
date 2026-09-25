@@ -21,29 +21,26 @@ procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AInlineAliases: TStrings;
   const AInlineAliasBaseDirectory: string = '');
 
-{ Applies the --allow-node-modules capability to a resolver.
+{ Translates an --allow-node-modules / "allow-node-modules" setting into an
+  import capability scope (ADR 0122).
 
-  APresent is whether the option was given at all — the flag alone arrives as
-  a present option with an empty value, so presence and value carry different
-  information. The default profile never calls this, which is what keeps bare
-  specifiers sealed unless a host opts in.
-
-  ABaseDirectory anchors a relative ceiling. It is the invocation directory for
-  a command-line flag and the configuration file's own directory for a config
-  key, matching how relative `--alias` targets are anchored: a ceiling written
-  in a config file has to mean the same directory wherever the command is run
-  from, or a relative allow-node-modules value would point somewhere different
-  for every caller. }
-procedure ConfigureNodeModulesResolution(
-  const AResolver: TGocciaModuleResolver; const APresent: Boolean;
-  const ASetting: string; const ABaseDirectory: string = '');
+  Returns False for the disabled setting. Otherwise AScope is
+  `node_modules` for the unbounded walk (an empty or `true` setting) or
+  `node_modules=<dir>` with the ceiling made absolute. ABaseDirectory anchors
+  a relative ceiling: the invocation directory for a command-line flag and the
+  configuration file's own directory for a config key, matching how relative
+  `--alias` targets are anchored. }
+function TryNodeModulesImportScope(const ASetting, ABaseDirectory: string;
+  out AScope: string): Boolean;
 
 implementation
 
 uses
   SysUtils,
 
-  FileUtils;
+  FileUtils,
+
+  Goccia.Capabilities;
 
 type
   TModuleAliasPair = record
@@ -125,19 +122,18 @@ begin
     ASetting;
 end;
 
-procedure ConfigureNodeModulesResolution(
-  const AResolver: TGocciaModuleResolver; const APresent: Boolean;
-  const ASetting: string; const ABaseDirectory: string);
+function TryNodeModulesImportScope(const ASetting, ABaseDirectory: string;
+  out AScope: string): Boolean;
 begin
-  if (not Assigned(AResolver)) or (not APresent) then
-    Exit;
+  AScope := '';
   if ASetting = NODE_MODULES_SETTING_DISABLED then
-    Exit;
+    Exit(False);
   if (ASetting = '') or (ASetting = NODE_MODULES_SETTING_ENABLED) then
-    AResolver.AllowNodeModules
+    AScope := IMPORT_NODE_MODULES_SCOPE
   else
-    AResolver.AllowNodeModules(AnchorCeilingDirectory(ASetting,
-      ABaseDirectory));
+    AScope := IMPORT_NODE_MODULES_SCOPE + '=' + ExpandHostFileName(
+      AnchorCeilingDirectory(ASetting, ABaseDirectory));
+  Result := True;
 end;
 
 end.

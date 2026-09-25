@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
   Goccia.ObjectModel,
@@ -16,6 +17,7 @@ uses
 type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
   private
+    FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -29,8 +31,11 @@ type
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
+    { FFI.open checks every library path against ACapabilities' ffi scopes
+      (ADR 0122). }
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
+      const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
   end;
 
@@ -65,11 +70,13 @@ const
 constructor TGocciaGlobalFFI.Create(const AName: string;
   const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback;
+  const ACapabilities: TGocciaCapabilities;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
 var
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
 
   Members := TGocciaMemberCollection.Create;
@@ -179,9 +186,20 @@ begin
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
+  { A relative path is judged where the dynamic loader will look for it, the
+    working directory; a bare library name only matches an unscoped grant. }
+  if not FCapabilities.AllowsPath(gcFFI, LibPath) then
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath,
+        'the ffi capability does not cover this library');
+    ThrowPermissionDenied(CapabilityName(gcFFI), LibPath,
+      Format('the ffi capability does not cover %s',
+        [CanonicalCapabilityPath(LibPath)]));
+  end;
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
-      'FFI capability is enabled');
+      'the ffi capability covers this library');
 
   try
     Handle := TGocciaFFILibraryHandle.Create(LibPath);

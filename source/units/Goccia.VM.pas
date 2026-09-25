@@ -162,6 +162,10 @@ type
     FGlobalThisValue: TGocciaValue;
     FRealm: TGocciaRealm;
     FLoadModule: TLoadModuleCallback;
+    { Set by OP_COMPUTED_IMPORT_SPECIFIER and consumed by the dynamic-import
+      opcode that immediately follows it. A stale mark can only make a later
+      import stricter. }
+    FComputedDynamicImportPending: Boolean;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
@@ -14336,6 +14340,7 @@ var
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
   DynImportPromise: TGocciaPromiseValue;
+  DynImportComputed: Boolean;
   DynImportTask: TGocciaMicrotask;
   AwaitPromise: TGocciaPromiseValue;
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
