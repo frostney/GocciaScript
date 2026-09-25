@@ -69,8 +69,10 @@ opening one still requires the independent FFI capability.
 ## Cache
 
 On first use, the resolver derives GET-only GitHub raw-content URLs from the
-repository, pinned commit, and artifact paths. It verifies every response
-before committing it under
+repository, pinned commit, and artifact paths. Every GET, including each
+redirect hop, is confined to the provider host and bounded by a deadline; a
+redirect to any other host is refused before it is sent. The resolver verifies
+every response before committing it under
 `.goccia/packages/github/<owner>/<repository>/<commit>/`. Later runs verify
 the cached bytes and perform no network request when they match, preserving
 offline repeatability. A missing or corrupt cache entry may be replaced only

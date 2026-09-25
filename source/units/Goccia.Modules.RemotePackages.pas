@@ -5,7 +5,10 @@ unit Goccia.Modules.RemotePackages;
 interface
 
 uses
+  Classes,
   SysUtils,
+
+  HTTPTypes,
 
   Goccia.Modules.Resolver;
 
@@ -20,6 +23,12 @@ type
     function MaterializeArtifact(const ARepository, AResolvedReference,
       AArtifactPath, AExpectedHash, APackageCacheRoot: string): string;
   protected
+    { Sends one provider GET. AAllowedHosts pins every hop, redirects
+      included, to the provider host. Tests override this to observe the
+      request without network access. }
+    function SendArtifactRequest(const AURL: string;
+      const AAllowedHosts: TStrings;
+      const ATimeoutMilliseconds: Integer): THTTPResponse; virtual;
     function FetchArtifact(const AURL: string): TBytes; virtual;
   public
     constructor Create(const ACacheDirectory: string = '');
@@ -30,8 +39,6 @@ type
 implementation
 
 uses
-  Classes,
-
   FileUtils,
   HTTPClient,
   SHA256,
@@ -56,6 +63,9 @@ const
   DEFAULT_CACHE_DIRECTORY = '.goccia';
   PACKAGES_CACHE_DIRECTORY = 'packages';
   GITHUB_RAW_BASE_URL = 'https://raw.githubusercontent.com/';
+  { Bounds one artifact GET, connect through body. Resolution runs before any
+    script, so no execution deadline covers it. }
+  REMOTE_PACKAGE_FETCH_TIMEOUT_MILLISECONDS = 60000;
   SHA256_HEX_LENGTH = 64;
   GITHUB_COMMIT_LENGTH = 40;
 
@@ -305,14 +315,40 @@ begin
   FCacheDirectory := ACacheDirectory;
 end;
 
+function TGocciaProviderRemotePackageResolver.SendArtifactRequest(
+  const AURL: string; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer): THTTPResponse;
+var
+  Headers: THTTPHeaders;
+begin
+  SetLength(Headers, 0);
+  Result := HTTPGet(AURL, Headers, AAllowedHosts, ATimeoutMilliseconds);
+end;
+
 function TGocciaProviderRemotePackageResolver.FetchArtifact(
   const AURL: string): TBytes;
 var
-  Headers: THTTPHeaders;
+  AllowedHosts: TStringList;
   Response: THTTPResponse;
 begin
-  SetLength(Headers, 0);
-  Response := HTTPGet(AURL, Headers);
+  { Without an allowlist HTTPClient follows a redirect to any host. The hash
+    check would still reject the bytes, but the request itself would already
+    have gone wherever the redirect pointed. }
+  AllowedHosts := TStringList.Create;
+  try
+    AllowedHosts.Add(HTTPURLHost(GITHUB_RAW_BASE_URL));
+    try
+      Response := SendArtifactRequest(AURL, AllowedHosts,
+        REMOTE_PACKAGE_FETCH_TIMEOUT_MILLISECONDS);
+    except
+      on E: EHTTPError do
+        raise EGocciaRemotePackageError.CreateFmt(
+          'Remote package GET failed for provider artifact: %s',
+          [E.Message]);
+    end;
+  finally
+    AllowedHosts.Free;
+  end;
   if Response.StatusCode <> 200 then
     raise EGocciaRemotePackageError.CreateFmt(
       'Remote package GET failed with HTTP %d for provider artifact.',

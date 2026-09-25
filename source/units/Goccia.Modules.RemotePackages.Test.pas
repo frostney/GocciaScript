@@ -7,6 +7,7 @@ uses
   SysUtils,
 
   FileUtils,
+  HTTPTypes,
   SHA256,
   TestingPascalLibrary,
   TextEncoding,
@@ -32,15 +33,24 @@ type
   private
     FFailOnFetch: Boolean;
     FFetchCount: Integer;
+    FLastAllowedHosts: string;
+    FLastTimeoutMilliseconds: Integer;
     FResponses: TStringList;
+    FStatusCode: Integer;
   protected
-    function FetchArtifact(const AURL: string): TBytes; override;
+    function SendArtifactRequest(const AURL: string;
+      const AAllowedHosts: TStrings;
+      const ATimeoutMilliseconds: Integer): THTTPResponse; override;
   public
     constructor Create(const ACacheDirectory: string);
     destructor Destroy; override;
     procedure AddResponse(const AURL, AText: string);
     property FailOnFetch: Boolean read FFailOnFetch write FFailOnFetch;
     property FetchCount: Integer read FFetchCount;
+    property LastAllowedHosts: string read FLastAllowedHosts;
+    property LastTimeoutMilliseconds: Integer
+      read FLastTimeoutMilliseconds;
+    property StatusCode: Integer read FStatusCode write FStatusCode;
   end;
 
   TRemotePackageTests = class(TTestSuite)
@@ -62,6 +72,8 @@ type
     procedure TestRejectsRawHTTPSReference;
     procedure TestRejectsUnsafeProviderRepository;
     procedure TestRejectsUnsafeArtifactPath;
+    procedure TestPinsProviderRequestsToProviderHost;
+    procedure TestRejectsNonSuccessProviderResponse;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -75,6 +87,7 @@ begin
   inherited Create(ACacheDirectory);
   FResponses := TStringList.Create;
   FResponses.NameValueSeparator := '=';
+  FStatusCode := 200;
 end;
 
 destructor TFixtureRemotePackageResolver.Destroy;
@@ -89,20 +102,29 @@ begin
   FResponses.Values[AURL] := AText;
 end;
 
-function TFixtureRemotePackageResolver.FetchArtifact(
-  const AURL: string): TBytes;
+function TFixtureRemotePackageResolver.SendArtifactRequest(
+  const AURL: string; const AAllowedHosts: TStrings;
+  const ATimeoutMilliseconds: Integer): THTTPResponse;
 var
   ErrorOffset, ResponseIndex: Integer;
   ResponseText: string;
 begin
   Inc(FFetchCount);
+  if Assigned(AAllowedHosts) then
+    FLastAllowedHosts := AAllowedHosts.CommaText
+  else
+    FLastAllowedHosts := '';
+  FLastTimeoutMilliseconds := ATimeoutMilliseconds;
   if FFailOnFetch then
     raise Exception.Create('unexpected provider GET');
   ResponseIndex := FResponses.IndexOfName(AURL);
   if ResponseIndex < 0 then
     raise Exception.Create('missing fixture response for ' + AURL);
   ResponseText := FResponses.ValueFromIndex[ResponseIndex];
-  if not TryEncodeUTF8(ResponseText, Result, ErrorOffset) then
+  Result.StatusCode := FStatusCode;
+  Result.FinalURL := AURL;
+  Result.Redirected := False;
+  if not TryEncodeUTF8(ResponseText, Result.Body, ErrorOffset) then
     raise Exception.CreateFmt(
       'Fixture response encoding failed at %d', [ErrorOffset]);
 end;
@@ -123,6 +145,10 @@ begin
     TestRejectsUnsafeProviderRepository);
   Test('Rejects lockfile artifact traversal',
     TestRejectsUnsafeArtifactPath);
+  Test('Pins provider requests to the provider host with a deadline',
+    TestPinsProviderRequestsToProviderHost);
+  Test('Rejects a non-success provider response',
+    TestRejectsNonSuccessProviderResponse);
 end;
 
 procedure TRemotePackageTests.BeforeAll;
@@ -447,6 +473,71 @@ begin
     end;
     Expect<Boolean>(ErrorRaised).ToBe(True);
     Expect<Integer>(Resolver.FetchCount).ToBe(0);
+  finally
+    Resolver.Free;
+  end;
+end;
+
+procedure TRemotePackageTests.TestPinsProviderRequestsToProviderHost;
+var
+  ImportMapPath, ProjectDirectory: string;
+  Resolver: TFixtureRemotePackageResolver;
+begin
+  ProjectDirectory := CreateTempDirectory;
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json';
+  WriteTextFile(ImportMapPath, '{"imports":{}}');
+  WriteLockfile(ProjectDirectory,
+    SHA256Hex(Bytes(ENTRY_TEXT)),
+    SHA256Hex(Bytes(NATIVE_TEXT)),
+    SHA256Hex(Bytes(OTHER_PLATFORM_TEXT)));
+  Resolver := TFixtureRemotePackageResolver.Create(
+    IncludeTrailingPathDelimiter(ProjectDirectory) + '.goccia');
+  try
+    Resolver.AddResponse(ArtifactURL(ENTRY_PATH), ENTRY_TEXT);
+    Resolver.AddResponse(ArtifactURL(NATIVE_PATH), NATIVE_TEXT);
+    Resolver.ResolvePackage(PACKAGE_REFERENCE, ImportMapPath);
+    Expect<string>(Resolver.LastAllowedHosts).ToBe(
+      'raw.githubusercontent.com');
+    Expect<Boolean>(Resolver.LastTimeoutMilliseconds > 0).ToBe(True);
+  finally
+    Resolver.Free;
+  end;
+end;
+
+procedure TRemotePackageTests.TestRejectsNonSuccessProviderResponse;
+var
+  ErrorRaised: Boolean;
+  ImportMapPath, ProjectDirectory: string;
+  Resolver: TFixtureRemotePackageResolver;
+begin
+  ProjectDirectory := CreateTempDirectory;
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json';
+  WriteTextFile(ImportMapPath, '{"imports":{}}');
+  WriteLockfile(ProjectDirectory,
+    SHA256Hex(Bytes(ENTRY_TEXT)),
+    SHA256Hex(Bytes(NATIVE_TEXT)),
+    SHA256Hex(Bytes(OTHER_PLATFORM_TEXT)));
+  Resolver := TFixtureRemotePackageResolver.Create(
+    IncludeTrailingPathDelimiter(ProjectDirectory) + '.goccia');
+  try
+    { A redirect the host allowlist refused never reaches here, and one it
+      allowed has already been followed; any other non-200 status must not be
+      read as artifact bytes, even when the body would hash correctly. }
+    Resolver.StatusCode := 302;
+    Resolver.AddResponse(ArtifactURL(ENTRY_PATH), ENTRY_TEXT);
+    Resolver.AddResponse(ArtifactURL(NATIVE_PATH), NATIVE_TEXT);
+    ErrorRaised := False;
+    try
+      Resolver.ResolvePackage(PACKAGE_REFERENCE, ImportMapPath);
+    except
+      on EGocciaRemotePackageError do
+        ErrorRaised := True;
+    end;
+    Expect<Boolean>(ErrorRaised).ToBe(True);
+    Expect<Boolean>(HostFileExists(
+      CachePath(ProjectDirectory, ENTRY_PATH))).ToBe(False);
   finally
     Resolver.Free;
   end;
