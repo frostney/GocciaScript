@@ -34,9 +34,11 @@ chunks of at most 128 pointers. The SHA-256 digest of each chunk's ordered
 
 Snapshots contain the fingerprint and the corresponding parsed pointer
 records. The JetStream adapter omits the duplicate `reportJson` payload that
-legacy daily pointers embed; full reports and raw pointers remain unchanged. Their serialized content is deterministic and bounded to 1 MiB before
-compression. Readers check the version, fingerprint, exact descriptor sequence,
-and report-specific schemas, and bound gzip expansion. Missing, invalid, or
+its daily pointers embed, because the publisher spreads the whole publish entry
+into each pointer; full reports and raw pointers remain unchanged. Their
+serialized content is deterministic and bounded to 1 MiB before compression.
+Readers check the version, fingerprint, exact descriptor sequence, and
+report-specific schemas, and bound gzip expansion. Missing, invalid, or
 unreadable snapshots fall back to raw pointers. Unknown historical path shapes,
 missing ETags, and weak ETags also use raw reads. Malformed raw pointers remain
 excluded as before; transport failures on raw reads still propagate.

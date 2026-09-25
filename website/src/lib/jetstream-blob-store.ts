@@ -115,8 +115,10 @@ export async function readJetStreamBlobReportJson(
 }
 
 function compactHistoryRun(run: JetStreamBlobRun): JetStreamBlobRun {
-  // Legacy pointers embed the full report as an extra field. The report artifact
-  // remains authoritative; the timeline needs only the declared run fields.
+  // Daily pointers embed the full report as an extra field because the
+  // publisher spreads the whole publish entry into each pointer. The report
+  // artifact remains authoritative; the timeline needs only the declared run
+  // fields.
   const { reportJson: _reportJson, ...history } = run as JetStreamBlobRun & {
     reportJson?: unknown;
   };
