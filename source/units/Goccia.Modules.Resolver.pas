@@ -283,6 +283,13 @@ begin
       if IsProviderQualifiedImportMapAddress(
          TGocciaStringLiteralValue(Value).Value) then
       begin
+        { A package resolves to a single entry file, which cannot stand in for
+          a directory prefix. Refused before the capability decision: a
+          malformed entry is not a request for remote authority. }
+        if HasImportMapTrailingSlash(Key) then
+          raise Exception.CreateFmt(
+            'Import map entry "%s" is a prefix, but a provider-qualified package reference resolves to a single entry module.',
+            [Key]);
         if not FRemoteImportsEnabled then
         begin
           if Assigned(FCapabilityAuditEmitter) then

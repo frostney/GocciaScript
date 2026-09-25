@@ -33,7 +33,9 @@ The same grant can be supplied explicitly on the command line:
 ```
 
 The first provider slice supports only
-`github:owner/repository@requested-ref`. The requested reference identifies
+`github:owner/repository@requested-ref`. A package resolves to its single
+entry module, so it can only be the address of an exact key; a prefix key
+ending in `/` is refused. The requested reference identifies
 the package entry in a committed `goccia.lock.json` beside the import map; it
 is never used directly for a download. The lockfile pins a lowercase
 40-character Git commit plus SHA-256 hashes for every artifact:

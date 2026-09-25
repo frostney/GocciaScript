@@ -47,6 +47,7 @@ type
     procedure TestDeniesRemoteEntryBeforeConsultingCache;
     procedure TestRequiresCapabilityAgainForCachedEntry;
     procedure TestRejectsRawHTTPSImportMapAddress;
+    procedure TestRejectsRemotePackageAsPrefixAddress;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -75,6 +76,8 @@ begin
     TestRequiresCapabilityAgainForCachedEntry);
   Test('Raw HTTPS import map addresses remain unsupported',
     TestRejectsRawHTTPSImportMapAddress);
+  Test('A remote package cannot be the address of a prefix entry',
+    TestRejectsRemotePackageAsPrefixAddress);
 end;
 
 procedure TModuleResolverTests.BeforeAll;
@@ -302,6 +305,44 @@ begin
     'goccia.json';
   WriteTextFile(ImportMapPath,
     '{"imports":{"raw":"https://example.com/package.js"}}');
+  Resolver := TGocciaModuleResolver.Create(ProjectDirectory);
+  RemoteResolver := TFixtureRemotePackageResolver.Create;
+  try
+    Resolver.RemotePackageResolver := RemoteResolver;
+    Resolver.RemoteImportsEnabled := True;
+    ResetAudit;
+    Resolver.CapabilityAuditEmitter := RecordAudit;
+    ErrorRaised := False;
+    try
+      Resolver.LoadImportMap(ImportMapPath);
+    except
+      on Exception do
+        ErrorRaised := True;
+    end;
+    Expect<Boolean>(ErrorRaised).ToBe(True);
+    Expect<Integer>(RemoteResolver.ResolveCount).ToBe(0);
+    Expect<Integer>(FAuditCount).ToBe(0);
+  finally
+    Resolver.Free;
+    RemoteResolver.Free;
+  end;
+end;
+
+procedure TModuleResolverTests.TestRejectsRemotePackageAsPrefixAddress;
+var
+  ErrorRaised: Boolean;
+  ImportMapPath, ProjectDirectory: string;
+  RemoteResolver: TFixtureRemotePackageResolver;
+  Resolver: TGocciaModuleResolver;
+begin
+  { A package resolves to one entry file, so a "remote/" prefix mapped to it
+    would turn "remote/x" into "<entry file>x". It is refused while the map
+    loads, before any lockfile, cache, or audit decision. }
+  ProjectDirectory := CreateTempDirectory;
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json';
+  WriteTextFile(ImportMapPath,
+    '{"imports":{"remote/":"' + PACKAGE_REFERENCE + '/"}}');
   Resolver := TGocciaModuleResolver.Create(ProjectDirectory);
   RemoteResolver := TFixtureRemotePackageResolver.Create;
   try
