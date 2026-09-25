@@ -10,6 +10,7 @@ export const BARE = `./build/GocciaScriptLoaderBare${ext}`;
 export const SANDBOXRUNNER = `./build/GocciaSandboxRunner${ext}`;
 export const REPL = `./build/GocciaREPL${ext}`;
 export const TESTRUNNER = `./build/GocciaTestRunner${ext}`;
+export const TEST262RUNNER = `./build/GocciaTest262Runner${ext}`;
 export const BUNDLER = `./build/GocciaBundler${ext}`;
 export const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
 export const FUZZHARNESS = `./build/GocciaFuzzHarness${ext}`;

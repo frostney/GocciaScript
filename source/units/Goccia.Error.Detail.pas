@@ -25,6 +25,11 @@ function FormatThrowDetail(const AThrown: TGocciaValue;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
   const ASuggestion: string = ''): string;
 
+{ Returns the thrown value's `name` when it is a string data property on the
+  object or its prototype chain, and 'Error' otherwise. Like FormatThrowDetail,
+  it never invokes accessors, so it is safe after the bytecode VM has unwound. }
+function ThrownErrorName(const AThrown: TGocciaValue): string;
+
 implementation
 
 uses
@@ -75,6 +80,14 @@ begin
 
     Current := Current.Prototype;
   end;
+end;
+
+function ThrownErrorName(const AThrown: TGocciaValue): string;
+begin
+  if not ((AThrown is TGocciaObjectValue) and
+     TryGetStringDataProperty(TGocciaObjectValue(AThrown), PROP_NAME,
+       Result)) then
+    Result := 'Error';
 end;
 
 function FormatThrowDetail(const AThrown: TGocciaValue;
