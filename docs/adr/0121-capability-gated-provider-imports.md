@@ -3,7 +3,7 @@
 **Date:** 2026-07-25
 **Area:** `modules`, `host capabilities`
 **Issue:** [#1053](https://github.com/frostney/GocciaScript/issues/1053)
-**Related:** [ADR 0097](0097-engine-owned-capability-audit-seam.md)
+**Related:** [ADR 0097](0097-engine-owned-capability-audit-seam.md), [ADR 0103](0103-layered-untrusted-execution-boundaries.md), [ADR 0111](0111-opt-in-node-modules-resolution.md)
 
 GocciaScript keeps ordinary module loading local. A provider-qualified entry
 in an import map is handled during resolver configuration: after an explicit
@@ -35,9 +35,11 @@ Alternatives considered:
 - **Accept raw HTTPS import-map addresses.** Rejected because arbitrary URLs
   do not carry provider identity, an immutable reference, or the complete
   artifact set needed for native packages.
-- **Use Node/npm package resolution.** Rejected because Node host
-  compatibility is outside the project vision and would add ambient package
-  and filesystem conventions.
+- **Use Node/npm package resolution.** Rejected as the remote mechanism.
+  [ADR 0111](0111-opt-in-node-modules-resolution.md) resolves bare specifiers
+  against packages that are already installed locally; it neither fetches nor
+  pins them. Provider imports stay a separate capability with their own
+  lockfile and cache rather than a download step added to that walk.
 - **Authorize only cache misses.** Rejected because cached remote packages are
   still authority selected by a remote import-map entry; cache state must not
   bypass the host decision.

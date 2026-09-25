@@ -1,5 +1,18 @@
 # Remote Package Imports
 
+*How a lockfile-pinned `github:` import-map entry becomes a verified local file, and what the `--remote-imports` capability does and does not grant.*
+
+## Executive Summary
+
+- **Off by default** — a `github:` import-map entry is refused unless the host grants `--remote-imports` (or the `"remote-imports"` config key), even when the cache is already complete
+- **Lockfile-pinned** — `goccia.lock.json` beside the import map pins each package to a commit and a SHA-256 per artifact; the runtime never writes or updates it
+- **Derived GET-only URLs** — download URLs are built from validated lock data; import maps and lockfiles cannot name an arbitrary URL
+- **Verified offline reuse** — cached bytes are re-hashed on every run and reused without network access when they match
+- **Resolution happens at configuration time** — materialization runs while the import map loads, before any script runs, so guest code cannot trigger a download
+- **The sandbox host stays sealed** — `GocciaSandboxRunner` refuses `--remote-imports`
+
+## Import map and lockfile
+
 Provider-qualified package entries coexist with local entries in the same
 `imports` object:
 
@@ -53,6 +66,8 @@ Artifacts without `platform` are universal; platform-specific artifacts use
 artifact. Platform-native libraries are materialized alongside the package;
 opening one still requires the independent FFI capability.
 
+## Cache
+
 On first use, the resolver derives GET-only GitHub raw-content URLs from the
 repository, pinned commit, and artifact paths. It verifies every response
 before committing it under
@@ -63,6 +78,8 @@ by a response matching the committed hash. Lockfile generation and updates
 are explicit external project maintenance in this first slice; the runtime
 never rewrites the lockfile or downloads in the background. Commit
 `goccia.lock.json`; ignore the `.goccia/` cache directory.
+
+## Authorization
 
 `--remote-imports` is checked before any cache access, so disabling it rejects
 the remote entry even when the cache is complete. It is separate from

@@ -184,6 +184,9 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaScriptLoader app.js --allow-node-modules
 ./build/GocciaScriptLoader app.js --allow-node-modules=./project
 
+# Allow lockfile-pinned `github:` import-map entries (off by default; see docs/remote-package-imports.md).
+./build/GocciaScriptLoader app.js --import-map=imports.json --remote-imports
+
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
