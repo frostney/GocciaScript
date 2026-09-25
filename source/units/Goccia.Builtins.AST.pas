@@ -21,12 +21,7 @@ interface
 uses
   Goccia.Values.ObjectValue;
 
-{ Returns the namespace object. AHostToken receives an opaque handle for the
-  per-namespace host state; pass it to ReleaseASTHost when the module
-  registration that owns this namespace goes away. }
-function CreateASTNamespace(out AHostToken: TObject): TGocciaObjectValue;
-procedure ReleaseASTHost(const AHostToken: TObject);
-procedure ClearASTHosts;
+function CreateASTNamespace: TGocciaObjectValue;
 
 implementation
 
@@ -807,12 +802,12 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-  TGocciaASTHostList = TObjectList<TObject>;
-
-{ Per thread, like every namespace host list: worker threads materialize the
-  module concurrently, and each thread's hosts are its own. }
+{ The host carries no state, so every namespace on a thread shares one. It
+  lives until thread teardown rather than being released with a namespace: a
+  `parse` function the guest kept is bound to it and may still be called.
+  Per thread because worker threads materialize the module concurrently. }
 threadvar
-  GASTHosts: TGocciaASTHostList;
+  GASTHost: TGocciaASTNamespaceHost;
 
 function ReadBooleanOption(const AOptions: TGocciaValue;
   const AName: string; const ADefault: Boolean): Boolean;
@@ -970,41 +965,29 @@ begin
   end;
 end;
 
-function CreateASTNamespace(out AHostToken: TObject): TGocciaObjectValue;
+function CreateASTNamespace: TGocciaObjectValue;
 var
-  Host: TGocciaASTNamespaceHost;
   Members: TGocciaMemberCollection;
 begin
-  Host := TGocciaASTNamespaceHost.Create;
-  if not Assigned(GASTHosts) then
-    GASTHosts := TGocciaASTHostList.Create(True);
-  GASTHosts.Add(Host);
-  AHostToken := Host;
+  if not Assigned(GASTHost) then
+    GASTHost := TGocciaASTNamespaceHost.Create;
 
   Result := TGocciaObjectValue.Create;
   Members := TGocciaMemberCollection.Create;
   try
-    Members.AddNamedMethod('parse', Host.Parse, 2, gmkStaticMethod);
+    Members.AddNamedMethod('parse', GASTHost.Parse, 2, gmkStaticMethod);
     RegisterMemberDefinitions(Result, Members.ToDefinitions);
   finally
     Members.Free;
   end;
 end;
 
-procedure ReleaseASTHost(const AHostToken: TObject);
+procedure ClearASTHost;
 begin
-  if not (Assigned(AHostToken) and Assigned(GASTHosts)) then
-    Exit;
-  GASTHosts.Remove(AHostToken);
-end;
-
-{ Thread teardown: releases whatever survived, for a host that never detached. }
-procedure ClearASTHosts;
-begin
-  FreeAndNil(GASTHosts);
+  FreeAndNil(GASTHost);
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearASTHosts);
+  RegisterThreadvarCleanup(@ClearASTHost);
 
 end.
