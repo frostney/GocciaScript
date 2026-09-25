@@ -13,6 +13,7 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Constants,
+  Goccia.Lexer,
   Goccia.SourceMap;
 
 type
@@ -35,6 +36,10 @@ type
     WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
+    { Opt-in comment trivia. The parser has no use for comments; a tool that
+      reads the parse result may. Off by default so an ordinary run does not
+      pay for the array. }
+    CollectComments: Boolean;
   end;
 
   TGocciaFunctionBodyParseResult = record
@@ -58,6 +63,7 @@ type
     FGeneratedSourceLines: TStringList;
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
+    FComments: TGocciaCommentSpanArray;
     FWarnings: array of TGocciaSourcePipelineWarning;
     FWarningCount: Integer;
 
@@ -74,6 +80,8 @@ type
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
     property GeneratedSourceLines: TStringList read FGeneratedSourceLines;
+    { Empty unless the run asked for comments. Ordered by start offset. }
+    property Comments: TGocciaCommentSpanArray read FComments;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
     property WarningCount: Integer read FWarningCount;
@@ -152,7 +160,6 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.Transformer,
-  Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token;
 
@@ -481,6 +488,7 @@ begin
   Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
+  Result.CollectComments := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
@@ -545,6 +553,7 @@ begin
 
     try
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
+      Lexer.CollectComments := AOptions.CollectComments;
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
@@ -569,6 +578,8 @@ begin
           else
             Result.FParseTimeNanoseconds := 0;
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
+          if AOptions.CollectComments then
+            Result.FComments := Lexer.TakeComments;
 
           for I := 0 to Parser.WarningCount - 1 do
           begin

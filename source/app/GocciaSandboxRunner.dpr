@@ -34,6 +34,7 @@ uses
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
   Goccia.RuntimeExtensions.Sandbox,
@@ -651,6 +652,8 @@ begin
   Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
   if ResolveFlagOption(EngineOptions.UnsafeFFI, EmptyConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  if ResolveFlagOption(EngineOptions.ExperimentalAST, EmptyConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
 
   { Same option application every other binary gets from CreateEngine, in the
     same position relative to runtime attachment — SetAllowedFetchHosts fans

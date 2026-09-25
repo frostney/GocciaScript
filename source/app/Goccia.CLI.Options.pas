@@ -41,6 +41,7 @@ type
     FFetchDenyPrivateRanges: TFlagOption;
     FFetchMaxResponseBytes: TIntegerOption;
     FNoHostFilesystem: TFlagOption;
+    FExperimentalAST: TFlagOption;
     FInspectDepth: TIntegerOption;
     FModule: TRepeatableOption;
     FModules: TRepeatableOption;
@@ -71,6 +72,7 @@ type
     property FetchDenyPrivateRanges: TFlagOption read FFetchDenyPrivateRanges;
     property FetchMaxResponseBytes: TIntegerOption read FFetchMaxResponseBytes;
     property NoHostFilesystem: TFlagOption read FNoHostFilesystem;
+    property ExperimentalAST: TFlagOption read FExperimentalAST;
     property InspectDepth: TIntegerOption read FInspectDepth;
     property ModuleDefinitions: TRepeatableOption read FModule;
     property ModuleManifests: TRepeatableOption read FModules;
@@ -124,7 +126,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 22;
+  ENGINE_FIXED_OPTION_COUNT = 23;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -250,6 +252,8 @@ begin
     'Runtime');
   FNoHostFilesystem := TFlagOption.Create('no-host-filesystem',
     'Disable ambient host-filesystem module loading', 'Runtime');
+  FExperimentalAST := TFlagOption.Create('experimental-ast',
+    'Enable the experimental goccia:ast parse module', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
     'Maximum object inspection depth for console output (default: 5)', 'Engine');
   FModule := TRepeatableOption.Create('module',
@@ -283,6 +287,7 @@ begin
   FFetchDenyPrivateRanges.Free;
   FFetchMaxResponseBytes.Free;
   FNoHostFilesystem.Free;
+  FExperimentalAST.Free;
   FInspectDepth.Free;
   FModule.Free;
   FModules.Free;
@@ -338,6 +343,8 @@ begin
   Result[Index] := FFetchMaxResponseBytes;
   Inc(Index);
   Result[Index] := FNoHostFilesystem;
+  Inc(Index);
+  Result[Index] := FExperimentalAST;
   Inc(Index);
   Result[Index] := FInspectDepth;
   Inc(Index);
