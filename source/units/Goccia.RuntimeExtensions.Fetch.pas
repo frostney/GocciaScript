@@ -7,9 +7,12 @@ interface
 uses
   Classes,
 
+  HTTPTypes,
+
   Goccia.Builtins.GlobalAbort,
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
+  Goccia.Engine,
   Goccia.Runtime;
 
 type
@@ -27,6 +30,14 @@ type
 
     property BuiltinFetch: TGocciaGlobalFetch read FBuiltinFetch;
   end;
+
+{ Sets the network policy AEngine's fetch applies to every request it starts:
+  resolved-address restrictions and the response-body ceiling. The policy
+  belongs to that engine alone, so engines on one thread — a sandbox parent
+  and its runScript child — each keep their own. Call it after the fetch
+  runtime extension is installed; it does nothing on an engine without one. }
+procedure SetFetchRequestPolicy(const AEngine: TGocciaEngine;
+  const APolicy: THTTPRequestPolicy);
 
 implementation
 
@@ -58,7 +69,6 @@ var
   TypeDef: TGocciaTypeDefinition;
 begin
   inherited Attach(ARuntime);
-  TGocciaFetchManager.Initialize;
   // EventTarget must exist before AbortSignal so the signal's prototype and
   // constructor can be linked into the EventTarget chain (WHATWG DOM §3.2).
   FBuiltinEventTarget := TGocciaGlobalEventTarget.Create('EventTarget',
@@ -72,7 +82,7 @@ begin
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
-    Runtime.Engine.EmitCapabilityAudit);
+    Runtime.Engine.EmitCapabilityAudit, Runtime.Engine.Realm);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -110,7 +120,6 @@ begin
   FBuiltinAbort := nil;
   FBuiltinEventTarget.Free;
   FBuiltinEventTarget := nil;
-  TGocciaFetchManager.Shutdown;
   inherited;
 end;
 
@@ -137,12 +146,29 @@ end;
 
 procedure TGocciaFetchRuntimeExtension.WaitForIdle;
 begin
-  WaitForFetchIdle;
+  if Assigned(FBuiltinFetch) then
+    WaitForFetchIdle(FBuiltinFetch.Realm);
 end;
 
 procedure TGocciaFetchRuntimeExtension.DiscardPending;
 begin
-  DiscardFetchCompletions;
+  if Assigned(FBuiltinFetch) then
+    DiscardFetchCompletions(FBuiltinFetch.Realm);
+end;
+
+procedure SetFetchRequestPolicy(const AEngine: TGocciaEngine;
+  const APolicy: THTTPRequestPolicy);
+var
+  Runtime: TGocciaRuntimeCore;
+  Extension: TGocciaFetchRuntimeExtension;
+begin
+  Runtime := GetRuntime(AEngine);
+  if not Assigned(Runtime) then
+    Exit;
+  Extension := TGocciaFetchRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaFetchRuntimeExtension));
+  if Assigned(Extension) and Assigned(Extension.BuiltinFetch) then
+    Extension.BuiltinFetch.RequestPolicy := APolicy;
 end;
 
 end.

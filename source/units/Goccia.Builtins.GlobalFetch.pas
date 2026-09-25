@@ -10,38 +10,54 @@ interface
 uses
   Classes,
 
+  HTTPTypes,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
 type
+  { One engine's fetch global. Everything that decides what this engine's
+    requests may reach — the host allowlist and the network policy — lives
+    here, per engine, and travels with each request it starts. }
   TGocciaGlobalFetch = class(TGocciaBuiltin)
   private
     FAllowedHosts: TStringList;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FRealm: TGocciaRealm;
+    FRequestPolicy: THTTPRequestPolicy;
+    FAcquiredFetchManager: Boolean;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure ValidateHost(const AURLStr: string);
   public
+    { ARealm is the owning engine's realm: this engine's requests are tagged
+      with it, and it is where their results are created. }
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
-      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
+      const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+      const ARealm: TGocciaRealm);
     destructor Destroy; override;
 
     procedure SetAllowedHosts(const AHosts: TStrings);
 
     property AllowedHosts: TStringList read FAllowedHosts;
+    { Resolved-address restrictions and response-body ceiling for this
+      engine's requests. Host configuration: script space cannot reach it.
+      Defaults to DefaultHTTPPolicy. }
+    property RequestPolicy: THTTPRequestPolicy
+      read FRequestPolicy write FRequestPolicy;
+    property Realm: TGocciaRealm read FRealm;
   end;
 
 implementation
 
 uses
   SysUtils,
-
-  HTTPTypes,
 
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -62,19 +78,25 @@ uses
 
 const
   INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
+  FETCH_BACKEND_UNAVAILABLE_ERROR = 'no fetch backend is available';
 
 { TGocciaGlobalFetch }
 
 constructor TGocciaGlobalFetch.Create(const AName: string;
   const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback;
-  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
+  const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+  const ARealm: TGocciaRealm);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
+  FRealm := ARealm;
+  FRequestPolicy := DefaultHTTPPolicy;
   FAllowedHosts := TStringList.Create;
   FAllowedHosts.CaseSensitive := False;
+  TGocciaFetchManager.AcquireInstance;
+  FAcquiredFetchManager := True;
 
   // Register fetch as a global function
   AScope.DefineLexicalBinding('fetch',
@@ -83,6 +105,13 @@ end;
 
 destructor TGocciaGlobalFetch.Destroy;
 begin
+  if FAcquiredFetchManager then
+  begin
+    // Detach this engine's in-flight requests before its realm goes away;
+    // other engines' requests on the thread are left running.
+    DiscardFetchCompletions(FRealm);
+    TGocciaFetchManager.ReleaseInstance;
+  end;
   FAllowedHosts.Free;
   inherited Destroy;
 end;
@@ -148,6 +177,7 @@ var
   RequestHeaders: THTTPHeaders;
   Promise: TGocciaPromiseValue;
   Signal: TGocciaAbortSignalValue;
+  Manager: TGocciaFetchManager;
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I: Integer;
@@ -230,14 +260,15 @@ begin
 
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
-  if (TGocciaFetchManager.Instance = nil) then
-    TGocciaFetchManager.Initialize;
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFetchDispatch, gcdAllow, URLStr,
       'fetch dispatch is allowed');
   try
-    TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      FAllowedHosts, Promise, Signal);
+    Manager := TGocciaFetchManager.Instance;
+    if not Assigned(Manager) then
+      raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
+    Manager.StartFetch(URLStr, Method, RequestHeaders, FAllowedHosts,
+      FRequestPolicy, FRealm, Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;

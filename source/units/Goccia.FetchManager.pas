@@ -14,49 +14,59 @@ uses
   CriticalSections,
   HTTPTypes,
 
+  Goccia.Realm,
   Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
 
 type
+  { One manager serves every engine on a thread: engines nest there (a sandbox
+    runScript child runs inside its parent's call), and they share the worker
+    cap. The manager therefore holds no per-engine state of its own. Each
+    request carries its engine's network policy, and is tagged with that
+    engine's realm, which scopes waits and discards to the engine that started
+    the request and is the realm its settlement values are created in. }
   TGocciaFetchManager = class
   public
     class function Instance: TGocciaFetchManager;
-    class procedure Initialize;
-    class procedure Shutdown;
+    { Registers one user of this thread's manager, creating it on first use.
+      The manager lives until its last user calls ReleaseInstance, so a nested
+      engine that ends cannot free the manager an outer engine is still using —
+      possibly from inside one of the manager's own methods further up the
+      stack. Pair every AcquireInstance with exactly one ReleaseInstance. }
+    class procedure AcquireInstance;
+    class procedure ReleaseInstance;
 
+    { APolicy is the dispatching engine's network policy: resolved address
+      restrictions and the response-body ceiling. It is passed per request
+      rather than stored here because engines on one thread may hold
+      different policies; the caller reads it from host configuration, never
+      from script space. ARealm is the dispatching engine's realm. }
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
       const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
+    { True while any engine on the thread has a request in flight. }
     function HasPending: Boolean; virtual; abstract;
+    { True while the engine owning ARealm has a request in flight. }
+    function HasPendingFor(const ARealm: TGocciaRealm): Boolean;
+      virtual; abstract;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; virtual; abstract;
-    procedure WaitForIdle; virtual; abstract;
-    procedure DiscardPending; virtual; abstract;
-
-    { Network policy applied to every request this manager starts: resolved
-      address restrictions and the response-body ceiling.
-
-      Carried on the manager rather than passed per call because it is host
-      configuration, not a property of an individual fetch — script space must
-      not be able to vary it, and StartFetch is reachable from script space.
-      Defaults to DefaultHTTPPolicy, so a host that never sets it keeps the
-      historical behavior. }
-    function GetRequestPolicy: THTTPRequestPolicy; virtual; abstract;
-    procedure SetRequestPolicy(
-      const APolicy: THTTPRequestPolicy); virtual; abstract;
-    property RequestPolicy: THTTPRequestPolicy
-      read GetRequestPolicy write SetRequestPolicy;
+    { Waits until the engine owning ARealm has no request in flight. }
+    procedure WaitForIdle(const ARealm: TGocciaRealm); virtual; abstract;
+    { Detaches the in-flight requests of the engine owning ARealm; their late
+      completions are discarded. Other engines' requests are untouched. }
+    procedure DiscardPending(const ARealm: TGocciaRealm); virtual; abstract;
   end;
-
-{ Applies a policy to the process-wide fetch manager, creating it if needed.
-  The CLI and embedding hosts use this rather than reaching for Instance. }
-procedure SetFetchRequestPolicy(const APolicy: THTTPRequestPolicy);
 
 procedure DrainMicrotasksAndFetchCompletions;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
-procedure WaitForFetchIdle;
-procedure DiscardFetchCompletions;
+{ The realm-less forms act on the current realm's engine. }
+procedure WaitForFetchIdle; overload;
+procedure WaitForFetchIdle(const ARealm: TGocciaRealm); overload;
+procedure DiscardFetchCompletions; overload;
+procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
 implementation
 
@@ -142,6 +152,8 @@ type
 
   TGocciaPendingFetch = record
     RequestID: Integer;
+    // Realm of the engine that started the request; see TGocciaFetchManager.
+    Realm: TGocciaRealm;
     Promise: TGocciaPromiseValue;
     Signal: TGocciaAbortSignalValue;
     // WHATWG DOM §3.2 abort algorithm registration for this request, removed
@@ -177,7 +189,6 @@ type
     FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
-    FPolicy: THTTPRequestPolicy;
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
@@ -190,22 +201,22 @@ type
 
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
       const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
+    function HasPendingFor(const ARealm: TGocciaRealm): Boolean; override;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; override;
-    procedure WaitForIdle; override;
-    procedure DiscardPending; override;
-    function GetRequestPolicy: THTTPRequestPolicy; override;
-    procedure SetRequestPolicy(
-      const APolicy: THTTPRequestPolicy); override;
+    procedure WaitForIdle(const ARealm: TGocciaRealm); override;
+    procedure DiscardPending(const ARealm: TGocciaRealm); override;
   end;
 
 {$ENDIF}
 
 threadvar
   FetchManagerThreadInstance: TGocciaFetchManager;
+  FetchManagerThreadUsers: Integer;
 
 {$IFNDEF LAKON}
 
@@ -430,17 +441,22 @@ begin
   Result := FetchManagerThreadInstance;
 end;
 
-class procedure TGocciaFetchManager.Initialize;
+class procedure TGocciaFetchManager.AcquireInstance;
 begin
   {$IFNDEF LAKON}
   if not Assigned(FetchManagerThreadInstance) then
     FetchManagerThreadInstance := TGocciaFetchManagerImpl.Create;
+  Inc(FetchManagerThreadUsers);
   {$ENDIF}
 end;
 
-class procedure TGocciaFetchManager.Shutdown;
+class procedure TGocciaFetchManager.ReleaseInstance;
 begin
-  FreeAndNil(FetchManagerThreadInstance);
+  if FetchManagerThreadUsers <= 0 then
+    Exit;
+  Dec(FetchManagerThreadUsers);
+  if FetchManagerThreadUsers = 0 then
+    FreeAndNil(FetchManagerThreadInstance);
 end;
 
 {$IFNDEF LAKON}
@@ -454,12 +470,15 @@ begin
   FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
-  FPolicy := DefaultHTTPPolicy;
 end;
 
 destructor TGocciaFetchManagerImpl.Destroy;
+var
+  I: Integer;
 begin
-  DiscardPending;
+  for I := 0 to FPending.Count - 1 do
+    ReleasePendingRoots(FPending[I]);
+  FPending.Clear;
   FState.Abandon;
   FState.Release;
   FLimiter.Release;
@@ -469,6 +488,7 @@ end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
   const APromise: TGocciaPromiseValue;
   const ASignal: TGocciaAbortSignalValue);
 var
@@ -500,6 +520,7 @@ begin
 
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
+  Pending.Realm := ARealm;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
@@ -550,7 +571,7 @@ begin
 
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
       Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
-      RequestTimeoutMilliseconds, FPolicy);
+      RequestTimeoutMilliseconds, APolicy);
     LimitAcquired := False;
 
     if (TGarbageCollector.Instance <> nil) then
@@ -699,6 +720,7 @@ var
   PendingIndex, I: Integer;
   RespHeaders: TGocciaHeadersValue;
   RespValue: TGocciaResponseValue;
+  PreviousRealm: TGocciaRealm;
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
@@ -707,29 +729,40 @@ begin
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
 
+  // Build the settlement values in the realm of the engine that started the
+  // request. A completion can be pumped while a nested engine's realm is
+  // current, and values made there would keep that realm's prototypes alive
+  // past the nested engine's end.
+  PreviousRealm := CurrentRealm;
   try
-    if ACompletion.Success then
-    begin
-      RespHeaders := TGocciaHeadersValue.Create;
-      RespHeaders.Immutable := True;
-      for I := 0 to High(ACompletion.Response.Headers) do
-        RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
-          ACompletion.Response.Headers[I].Value);
+    if Assigned(Pending.Realm) then
+      SetCurrentRealm(Pending.Realm);
+    try
+      if ACompletion.Success then
+      begin
+        RespHeaders := TGocciaHeadersValue.Create;
+        RespHeaders.Immutable := True;
+        for I := 0 to High(ACompletion.Response.Headers) do
+          RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
+            ACompletion.Response.Headers[I].Value);
 
-      RespValue := TGocciaResponseValue.Create;
-      RespValue.InitFromHTTP(
-        ACompletion.Response.StatusCode,
-        ACompletion.Response.StatusText,
-        ACompletion.Response.FinalURL,
-        RespHeaders,
-        ACompletion.Response.Body,
-        ACompletion.Response.Redirected);
+        RespValue := TGocciaResponseValue.Create;
+        RespValue.InitFromHTTP(
+          ACompletion.Response.StatusCode,
+          ACompletion.Response.StatusText,
+          ACompletion.Response.FinalURL,
+          RespHeaders,
+          ACompletion.Response.Body,
+          ACompletion.Response.Redirected);
 
-      Pending.Promise.Resolve(RespValue);
-    end
-    else
-      Pending.Promise.Reject(CreateErrorObject('TypeError',
-        ACompletion.ErrorMessage));
+        Pending.Promise.Resolve(RespValue);
+      end
+      else
+        Pending.Promise.Reject(CreateErrorObject('TypeError',
+          ACompletion.ErrorMessage));
+    finally
+      SetCurrentRealm(PreviousRealm);
+    end;
 
     if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
@@ -781,13 +814,24 @@ begin
   end;
 end;
 
-procedure TGocciaFetchManagerImpl.WaitForIdle;
+function TGocciaFetchManagerImpl.HasPendingFor(
+  const ARealm: TGocciaRealm): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FPending.Count - 1 do
+    if FPending[I].Realm = ARealm then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TGocciaFetchManagerImpl.WaitForIdle(const ARealm: TGocciaRealm);
 begin
   repeat
     DrainMicrotasksAndFetchCompletions;
-    if not HasPending then
+    if not HasPendingFor(ARealm) then
       Break;
-    while HasPending and (PumpCompletions = 0) do
+    while HasPendingFor(ARealm) and (PumpCompletions = 0) do
     begin
       CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
@@ -796,31 +840,29 @@ begin
   DrainMicrotasksAndFetchCompletions;
 end;
 
-function TGocciaFetchManagerImpl.GetRequestPolicy: THTTPRequestPolicy;
-begin
-  Result := FPolicy;
-end;
-
-procedure TGocciaFetchManagerImpl.SetRequestPolicy(
-  const APolicy: THTTPRequestPolicy);
-begin
-  FPolicy := APolicy;
-end;
-
-procedure TGocciaFetchManagerImpl.DiscardPending;
+procedure TGocciaFetchManagerImpl.DiscardPending(const ARealm: TGocciaRealm);
 var
   I: Integer;
   HadPending: Boolean;
   OldState: TGocciaFetchState;
   Pending: TGocciaPendingFetch;
 begin
-  HadPending := FPending.Count > 0;
-  for I := 0 to FPending.Count - 1 do
+  HadPending := False;
+  for I := FPending.Count - 1 downto 0 do
   begin
     Pending := FPending[I];
+    if Pending.Realm <> ARealm then
+      Continue;
+    FPending.Delete(I);
     ReleasePendingRoots(Pending);
+    HadPending := True;
   end;
-  FPending.Clear;
+
+  { Another engine still has requests in flight, so the completion queue is
+    shared with live work. The detached requests' late completions no longer
+    match a pending entry and are dropped when popped. }
+  if FPending.Count > 0 then
+    Exit;
 
   if not HadPending then
   begin
@@ -958,38 +1000,33 @@ begin
 end;
 
 procedure WaitForFetchIdle;
+begin
+  WaitForFetchIdle(CurrentRealm);
+end;
+
+procedure WaitForFetchIdle(const ARealm: TGocciaRealm);
 var
   Manager: TGocciaFetchManager;
 begin
   Manager := TGocciaFetchManager.Instance;
-  if Assigned(Manager) and Manager.HasPending then
-    Manager.WaitForIdle
+  if Assigned(Manager) and Manager.HasPendingFor(ARealm) then
+    Manager.WaitForIdle(ARealm)
   else
     DrainMicrotasksAndFetchCompletions;
 end;
 
 procedure DiscardFetchCompletions;
-var
-  Manager: TGocciaFetchManager;
 begin
-  Manager := TGocciaFetchManager.Instance;
-  if Assigned(Manager) then
-    Manager.DiscardPending;
+  DiscardFetchCompletions(CurrentRealm);
 end;
 
-procedure SetFetchRequestPolicy(const APolicy: THTTPRequestPolicy);
+procedure DiscardFetchCompletions(const ARealm: TGocciaRealm);
 var
   Manager: TGocciaFetchManager;
 begin
-  { Initialize first: a host that configures policy before any script runs
-    would otherwise set it on a nil manager and silently get the default when
-    the manager is lazily created on the first fetch. On the LAKON lane
-    Initialize leaves Instance nil because there is no socket backend, and
-    there is nothing to configure — hence the guard rather than an assert. }
-  TGocciaFetchManager.Initialize;
   Manager := TGocciaFetchManager.Instance;
   if Assigned(Manager) then
-    Manager.RequestPolicy := APolicy;
+    Manager.DiscardPending(ARealm);
 end;
 
 end.
