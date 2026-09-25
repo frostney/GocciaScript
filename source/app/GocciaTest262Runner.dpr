@@ -1798,8 +1798,14 @@ begin
         PrintHost.PrintValue, 'print', -1));
     Host.Install(Engine);
     try
-      Engine.Execute;
-      Write(PrintHost.Text);
+      // Emit buffered print output on every exit path, as Bare's unbuffered
+      // print did, so a probe that throws keeps what it printed first.
+      try
+        Engine.Execute;
+      finally
+        Write(PrintHost.Text);
+        Flush(Output);
+      end;
     except
       on E: EGocciaBytecodeThrow do
       begin
