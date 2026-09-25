@@ -383,8 +383,9 @@ export function Install({
               It carries the whole toolchain — <code>GocciaScriptLoader</code>{" "}
               (the runtime), <code>GocciaScriptLoaderBare</code>,{" "}
               <code>GocciaSandboxRunner</code>, <code>GocciaTestRunner</code>,{" "}
-              <code>GocciaBundler</code>, <code>GocciaBenchmarkRunner</code>,{" "}
-              <code>GocciaREPL</code>, <code>GocciaFuzzHarness</code>, and{" "}
+              <code>GocciaTest262Runner</code>, <code>GocciaBundler</code>,{" "}
+              <code>GocciaBenchmarkRunner</code>, <code>GocciaREPL</code>,{" "}
+              <code>GocciaFuzzHarness</code>, and{" "}
               <code>GocciaWasmTestRunner</code> — plus the <code>tests/</code>,{" "}
               <code>benchmarks/</code>, and <code>examples/</code> directories,
               all inside one versioned folder named after the archive. The

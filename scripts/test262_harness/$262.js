@@ -13,7 +13,7 @@
 // an honest FAIL.
 
 if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
-  throw new Error("$262 host hooks require GocciaScriptLoaderBare --test262-host");
+  throw new Error("$262 host hooks require GocciaTest262Runner");
 }
 
 const AbstractModuleSource = () => {

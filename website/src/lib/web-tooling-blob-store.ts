@@ -1,14 +1,16 @@
-import { gzipSync } from "node:zlib";
-import { put } from "@vercel/blob";
+import {
+  type BlobAccess,
+  type BlobReport,
+  blobAccess,
+  byCreatedAtThenRunNumber,
+  cleanBlobPrefix,
+  putCompressedReportBlob,
+  putDailyBlobPointer,
+} from "./report-blob";
 
-export type WebToolingBlobAccess = "public" | "private";
+export type WebToolingBlobAccess = BlobAccess;
 
-export type WebToolingBlobReport = {
-  path: string;
-  url: string;
-  downloadUrl: string;
-  size: number;
-};
+export type WebToolingBlobReport = BlobReport;
 
 export type WebToolingBlobRunSummary = {
   workloadCount: number;
@@ -48,21 +50,13 @@ export type WebToolingBlobPublishEntry = Omit<
 };
 
 const DEFAULT_PREFIX = "web-tooling";
-const DEFAULT_ACCESS: WebToolingBlobAccess = "public";
-
-function cleanPrefix(value: string | undefined, fallback: string): string {
-  const trimmed = (value ?? fallback).trim().replace(/^\/+|\/+$/g, "");
-  return trimmed || fallback;
-}
 
 export function webToolingBlobPrefix(): string {
-  return cleanPrefix(process.env.WEB_TOOLING_BLOB_PREFIX, DEFAULT_PREFIX);
+  return cleanBlobPrefix(process.env.WEB_TOOLING_BLOB_PREFIX, DEFAULT_PREFIX);
 }
 
 export function webToolingBlobAccess(): WebToolingBlobAccess {
-  return process.env.WEB_TOOLING_BLOB_ACCESS === "private"
-    ? "private"
-    : DEFAULT_ACCESS;
+  return blobAccess(process.env.WEB_TOOLING_BLOB_ACCESS);
 }
 
 export function webToolingBlobRunsPrefix(
@@ -98,16 +92,6 @@ function dailyPathForRun(
   return webToolingBlobDailyPathForDay(run.createdAt.slice(0, 10), prefix);
 }
 
-function byCreatedAtThenRunNumber(
-  a: Pick<WebToolingBlobRun, "createdAt" | "runNumber">,
-  b: Pick<WebToolingBlobRun, "createdAt" | "runNumber">,
-): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) ||
-    a.runNumber - b.runNumber
-  );
-}
-
 export async function publishWebToolingReportsToBlob(
   entries: WebToolingBlobPublishEntry[],
 ): Promise<WebToolingBlobRun[]> {
@@ -120,13 +104,11 @@ export async function publishWebToolingReportsToBlob(
       entry.artifactId,
       prefix,
     );
-    const compressed = gzipSync(`${entry.reportJson.trimEnd()}\n`);
-    const reportBlob = await put(reportPath, compressed, {
+    const reportBlob = await putCompressedReportBlob(
+      reportPath,
+      entry.reportJson,
       access,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31_536_000,
-      contentType: "application/gzip",
-    });
+    );
 
     const published: WebToolingBlobRun = {
       runId: entry.runId,
@@ -140,23 +122,13 @@ export async function publishWebToolingReportsToBlob(
       updatedAt: entry.updatedAt,
       artifactCreatedAt: entry.artifactCreatedAt,
       summary: entry.summary,
-      report: {
-        path: reportPath,
-        url: reportBlob.url,
-        downloadUrl: reportBlob.downloadUrl,
-        size: compressed.byteLength,
-      },
+      report: reportBlob,
       publishedAt: new Date().toISOString(),
     };
-    await put(
+    await putDailyBlobPointer(
       dailyPathForRun(published, prefix),
-      JSON.stringify(published, null, 2),
-      {
-        access,
-        allowOverwrite: true,
-        cacheControlMaxAge: 900,
-        contentType: "application/json",
-      },
+      published,
+      access,
     );
     publishedRuns.push(published);
   }

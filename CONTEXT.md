@@ -399,7 +399,7 @@ The stated direction of the testing API: that existing Vitest suites run unchang
 _Avoid_: Vitest compatible as an unqualified claim, full parity.
 
 **Test262 host capability**:
-A JavaScript-visible hook exposed on the `Goccia` namespace only when a CLI host opts into the test262 conformance contract, such as `GocciaScriptLoaderBare --test262-host`. It is not a core language built-in and not part of the normal runtime surface.
+A JavaScript-visible hook exposed on the `Goccia` namespace only by the dedicated `GocciaTest262Runner` conformance host. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
 
 **Compatibility dashboard**:

@@ -113,6 +113,7 @@ type
     FCancelFlag: TGocciaCancellationFlag;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
+    FResetRuntimeBetweenItems: Boolean;
     FMaxBytes: Int64;
     FCoverageTracker: TObject;  // TGocciaCoverageTracker, kept alive for merge
     FMemoryStats: TCLIJSONMemoryStats;
@@ -136,7 +137,7 @@ type
     constructor Create(AQueue: TGocciaWorkQueue;
       AWorkerProc: TGocciaWorkerProc; ACancelFlag: TGocciaCancellationFlag;
       ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
-      AData: Pointer);
+      AResetRuntimeBetweenItems: Boolean; AData: Pointer);
     property Results: TGocciaWorkerResultArray read FResults;
     property ResultCount: Integer read FResultCount;
     property CoverageTracker: TObject read FCoverageTracker;
@@ -172,6 +173,7 @@ type
     FCancelFlagLeaked: Boolean;
     FCancelOnError: Boolean;
     FEnableCoverage: Boolean;
+    FResetRuntimeBetweenItems: Boolean;
     FMaxBytes: Int64;
     FMemoryStats: TCLIJSONMemoryStats;
     function GetCancelled: Boolean;
@@ -220,6 +222,11 @@ type
     { When True, each worker initialises a per-thread coverage tracker.
       After RunAll, use MergeCoverageInto to collect results. }
     property EnableCoverage: Boolean read FEnableCoverage write FEnableCoverage;
+    { Recreate the complete thread-local runtime after each work item. This is
+      intended for long-lived native harnesses whose cases require heap and
+      singleton isolation in addition to a fresh engine. }
+    property ResetRuntimeBetweenItems: Boolean
+      read FResetRuntimeBetweenItems write FResetRuntimeBetweenItems;
     { GC memory ceiling propagated to each worker thread.
       0 means workers use the auto-detected default. }
     property MaxBytes: Int64 read FMaxBytes write FMaxBytes;
@@ -383,7 +390,7 @@ end;
 constructor TGocciaFileWorker.Create(AQueue: TGocciaWorkQueue;
   AWorkerProc: TGocciaWorkerProc; ACancelFlag: TGocciaCancellationFlag;
   ACancelOnError: Boolean; AEnableCoverage: Boolean; AMaxBytes: Int64;
-  AData: Pointer);
+  AResetRuntimeBetweenItems: Boolean; AData: Pointer);
 const
   WORKER_STACK_SIZE = 8 * 1024 * 1024; // 8 MB — match main thread
 begin
@@ -394,6 +401,7 @@ begin
   FCancelFlag := ACancelFlag;
   FCancelOnError := ACancelOnError;
   FEnableCoverage := AEnableCoverage;
+  FResetRuntimeBetweenItems := AResetRuntimeBetweenItems;
   FMaxBytes := AMaxBytes;
   FCoverageTracker := nil;
   FMemoryStats := DefaultCLIJSONMemoryStats;
@@ -473,12 +481,22 @@ begin
       { Cancel remaining files across all workers on first error. }
       if FCancelOnError and (not FResults[Idx].Success) then
         FCancelFlag.Cancel;
+
+      if FResetRuntimeBetweenItems then
+      begin
+        FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
+          FinishCLIJSONMemoryMeasurement(MemoryMeasurement), True);
+        ShutdownThreadRuntime;
+        InitThreadRuntime(FEnableCoverage, FMaxBytes);
+        BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
+      end;
     end;
   finally
     // Refresh the timestamp as we exit the work loop so the watchdog
     // does not interpret a slow thread-runtime shutdown as a hang.
     FLastActivityNs := GetNanoseconds;
-    FMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
+    FMemoryStats := CombineCLIJSONMemoryStats(FMemoryStats,
+      FinishCLIJSONMemoryMeasurement(MemoryMeasurement), True);
     { Detach the coverage tracker before shutting down the runtime so
       the main thread can read it after the worker completes. }
     if FEnableCoverage then
@@ -497,6 +515,7 @@ begin
   FCancelFlagLeaked := False;
   FCancelOnError := False;
   FEnableCoverage := False;
+  FResetRuntimeBetweenItems := False;
   FMaxBytes := 0;
   FMemoryStats := DefaultCLIJSONMemoryStats;
 end;
@@ -579,7 +598,8 @@ begin
     for I := 0 to FWorkerCount - 1 do
     begin
       FWorkers[I] := TGocciaFileWorker.Create(Queue, AWorkerProc,
-        FCancelFlag, FCancelOnError, FEnableCoverage, FMaxBytes, AData);
+        FCancelFlag, FCancelOnError, FEnableCoverage, FMaxBytes,
+        FResetRuntimeBetweenItems, AData);
       FWorkers[I].Start;
     end;
   finally
