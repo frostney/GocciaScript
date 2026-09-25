@@ -912,26 +912,13 @@ var
   Rule: TGocciaCapabilityRule;
 begin
   ACeiling := '';
-  if Length(FLayers) = 0 then
+  if (Length(FLayers) = 0) or DeniesNodeModules(AImportingDirectory) then
     Exit(False);
   if AImportingDirectory <> '' then
     Directory := StripTrailingDelimiter(
       ExpandHostFileName(AImportingDirectory))
   else
     Directory := '';
-
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcImport];
-    if Rule.DenyAll then
-      Exit(False);
-    for J := 0 to High(Rule.DenyScopes) do
-      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
-         (ImportScope.Kind = iskNodeModules) and
-         ((ImportScope.Ceiling = '') or
-          IsPathWithinScope(Directory, ImportScope.Ceiling)) then
-        Exit(False);
-  end;
 
   for I := 0 to High(FLayers) do
   begin
