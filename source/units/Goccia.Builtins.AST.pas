@@ -21,7 +21,12 @@ interface
 uses
   Goccia.Values.ObjectValue;
 
-function CreateASTNamespace: TGocciaObjectValue;
+{ Returns the namespace object. AHostToken receives an opaque handle for the
+  per-namespace host state; pass it to ReleaseASTHost when the module
+  registration that owns this namespace goes away. }
+function CreateASTNamespace(out AHostToken: TObject): TGocciaObjectValue;
+procedure ReleaseASTHost(const AHostToken: TObject);
+procedure ClearASTHosts;
 
 implementation
 
@@ -44,6 +49,7 @@ uses
   Goccia.OriginMap,
   Goccia.SourcePipeline,
   Goccia.SourceSpan,
+  Goccia.ThreadCleanupRegistry,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
@@ -801,8 +807,12 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-var
-  GASTHosts: TObjectList<TGocciaASTNamespaceHost>;
+  TGocciaASTHostList = TObjectList<TObject>;
+
+{ Per thread, like every namespace host list: worker threads materialize the
+  module concurrently, and each thread's hosts are its own. }
+threadvar
+  GASTHosts: TGocciaASTHostList;
 
 function ReadBooleanOption(const AOptions: TGocciaValue;
   const AName: string; const ADefault: Boolean): Boolean;
@@ -960,15 +970,16 @@ begin
   end;
 end;
 
-function CreateASTNamespace: TGocciaObjectValue;
+function CreateASTNamespace(out AHostToken: TObject): TGocciaObjectValue;
 var
   Host: TGocciaASTNamespaceHost;
   Members: TGocciaMemberCollection;
 begin
   Host := TGocciaASTNamespaceHost.Create;
   if not Assigned(GASTHosts) then
-    GASTHosts := TObjectList<TGocciaASTNamespaceHost>.Create(True);
+    GASTHosts := TGocciaASTHostList.Create(True);
   GASTHosts.Add(Host);
+  AHostToken := Host;
 
   Result := TGocciaObjectValue.Create;
   Members := TGocciaMemberCollection.Create;
@@ -980,9 +991,20 @@ begin
   end;
 end;
 
-initialization
+procedure ReleaseASTHost(const AHostToken: TObject);
+begin
+  if not (Assigned(AHostToken) and Assigned(GASTHosts)) then
+    Exit;
+  GASTHosts.Remove(AHostToken);
+end;
 
-finalization
-  GASTHosts.Free;
+{ Thread teardown: releases whatever survived, for a host that never detached. }
+procedure ClearASTHosts;
+begin
+  FreeAndNil(GASTHosts);
+end;
+
+initialization
+  RegisterThreadvarCleanup(@ClearASTHosts);
 
 end.
