@@ -6496,6 +6496,72 @@ await section("SandboxRunner: --write-back keeps nothing from a run that failed.
   }
 });
 
+await section("SandboxRunner: --write-back refuses a symlink at its temporary name...", async () => {
+  const tmp = makeTmp();
+  try {
+    if (process.platform !== "win32") {
+      // A file seed does not scan its directory, so a link planted beside the
+      // seeded file reaches write-back. The temporary must not follow it.
+      const tree = join(tmp, "tree");
+      mkdirSync(tree, { recursive: true });
+      const target = join(tree, "kept.txt");
+      writeFileSync(target, "before");
+      writeFileSync(join(tmp, "outside.txt"), "outside-secret");
+      symlinkSync("../outside.txt", `${target}.goccia-write-back`);
+      const entry = join(tmp, "main.js");
+      writeFileSync(entry, [
+        'import fs from "fs";',
+        'fs.writeFileSync("/kept.txt", "after");',
+      ].join("\n"));
+
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${target}=/kept.txt`, "--source-type=module", "--write-back"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (readFileSync(join(tmp, "outside.txt"), "utf-8") !== "outside-secret")
+        throw new Error("SECURITY: SandboxRunner --write-back wrote through a symlink at its temporary name");
+      if (readFileSync(target, "utf-8") !== "before")
+        throw new Error("SandboxRunner --write-back should leave the target unchanged when it cannot write safely");
+      if (!proc.stderr.toString().includes(`${target}.goccia-write-back is a symlink`))
+        throw new Error(`SandboxRunner --write-back should report the refused temporary, got: ${proc.stderr.toString()}`);
+      if (!normalizeLineEndings(proc.stdout.toString()).includes("write-back: 0 file(s) written, 1 skipped"))
+        throw new Error(`SandboxRunner --write-back should count the refused file as skipped, got: ${proc.stdout.toString()}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: --write-back replaces a leftover temporary...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, "kept.txt"), "before");
+    writeFileSync(join(tree, "kept.txt.goccia-write-back"), "left by an interrupted run");
+    const entry = join(tmp, "main.js");
+    writeFileSync(entry, [
+      'import fs from "fs";',
+      'fs.writeFileSync("/kept.txt", "after");',
+    ].join("\n"));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${join(tree, "kept.txt")}=/kept.txt`, "--source-type=module", "--write-back"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "after")
+      throw new Error("SandboxRunner --write-back should write past a leftover temporary");
+    if (existsSync(join(tree, "kept.txt.goccia-write-back")))
+      throw new Error("SandboxRunner --write-back should not leave its temporary behind");
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("SandboxRunner: bytecode uses the same sandbox runtime modules...", async () => {
   const tmp = makeTmp();
   try {
