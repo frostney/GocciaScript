@@ -47,6 +47,9 @@ type
     FFactoryName: string;
     FFragmentName: string;
     FLastTokenKind: TLastTokenKind;
+    // The kind before the current run of line breaks, so a word at the start
+    // of a line can still be read against the token that preceded it.
+    FKindBeforeLineBreak: TLastTokenKind;
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
@@ -565,10 +568,10 @@ end;
 // as the token before AWord.
 //
 // `of` is the one contextual word here. It is a keyword only in a for-of
-// header, where it follows the end of a binding (`x`, `]`, `}`) — or a line
-// break inside the header, or a binding itself named `of` — and a regex can
-// follow it; everywhere else it is an ordinary identifier, and `of / 2`
-// divides. AStart is the word's position in FSource.
+// header, where it follows the end of a binding (`x`, `]`, `}`) — across a
+// line break too, or a binding itself named `of` — and a regex can follow
+// it; everywhere else it is an ordinary identifier, and `of / 2` divides.
+// AStart is the word's position in FSource.
 function TGocciaJSXTransformer.TokenKindAfterWord(const AWord: string;
   const AStart: Integer): TLastTokenKind;
 
@@ -590,7 +593,10 @@ begin
      (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
     Result := ltkOperator
   else if (AWord = KEYWORD_OF) and
-          ((FLastTokenKind in [ltkExpressionEnd, ltkLineBreak]) or FollowsWordOf) then
+          ((FLastTokenKind = ltkExpressionEnd) or
+           ((FLastTokenKind = ltkLineBreak) and
+            (FKindBeforeLineBreak = ltkExpressionEnd)) or
+           FollowsWordOf) then
     Result := ltkOperator
   else
     Result := ltkExpressionEnd;
@@ -1833,6 +1839,8 @@ begin
     begin
       CopyChar;
       AddIdentityMapping;
+      if FLastTokenKind <> ltkLineBreak then
+        FKindBeforeLineBreak := FLastTokenKind;
       FLastTokenKind := ltkLineBreak;
       Continue;
     end;
@@ -1843,6 +1851,8 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
+      if FLastTokenKind <> ltkLineBreak then
+        FKindBeforeLineBreak := FLastTokenKind;
       FLastTokenKind := ltkLineBreak;
       Continue;
     end;

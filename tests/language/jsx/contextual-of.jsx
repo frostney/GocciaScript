@@ -9,11 +9,18 @@ const createElement = (tag, props, ...children) => ({ tag, props, children });
 // into the closing tag on the same line.
 const of = 8;
 const half = of / 2, halfElement = <b>{half}</b>;
+const quarter =
+  of / 4, quarterElement = <b>{quarter}</b>;
 
 describe("contextual of in the JSX preprocessor", () => {
   test("an identifier named of divides at the top level", () => {
     expect(halfElement.tag).toBe("b");
     expect(halfElement.children[0]).toBe(4);
+  });
+
+  test("an identifier named of at the start of a line divides", () => {
+    expect(quarterElement.tag).toBe("b");
+    expect(quarterElement.children[0]).toBe(2);
   });
 
   test("of on its own line in a for-of header is followed by a regex", () => {
