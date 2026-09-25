@@ -184,6 +184,9 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 ./build/GocciaScriptLoader app.js --allow-node-modules
 ./build/GocciaScriptLoader app.js --allow-node-modules=./project
 
+# Allow lockfile-pinned `github:` import-map entries (off by default; see docs/remote-package-imports.md).
+./build/GocciaScriptLoader app.js --import-map=imports.json --remote-imports
+
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
@@ -318,6 +321,7 @@ Relative paths are resolved against the current working directory. A missing fil
 ```
 
 Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json

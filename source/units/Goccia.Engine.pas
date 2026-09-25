@@ -878,6 +878,8 @@ begin
     FModuleLoader := TGocciaModuleLoader.Create(AFileName);
     FOwnsModuleLoader := True;
   end;
+  if Assigned(FModuleLoader.Resolver) then
+    FModuleLoader.Resolver.CapabilityAuditEmitter := EmitCapabilityAudit;
 
   TGarbageCollector.Initialize;
   TGocciaCallStack.Initialize;
@@ -962,6 +964,15 @@ begin
     current when it was constructed — engines nest on one thread, so clearing
     the thread outright would strip an outer engine's context mid-run. }
   LeaveEngineAsyncContext(FAsyncContextToken);
+
+  { Initialize registered this engine as the resolver's audit emitter, but a
+    host can pass in a loader or resolver that outlives the engine. Leaving the
+    method pointer behind would make the next import-map load call into a
+    freed engine. }
+  if Assigned(FModuleLoader) and Assigned(FModuleLoader.Resolver) and
+     (TMethod(FModuleLoader.Resolver.CapabilityAuditEmitter).Data =
+      Pointer(Self)) then
+    FModuleLoader.Resolver.CapabilityAuditEmitter := nil;
 
   if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);

@@ -9,11 +9,25 @@ uses
 
   OrderedStringMap,
 
+  Goccia.CapabilityAudit,
   Goccia.Error,
   Goccia.ModuleResolver;
 
 type
+  TGocciaRemotePackageResolver = class
+  public
+    function ResolvePackage(const AReference,
+      AImportMapPath: string): string; virtual; abstract;
+  end;
+
   TGocciaModuleResolver = class(TModuleResolver)
+  private
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FOwnsRemotePackageResolver: Boolean;
+    FRemoteImportsEnabled: Boolean;
+    FRemotePackageResolver: TGocciaRemotePackageResolver;
+    procedure SetRemotePackageResolver(
+      const AResolver: TGocciaRemotePackageResolver);
   protected
     function IsAbsoluteImportMapPath(const APath: string): Boolean; virtual;
     function IsRelativeImportMapPath(const APath: string): Boolean; virtual;
@@ -23,8 +37,18 @@ type
       virtual;
   public
     constructor Create(const ABaseDirectory: string = '');
+    destructor Destroy; override;
     class function DiscoverProjectConfig(const AStartDirectory: string): string; static;
     procedure LoadImportMap(const APath: string);
+
+    property CapabilityAuditEmitter: TGocciaCapabilityAuditEmitter
+      read FCapabilityAuditEmitter write FCapabilityAuditEmitter;
+    property OwnsRemotePackageResolver: Boolean
+      read FOwnsRemotePackageResolver write FOwnsRemotePackageResolver;
+    property RemoteImportsEnabled: Boolean
+      read FRemoteImportsEnabled write FRemoteImportsEnabled;
+    property RemotePackageResolver: TGocciaRemotePackageResolver
+      read FRemotePackageResolver write SetRemotePackageResolver;
   end;
 
   EGocciaModuleNotFound = EModuleNotFound;
@@ -86,6 +110,12 @@ begin
       [TGocciaModuleResolutionError(AError).ResolvedCandidatePath]) + sLineBreak;
 end;
 
+function IsProviderQualifiedImportMapAddress(
+  const AAddress: string): Boolean;
+begin
+  Result := Copy(AAddress, 1, Length('github:')) = 'github:';
+end;
+
 function TGocciaModuleResolver.IsAbsoluteImportMapPath(
   const APath: string): Boolean;
 begin
@@ -140,7 +170,28 @@ end;
 constructor TGocciaModuleResolver.Create(const ABaseDirectory: string);
 begin
   inherited Create(ABaseDirectory);
+  FOwnsRemotePackageResolver := False;
+  FRemoteImportsEnabled := False;
+  FRemotePackageResolver := nil;
   SetExtensions(EngineModuleImportExtensions);
+end;
+
+destructor TGocciaModuleResolver.Destroy;
+begin
+  if FOwnsRemotePackageResolver then
+    FRemotePackageResolver.Free;
+  inherited;
+end;
+
+procedure TGocciaModuleResolver.SetRemotePackageResolver(
+  const AResolver: TGocciaRemotePackageResolver);
+begin
+  if AResolver = FRemotePackageResolver then
+    Exit;
+  if FOwnsRemotePackageResolver then
+    FRemotePackageResolver.Free;
+  FRemotePackageResolver := AResolver;
+  FOwnsRemotePackageResolver := False;
 end;
 
 class function TGocciaModuleResolver.DiscoverProjectConfig(
@@ -229,15 +280,48 @@ begin
           'Import map entry "%s" ends with "/" so its address must also end with "/".',
           [Key]);
 
-      if not (IsAbsoluteImportMapPath(TGocciaStringLiteralValue(Value).Value) or
+      if IsProviderQualifiedImportMapAddress(
+         TGocciaStringLiteralValue(Value).Value) then
+      begin
+        { A package resolves to a single entry file, which cannot stand in for
+          a directory prefix. Refused before the capability decision: a
+          malformed entry is not a request for remote authority. }
+        if HasImportMapTrailingSlash(Key) then
+          raise Exception.CreateFmt(
+            'Import map entry "%s" is a prefix, but a provider-qualified package reference resolves to a single entry module.',
+            [Key]);
+        if not FRemoteImportsEnabled then
+        begin
+          if Assigned(FCapabilityAuditEmitter) then
+            FCapabilityAuditEmitter(gckRemoteImport, gcdDeny,
+              TGocciaStringLiteralValue(Value).Value,
+              'remote imports capability is disabled');
+          raise Exception.CreateFmt(
+            'Import map entry "%s" requires the remote imports capability.',
+            [Key]);
+        end;
+        if Assigned(FCapabilityAuditEmitter) then
+          FCapabilityAuditEmitter(gckRemoteImport, gcdAllow,
+            TGocciaStringLiteralValue(Value).Value,
+            'remote imports capability is enabled');
+        if not Assigned(FRemotePackageResolver) then
+          raise Exception.Create(
+            'No remote package resolver is configured.');
+        NormalizedValue := FRemotePackageResolver.ResolvePackage(
+          TGocciaStringLiteralValue(Value).Value, ImportMapPath);
+      end
+      else if not (
+              IsAbsoluteImportMapPath(TGocciaStringLiteralValue(Value).Value) or
               IsRelativeImportMapPath(TGocciaStringLiteralValue(Value).Value)) then
         raise Exception.CreateFmt(
-          'Import map entry "%s" must use an absolute or relative file path address.',
+          'Import map entry "%s" must use an absolute or relative file path address or a provider-qualified package reference.',
           [Key]);
 
       NormalizedKey := NormalizeImportMapPath(Key, ImportMapBaseDirectory);
-      NormalizedValue := NormalizeImportMapPath(
-        TGocciaStringLiteralValue(Value).Value, ImportMapBaseDirectory);
+      if not IsProviderQualifiedImportMapAddress(
+         TGocciaStringLiteralValue(Value).Value) then
+        NormalizedValue := NormalizeImportMapPath(
+          TGocciaStringLiteralValue(Value).Value, ImportMapBaseDirectory);
       AddAlias(NormalizedKey, NormalizedValue);
     end;
   finally

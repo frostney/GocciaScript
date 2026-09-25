@@ -24,6 +24,7 @@ import {
   symlinkSync,
 } from "fs";
 import { join, resolve } from "path";
+import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import {
   LOADER,
@@ -2503,6 +2504,143 @@ await section("Loader: --allow-node-modules emits a capability-audit grant...", 
       throw new Error(
         `Unbounded grant should report an empty subject: ${JSON.stringify(unboundedEvents)}`,
       );
+  } finally {
+    clean(tmp);
+  }
+});
+
+// A remote package whose verified bytes are already in the cache, so every
+// run below is offline: the resolver re-hashes the cached entry and never
+// reaches the provider. A mismatching or missing cache would need a real GET,
+// which these tests deliberately never exercise.
+const REMOTE_PACKAGE_REFERENCE = "github:frostney/example-package@v1.0.0";
+const REMOTE_PACKAGE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
+const writeRemotePackageProject = (tmp: string): string => {
+  const project = join(tmp, "project");
+  const entryText = "export const remote = 42;\n";
+  const cacheDirectory = join(
+    project,
+    ".goccia",
+    "packages",
+    "github",
+    "frostney",
+    "example-package",
+    REMOTE_PACKAGE_COMMIT,
+  );
+  mkdirSync(cacheDirectory, { recursive: true });
+  writeFileSync(join(cacheDirectory, "index.js"), entryText);
+  writeFileSync(
+    join(project, "goccia.lock.json"),
+    JSON.stringify({
+      version: 1,
+      packages: {
+        [REMOTE_PACKAGE_REFERENCE]: {
+          resolvedRef: REMOTE_PACKAGE_COMMIT,
+          entry: "index.js",
+          artifacts: {
+            "index.js": { sha256: createHash("sha256").update(entryText).digest("hex") },
+          },
+        },
+      },
+    }),
+  );
+  writeFileSync(
+    join(project, "imports.json"),
+    JSON.stringify({ imports: { "remote-package": REMOTE_PACKAGE_REFERENCE } }),
+  );
+  writeFileSync(
+    join(project, "app.js"),
+    'import { remote } from "remote-package";\nconsole.log("remote:" + remote);\n',
+  );
+  return project;
+};
+
+await section("Loader: a cached remote package is refused without --remote-imports...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeRemotePackageProject(tmp);
+    const audit = join(tmp, "remote-deny-audit.jsonl");
+    const proc = Bun.spawnSync(
+      [
+        resolve(LOADER),
+        "app.js",
+        "--source-type=module",
+        "--import-map=imports.json",
+        `--audit-log=${audit}`,
+      ],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0 || containsLine(proc.stdout.toString(), "remote:42"))
+      throw new Error(`A complete cache must not bypass the capability, got: ${out}`);
+    if (!out.includes("requires the remote imports capability"))
+      throw new Error(`Expected the capability refusal, got: ${out}`);
+    const events = readJsonLines(audit);
+    if (
+      events.length !== 1 ||
+      events[0].kind !== "remote-import.resolve" ||
+      events[0].decision !== "deny" ||
+      events[0].subject !== REMOTE_PACKAGE_REFERENCE
+    )
+      throw new Error(`remote-import deny audit event mismatch: ${JSON.stringify(events)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --remote-imports resolves a verified cache offline...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = writeRemotePackageProject(tmp);
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `remote-allow-${mode}.jsonl`);
+      const proc = Bun.spawnSync(
+        [
+          resolve(LOADER),
+          "app.js",
+          "--source-type=module",
+          `--mode=${mode}`,
+          "--import-map=imports.json",
+          "--remote-imports",
+          `--audit-log=${audit}`,
+        ],
+        { cwd: project, stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "remote:42"))
+        throw new Error(
+          `--remote-imports should resolve the cached ${mode} run: ${proc.stdout}${proc.stderr}`,
+        );
+      const events = readJsonLines(audit);
+      if (
+        events.length !== 1 ||
+        events[0].kind !== "remote-import.resolve" ||
+        events[0].decision !== "allow" ||
+        events[0].subject !== REMOTE_PACKAGE_REFERENCE
+      )
+        throw new Error(`remote-import allow audit event mismatch: ${JSON.stringify(events)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: --remote-imports is refused...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: [{ path: "/main.js", text: 'console.log("ran");' }],
+    }));
+    const proc = Bun.spawnSync(
+      [resolve(SANDBOXRUNNER), "/main.js", `--seed-config=${seed}`, "--remote-imports"],
+      { stdout: "pipe", stderr: "pipe", cwd: tmp },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    if (proc.exitCode === 0 || containsLine(proc.stdout.toString(), "ran"))
+      throw new Error(`The sandbox runner must refuse --remote-imports, got: ${out}`);
+    if (!out.includes("does not expose the host-backed remote package cache"))
+      throw new Error(`Expected the sandbox refusal, got: ${out}`);
   } finally {
     clean(tmp);
   }

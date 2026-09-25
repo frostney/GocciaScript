@@ -1168,7 +1168,8 @@ begin
         AliasBaseDirectory := ExtractFilePath(FRootConfigPath);
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
-        AliasBaseDirectory);
+        AliasBaseDirectory,
+        ResolveFlagOption(FEngineOptions.RemoteImports, FileConfig));
       ApplyNodeModulesResolution(Result, FileConfig, FileConfigPath);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;

@@ -58,6 +58,7 @@ type
     function LoadCustomRuntimeModule(const AResolvedPath: string;
       out AModule: TGocciaModule): Boolean;
     procedure TestEngineRejectsNilExtension;
+    procedure TestEngineDetachesAuditEmitterFromBorrowedResolver;
     procedure TestGlobalModuleProviderReplacementClearsLoadedModule;
     procedure TestGlobalModuleProviderUnregisterClearsLoadedModule;
     procedure TestRuntimeConstructorAcceptsExistingEngine;
@@ -110,6 +111,8 @@ procedure TRuntimeTests.SetupTests;
 begin
   Test('Engine rejects nil extension',
     TestEngineRejectsNilExtension);
+  Test('Engine teardown detaches its audit emitter from a borrowed resolver',
+    TestEngineDetachesAuditEmitterFromBorrowedResolver);
   Test('Global module provider unregister clears loaded module',
     TestGlobalModuleProviderUnregisterClearsLoadedModule);
   Test('Global module provider replacement clears loaded module',
@@ -137,6 +140,32 @@ function TRuntimeTests.CreateEmptySource: TStringList;
 begin
   Result := TStringList.Create;
   Result.Text := '';
+end;
+
+procedure TRuntimeTests.TestEngineDetachesAuditEmitterFromBorrowedResolver;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Resolver: TGocciaModuleResolver;
+  Source: TStringList;
+begin
+  Source := CreateEmptySource;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Resolver := TGocciaModuleResolver.Create;
+  try
+    Engine := TGocciaEngine.Create('<runtime-test>', Source, Resolver,
+      Executor);
+    try
+      Expect<Boolean>(Assigned(Resolver.CapabilityAuditEmitter)).ToBe(True);
+    finally
+      Engine.Free;
+    end;
+    Expect<Boolean>(Assigned(Resolver.CapabilityAuditEmitter)).ToBe(False);
+  finally
+    Resolver.Free;
+    Executor.Free;
+    Source.Free;
+  end;
 end;
 
 function TRuntimeTests.CreateProvidedGlobalModule: TGocciaModule;

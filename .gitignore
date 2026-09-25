@@ -10,6 +10,7 @@ tmp/
 
 # Build files
 build/
+.goccia/
 
 # Delphi IDE state and generated project resources
 source/app/*.dproj.local

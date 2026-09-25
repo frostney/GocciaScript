@@ -23,7 +23,10 @@ first that answers:
 2. **Aliases and import maps** — `--alias key=value`, `--import-map=<file>`,
    and the `imports` object of a discovered `goccia.json`. Longest matching
    prefix wins. Commands and precedence live in
-   [Build System](build-system.md#compile-and-run).
+   [Build System](build-system.md#compile-and-run). A lockfile-pinned
+   `github:` entry is materialized into a local cache while the import map
+   loads, and only when `--remote-imports` is granted; see
+   [Remote Package Imports](remote-package-imports.md).
 3. **Relative and absolute paths** — `./`, `../`, and host-absolute
    specifiers, resolved against the importing file's directory.
 4. **Bare specifiers** — a package name, resolved against `node_modules` only
