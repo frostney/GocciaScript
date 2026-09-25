@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Four kinds of specifier** — virtual modules, aliases and import maps, relative and absolute paths, and (opt-in) bare package names, tried in that order
-- **Bare specifiers are sealed by default** — `import "zod"` fails until a host passes `--allow-node-modules`, keeping the default profile free of ambient package lookup
+- **Bare specifiers are sealed by default** — `import "zod"` fails until the engine's `import` capability grants `node_modules` (`--allow-node-modules` on the command line), keeping the default profile free of ambient package lookup
 - **A subset of Node's ESM resolver** — the `exports` map with the `import` and `default` conditions, wildcard patterns, and the legacy entry fields; no `require`/`node` conditions, no `imports` map, no self-reference
 - **Two deliberate deviations** — the bundler-only `module` field is honoured (Node ignores it), and a package that resolves to CommonJS is refused by name instead of being parsed
 - **The sandbox host stays sealed** — `GocciaSandboxRunner` offers no `node_modules` opt-in, because its filesystem is seeded by the embedder rather than walked
@@ -60,10 +60,15 @@ file extension, and a directory resolves to its `index` file.
 ```
 
 Without the option, a bare specifier fails with `Cannot resolve bare module
-specifier "<name>". Imports must start with "./" or "../"` — the pre-existing
-behavior, unchanged. This is a capability in the sense
-[VISION](../VISION.md) uses the word: the engine gains the ability to read a
-directory tree the script never named, so a host has to ask for it.
+specifier "<name>". Imports must start with "./" or "../"`. This is a
+capability in the sense [VISION](../VISION.md) uses the word: the engine gains
+the ability to read a directory tree the script never named, so a host has to
+ask for it. The option grants the engine's `import` capability for
+`node_modules` — `node_modules=<dir>` when it names a ceiling — and the
+resolver asks the engine's set before every walk; an embedder grants the same
+scope with `TGocciaCapabilities.Allow(gcImport, 'node_modules')`. See
+[Permissions](permissions.md#import-scopes) for how grants and denies combine;
+an explicit deny throws `PermissionDenied` instead of the sealed message.
 
 The optional value is a **ceiling**, not a starting point. The walk still
 begins at the importing file's directory, so a package that ships its own
@@ -72,6 +77,9 @@ climbing past the directory named. Together with the package-boundary rules
 below — which keep a resolved file inside the package it was found in — that is
 what makes the option safe to point at a project root: nothing outside it can
 satisfy an import.
+
+A ceiling grants the walk only to importers inside it; a bare specifier
+imported from outside every granted ceiling stays sealed.
 
 A relative ceiling is anchored to whatever supplied it: the invocation
 directory for the command-line flag, and the configuration file's own directory

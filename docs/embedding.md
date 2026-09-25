@@ -6,7 +6,7 @@
 ## Executive Summary
 
 - **Quick start** — `TGocciaRuntime.Create(...)` creates the runtime layer for file loading and runtime extension installation; apply a runtime profile or install concrete runtime extensions for runtime globals and `goccia:` runtime modules. `TGocciaEngine.Create(...)` remains available for core-language-only embedders and requires an explicit executor (`TGocciaInterpreterExecutor` for tree-walk or `TGocciaBytecodeExecutor` for bytecode VM)
-- **Sandboxing** — Choose runtime extensions and tool-specific runtime APIs explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
+- **Sandboxing** — Fix what the engine may reach with an immutable [capability set](permissions.md) (`None` by default); choose runtime extensions explicitly; inject custom globals via `DefineLexicalBinding`; enforce execution limits via timeout or instruction cap
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
@@ -96,7 +96,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ### Engine Constructor and Executor Ownership
 
-Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Executor.Interpreter`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default interpreter setup.
+Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Executor.Interpreter`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default interpreter setup. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md).
 
 ### Automatic Semicolon Insertion
 
@@ -217,11 +217,11 @@ import { formatDate } from "@/utils/dates";
 
 ### Bare Specifiers and node_modules
 
-A bare specifier is refused for an embedded engine too; grant it explicitly, optionally capping the ancestor walk. See [Module Resolution](module-resolution.md) for the supported `exports` subset, the `module`-field deviation from Node, and the CommonJS refusal.
+A bare specifier is refused for an embedded engine too; grant `node_modules` through the engine's capability set, optionally capping the ancestor walk. See [Module Resolution](module-resolution.md) for the supported `exports` subset, the `module`-field deviation from Node, and the CommonJS refusal.
 
 ```pascal
-Engine.AllowNodeModules;              // walk up from each importing file
-Engine.AllowNodeModules('/srv/app');  // ...but never above /srv/app
+Caps := TGocciaCapabilities.None.Allow(gcImport, 'node_modules');          // walk up from each importer
+Caps := TGocciaCapabilities.None.Allow(gcImport, 'node_modules=/srv/app'); // ...but never above /srv/app
 ```
 
 ### Custom Resolver
@@ -359,7 +359,7 @@ begin
 end;
 ```
 
-`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached unless `AttachRuntime(Engine, False)` is used. Untrusted-source hosts should pass `False` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors).
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached unless the engine's `read` capability is denied outright, and the loader checks every read through it against the set: static imports inside the project are exempt, everything else needs a `read` grant ([Permissions](permissions.md#the-module-graph-exemption)). Untrusted-source hosts can deny `read` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors).
 
 ### Virtual Modules
 
@@ -497,9 +497,9 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
-| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; CLI tools install this for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
+| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
 
-When embedding, install `TGocciaFFIRuntimeExtension` to enable the FFI global. CLI tools (ScriptLoader, REPL, TestRunner, BenchmarkRunner, Bundler) expose this as the `--unsafe-ffi` flag and matching `"unsafe-ffi"` config key.
+When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
 To add the test framework for a custom test runner:
 

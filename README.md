@@ -403,6 +403,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Module Resolution](docs/module-resolution.md) | Resolution order, opt-in `node_modules` lookup, and the deviations from Node |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
+| [Permissions](docs/permissions.md) | The capability model: `read`, `net`, `ffi`, `import`, deny-wins, the module-graph exemption, `PermissionDenied` |
 | [Capability Audit Events](docs/capability-audit.md) | Structured host capability decisions, embedding sink, and CLI JSONL output |
 | [Testing](docs/testing.md) | Test organization, running tests, coverage, CI |
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |

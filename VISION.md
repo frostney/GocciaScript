@@ -17,7 +17,7 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 
 - **No ambient authority** — Scripts cannot access the file system, network, operating system, or native FFI unless the host explicitly grants capability through embedding APIs or unsafe runtime opt-ins such as `--unsafe-ffi`
 - **No script-visible file system by default** — Scripts do not get a general read/write file-system API. Hosts can provide file-backed module/content loading or custom module content providers; a bounded script-visible virtual file system is available via the dedicated `GocciaSandboxRunner` host (seeded, in-memory, with no ambient host-filesystem access)
-- **Read-only network access** — A WHATWG `fetch` (GET/HEAD only) gated by an explicit host allowlist (`--allowed-host`); without an allowlist any call to `fetch` throws `TypeError`, so scripts cannot retrieve data or reach the network unless the host opts in
+- **Read-only network access** — A WHATWG `fetch` (GET/HEAD only) gated by the engine's `net` capability (`--allowed-host`); without a grant any call to `fetch` throws `PermissionDenied`, so scripts cannot retrieve data or reach the network unless the host opts in
 - **Deterministic core execution** — For core-language execution with the same source, config, and host-provided runtime surface, behavior is repeatable and intrinsic state does not leak between engine instances; hosts that install time, network, or other external runtime extensions own those sources of nondeterminism
 - **Timeout enforcement** — The `--timeout` option and embedding API allow hosts to kill runaway scripts
 - **Controlled runtime surface** — The host chooses which runtime extensions or profiles to install (see [Embedding](docs/embedding.md))
