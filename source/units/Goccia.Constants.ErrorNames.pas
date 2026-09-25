@@ -20,6 +20,7 @@ const
   TIMEOUT_ERROR_NAME            = 'TimeoutError';
   INVALID_STATE_ERROR_NAME      = 'InvalidStateError';
   SUPPRESSED_ERROR_NAME        = 'SuppressedError';
+  PERMISSION_DENIED_NAME       = 'PermissionDenied';
 
 implementation
 

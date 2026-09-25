@@ -28,6 +28,7 @@ function GetURIErrorProto: TGocciaObjectValue;
 function GetAggregateErrorProto: TGocciaObjectValue;
 function GetSuppressedErrorProto: TGocciaObjectValue;
 function GetDOMExceptionProto: TGocciaObjectValue;
+function GetPermissionDeniedProto: TGocciaObjectValue;
 
 type
   TGocciaGlobals = class(TGocciaBuiltin)
@@ -42,6 +43,7 @@ type
     FAggregateErrorProto: TGocciaObjectValue;
     FSuppressedErrorProto: TGocciaObjectValue;
     FDOMExceptionProto: TGocciaObjectValue;
+    FPermissionDeniedProto: TGocciaObjectValue;
 
     function BuildErrorObject(const AName: string; const AProto: TGocciaObjectValue; const AArgs: TGocciaArgumentsCollection): TGocciaObjectValue;
     function BuildAggregateError(const AArgs: TGocciaArgumentsCollection; const AProto: TGocciaObjectValue): TGocciaObjectValue;
@@ -60,6 +62,7 @@ type
     function AggregateErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function SuppressedErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
     function DOMExceptionConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+    function PermissionDeniedConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
   protected
   published
     function ErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -72,6 +75,7 @@ type
     function AggregateErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function SuppressedErrorConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DOMExceptionConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function PermissionDeniedConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ErrorIsError(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ErrorPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function QueueMicrotaskCallback(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -133,6 +137,7 @@ var
   GAggregateErrorProtoSlot: TGocciaRealmSlotId;
   GSuppressedErrorProtoSlot: TGocciaRealmSlotId;
   GDOMExceptionProtoSlot: TGocciaRealmSlotId;
+  GPermissionDeniedProtoSlot: TGocciaRealmSlotId;
 
 function GetErrorProto: TGocciaObjectValue;
 begin
@@ -214,6 +219,15 @@ begin
     Result := nil;
 end;
 
+function GetPermissionDeniedProto: TGocciaObjectValue;
+begin
+  if (CurrentRealm <> nil) then
+    Result := TGocciaObjectValue(
+      CurrentRealm.GetSlot(GPermissionDeniedProtoSlot))
+  else
+    Result := nil;
+end;
+
 constructor TGocciaGlobals.Create(const AName: string; const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback);
 var
   ErrorConstructorFunc: TGocciaNativeFunctionValue;
@@ -226,6 +240,7 @@ var
   AggregateErrorConstructorFunc: TGocciaNativeFunctionValue;
   SuppressedErrorConstructorFunc: TGocciaNativeFunctionValue;
   DOMExceptionConstructorFunc: TGocciaNativeFunctionValue;
+  PermissionDeniedConstructorFunc: TGocciaNativeFunctionValue;
   DecodeURIComponentFunc: TGocciaNativeFunctionValue;
   DecodeURIFunc: TGocciaNativeFunctionValue;
   ErrorStaticMembers: TArray<TGocciaMemberDefinition>;
@@ -296,6 +311,13 @@ begin
   FDOMExceptionProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
   FDOMExceptionProto.AssignProperty(PROP_CODE, TGocciaNumberLiteralValue.Create(0));
 
+  { PermissionDenied is the engine's capability-denial error (ADR 0122): an
+    Error subclass shaped like the NativeError constructors, so a guest can
+    catch it and test it with instanceof. }
+  FPermissionDeniedProto := TGocciaObjectValue.Create(FErrorProto);
+  FPermissionDeniedProto.DefineProperty(PROP_NAME, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(PERMISSION_DENIED_NAME), [pfConfigurable, pfWritable]));
+  FPermissionDeniedProto.DefineProperty(PROP_MESSAGE, TGocciaPropertyDescriptorData.Create(TGocciaStringLiteralValue.Create(''), [pfConfigurable, pfWritable]));
+
   // Publish the per-engine prototypes through the per-realm slot mechanism so
   // ErrorHelper / DisposalTracker / other readers see exactly the prototypes
   // owned by this engine.  When the engine is freed its realm is freed,
@@ -312,6 +334,7 @@ begin
     CurrentRealm.SetSlot(GAggregateErrorProtoSlot, FAggregateErrorProto);
     CurrentRealm.SetSlot(GSuppressedErrorProtoSlot, FSuppressedErrorProto);
     CurrentRealm.SetSlot(GDOMExceptionProtoSlot, FDOMExceptionProto);
+    CurrentRealm.SetSlot(GPermissionDeniedProtoSlot, FPermissionDeniedProto);
   end;
 
   ErrorConstructorFunc := TGocciaNativeFunctionValue.Create(ErrorConstructor, ERROR_NAME, 1);
@@ -334,6 +357,8 @@ begin
   SuppressedErrorConstructorFunc.ConstructCallback := SuppressedErrorConstruct;
   DOMExceptionConstructorFunc := TGocciaNativeFunctionValue.Create(DOMExceptionConstructor, DOM_EXCEPTION_NAME, 2);
   DOMExceptionConstructorFunc.ConstructCallback := DOMExceptionConstruct;
+  PermissionDeniedConstructorFunc := TGocciaNativeFunctionValue.Create(PermissionDeniedConstructor, PERMISSION_DENIED_NAME, 1);
+  PermissionDeniedConstructorFunc.ConstructCallback := PermissionDeniedConstruct;
 
   EvalErrorConstructorFunc.Prototype := ErrorConstructorFunc;
   TypeErrorConstructorFunc.Prototype := ErrorConstructorFunc;
@@ -343,6 +368,7 @@ begin
   URIErrorConstructorFunc.Prototype := ErrorConstructorFunc;
   AggregateErrorConstructorFunc.Prototype := ErrorConstructorFunc;
   SuppressedErrorConstructorFunc.Prototype := ErrorConstructorFunc;
+  PermissionDeniedConstructorFunc.Prototype := ErrorConstructorFunc;
 
   ErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FErrorProto, []));
   with TGocciaMemberCollection.Create do
@@ -362,6 +388,7 @@ begin
   AggregateErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FAggregateErrorProto, []));
   SuppressedErrorConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FSuppressedErrorProto, []));
   DOMExceptionConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FDOMExceptionProto, []));
+  PermissionDeniedConstructorFunc.DefineProperty(PROP_PROTOTYPE, TGocciaPropertyDescriptorData.Create(FPermissionDeniedProto, []));
 
   FErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(ErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FEvalErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(EvalErrorConstructorFunc, [pfConfigurable, pfWritable]));
@@ -373,6 +400,7 @@ begin
   FAggregateErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(AggregateErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FSuppressedErrorProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(SuppressedErrorConstructorFunc, [pfConfigurable, pfWritable]));
   FDOMExceptionProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(DOMExceptionConstructorFunc, [pfConfigurable, pfWritable]));
+  FPermissionDeniedProto.DefineProperty(PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(PermissionDeniedConstructorFunc, [pfConfigurable, pfWritable]));
 
   AScope.DefineLexicalBinding(ERROR_NAME, ErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(EVAL_ERROR_NAME, EvalErrorConstructorFunc, dtConst, True);
@@ -384,6 +412,7 @@ begin
   AScope.DefineLexicalBinding(AGGREGATE_ERROR_NAME, AggregateErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(SUPPRESSED_ERROR_NAME, SuppressedErrorConstructorFunc, dtConst, True);
   AScope.DefineLexicalBinding(DOM_EXCEPTION_NAME, DOMExceptionConstructorFunc, dtConst, True);
+  AScope.DefineLexicalBinding(PERMISSION_DENIED_NAME, PermissionDeniedConstructorFunc, dtConst, True);
 
   AScope.DefineLexicalBinding('encodeURI',
     TGocciaNativeFunctionValue.CreateWithoutPrototype(
@@ -813,6 +842,20 @@ begin
   Result := BuildErrorObject(EVAL_ERROR_NAME,
     GetProtoFromConstructorWithIntrinsic(ANewTarget, FEvalErrorProto,
       GEvalErrorProtoSlot), AArgs);
+end;
+
+{ PermissionDenied ( message [ , options ] ) — shaped like NativeError }
+function TGocciaGlobals.PermissionDeniedConstructor(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject(PERMISSION_DENIED_NAME, FPermissionDeniedProto,
+    AArgs);
+end;
+
+function TGocciaGlobals.PermissionDeniedConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
+begin
+  Result := BuildErrorObject(PERMISSION_DENIED_NAME,
+    GetProtoFromConstructorWithIntrinsic(ANewTarget, FPermissionDeniedProto,
+      GPermissionDeniedProtoSlot), AArgs);
 end;
 
 function TGocciaGlobals.TypeErrorConstruct(const AArgs: TGocciaArgumentsCollection; const ANewTarget: TGocciaValue): TGocciaValue;
@@ -1368,5 +1411,7 @@ initialization
   GAggregateErrorProtoSlot := RegisterRealmSlot('AggregateError.prototype');
   GSuppressedErrorProtoSlot := RegisterRealmSlot('SuppressedError.prototype');
   GDOMExceptionProtoSlot := RegisterRealmSlot('DOMException.prototype');
+  GPermissionDeniedProtoSlot := RegisterRealmSlot(
+    'PermissionDenied.prototype');
 
 end.

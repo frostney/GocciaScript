@@ -75,6 +75,19 @@ procedure ThrowURIError(const AMessage, ASuggestion: string); overload;
 procedure ThrowError(const AMessage: string); overload;
 procedure ThrowError(const AMessage, ASuggestion: string); overload;
 
+{ The capability-denial error (ADR 0122): a PermissionDenied whose message is
+  `<capability>: <scope>` and which carries both as own `capability` and
+  `scope` properties. AScope is guest-visible, so callers pass what the guest
+  asked for (a specifier, a host name) and never an expanded host path
+  (ADR 0108). }
+function CreatePermissionDeniedError(const ACapability,
+  AScope: string): TGocciaObjectValue;
+
+{ Raises CreatePermissionDeniedError. ASuggestion is host-side only: it reaches
+  CLI error output but never the guest, so it may name paths and flags. }
+procedure ThrowPermissionDenied(const ACapability, AScope,
+  ASuggestion: string);
+
 implementation
 
 uses
@@ -219,6 +232,8 @@ begin
     Result := GetAggregateErrorProto
   else if AName = SUPPRESSED_ERROR_NAME then
     Result := GetSuppressedErrorProto
+  else if AName = PERMISSION_DENIED_NAME then
+    Result := GetPermissionDeniedProto
   else if AName = ERROR_NAME then
     Result := GetErrorProto
   else
@@ -397,6 +412,23 @@ end;
 procedure ThrowError(const AMessage, ASuggestion: string);
 begin
   RaiseNativeError(ERROR_NAME, AMessage, ASuggestion);
+end;
+
+function CreatePermissionDeniedError(const ACapability,
+  AScope: string): TGocciaObjectValue;
+begin
+  Result := CreateErrorObject(PERMISSION_DENIED_NAME,
+    ACapability + ': ' + AScope);
+  Result.AssignProperty(PROP_CAPABILITY,
+    TGocciaStringLiteralValue.Create(ACapability));
+  Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+end;
+
+procedure ThrowPermissionDenied(const ACapability, AScope,
+  ASuggestion: string);
+begin
+  raise TGocciaThrowValue.Create(
+    CreatePermissionDeniedError(ACapability, AScope), ASuggestion);
 end;
 
 end.
