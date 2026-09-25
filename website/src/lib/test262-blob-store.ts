@@ -1,8 +1,12 @@
-import { list } from "@vercel/blob";
 import type {
   Test262Report,
   Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
+import {
+  listBlobHistory,
+  publishBlobHistorySnapshots,
+  rebuildBlobHistorySnapshots,
+} from "./blob-history";
 import {
   type BlobAccess,
   type BlobReport,
@@ -13,7 +17,6 @@ import {
   publishProfileArtifacts,
   putCompressedReportBlob,
   putDailyBlobPointer,
-  readBlobText,
   readCompressedBlobText,
 } from "./report-blob";
 
@@ -186,34 +189,18 @@ export async function readTest262BlobReportJsonByArtifactId(
   );
 }
 
+export async function rebuildTest262BlobHistory(): Promise<number> {
+  return rebuildBlobHistorySnapshots(
+    test262BlobPrefix(),
+    test262BlobAccess(),
+    isBlobRun,
+  );
+}
+
 export async function listTest262BlobDailyRuns(
   prefix = test262BlobPrefix(),
 ): Promise<Test262BlobRun[]> {
-  const access = test262BlobAccess();
-  const runs: Test262BlobRun[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${test262BlobDailyPrefix(prefix)}/`,
-    });
-    cursor = page.cursor;
-    for (const blob of page.blobs) {
-      const text = await readBlobText(blob.pathname, access);
-      if (!text) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        continue;
-      }
-      if (isBlobRun(parsed)) runs.push(parsed);
-    }
-    if (!page.hasMore) break;
-  } while (cursor);
-
-  return runs.sort(byCreatedAtThenRunNumber);
+  return listBlobHistory(prefix, test262BlobAccess(), isBlobRun);
 }
 
 export async function publishTest262ReportsToBlob(
@@ -222,6 +209,8 @@ export async function publishTest262ReportsToBlob(
   const prefix = test262BlobPrefix();
   const access = test262BlobAccess();
   const publishedRuns: Test262BlobRun[] = [];
+  const pointers: { pathname: string; etag: string; run: Test262BlobRun }[] =
+    [];
 
   for (const entry of entries) {
     const reportPath = test262BlobReportPathForArtifactId(
@@ -242,14 +231,13 @@ export async function publishTest262ReportsToBlob(
       reportCompressedSize: reportBlob.size,
       publishedAt: new Date().toISOString(),
     };
-    await putDailyBlobPointer(
-      dailyPathForPoint(published, prefix),
-      published,
-      access,
-    );
+    const pathname = dailyPathForPoint(published, prefix);
+    const pointer = await putDailyBlobPointer(pathname, published, access);
+    pointers.push({ pathname, etag: pointer.etag, run: published });
     publishedRuns.push(published);
   }
 
+  await publishBlobHistorySnapshots(prefix, access, isBlobRun, pointers);
   return publishedRuns.sort(byCreatedAtThenRunNumber);
 }
 
