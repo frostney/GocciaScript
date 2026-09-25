@@ -32,8 +32,12 @@ type
   TGocciaJSXTransformer = class
   private
     type
-      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak);
+      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator);
       TScanContext = (scSource, scAttributes, scChildren, scExpression);
+      TForHeader = record
+        Depth: Integer;
+        SawOf: Boolean;
+      end;
   private
     FSource: string;
     FPos: Integer;
@@ -47,9 +51,11 @@ type
     FFactoryName: string;
     FFragmentName: string;
     FLastTokenKind: TLastTokenKind;
-    // The kind before the current run of line breaks, so a word at the start
-    // of a line can still be read against the token that preceded it.
-    FKindBeforeLineBreak: TLastTokenKind;
+    // Parenthesis nesting, and the `for (...)` headers open within it,
+    // innermost last: `of` is a keyword only at the top level of one.
+    FParenDepth: Integer;
+    FForHeaders: array of TForHeader;
+    FForPending: Boolean;
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
@@ -86,6 +92,10 @@ type
       const AStart: Integer): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
+    procedure OpenParen;
+    procedure CloseParen;
+    function IsForOfKeyword(const AStart: Integer): Boolean;
+    function InForHeader: Boolean;
 
     function IsJSXContext: Boolean;
     function IsJSXStart: Boolean;
@@ -565,41 +575,103 @@ end;
 
 // What a '/' after AWord would be: a regex after a word that expects an
 // operand, a division after one that ends an expression. Reads FLastTokenKind
-// as the token before AWord.
+// as the token before AWord; AStart is the word's position in FSource.
 //
-// `of` is the one contextual word here. It is a keyword only in a for-of
-// header, where it follows the end of a binding (`x`, `]`, `}`) — across a
-// line break too, or a binding itself named `of` — and a regex can follow
-// it; everywhere else it is an ordinary identifier, and `of / 2` divides.
-// AStart is the word's position in FSource.
+// `of` is the one contextual word here: a keyword, which a regex can follow,
+// only in a for-of header, and an ordinary identifier everywhere else, where
+// `of / 2` divides.
 function TGocciaJSXTransformer.TokenKindAfterWord(const AWord: string;
   const AStart: Integer): TLastTokenKind;
-
-  function FollowsWordOf: Boolean;
-  var
-    Index: Integer;
-  begin
-    Index := AStart - 1;
-    while (Index >= 1) and (FSource[Index] in [' ', #9, #10, #13]) do
-      Dec(Index);
-    Result := (Index >= 2) and (Copy(FSource, Index - 1, 2) = KEYWORD_OF) and
-      ((Index = 2) or not IsIdentifierPart(FSource[Index - 2]));
-  end;
-
 begin
+  if AWord = KEYWORD_FOR then
+    FForPending := True
+  else if AWord <> KEYWORD_AWAIT then
+    FForPending := False;
+
   if (AWord = KEYWORD_RETURN) or (AWord = KEYWORD_THROW) or (AWord = KEYWORD_CASE) or
      (AWord = KEYWORD_NEW) or (AWord = KEYWORD_TYPEOF) or (AWord = KEYWORD_VOID) or
      (AWord = KEYWORD_DELETE) or (AWord = KEYWORD_IN) or (AWord = KEYWORD_INSTANCEOF) or
      (AWord = KEYWORD_YIELD) or (AWord = KEYWORD_AWAIT) then
     Result := ltkOperator
-  else if (AWord = KEYWORD_OF) and
-          ((FLastTokenKind = ltkExpressionEnd) or
-           ((FLastTokenKind = ltkLineBreak) and
-            (FKindBeforeLineBreak = ltkExpressionEnd)) or
-           FollowsWordOf) then
+  else if (AWord = KEYWORD_OF) and IsForOfKeyword(AStart) then
     Result := ltkOperator
   else
     Result := ltkExpressionEnd;
+end;
+
+// The `of` at AStart is the for-of keyword when it sits at the top level of
+// the innermost open `for (...)` header, is that header's first, and follows
+// the end of a binding. The token kind says whether a binding just ended — a
+// name, `]`, `}`, or `)` — and comments leave it as it was. The word before
+// rules out a declaration keyword: in `for (const of of xs)` the first `of`
+// is the binding.
+function TGocciaJSXTransformer.IsForOfKeyword(const AStart: Integer): Boolean;
+var
+  Header, Index, WordEnd: Integer;
+  Word: string;
+begin
+  Result := False;
+  Header := High(FForHeaders);
+  if (Header < 0) or (FForHeaders[Header].Depth <> FParenDepth) or
+     FForHeaders[Header].SawOf or (FLastTokenKind <> ltkExpressionEnd) then
+    Exit;
+
+  // Back over whitespace and block comments to the word before, if any.
+  Index := AStart - 1;
+  while Index >= 1 do
+    if FSource[Index] in [' ', #9, #10, #13] then
+      Dec(Index)
+    else if (Index >= 2) and (FSource[Index] = '/') and
+            (FSource[Index - 1] = '*') then
+    begin
+      Dec(Index, 2);
+      while (Index >= 2) and
+            not ((FSource[Index - 1] = '/') and (FSource[Index] = '*')) do
+        Dec(Index);
+      Dec(Index, 2);
+    end
+    else
+      Break;
+  Word := '';
+  if (Index >= 1) and IsIdentifierPart(FSource[Index]) then
+  begin
+    WordEnd := Index;
+    while (Index >= 1) and IsIdentifierPart(FSource[Index]) do
+      Dec(Index);
+    Word := Copy(FSource, Index + 1, WordEnd - Index);
+  end;
+
+  Result := (Word <> KEYWORD_CONST) and (Word <> KEYWORD_LET) and
+    (Word <> KEYWORD_VAR) and (Word <> KEYWORD_USING);
+  if Result then
+    FForHeaders[Header].SawOf := True;
+end;
+
+function TGocciaJSXTransformer.InForHeader: Boolean;
+begin
+  Result := (Length(FForHeaders) > 0) and
+    (FForHeaders[High(FForHeaders)].Depth = FParenDepth);
+end;
+
+procedure TGocciaJSXTransformer.OpenParen;
+begin
+  Inc(FParenDepth);
+  if FForPending then
+  begin
+    SetLength(FForHeaders, Length(FForHeaders) + 1);
+    FForHeaders[High(FForHeaders)].Depth := FParenDepth;
+    FForHeaders[High(FForHeaders)].SawOf := False;
+    FForPending := False;
+  end;
+end;
+
+procedure TGocciaJSXTransformer.CloseParen;
+begin
+  if (Length(FForHeaders) > 0) and
+     (FForHeaders[High(FForHeaders)].Depth = FParenDepth) then
+    SetLength(FForHeaders, Length(FForHeaders) - 1);
+  if FParenDepth > 0 then
+    Dec(FParenDepth);
 end;
 
 procedure TGocciaJSXTransformer.CopyNumber;
@@ -682,6 +754,10 @@ begin
 
   CopyChar;
 
+  if C = '(' then
+    OpenParen
+  else if C = ')' then
+    CloseParen;
   if C in [')', ']', '}'] then
     FLastTokenKind := ltkExpressionEnd
   else
@@ -690,7 +766,7 @@ end;
 
 function TGocciaJSXTransformer.IsJSXContext: Boolean;
 begin
-  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak];
+  Result := FLastTokenKind in [ltkNone, ltkOperator];
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
@@ -1581,7 +1657,7 @@ begin
           CopyLineComment
         else if PeekAt(1) = '*' then
           CopyBlockComment
-        else if FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak] then
+        else if FLastTokenKind in [ltkNone, ltkOperator] then
           CopyRegexLiteral
         else
         begin
@@ -1597,12 +1673,16 @@ begin
       end;
       ')', ']':
       begin
+        if CurrentChar = ')' then
+          CloseParen;
         EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkExpressionEnd;
       end;
       '(', '[', ',', ':', '?', ';', '~', '!':
       begin
+        if CurrentChar = '(' then
+          OpenParen;
         EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
@@ -1835,13 +1915,15 @@ begin
       Continue;
     end;
 
+    // A line break may start a statement, so it reads as an operator —
+    // except at the top level of a for header, where none can start and the
+    // token before still decides what `of` is.
     if C = #10 then
     begin
       CopyChar;
       AddIdentityMapping;
-      if FLastTokenKind <> ltkLineBreak then
-        FKindBeforeLineBreak := FLastTokenKind;
-      FLastTokenKind := ltkLineBreak;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 
@@ -1851,9 +1933,8 @@ begin
       if not IsAtEnd and (CurrentChar = #10) then
         CopyChar;
       AddIdentityMapping;
-      if FLastTokenKind <> ltkLineBreak then
-        FKindBeforeLineBreak := FLastTokenKind;
-      FLastTokenKind := ltkLineBreak;
+      if not InForHeader then
+        FLastTokenKind := ltkOperator;
       Continue;
     end;
 

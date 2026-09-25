@@ -31,6 +31,32 @@ describe("contextual of in the JSX preprocessor", () => {
     expect(el.children[0]).toBe("<b>");
   });
 
+  test("an of after a for-of header's keyword divides", () => {
+    const found = [];
+    for (const value of [of / 2, <i>{of / 4}</i>]) found.push(value);
+    expect(found[0]).toBe(4);
+    expect(found[1].children[0]).toBe(2);
+  });
+
+  test("a nested for-of header keeps its own keyword", () => {
+    const found = [];
+    for (const outer of [/<b>/]) {
+      for (const inner of /<i>/.exec("<i>")) found.push(`${outer.source}${inner}`);
+    }
+    const el = <b>{found.join("")}</b>;
+    expect(el.children[0]).toBe("<b><i>");
+  });
+
+  test("a comment between the binding and of keeps the keyword", () => {
+    const found = [];
+    for (const block /* the match */ of /<b>/.exec("<b>")) found.push(block);
+    for (const line // the match.
+      of /<i>/.exec("<i>")) found.push(line);
+    for ((found.last) of /<u>/.exec("<u>")) found.push(found.last);
+    const el = <b>{found.join("")}</b>;
+    expect(el.children[0]).toBe("<b><i><u>");
+  });
+
   test("a binding named of is followed by the keyword and a regex", () => {
     const found = [];
     for (const of of /<i>/.exec("<i>")) found.push(of);
