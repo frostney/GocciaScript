@@ -128,3 +128,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0117 — A JavaScript-visible AST module exposes statement structure, not the AST](0117-javascript-visible-ast-module.md)
 - [0118 — A parse result is measured in the file, not in what the parser was handed](0118-original-file-source-ranges.md)
 - [0119 — A sandbox run is materialized by the host, on the host's command line](0119-host-applied-sandbox-write-back.md)
+- [0122 — One capability model: explicit allow/deny grants, trusted config, one runner](0122-unified-capability-model.md)
