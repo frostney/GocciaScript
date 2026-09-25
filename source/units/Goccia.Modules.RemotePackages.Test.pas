@@ -3,6 +3,7 @@ program Goccia.Modules.RemotePackages.Test;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
   SysUtils,
 
@@ -74,6 +75,9 @@ type
     procedure TestRejectsUnsafeArtifactPath;
     procedure TestPinsProviderRequestsToProviderHost;
     procedure TestRejectsNonSuccessProviderResponse;
+    {$IFDEF UNIX}
+    procedure TestDoesNotWriteThroughPlantedTemporarySymlink;
+    {$ENDIF}
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -149,6 +153,10 @@ begin
     TestPinsProviderRequestsToProviderHost);
   Test('Rejects a non-success provider response',
     TestRejectsNonSuccessProviderResponse);
+  {$IFDEF UNIX}
+  Test('Does not write an artifact through a planted temporary symlink',
+    TestDoesNotWriteThroughPlantedTemporarySymlink);
+  {$ENDIF}
 end;
 
 procedure TRemotePackageTests.BeforeAll;
@@ -542,6 +550,50 @@ begin
     Resolver.Free;
   end;
 end;
+
+{$IFDEF UNIX}
+procedure TRemotePackageTests.TestDoesNotWriteThroughPlantedTemporarySymlink;
+var
+  ArtifactDirectory, ImportMapPath, OutsidePath, ProjectDirectory: string;
+  I: Integer;
+  Resolver: TFixtureRemotePackageResolver;
+begin
+  ProjectDirectory := CreateTempDirectory;
+  OutsidePath := IncludeTrailingPathDelimiter(CreateTempDirectory) +
+    'outside.txt';
+  ImportMapPath := IncludeTrailingPathDelimiter(ProjectDirectory) +
+    'goccia.json';
+  WriteTextFile(ImportMapPath, '{"imports":{}}');
+  WriteLockfile(ProjectDirectory,
+    SHA256Hex(Bytes(ENTRY_TEXT)),
+    SHA256Hex(Bytes(NATIVE_TEXT)),
+    SHA256Hex(Bytes(OTHER_PLATFORM_TEXT)));
+
+  { A dangling link does not "exist" to FileExists, so a temporary name chosen
+    by probing for a free name lands on it and the write follows the link out
+    of the cache. Plant one at every name such a probe would try first. }
+  ArtifactDirectory := ExtractFileDir(CachePath(ProjectDirectory, ENTRY_PATH));
+  ForceDirectories(ArtifactDirectory);
+  for I := 0 to 3 do
+    Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(OutsidePath)),
+      PAnsiChar(AnsiString(IncludeTrailingPathDelimiter(ArtifactDirectory) +
+        Format('goc%.5d.tmp', [I]))))).ToBe(0);
+
+  Resolver := TFixtureRemotePackageResolver.Create(
+    IncludeTrailingPathDelimiter(ProjectDirectory) + '.goccia');
+  try
+    Resolver.AddResponse(ArtifactURL(ENTRY_PATH), ENTRY_TEXT);
+    Resolver.AddResponse(ArtifactURL(NATIVE_PATH), NATIVE_TEXT);
+    Expect<string>(Resolver.ResolvePackage(PACKAGE_REFERENCE,
+      ImportMapPath)).ToBe(CachePath(ProjectDirectory, ENTRY_PATH));
+    Expect<Boolean>(FileExists(OutsidePath)).ToBe(False);
+    Expect<string>(ReadUTF8FileText(
+      CachePath(ProjectDirectory, ENTRY_PATH))).ToBe(ENTRY_TEXT);
+  finally
+    Resolver.Free;
+  end;
+end;
+{$ENDIF}
 
 begin
   TestRunnerProgram.AddSuite(

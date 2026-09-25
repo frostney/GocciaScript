@@ -66,6 +66,7 @@ const
   { Bounds one artifact GET, connect through body. Resolution runs before any
     script, so no execution deadline covers it. }
   REMOTE_PACKAGE_FETCH_TIMEOUT_MILLISECONDS = 60000;
+  TEMPORARY_ARTIFACT_INFIX = '.goccia-download-';
   SHA256_HEX_LENGTH = 64;
   GITHUB_COMMIT_LENGTH = 40;
 
@@ -279,33 +280,21 @@ begin
     end;
 end;
 
+{ The temporary is named for this process and thread, so concurrent
+  resolutions of one package — GocciaTestRunner workers configuring their
+  engines in parallel — never share a temporary. ReplaceHostFile creates it
+  exclusively, refusing a symlink planted at that name, and renames it over
+  APath in one step, so a reader sees either the old artifact or the new one. }
 procedure WriteBytesAtomically(const APath: string; const ABytes: TBytes);
 var
-  Stream: TFileStream;
-  TemporaryPath: string;
+  ErrorMessage, TemporaryPath: string;
 begin
-  TemporaryPath := GetTempFileName(ExtractFileDir(APath), 'goc');
-  Stream := TFileStream.Create(TemporaryPath, fmCreate);
-  try
-    if Length(ABytes) > 0 then
-      Stream.WriteBuffer(ABytes[0], Length(ABytes));
-  finally
-    Stream.Free;
-  end;
-
-  try
-    if HostFileExists(APath) and not DeleteFile(APath) then
-      raise EGocciaRemotePackageError.CreateFmt(
-        'Could not replace corrupt remote package cache artifact: %s',
-        [APath]);
-    if not RenameFile(TemporaryPath, APath) then
-      raise EGocciaRemotePackageError.CreateFmt(
-        'Could not commit remote package cache artifact: %s',
-        [APath]);
-  finally
-    if HostFileExists(TemporaryPath) then
-      DeleteFile(TemporaryPath);
-  end;
+  TemporaryPath := APath + TEMPORARY_ARTIFACT_INFIX +
+    IntToStr(GetProcessID) + '-' + IntToStr(PtrUInt(GetCurrentThreadId));
+  if not ReplaceHostFile(APath, TemporaryPath, ABytes, ErrorMessage) then
+    raise EGocciaRemotePackageError.CreateFmt(
+      'Could not commit remote package cache artifact %s: %s',
+      [APath, ErrorMessage]);
 end;
 
 constructor TGocciaProviderRemotePackageResolver.Create(
