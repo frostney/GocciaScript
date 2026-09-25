@@ -14,6 +14,12 @@ describe("install commands", () => {
     );
   });
 
+  test("points Windows at the PowerShell install script", () => {
+    expect(QUICK_INSTALL_COMMANDS.windows).toBe(
+      "irm https://www.gocciascript.dev/install.ps1 | iex",
+    );
+  });
+
   test("exposes the maintained Homebrew tap as a separate option", () => {
     expect(HOMEBREW_INSTALL_COMMAND).toBe(
       "brew install frostney/tap/gocciascript",
