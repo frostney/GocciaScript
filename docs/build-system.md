@@ -674,8 +674,6 @@ RegExp embeds this generated UCD resource by default through `source/units/Gocci
 
 GitHub Actions CI is split into two workflow files:
 
-Report publication uses `.github/scripts/publish-website-report.sh` for the optional Blob token check and one website dependency installation per CI job. The workflow retains report arguments, timestamps, artifact conditions, and profile archive creation. Checked-out PR report jobs share `.github/scripts/upsert-pr-comment.js`; report builders retain their markdown and comment markers.
-
 ### `ci.yml` — Push to main + tags
 
 Job graph: `build -> test / toml-compliance / json5-compliance / test262 / awfy / jetstream / web-tooling / benchmark / cli -> artifacts/release`.
@@ -736,6 +734,8 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 **`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
+
+Report publication uses `.github/scripts/publish-website-report.sh` for the optional Blob token check and one website dependency installation per CI job. The workflow retains report arguments, timestamps, artifact conditions, and profile archive creation. Checked-out PR report jobs share `.github/scripts/upsert-pr-comment.js`; report builders retain their markdown and comment markers.
 
 ## Changelog
 
