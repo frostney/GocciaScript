@@ -61,6 +61,25 @@ describe("JSX children", () => {
     expect(el.children[0]()).toBe(42);
   });
 
+  test("expression with a template literal substitution", () => {
+    const name = "Alice";
+    const el = <div>{`hello ${name}`}</div>;
+    expect(el.children[0]).toBe("hello Alice");
+  });
+
+  test("template substitution child followed by another child", () => {
+    const name = "Alice";
+    const el = (
+      <div>
+        {`hello ${name}`}
+        <span>after</span>
+      </div>
+    );
+    expect(el.children.length).toBe(2);
+    expect(el.children[0]).toBe("hello Alice");
+    expect(el.children[1].tag).toBe("span");
+  });
+
   test("expression with string containing braces", () => {
     const el = <div>{"hello {world}"}</div>;
     expect(el.children[0]).toBe("hello {world}");

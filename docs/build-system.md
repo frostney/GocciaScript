@@ -502,6 +502,12 @@ Pass `--config=<file>` to apply it, and note that `--config` is the only way to 
 
 Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
 
+Keeping what a run produced is explicit too. `--write-back` writes the files a run changed to the host paths they were seeded from, once, after the run is over. The guest never writes to the host; it writes into its own filesystem, and this is the host deciding afterwards to materialize the result — so a program that reports and a program that fixes are the same program, and the word that makes the difference is on the host's command line. Only paths a `--seed` supplied are eligible: a file with no seeded origin is reported and skipped, a deletion is never applied, and a host target that is a symlink is skipped. Each file is written to an exclusively created temporary beside it and then replaces it in one rename, so a symlink at the temporary name is refused rather than followed and a failed write leaves the original as it was. A run that failed writes nothing. See [ADR 0119](adr/0119-host-applied-sandbox-write-back.md).
+
+```bash
+./build/GocciaSandboxRunner /fix.mjs --seed fix.mjs=/fix.mjs --seed src=/src --write-back
+```
+
 ## Build Output
 
 All compiled binaries go to the `build/` directory:

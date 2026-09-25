@@ -60,7 +60,6 @@ uses
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.Error,
@@ -75,14 +74,6 @@ uses
   Goccia.Values.SetValue,
   Goccia.Values.SymbolValue,
   Goccia.VM.Exception;
-
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
 
 type
   TPromiseCapability = record
@@ -1098,11 +1089,10 @@ begin
     Members.AddMethod(PromiseAllSettledKeyed, 1, gmkStaticMethod);
     Members.AddMethod(PromiseWithResolvers, 0, gmkStaticMethod);
     Members.AddMethod(PromiseTry, 1, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FPromiseConstructor, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FPromiseConstructor, FStaticMembers);
 
   AScope.DefineLexicalBinding(AName, FPromiseConstructor, dtLet, True);
 end;
@@ -2136,8 +2126,5 @@ begin
   { Step 7: Return promiseCapability.[[Promise]] }
   Result := Capability.Promise;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

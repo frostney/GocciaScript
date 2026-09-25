@@ -96,8 +96,11 @@ type
     function GetEnumerablePropertyEntries: TArray<TPair<string, TGocciaValue>>; virtual;
     function GetAllPropertyNames: TArray<string>; virtual;
     function GetOwnPropertyNames: TArray<string>; virtual;
+    // Ordered own string keys. Ordinary objects use ES2026 §10.1.11.1;
+    // exotic overrides preserve their own [[OwnPropertyKeys]] order.
     function GetOwnPropertyKeys: TArray<string>; virtual;
 
+    // Includes symbols and preserves the complete mixed order of proxy traps.
     function OwnPropertyKeyValues: TArray<TGocciaValue>;
     function OwnPropertyDescriptorForKey(
       const AKey: TGocciaValue): TGocciaPropertyDescriptor;
@@ -484,18 +487,18 @@ begin
     Result := TGocciaNullLiteralValue.NullValue;
 end;
 
-function OwnPropertyKeyValues(const AObject: TGocciaObjectValue): TArray<TGocciaValue>;
+function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
 var
   Count: Integer;
   I: Integer;
   StringKeys: TArray<string>;
   SymbolKeys: TArray<TGocciaSymbolValue>;
 begin
-  if AObject is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(AObject).GetOwnPropertyKeyValues);
+  if Self is TGocciaProxyValue then
+    Exit(TGocciaProxyValue(Self).GetOwnPropertyKeyValues);
 
-  StringKeys := AObject.GetOwnPropertyKeys;
-  SymbolKeys := AObject.GetOwnSymbols;
+  StringKeys := GetOwnPropertyKeys;
+  SymbolKeys := GetOwnSymbols;
   SetLength(Result, Length(StringKeys) + Length(SymbolKeys));
   Count := 0;
   for I := 0 to High(StringKeys) do
@@ -534,11 +537,6 @@ begin
     ADescriptor.Free;
     raise;
   end;
-end;
-
-function TGocciaObjectValue.OwnPropertyKeyValues: TArray<TGocciaValue>;
-begin
-  Result := Goccia.Values.ObjectValue.OwnPropertyKeyValues(Self);
 end;
 
 function TGocciaObjectValue.OwnPropertyDescriptorForKey(
