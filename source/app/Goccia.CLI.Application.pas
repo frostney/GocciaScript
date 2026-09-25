@@ -853,14 +853,12 @@ begin
   if (Extension = '.js') or (Extension = '.mjs') or
      (Extension = '.ts') then
   begin
+    { The manifest is a host file named by the host, so it always loads from
+      the filesystem. Only an engine that already has host-filesystem module
+      loading may evaluate it in place; any other engine (for example under
+      --no-host-filesystem) uses an isolated loader so the script's own
+      content provider is never widened. }
     if AEngine.ContentProvider is
-       TGocciaUnavailableModuleContentProvider then
-    begin
-      AEngine.ModuleLoader.SetContentProvider(
-        TGocciaFileSystemModuleContentProvider.Create, True);
-      AEngine.InjectModulesFromModule(APath);
-    end
-    else if AEngine.ContentProvider is
        TGocciaFileSystemModuleContentProvider then
       AEngine.InjectModulesFromModule(APath)
     else
