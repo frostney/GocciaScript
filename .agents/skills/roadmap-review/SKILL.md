@@ -6,7 +6,8 @@ description: >-
   when reviewing a roadmap, planning releases, or sequencing a backlog.
 license: Unlicense OR MIT
 compatibility: >-
-  Requires forge access; default data pulls use GitHub/gh. A CI-published
+  Requires access to the Git hosting service; default data pulls use GitHub/gh.
+  A CI-published
   conformance, coverage, or benchmark metric is used when present but is
   optional.
 ---
@@ -14,7 +15,8 @@ compatibility: >-
 # Roadmap review
 
 Produce a source-verified roadmap and throughput-anchored release plan. Analysis
-is the deliverable; forge changes are optional and confirmation-gated.
+is the deliverable; issue, pull-request, milestone, and release changes are
+optional and confirmation-gated.
 
 ## Evidence contract
 
@@ -35,7 +37,8 @@ evidence areas; otherwise work directly. Synthesize before planning.
 
 ## Workflow
 
-1. Ground the review in the evidence contract and reconcile forge counts.
+1. Ground the review in the evidence contract and reconcile issue, pull-request,
+   release, and milestone counts from the Git hosting service.
 2. Assess release cadence, merged-but-unreleased work, milestone-versus-commit
    drift, vision, scope, and non-goals.
 3. Apply measured rates to the counted backlog, with basis and confidence. Never

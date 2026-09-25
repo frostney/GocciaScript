@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, wait for, reply to, and resolve GitHub review activity."""
+"""Inspect, wait for, reply to, and resolve pull-request feedback."""
 
 from __future__ import annotations
 
@@ -25,36 +25,8 @@ from kgr_github import (  # noqa: E402
     stable_digest,
     wait_for_transition,
 )
-
-
-REVIEW_QUERY = """
-query($owner:String!,$name:String!,$number:Int!){
-  repository(owner:$owner,name:$name){
-    pullRequest(number:$number){
-      headRefOid
-      comments(first:100){nodes{id databaseId body createdAt author{login} authorAssociation} pageInfo{hasNextPage}}
-      reviews(first:100){nodes{id databaseId author{login} authorAssociation state body submittedAt commit{oid}} pageInfo{hasNextPage}}
-      reviewThreads(first:100){nodes{id isResolved comments(first:100){nodes{
-        id databaseId body createdAt author{login} authorAssociation replyTo{id}
-      } pageInfo{hasNextPage}}} pageInfo{hasNextPage}}
-      commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
-        __typename
-        ... on CheckRun{name status conclusion checkSuite{app{slug}}}
-        ... on StatusContext{context state creator{login}}
-      } pageInfo{hasNextPage}}}}}}
-    }
-  }
-}
-"""
-
-
-RESOLVE_MUTATION = """
-mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id isResolved}}}
-"""
-
-THREAD_QUERY = """
-query($thread:ID!){node(id:$thread){... on PullRequestReviewThread{id isResolved}}}
-"""
+from review_observation import review_census, terminal_evidence  # noqa: E402
+from review_mutations import reply as reply_feedback, resolve as resolve_feedback  # noqa: E402
 
 
 def repo_parts(repo: str) -> tuple[str, str]:
@@ -69,6 +41,8 @@ def load_policy(path: Path) -> dict[str, Any]:
         policy = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise WaitError(f"cannot read review policy {path}: {error}") from error
+    if not isinstance(policy, dict):
+        raise WaitError(f"review policy {path} must be an object")
     automations = policy.get("automations")
     if not isinstance(automations, list):
         raise WaitError(f"review policy {path} needs an automations array")
@@ -116,27 +90,11 @@ def review_snapshot(
     number: int,
     policy: dict[str, Any],
     include_bodies: bool = False,
+    page_size: int = 100,
 ) -> dict[str, Any]:
+    policy_available = not policy.get("unavailableReason")
     owner, name = repo_parts(repo)
-    data = gh.graphql(REVIEW_QUERY, {"owner": owner, "name": name, "number": number})
-    pull = data.get("repository", {}).get("pullRequest")
-    if not isinstance(pull, dict):
-        raise WaitError(f"pull request {repo}#{number} was not found")
-    reviews_connection = pull.get("reviews") or {}
-    threads_connection = pull.get("reviewThreads") or {}
-    comments_connection = pull.get("comments") or {}
-    contexts = (
-        pull.get("commits", {}).get("nodes", [{}])[0]
-        .get("commit", {}).get("statusCheckRollup", {}).get("contexts") or {}
-    )
-    if reviews_connection.get("pageInfo", {}).get("hasNextPage"):
-        raise WaitError("pull request has more than 100 reviews; complete pagination is required")
-    if threads_connection.get("pageInfo", {}).get("hasNextPage"):
-        raise WaitError("pull request has more than 100 review threads; complete pagination is required")
-    if comments_connection.get("pageInfo", {}).get("hasNextPage"):
-        raise WaitError("pull request has more than 100 top-level comments; complete pagination is required")
-    if contexts.get("pageInfo", {}).get("hasNextPage"):
-        raise WaitError("pull request has more than 100 check contexts; complete pagination is required")
+    census = review_census(gh, {"owner": owner, "name": name, "number": number}, page_size)
 
     threads = []
     unanswered = 0
@@ -146,11 +104,8 @@ def review_snapshot(
         for item in policy["automations"]
     }
     all_actors = set().union(*actor_sets.values()) if actor_sets else set()
-    for thread in threads_connection.get("nodes") or []:
-        thread_comments_connection = thread.get("comments") or {}
-        if thread_comments_connection.get("pageInfo", {}).get("hasNextPage"):
-            raise WaitError(f"review thread {thread.get('id')} has more than 100 comments")
-        comments = thread_comments_connection.get("nodes") or []
+    for thread in census["reviewThreads"]:
+        comments = thread["comments"]
         is_resolved = bool(thread.get("isResolved"))
         if not is_resolved:
             unresolved += 1
@@ -181,9 +136,9 @@ def review_snapshot(
         threads.append({
             "id": thread.get("id"),
             "resolved": is_resolved,
-            "automation": bool(automation_comments),
+            "automation": bool(automation_comments) if policy_available else None,
             "automationIds": automation_ids,
-            "maintainerReply": has_maintainer_reply,
+            "maintainerReply": has_maintainer_reply if policy_available else None,
             "comments": [
                 ({
                     "id": comment.get("databaseId"),
@@ -201,17 +156,14 @@ def review_snapshot(
             ],
         })
 
-    head = pull.get("headRefOid")
-    reviews = reviews_connection.get("nodes") or []
-    checks = contexts.get("nodes") or []
+    head = census["headRefOid"]
+    reviews = census["reviews"]
+    checks = census["contexts"]
     automation_states = []
     for automation in policy["automations"]:
         actors = actor_sets[automation["id"]]
         contexts_wanted = set(automation.get("check_contexts", []))
         apps_wanted = {normalize_login(value) for value in automation.get("check_app_slugs", [])}
-        terminal_conclusions = {str(value).lower() for value in automation.get("terminal_check_conclusions", [])}
-        terminal_reviews = {str(value).upper() for value in automation.get("terminal_review_states", [])}
-        markers = [str(value).lower() for value in automation.get("nonterminal_review_markers", [])]
         matching_checks = []
         for check in checks:
             if check.get("__typename") == "CheckRun":
@@ -225,26 +177,20 @@ def review_snapshot(
                 check_name = check.get("context")
                 app = normalize_login((check.get("creator") or {}).get("login"))
                 conclusion = str(check.get("state") or "").lower()
-                status = "COMPLETED"
+                status = "PENDING" if conclusion in {"pending", "expected"} else "COMPLETED"
             if check_name in contexts_wanted and (not apps_wanted or app in apps_wanted):
-                matching_checks.append({"name": check_name, "app": app, "status": status, "conclusion": conclusion})
+                matching_checks.append({"id": check.get("id"), "source": check.get("__typename"), "name": check_name, "app": app,
+                    "status": status, "conclusion": conclusion,
+                    "startedAt": check.get("startedAt") if check.get("__typename") == "CheckRun" else check.get("createdAt"),
+                    "completedAt": check.get("completedAt") if check.get("__typename") == "CheckRun" else check.get("createdAt")})
         matching_reviews = [
             review for review in reviews
             if normalize_login((review.get("author") or {}).get("login")) in actors
             and (review.get("commit") or {}).get("oid") == head
         ]
-        review_terminal = any(
-            str(review.get("state") or "").upper() in terminal_reviews
-            and not any(marker in str(review.get("body") or "").lower() for marker in markers)
-            for review in matching_reviews
-        )
-        check_terminal = any(
-            check["status"] == "COMPLETED" and check["conclusion"] in terminal_conclusions
-            for check in matching_checks
-        )
         automation_states.append({
             "id": automation["id"],
-            "terminal": check_terminal or review_terminal,
+            **terminal_evidence(matching_checks, matching_reviews, automation),
             "checks": matching_checks,
             "reviews": [
                 ({
@@ -264,10 +210,8 @@ def review_snapshot(
             ],
         })
     top_level = []
-    for comment in comments_connection.get("nodes") or []:
+    for comment in census["comments"]:
         author = normalize_login((comment.get("author") or {}).get("login"))
-        if author not in all_actors:
-            continue
         item = {
             "id": comment.get("databaseId"),
             "nodeId": comment.get("id"),
@@ -288,7 +232,7 @@ def review_snapshot(
 
     finding_surfaces = []
     for thread in threads:
-        if thread["resolved"] and (
+        if policy_available and thread["resolved"] and (
             not thread["automation"] or thread["maintainerReply"]
         ):
             continue
@@ -301,17 +245,6 @@ def review_snapshot(
             "maintainerReply": thread["maintainerReply"],
             "comments": thread["comments"],
         })
-    for automation in automation_states:
-        for review in automation["reviews"]:
-            if not review["hasBody"]:
-                continue
-            finding_surfaces.append({
-                "kind": "review",
-                "id": review["nodeId"],
-                "headBinding": "exact-head",
-                "automationIds": [automation["id"]],
-                "review": review,
-            })
     for comment in top_level:
         if not comment["hasBody"]:
             continue
@@ -322,21 +255,50 @@ def review_snapshot(
             "automationIds": comment["automationIds"],
             "comment": comment,
         })
+    # Review bodies belong to the feedback census even when their author is not
+    # registered as an automation. Do not drop a human's exact-head finding.
+    for review in reviews:
+        if ((review.get("commit") or {}).get("oid") != head
+                or (not str(review.get("body") or "").strip()
+                    and review.get("state") != "CHANGES_REQUESTED")):
+            continue
+        item = {
+            "id": review.get("databaseId"), "nodeId": review.get("id"),
+            "author": (review.get("author") or {}).get("login"),
+            "state": review.get("state"), "submittedAt": review.get("submittedAt"),
+            "hasBody": bool(str(review.get("body") or "").strip()),
+        }
+        item.update({"body": review.get("body")} if include_bodies else
+                    {"bodyDigest": stable_digest(str(review.get("body") or ""))})
+        finding_surfaces.append({
+            "kind": "review", "id": review.get("id"), "headBinding": "exact-head",
+            "automationIds": sorted(
+                automation_id for automation_id, actors in actor_sets.items()
+                if normalize_login((review.get("author") or {}).get("login")) in actors
+            ),
+            "review": item,
+        })
     return {
         "head": head,
+        "policyAvailable": policy_available,
+        "policyError": policy.get("unavailableReason"),
         "automations": automation_states,
+        "checks": checks,
         "unresolvedThreads": unresolved,
-        "unansweredAutomationThreads": unanswered,
+        "unansweredAutomationThreads": unanswered if policy_available else None,
         "findingSurfaceCount": len(finding_surfaces),
         "findingSurfaces": finding_surfaces,
         "threads": threads,
-        "topLevelAutomationComments": top_level,
+        "topLevelAutomationComments": [item for item in top_level if item["automationIds"]],
+        "unclassifiedTopLevelComments": [item for item in top_level if not item["automationIds"]],
     }
 
 
 def classify(expected_head: str, observation: dict[str, Any]) -> tuple[str, str]:
     if observation.get("head") != expected_head:
         return "invalidated", f"expected head {expected_head}, observed {observation.get('head')}"
+    if observation.get("policyAvailable") is False:
+        return "waiting", "current feedback was inspected but review policy is unavailable; completion is unverified"
     automations_terminal = all(
         item.get("terminal") for item in observation.get("automations", [])
     )
@@ -350,8 +312,8 @@ def classify(expected_head: str, observation: dict[str, Any]) -> tuple[str, str]
         and observation.get("unresolvedThreads") == 0
         and observation.get("unansweredAutomationThreads") == 0
     ):
-        return "satisfied", "review convergence reached"
-    return "waiting", "review convergence is pending"
+        return "satisfied", "review gates satisfied"
+    return "waiting", "review gates are pending"
 
 
 def review_transition_key(observation: dict[str, Any]) -> dict[str, Any]:
@@ -369,15 +331,19 @@ def review_transition_key(observation: dict[str, Any]) -> dict[str, Any]:
                 "terminal": automation.get("terminal"),
                 "completedChecks": completed_checks,
                 "reviews": automation.get("reviews", []),
+                "latestEvidence": automation.get("latestEvidence", []),
             }
         )
     return {
         "head": observation.get("head"),
+        "policyAvailable": observation.get("policyAvailable"),
         "automations": automations,
+        "findingSurfaces": observation.get("findingSurfaces", []),
         "threads": observation.get("threads", []),
         "topLevelAutomationComments": observation.get(
             "topLevelAutomationComments", []
         ),
+        "unclassifiedTopLevelComments": observation.get("unclassifiedTopLevelComments", []),
     }
 
 
@@ -391,6 +357,7 @@ def base_parser() -> argparse.ArgumentParser:
         sub.add_argument("--head", required=True)
         sub.add_argument("--policy", type=Path, default=Path(".github/delivery/review-automations.json"))
         sub.add_argument("--json", action="store_true")
+        sub.add_argument("--page-size", type=int, choices=range(1, 101), default=100, metavar="1..100")
         if name == "wait":
             sub.add_argument("--deadline", required=True)
             sub.add_argument("--interval", type=float, default=30.0)
@@ -403,6 +370,7 @@ def base_parser() -> argparse.ArgumentParser:
     reply.add_argument("--body", required=True)
     reply.add_argument("--operation-id", required=True)
     reply.add_argument("--json", action="store_true")
+    reply.add_argument("--state", type=Path)
     resolve = subparsers.add_parser("resolve")
     resolve.add_argument("--repo", required=True)
     resolve.add_argument("--pr", type=int, required=True)
@@ -419,10 +387,15 @@ def main() -> int:
     try:
         gh = Gh(metrics)
         if args.command in {"inspect", "wait"}:
-            policy = load_policy(args.policy)
+            try:
+                policy = load_policy(args.policy)
+            except WaitError as error:
+                if args.command != "inspect":
+                    raise
+                policy = {"automations": [], "unavailableReason": str(error)}
             identity["policyDigest"] = stable_digest(policy)
             observe = lambda: review_snapshot(
-                gh, args.repo, args.pr, policy, include_bodies=args.command == "inspect"
+                gh, args.repo, args.pr, policy, include_bodies=args.command == "inspect", page_size=args.page_size
             )
             if args.command == "inspect":
                 observation = observe()
@@ -446,49 +419,19 @@ def main() -> int:
                         change_precedes_terminal=True,
                     )
         elif args.command == "reply":
-            if not args.operation_id.replace("-", "").replace("_", "").replace(".", "").replace(":", "").isalnum():
-                raise WaitError("--operation-id may contain letters, digits, dot, colon, dash, and underscore")
-            owner, name = repo_parts(args.repo)
-            head_data = gh.graphql(
-                "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid}}}",
-                {"owner": owner, "name": name, "number": args.pr},
-            )
-            observed_head = head_data.get("repository", {}).get("pullRequest", {}).get("headRefOid")
-            if observed_head != args.head:
-                output = result_envelope("review-reply", "invalidated", identity, {"head": observed_head}, metrics, f"expected head {args.head}, observed {observed_head}")
-                emit(output, args.json)
-                return 0
-            marker = f"<!-- known-good-route-operation:{args.operation_id} -->"
-            pages = gh.rest_pages(f"repos/{args.repo}/pulls/{args.pr}/comments?per_page=100")
-            comments = [item for page in pages for item in page]
-            existing = next((item for item in comments if marker in str(item.get("body") or "")), None)
-            if existing:
-                observation = {"commentId": existing.get("id"), "operationId": args.operation_id, "created": False}
-            else:
-                created = gh.rest(f"repos/{args.repo}/pulls/{args.pr}/comments/{args.comment_id}/replies", "POST", {"body": f"{args.body}\n\n{marker}"})
-                observation = {"commentId": created.get("id"), "operationId": args.operation_id, "created": True}
-            output = result_envelope("review-reply", "satisfied", identity, observation, metrics, "inline reply present")
+            repo_parts(args.repo)
+            state_path = args.state or default_state_path("review-reply", {
+                "repo": args.repo, "pr": args.pr, "operationId": args.operation_id,
+            })
+            mutation = reply_feedback(gh, args.repo, args.pr, args.head, args.comment_id,
+                                      args.body, args.operation_id, state_path)
+            output = result_envelope("review-reply", mutation["state"], identity,
+                                     mutation["observation"], metrics, mutation["reason"])
         else:
-            owner, name = repo_parts(args.repo)
-            head_data = gh.graphql(
-                "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid}}}",
-                {"owner": owner, "name": name, "number": args.pr},
-            )
-            observed_head = head_data.get("repository", {}).get("pullRequest", {}).get("headRefOid")
-            if observed_head != args.head:
-                output = result_envelope("review-resolve", "invalidated", identity, {"head": observed_head}, metrics, f"expected head {args.head}, observed {observed_head}")
-                emit(output, args.json)
-                return 0
-            existing = gh.graphql(THREAD_QUERY, {"thread": args.thread_id}).get("node") or {}
-            if existing.get("isResolved"):
-                thread = existing
-            else:
-                data = gh.graphql(RESOLVE_MUTATION, {"thread": args.thread_id})
-                thread = data.get("resolveReviewThread", {}).get("thread") or {}
-            observation = {"threadId": thread.get("id"), "resolved": thread.get("isResolved")}
-            if not observation["resolved"]:
-                raise WaitError(f"thread {args.thread_id} was not resolved")
-            output = result_envelope("review-resolve", "satisfied", identity, observation, metrics, "thread resolved")
+            repo_parts(args.repo)
+            mutation = resolve_feedback(gh, args.repo, args.pr, args.head, args.thread_id)
+            output = result_envelope("review-resolve", mutation["state"], identity,
+                                     mutation["observation"], metrics, mutation["reason"])
         emit(output, args.json)
         return 0
     except WaitError as error:

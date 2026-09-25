@@ -8,13 +8,15 @@ description: >-
 license: Unlicense OR MIT
 compatibility: >-
   Requires git; pull-request operations also require the GitHub CLI (gh) and
-  network access.
+  network access. Protected native stack publication also requires Python 3.11+
+  and a POSIX shell.
 ---
 
 # Git workflow
 
-Apply these defaults unless the user explicitly overrides them in the same
-turn. A git request authorizes only the repository and forge state required for
+Apply these defaults unless the user has explicitly overridden them in the
+active workstream. Preserve that authority across turns until changed; a new
+repository or operation needs its own scope. A git request authorizes only the repository and GitHub state required for
 that operation.
 
 - Resolve the base from the remote default; never hardcode `main`.
@@ -38,7 +40,11 @@ that operation.
 - When entering an existing focused branch or worktree, merge the freshly
   fetched remote default before editing.
 - Merge the remote base to update a branch. Never rebase.
-- Stop and report merge conflicts; do not bypass or rewrite them.
+- During an authorized PR update, resolve conflicts whose intended behavior is
+  established by the selected change and current base. Preserve both sides'
+  required behavior, regenerate generated files with the project tool, and
+  validate the result. Pause when resolution requires a material unresolved
+  choice. During a new-work preflight, report conflicts before implementation.
 - Never amend commits. Add a new commit for every correction.
 - Never force-push. Stop if a plain push is rejected by divergent history.
 - Stage only relevant files and exclude secrets or unrelated local work.
@@ -60,7 +66,7 @@ Use the official `gh stack` workflow when the user selects a stack, when work
 has a real dependency chain, or when a confirmed large issue is deliberately
 split into cumulative, independently reviewable layers. Do not stack unrelated
 work. Each layer must have one clear claim, a bounded diff, its own validation,
-and an explicit subset of the acceptance criteria.
+and an explicit subset of the requirements.
 
 Read [references/github-stacks.md](references/github-stacks.md) before creating,
 syncing, pushing, submitting, reviewing, or merging a stack. That reference is
