@@ -32,8 +32,8 @@ Use the following files when the topics apply:
 | `decision-log.md` | Append-only decisions |
 | `spikes/` | Immutable point-in-time investigations |
 
-Every docs file except the decision log and root entry points starts with an
-`## Executive Summary` containing three to six bullets. Each topic has one
+Use a short summary when a long document benefits from one; small documents
+can start directly with their subject. Each topic has one
 authoritative home; other documents link to it. Do not rewrite old decision-log
 entries or spikes to match later reality.
 
@@ -41,7 +41,7 @@ entries or spikes to match later reality.
 
 - `VISION.md`: purpose, audience, durable technical direction, and explicit
   non-goals.
-- `DEFINITION_OF_READY.md`: outcome, scope, acceptance criteria, constraints,
+- `DEFINITION_OF_READY.md`: outcome, scope, required behavior, constraints,
   and resolved dependencies.
 - `DEFINITION_OF_DONE.md`: implementation, meaningful tests, current docs,
   passing project gate, review evidence, and required handoff artifacts.

@@ -1,6 +1,6 @@
 # Built-in Objects
 
-<!-- doc-length-limit: 1000 -->
+<!-- doc-length-limit: 1050 -->
 
 *For contributors adding or modifying built-in objects, and for script authors looking up available APIs.*
 
@@ -818,6 +818,65 @@ const out = await $`goccia --sandbox --seed /child.js --seed /lib=/lib --diff /c
 ```
 
 Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, `--diff-metadata`, and `--diff-format json|unified`. `--diff-metadata` implies a diff. Child diffs are appended to command stdout only when a diff is requested.
+
+### AST — experimental (`Goccia.Builtins.AST.pas`)
+
+Only available when the host passes `--experimental-ast`. `goccia:ast` makes
+the parse result reachable from JavaScript, so a tool that asks questions
+about source — a lint rule, a codemod, a metric — can be a GocciaScript
+program instead of a Pascal one. It is a read: there is no write-back.
+
+```javascript
+import { parse } from "goccia:ast";
+
+const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" });
+```
+
+| Option | Meaning |
+|--------|---------|
+| `jsx` | Run the JSX preprocessor before parsing (default `false`) |
+| `module` | Parse as module source rather than script source (default `true`) |
+| `fileName` | Name used in a syntax error's position (default `<source>`) |
+
+The *language* is the host's, not a second one configured here: the
+compatibility flags in force for the run are the ones `parse` accepts, exactly
+as `eval` and the `Function` constructor inherit them. A file that needs
+`--compat-asi` to parse needs the host to have been given `--compat-asi`.
+
+`parse` returns `{ source, root, comments }`:
+
+| Property | Description |
+|----------|-------------|
+| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
+| `root` | The `Program` node |
+| `comments` | Every comment, in source order |
+
+Every node is `{ kind, start, end, loc, children }`, and every comment is
+`{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
+`start` and `end` are zero-based offsets into `source`, `end` exclusive;
+`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
+
+The tree holds statements only — no expressions, names, or literal values.
+`children` are the statements nested immediately beneath a node, reached
+through expressions where it has to be, so the block of an arrow function
+assigned to a `const` is a child of that declaration. Three kinds own a
+statement *list*, whose children are siblings of one another: `Program`,
+`BlockStatement`, and `SwitchCase`.
+
+A syntax error in the parsed text is a `SyntaxError` naming its position; it
+does not abort the caller's own run unless the caller lets it.
+
+With `jsx` on, the text is rewritten before it is parsed, but nothing in the
+result is measured in that rewrite: offsets and positions alike are mapped back
+to the file as written, so `source.slice(node.start, node.end)` is the node's
+own text. Comments the transformer removes — one between JSX attributes, or a
+child container holding nothing else — are not in `comments`, because the
+parser never sees them.
+
+See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
+exposes, what it withholds, and why, and
+[ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
+system.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

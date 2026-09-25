@@ -125,3 +125,7 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0113 — Deterministic virtual timer queue](0113-deterministic-virtual-timer-queue.md)
 - [0114 — Unmanaged execution-context records](0114-unmanaged-execution-context-records.md)
 - [0115 — Immutable Blob history snapshots](0115-immutable-blob-history-snapshots.md)
+- [0116 — Bounded string prefixes with reserved materialization capacity](0116-bounded-string-prefixes.md)
+- [0117 — A JavaScript-visible AST module exposes statement structure, not the AST](0117-javascript-visible-ast-module.md)
+- [0118 — A parse result is measured in the file, not in what the parser was handed](0118-original-file-source-ranges.md)
+- [0119 — A sandbox run is materialized by the host, on the host's command line](0119-host-applied-sandbox-write-back.md)

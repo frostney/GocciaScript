@@ -185,6 +185,7 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     function GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor; override;
     function GetAllPropertyNames: TArray<string>; override;
+    function GetOwnPropertyKeys: TArray<string>; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function DeleteProperty(const AName: string): Boolean; override;
     function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; virtual;
@@ -2504,6 +2505,11 @@ begin
       AppendName(OwnNames[I]);
 
   SetLength(Result, Count);
+end;
+
+function TGocciaClassValue.GetOwnPropertyKeys: TArray<string>;
+begin
+  Result := GetAllPropertyNames;
 end;
 
 function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;

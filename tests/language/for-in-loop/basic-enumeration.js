@@ -108,6 +108,28 @@ test("array-index property names are ordered before other string keys", () => {
   expect(keys).toEqual(["0", "1", "2", "p2", "p4", "p1"]);
 });
 
+test("array-index boundaries keep non-index strings in creation order", () => {
+  const obj = { "4294967295": 1, "01": 2, "-0": 3, "4294967294": 4, "2": 5, "0": 6 };
+  const keys = [];
+  for (const key in obj) keys.push(key);
+  expect(keys).toEqual(["0", "2", "4294967294", "4294967295", "01", "-0"]);
+});
+
+test("proxy enumeration preserves the ownKeys trap's string order", () => {
+  const symbol = Symbol("hidden from for-in");
+  let calls = 0;
+  const proxy = new Proxy({ 2: "two", 1: "one", label: "label", [symbol]: true }, {
+    ownKeys: () => {
+      calls++;
+      return ["label", symbol, "2", "1"];
+    },
+  });
+  const keys = [];
+  for (const key in proxy) keys.push(key);
+  expect(keys).toEqual(["label", "2", "1"]);
+  expect(calls).toBe(1);
+});
+
 test("lexical loop head names are in TDZ while evaluating the source", () => {
   let key = "outer";
   expect(() => {

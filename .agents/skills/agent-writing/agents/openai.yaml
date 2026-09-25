@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Writing"
+  short_description: "Write concise, direct agent responses."
+  default_prompt: "Apply the agent-writing rules to this response."

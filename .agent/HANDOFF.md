@@ -1,6 +1,63 @@
 # Handoff
 
-Updated: 2026-08-26 (wave 2 prod-dispatch + JUMP_IF_NOT_LT merged)
+Updated: 2026-09-05 (audit string accumulation optimization)
+
+## September audit: bounded string prefixes
+
+The accepted string implementation is `2128fc2df364098a1f7ffeebbac5e1422a369e2c`
+on `codex/audit-string-accumulators`, against baseline
+`f33d9c6a061e6cb61dce65ffcf8514da1c051870`. This is a Goccia-vs-Goccia
+comparison. Local macOS arm64 reproduction measured the append and JetStream
+Base64 worker kernels below; no new QuickJS gap was measured there. Retained
+JetStream CI on Linux x64 reported an approximate 5.2% `ai-astar` reduction
+(main 1.78 → PR 1.69) that remains pending local reproduction before treating
+it as a merge or release signal. The August wave sections below retain their
+original historical context.
+
+The bytecode primitive-string concatenation paths retain immutable prefix
+links bounded at 32. Every append reserves its eventual materialization capacity,
+so reading `Value` does not collect or run guest code. Aliases and UTF-16 contents
+remain intact; ordinary literals remain flat. Under memory pressure, flattening
+the parent allows collection of unaliased intermediate prefixes. See
+[ADR 0116](../docs/adr/0116-bounded-string-prefixes.md) for the representation,
+measured limits, upstream pins, and profile evidence.
+
+Measurements used FPC 3.2.2 production loaders on macOS 26.5.2 arm64, bytecode
+mode, a 256 MiB GC budget, and `/tmp/gocciascript-perf-gate.lock`. Each order
+had one discarded warmup and seven interleaved measured samples, followed by
+reverse order. Engine execution medians in milliseconds were:
+
+| Workload | Baseline AB / BA | Candidate AB / BA |
+|---|---:|---:|
+| Append, 8,000 iterations | 473.3 / 461.9 | 25.3 / 25.9 |
+| JetStream Base64 worker kernel | 1432.0 / 1432.7 | 1111.3 / 1112.3 |
+
+Process CPU timing confirmed both target and transfer improvements. The Json
+parser guard initially varied by order; a five-parse invocation and seven ABBA
+blocks (14 measured samples per binary) found no repeatable regression. No Json
+speedup or whole-JetStream score is claimed. Conservative reserved capacity still
+reaches approximately 240 MiB and seven collections in the append probe; native
+heap allocation reported at completion falls from approximately 109 MiB to 5 MiB.
+Frequent reads force materialization, and bounded prefixes do not make arbitrary
+repeated appends asymptotically linear.
+
+Rejected: reserving flat capacity during `Value` reads. That design could collect
+an unrelated temporary operand during a primitive comparison. Its patch and
+reason are retained with the experiment, and it is absent from the accepted code.
+
+Validation passed in both executors and both production/development builds:
+12,820 tests and 28,654 assertions per run, plus 20 checked native primitive tests,
+formatting, and ordinary hooks. The independent Base64 checksum and AWFY Json's
+upstream verification passed. No other runtime candidate was combined with this
+change, and isolated percentages must not be added to predict a combined result.
+
+Artifacts are retained in the string-accumulators worktree under `tmp/audit/`:
+`string-paired.json`, `string-json-confirmation.json`, `candidate-metadata.json`,
+`baseline-host-sample-current.txt`, and baseline/candidate VM profile reports.
+The measured production candidate SHA-256 is
+`93a7f3c58a33feeec5be0e29516f337662a0257af74f52985e5861e6d61ba183`.
+The remaining representation cost is conservative reserved capacity and forced
+materialization on content reads; profile a real workload before changing either.
 
 ## Experiment
 
@@ -182,3 +239,61 @@ Json 24.96, Permute 21.86, Sieve 21.63, CD 20.41, Bounce 19.94, Havlak 19.09, To
 - Value caches (ADR 0081)
 - String interning on `RuntimeCopy`
 - July 2026 pooled-collection call bypass (ADR 0089)
+
+## September audit: array callback roots
+
+Recorded 2026-09-05. Accepted runtime commit
+`457e2f89f8a6b9fe671b253071427bfcf4fd048e` on
+`codex/audit-array-callback-overhead` starts from
+`f33d9c6a061e6cb61dce65ffcf8514da1c051870`. The earlier sections describe the
+August wave. This experiment compares Goccia production binaries; it does not
+remeasure the QuickJS gap or establish a result on another architecture.
+
+Array callback dispatch now relies on the live argument containers specified by
+[ADR 0105](../docs/adr/0105-argument-collections-root-their-elements.md).
+The enclosing builtin arguments retain the callback and receiver; specialized
+callback arguments trace the element, index, array, and reduce accumulator.
+Nested calls borrow a different collection. The per-call dynamic root array and
+individual temporary-root hash operations are removed. Generator continuation
+restoration remains in its existing exception-safe scope.
+
+Measurements used FPC 3.2.2 production builds on macOS arm64, bytecode mode, a
+256 MiB limit, and the exclusive performance lock. The target and initial
+NBody/Richards guards used one discarded warmup and seven measured samples per
+binary in each AB/BA order. Full upstream NBody used one warmup per binary and
+four ABBA blocks, giving eight measured samples per binary. Every result passed
+its independent verifier. AWFY was pinned to
+`74306fec151070fd07157cefeacf19e7e0bcdc89`.
+
+| Workload | Baseline execution | Candidate execution |
+| --- | ---: | ---: |
+| 128-value map/reduce, 1,000 repetitions, AB median | 376.306 ms | 296.214 ms |
+| Same target, BA median | 378.230 ms | 296.752 ms |
+| Upstream NBody, 250,000 iterations, ABBA median | 17.014174 s | 16.523542 s |
+
+Target execution improved about 21%. Full NBody execution improved 2.88%; child
+process CPU, measured separately, fell from 16.922659 s to 16.484344 s (2.59%).
+CPU ranges were disjoint: baseline 16.902593–17.301686 s and candidate
+16.442337–16.585410 s. All four balanced blocks improved CPU. NBody execution
+ranges overlapped during transient scheduling delays. Richards remained a
+neutral guard; no suite score or Richards improvement is claimed.
+
+Rejected predecessors replaced all roots with an active frame (v1), then kept
+only callback/receiver frame roots (v2). Both improved the focused probe but
+failed to establish representative transfer. Their measurements are retained;
+neither implementation is part of the accepted commit. Source review confirmed
+all 26 callback dispatch sites retain the owning argument collections.
+
+Production and checked development builds each passed 12,819 tests and 28,580
+assertions in both executors. Focused Array/callback suites passed 592 tests and
+1,170 assertions per executor. Native GC tests passed 12/12, formatter checks
+passed all 463 files, and ordinary hooks passed. The measured source is unchanged.
+No other optimization was combined here; do not add isolated percentages.
+
+The array-callbacks worktree retains raw evidence under `tmp/audit/`:
+`comparison-no-extra-roots-v3.json`, `nbody-full-no-extra-roots-v3.json`,
+`acceptance-no-extra-roots-v3.json`, baseline VM/host profiles, and all four full
+correctness reports. The production candidate SHA-256 is
+`d079ad3b6427504334704df9dcdf65307da314b324d4a892baf276741f6c7874`.
+Index boxing and result allocation remain unchanged; profile them before a
+further runtime change.

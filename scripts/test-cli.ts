@@ -2123,6 +2123,17 @@ type ParkedGateCase = {
   completedGuard: string;
 };
 
+// Bytecode string + (#1235) may leave `doc` as a deferred concatenation that
+// still charges its prefix. Parking against that live set, then reading Value
+// inside the builtin, Flattens and lets the gate's collect reclaim the prefix —
+// expanding slack by roughly the document size. On i386 that reclaimed headroom
+// covers every property-map doubling a 4000-key parse requests, so every slack
+// rung completes and the probe proves nothing. Force a content read (and let
+// parking's opening Goccia.gc() drop the orphaned prefix) so the parked slack
+// matches the live set the builtin actually sees.
+const materializeParkedDoc = (buildExpr: string): string =>
+  `const doc = ${buildExpr};\ndoc.charCodeAt(0);`;
+
 // Source shared by the parse and stringify halves. Nothing but the call itself
 // runs inside the try — not even the success guard — because an assertion that
 // allocates inside the region under test can be the allocation that decides
@@ -2364,22 +2375,27 @@ const assertParkedGateOutcome = (
       {
         label: "JSON.parse",
         imports: [],
-        setup:
-          'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}";',
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}"',
+        ),
         call: "JSON.parse(doc)",
         completedGuard: "produced !== undefined",
       },
       {
         label: "JSON5.parse",
         imports: ['import * as JSON5NS from "goccia:json5"; const JSON5 = JSON5NS.JSON5 ?? JSON5NS;'],
-        setup: 'const doc = "{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join(",") + "}";',
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join(",") + "}"',
+        ),
         call: "JSON5.parse(doc)",
         completedGuard: "produced !== undefined",
       },
       {
         label: "YAML.parse",
         imports: ['import * as YAMLNS from "goccia:yaml"; const YAML = YAMLNS.YAML ?? YAMLNS;'],
-        setup: 'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join("\\n") + "\\n";',
+        setup: materializeParkedDoc(
+          'Array.from({ length: 4000 }, (_, i) => "k" + i + ": true").join("\\n") + "\\n"',
+        ),
         call: "YAML.parse(doc)",
         completedGuard: "produced !== undefined",
       },
@@ -2389,15 +2405,18 @@ const assertParkedGateOutcome = (
         // One line holding the whole wide object: the map that has to double is
         // per record, so splitting it across lines would only build 4000 small
         // maps that never reach the gate.
-        setup:
-          'const doc = "{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}\\n";',
+        setup: materializeParkedDoc(
+          '"{" + Array.from({ length: 4000 }, (_, i) => \'"k\' + i + \'":true\').join(",") + "}\\n"',
+        ),
         call: "JSONL.parse(doc)",
         completedGuard: "produced !== undefined",
       },
       {
         label: "TOML.parse",
         imports: ['import * as TOMLNS from "goccia:toml"; const TOML = TOMLNS.TOML ?? TOMLNS;'],
-        setup: 'const doc = Array.from({ length: 4000 }, (_, i) => "k" + i + " = true").join("\\n") + "\\n";',
+        setup: materializeParkedDoc(
+          'Array.from({ length: 4000 }, (_, i) => "k" + i + " = true").join("\\n") + "\\n"',
+        ),
         call: "TOML.parse(doc)",
         completedGuard: "produced !== undefined",
       },

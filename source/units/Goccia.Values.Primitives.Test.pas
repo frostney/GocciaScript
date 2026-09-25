@@ -23,6 +23,11 @@ type
     procedure TestStringValuePreservesUnicode;
     procedure TestStringValueAccountsForBackingStore;
     procedure TestStringValueMemoryLimitRaisesOnce;
+    procedure TestStringConcatenationPreservesAliases;
+    procedure TestStringConcatenationTracesPrefixes;
+    procedure TestStringConcatenationMaterializationDoesNotCollect;
+    procedure TestStringConcatenationMemoryLimit;
+    procedure TestStringConcatenationLimitedAccumulator;
     procedure TestNumberValue;
     procedure TestNumberValueNaN;
     procedure TestNumberValueInfinity;
@@ -46,6 +51,16 @@ begin
     TestStringValueAccountsForBackingStore);
   Test('String value memory limit raises without recursion',
     TestStringValueMemoryLimitRaisesOnce);
+  Test('String concatenation preserves aliases and UTF-16 contents',
+    TestStringConcatenationPreservesAliases);
+  Test('String concatenation traces prefixes and releases backing stores',
+    TestStringConcatenationTracesPrefixes);
+  Test('String concatenation materialization never collects',
+    TestStringConcatenationMaterializationDoesNotCollect);
+  Test('String concatenation reserves materialization capacity',
+    TestStringConcatenationMemoryLimit);
+  Test('String accumulator drops deferred capacity under memory pressure',
+    TestStringConcatenationLimitedAccumulator);
   Test('Number value', TestNumberValue);
   Test('NaN value', TestNumberValueNaN);
   Test('Infinity value', TestNumberValueInfinity);
@@ -169,6 +184,185 @@ begin
     Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
   finally
     GC.MaxBytes := OldMaxBytes;
+    GC.Collect;
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestStringConcatenationPreservesAliases;
+var
+  AliasValue, CopiedValue, Value: TGocciaStringLiteralValue;
+  Expected, Suffix: string;
+  I: Integer;
+begin
+  Expected := StringOfChar(' ', 256);
+  AliasValue := TGocciaStringLiteralValue.Create(Expected);
+  Value := TGocciaStringLiteralValue.Concatenate(AliasValue, '12');
+  Expect<Double>(Value.ToNumberLiteral.Value).ToBe(12);
+  Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  Expected := Expected + '12';
+  for I := 1 to 80 do
+  begin
+    Suffix := #$D83D + #$DE80 + #$D800 + IntToStr(I);
+    Value := TGocciaStringLiteralValue.Concatenate(Value, Suffix);
+    Expected := Expected + Suffix;
+  end;
+  CopiedValue := TGocciaStringLiteralValue(Value.RuntimeCopy);
+  Expect<string>(CopiedValue.Value).ToBe(Expected);
+  Expect<string>(Value.Value).ToBe(Expected);
+  Expect<string>(AliasValue.Value).ToBe(StringOfChar(' ', 256));
+  Expect<string>(TGocciaStringLiteralValue.Concatenate(Value, '').Value).ToBe(Expected);
+end;
+
+procedure TTestPrimitives.TestStringConcatenationTracesPrefixes;
+var
+  BaselineBytes: Int64;
+  Expected, FlatValue: string;
+  GC: TGarbageCollector;
+  I: Integer;
+  OwnsGarbageCollector: Boolean;
+  Value: TGocciaStringLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  try
+    GC.Collect;
+    BaselineBytes := GC.BytesAllocated;
+    Expected := StringOfChar('x', 256);
+    Value := TGocciaStringLiteralValue.Create(Expected);
+    for I := 1 to 20 do
+    begin
+      Value := TGocciaStringLiteralValue.Concatenate(Value, #$D800);
+      Expected := Expected + #$D800;
+    end;
+    GC.AddRootObject(Value);
+    try
+      GC.Collect;
+      FlatValue := Value.Value;
+      Expect<Integer>(Length(FlatValue)).ToBe(276);
+      Expect<Integer>(Ord(FlatValue[276])).ToBe($D800);
+      Expect<string>(FlatValue).ToBe(Expected);
+      GC.Collect;
+      Expect<Boolean>(GC.BytesAllocated >= BaselineBytes + 276 * SizeOf(Char)).ToBe(True);
+    finally
+      GC.RemoveRootObject(Value);
+      GC.Collect;
+    end;
+    Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+  finally
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestStringConcatenationMaterializationDoesNotCollect;
+var
+  Flattened: string;
+  GC: TGarbageCollector;
+  OldMaxBytes: Int64;
+  CollectionsBefore: Integer;
+  OwnsGarbageCollector: Boolean;
+  PeerValue, Value: TGocciaStringLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  OldMaxBytes := GC.MaxBytes;
+  Value := TGocciaStringLiteralValue.Concatenate(
+    TGocciaStringLiteralValue.Create(StringOfChar('x', 256)), 'suffix');
+  GC.AddRootObject(Value);
+  try
+    GC.Collect;
+    PeerValue := TGocciaStringLiteralValue.Create('unrooted peer');
+    GC.MaxBytes := GC.BytesAllocated + 1;
+    CollectionsBefore := GC.TotalCollections;
+    Flattened := Value.Value;
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+    Expect<string>(PeerValue.Value).ToBe('unrooted peer');
+    Expect<string>(Flattened).ToBe(StringOfChar('x', 256) + 'suffix');
+    Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
+    GC.MaxBytes := OldMaxBytes;
+    GC.Collect;
+    Expect<string>(Value.Value).ToBe(StringOfChar('x', 256) + 'suffix');
+  finally
+    GC.MaxBytes := OldMaxBytes;
+    GC.RemoveRootObject(Value);
+    GC.Collect;
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestStringConcatenationMemoryLimit;
+var
+  GC: TGarbageCollector;
+  OldMaxBytes: Int64;
+  OwnsGarbageCollector, RaisedMemoryLimit: Boolean;
+  Prefix: TGocciaStringLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  OldMaxBytes := GC.MaxBytes;
+  Prefix := TGocciaStringLiteralValue.Create(StringOfChar('x', 256));
+  GC.AddRootObject(Prefix);
+  try
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + 128;
+    RaisedMemoryLimit := False;
+    try
+      TGocciaStringLiteralValue.Concatenate(Prefix, 'y');
+    except
+      on E: TGocciaThrowValue do
+        RaisedMemoryLimit := True;
+    end;
+    Expect<Boolean>(RaisedMemoryLimit).ToBe(True);
+    Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
+    Expect<string>(Prefix.Value).ToBe(StringOfChar('x', 256));
+  finally
+    GC.MaxBytes := OldMaxBytes;
+    GC.RemoveRootObject(Prefix);
+    GC.Collect;
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestStringConcatenationLimitedAccumulator;
+var
+  GC: TGarbageCollector;
+  I: Integer;
+  OldMaxBytes: Int64;
+  OwnsGarbageCollector: Boolean;
+  NextValue, Value: TGocciaStringLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  OldMaxBytes := GC.MaxBytes;
+  Value := TGocciaStringLiteralValue.Create(StringOfChar('x', 1024));
+  GC.AddRootObject(Value);
+  try
+    GC.Collect;
+    GC.MaxBytes := GC.BytesAllocated + 16 * 1024;
+    for I := 1 to 80 do
+    begin
+      NextValue := TGocciaStringLiteralValue.Concatenate(Value, 'x');
+      GC.AddRootObject(NextValue);
+      GC.RemoveRootObject(Value);
+      Value := NextValue;
+    end;
+    Expect<string>(Value.Value).ToBe(StringOfChar('x', 1104));
+    Expect<Boolean>(GC.BytesAllocated <= GC.MaxBytes).ToBe(True);
+  finally
+    GC.MaxBytes := OldMaxBytes;
+    GC.RemoveRootObject(Value);
     GC.Collect;
     if OwnsGarbageCollector then
       TGarbageCollector.Shutdown;
