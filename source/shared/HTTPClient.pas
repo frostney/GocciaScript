@@ -64,6 +64,7 @@ uses
   WinSock2,
   {$ENDIF}
   CriticalSections,
+  NetworkAddress,
   TextEncoding,
   TimingUtils,
   TransportSecurity;
@@ -984,105 +985,11 @@ end;
 // Destination resolution and address policy
 // ---------------------------------------------------------------------------
 
-{ Parses dotted-quad IPv4 text. Deliberately strict: anything that is not
-  exactly four decimal octets is not an IPv4 literal, so shortened forms
-  ("10.1", "0x7f.1") and octal-looking octets are rejected rather than
-  reinterpreted. Those forms are a classic way to smuggle a loopback address
-  past a naive textual filter, and both platform resolvers here are AF_INET
-  so we never have to accept them. }
-function TryParseIPv4(const AValue: string; out AOctets: array of Byte): Boolean;
-var
-  I, Part, Digits, Value: Integer;
-  Ch: Char;
-begin
-  Part := 0;
-  Value := 0;
-  Digits := 0;
-  for I := 1 to Length(AValue) do
-  begin
-    Ch := AValue[I];
-    if (Ch >= '0') and (Ch <= '9') then
-    begin
-      Inc(Digits);
-      if Digits > 3 then
-        Exit(False);
-      Value := Value * 10 + (Ord(Ch) - Ord('0'));
-      if Value > 255 then
-        Exit(False);
-    end
-    else if Ch = '.' then
-    begin
-      if (Digits = 0) or (Part > 2) then
-        Exit(False);
-      AOctets[Part] := Byte(Value);
-      Inc(Part);
-      Value := 0;
-      Digits := 0;
-    end
-    else
-      Exit(False);
-  end;
-  if (Digits = 0) or (Part <> 3) then
-    Exit(False);
-  AOctets[3] := Byte(Value);
-  Result := True;
-end;
-
-{ True when the address belongs to a range that is not routable on the public
-  internet and is therefore reachable only from inside the host's own network
-  position — which is exactly what an SSRF payload is after. The cloud
-  instance-metadata endpoint (169.254.169.254) falls under link-local. }
+{ The address classification lives in NetworkAddress, which carries no socket
+  dependency; this unit re-exports it under its original name. }
 function IsPrivateNetworkAddress(const AAddressText: string): Boolean;
-var
-  Octets: array[0..3] of Byte;
-  Normalized: string;
 begin
-  Normalized := LowerCase(Trim(AAddressText));
-  if Normalized = '' then
-    Exit(True);
-
-  { Strip the brackets an IPv6 authority carries in a URL. }
-  if (Length(Normalized) >= 2) and (Normalized[1] = '[') and
-     (Normalized[Length(Normalized)] = ']') then
-    Normalized := Copy(Normalized, 2, Length(Normalized) - 2);
-
-  if TryParseIPv4(Normalized, Octets) then
-  begin
-    Result :=
-      (Octets[0] = 10) or                                        // 10/8
-      (Octets[0] = 127) or                                       // loopback
-      (Octets[0] = 0) or                                         // this host
-      ((Octets[0] = 172) and (Octets[1] >= 16) and
-       (Octets[1] <= 31)) or                                     // 172.16/12
-      ((Octets[0] = 192) and (Octets[1] = 168)) or               // 192.168/16
-      ((Octets[0] = 169) and (Octets[1] = 254)) or               // link-local
-      ((Octets[0] = 100) and (Octets[1] >= 64) and
-       (Octets[1] <= 127)) or                                    // CGNAT
-      ((Octets[0] = 192) and (Octets[1] = 0) and
-       (Octets[2] = 0)) or                                       // IETF proto
-      (Octets[0] >= 224);                                        // multicast +
-    Exit;
-  end;
-
-  { IPv6. Neither platform connect path requests AF_INET6 today, so this is
-    defensive: it keeps the classifier correct if a literal reaches it, and
-    stays deny-biased for anything it cannot parse. }
-  if Pos(':', Normalized) > 0 then
-  begin
-    Result :=
-      (Normalized = '::1') or                                    // loopback
-      (Normalized = '::') or                                     // unspecified
-      (Copy(Normalized, 1, 2) = 'fc') or                         // ULA fc00::/7
-      (Copy(Normalized, 1, 2) = 'fd') or
-      (Copy(Normalized, 1, 4) = 'fe80') or                       // link-local
-      (Copy(Normalized, 1, 7) = '::ffff:');                      // v4-mapped
-    Exit;
-  end;
-
-  { Not an address literal at all. Callers pass a resolved address here, so
-    reaching this means resolution produced something unexpected; refuse it
-    rather than let an unclassifiable target through. }
-  Result := True;
+  Result := NetworkAddress.IsPrivateNetworkAddress(AAddressText);
 end;
 
 { Resolves a hostname to a single numeric address, once.

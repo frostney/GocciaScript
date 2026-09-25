@@ -1,0 +1,1096 @@
+unit Goccia.Capabilities;
+
+{ The engine-owned capability set (ADR 0122).
+
+  A capability set says which host resources an engine may reach beyond the
+  process: host files (`read`), the network (`net`), native libraries (`ffi`),
+  and non-local module sources (`import`). It is an immutable value: every
+  builder returns a new set and deep-copies the rules it carries, so a set
+  handed to an engine can never change underneath it, and no caller can reach
+  the rule arrays inside it.
+
+  A set is a stack of layers. The root layer is what a host granted; each
+  nested context (a ShadowRealm, a sandbox runScript child, a narrowed embedder
+  context) appends a layer through Narrow. A request is allowed only when every
+  layer allows it and no layer denies it, so a narrowed set can never allow
+  more than its parent. Within a layer, and across layers, a deny always wins
+  over an allow regardless of the order they were added in.
+
+  A zero-initialized value, and None, grant nothing. }
+
+{$I Goccia.inc}
+
+interface
+
+uses
+  SysUtils;
+
+type
+  TGocciaCapability = (gcRead, gcNet, gcFFI, gcImport);
+
+  EGocciaCapabilityScopeError = class(Exception);
+
+  TGocciaCapabilityScopes = array of string;
+
+  { One capability's rules inside one layer. Implementation detail of
+    TGocciaCapabilities; declared here only because the record field needs a
+    type. Nothing outside this unit can reach an instance. }
+  TGocciaCapabilityRule = record
+    AllowAll: Boolean;
+    DenyAll: Boolean;
+    AllowScopes: TGocciaCapabilityScopes;
+    DenyScopes: TGocciaCapabilityScopes;
+  end;
+
+  TGocciaCapabilityLayer = record
+    Rules: array[TGocciaCapability] of TGocciaCapabilityRule;
+  end;
+
+  TGocciaCapabilityLayers = array of TGocciaCapabilityLayer;
+
+  TGocciaCapabilities = record
+  private
+    FLayers: TGocciaCapabilityLayers;
+    function CopyWithScope(const ACapability: TGocciaCapability;
+      const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
+    function PrivateAddressNamed(const AAddressText: string): Boolean;
+  public
+    { Grants nothing. The default for an engine created without a set. }
+    class function None: TGocciaCapabilities; static;
+    { Grants every capability, including private network ranges. Intended for
+      tests and fully trusted hosts. }
+    class function Unrestricted: TGocciaCapabilities; static;
+
+    { Returns a copy with AScope allowed (or denied) for ACapability in the
+      innermost layer. An empty scope means every scope of that capability.
+      Raises EGocciaCapabilityScopeError for a malformed or relative scope. }
+    function Allow(const ACapability: TGocciaCapability;
+      const AScope: string = ''): TGocciaCapabilities;
+    function Deny(const ACapability: TGocciaCapability;
+      const AScope: string = ''): TGocciaCapabilities;
+
+    { Returns a copy with AChild's layers appended. The result never allows a
+      request this set denies. A child with no layers narrows to nothing. }
+    function Narrow(const AChild: TGocciaCapabilities): TGocciaCapabilities;
+
+    { True when some request of this capability could be allowed: every layer
+      allows at least one scope and none denies the capability outright. }
+    function Grants(const ACapability: TGocciaCapability): Boolean;
+
+    { True when some layer denies the capability outright (an unscoped deny).
+      For read this also removes the module-graph exemption. }
+    function DeniesAll(const ACapability: TGocciaCapability): Boolean;
+
+    { read/ffi: true when some layer denies APath, outright or through a deny
+      scope covering it. Deny wins over grants and exemptions alike. }
+    function DeniesPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
+
+    { Generic request query. read/ffi take a path, net takes `host`,
+      `host:port`, or `[v6]:port`, import takes `node_modules` or a provider
+      name. }
+    function Allows(const ACapability: TGocciaCapability;
+      const ARequest: string): Boolean;
+
+    { read/ffi: APath is canonicalized (symlinks resolved) before matching. }
+    function AllowsPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
+
+    { net, before name resolution. An IP-literal host in a private range also
+      needs private ranges to be named (see AllowsNetAddress). }
+    function AllowsNetHost(const AHost: string; const APort: Integer): Boolean;
+
+    { net, after name resolution: the resolved address of a request whose host
+      already passed AllowsNetHost. Private, loopback, and link-local addresses
+      are denied unless every layer names them, through the `private` scope or
+      an explicit IP/CIDR scope that covers the address. }
+    function AllowsNetAddress(const AAddress: string): Boolean;
+
+    { import: whether a bare specifier imported from AImportingDirectory may be
+      resolved against node_modules, and the highest directory the ancestor
+      walk may reach (empty = unbounded). }
+    function NodeModulesCeiling(const AImportingDirectory: string;
+      out ACeiling: string): Boolean;
+
+    { import: whether provider imports from AProvider (e.g. `github`) are
+      allowed. Provider resolution itself is not implemented yet. }
+    function AllowsProvider(const AProvider: string): Boolean;
+
+    function LayerCount: Integer;
+    function ToJSON: string;
+  end;
+
+const
+  NET_PRIVATE_SCOPE = 'private';
+  IMPORT_NODE_MODULES_SCOPE = 'node_modules';
+
+function CapabilityName(const ACapability: TGocciaCapability): string;
+function TryParseCapabilityName(const AName: string;
+  out ACapability: TGocciaCapability): Boolean;
+
+{ Absolute, symlink-resolved spelling of APath without a trailing separator.
+  The deepest existing ancestor is canonicalized and the rest appended, so a
+  path that does not exist yet still compares against canonical scopes. }
+function CanonicalCapabilityPath(const APath: string): string;
+
+{ True when APath equals AScope or lives beneath it. Both must already be
+  canonical. /a/b does not contain /a/bc. }
+function IsPathWithinScope(const APath, AScope: string): Boolean;
+
+implementation
+
+uses
+  FileUtils,
+  NetworkAddress,
+
+  Goccia.JSON.Utils;
+
+type
+  TGocciaNetScopeKind = (nskPrivate, nskHost, nskWildcard, nskAddress,
+    nskCIDR);
+
+  TGocciaNetScope = record
+    Kind: TGocciaNetScopeKind;
+    Host: string;
+    Address: TNetworkAddress;
+    PrefixLength: Integer;
+    Port: Integer;
+  end;
+
+  TGocciaImportScopeKind = (iskNodeModules, iskProvider);
+
+  TGocciaImportScope = record
+    Kind: TGocciaImportScopeKind;
+    Ceiling: string;
+    Provider: string;
+  end;
+
+const
+  CAPABILITY_NAMES: array[TGocciaCapability] of string = (
+    'read', 'net', 'ffi', 'import');
+  NODE_MODULES_CEILING_SEPARATOR = '=';
+  MAX_PORT = 65535;
+
+function CapabilityName(const ACapability: TGocciaCapability): string;
+begin
+  Result := CAPABILITY_NAMES[ACapability];
+end;
+
+function TryParseCapabilityName(const AName: string;
+  out ACapability: TGocciaCapability): Boolean;
+var
+  Capability: TGocciaCapability;
+begin
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    if SameText(AName, CAPABILITY_NAMES[Capability]) then
+    begin
+      ACapability := Capability;
+      Exit(True);
+    end;
+  ACapability := gcRead;
+  Result := False;
+end;
+
+{ ── paths ─────────────────────────────────────────────────────── }
+
+function SamePathText(const A, B: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := SameText(A, B);
+  {$ELSE}
+  Result := A = B;
+  {$ENDIF}
+end;
+
+function IsRootPath(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and (ExtractFileDir(APath) = APath);
+end;
+
+function StripTrailingDelimiter(const APath: string): string;
+begin
+  Result := APath;
+  while (Length(Result) > 1) and (Result[Length(Result)] = PathDelim) and
+    not IsRootPath(Result) do
+    Delete(Result, Length(Result), 1);
+end;
+
+function CanonicalCapabilityPath(const APath: string): string;
+var
+  Expanded, Parent, Canonical, Suffix: string;
+begin
+  Result := '';
+  if APath = '' then
+    Exit;
+  Expanded := StripTrailingDelimiter(ExpandHostFileName(APath));
+  Suffix := '';
+  Parent := Expanded;
+  while Parent <> '' do
+  begin
+    Canonical := CanonicalHostPath(Parent);
+    if Canonical <> '' then
+    begin
+      Canonical := StripTrailingDelimiter(Canonical);
+      if Suffix = '' then
+        Exit(Canonical);
+      if Canonical[Length(Canonical)] = PathDelim then
+        Exit(Canonical + Suffix);
+      Exit(Canonical + PathDelim + Suffix);
+    end;
+    if IsRootPath(Parent) then
+      Break;
+    if Suffix = '' then
+      Suffix := ExtractFileName(Parent)
+    else
+      Suffix := ExtractFileName(Parent) + PathDelim + Suffix;
+    Canonical := ExtractFileDir(Parent);
+    if (Canonical = '') or SamePathText(Canonical, Parent) then
+      Break;
+    Parent := Canonical;
+  end;
+  { No ancestor could be canonicalized (the Lakon lane, or an unreadable
+    root): the lexical spelling is the best answer available. }
+  Result := Expanded;
+end;
+
+function IsPathWithinScope(const APath, AScope: string): Boolean;
+var
+  Prefix: string;
+begin
+  if (APath = '') or (AScope = '') then
+    Exit(False);
+  if SamePathText(APath, AScope) then
+    Exit(True);
+  if AScope[Length(AScope)] = PathDelim then
+    Prefix := AScope
+  else
+    Prefix := AScope + PathDelim;
+  Result := (Length(APath) > Length(Prefix)) and
+    SamePathText(Copy(APath, 1, Length(Prefix)), Prefix);
+end;
+
+function NormalizePathScope(const ACapability: TGocciaCapability;
+  const AScope: string): string;
+begin
+  if not IsAbsoluteHostPath(AScope) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s scope must be an absolute path: %s',
+      [CapabilityName(ACapability), AScope]);
+  Result := CanonicalCapabilityPath(AScope);
+end;
+
+{ ── net scopes ────────────────────────────────────────────────── }
+
+function IsValidHostName(const AHost: string): Boolean;
+var
+  I: Integer;
+begin
+  if (AHost = '') or (AHost[1] = '.') or (AHost[Length(AHost)] = '.') then
+    Exit(False);
+  for I := 1 to Length(AHost) do
+    case AHost[I] of
+      'a'..'z', '0'..'9', '-', '.', '_':
+        ;
+    else
+      Exit(False);
+    end;
+  Result := Pos('..', AHost) = 0;
+end;
+
+function TryParsePort(const AText: string; out APort: Integer): Boolean;
+begin
+  Result := TryStrToInt(AText, APort) and (APort >= 1) and
+    (APort <= MAX_PORT) and (Pos('+', AText) = 0) and (Pos('-', AText) = 0);
+end;
+
+function TryParseNetScope(const AScope: string;
+  out ANetScope: TGocciaNetScope): Boolean;
+var
+  Text, HostPart, PortPart: string;
+  CloseBracket, ColonPos, ColonCount, I: Integer;
+begin
+  Result := False;
+  ANetScope := Default(TGocciaNetScope);
+  Text := LowerCase(Trim(AScope));
+  if Text = '' then
+    Exit;
+
+  if Text = NET_PRIVATE_SCOPE then
+  begin
+    ANetScope.Kind := nskPrivate;
+    Exit(True);
+  end;
+
+  if Pos('/', Text) > 0 then
+  begin
+    ANetScope.Kind := nskCIDR;
+    Exit(TryParseCIDR(Text, ANetScope.Address, ANetScope.PrefixLength));
+  end;
+
+  HostPart := Text;
+  PortPart := '';
+  if Text[1] = '[' then
+  begin
+    CloseBracket := Pos(']', Text);
+    if CloseBracket < 3 then
+      Exit;
+    HostPart := Copy(Text, 2, CloseBracket - 2);
+    if CloseBracket < Length(Text) then
+    begin
+      if Text[CloseBracket + 1] <> ':' then
+        Exit;
+      PortPart := Copy(Text, CloseBracket + 2, MaxInt);
+      if PortPart = '' then
+        Exit;
+    end;
+  end
+  else
+  begin
+    ColonCount := 0;
+    for I := 1 to Length(Text) do
+      if Text[I] = ':' then
+        Inc(ColonCount);
+    if ColonCount = 1 then
+    begin
+      ColonPos := Pos(':', Text);
+      HostPart := Copy(Text, 1, ColonPos - 1);
+      PortPart := Copy(Text, ColonPos + 1, MaxInt);
+      if PortPart = '' then
+        Exit;
+    end;
+  end;
+
+  if PortPart <> '' then
+  begin
+    if not TryParsePort(PortPart, ANetScope.Port) then
+      Exit;
+  end;
+
+  if TryParseIPAddress(HostPart, ANetScope.Address) then
+  begin
+    ANetScope.Kind := nskAddress;
+    Exit(True);
+  end;
+
+  if Pos(':', HostPart) > 0 then
+    Exit;
+
+  if Copy(HostPart, 1, 2) = '*.' then
+  begin
+    ANetScope.Kind := nskWildcard;
+    ANetScope.Host := Copy(HostPart, 3, MaxInt);
+    Exit(IsValidHostName(ANetScope.Host));
+  end;
+
+  ANetScope.Kind := nskHost;
+  ANetScope.Host := HostPart;
+  Result := IsValidHostName(HostPart);
+end;
+
+function NormalizeNetScope(const AScope: string): string;
+var
+  NetScope: TGocciaNetScope;
+begin
+  if not TryParseNetScope(AScope, NetScope) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      'net scope is not a host, host:port, *.domain, IP, CIDR, or private: %s',
+      [AScope]);
+  Result := LowerCase(Trim(AScope));
+end;
+
+function NormalizeRequestHost(const AHost: string): string;
+begin
+  Result := LowerCase(Trim(AHost));
+  if (Length(Result) >= 2) and (Result[1] = '[') and
+     (Result[Length(Result)] = ']') then
+    Result := Copy(Result, 2, Length(Result) - 2);
+end;
+
+{ Whether a non-private scope names this destination. APort of zero means the
+  request did not state one, which only an unported scope can match. }
+function NetScopeMatchesHost(const ANetScope: TGocciaNetScope;
+  const AHost: string; const AHostIsAddress: Boolean;
+  const AHostAddress: TNetworkAddress; const APort: Integer): Boolean;
+var
+  Suffix: string;
+begin
+  if (ANetScope.Port <> 0) and (ANetScope.Port <> APort) then
+    Exit(False);
+  case ANetScope.Kind of
+    nskHost:
+      Result := (not AHostIsAddress) and (AHost = ANetScope.Host);
+    nskWildcard:
+      begin
+        Suffix := '.' + ANetScope.Host;
+        Result := (not AHostIsAddress) and (Length(AHost) > Length(Suffix)) and
+          (Copy(AHost, Length(AHost) - Length(Suffix) + 1, MaxInt) = Suffix);
+      end;
+    nskAddress:
+      Result := AHostIsAddress and
+        AddressesEqual(AHostAddress, ANetScope.Address);
+    nskCIDR:
+      Result := AHostIsAddress and IsAddressInNetwork(AHostAddress,
+        ANetScope.Address, ANetScope.PrefixLength);
+  else
+    Result := False;
+  end;
+end;
+
+function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
+  const AAddress: TNetworkAddress): Boolean;
+begin
+  case ANetScope.Kind of
+    nskAddress:
+      Result := AddressesEqual(AAddress, ANetScope.Address);
+    nskCIDR:
+      Result := IsAddressInNetwork(AAddress, ANetScope.Address,
+        ANetScope.PrefixLength);
+  else
+    Result := False;
+  end;
+end;
+
+{ ── import scopes ─────────────────────────────────────────────── }
+
+function TryParseImportScope(const AScope: string;
+  out AImportScope: TGocciaImportScope): Boolean;
+var
+  Text, Prefix: string;
+begin
+  AImportScope := Default(TGocciaImportScope);
+  Text := Trim(AScope);
+  Result := False;
+  if Text = '' then
+    Exit;
+  if SameText(Text, IMPORT_NODE_MODULES_SCOPE) then
+  begin
+    AImportScope.Kind := iskNodeModules;
+    Exit(True);
+  end;
+  Prefix := IMPORT_NODE_MODULES_SCOPE + NODE_MODULES_CEILING_SEPARATOR;
+  if SameText(Copy(Text, 1, Length(Prefix)), Prefix) then
+  begin
+    AImportScope.Kind := iskNodeModules;
+    AImportScope.Ceiling := Copy(Text, Length(Prefix) + 1, MaxInt);
+    Exit(AImportScope.Ceiling <> '');
+  end;
+  AImportScope.Kind := iskProvider;
+  AImportScope.Provider := LowerCase(Text);
+  Result := IsValidHostName(AImportScope.Provider);
+end;
+
+{ node_modules ceilings stay *expanded* rather than canonical: the ancestor
+  walk in Goccia.Modules.NodeResolution compares expanded spellings, and a
+  ceiling reached through a symlink fails closed (ADR 0111). }
+function NormalizeImportScope(const AScope: string): string;
+var
+  ImportScope: TGocciaImportScope;
+begin
+  if not TryParseImportScope(AScope, ImportScope) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      'import scope is not node_modules, node_modules=<dir>, or a provider: %s',
+      [AScope]);
+  case ImportScope.Kind of
+    iskNodeModules:
+      begin
+        if ImportScope.Ceiling = '' then
+          Exit(IMPORT_NODE_MODULES_SCOPE);
+        if not IsAbsoluteHostPath(ImportScope.Ceiling) then
+          raise EGocciaCapabilityScopeError.CreateFmt(
+            'import node_modules ceiling must be an absolute path: %s',
+            [ImportScope.Ceiling]);
+        Result := IMPORT_NODE_MODULES_SCOPE + NODE_MODULES_CEILING_SEPARATOR +
+          StripTrailingDelimiter(ExpandHostFileName(ImportScope.Ceiling));
+      end;
+  else
+    Result := ImportScope.Provider;
+  end;
+end;
+
+{ ── rule copying ──────────────────────────────────────────────── }
+
+function CopyScopes(const AScopes: TGocciaCapabilityScopes):
+  TGocciaCapabilityScopes;
+var
+  I: Integer;
+begin
+  Result := nil;
+  SetLength(Result, Length(AScopes));
+  for I := 0 to High(AScopes) do
+    Result[I] := AScopes[I];
+end;
+
+function CopyLayer(const ALayer: TGocciaCapabilityLayer):
+  TGocciaCapabilityLayer;
+var
+  Capability: TGocciaCapability;
+begin
+  Result := Default(TGocciaCapabilityLayer);
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    Result.Rules[Capability].AllowAll := ALayer.Rules[Capability].AllowAll;
+    Result.Rules[Capability].DenyAll := ALayer.Rules[Capability].DenyAll;
+    Result.Rules[Capability].AllowScopes :=
+      CopyScopes(ALayer.Rules[Capability].AllowScopes);
+    Result.Rules[Capability].DenyScopes :=
+      CopyScopes(ALayer.Rules[Capability].DenyScopes);
+  end;
+end;
+
+function EmptyLayer: TGocciaCapabilityLayer;
+var
+  Capability: TGocciaCapability;
+begin
+  Result := Default(TGocciaCapabilityLayer);
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    Result.Rules[Capability].AllowAll := False;
+    Result.Rules[Capability].DenyAll := False;
+    SetLength(Result.Rules[Capability].AllowScopes, 0);
+    SetLength(Result.Rules[Capability].DenyScopes, 0);
+  end;
+end;
+
+function CopyLayers(const ALayers: TGocciaCapabilityLayers):
+  TGocciaCapabilityLayers;
+var
+  I: Integer;
+begin
+  Result := nil;
+  SetLength(Result, Length(ALayers));
+  for I := 0 to High(ALayers) do
+    Result[I] := CopyLayer(ALayers[I]);
+end;
+
+procedure AppendScope(var AScopes: TGocciaCapabilityScopes;
+  const AScope: string);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AScopes) do
+    if AScopes[I] = AScope then
+      Exit;
+  SetLength(AScopes, Length(AScopes) + 1);
+  AScopes[High(AScopes)] := AScope;
+end;
+
+{ ── TGocciaCapabilities ───────────────────────────────────────── }
+
+class function TGocciaCapabilities.None: TGocciaCapabilities;
+begin
+  Result := Default(TGocciaCapabilities);
+  SetLength(Result.FLayers, 1);
+  Result.FLayers[0] := EmptyLayer;
+end;
+
+class function TGocciaCapabilities.Unrestricted: TGocciaCapabilities;
+var
+  Capability: TGocciaCapability;
+begin
+  Result := None;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    Result.FLayers[0].Rules[Capability].AllowAll := True;
+  AppendScope(Result.FLayers[0].Rules[gcNet].AllowScopes, NET_PRIVATE_SCOPE);
+end;
+
+function TGocciaCapabilities.CopyWithScope(
+  const ACapability: TGocciaCapability; const AScope: string;
+  const AAllow: Boolean): TGocciaCapabilities;
+var
+  Normalized: string;
+  LayerIndex: Integer;
+begin
+  Normalized := '';
+  if Trim(AScope) <> '' then
+    case ACapability of
+      gcRead, gcFFI:
+        Normalized := NormalizePathScope(ACapability, AScope);
+      gcNet:
+        Normalized := NormalizeNetScope(AScope);
+      gcImport:
+        Normalized := NormalizeImportScope(AScope);
+    end;
+
+  Result.FLayers := CopyLayers(FLayers);
+  if Length(Result.FLayers) = 0 then
+  begin
+    SetLength(Result.FLayers, 1);
+    Result.FLayers[0] := EmptyLayer;
+  end;
+  LayerIndex := High(Result.FLayers);
+  if Normalized = '' then
+  begin
+    if AAllow then
+      Result.FLayers[LayerIndex].Rules[ACapability].AllowAll := True
+    else
+      Result.FLayers[LayerIndex].Rules[ACapability].DenyAll := True;
+  end
+  else if AAllow then
+    AppendScope(Result.FLayers[LayerIndex].Rules[ACapability].AllowScopes,
+      Normalized)
+  else
+    AppendScope(Result.FLayers[LayerIndex].Rules[ACapability].DenyScopes,
+      Normalized);
+end;
+
+function TGocciaCapabilities.Allow(const ACapability: TGocciaCapability;
+  const AScope: string): TGocciaCapabilities;
+begin
+  Result := CopyWithScope(ACapability, AScope, True);
+end;
+
+function TGocciaCapabilities.Deny(const ACapability: TGocciaCapability;
+  const AScope: string): TGocciaCapabilities;
+begin
+  Result := CopyWithScope(ACapability, AScope, False);
+end;
+
+function TGocciaCapabilities.Narrow(
+  const AChild: TGocciaCapabilities): TGocciaCapabilities;
+var
+  Base, I: Integer;
+  ChildLayers: TGocciaCapabilityLayers;
+begin
+  if Length(AChild.FLayers) = 0 then
+  begin
+    SetLength(ChildLayers, 1);
+    ChildLayers[0] := EmptyLayer;
+  end
+  else
+    ChildLayers := CopyLayers(AChild.FLayers);
+
+  Result.FLayers := CopyLayers(FLayers);
+  if Length(Result.FLayers) = 0 then
+  begin
+    SetLength(Result.FLayers, 1);
+    Result.FLayers[0] := EmptyLayer;
+  end;
+  Base := Length(Result.FLayers);
+  SetLength(Result.FLayers, Base + Length(ChildLayers));
+  for I := 0 to High(ChildLayers) do
+    Result.FLayers[Base + I] := ChildLayers[I];
+end;
+
+function TGocciaCapabilities.LayerCount: Integer;
+begin
+  Result := Length(FLayers);
+end;
+
+function TGocciaCapabilities.Grants(
+  const ACapability: TGocciaCapability): Boolean;
+var
+  I: Integer;
+  Rule: TGocciaCapabilityRule;
+begin
+  if Length(FLayers) = 0 then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[ACapability];
+    if Rule.DenyAll or ((not Rule.AllowAll) and
+       (Length(Rule.AllowScopes) = 0)) then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.DeniesAll(
+  const ACapability: TGocciaCapability): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FLayers) do
+    if FLayers[I].Rules[ACapability].DenyAll then
+      Exit(True);
+  Result := False;
+end;
+
+function CanonicalPathRequest(const ACapability: TGocciaCapability;
+  const APath: string): string;
+begin
+  if not (ACapability in [gcRead, gcFFI]) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s is not a path capability', [CapabilityName(ACapability)]);
+  Result := CanonicalCapabilityPath(APath);
+end;
+
+function LayersDenyCanonicalPath(const ALayers: TGocciaCapabilityLayers;
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
+var
+  I, J: Integer;
+  Rule: TGocciaCapabilityRule;
+begin
+  for I := 0 to High(ALayers) do
+  begin
+    Rule := ALayers[I].Rules[ACapability];
+    if Rule.DenyAll then
+      Exit(True);
+    for J := 0 to High(Rule.DenyScopes) do
+      if IsPathWithinScope(APath, Rule.DenyScopes[J]) then
+        Exit(True);
+  end;
+  Result := False;
+end;
+
+function TGocciaCapabilities.DeniesPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
+var
+  Path: string;
+begin
+  Path := CanonicalPathRequest(ACapability, APath);
+  Result := (Path = '') or LayersDenyCanonicalPath(FLayers, ACapability, Path);
+end;
+
+function TGocciaCapabilities.AllowsPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
+var
+  I, J: Integer;
+  Path: string;
+  LayerAllows: Boolean;
+  Rule: TGocciaCapabilityRule;
+begin
+  Path := CanonicalPathRequest(ACapability, APath);
+  if (Length(FLayers) = 0) or (Path = '') then
+    Exit(False);
+  if LayersDenyCanonicalPath(FLayers, ACapability, Path) then
+    Exit(False);
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[ACapability];
+    LayerAllows := Rule.AllowAll;
+    J := 0;
+    while (not LayerAllows) and (J <= High(Rule.AllowScopes)) do
+    begin
+      LayerAllows := IsPathWithinScope(Path, Rule.AllowScopes[J]);
+      Inc(J);
+    end;
+    if not LayerAllows then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.PrivateAddressNamed(
+  const AAddressText: string): Boolean;
+var
+  Address: TNetworkAddress;
+  I, J: Integer;
+  NetScope: TGocciaNetScope;
+  LayerNames: Boolean;
+  Rule: TGocciaCapabilityRule;
+begin
+  if (Length(FLayers) = 0) or
+     not TryParseIPAddress(AAddressText, Address) then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcNet];
+    LayerNames := False;
+    for J := 0 to High(Rule.AllowScopes) do
+      if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
+         ((NetScope.Kind = nskPrivate) or
+          NetScopeCoversAddress(NetScope, Address)) then
+      begin
+        LayerNames := True;
+        Break;
+      end;
+    if not LayerNames then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.AllowsNetHost(const AHost: string;
+  const APort: Integer): Boolean;
+var
+  Host: string;
+  HostAddress: TNetworkAddress;
+  HostIsAddress, HostIsPrivate, LayerAllows: Boolean;
+  I, J: Integer;
+  NetScope: TGocciaNetScope;
+  Rule: TGocciaCapabilityRule;
+begin
+  if Length(FLayers) = 0 then
+    Exit(False);
+  Host := NormalizeRequestHost(AHost);
+  if Host = '' then
+    Exit(False);
+  HostIsAddress := TryParseIPAddress(Host, HostAddress);
+  HostIsPrivate := HostIsAddress and IsPrivateIPAddress(HostAddress);
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcNet];
+    if Rule.DenyAll then
+      Exit(False);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseNetScope(Rule.DenyScopes[J], NetScope) then
+      begin
+        if NetScope.Kind = nskPrivate then
+        begin
+          if HostIsPrivate then
+            Exit(False);
+        end
+        else if NetScopeMatchesHost(NetScope, Host, HostIsAddress,
+          HostAddress, APort) then
+          Exit(False);
+      end;
+  end;
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcNet];
+    LayerAllows := Rule.AllowAll;
+    J := 0;
+    while (not LayerAllows) and (J <= High(Rule.AllowScopes)) do
+    begin
+      if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
+         (NetScope.Kind <> nskPrivate) then
+        LayerAllows := NetScopeMatchesHost(NetScope, Host, HostIsAddress,
+          HostAddress, APort);
+      Inc(J);
+    end;
+    if not LayerAllows then
+      Exit(False);
+  end;
+
+  if HostIsPrivate then
+    Exit(PrivateAddressNamed(Host));
+  Result := True;
+end;
+
+function TGocciaCapabilities.AllowsNetAddress(
+  const AAddress: string): Boolean;
+var
+  Address: TNetworkAddress;
+  AddressText: string;
+  IsPrivate: Boolean;
+  I, J: Integer;
+  NetScope: TGocciaNetScope;
+  Rule: TGocciaCapabilityRule;
+begin
+  if Length(FLayers) = 0 then
+    Exit(False);
+  AddressText := NormalizeRequestHost(AAddress);
+  { An unparseable resolution result is refused rather than classified. }
+  if not TryParseIPAddress(AddressText, Address) then
+    Exit(False);
+  IsPrivate := IsPrivateIPAddress(Address);
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcNet];
+    if Rule.DenyAll then
+      Exit(False);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseNetScope(Rule.DenyScopes[J], NetScope) then
+      begin
+        if (NetScope.Kind = nskPrivate) and IsPrivate then
+          Exit(False);
+        if NetScopeCoversAddress(NetScope, Address) then
+          Exit(False);
+      end;
+  end;
+
+  if IsPrivate then
+    Exit(PrivateAddressNamed(AddressText));
+  Result := True;
+end;
+
+function TGocciaCapabilities.NodeModulesCeiling(
+  const AImportingDirectory: string; out ACeiling: string): Boolean;
+var
+  Directory, LayerCeiling: string;
+  I, J: Integer;
+  ImportScope: TGocciaImportScope;
+  LayerAllows, LayerUnbounded: Boolean;
+  Rule: TGocciaCapabilityRule;
+begin
+  ACeiling := '';
+  if Length(FLayers) = 0 then
+    Exit(False);
+  if AImportingDirectory <> '' then
+    Directory := StripTrailingDelimiter(
+      ExpandHostFileName(AImportingDirectory))
+  else
+    Directory := '';
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    if Rule.DenyAll then
+      Exit(False);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
+         (ImportScope.Kind = iskNodeModules) and
+         ((ImportScope.Ceiling = '') or
+          IsPathWithinScope(Directory, ImportScope.Ceiling)) then
+        Exit(False);
+  end;
+
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    LayerAllows := Rule.AllowAll;
+    LayerUnbounded := Rule.AllowAll;
+    LayerCeiling := '';
+    for J := 0 to High(Rule.AllowScopes) do
+      if TryParseImportScope(Rule.AllowScopes[J], ImportScope) and
+         (ImportScope.Kind = iskNodeModules) then
+      begin
+        if ImportScope.Ceiling = '' then
+        begin
+          LayerAllows := True;
+          LayerUnbounded := True;
+        end
+        else if IsPathWithinScope(Directory, ImportScope.Ceiling) then
+        begin
+          LayerAllows := True;
+          { Within one layer the grants are a union: the highest ceiling that
+            still contains the importer is the most the layer allows. }
+          if (LayerCeiling = '') or
+             (Length(ImportScope.Ceiling) < Length(LayerCeiling)) then
+            LayerCeiling := ImportScope.Ceiling;
+        end;
+      end;
+    if not LayerAllows then
+      Exit(False);
+    { Every layer must allow the walk, so across layers the deepest ceiling
+      wins. All candidate ceilings contain the importer, so they nest. }
+    if (not LayerUnbounded) and (Length(LayerCeiling) > Length(ACeiling)) then
+      ACeiling := LayerCeiling;
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.AllowsProvider(const AProvider: string): Boolean;
+var
+  Provider: string;
+  I, J: Integer;
+  ImportScope: TGocciaImportScope;
+  LayerAllows: Boolean;
+  Rule: TGocciaCapabilityRule;
+begin
+  if Length(FLayers) = 0 then
+    Exit(False);
+  Provider := LowerCase(Trim(AProvider));
+  if Provider = '' then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    if Rule.DenyAll then
+      Exit(False);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
+         (ImportScope.Kind = iskProvider) and
+         (ImportScope.Provider = Provider) then
+        Exit(False);
+  end;
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    LayerAllows := Rule.AllowAll;
+    J := 0;
+    while (not LayerAllows) and (J <= High(Rule.AllowScopes)) do
+    begin
+      LayerAllows := TryParseImportScope(Rule.AllowScopes[J], ImportScope) and
+        (ImportScope.Kind = iskProvider) and
+        (ImportScope.Provider = Provider);
+      Inc(J);
+    end;
+    if not LayerAllows then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.Allows(const ACapability: TGocciaCapability;
+  const ARequest: string): Boolean;
+var
+  NetScope: TGocciaNetScope;
+  Host, Ceiling: string;
+  CloseBracket: Integer;
+begin
+  case ACapability of
+    gcRead, gcFFI:
+      Result := AllowsPath(ACapability, ARequest);
+    gcNet:
+      begin
+        if (not TryParseNetScope(ARequest, NetScope)) or
+           not (NetScope.Kind in [nskHost, nskAddress]) then
+          Exit(False);
+        Host := LowerCase(Trim(ARequest));
+        if NetScope.Kind = nskHost then
+          Host := NetScope.Host
+        else if Host[1] = '[' then
+        begin
+          CloseBracket := Pos(']', Host);
+          Host := Copy(Host, 2, CloseBracket - 2);
+        end
+        else if (NetScope.Port <> 0) and (Pos(':', Host) > 0) then
+          Host := Copy(Host, 1, Pos(':', Host) - 1);
+        Result := AllowsNetHost(Host, NetScope.Port);
+      end;
+    gcImport:
+      if SameText(Trim(ARequest), IMPORT_NODE_MODULES_SCOPE) then
+        Result := NodeModulesCeiling('', Ceiling)
+      else
+        Result := AllowsProvider(ARequest);
+  else
+    Result := False;
+  end;
+end;
+
+function ScopesToJSON(const AScopes: TGocciaCapabilityScopes): string;
+var
+  I: Integer;
+begin
+  Result := '[';
+  for I := 0 to High(AScopes) do
+  begin
+    if I > 0 then
+      Result := Result + ',';
+    Result := Result + QuoteJSONString(AScopes[I]);
+  end;
+  Result := Result + ']';
+end;
+
+function BooleanToJSON(const AValue: Boolean): string;
+begin
+  if AValue then
+    Result := 'true'
+  else
+    Result := 'false';
+end;
+
+function TGocciaCapabilities.ToJSON: string;
+var
+  I: Integer;
+  Capability: TGocciaCapability;
+  Rule: TGocciaCapabilityRule;
+begin
+  Result := '{"layers":[';
+  for I := 0 to High(FLayers) do
+  begin
+    if I > 0 then
+      Result := Result + ',';
+    Result := Result + '{';
+    for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    begin
+      if Capability <> Low(TGocciaCapability) then
+        Result := Result + ',';
+      Rule := FLayers[I].Rules[Capability];
+      Result := Result + QuoteJSONString(CapabilityName(Capability)) +
+        ':{"allowAll":' + BooleanToJSON(Rule.AllowAll) +
+        ',"allow":' + ScopesToJSON(Rule.AllowScopes) +
+        ',"denyAll":' + BooleanToJSON(Rule.DenyAll) +
+        ',"deny":' + ScopesToJSON(Rule.DenyScopes) + '}';
+    end;
+    Result := Result + '}';
+  end;
+  Result := Result + ']}';
+end;
+
+end.
