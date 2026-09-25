@@ -100,16 +100,20 @@ const lineStartsOf = (source) =>
 
 /**
  * Insert the missing blank lines. Back to front, so an earlier insertion does
- * not move a later offset.
+ * not move a later offset. The blank line uses the file's own line ending, so
+ * a CRLF file stays CRLF.
  */
-const fixed = (source, offsets) =>
-  offsets
+const fixed = (source, offsets) => {
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+
+  return offsets
     .slice()
     .sort((left, right) => right - left)
     .reduce(
-      (text, offset) => `${text.slice(0, offset)}\n${text.slice(offset)}`,
+      (text, offset) => `${text.slice(0, offset)}${eol}${text.slice(offset)}`,
       source,
     );
+};
 
 const findingsIn = (file, source) => {
   const { root, comments } = parse(source, {
