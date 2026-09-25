@@ -15,10 +15,10 @@ uses
   Goccia.Application,
   Goccia.Base64,
   Goccia.Builtins.Console,
-  Goccia.Builtins.GlobalShadowRealm,
   Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
+  Goccia.Diagnostics.SourceRegistry,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -29,10 +29,12 @@ uses
   Goccia.HostEnvironment,
   Goccia.InstructionLimit,
   Goccia.JSON,
+  Goccia.MemoryLimit,
   Goccia.Modules.Loader,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
   Goccia.RuntimeExtensions.Sandbox,
@@ -45,19 +47,43 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.VM.Exception,
   SandboxVirtualFileSystem;
 
+const
+  { Each nesting level holds an engine, a realm, and a virtual
+    filesystem alive on the native stack, so the depth a guest may ask
+    for is a resource ceiling like the memory budget, not a taste
+    judgement about how deep orchestration should go. }
+  MAX_RUN_SCRIPT_DEPTH = 32;
+
 type
+  { Where a seeded sandbox path came from on the host. A seed is an import
+    baseline and never a mount, so this is not a live mapping — it is the
+    record of one, kept so that the host can decide, after the run is over,
+    to materialize what the run produced. See
+    [ADR 0119](../../docs/adr/0119-host-applied-sandbox-write-back.md). }
+  TSandboxSeedOrigin = record
+    SandboxPath: string;
+    HostPath: string;
+    IsDirectory: Boolean;
+  end;
+
   TSandboxRunnerApp = class(TGocciaCLIApplication)
   private
     FContext: TGocciaSandboxContext;
+    FSeedOrigins: array of TSandboxSeedOrigin;
     FSeedPaths: TRepeatableOption;
     FSeedConfigFiles: TRepeatableOption;
     FDiff: TFlagOption;
     FDiffMetadata: TFlagOption;
     FDiffFormat: TStringOption;
     FDiffOutput: TStringOption;
+    FWriteBack: TFlagOption;
     FPrint: TFlagOption;
+    FFsQuotaBytes: TInt64Option;
+    FFsNodeLimit: TIntegerOption;
+    FRunScriptDepth: Integer;
     FCurrentOutputLines: TStrings;
     FCurrentHostEnvironment: TGocciaHostEnvironment;
 
@@ -78,6 +104,13 @@ type
     procedure ApplySeedConfigEntry(const AEntry: TGocciaObjectValue;
       const ABaseDirectory: string);
     procedure LoadSeeds;
+    procedure RecordSeedOrigin(const AHostPath, ASandboxPath: string;
+      const AIsDirectory: Boolean);
+    function HostPathForSandboxPath(const ASandboxPath: string;
+      out AHostPath: string): Boolean;
+    procedure WriteBackIfRequested(const ARunOk: Boolean);
+    function WriteHostFile(const AHostPath: string;
+      const ABytes: TBytes): Boolean;
 
     procedure EnsureSandboxParentDirectory(const AContext:
       TGocciaSandboxContext; const APath: string);
@@ -216,7 +249,14 @@ begin
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
+  FWriteBack := AddFlag('write-back',
+    'After a successful run, write files it changed back to the host paths they were seeded from');
   FPrint := AddFlag('print', 'Print the script result value');
+  FFsQuotaBytes := TInt64Option.Create('fs-quota-bytes',
+    'Maximum bytes in the sandbox filesystem (default: 16777216)');
+  Add(FFsQuotaBytes);
+  FFsNodeLimit := AddInteger('fs-node-limit',
+    'Maximum files and directories in the sandbox filesystem (default: 4096)');
 end;
 
 function TSandboxRunnerApp.UsageLine: string;
@@ -224,10 +264,28 @@ begin
   Result := '<sandbox-entry-path> [options]';
 end;
 
+{ Config reaches this runner only through an explicit --config.  The entry
+  path names a file in the virtual filesystem, so discovery walking up from
+  it describes host directories that have nothing to do with the run, and
+  which host directories those are depends on how the operator spelled the
+  path: an absolute sandbox path starts the walk at the host root, a bare
+  name starts it at the current directory.  Config that lands by accident of
+  spelling is worse than no config for the one binary that runs untrusted
+  code, so the runner requires the operator to say which file to apply.
+
+  The cost is that an operator who sets limits in a discovered goccia.json
+  gets no limits here while every other binary honours them, and the failure
+  is silent and in the permissive direction.  So say so, on stderr, whenever
+  a config was found and skipped — this predicate is the only place that
+  knows both that a config exists and that it will not be applied. }
 function TSandboxRunnerApp.ShouldApplyRootConfig(const APaths: TStringList;
   const AConfigPath: string; const AExplicitConfig: Boolean): Boolean;
 begin
   Result := AExplicitConfig;
+  if not Result then
+    WriteLn(ErrOutput, Format('Warning: ignoring discovered configuration ' +
+      '%s. %s applies configuration files only when named with --config.',
+      [AConfigPath, Name]));
 end;
 
 procedure TSandboxRunnerApp.Validate;
@@ -238,6 +296,10 @@ begin
   if FDiffFormat.Present and (FDiffFormat.Value <> 'json') and
      (FDiffFormat.Value <> 'unified') then
     raise TParseError.Create('--diff-format must be json or unified.');
+  if FFsQuotaBytes.Present and (FFsQuotaBytes.Value <= 0) then
+    raise TParseError.Create('--fs-quota-bytes must be greater than 0.');
+  if FFsNodeLimit.Present and (FFsNodeLimit.Value <= 0) then
+    raise TParseError.Create('--fs-node-limit must be greater than 0.');
 end;
 
 function TSandboxRunnerApp.ReadHostBytes(const APath: string): TBytes;
@@ -376,7 +438,10 @@ begin
   TargetPath := EnsureSandboxAbsolute(ASandboxPath);
 
   if IsDirectoryPath(HostPath) then
-    ImportDirectoryContents(HostPath, TargetPath)
+  begin
+    ImportDirectoryContents(HostPath, TargetPath);
+    RecordSeedOrigin(HostPath, FContext.Fs.Normalize(TargetPath), True);
+  end
   else
   begin
     if (TargetPath = '/') or SandboxPathHasTrailingSeparator(ASandboxPath) or
@@ -384,7 +449,20 @@ begin
       TargetPath := FContext.Fs.Normalize(SandboxJoinPath(TargetPath,
         ExtractFileName(HostPath)));
     ImportFile(HostPath, TargetPath);
+    RecordSeedOrigin(HostPath, FContext.Fs.Normalize(TargetPath), False);
   end;
+end;
+
+procedure TSandboxRunnerApp.RecordSeedOrigin(const AHostPath,
+  ASandboxPath: string; const AIsDirectory: Boolean);
+var
+  Index: Integer;
+begin
+  Index := Length(FSeedOrigins);
+  SetLength(FSeedOrigins, Index + 1);
+  FSeedOrigins[Index].SandboxPath := ASandboxPath;
+  FSeedOrigins[Index].HostPath := ExcludeTrailingPathDelimiter(AHostPath);
+  FSeedOrigins[Index].IsDirectory := AIsDirectory;
 end;
 
 procedure TSandboxRunnerApp.SeedHostPathSpec(const ASpec,
@@ -602,27 +680,29 @@ var
 begin
   EmptyConfig := EmptyConfigEntries;
   ConfigureCapabilityAudit(AEngine);
-  AEngine.SourceType := ResolveSourceTypeOption(EngineOptions.SourceType,
-    EmptyConfig, AFileName);
-  ApplyCompatibilityAndWarningFlags(AEngine, EngineOptions, EmptyConfig);
-  AEngine.StrictTypes := ResolveFlagOption(EngineOptions.StrictTypes,
-    EmptyConfig);
-  AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
-    EngineOptions.UnsafeFunctionConstructor, EmptyConfig);
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
   else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
     AEngine.HostEnvironment.UseDeterministicProfile;
-  if ResolveFlagOption(EngineOptions.UnsafeShadowRealm, EmptyConfig) then
-    EnableShadowRealm(AEngine);
 
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
   Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
   if ResolveFlagOption(EngineOptions.UnsafeFFI, EmptyConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
-  if EngineOptions.AllowedHosts.Present then
-    AEngine.SetAllowedFetchHosts(EngineOptions.AllowedHosts.Values);
+  if ResolveFlagOption(EngineOptions.ExperimentalAST, EmptyConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
+
+  { Same option application every other binary gets from CreateEngine, in the
+    same position relative to runtime attachment — SetAllowedFetchHosts fans
+    out to engine extensions, so it has to run after the runtime is installed.
+    The per-file config is empty because AFileName is a sandbox path, not a
+    host path: a per-file walk upwards from it would leave the sandbox
+    namespace entirely and climb the host filesystem from its root, so it
+    could only ever find a config that has nothing to do with this run.
+    Root config still applies, because it is merged into the option values
+    before execution starts. }
+  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName);
 
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
@@ -752,14 +832,24 @@ var
   CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
   PreviousHostEnvironment: TGocciaHostEnvironment;
+  RenderScope: TGocciaDiagnosticSourceScope;
+  ExpectedPrincipal: Int64;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
   Result.ExitCode := 1;
+  { Only a fall-through default: every path below assigns a kind, so
+    this stands for "the runner returned without classifying", which is
+    a runner defect by definition. }
+  Result.FailureKind := sfkHostError;
 
   if not AContext.Fs.IsFile(AEntryPath) then
   begin
+    { The entry path is an argument, and for a nested run the guest
+      chose it — sfkHostError here would let the guest name the runner
+      as the party at fault by passing a path that does not exist. }
     Result.ErrorMessage := 'sandbox entry file not found: ' + AEntryPath;
+    Result.FailureKind := sfkScriptError;
     Exit;
   end;
 
@@ -797,9 +887,21 @@ begin
       ApplyVirtualModulesToEngine(Engine, '');
       FCurrentHostEnvironment := Engine.HostEnvironment;
 
+      { The recipient owns render authorization. A top-level runner invocation
+        explicitly authorizes the engine it just created. During nested
+        runScript, the parent scope is active before the child transition, so
+        the returned error string is authorized only for the parent and the
+        child's excerpt is withheld. Engine.Execute restores that same scope
+        before its exception reaches the formatter below. }
+      RenderScope := TGocciaDiagnosticSourceRegistry.Current;
+      if Assigned(RenderScope) then
+        ExpectedPrincipal := RenderScope.Principal
+      else
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
+
       try
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
-        StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+        PushTimeoutScope(tsFile, EngineOptions.Timeout.ValueOr(0));
+        PushInstructionLimitScope(EngineOptions.MaxInstructions.ValueOr(0));
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
         try
@@ -810,20 +912,79 @@ begin
         end;
         Result.Ok := True;
         Result.ExitCode := 0;
+        Result.FailureKind := sfkNone;
       finally
-        ClearExecutionTimeout;
-        ClearInstructionLimit;
+        PopTimeoutScope;
+        PopInstructionLimitScope;
       end;
     except
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
-      on E: TGocciaError do
-        Result.ErrorMessage := E.GetDetailedMessage(False);
-      on E: TGocciaThrowValue do
-        Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-          False, E.Suggestion);
-      on E: Exception do
+      { Each branch classifies as well as formats.  The order is what does
+        the classifying: every kind the guest can steer is named ahead of
+        the generic Exception branch, so a ceiling is reported as the
+        ceiling it is and a guest throw as the guest's, rather than either
+        being folded into "some native error happened". }
+      on E: TGocciaMemoryLimitError do
+      begin
+        Result.ErrorMessage := 'memory limit exceeded: ' + E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: TGocciaInstructionLimitError do
+      begin
         Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      { Reached from a nested isolated runScript, which checks the
+        inherited quota before it builds the child context and raises
+        out through the calling guest rather than returning a result;
+        this frame is where that lands. }
+      on E: ESandboxFsQuotaExceeded do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: EGocciaSandboxNestingLimitExceeded do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: TGocciaTimeoutError do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkTimeout;
+      end;
+      on E: TGocciaError do
+      begin
+        Result.ErrorMessage := E.GetDetailedMessage(False);
+        Result.FailureKind := sfkScriptError;
+      end;
+      on E: TGocciaThrowValue do
+      begin
+        Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
+          False, ExpectedPrincipal, E.Suggestion);
+        Result.FailureKind := sfkScriptError;
+      end;
+      { The same guest throw, as the bytecode VM delivers it.  Without this
+        branch a bytecode run reported an uncaught throw as a host fault and
+        printed the bare message where the interpreter printed the frame —
+        the guest picking both the classification and the format. }
+      on E: EGocciaBytecodeThrow do
+      begin
+        Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
+          Source, False, ExpectedPrincipal, E.Suggestion);
+        Result.FailureKind := sfkScriptError;
+      end;
+      { Whatever is left is a native error the engine does not model.
+        Every failure the guest can steer is named above, so reaching
+        here means the runner malfunctioned; if a guest-reachable
+        condition ever lands here it belongs in a branch of its own
+        rather than in this one. }
+      on E: Exception do
+      begin
+        Result.ErrorMessage := E.Message;
+        Result.FailureKind := sfkHostError;
+      end;
     end;
 
     Result.Output := OutputLines.Text;
@@ -846,14 +1007,31 @@ function TSandboxRunnerApp.ExecuteSandboxPath(
   const AOptions: TGocciaSandboxRunOptions): TGocciaSandboxRunResult;
 var
   ChildContext: TGocciaSandboxContext;
+  RemainingBytes: Int64;
+  RemainingNodes: Integer;
 begin
+  if FRunScriptDepth >= MAX_RUN_SCRIPT_DEPTH then
+    raise EGocciaSandboxNestingLimitExceeded.Create(
+      'sandbox runScript nesting limit exceeded');
+  Inc(FRunScriptDepth);
+  try
   if not AOptions.Isolated then
     Exit(ExecuteSandboxPathInContext(AContext, AEntryPath));
 
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
   Result.ExitCode := 1;
-  ChildContext := TGocciaSandboxContext.Create;
+  { Fall-through default, as in ExecuteSandboxPathInContext: the child
+    run replaces the whole record and every except branch assigns a
+    kind, so this only survives if the runner returned unclassified. }
+  Result.FailureKind := sfkHostError;
+  RemainingBytes := AContext.Fs.QuotaBytes - AContext.Fs.UsedBytes;
+  RemainingNodes := AContext.Fs.NodeQuota - AContext.Fs.NodeCount;
+  if RemainingBytes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox byte quota exhausted');
+  if RemainingNodes <= 0 then
+    raise ESandboxFsQuotaExceeded.Create('sandbox node quota exhausted');
+  ChildContext := TGocciaSandboxContext.Create(RemainingBytes, RemainingNodes);
   try
     try
       ChildContext.RunScriptCallback := ExecuteSandboxPath;
@@ -872,16 +1050,238 @@ begin
     except
       on E: EGocciaCapabilityAuditDeliveryError do
         raise;
+      { Seeding and diffing the child context, not the child program —
+        but the guest supplies the seed list, so most of what fails here
+        is still its own doing: the inherited quotas are a ceiling like
+        any other, and a seed path that is missing, is not a directory,
+        or is otherwise unusable is the guest naming a path the parent
+        filesystem does not have. }
+      on E: ESandboxFsQuotaExceeded do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkResourceLimit;
+      end;
+      on E: ESandboxFsError do
+      begin
+        Result.Ok := False;
+        Result.ExitCode := 1;
+        Result.ErrorMessage := E.Message;
+        Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkScriptError;
+      end;
+      { What is left is seeding or diffing failing for a reason the
+        guest did not name — a native error in the runner's own copy or
+        diff machinery. }
       on E: Exception do
       begin
         Result.Ok := False;
         Result.ExitCode := 1;
         Result.ErrorMessage := E.Message;
         Result.ErrorOutput := E.Message + sLineBreak;
+        Result.FailureKind := sfkHostError;
       end;
     end;
   finally
     ChildContext.Free;
+  end;
+  finally
+    Dec(FRunScriptDepth);
+  end;
+end;
+
+function SameSandboxBytes(const ALeft, ARight: TBytes): Boolean;
+begin
+  Result := (Length(ALeft) = Length(ARight)) and
+    ((Length(ALeft) = 0) or
+     CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
+end;
+
+// The host path a sandbox path was seeded from, or False when nothing seeded
+// it. The longest matching seed wins, so a directory seeded inside another
+// resolves against the one that actually supplied the file.
+function TSandboxRunnerApp.HostPathForSandboxPath(const ASandboxPath: string;
+  out AHostPath: string): Boolean;
+var
+  I: Integer;
+  Origin: TSandboxSeedOrigin;
+  Best: Integer;
+  Relative: string;
+begin
+  Result := False;
+  AHostPath := '';
+  Best := -1;
+  for I := 0 to High(FSeedOrigins) do
+  begin
+    Origin := FSeedOrigins[I];
+    if not Origin.IsDirectory then
+    begin
+      if Origin.SandboxPath = ASandboxPath then
+      begin
+        Best := I;
+        Break;
+      end;
+      Continue;
+    end;
+
+    if (ASandboxPath = Origin.SandboxPath) or
+       (Copy(ASandboxPath, 1, Length(Origin.SandboxPath)) =
+        Origin.SandboxPath) and
+       ((Origin.SandboxPath = '/') or
+        (ASandboxPath[Length(Origin.SandboxPath) + 1] = '/')) then
+      if (Best < 0) or
+         (Length(Origin.SandboxPath) > Length(FSeedOrigins[Best].SandboxPath)) then
+        Best := I;
+  end;
+
+  if Best < 0 then
+    Exit;
+
+  Origin := FSeedOrigins[Best];
+  if not Origin.IsDirectory then
+  begin
+    AHostPath := Origin.HostPath;
+    Exit(True);
+  end;
+
+  Relative := Copy(ASandboxPath, Length(Origin.SandboxPath) + 1, MaxInt);
+  while (Relative <> '') and (Relative[1] = '/') do
+    Delete(Relative, 1, 1);
+  if Relative = '' then
+    Exit;
+
+  AHostPath := IncludeTrailingPathDelimiter(Origin.HostPath) +
+    StringReplace(Relative, '/', DirectorySeparator, [rfReplaceAll]);
+  { The sandbox normalizes its own paths, so `Relative` cannot climb out on
+    its own. Checking the result anyway costs nothing and means the guarantee
+    does not depend on a normalizer two units away. }
+  Result := Copy(ExpandFileName(AHostPath), 1,
+    Length(IncludeTrailingPathDelimiter(Origin.HostPath))) =
+    IncludeTrailingPathDelimiter(Origin.HostPath);
+  if not Result then
+    AHostPath := '';
+end;
+
+// A write that either replaces the file or leaves it as it was. The temporary
+// lands in the same directory, so the rename is within one filesystem, and
+// ReplaceHostFile refuses a symlink planted at the temporary's name.
+function TSandboxRunnerApp.WriteHostFile(const AHostPath: string;
+  const ABytes: TBytes): Boolean;
+var
+  ErrorMessage: string;
+begin
+  try
+    ForceDirectories(ExtractFilePath(AHostPath));
+    Result := ReplaceHostFile(AHostPath, AHostPath + '.goccia-write-back',
+      ABytes, ErrorMessage);
+  except
+    on E: Exception do
+    begin
+      ErrorMessage := E.Message;
+      Result := False;
+    end;
+  end;
+  if not Result then
+    WriteLn(ErrOutput, 'write-back: ' + AHostPath + ': ' + ErrorMessage);
+end;
+
+{ The guest never writes to the host. It writes into its own filesystem, and
+  this is the host deciding, afterwards and on its own command line, to keep
+  what came out. A run that failed is not kept: a fixer that threw halfway
+  has written some of its files and not the rest, and a half-applied fix is
+  worse than none. Deletions are never applied — this makes a file say
+  something different, it does not make one stop existing. }
+procedure TSandboxRunnerApp.WriteBackIfRequested(const ARunOk: Boolean);
+var
+  Paths: TStringList;
+  PendingSandbox, PendingHost: TStringList;
+  Path, HostPath: string;
+  I: Integer;
+  Written, Skipped: Integer;
+
+  procedure Collect(const ADirectory: string);
+  var
+    Index: Integer;
+    Listing: TSandboxFsStatArray;
+  begin
+    Listing := FContext.Fs.SnapshotList(ADirectory);
+    for Index := 0 to High(Listing) do
+      if Listing[Index].Kind = nkFile then
+        Paths.Add(Listing[Index].Path)
+      else
+        Collect(Listing[Index].Path);
+  end;
+
+begin
+  if not FWriteBack.Present then
+    Exit;
+
+  if not ARunOk then
+  begin
+    WriteLn(ErrOutput,
+      'write-back: skipped, the run did not succeed.');
+    Exit;
+  end;
+
+  Paths := TStringList.Create;
+  PendingSandbox := TStringList.Create;
+  PendingHost := TStringList.Create;
+  try
+    Collect('/');
+    Paths.Sort;
+    Written := 0;
+    Skipped := 0;
+
+    { Every target is resolved before any is written, so a path with no host
+      origin is reported rather than discovered halfway through. }
+    for I := 0 to Paths.Count - 1 do
+    begin
+      Path := Paths[I];
+      if Assigned(FContext.Baseline) and FContext.Baseline.IsFile(Path) and
+         SameSandboxBytes(FContext.Baseline.SnapshotReadAllBytes(Path),
+           FContext.Fs.SnapshotReadAllBytes(Path)) then
+        Continue;
+
+      if not HostPathForSandboxPath(Path, HostPath) then
+      begin
+        WriteLn('write-back: ' + Path + ' has no seeded host path, skipped');
+        Inc(Skipped);
+        Continue;
+      end;
+
+      if HostPathIsSymlink(ExcludeTrailingPathDelimiter(HostPath)) then
+      begin
+        WriteLn('write-back: ' + HostPath + ' is a symlink, skipped');
+        Inc(Skipped);
+        Continue;
+      end;
+
+      PendingSandbox.Add(Path);
+      PendingHost.Add(HostPath);
+    end;
+
+    for I := 0 to PendingSandbox.Count - 1 do
+    begin
+      Path := PendingSandbox[I];
+      HostPath := PendingHost[I];
+      if WriteHostFile(HostPath,
+           FContext.Fs.SnapshotReadAllBytes(Path)) then
+      begin
+        WriteLn('write-back: ' + HostPath);
+        Inc(Written);
+      end
+      else
+        Inc(Skipped);
+    end;
+
+    WriteLn(Format('write-back: %d file(s) written, %d skipped',
+      [Written, Skipped]));
+  finally
+    PendingHost.Free;
+    PendingSandbox.Free;
+    Paths.Free;
   end;
 end;
 
@@ -925,7 +1325,9 @@ begin
   end;
 
   FContext.Free;
-  FContext := TGocciaSandboxContext.Create;
+  FContext := TGocciaSandboxContext.Create(
+    FFsQuotaBytes.ValueOr(DEFAULT_SANDBOX_BYTE_QUOTA),
+    FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA));
   FContext.RunScriptCallback := ExecuteSandboxPath;
   LoadSeeds;
   FContext.CaptureBaseline;
@@ -941,6 +1343,7 @@ begin
     WriteLn(RunResult.ResultValue.ToStringLiteral.Value);
   if not RunResult.Ok then
     ExitCode := RunResult.ExitCode;
+  WriteBackIfRequested(RunResult.Ok);
   WriteDiffIfRequested;
 end;
 

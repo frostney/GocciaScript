@@ -2,78 +2,77 @@
 name: git-workflow
 description: >-
   Applies the user's git defaults: branch from the remote default, merge rather
-  than rebase, never amend or force-push, and squash-merge pull requests. Use
-  when branching, syncing, committing, pushing, or merging in the user's repos.
+  than rebase for ordinary branches, use native GitHub stacks when selected,
+  never amend, and squash-merge pull requests. Use when branching, syncing,
+  committing, pushing, or merging in the user's repos.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git; pull-request operations also require the GitHub CLI (gh) and
-  network access.
+  network access. Protected native stack publication also requires Python 3.11+
+  and a POSIX shell.
 ---
 
 # Git workflow
 
-## Instructions
+Apply these defaults unless the user has explicitly overridden them in the
+active workstream. Preserve that authority across turns until changed; a new
+repository or operation needs its own scope. A git request authorizes only the repository and GitHub state required for
+that operation.
 
-These are the user's repository defaults. Apply them on every git action unless the user explicitly overrides them in the same turn.
+- Resolve the base from the remote default; never hardcode `main`.
+- Make remote-default synchronization an automatic preflight for new work; do
+  not ask permission to perform a safe clean update.
+- When new work starts from the local default branch, inspect status before
+  fetching or editing. If it is clean, fetch and fast-forward it to the fetched
+  remote-default tip automatically. Stop on local-only commits, divergence, or
+  a non-fast-forward update.
+- If that local default worktree is dirty, stop before fetching, updating, or
+  editing and ask the user to choose: discard the state, or preserve it and
+  create a focused branch/worktree from the latest remote default. Do not make
+  either choice, stash, commit, or discard anything without the answer.
+- Before the first edit in any other newly selected or reused branch or
+  worktree, require a clean worktree and fetch the remote default branch. Stop
+  and report dirty files; never stash, commit, or discard them automatically.
+- Automatically create every new focused local branch and worktree at the exact
+  freshly fetched remote-default tip. Do not configure a focused branch to
+  track the remote default; set its upstream only when pushing that focused
+  branch.
+- When entering an existing focused branch or worktree, merge the freshly
+  fetched remote default before editing.
+- Merge the remote base to update a branch. Never rebase.
+- During an authorized PR update, resolve conflicts whose intended behavior is
+  established by the selected change and current base. Preserve both sides'
+  required behavior, regenerate generated files with the project tool, and
+  validate the result. Pause when resolution requires a material unresolved
+  choice. During a new-work preflight, report conflicts before implementation.
+- Never amend commits. Add a new commit for every correction.
+- Never force-push. Stop if a plain push is rejected by divergent history.
+- Stage only relevant files and exclude secrets or unrelated local work.
+- Use concise Conventional Commit subjects in imperative mood. Each commit title
+  must state its observable impact, not only the mechanism changed.
+- Let hooks run unless the user explicitly asks otherwise.
+- Squash-merge pull requests and delete the source branch afterward.
+- Because the merge is a squash, the pull request **title** becomes the commit
+  subject on the base branch: the branch's own commit subjects do not survive.
+  Give the title a Conventional Commit subject that states the observable impact
+  of the change as a whole. Pick its type from the net effect rather than the
+  most frequent commit under it. Where a project generates its changelog or
+  version bump from commit history, a non-conforming title merges cleanly and is
+  then silently absent from it.
 
-### Rules
+## Native GitHub stacks
 
-- **Squash-merge** every pull request. Never use "Create a merge commit" or "Rebase and merge" on GitHub.
-- **Never rebase.** Use merge to integrate changes — including baseline catch-up and conflict resolution.
-- **Never force push.** Plain `git push` only. No `--force`, no `--force-with-lease`.
-- **Never amend commits.** Always create new commits. `git commit --amend` is forbidden, even for typo fixes, unless the user explicitly asks in the same turn.
+Use the official `gh stack` workflow when the user selects a stack, when work
+has a real dependency chain, or when a confirmed large issue is deliberately
+split into cumulative, independently reviewable layers. Do not stack unrelated
+work. Each layer must have one clear claim, a bounded diff, its own validation,
+and an explicit subset of the requirements.
 
-### Branching
+Read [references/github-stacks.md](references/github-stacks.md) before creating,
+syncing, pushing, submitting, reviewing, or merging a stack. That reference is
+the only exception to the merge-only and never-force-push defaults above:
+rebases and force-with-lease are permitted only when performed by verified
+`gh stack` commands against a clean, confirmed native stack. Raw `git rebase`,
+`git push --force`, and manual `git push --force-with-lease` remain forbidden.
 
-Resolve the base branch from the remote default — do not hardcode `main`:
-
-```bash
-BASE_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
-```
-
-- Create focused branches off the base. Name them from the issue or change (e.g. `issue-123-short-slug`, `fix-checkout-validation`).
-- Never commit directly to the base branch.
-
-### Keeping a branch up to date
-
-When the branch is behind the remote base, **merge** the baseline:
-
-```bash
-git fetch origin "$BASE_BRANCH"
-git merge "origin/$BASE_BRANCH" --no-edit
-```
-
-Resolve any conflicts and commit the merge before continuing. Do not `git rebase origin/$BASE_BRANCH`.
-
-### Commits
-
-- Each logical change is its own commit. Use a HEREDOC for multi-line messages so formatting is preserved.
-- Always use Conventional Commit subjects: `type(scope): summary`, with type from `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, or `revert`. Pick the narrowest accurate scope; omit the scope only when no meaningful scope exists.
-- Write the subject in imperative mood, lowercase after the type/scope, no trailing period, and keep it concise. Use the body for rationale or verification details when helpful.
-- Do not amend. If a commit needs a fix-up, add a new commit.
-- Do not skip hooks (`--no-verify`) unless the user explicitly asks.
-
-### Pushing
-
-```bash
-git push                       # routine push
-git push -u origin HEAD        # first push of a new branch
-```
-
-Never `git push --force` or `git push --force-with-lease`. If a remote push is rejected because the histories diverged, stop and ask the user — do not paper over with a force push.
-
-### Merging pull requests
-
-- Always **squash-merge** on GitHub. Edit the squash commit message to a clean summary before confirming the merge.
-- Delete the source branch after the squash-merge (the GitHub option, or local cleanup).
-- After the squash-merge, sync any local working copy that still has the merged branch:
-
-```bash
-git checkout "$BASE_BRANCH"
-git pull origin "$BASE_BRANCH"
-git branch -D <merged-branch>
-```
-
-### Exceptions
-
-Deviate from any rule only when the user explicitly asks in the same turn. State the deviation in chat so it is not silently normalized.
+After a squash merge, sync the local base and remove the merged local branch.

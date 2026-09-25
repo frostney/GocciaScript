@@ -107,4 +107,24 @@ describe("Function.prototype.bind", () => {
 
     expect(bound.name).toBe("bound before");
   });
+
+  test("an own bind property is invoked instead of the intrinsic", () => {
+    const host = () => "host";
+    host.bind = (...args) => `own bind(${args.join(",")})`;
+
+    expect(host.bind("t")).toBe("own bind(t)");
+    expect(host.bind("t", 1, 2)).toBe("own bind(t,1,2)");
+    expect(Function.prototype.bind.call(host, null)()).toBe("host");
+  });
+
+  test("a class static named bind is the class's own method", () => {
+    class Registry {
+      static bind(name) {
+        return `Registry.bind(${name})`;
+      }
+    }
+
+    expect(Registry.bind("a")).toBe("Registry.bind(a)");
+    expect(Registry.bind).not.toBe(Function.prototype.bind);
+  });
 });

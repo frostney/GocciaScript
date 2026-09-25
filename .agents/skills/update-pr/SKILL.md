@@ -12,55 +12,50 @@ compatibility: >-
 
 # Update PR
 
-## Instructions
+Update the established PR through integration, relevant commits, a normal push
+and current metadata. The request includes resolving routine conflicts and
+running the declared PR gate. Reuse the selected target and prior authorization;
+ask only when the intended PR or a material resolution choice remains unclear.
 
-This workflow is explicit permission to commit relevant changes and push to the current PR branch.
+When the current PR belongs to a native GitHub stack, read
+[../git-workflow/references/github-stacks.md](../git-workflow/references/github-stacks.md).
 
-### Rules
-
-- **Never amend commits.** Always create new commits.
-- **Never force push.** Use `git push` without `--force` or `--force-with-lease`.
-
-### Steps
-
-1. Inspect repository state and resolve the base branch (never hardcode `main`):
-   - `git status --short --branch`
-   - `git diff`
-   - `git diff --staged`
-   - `git log --oneline -5`
-   - `BASE_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')`
-2. If the current branch is the base branch, stop and ask for the intended PR branch.
-3. Confirm an open PR exists: `gh pr view`. If none, ask whether to run `/create-pr` instead.
-4. If the branch is behind `origin/$BASE_BRANCH`, merge baseline:
-
-   ```bash
-   git fetch origin "$BASE_BRANCH"
-   git merge "origin/$BASE_BRANCH" --no-edit
-   ```
-
-   Resolve conflicts and commit the merge if needed before continuing.
-
-5. If there is nothing new to commit (aside from an already-finished merge), skip to step 8.
-6. Stage only relevant files. Exclude secrets and unrelated local changes.
-7. Commit with a concise Conventional Commit message via HEREDOC:
-   - Subject format: `type(scope): summary`.
-   - Use one of: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
-   - Pick the narrowest accurate scope; omit the scope only when no meaningful scope exists.
-   - Use imperative mood, lowercase the summary after the type/scope, and do not end the subject with a period.
-8. Push (set upstream if needed):
-
-   ```bash
-   git push -u origin HEAD
-   ```
-
-9. Reconcile PR title and body with the latest implementation:
-   - Search `.github/pull_request_template.md` and `.github/PULL_REQUEST_TEMPLATE/`; read every matching PR template relevant to the current PR.
-   - Absence protocol: after the template search finds no PR template, state that no project PR template was found and reconcile against the existing PR body structure.
-   - `gh pr view --json body,url,title`
-   - Align title, Summary, Testing, linked issues, and scope with commits and verification.
-   - Update title: `gh pr edit --title "$PR_TITLE"` when stale.
-   - Update body: `gh pr edit --body-file <file>` when stale. Keep template structure and reviewer context.
-
-10. Report: commit hash, branch, PR URL, whether title/body changed, and verification performed.
-
-Do not skip git hooks or verification unless the user explicitly requests it.
+1. Apply `git-workflow`. Inspect the current PR, branch, relevant local changes,
+   recent commits and fetched remote default. Resolve a behind-base or
+   conflicting branch before deciding whether missing CI needs any action.
+2. Stop if on the base branch or no open PR exists; report the required next
+   workflow.
+3. When an ordinary branch is behind the remote base, merge it into the branch.
+   Preserve both sides' required behavior in additive conflicts; regenerate
+   generated files using the project's tool. Continue through validation when
+   the resolution is established. Ask for a material unresolved choice.
+   For a verified native stack, capture remote heads and use the guarded
+   `gh stack sync` or narrower official stack operation; never use raw rebase or
+   force-push commands.
+4. Apply `/code-review fix-all` and `/test-against-spec fix` to the changed
+   behavior, including any baseline integration. Reuse matching current evidence;
+   run missing or invalidated checks. Repair every verified in-scope requirement
+   gap through `/implement`'s development loop, then establish the declared PR
+   gate. Preserve content, command, environment and coverage bindings. A preview
+   needed to test an unpublished fix permits its draft update; resume testing
+   on that exact revision before claiming readiness.
+5. Stage only relevant files and commit them with a concise Conventional Commit
+   subject. Never amend and never skip hooks.
+6. Push an ordinary branch normally, setting upstream when needed. Push a
+   verified stack only through the guarded official stack workflow.
+7. Reconcile the PR title and body with the complete current diff, scope, linked
+   issues, and observed verification. Keep the title a Conventional Commit
+   subject for the whole change; the squash merge makes it the commit subject on
+   the base branch, so widened scope may also change its type. Follow
+   [../agent-writing/references/pr-descriptions.md](../agent-writing/references/pr-descriptions.md),
+   preserving explicit project-template requirements and replacing obsolete
+   summaries or intermediate development history. Reuse media that still shows
+   the current behavior; refresh affected walkthrough segments using
+   [../create-pr/references/walkthroughs.md](../create-pr/references/walkthroughs.md).
+8. Report the updated PR, commit, metadata changes and observed validation.
+   Include stack position and rewritten branches when applicable. Distinguish
+   passed local checks from pending current-head CI. Return the exact new head
+   and next transition to the active publication or delivery caller; that caller
+   continues through CI and feedback. Updating a PR does not
+   authorize merging it. Report missing walkthrough requirements with remedies;
+   media tooling gaps alone do not block the update.

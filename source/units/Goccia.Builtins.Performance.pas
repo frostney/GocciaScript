@@ -133,8 +133,16 @@ var
   ElapsedNanoseconds: Int64;
 begin
   Performance := RequirePerformanceThis(AThisValue);
-  ElapsedNanoseconds := Performance.FHostEnvironment.MonotonicNanoseconds -
-    Performance.FTimeOriginMonotonicNanoseconds;
+  { A mocked monotonic clock — the virtual timer queue installs one while fake
+    timers are on — already counts from its own origin, so subtracting this
+    performance object's time origin would measure from a boot that is not on
+    the same timeline. Under a mock, elapsed virtual time is the answer, which
+    is what @sinonjs/fake-timers reports too. }
+  if Performance.FHostEnvironment.HasMonotonicClockOverride then
+    ElapsedNanoseconds := Performance.FHostEnvironment.MonotonicNanoseconds
+  else
+    ElapsedNanoseconds := Performance.FHostEnvironment.MonotonicNanoseconds -
+      Performance.FTimeOriginMonotonicNanoseconds;
   Result := TGocciaNumberLiteralValue.Create(Max(0.0,
     Int64ToDouble(ElapsedNanoseconds) / 1000000.0));
 end;

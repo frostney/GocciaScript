@@ -48,6 +48,10 @@ type
       AEndOffset: Integer): TGocciaSourceSpan;
     function Cover(const AOther: TGocciaSourceSpan): TGocciaSourceSpan;
     function Length: Integer;
+    { The exact source text this span covers, or '' when the span carries no
+      coordinates (synthetic nodes, shim-generated AST). Used by runtime
+      diagnostics that name an expression the way the author wrote it. }
+    function Text: string;
     function OffsetAtPosition(const ALine, AColumn: Integer): Integer;
     property StartOffset: Integer read FStartOffset;
     property EndOffset: Integer read FEndOffset;
@@ -105,6 +109,25 @@ end;
 function TGocciaSourceSpan.Length: Integer;
 begin
   Result := FEndOffset - FStartOffset;
+end;
+
+function TGocciaSourceSpan.Text: string;
+var
+  SourceText: string;
+  Count, SourceLength: Integer;
+begin
+  Result := '';
+  if not Assigned(FCoordinates) then
+    Exit;
+  SourceText := FCoordinates.Source;
+  SourceLength := System.Length(SourceText);
+  if (FStartOffset < 0) or (FStartOffset >= SourceLength) or
+     (FEndOffset <= FStartOffset) then
+    Exit;
+  Count := FEndOffset - FStartOffset;
+  if FStartOffset + Count > SourceLength then
+    Count := SourceLength - FStartOffset;
+  Result := Copy(SourceText, FStartOffset + 1, Count);
 end;
 
 function TGocciaSourceSpan.GetStartLine: Integer;

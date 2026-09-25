@@ -10,11 +10,13 @@ uses
 
   TimingUtils,
   TextSemantics,
+  CriticalSections,
 
   Goccia.Arguments.Collection,
   Goccia.Application,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
@@ -22,6 +24,7 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Engine,
+  Goccia.EngineFault,
   Goccia.Executor.Interpreter,
   Goccia.Executor.Bytecode,
   Goccia.Executor,
@@ -31,13 +34,19 @@ uses
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
   Goccia.JSON.Utils,
+  Goccia.Modules.NodeResolution,
+  Goccia.Modules.Resolver,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeProfiles.TestRunner,
   Goccia.Scope,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
+  Goccia.VM.Exception,
   Goccia.Builtins.TestingLibrary,
   Goccia.Builtins.Testing.Snapshots,
   Goccia.CLI.JSON.Reporter,
@@ -65,6 +74,48 @@ const
     --timeout=0. }
   DEFAULT_TIMEOUT_MS = 30000;  // 30 seconds
 
+  { Directory names never descended into when a positional path is a directory.
+    A node_modules tree in a test folder is a module-resolution fixture that
+    the suites inside that folder import; treating its packages as test files
+    would execute third-party (or, here, deliberately CommonJS) source. }
+  TEST_DISCOVERY_EXCLUDED_DIRECTORIES: array[0..0] of string = (
+    NODE_MODULES_DIRECTORY_NAME
+  );
+
+  { Sentinel the parallel worker returns as its pool error message when
+    --exit-on-first-failure has to stop the queue. It carries no diagnostic
+    value — the file's own counts and failed-test names are already in
+    TTestWorkerData — it only trips TGocciaThreadPool.CancelOnError, and the
+    aggregation recognises it so the slot is not rewritten as a synthetic
+    failure. }
+  EXIT_ON_FIRST_FAILURE_SIGNAL = '<exit-on-first-failure>';
+
+  { Prefix on every line of the integrity-fault diagnostic. Deliberately unlike
+    any ordinary failure line the runner prints, so `grep 'Integrity fault:'`
+    over a CI log finds the abort and nothing else. }
+  INTEGRITY_FAULT_PREFIX = 'Integrity fault: ';
+
+  { Stands in for a file name in the diagnostic when the fault came from
+    end-of-run inline-snapshot write-back, which belongs to no single file. }
+  INLINE_SNAPSHOT_FLUSH_SITE = '<inline snapshot write-back>';
+
+  { Exit code for a run the engine abandoned. An integrity fault
+    (Goccia.EngineFault.IsEngineIntegrityFault) means a value was used after it
+    was freed, a pointer was never valid, or the heap's own bookkeeping is
+    destroyed — so every later file would execute on state the engine has
+    already lost track of, and the verdict it reported would be worthless.
+    Distinct from 1 (the suite ran and reported failures) and 2 (the invocation
+    was unusable) so a harness can tell "these tests failed" from "stop
+    believing this process". 70 is sysexits' EX_SOFTWARE, "an internal software
+    error has been detected"; see docs/contributing/cli-conventions.md. }
+  EXIT_CODE_INTEGRITY_FAULT = 70;
+
+  { Upper bound, in milliseconds, that a thread ending the process will wait for
+    the reporting thread to finish writing the diagnostic. Generous next to a
+    single flushed write, and bounded so a reporter that itself dies mid-write
+    cannot leave the process hanging in an abort. }
+  INTEGRITY_DIAGNOSTIC_WAIT_MS = 2000;
+
 type
   { Plain-data record for extracting test results from GC-managed objects.
     Used by the parallel path to pass results across thread boundaries
@@ -73,6 +124,7 @@ type
     Passed: Double;
     Failed: Double;
     Skipped: Double;
+    SuiteErrors: Double;
     TotalRunTests: Double;
     Assertions: Double;
     Duration: Double;
@@ -82,6 +134,9 @@ type
     CompileNs: Int64;
     ExecNs: Int64;
     ErrorMessage: string;
+    { Console-only rendering of ErrorMessage — may carry the module
+      'Resolved to:' line and color codes; never serialized into results. }
+    HostDiagnostic: string;
   end;
 
   TTestWorkerDataArray = array[0..MaxInt div SizeOf(TTestWorkerData) - 1] of TTestWorkerData;
@@ -91,6 +146,9 @@ type
     TestResult: TGocciaObjectValue;
     Timing: TGocciaScriptResult;
     ErrorMessage: string;
+    { Console-only rendering of ErrorMessage — may carry the module
+      'Resolved to:' line and color codes; never serialized into results. }
+    HostDiagnostic: string;
   end;
 
   { Per-input-file outcome, serialised into the JSON output's "results"
@@ -104,6 +162,7 @@ type
     Passed: Double;
     Failed: Double;
     Skipped: Double;
+    SuiteErrors: Double;
     TotalTests: Double;
     LexTimeNanoseconds: Int64;
     ParseTimeNanoseconds: Int64;
@@ -136,8 +195,33 @@ type
     FDescribeTimeout: TIntegerOption;
     FUpdateSnapshots: TFlagOption;
     FUpdateSnapshotsAlias: TFlagOption;
+    FGlobalFiles: TRepeatableOption;
+    FInlineGlobals: TRepeatableOption;
+    FNoVitestCompat: TFlagOption;
+    { Stop signal of the parallel run currently in flight, or nil. Not owned —
+      RunScriptsFromFilesParallel publishes it before RunAll starts any worker
+      and clears it once RunAll has joined them. It exists so a worker that hits
+      an engine-integrity fault can stop the queue on its way out: the pool's
+      automatic cancel-on-error only arms under --exit-on-first-failure, and an
+      integrity fault must stop dispatching new files whether or not the user
+      asked to bail on failures. What it does not do is guarantee the abort —
+      the faulting worker halts the process itself — it keeps peer workers from
+      starting more files during the window that halt takes.
+
+      The flag rather than the pool, deliberately. A worker the watchdog
+      abandoned keeps running after RunAll returns and after the pool is freed,
+      so a cached pool pointer would be a use-after-free waiting for that
+      zombie to fault. The pool leaks the flag instead of freeing it as soon as
+      any worker is abandoned, which is exactly the condition under which a
+      zombie exists — so this pointer is live whenever anything can still read
+      it. Clearing it in the same scope keeps a zombie from a finished run
+      cancelling a later one, which is the mis-cancellation
+      TGocciaThreadPool.RunAll guards against on its own side. }
+    FActiveCancelFlag: TGocciaCancellationFlag;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-    procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    procedure InitializeRuntime(const AEngine: TGocciaEngine;
+      const AEnableHostFileLoading: Boolean = True);
+    procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
     procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
@@ -149,6 +233,7 @@ type
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   private
@@ -177,6 +262,141 @@ type
     procedure PrintTestResults(const AResult: TAggregatedTestResult);
   end;
 
+{ Ends the process immediately, running no unit finalization and flushing
+  nothing. The abort path needs a termination that cannot run code on a heap the
+  engine has already declared untrustworthy, and cannot tear down the RTL under
+  peer worker threads that are still running; Halt does both. Declared against
+  the C runtime rather than routed through the RTL for that reason. }
+{$IFDEF WINDOWS}
+{ TerminateProcess rather than ExitProcess: ExitProcess first terminates the
+  peer threads and THEN runs DLL process-detach handlers — a detach handler
+  needing a lock a just-terminated worker held deadlocks the abort. Terminate
+  skips detach handlers entirely, which is the whole contract here. }
+function GetCurrentProcess: THandle; stdcall;
+  external 'kernel32' name 'GetCurrentProcess';
+function TerminateProcess(AProcess: THandle; AExitCode: LongWord): LongBool;
+  stdcall; external 'kernel32' name 'TerminateProcess';
+
+procedure TerminateProcessNow(AStatus: LongInt);
+begin
+  TerminateProcess(GetCurrentProcess, LongWord(AStatus));
+end;
+{$ELSE}
+procedure TerminateProcessNow(AStatus: LongInt); cdecl; external name '_exit';
+{$ENDIF}
+
+var
+  { Set once, by whichever thread reports the first engine-integrity fault, and
+    never cleared. Two jobs, both of which need it to outlive the pool:
+
+    It decides who prints. Faults arrive on worker threads, and a run that
+    corrupts shared state is as likely to fault two workers as one; an
+    unsynchronised WriteLn race would shred the very diagnostic the abort
+    exists to produce. First fault wins, the rest stay silent.
+
+    It also lets the main thread recognise an abort that is already under way.
+    A faulting worker ends the process itself, but it waits for the diagnostic
+    to be written first, and the main thread can return from RunAll inside that
+    window; reading this tells it to stop rather than spend the window
+    aggregating a summary that is about to vanish mid-sentence. The pool's own
+    results cannot serve that purpose — a worker the watchdog abandoned has its
+    in-progress slot dropped and rewritten as a TIMEOUT — and this lives in
+    process memory no pool owns, so nothing can rewrite it.
+
+    Integer with an interlocked write because the claim it makes ("I am the
+    reporter") must be exclusive; plain aligned reads are enough on the
+    consuming side, which only ever asks whether it is non-zero. }
+  GIntegrityFaultReported: Integer;
+
+  { Raised by the reporting thread once its diagnostic is written AND flushed.
+    Every thread that ends the process waits for this first. Without it the
+    abort could truncate its own message: the reporter is mid-write while a
+    second faulting worker reaches the exit, and the process dies with one of
+    the two lines delivered. That was observed once per ~150 aborting runs with
+    two or more faulting files, and never with one. }
+  GIntegrityFaultDiagnosticWritten: Integer;
+
+{ Writes the abort diagnostic for an engine-integrity fault to stderr and
+  flushes it immediately. Only the first caller in the process writes anything;
+  later ones return silently, having lost the race to report.
+
+  Written at the point of the fault, including from a worker thread — a
+  deliberate exception to the pool's "capture your output, never WriteLn"
+  contract. Handing the text back to the main thread would mean allocating and
+  refcounting strings on the heap that just proved untrustworthy, and the
+  faulting thread may not get that far; the diagnostic is the one thing that
+  must survive. The first-fault gate removes the worker-against-worker race,
+  and composing the whole report into one string leaves a single write rather
+  than a sequence of them — the remaining interleaving partner is the pool
+  watchdog's own stall warnings on the main thread, which are line-oriented and
+  only appear once a worker has already been stuck for twice the file timeout.
+  Flushing is what makes the message survive the exit below, which runs no
+  finalization and so flushes nothing on its own. }
+procedure ReportIntegrityFault(const AFileName: string;
+  const AException: Exception);
+begin
+  if AtomicExchangeInt32(GIntegrityFaultReported, 1) <> 0 then
+    Exit;
+  WriteLn(ErrOutput, INTEGRITY_FAULT_PREFIX + AException.ClassName + ' in ' +
+    AFileName + ': ' + AException.Message + sLineBreak +
+    INTEGRITY_FAULT_PREFIX + 'the engine can no longer vouch for its own ' +
+    'state, so the run is aborted and the remaining files were not executed.');
+  Flush(ErrOutput);
+  AtomicExchangeInt32(GIntegrityFaultDiagnosticWritten, 1);
+end;
+
+{ True once any thread has reported an integrity fault. }
+function IntegrityFaultWasReported: Boolean;
+begin
+  Result := GIntegrityFaultReported <> 0;
+end;
+
+{ Ends the process on an integrity fault, from whichever thread got here first.
+
+  Not Halt, and that is the whole point of this routine. Halt runs unit
+  finalization on the calling thread before the process dies, and on a worker
+  thread that tears down process-wide RTL state — the thread manager included —
+  while peer workers are still executing tests. The next threading operation in
+  a peer then fails with the RTL's own 'Thread error' (sysconst.SThreadError),
+  the testing library's generic per-test arm converts it into a recorded test
+  failure, and the abort prints an ordinary-looking red test line for a test
+  that never really failed. Measured at ~1 aborting run in 75 before this, and
+  provably the halt's doing: removing only the worker-side halt took it to zero
+  in 300 runs, and 40 non-aborting runs of the same files never produced one.
+
+  Exiting without finalization removes the window rather than papering over it,
+  and it trusts the suspect heap less, not more: no finalizer runs on a heap the
+  engine has already said it cannot vouch for. Buffered stdout dies with it,
+  which is exactly right — a run that stopped mid-way has no summary worth
+  flushing. The diagnostic survives because it is flushed at the point of the
+  fault, and because of the wait below. }
+procedure TerminateAfterIntegrityFault;
+var
+  Deadline: Int64;
+begin
+  { Never overtake the reporting thread. Whoever lost the report gate would
+    otherwise end the process while the winner is still inside its write, and
+    the abort would truncate its own diagnostic. The bound is a monotonic
+    deadline, not a Sleep(1) iteration count: on Windows Sleep(1) can consume
+    a full scheduler tick, which would stretch the intended ceiling ~15x. }
+  Deadline := GetMilliseconds + INTEGRITY_DIAGNOSTIC_WAIT_MS;
+  while (GIntegrityFaultDiagnosticWritten = 0) and
+    (GetMilliseconds < Deadline) do
+    Sleep(1);
+  TerminateProcessNow(EXIT_CODE_INTEGRITY_FAULT);
+end;
+
+{ Reports the fault and stops the process. Deliberately not an unwind: the
+  aggregation the runner would unwind through reads the very objects the fault
+  calls into question, and PrintTestResults would then overwrite ExitCode with
+  a pass/fail verdict this process is in no position to give. }
+procedure AbortRunOnIntegrityFault(const AFileName: string;
+  const AException: Exception);
+begin
+  ReportIntegrityFault(AFileName, AException);
+  TerminateAfterIntegrityFault;
+end;
+
 function MakeEmptyTestResult(const AScriptResult: TGocciaObjectValue;
   const AErrorMessage: string = ''): TTestFileResult;
 begin
@@ -189,6 +409,7 @@ begin
   Result.Timing.TotalTimeNanoseconds := 0;
   Result.Timing.FileName := '';
   Result.ErrorMessage := AErrorMessage;
+  Result.HostDiagnostic := '';
 end;
 
 function IsContinuousIntegration: Boolean;
@@ -237,6 +458,7 @@ begin
   Result.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  Result.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   Result.AssignProperty('failedTests', TGocciaArrayValue.Create);
@@ -253,6 +475,8 @@ begin
     ATarget.AssignProperty('failed', AFileResult.GetProperty('failed'));
   if AFileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
     ATarget.AssignProperty('skipped', AFileResult.GetProperty('skipped'));
+  if AFileResult.GetProperty('suiteErrors').ToStringLiteral.Value <> 'undefined' then
+    ATarget.AssignProperty('suiteErrors', AFileResult.GetProperty('suiteErrors'));
   if AFileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
     ATarget.AssignProperty('assertions', AFileResult.GetProperty('assertions'));
   if AFileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
@@ -285,13 +509,39 @@ begin
     ConsoleExtension.BuiltinConsole.Enabled := False;
 end;
 
+{ The testing library writes per-test markers (❌ failures, 📝 todo,
+  ⏸️ skipped, describe-block errors) straight to stdout unless its reporter
+  is muted. `showTestResults: false` only silences the trailing summary
+  block, so in the JSON envelope modes those markers used to land on stdout
+  ahead of the envelope and made it unparseable for any failing, todo, or
+  skipped test. The counts and messages still reach the envelope through the
+  runTests result object, so muting the reporter costs no information. }
+procedure SuppressTestReporterOutput(const AEngine: TGocciaEngine);
+var
+  TestingExtension: TGocciaTestingLibraryRuntimeExtension;
+  Runtime: TGocciaRuntimeCore;
+begin
+  Runtime := GetRuntime(AEngine);
+  if not Assigned(Runtime) then
+    Exit;
+  TestingExtension := TGocciaTestingLibraryRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaTestingLibraryRuntimeExtension));
+  if Assigned(TestingExtension) and
+    Assigned(TestingExtension.BuiltinTestAssertions) then
+    TestingExtension.BuiltinTestAssertions.SuppressOutput := True;
+end;
+
 procedure TTestRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddCoverageOptions;
   FNoProgress := AddFlag('no-progress', 'Suppress per-file progress output');
   FNoResults := AddFlag('no-results', 'Suppress test results summary');
-  FExitOnFirst := AddFlag('exit-on-first-failure', 'Stop on first test failure');
+  FExitOnFirst := AddFlag('exit-on-first-failure',
+    'Stop on first test failure or suite error. Sequential runs stop at the '
+    + 'failing file; under --jobs the queue is cancelled but files already '
+    + 'in flight run to completion, so some files after the failure still '
+    + 'execute.');
   FSilent := AddFlag('silent', 'Suppress console output from test scripts');
   FOutputFile := AddString('output',
     '"json" emits a structured JSON envelope to stdout, "compact-json" '
@@ -306,6 +556,15 @@ begin
   FUpdateSnapshots.ShortName := 'u';
   FUpdateSnapshotsAlias := AddFlag('update',
     'Alias for --update-snapshots');
+  { The same two the loader exposes, applied through the same shared helpers.
+    A suite that needs a host global — `process` for vi.stubEnv above all —
+    injects it here rather than the runner inventing one. }
+  FGlobalFiles := AddRepeatable('globals',
+    'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
+  FInlineGlobals := AddRepeatable('global',
+    'Inject a single global; value is parsed as JSON or kept as a string');
+  FNoVitestCompat := AddFlag('no-vitest-compat',
+    'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
 end;
 
 function TTestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
@@ -318,17 +577,51 @@ begin
     Result := sumNew;
 end;
 
+{ Globals are injected before the runtime extensions attach, so a module that
+  reads one at import time sees it no matter where it sits in the import order. }
+procedure TTestRunnerApp.ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
+var
+  I: Integer;
+  Pair: TScriptLoaderGlobalPair;
+begin
+  for I := 0 to FGlobalFiles.Values.Count - 1 do
+    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+    begin
+      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
+      else
+        AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
+    end
+    else
+      AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
+
+  for I := 0 to FInlineGlobals.Values.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
+    AEngine.InjectGlobal(Pair.Key, ParseInlineGlobalValue(Pair.ValueText));
+  end;
+end;
+
 procedure TTestRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Runtime: TGocciaRuntimeCore;
 begin
-  InitializeRuntime(AEngine);
+  ApplyGlobalsToEngine(AEngine);
+  InitializeRuntime(AEngine,
+    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
   Runtime := GetRuntime(AEngine);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -346,8 +639,16 @@ end;
 
 procedure TTestRunnerApp.Validate;
 begin
+  inherited Validate;
+
   if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
     CoverageOptions.Enabled.Apply('');
+
+  // Coverage requires bytecode mode regardless of the --mode option: the
+  // interpreter only instruments the entry file and counts statements per
+  // AST node instead of per executed line.
+  if CoverageOptions.Enabled.Present then
+    EngineOptions.Mode.Apply('bytecode');
 end;
 
 function TTestRunnerApp.IsJsonOutput: Boolean;
@@ -364,6 +665,11 @@ end;
 function TTestRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+function TTestRunnerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
 end;
 
 function NormalizeSnapshotAttributionPath(const APath: string): string;
@@ -489,7 +795,11 @@ begin
         for I := 0 to APaths.Count - 1 do
         begin
           if DirectoryExists(APaths[I]) then
-            RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+            { A committed node_modules tree is a resolution fixture, not a
+              suite: its packages are ordinary .js files that would otherwise
+              be discovered and executed as test files. }
+            RawFiles.AddStrings(FindAllFilesExcludingDirectories(APaths[I],
+              ScriptExtensions, TEST_DISCOVERY_EXCLUDED_DIRECTORIES))
           else if FileExists(APaths[I]) then
             RawFiles.Add(APaths[I])
           else
@@ -545,8 +855,17 @@ begin
       FlushPendingInlineSnapshots;
     except
       on E: Exception do
+      begin
+        { Host tier once more. Write-back re-reads the recorded snapshot values
+          and rewrites test sources from them, so an integrity fault here is a
+          fault over the results the run is about to report — filing it as one
+          recorded finalization failure would publish those results anyway
+          (ADR 0109). }
+        if IsEngineIntegrityFault(E) then
+          AbortRunOnIntegrityFault(INLINE_SNAPSHOT_FLUSH_SITE, E);
         RecordSnapshotFinalizationFailure(AggregatedResult,
           'Snapshot finalization failed: ' + E.Message);
+      end;
     end;
     MainMemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
     if IsParallelRun then
@@ -603,19 +922,21 @@ begin
   end;
 end;
 
-procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
+procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine;
+  const AEnableHostFileLoading: Boolean);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine, AEnableHostFileLoading);
   ApplyTestRunnerRuntimeProfile(Runtime,
     TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
-    SnapshotUpdateMode);
+    SnapshotUpdateMode, nil, not FNoVitestCompat.Present);
 end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
 begin
-  InitializeRuntime(AEngine);
+  InitializeRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
@@ -629,7 +950,8 @@ end;
 procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(
   const AEngine: TGocciaEngine);
 begin
-  InitializeRuntime(AEngine);
+  InitializeRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
@@ -683,11 +1005,14 @@ var
   EngineResult: TGocciaScriptResult;
   GC: TGarbageCollector;
   EngineResultRooted: Boolean;
+  ExpectedPrincipal: Int64;
+  PlainThrowDetail: string;
 begin
   ScriptResult := CreateDefaultScriptResult;
   GC := TGarbageCollector.Instance;
   EngineResult.Result := nil;
   EngineResultRooted := False;
+  ExpectedPrincipal := 0;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
 
@@ -716,6 +1041,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           Engine.RegisterGlobal('__gocciaTestRunnerMode',
             TGocciaStringLiteralValue.Create('interpreted'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
@@ -723,6 +1049,8 @@ begin
             DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
+          if IsJsonOutput then
+            SuppressTestReporterOutput(Engine);
 
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -752,23 +1080,53 @@ begin
     except
       on E: Exception do
       begin
+        { An integrity fault is not a per-file verdict, so this arm must not
+          turn it into one. Re-raise it to the runner's host tier —
+          RunScriptFromFile for a sequential run, TestWorkerProc for a parallel
+          one — which stops the whole run. See ADR 0109, "Host tier: the test
+          runner". }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
+          Result.HostDiagnostic :=
+            FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal);
         end
         else if E is TGocciaThrowValue then
         begin
+          // Render the plain diagnostic once and reuse it for both result
+          // fields; only the console copy differs (it may be colored).
+          PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
+            AFileName, Source, False, ExpectedPrincipal,
+            TGocciaThrowValue(E).Suggestion);
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
-              False, TGocciaThrowValue(E).Suggestion));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              Source, IsColorTerminal, ExpectedPrincipal,
+              TGocciaThrowValue(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
+        end
+        else if E is EGocciaBytecodeThrow then
+        begin
+          { A JS throw that escapes the bytecode VM is the same verdict as the
+            evaluator's TGocciaThrowValue and must render the same way; without
+            this arm it fell through to the bare "Fatal error:" line and lost
+            the location, code frame and suggestion. }
+          PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+            AFileName, Source, False, ExpectedPrincipal,
+            EGocciaBytecodeThrow(E).Suggestion);
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, Source, IsColorTerminal,
+              ExpectedPrincipal,
+              EGocciaBytecodeThrow(E).Suggestion));
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else
         begin
@@ -809,19 +1167,28 @@ var
   ResultValue: TGocciaValue;
   GC: TGarbageCollector;
   ResultValueRooted: Boolean;
+  ExpectedPrincipal: Int64;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
   SourceText: string;
+  PlainThrowDetail: string;
+  { The file as written. Source itself gains an appended runTests(...) call
+    below, and quoting that in a code frame showed the runner's own epilogue as
+    if the author had written it — a line the interpreted path, which calls
+    runTests directly instead of appending it, never showed. }
+  DiagnosticSource: TStringList;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
   GC := TGarbageCollector.Instance;
   ResultValueRooted := False;
+  ExpectedPrincipal := 0;
   SourcePipelineResult := nil;
   if Assigned(GC) then
     GC.AddTempRoot(ScriptResult);
 
   Source := nil;
+  DiagnosticSource := nil;
   try
     if Assigned(APreloadedSource) then
       Source := APreloadedSource
@@ -841,6 +1208,8 @@ begin
       end;
     end;
 
+    DiagnosticSource := TStringList.Create;
+    DiagnosticSource.Assign(Source);
     SourceText := StringListToSourceText(Source);
     if Source.Count > 0 then
       SourceText := SourceText + #10;
@@ -855,6 +1224,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           Engine.RegisterGlobal('__gocciaTestRunnerMode',
             TGocciaStringLiteralValue.Create('bytecode'));
           if FSilent.Present or GIsWorkerThread or IsJsonOutput then
@@ -862,6 +1232,8 @@ begin
             DisableRuntimeConsole(Engine);
             Engine.SuppressWarnings := True;
           end;
+          if IsJsonOutput then
+            SuppressTestReporterOutput(Engine);
 
             LexStart := GetNanoseconds;
             PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
@@ -929,23 +1301,48 @@ begin
     except
       on E: Exception do
       begin
+        { Same host-tier rule as the interpreted path: an integrity fault
+          unwinds past this arm rather than becoming a failed file. }
+        if IsEngineIntegrityFault(E) then
+          raise;
         if E is TGocciaError then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal));
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal));
           MarkLoadError(ScriptResult, AFileName, TGocciaError(E).GetDetailedMessage);
           Result := MakeEmptyTestResult(ScriptResult,
             TGocciaError(E).GetDetailedMessage);
+          Result.HostDiagnostic :=
+            FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal);
         end
         else if E is TGocciaThrowValue then
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, IsColorTerminal, TGocciaThrowValue(E).Suggestion));
-          MarkLoadError(ScriptResult, AFileName,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source, False, TGocciaThrowValue(E).Suggestion));
-          Result := MakeEmptyTestResult(ScriptResult,
-            FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, Source,
-              False, TGocciaThrowValue(E).Suggestion));
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              DiagnosticSource, IsColorTerminal, ExpectedPrincipal,
+              TGocciaThrowValue(E).Suggestion));
+          PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
+            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            TGocciaThrowValue(E).Suggestion);
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
+        end
+        else if E is EGocciaBytecodeThrow then
+        begin
+          { A JS throw that escapes the bytecode VM is the same verdict as the
+            evaluator's TGocciaThrowValue and must render the same way; without
+            this arm it fell through to the bare "Fatal error:" line and lost
+            the location, code frame and suggestion. }
+          if (not GIsWorkerThread) and (not IsJsonOutput) then
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, DiagnosticSource, IsColorTerminal,
+              ExpectedPrincipal,
+              EGocciaBytecodeThrow(E).Suggestion));
+          PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            EGocciaBytecodeThrow(E).Suggestion);
+          MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
+          Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
         end
         else
         begin
@@ -962,6 +1359,7 @@ begin
       GC.RemoveTempRoot(ResultValue);
     if Assigned(GC) then
       GC.RemoveTempRoot(ScriptResult);
+    DiagnosticSource.Free;
     Source.Free;
   end;
 end;
@@ -1014,6 +1412,8 @@ begin
         FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
       Result.FileResults[0].Skipped :=
         FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      Result.FileResults[0].SuiteErrors :=
+        FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
       Result.FileResults[0].TotalTests :=
         FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
       FileFailedTests := FileResult.TestResult.GetProperty('failedTests');
@@ -1029,8 +1429,15 @@ begin
   except
     on E: Exception do
     begin
+      { Host tier, sequential path. A refused allocation or a thrown value is a
+        verdict on this one file and the rest of the run still means something;
+        an integrity fault is a verdict on the process, so the run stops here
+        instead of relabelling the fault as one more failed file and executing
+        hundreds more on a heap the engine has lost track of (ADR 0109). }
+      if IsEngineIntegrityFault(E) then
+        AbortRunOnIntegrityFault(AFileName, E);
       if E is TGocciaError then
-        WriteLn(ErrOutput, TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
       else
         WriteLn(ErrOutput, 'Fatal error: ', E.Message);
       { Synthesize a one-failed-file TestResult so PrintTestResults still
@@ -1063,6 +1470,7 @@ var
   FileResult: TAggregatedTestResult;
   FileFailedTests: TGocciaValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions, TotalDuration: Double;
+  SuiteErrorCount: Double;
 begin
   GC := TGarbageCollector.Instance;
 
@@ -1080,6 +1488,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.ZeroValue);
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.ZeroValue);
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
@@ -1087,6 +1496,7 @@ begin
   PassedCount := 0;
   FailedCount := 0;
   SkippedCount := 0;
+  SuiteErrorCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
   TotalDuration := 0;
@@ -1118,6 +1528,7 @@ begin
     PassedCount := PassedCount + FileResult.TestResult.GetProperty('passed').ToNumberLiteral.Value;
     FailedCount := FailedCount + FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
     SkippedCount := SkippedCount + FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    SuiteErrorCount := SuiteErrorCount + FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
     TotalRunCount := TotalRunCount + FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     TotalDuration := TotalDuration + FileResult.TestResult.GetProperty('duration').ToNumberLiteral.Value;
     TotalAssertions := TotalAssertions + FileResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value;
@@ -1144,6 +1555,8 @@ begin
       FileResult.TestResult.GetProperty('failed').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].Skipped :=
       FileResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+    Result.FileResults[ProcessedCount].SuiteErrors :=
+      FileResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
     Result.FileResults[ProcessedCount].TotalTests :=
       FileResult.TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
     if Length(FileResult.FileResults) > 0 then
@@ -1162,7 +1575,11 @@ begin
     if Assigned(GC) then
       GC.Collect;
 
-    if FExitOnFirst.Present and (FailedCount > 0) then
+    { Suite-level errors (throwing describe, failed beforeAll/afterAll) never
+      enter `failed` — Vitest keeps them out of the test counts — so bailing
+      on `failed` alone would keep running files after a file already died.
+      Both counters gate the break, matching the parallel path. }
+    if FExitOnFirst.Present and ((FailedCount > 0) or (SuiteErrorCount > 0)) then
       Break;
   end;
   SetLength(Result.FileResults, ProcessedCount);
@@ -1177,6 +1594,7 @@ begin
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(SuiteErrorCount));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(TotalDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
@@ -1212,6 +1630,7 @@ begin
       WorkerResults^[AIndex].Passed := TestResult.GetProperty('passed').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Failed := TestResult.GetProperty('failed').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Skipped := TestResult.GetProperty('skipped').ToNumberLiteral.Value;
+      WorkerResults^[AIndex].SuiteErrors := TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value;
       WorkerResults^[AIndex].TotalRunTests := TestResult.GetProperty('totalRunTests').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Assertions := TestResult.GetProperty('assertions').ToNumberLiteral.Value;
       WorkerResults^[AIndex].Duration := TestResult.GetProperty('duration').ToNumberLiteral.Value;
@@ -1220,6 +1639,7 @@ begin
       WorkerResults^[AIndex].CompileNs := FileResult.Timing.CompileTimeNanoseconds;
       WorkerResults^[AIndex].ExecNs := FileResult.Timing.ExecuteTimeNanoseconds;
       WorkerResults^[AIndex].ErrorMessage := FileResult.ErrorMessage;
+      WorkerResults^[AIndex].HostDiagnostic := FileResult.HostDiagnostic;
 
       FailedTests := TestResult.GetProperty('failedTests');
       if FailedTests is TGocciaArrayValue then
@@ -1236,6 +1656,8 @@ begin
     on E: TGocciaError do
     begin
       WorkerResults^[AIndex].ErrorMessage := E.GetDetailedMessage;
+      WorkerResults^[AIndex].HostDiagnostic :=
+        FormatHostErrorDiagnostic(E, IsColorTerminal);
       WorkerResults^[AIndex].Failed := 1;
       WorkerResults^[AIndex].TotalRunTests := 1;
       SetLength(WorkerResults^[AIndex].FailedTestNames, 1);
@@ -1251,6 +1673,33 @@ begin
     end;
     on E: Exception do
     begin
+      { Host tier, parallel path. Report first — the diagnostic must be out and
+        flushed before anything else is attempted on this heap — then cancel
+        the queue so no further file is dispatched, then end the process from
+        this thread.
+
+        The cancel is the orderly half and the Halt is the unconditional one.
+        Cancelling alone was the original design, on the grounds that the pool
+        had a cleaner stop than halting from a worker; that reasoning holds
+        only while the main thread is still listening. A worker the watchdog
+        abandoned outlives RunAll, so if it faults after the main thread has
+        made its post-RunAll check, the cancel lands on a queue nobody is
+        draining and the run goes on to print a summary under a stderr line
+        that already said it was aborted. No fixed checkpoint closes that — the
+        zombie can report at any later moment — so the thread that knows ends
+        the process itself. Graceful shutdown on a suspect heap was never a
+        goal (ADR 0109).
+
+        Ending it means TerminateAfterIntegrityFault, not Halt. Halt would run
+        unit finalization on this thread and tear the RTL down under peers that
+        are still running tests; see that routine for the measurements. }
+      if IsEngineIntegrityFault(E) then
+      begin
+        ReportIntegrityFault(AFileName, E);
+        if Assigned(FActiveCancelFlag) then
+          FActiveCancelFlag.Cancel;
+        TerminateAfterIntegrityFault;
+      end;
       WorkerResults^[AIndex].ErrorMessage := E.Message;
       WorkerResults^[AIndex].Failed := 1;
       WorkerResults^[AIndex].TotalRunTests := 1;
@@ -1258,6 +1707,19 @@ begin
       WorkerResults^[AIndex].FailedTestNames[0] := AFileName + ': ' + E.Message;
     end;
   end;
+
+  { Arm --exit-on-first-failure. The pool's only stop signal is a non-empty
+    AErrorMessage (TGocciaFileWorker sets Success := ErrorMsg = '' and
+    cancels the queue when CancelOnError is on), and a file that merely
+    failed tests or errored a suite otherwise returns as a successful
+    worker — so queued files kept running. Suite errors are consulted
+    alongside `failed` because they never enter the test counts. The
+    sentinel is not a real error message: the aggregation recognises it and
+    keeps the slot's own numbers, so nothing is reported twice. }
+  if FExitOnFirst.Present and
+    ((WorkerResults^[AIndex].Failed > 0) or
+     (WorkerResults^[AIndex].SuiteErrors > 0)) then
+    AErrorMessage := EXIT_ON_FIRST_FAILURE_SIGNAL;
 
   // No per-file GC.Collect here. Explicit script-level Goccia.gc() is
   // serialized by the collector lock, but the runner still lets worker
@@ -1277,16 +1739,22 @@ var
     aggregation reads is a refcount race we cannot tolerate. }
   OrphanResults: array of TTestWorkerData;
   IsOrphan: array of Boolean;
+  { Files the queue never got to because --exit-on-first-failure cancelled
+    the run. They contribute nothing and are omitted from the report. }
+  NeverRan: array of Boolean;
   Source: ^TTestWorkerData;
   GC: TGarbageCollector;
-  I, J: Integer;
+  I, J, ProcessedCount: Integer;
   AllTestResults: TGocciaObjectValue;
   AllFailedTests: TGocciaArrayValue;
   PassedCount, FailedCount, SkippedCount, TotalRunCount, TotalAssertions: Double;
+  SuiteErrorCount: Double;
   WallClockStart, WallClockDuration: Int64;
   EffectiveTimeoutMs: Integer;
   WatchdogMs: Integer;
   WorkerMemoryStats: TCLIJSONMemoryStats;
+  CoverageTracker: TGocciaCoverageTracker;
+  CoverageWasEnabled: Boolean;
 begin
   WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(WorkerData, AFiles.Count);
@@ -1295,6 +1763,9 @@ begin
     WorkerData[I].Passed := 0;
     WorkerData[I].Failed := 0;
     WorkerData[I].Skipped := 0;
+    { Explicit: the cancelled-slot discrimination below reads this field to
+      tell a file that never ran from one that reported a suite error. }
+    WorkerData[I].SuiteErrors := 0;
     WorkerData[I].TotalRunTests := 0;
     WorkerData[I].Assertions := 0;
     WorkerData[I].Duration := 0;
@@ -1306,16 +1777,37 @@ begin
     SetLength(WorkerData[I].FailedTestNames, 0);
   end;
 
-  // Force all shared prototypes to be initialised on the main thread
-  // before any worker thread starts, avoiding class-var race conditions.
-  if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-    EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
-  else
-    EnsureSharedPrototypesInitialized(WarmUpRuntime);
+  // Force all shared prototypes to be initialised on the main thread before
+  // any worker starts, avoiding class-var race conditions. This throwaway
+  // engine is runner infrastructure, so do not register its <thread-init>
+  // source in the user's coverage report. Preserve the tracker state instead
+  // of filtering by file name so a user source can never be hidden.
+  CoverageTracker := TGocciaCoverageTracker.Instance;
+  CoverageWasEnabled := False;
+  if Assigned(CoverageTracker) then
+  begin
+    CoverageWasEnabled := CoverageTracker.Enabled;
+    CoverageTracker.Enabled := False;
+  end;
+  try
+    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+      EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
+    else
+      EnsureSharedPrototypesInitialized(WarmUpRuntime);
+  finally
+    if Assigned(CoverageTracker) then
+      CoverageTracker.Enabled := CoverageWasEnabled;
+  end;
 
   WallClockStart := GetNanoseconds;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
+  { Published for the workers before any of them starts: a worker that faults
+    needs to reach Cancel. Reading the flag before RunAll is safe because this
+    pool was constructed two lines up — RunAll only mints a replacement flag
+    for a pool whose previous run leaked one, and this one has had no previous
+    run. }
+  FActiveCancelFlag := Pool.CancelFlag;
   try
     Pool.CancelOnError := FExitOnFirst.Present;
     Pool.EnableCoverage := CoverageOptions.Enabled.Present;
@@ -1336,6 +1828,19 @@ begin
     else
       WatchdogMs := 0;
     Pool.RunAll(AFiles, TestWorkerProc, @WorkerData[0], WatchdogMs);
+    { A worker hit an engine-integrity fault: it wrote the diagnostic, cancelled
+      the queue, and is ending the process. The files that did finish were
+      running beside a heap that is no longer sound, so stop before aggregating
+      them into a total the run cannot stand behind.
+
+      This is not the mechanism that guarantees the abort — the faulting worker
+      halts on its own thread — it is what keeps the ordinary case from racing
+      it. Halt runs unit finalization first, and the main thread can come out
+      of RunAll inside that window; without this check it would spend the
+      window aggregating and printing a summary that the process is about to
+      truncate at an arbitrary point. }
+    if IntegrityFaultWasReported then
+      TerminateAfterIntegrityFault;
     WorkerMemoryStats := Pool.MemoryStats;
     if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
       Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
@@ -1362,10 +1867,33 @@ begin
       Success=False slots get rewritten. }
     SetLength(OrphanResults, AFiles.Count);
     SetLength(IsOrphan, AFiles.Count);
+    SetLength(NeverRan, AFiles.Count);
     for I := 0 to AFiles.Count - 1 do
     begin
       if (I > High(Pool.Results)) or Pool.Results[I].Success then
         Continue;
+
+      { The file ran and reported its own numbers; the sentinel exists only
+        to have stopped the queue. Leave WorkerData[I] exactly as the worker
+        wrote it. }
+      if Pool.Results[I].ErrorMessage = EXIT_ON_FIRST_FAILURE_SIGNAL then
+        Continue;
+
+      { Queue cancelled by --exit-on-first-failure: this file never ran, and
+        a bail is not a per-file failure. Drop it from the report instead of
+        synthesising one failed test for it (which is what the watchdog path
+        below legitimately does — there the file was expected to complete). }
+      if FExitOnFirst.Present and
+        (Pool.Results[I].ErrorMessage = GOCCIA_POOL_CANCELLED_MESSAGE) and
+        (WorkerData[I].ErrorMessage = '') and
+        (WorkerData[I].Passed = 0) and
+        (WorkerData[I].Failed = 0) and
+        (WorkerData[I].SuiteErrors = 0) and
+        (WorkerData[I].TotalRunTests = 0) then
+      begin
+        NeverRan[I] := True;
+        Continue;
+      end;
 
       if Pool.Results[I].ErrorMessage <> '' then
       begin
@@ -1404,6 +1932,7 @@ begin
       end;
     end;
   finally
+    FActiveCancelFlag := nil;
     Pool.Free;
   end;
 
@@ -1424,6 +1953,7 @@ begin
   PassedCount := 0;
   FailedCount := 0;
   SkippedCount := 0;
+  SuiteErrorCount := 0;
   TotalRunCount := 0;
   TotalAssertions := 0;
   Result.TotalLexNanoseconds := 0;
@@ -1432,9 +1962,15 @@ begin
   Result.TotalExecNanoseconds := 0;
   Result.MemoryStats := WorkerMemoryStats;
   SetLength(Result.FileResults, AFiles.Count);
+  ProcessedCount := 0;
 
   for I := 0 to AFiles.Count - 1 do
   begin
+    { Bailed-out files never ran, so they neither print progress nor take a
+      results row — the same shape the sequential path's Break produces. }
+    if (I < Length(NeverRan)) and NeverRan[I] then
+      Continue;
+
     if (not FNoProgress.Present) and (not IsJsonOutput) then
       WriteLn(SysUtils.Format('[%d/%d] %s', [I + 1, AFiles.Count, AFiles[I]]));
 
@@ -1446,12 +1982,15 @@ begin
     else
       Source := @WorkerData[I];
 
-    if Source^.ErrorMessage <> '' then
+    if Source^.HostDiagnostic <> '' then
+      WriteLn(ErrOutput, Source^.HostDiagnostic)
+    else if Source^.ErrorMessage <> '' then
       WriteLn(ErrOutput, Source^.ErrorMessage);
 
     PassedCount := PassedCount + Source^.Passed;
     FailedCount := FailedCount + Source^.Failed;
     SkippedCount := SkippedCount + Source^.Skipped;
+    SuiteErrorCount := SuiteErrorCount + Source^.SuiteErrors;
     TotalRunCount := TotalRunCount + Source^.TotalRunTests;
     TotalAssertions := TotalAssertions + Source^.Assertions;
 
@@ -1467,27 +2006,32 @@ begin
     { Per-file record for the JSON output. Copying strings by value
       keeps the aggregated result self-contained once WorkerData goes
       out of scope. }
-    Result.FileResults[I].FileName := AFiles[I];
-    Result.FileResults[I].LexTimeNanoseconds := Source^.LexNs;
-    Result.FileResults[I].ParseTimeNanoseconds := Source^.ParseNs;
-    Result.FileResults[I].CompileTimeNanoseconds := Source^.CompileNs;
-    Result.FileResults[I].ExecuteTimeNanoseconds := Source^.ExecNs;
-    Result.FileResults[I].Passed := Source^.Passed;
-    Result.FileResults[I].Failed := Source^.Failed;
-    Result.FileResults[I].Skipped := Source^.Skipped;
-    Result.FileResults[I].TotalTests := Source^.TotalRunTests;
-    Result.FileResults[I].ErrorMessage := Source^.ErrorMessage;
-    SetLength(Result.FileResults[I].FailedTests,
+    Result.FileResults[ProcessedCount].FileName := AFiles[I];
+    Result.FileResults[ProcessedCount].LexTimeNanoseconds := Source^.LexNs;
+    Result.FileResults[ProcessedCount].ParseTimeNanoseconds := Source^.ParseNs;
+    Result.FileResults[ProcessedCount].CompileTimeNanoseconds := Source^.CompileNs;
+    Result.FileResults[ProcessedCount].ExecuteTimeNanoseconds := Source^.ExecNs;
+    Result.FileResults[ProcessedCount].Passed := Source^.Passed;
+    Result.FileResults[ProcessedCount].Failed := Source^.Failed;
+    Result.FileResults[ProcessedCount].Skipped := Source^.Skipped;
+    Result.FileResults[ProcessedCount].SuiteErrors := Source^.SuiteErrors;
+    Result.FileResults[ProcessedCount].TotalTests := Source^.TotalRunTests;
+    Result.FileResults[ProcessedCount].ErrorMessage := Source^.ErrorMessage;
+    SetLength(Result.FileResults[ProcessedCount].FailedTests,
       Length(Source^.FailedTestNames));
     for J := 0 to High(Source^.FailedTestNames) do
-      Result.FileResults[I].FailedTests[J] := Source^.FailedTestNames[J];
+      Result.FileResults[ProcessedCount].FailedTests[J] :=
+        Source^.FailedTestNames[J];
+    Inc(ProcessedCount);
   end;
+  SetLength(Result.FileResults, ProcessedCount);
 
   AllTestResults.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(AFiles.Count * 1.0));
   AllTestResults.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(TotalRunCount));
   AllTestResults.AssignProperty('passed', TGocciaNumberLiteralValue.Create(PassedCount));
   AllTestResults.AssignProperty('failed', TGocciaNumberLiteralValue.Create(FailedCount));
   AllTestResults.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(SkippedCount));
+  AllTestResults.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(SuiteErrorCount));
   AllTestResults.AssignProperty('duration', TGocciaNumberLiteralValue.Create(WallClockDuration));
   AllTestResults.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(TotalAssertions));
   AllTestResults.AssignProperty('failedTests', AllFailedTests);
@@ -1514,6 +2058,11 @@ var
 begin
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
   FailedCount := Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value);
+  { Suite-level errors never enter `failed` (Vitest keeps them out of the
+    test counts), so `ok` and the exit code must consult them separately
+    -- otherwise a file whose describe or beforeAll threw reports ok. }
+  FailedCount := FailedCount +
+    Round(AResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value);
   if IsBytecodeMode then
     TotalNanoseconds := AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds
   else
@@ -1551,6 +2100,7 @@ begin
     Lines.Add(Format('  "passed": %d,', [Round(AResult.TestResult.GetProperty('passed').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "failed": %d,', [Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "skipped": %d,', [Round(AResult.TestResult.GetProperty('skipped').ToNumberLiteral.Value)]));
+    Lines.Add(Format('  "suiteErrors": %d,', [Round(AResult.TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "assertions": %d,', [Round(AResult.TestResult.GetProperty('assertions').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "durationNanoseconds": %d,', [Round(AResult.TestResult.GetProperty('duration').ToNumberLiteral.Value)]));
     Lines.Add(Format('  "lexTimeNanoseconds": %d,', [AResult.TotalLexNanoseconds]));
@@ -1645,9 +2195,12 @@ begin
       end;
 
       Entry.Append('    {');
+      { A file is ok only when nothing failed AND no suite-level error
+        (throwing describe / beforeAll / afterAll) was recorded. Vitest
+        fails the FILE for those while leaving the test counts alone. }
       Entry.Append(BuildCLIFileBaseJSON(Fr.FileName,
-        (Fr.Failed = 0) and (Fr.ErrorMessage = ''), '', '', '', ErrorJSON,
-        Timing, '"memory":null', ACompact));
+        (Fr.Failed = 0) and (Fr.ErrorMessage = '') and (Fr.SuiteErrors = 0),
+        '', '', '', ErrorJSON, Timing, '"memory":null', ACompact));
       Entry.Append(', ');
       Entry.Append('"passed": ');
       Entry.Append(Round(Fr.Passed));
@@ -1655,6 +2208,8 @@ begin
       Entry.Append(Round(Fr.Failed));
       Entry.Append(', "skipped": ');
       Entry.Append(Round(Fr.Skipped));
+      Entry.Append(', "suiteErrors": ');
+      Entry.Append(Round(Fr.SuiteErrors));
       Entry.Append(', "totalTests": ');
       Entry.Append(Round(Fr.TotalTests));
       Entry.Append(', "errorMessage": "');
@@ -1772,7 +2327,11 @@ begin
       WriteResultsJSON(AResult, CurrentOutputFile, False);
   end;
 
-  if StrToFloat(TotalFailed) > 0 then
+  { Suite-level errors (throwing describe / beforeAll / afterAll) are
+    deliberately absent from `failed`, so the exit code consults them
+    alongside it -- same rule as the envelope `ok`. }
+  if (StrToFloat(TotalFailed) > 0) or
+    (TestResult.GetProperty('suiteErrors').ToNumberLiteral.Value > 0) then
     ExitCode := 1;
 end;
 

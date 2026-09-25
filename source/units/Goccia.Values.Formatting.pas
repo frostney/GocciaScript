@@ -19,11 +19,14 @@ implementation
 uses
   Generics.Collections,
   Math,
+  SysUtils,
 
   StringBuffer,
 
   Goccia.Values.ArrayValue,
+  Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
+  Goccia.Values.SetValue,
   Goccia.Values.SymbolValue;
 
 var
@@ -60,6 +63,86 @@ begin
     SB.Append(FormatRecursive(AArr.Elements[I], True, ADepth + 1));
   end;
   SB.Append(' ]');
+  Result := SB.ToString;
+end;
+
+function FormatSet(const ASet: TGocciaSetValue; const ADepth: Integer): string;
+var
+  SB: TStringBuffer;
+  Cursor: Integer;
+  Item: TGocciaValue;
+  First: Boolean;
+begin
+  if ADepth >= GInspectDepth then
+  begin
+    Result := '[Set]';
+    Exit;
+  end;
+  if ASet.Count = 0 then
+  begin
+    Result := 'Set(0) {}';
+    Exit;
+  end;
+  SB := TStringBuffer.Create;
+  SB.Append('Set(');
+  SB.Append(IntToStr(ASet.Count));
+  SB.Append(') { ');
+  First := True;
+  Cursor := 0;
+  ASet.RetainIterator;
+  try
+    while ASet.NextItem(Cursor, Item) do
+    begin
+      if not First then
+        SB.Append(', ');
+      First := False;
+      SB.Append(FormatRecursive(Item, True, ADepth + 1));
+    end;
+  finally
+    ASet.ReleaseIterator;
+  end;
+  SB.Append(' }');
+  Result := SB.ToString;
+end;
+
+function FormatMap(const AMap: TGocciaMapValue; const ADepth: Integer): string;
+var
+  SB: TStringBuffer;
+  Cursor: Integer;
+  Key, Value: TGocciaValue;
+  First: Boolean;
+begin
+  if ADepth >= GInspectDepth then
+  begin
+    Result := '[Map]';
+    Exit;
+  end;
+  if AMap.Count = 0 then
+  begin
+    Result := 'Map(0) {}';
+    Exit;
+  end;
+  SB := TStringBuffer.Create;
+  SB.Append('Map(');
+  SB.Append(IntToStr(AMap.Count));
+  SB.Append(') { ');
+  First := True;
+  Cursor := 0;
+  AMap.RetainIterator;
+  try
+    while AMap.NextEntry(Cursor, Key, Value) do
+    begin
+      if not First then
+        SB.Append(', ');
+      First := False;
+      SB.Append(FormatRecursive(Key, True, ADepth + 1));
+      SB.Append(' => ');
+      SB.Append(FormatRecursive(Value, True, ADepth + 1));
+    end;
+  finally
+    AMap.ReleaseIterator;
+  end;
+  SB.Append(' }');
   Result := SB.ToString;
 end;
 
@@ -117,6 +200,10 @@ begin
     Result := TGocciaSymbolValue(AValue).ToDisplayString.Value
   else if AValue is TGocciaArrayValue then
     Result := FormatArray(TGocciaArrayValue(AValue), ADepth)
+  else if AValue is TGocciaSetValue then
+    Result := FormatSet(TGocciaSetValue(AValue), ADepth)
+  else if AValue is TGocciaMapValue then
+    Result := FormatMap(TGocciaMapValue(AValue), ADepth)
   else if AValue is TGocciaObjectValue then
     Result := FormatObject(TGocciaObjectValue(AValue), ADepth)
   else if ANested and (AValue is TGocciaStringLiteralValue) then

@@ -10,11 +10,13 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.AsyncContext,
   Goccia.Engine,
   Goccia.ExecutionContext,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
@@ -52,6 +54,7 @@ type
     procedure TestSequentialEnginesHaveFreshURLSearchParamsPrototype;
     procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
+    procedure TestNestedEngineRestoresOuterAsyncContextOnDestroy;
     procedure TestEachEngineGetsADistinctRealm;
     procedure TestInterpreterExecutionContextUsesEngineRealm;
     procedure TestBytecodeExecutionContextUsesEngineRealm;
@@ -84,6 +87,8 @@ begin
     TestSequentialEnginesHaveFreshURLPrototype);
   Test('Destroying a nested engine restores the outer engine''s realm',
     TestNestedEngineRestoresOuterRealmOnDestroy);
+  Test('Destroying a nested engine restores the outer async context',
+    TestNestedEngineRestoresOuterAsyncContextOnDestroy);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
   Test('Interpreter execution context uses the engine realm',
@@ -463,6 +468,71 @@ begin
       InnerSource.Free;
       OuterSource.Free;
     end;
+  finally
+    InnerExecutor.Free;
+    OuterExecutor.Free;
+  end;
+end;
+
+{ An engine's teardown used to clear the thread's async-context state outright,
+  which is correct for a worker thread reusing a slot but wrong for the nested
+  lifetimes the engine supports: a ShadowRealm owns a child engine, and freeing
+  it can happen inside the outer engine's run or a microtask callback. Clearing
+  there stripped the outer engine's AsyncLocalStorage binding mid-run. }
+procedure TTestEngineRealm.TestNestedEngineRestoresOuterAsyncContextOnDestroy;
+var
+  OuterEngine, InnerEngine: TGocciaEngine;
+  OuterExecutor, InnerExecutor: TGocciaInterpreterExecutor;
+  OuterSource, InnerSource: TStringList;
+  OuterContext: TGocciaAsyncContextSnapshot;
+  Key, Store: TGocciaValue;
+begin
+  OuterSource := TStringList.Create;
+  OuterSource.Text := '';
+  InnerSource := TStringList.Create;
+  InnerSource.Text := '';
+
+  OuterExecutor := TGocciaInterpreterExecutor.Create;
+  InnerExecutor := TGocciaInterpreterExecutor.Create;
+  try
+    OuterEngine := TGocciaEngine.Create('<outer-async>', OuterSource,
+      OuterExecutor);
+    try
+      Key := TGocciaStringLiteralValue.Create('storage-key');
+      Store := TGocciaStringLiteralValue.Create('outer-store');
+      // Key and Store live only in Pascal locals until the snapshot is
+      // installed as the current context; the derive itself allocates, so
+      // they need temp roots across it or a collection makes this test
+      // nondeterministic.
+      TGarbageCollector.Instance.AddTempRoot(Key);
+      TGarbageCollector.Instance.AddTempRoot(Store);
+      try
+        OuterContext := DeriveAsyncContext(nil, Key, Store);
+        SetCurrentAsyncContext(OuterContext);
+      finally
+        TGarbageCollector.Instance.RemoveTempRoot(Store);
+        TGarbageCollector.Instance.RemoveTempRoot(Key);
+      end;
+      Expect<Boolean>(CurrentAsyncContext = OuterContext).ToBe(True);
+
+      InnerEngine := TGocciaEngine.Create('<inner-async>', InnerSource,
+        InnerExecutor);
+      try
+        // A nested engine starts on an empty context rather than inheriting
+        // the outer engine's, whose stores belong to the outer realm.
+        Expect<Boolean>(CurrentAsyncContext = nil).ToBe(True);
+      finally
+        InnerEngine.Free;
+      end;
+
+      Expect<Boolean>(CurrentAsyncContext = OuterContext).ToBe(True);
+    finally
+      OuterEngine.Free;
+      InnerSource.Free;
+      OuterSource.Free;
+    end;
+    // The outermost engine's own teardown still leaves the thread clean.
+    Expect<Boolean>(CurrentAsyncContext = nil).ToBe(True);
   finally
     InnerExecutor.Free;
     OuterExecutor.Free;

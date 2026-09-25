@@ -9,11 +9,18 @@ resourcestring
   SErrorIdentifierAlreadyDeclared = 'Identifier ''%s'' has already been declared';
   SErrorCannotAccessBeforeInit = 'Cannot access ''%s'' before initialization';
   SErrorAssignToConstant = 'Assignment to constant variable ''%s''';
-  SErrorUndefinedVariable = 'Undefined variable: %s';
+  // Node's wording. The bytecode VM already emitted this form, so the
+  // tree-walk evaluator uses the same constant and the two modes report an
+  // unresolved identifier identically.
+  SErrorUndefinedVariable = '%s is not defined';
 
-  // Type errors — function calls
-  SErrorMemberNotFunction = '%s.%s is not a function';
-  SErrorNotFunction = '''%s'' is not a function';
+  // Type errors — function calls.
+  // One form for every non-callable callee: what goes in the slot is the
+  // callee as the author wrote it when that is known, and the runtime type
+  // name otherwise. Both executors build it through
+  // Goccia.Error.CallDiagnostics so the text cannot drift between modes; the
+  // older per-shape variants ('obj.m is not a function' assembled from two
+  // parts, and a quoted-identifier form) were retired for that reason.
   SErrorValueNotFunction = '%s is not a function';
   SErrorSymbolToNumber = 'Cannot convert a Symbol value to a number';
   SErrorSymbolToString = 'Cannot convert a Symbol value to a string';
@@ -31,13 +38,31 @@ resourcestring
 
   SErrorNotANumber = 'Value is not a Number';
 
-  // Type errors — property access
-  SErrorCannotReadPropertyOf = 'Cannot read property ''%s'' of %s';
+  // Type errors — property access.
+  // Both executors use the "Cannot read properties of X (reading 'k')" form —
+  // Node's wording — so a nullish-base fault reads identically in interpreter
+  // and bytecode mode. The older "Cannot read property 'k' of X" phrasing was
+  // retired for that reason; do not reintroduce it.
   SErrorCannotReadPropertiesOf = 'Cannot read properties of %s (reading ''%s'')';
 
-  // Type errors — constructors
-  SErrorNotConstructor = '''%s'' is not a constructor';
+  // Type errors — constructors.
+  // One Node-form (unquoted) constant for both modes; the slot holds the callee
+  // as written when known (via Goccia.Error.CallDiagnostics), else the type or
+  // constructor name. The quoted `'%s' is not a constructor` variant was
+  // retired so the two executors cannot drift.
   SErrorValueNotConstructor = '%s is not a constructor';
+  SErrorSuperNotConstructor = 'Super constructor is not a constructor';
+
+  { ES2026 §10.2.2 [[Construct]] step 13.c and §13.3.7.1 SuperCall: a derived
+    constructor leaves `this` uninitialized until super() returns, and both
+    reading `this` and returning report it. Which of the two fires first is an
+    implementation detail — the interpreter reaches the return check for a body
+    that never touches `this`, the compiler's OP_CHECK_DERIVED_THIS reaches the
+    access check for one that does — so both modes and both checks share this
+    one message rather than describing the route they took. Node v24.0.1 words
+    it the same way for the same reason. }
+  SErrorSuperConstructorNotCalled = 'Must call super constructor in derived ' +
+    'class before accessing ''this'' or returning from derived constructor';
 
   // Type errors — iterables and spread
   SErrorSpreadRequiresIterable = 'Spread syntax requires an iterable';
@@ -525,6 +550,12 @@ resourcestring
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
   SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';
 
+  // Module loading errors
+  // Names no module address on purpose: the only address available where this
+  // is raised is the resolved one, which the default resolver expands against
+  // the host filesystem. See Goccia.Modules.Errors.
+  SErrorModuleLoadingUnsupported = 'Cannot load module: no module content provider is configured';
+
   // Uint8Array encoding errors
   SErrorRequiresUint8Array = '%s requires that |this| be a Uint8Array';
   SErrorInvalidAlphabet = 'Invalid alphabet: expected "base64" or "base64url"';
@@ -657,6 +688,13 @@ resourcestring
   SErrorPromiseFinallyNonPromise = 'Promise.prototype.finally called on non-Promise';
   SErrorThenNotFunction = 'then is not a function';
   SErrorPromiseChainingCycle = 'Chaining cycle detected for promise';
+
+  // node:async_hooks errors
+  SErrorAsyncLocalStorageReceiver =
+    'AsyncLocalStorage prototype method called on a non-AsyncLocalStorage object';
+  SErrorAsyncResourceReceiver =
+    'AsyncResource prototype method called on a non-AsyncResource object';
+  SErrorAsyncHooksCallbackRequired = 'callback is not a function';
 
   // Disposal method errors
   SErrorDisposePropertyNotFunction = 'Property [Symbol.%s] is not a function';
@@ -837,7 +875,9 @@ resourcestring
   SErrorFunctionExpectsFunctionSecond = '%s expects second argument to be a function';
   SErrorFunctionExpectsTableArray = '%s expects a table array';
   SErrorFunctionExpectsFunctionArg = '%s expects a function argument';
+  SErrorToHavePropertyExpectsPath = 'toHaveProperty expects a string or number path, or an array of path segments';
   SErrorToThrowExpectsFunction = 'toThrow expects actual value to be a function';
+  SErrorToThrowExpectsMatchableValue = 'toThrow expects a string, RegExp, error class, or Error instance';
   SErrorToHaveBeenCalledTimesExpectsInt = 'toHaveBeenCalledTimes expects a non-negative integer';
   SErrorToHaveBeenNthCalledWithRequiresArg = 'toHaveBeenNthCalledWith requires at least 1 argument (call index)';
   SErrorToHaveBeenNthCalledWithExpectsInt = 'toHaveBeenNthCalledWith expects a positive integer index';

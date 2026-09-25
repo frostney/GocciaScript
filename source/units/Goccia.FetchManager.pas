@@ -9,9 +9,12 @@ interface
 // gate in the implementation.
 
 uses
+  Classes,
+
   CriticalSections,
   HTTPTypes,
 
+  Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
 
 type
@@ -22,13 +25,33 @@ type
     class procedure Shutdown;
 
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue); virtual; abstract;
+      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APromise: TGocciaPromiseValue;
+      const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     function HasPending: Boolean; virtual; abstract;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; virtual; abstract;
     procedure WaitForIdle; virtual; abstract;
     procedure DiscardPending; virtual; abstract;
+
+    { Network policy applied to every request this manager starts: resolved
+      address restrictions and the response-body ceiling.
+
+      Carried on the manager rather than passed per call because it is host
+      configuration, not a property of an individual fetch — script space must
+      not be able to vary it, and StartFetch is reachable from script space.
+      Defaults to DefaultHTTPPolicy, so a host that never sets it keeps the
+      historical behavior. }
+    function GetRequestPolicy: THTTPRequestPolicy; virtual; abstract;
+    procedure SetRequestPolicy(
+      const APolicy: THTTPRequestPolicy); virtual; abstract;
+    property RequestPolicy: THTTPRequestPolicy
+      read GetRequestPolicy write SetRequestPolicy;
   end;
+
+{ Applies a policy to the process-wide fetch manager, creating it if needed.
+  The CLI and embedding hosts use this rather than reaching for Instance. }
+procedure SetFetchRequestPolicy(const APolicy: THTTPRequestPolicy);
 
 procedure DrainMicrotasksAndFetchCompletions;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
@@ -46,7 +69,6 @@ implementation
 
 uses
   {$IFNDEF LAKON}
-  Classes,
   Generics.Collections,
   SyncObjs,
 
@@ -60,7 +82,10 @@ uses
 
   Goccia.Builtins.Atomics,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue;
+  Goccia.InstructionLimit,
+  Goccia.MicrotaskQueue,
+  Goccia.Timeout,
+  Goccia.Timers;
 
 const
   FETCH_POLL_INTERVAL_MS = 1;
@@ -118,6 +143,10 @@ type
   TGocciaPendingFetch = record
     RequestID: Integer;
     Promise: TGocciaPromiseValue;
+    Signal: TGocciaAbortSignalValue;
+    // WHATWG DOM §3.2 abort algorithm registration for this request, removed
+    // again whenever the pending entry leaves FPending.
+    AbortAlgorithmHandle: Integer;
   end;
 
   TGocciaFetchWorker = class(TThread)
@@ -128,12 +157,17 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
+    FAllowedHosts: TStringList;
+    FTimeoutMilliseconds: Integer;
+    FPolicy: THTTPRequestPolicy;
   protected
     procedure Execute; override;
   public
     constructor Create(const AState: TGocciaFetchState;
       const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
-      const AURL, AMethod: string; const AHeaders: THTTPHeaders);
+      const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+      const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer;
+      const APolicy: THTTPRequestPolicy);
     destructor Destroy; override;
   end;
 
@@ -143,20 +177,29 @@ type
     FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
+    FPolicy: THTTPRequestPolicy;
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
+    function RejectAbortedFetches: Integer;
+    procedure AbortPendingFetch(const AToken: Int64);
+    procedure ReleasePendingRoots(const APending: TGocciaPendingFetch);
     procedure SettleCompletion(const ACompletion: TGocciaFetchCompletion);
   public
     constructor Create;
     destructor Destroy; override;
 
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue); override;
+      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+      const APromise: TGocciaPromiseValue;
+      const ASignal: TGocciaAbortSignalValue = nil); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; override;
     procedure WaitForIdle; override;
     procedure DiscardPending; override;
+    function GetRequestPolicy: THTTPRequestPolicy; override;
+    procedure SetRequestPolicy(
+      const APolicy: THTTPRequestPolicy); override;
   end;
 
 {$ENDIF}
@@ -315,7 +358,9 @@ end;
 
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
   const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
-  const AURL, AMethod: string; const AHeaders: THTTPHeaders);
+  const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+  const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer;
+  const APolicy: THTTPRequestPolicy);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
   FreeOnTerminate := True;
@@ -323,6 +368,12 @@ begin
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
+  FAllowedHosts := TStringList.Create;
+  FAllowedHosts.CaseSensitive := False;
+  if Assigned(AAllowedHosts) then
+    FAllowedHosts.Assign(AAllowedHosts);
+  FTimeoutMilliseconds := ATimeoutMilliseconds;
+  FPolicy := APolicy;
   FState := AState;
   FState.AddRef;
   FLimiter := ALimiter;
@@ -331,6 +382,7 @@ end;
 
 destructor TGocciaFetchWorker.Destroy;
 begin
+  FAllowedHosts.Free;
   if Assigned(FLimiter) then
   begin
     FLimiter.ReleaseWorker;
@@ -349,9 +401,11 @@ begin
   try
     try
       if FMethod = 'HEAD' then
-        Completion.Response := HTTPHead(FURL, FHeaders)
+        Completion.Response := HTTPHead(FURL, FHeaders, FAllowedHosts,
+          FTimeoutMilliseconds, FPolicy)
       else
-        Completion.Response := HTTPGet(FURL, FHeaders);
+        Completion.Response := HTTPGet(FURL, FHeaders, FAllowedHosts,
+          FTimeoutMilliseconds, FPolicy);
       Completion.Success := True;
     except
       on E: EHTTPError do
@@ -400,6 +454,7 @@ begin
   FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
+  FPolicy := DefaultHTTPPolicy;
 end;
 
 destructor TGocciaFetchManagerImpl.Destroy;
@@ -413,16 +468,28 @@ begin
 end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders; const APromise: TGocciaPromiseValue);
+  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
+  const APromise: TGocciaPromiseValue;
+  const ASignal: TGocciaAbortSignalValue);
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
   Added, LimitAcquired, Rooted: Boolean;
+  RequestTimeoutMilliseconds, SignalTimeoutMilliseconds: Integer;
 begin
   Worker := nil;
   Added := False;
   LimitAcquired := False;
   Rooted := False;
+
+  if Assigned(ASignal) and ASignal.IsAborted then
+  begin
+    // WHATWG DOM §3.2 signal abort: abort algorithms (the fetch rejection)
+    // run before the "abort" event is fired at the signal.
+    APromise.Reject(ASignal.Reason);
+    ASignal.FlushAbortEvent;
+    Exit;
+  end;
 
   if not FLimiter.TryAcquireWorker then
   begin
@@ -433,16 +500,64 @@ begin
 
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
+  Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
+  Pending.Signal := ASignal;
 
   try
+    RequestTimeoutMilliseconds := RemainingExecutionTimeoutMilliseconds;
+    if Assigned(ASignal) then
+    begin
+      SignalTimeoutMilliseconds := ASignal.RemainingTimeoutMilliseconds;
+      if SignalTimeoutMilliseconds = 0 then
+      begin
+        ASignal.RefreshTimeout;
+        APromise.Reject(ASignal.Reason);
+        ASignal.FlushAbortEvent;
+        FLimiter.ReleaseWorker;
+        Exit;
+      end;
+      if (SignalTimeoutMilliseconds > 0) and
+         ((RequestTimeoutMilliseconds = 0) or
+          (SignalTimeoutMilliseconds < RequestTimeoutMilliseconds)) then
+        RequestTimeoutMilliseconds := SignalTimeoutMilliseconds;
+    end;
+
+    // WHATWG DOM §3.2 / Fetch: register this request's abort algorithm so a
+    // later abort rejects it before the "abort" event is fired, instead of
+    // waiting for the next pump. Registered before the worker exists so the
+    // already-aborted answer is known while this request is still cheap to
+    // abandon.
+    if Assigned(ASignal) then
+    begin
+      Pending.AbortAlgorithmHandle :=
+        ASignal.AddAbortAlgorithm(AbortPendingFetch, Pending.RequestID);
+      // "If signal is aborted, then return" — a zero handle means the signal
+      // aborted between the checks above and this registration, which a
+      // timeout signal can do purely by the deadline elapsing in between. No
+      // algorithm would ever reject this request, so phase 2 of
+      // RejectAbortedFetches would fire the abort event and the fetch would go
+      // on to settle normally afterwards. Take the same path the pre-flight
+      // already-aborted branch takes instead.
+      if Pending.AbortAlgorithmHandle = 0 then
+      begin
+        APromise.Reject(ASignal.Reason);
+        ASignal.FlushAbortEvent;
+        FLimiter.ReleaseWorker;
+        Exit;
+      end;
+    end;
+
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-      Pending.RequestID, AURL, AMethod, AHeaders);
+      Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
+      RequestTimeoutMilliseconds, FPolicy);
     LimitAcquired := False;
 
     if (TGarbageCollector.Instance <> nil) then
     begin
       TGarbageCollector.Instance.AddTempRoot(APromise);
+      if Assigned(ASignal) then
+        TGarbageCollector.Instance.AddTempRoot(ASignal);
       Rooted := True;
     end;
 
@@ -453,13 +568,111 @@ begin
   except
     if Added then
       FPending.Delete(FPending.Count - 1);
+    if Assigned(ASignal) and (Pending.AbortAlgorithmHandle <> 0) then
+      ASignal.RemoveAbortAlgorithm(Pending.AbortAlgorithmHandle);
     if Rooted and (TGarbageCollector.Instance <> nil) then
+    begin
       TGarbageCollector.Instance.RemoveTempRoot(APromise);
+      if Assigned(ASignal) then
+        TGarbageCollector.Instance.RemoveTempRoot(ASignal);
+    end;
     Worker.Free;
     if LimitAcquired then
       FLimiter.ReleaseWorker;
     raise;
   end;
+end;
+
+procedure TGocciaFetchManagerImpl.ReleasePendingRoots(
+  const APending: TGocciaPendingFetch);
+begin
+  // The pending entry is leaving FPending, so its abort algorithm must go with
+  // it. This is a no-op when the algorithm list was already emptied by the
+  // signal abort that brought us here.
+  if Assigned(APending.Signal) and (APending.AbortAlgorithmHandle <> 0) then
+    APending.Signal.RemoveAbortAlgorithm(APending.AbortAlgorithmHandle);
+
+  if TGarbageCollector.Instance = nil then
+    Exit;
+  TGarbageCollector.Instance.RemoveTempRoot(APending.Promise);
+  if Assigned(APending.Signal) then
+    TGarbageCollector.Instance.RemoveTempRoot(APending.Signal);
+end;
+
+// WHATWG DOM §3.2 abort algorithm for one in-flight fetch: reject the request's
+// promise and drop its pending entry. Runs during signal abort, before the
+// "abort" event, so a listener already sees the fetch settled.
+procedure TGocciaFetchManagerImpl.AbortPendingFetch(const AToken: Int64);
+var
+  PendingIndex: Integer;
+  Pending: TGocciaPendingFetch;
+begin
+  PendingIndex := FindPendingIndex(Integer(AToken));
+  if PendingIndex < 0 then
+    Exit;
+
+  Pending := FPending[PendingIndex];
+  FPending.Delete(PendingIndex);
+  try
+    Pending.Promise.Reject(Pending.Signal.Reason);
+  finally
+    ReleasePendingRoots(Pending);
+  end;
+end;
+
+// Settles fetches whose signal has aborted. Controller-driven aborts already
+// rejected themselves through their abort algorithm, so what reaches here is
+// the lazily observed case: a timeout signal that expired since the last pump.
+function TGocciaFetchManagerImpl.RejectAbortedFetches: Integer;
+var
+  I, CountBefore: Integer;
+  Signal: TGocciaAbortSignalValue;
+  AbortedSignals: TGocciaAbortSignalList;
+  SignalRoot: TGocciaTempRoot;
+begin
+  CountBefore := FPending.Count;
+  AbortedSignals := TGocciaAbortSignalList.Create(False);
+  try
+    // Phase 1 flips expired timeouts only. RefreshTimeout deliberately does not
+    // run abort algorithms, because an algorithm mutates FPending and this
+    // walks it.
+    for I := 0 to FPending.Count - 1 do
+    begin
+      Signal := FPending[I].Signal;
+      if not Assigned(Signal) then
+        Continue;
+      Signal.RefreshTimeout;
+      if not Signal.IsAborted then
+        Continue;
+      if AbortedSignals.IndexOf(Signal) < 0 then
+        AbortedSignals.Add(Signal);
+    end;
+
+    // Phase 2 runs with no walk in progress, so each signal may now run its
+    // abort algorithms (rejecting and removing its own pending entries) and
+    // then fire its one-shot "abort" event. No script runs between the two, so
+    // a listener still cannot be registered after the signal aborted but
+    // before its event fires.
+    for I := 0 to AbortedSignals.Count - 1 do
+    begin
+      Signal := AbortedSignals[I];
+      Signal.RunPendingAbortAlgorithms;
+      // Those algorithms dropped the pending entries that were rooting this
+      // signal, so root it for the dispatch itself. AddTempRootIfNeeded is a
+      // no-op when another pending fetch still holds a root on it, which is
+      // why the raw AddTempRoot/RemoveTempRoot pair must not be used here.
+      InitializeTempRoot(SignalRoot);
+      AddTempRootIfNeeded(SignalRoot, Signal);
+      try
+        Signal.FlushAbortEvent;
+      finally
+        RemoveTempRootIfNeeded(SignalRoot);
+      end;
+    end;
+  finally
+    AbortedSignals.Free;
+  end;
+  Result := CountBefore - FPending.Count;
 end;
 
 function TGocciaFetchManagerImpl.PopCompletion(
@@ -521,8 +734,7 @@ begin
     if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
   finally
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
+    ReleasePendingRoots(Pending);
   end;
 end;
 
@@ -530,7 +742,7 @@ function TGocciaFetchManagerImpl.PumpCompletions: Integer;
 var
   Completion: TGocciaFetchCompletion;
 begin
-  Result := 0;
+  Result := RejectAbortedFetches;
   while PopCompletion(Completion) do
   begin
     try
@@ -540,6 +752,8 @@ begin
       Completion.Free;
     end;
   end;
+  if (Result > 0) and (TGocciaMicrotaskQueue.Instance <> nil) then
+    TGocciaMicrotaskQueue.Instance.DrainQueue;
 end;
 
 function TGocciaFetchManagerImpl.HasPending: Boolean;
@@ -560,7 +774,10 @@ begin
       Exit(False);
 
     while HasPending and (PumpCompletions = 0) do
+    begin
+      CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
+    end;
   end;
 end;
 
@@ -571,9 +788,23 @@ begin
     if not HasPending then
       Break;
     while HasPending and (PumpCompletions = 0) do
+    begin
+      CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
+    end;
   until False;
   DrainMicrotasksAndFetchCompletions;
+end;
+
+function TGocciaFetchManagerImpl.GetRequestPolicy: THTTPRequestPolicy;
+begin
+  Result := FPolicy;
+end;
+
+procedure TGocciaFetchManagerImpl.SetRequestPolicy(
+  const APolicy: THTTPRequestPolicy);
+begin
+  FPolicy := APolicy;
 end;
 
 procedure TGocciaFetchManagerImpl.DiscardPending;
@@ -587,8 +818,7 @@ begin
   for I := 0 to FPending.Count - 1 do
   begin
     Pending := FPending[I];
-    if (TGarbageCollector.Instance <> nil) then
-      TGarbageCollector.Instance.RemoveTempRoot(Pending.Promise);
+    ReleasePendingRoots(Pending);
   end;
   FPending.Clear;
 
@@ -645,22 +875,83 @@ function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 var
   Manager: TGocciaFetchManager;
   HasPendingFetch: Boolean;
+  TimersRun: Integer;
 begin
   if not Assigned(APromise) then
     Exit(False);
 
+  TimersRun := 0;
   while APromise.State = gpsPending do
   begin
     DrainMicrotasksAndFetchCompletions;
     if APromise.State <> gpsPending then
       Exit(True);
 
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+
     Manager := TGocciaFetchManager.Instance;
     HasPendingFetch := Assigned(Manager) and Manager.HasPending;
-    if not HasPendingFetch and not HasPendingAtomicsWaitAsyncCompletions then
-      Exit(False);
 
-    Sleep(FETCH_POLL_INTERVAL_MS);
+    { Work that is really outstanding outranks virtual time.
+
+      Despite the name this is the host's general "drive this promise to
+      settlement" wait — the test runner uses it for every async test's
+      returned promise — so the virtual timer queue belongs here alongside
+      fetch and Atomics.waitAsync. But it must not be reached FIRST. A real-mode
+      timer costs no real time, so running one while a fetch was still in
+      flight made `Promise.race([fetch(url), timeoutAfter(ms)])` resolve to the
+      timeout every single time, whatever ms was, and a live interval could
+      spend the entire budget before the response ever arrived. Polling the
+      real work first means the race is decided by whether the fetch completes
+      at all, which is the outcome a suite writing that race expects. }
+    if HasPendingFetch then
+    begin
+      Sleep(FETCH_POLL_INTERVAL_MS);
+      Continue;
+    end;
+
+    { A pending async Atomics waiter is not, unlike a fetch, necessarily
+      resolved by outside work: a real-mode timer calling Atomics.notify can be
+      what wakes it, so timers must still run while one is pending. Service a due
+      timer first; only when none is runnable does this poll for a cross-thread
+      notify. Blocking timers here left an indefinite Atomics.waitAsync pending
+      forever, and CheckInstructionLimit never advanced the counter to break it. }
+    if HasPendingAtomicsWaitAsyncCompletions then
+    begin
+      if HasRunnableRealTimers then
+      begin
+        if TimersRun >= TIMER_LOOP_LIMIT then
+          RaiseRealTimerLoopLimit;
+        if RunOneRealTimer then
+        begin
+          Inc(TimersRun);
+          Continue;
+        end;
+      end;
+      Sleep(FETCH_POLL_INTERVAL_MS);
+      Continue;
+    end;
+
+    { Nothing real is outstanding, so the clock may jump to the next timer. A
+      real-mode timer is a continuation no amount of microtask draining will
+      produce. Under fake timers this does nothing, because the suite, not the
+      engine, decides when those run — and it does nothing for a queue owned by
+      another realm either. }
+    if TimersRun >= TIMER_LOOP_LIMIT then
+    begin
+      { Spending the whole budget with timers still runnable is a diagnosis of
+        its own, and one the caller cannot make: reported as an unsettled
+        promise it read as a missing `await` rather than as a timer that keeps
+        rescheduling itself. }
+      if HasRunnableRealTimers then
+        RaiseRealTimerLoopLimit;
+      Exit(False);
+    end;
+
+    if not RunOneRealTimer then
+      Exit(False);
+    Inc(TimersRun);
   end;
 
   Result := True;
@@ -684,6 +975,21 @@ begin
   Manager := TGocciaFetchManager.Instance;
   if Assigned(Manager) then
     Manager.DiscardPending;
+end;
+
+procedure SetFetchRequestPolicy(const APolicy: THTTPRequestPolicy);
+var
+  Manager: TGocciaFetchManager;
+begin
+  { Initialize first: a host that configures policy before any script runs
+    would otherwise set it on a nil manager and silently get the default when
+    the manager is lazily created on the first fetch. On the LAKON lane
+    Initialize leaves Instance nil because there is no socket backend, and
+    there is nothing to configure — hence the guard rather than an assert. }
+  TGocciaFetchManager.Initialize;
+  Manager := TGocciaFetchManager.Instance;
+  if Assigned(Manager) then
+    Manager.RequestPolicy := APolicy;
 end;
 
 end.

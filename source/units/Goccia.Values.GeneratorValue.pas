@@ -72,6 +72,25 @@ type
   private
     FContinuation: TGocciaGeneratorContinuation;
     FState: TGocciaGeneratorState;
+    { Async-generator request queue. DUPLICATED: TGocciaBytecodeAsyncGeneratorObjectValue
+      in Goccia.VM
+      carries the same queue with the same discipline for the other executor,
+      and the two must stay in step — a change to one is a bug in the other
+      until it is made there too.
+
+      Async context is deliberately NOT recorded per request. A body observes
+      the context of whichever call resumed it, and that falls out of the two
+      execution paths without any per-request bookkeeping: a request that finds
+      the queue idle is started synchronously on the resuming call's own stack,
+      under that call's context, while a request that had to wait — a queued
+      second next(), or a body suspended on await — reaches the body through a
+      promise reaction, which carries the snapshot captured where it was
+      registered.
+      Probed against Node v24.0.1 across for-await, a generator created in one
+      context and resumed in another, a queued second request overlapping a
+      running one, and nested for-await under different stores; both executors
+      match Node on all of them. See tests/built-ins/AsyncHooks/
+      async-generators.js, which locks that in, and ADR 0111. }
     FQueue: array of TGocciaAsyncGeneratorRequest;
     FQueueHead: Integer;
     FQueueCount: Integer;
@@ -155,11 +174,16 @@ uses
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.Coverage,
+  Goccia.EngineFault,
   Goccia.Evaluator,
   Goccia.Evaluator.Context,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
+  Goccia.MemoryLimit,
   Goccia.Realm,
+  Goccia.Timeout,
   Goccia.Types.Enforcement,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -1021,8 +1045,21 @@ begin
           RejectAwaitedReturn(E.Value);
         Exit;
       end;
+      { A resource ceiling reached while resolving the return/yield value —
+        e.g. `.return(thenable)` whose `then` getter allocates past the budget,
+        or an instruction/timeout deadline expiring mid-resolution — is opaque
+        to the guest. Named before the generic arm (Pascal first-match), which
+        would otherwise fold it into a promise rejection the guest can catch. }
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaInstructionLimitError do
+        raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
       on E: Exception do
       begin
+        if IsEngineIntegrityFault(E) then
+          raise;
         if AThrowIntoGenerator then
           RejectAwaitedYield(ExceptionToErrorValue(E))
         else
@@ -1179,8 +1216,20 @@ begin
           RejectAwaitedYield(E.Value);
           Exit;
         end;
+        { The limit family stays opaque here too: resolving a promise-valued
+          `.return()` runs guest code (a thenable's `then` getter) that can
+          hit the budget, and the generic arm below would hand that ceiling
+          back to the guest as a catchable rejection. First-match ordering. }
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
         on E: Exception do
         begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           RejectAwaitedYield(ExceptionToErrorValue(E));
           Exit;
         end;
@@ -1231,8 +1280,22 @@ begin
       FState := gsCompleted;
       CompleteCurrentRequest(E.Value, True, True);
     end;
+    { A `for await ... break` runs the body's `finally` as part of the
+      generator's `.return()`; a resource ceiling raised there reaches this
+      handler on the grkReturn path and, without these arms, was converted
+      into a rejection the guest could catch (and, in bytecode, diverged to a
+      fatal — a mode split). The ceiling must keep unwinding to the host in
+      both executors. Named before the generic arm (Pascal first-match). }
+    on E: TGocciaTimeoutError do
+      raise;
+    on E: TGocciaInstructionLimitError do
+      raise;
+    on E: TGocciaMemoryLimitError do
+      raise;
     on E: Exception do
     begin
+      if IsEngineIntegrityFault(E) then
+        raise;
       if ARequest.Kind = grkReturn then
       begin
         FState := gsCompleted;
@@ -1371,7 +1434,9 @@ begin
   Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
-  Context.CoverageEnabled := False;
+  Context.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   // EffectiveStrictTypes walks to the root scope so generator bodies
   // observe TGocciaEngine.SetStrictTypes updates made after the
   // generator's closure scope was created.
@@ -1382,6 +1447,7 @@ begin
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
+  RecordCoverageCall;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
   // only build it when a parameter actually has a default or pattern
@@ -1616,7 +1682,9 @@ begin
   Context.LoadModuleSource := FClosure.LoadModuleSource;
   Context.ResolveModuleURL := FClosure.ResolveModuleURL;
   Context.CurrentFilePath := FSourceFilePath;
-  Context.CoverageEnabled := False;
+  Context.CoverageEnabled := FTrackCoverage and
+    (TGocciaCoverageTracker.Instance <> nil) and
+    TGocciaCoverageTracker.Instance.Enabled;
   // EffectiveStrictTypes — see CreateContinuation above.
   Context.StrictTypes := FClosure.EffectiveStrictTypes;
   CompatibilityNonStrictMode := FClosure.EffectiveNonStrictMode;
@@ -1625,6 +1693,7 @@ begin
   Context.CompatibilityNonStrictMode := CompatibilityNonStrictMode;
   Context.HideFunctionSourceText := FHideNestedFunctionSourceText;
   Context.DisposalTracker := nil;
+  RecordCoverageCall;
   HasParamExpressions := HasParameterExpressions;
   // EvalRejectNames is only read while evaluating a parameter default, so
   // only build it when a parameter actually has a default or pattern

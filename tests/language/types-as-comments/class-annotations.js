@@ -30,6 +30,17 @@ test("class method return type", () => {
   expect(calc.add(2, 3)).toBe(5);
 });
 
+test("class method with array of object return type", () => {
+  class Collection {
+    entries(): { label: string }[] {
+      return [{ label: "ready" }];
+    }
+  }
+
+  const collection = new Collection();
+  expect(collection.entries()[0].label).toBe("ready");
+});
+
 test("class with implements clause", () => {
   class Dog implements Animal {
     name: string;

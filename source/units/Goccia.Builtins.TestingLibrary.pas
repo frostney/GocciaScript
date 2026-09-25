@@ -103,9 +103,14 @@ type
   private
     FActualValue: TGocciaValue;
     FIsNegated: Boolean;
+    // True when FActualValue is a promise rejection reason unwrapped by
+    // .rejects, so toThrow treats it as the thrown value instead of calling it.
+    FIsRejectionReason: Boolean;
     FTestAssertions: TGocciaTestAssertions; // Reference to parent
   public
-    constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False);
+    constructor Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean = False;
+      const AIsRejectionReason: Boolean = False);
+    procedure MarkReferences; override;
 
     // Core matchers
     function ToBe(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -137,6 +142,7 @@ type
 
     // Mock matchers
     function ToHaveBeenCalled(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+    function ToHaveBeenCalledOnce(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenCalledTimes(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ToHaveBeenLastCalledWith(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -163,9 +169,19 @@ type
       PassedTests: Integer;
       FailedTests: Integer;
       SkippedTests: Integer;
+      { Suite-level errors: a describe callback that threw during
+        registration, or a failed beforeAll/afterAll hook. Vitest keeps
+        these out of the test counts (the affected tests report as
+        skipped) and fails the FILE instead, so they are tracked apart
+        from FailedTests and surface as the `suiteErrors` field. }
+      SuiteErrors: Integer;
       CurrentSuiteName: string;
       CurrentTestName: string;
       CurrentTestHasFailures: Boolean;
+      { Message of the first failure recorded for the current test or
+        hook. Hook/describe detail strings surface it so the reported
+        payload keeps the error text both oracles print. }
+      CurrentFailureMessage: string;
       CurrentTestIsSkipped: Boolean;
       CurrentTestAssertionCount: Integer;  // Assertions in current test
       TotalAssertionCount: Integer;        // Total assertions across all tests
@@ -173,6 +189,12 @@ type
 
     FRootSuite: TGocciaTestSuite;
     FCurrentRegistrationSuite: TGocciaTestSuite;
+    { A describe callback threw while the file was being collected.
+      Vitest discards the WHOLE file in that case -- including suites
+      collected before the throwing one -- so registration stops and no
+      test runs. Distinct from a hook or test failure, which are
+      execution-time and leave already-collected results intact. }
+    FCollectionAborted: Boolean;
     FSkipNextDescribe: Boolean;
     FFocusNextDescribe: Boolean;
     FSkipNextTest: Boolean;
@@ -217,9 +239,13 @@ type
       const AHasFocusedEntries: Boolean): Boolean;
     function SuiteHasRunnableEntries(const ASuite: TGocciaTestSuite;
       const AHasFocusedEntries: Boolean): Boolean;
+    { ASetupFailed: an ancestor suite's beforeAll hook threw. Its tests
+      and every descendant's report as skipped, and neither beforeAll nor
+      afterAll runs for those descendants. }
     procedure ExecuteSuite(const ASuite: TGocciaTestSuite;
       const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
-      const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+      const AFailedTestDetails: TStringList; var AShouldStop: Boolean;
+      const ASetupFailed: Boolean = False);
     function CountRegisteredTests(const ASuite: TGocciaTestSuite): Integer;
     procedure CollectSuiteNames(const ASuite: TGocciaTestSuite;
       const ANames: TStringList);
@@ -234,7 +260,8 @@ type
       const AThrowError: TGocciaThrowErrorCallback;
       const ASnapshotHost: IGocciaSnapshotHost = nil;
       const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode = sumNew;
-      const ASnapshotFormatter: IGocciaSnapshotFormatter = nil);
+      const ASnapshotFormatter: IGocciaSnapshotFormatter = nil;
+      const AInjectGlobals: Boolean = True);
     destructor Destroy; override;
 
     // Main expect function
@@ -345,8 +372,11 @@ uses
   TimingUtils,
 
   Goccia.Arithmetic,
+  Goccia.Builtins.Globals,
+  Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Evaluator,
@@ -355,9 +385,11 @@ uses
   Goccia.FetchManager,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
+  Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
   Goccia.Timeout,
+  Goccia.Timers,
   Goccia.Utils,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassHelper,
@@ -366,10 +398,12 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
   Goccia.Values.HoleValue,
+  Goccia.Values.MapValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SetValue,
-  Goccia.Values.SymbolValue;
+  Goccia.Values.SymbolValue,
+  Goccia.VM.Exception;
 
 function SnapshotTestName(const AAssertions: TGocciaTestAssertions): string;
 begin
@@ -514,6 +548,157 @@ begin
   end;
 end;
 
+{ toHaveProperty accepts a dotted/bracketed path string ("items[0].type") or
+  an array of segments (["a", "b", 0, "c"]). The array form is also the escape
+  hatch for keys that themselves contain a dot, since a string path always
+  splits on dots.
+
+  A string path drops every empty segment, so "a.", ".a" and "a..b" all parse
+  the same as "a" / "a" / "a.b". That matches vitest, whose path grammar
+  (chai's parsePath, `str.match(/(\\\.|[^.]+?)+/g)`) can never produce an empty
+  segment. An empty-string key is therefore unreachable through a string path;
+  it is reached by the literal-key lookup in ToHaveProperty (for the whole path)
+  or by an array path (for a nested one). }
+function ParsePropertyPath(const APathValue: TGocciaValue): TArray<string>;
+var
+  PathArray: TGocciaArrayValue;
+  Path: string;
+  Current: string;
+  Bracket: string;
+  Position: Integer;
+  I: Integer;
+
+  procedure AppendSegment(const ASegment: string);
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := ASegment;
+  end;
+
+begin
+  SetLength(Result, 0);
+
+  if APathValue is TGocciaArrayValue then
+  begin
+    PathArray := TGocciaArrayValue(APathValue);
+    for I := 0 to PathArray.Elements.Count - 1 do
+      AppendSegment(PathArray.GetElement(I).ToStringLiteral.Value);
+    Exit;
+  end;
+
+  Path := APathValue.ToStringLiteral.Value;
+  Current := '';
+  Position := 1;
+  while Position <= Length(Path) do
+  begin
+    if Path[Position] = '.' then
+    begin
+      // Empty segments are dropped, so a leading, doubled or trailing
+      // separator never contributes a key.
+      if Current <> '' then
+        AppendSegment(Current);
+      Current := '';
+      Inc(Position);
+    end
+    else if Path[Position] = '[' then
+    begin
+      if Current <> '' then
+        AppendSegment(Current);
+      Current := '';
+      Inc(Position);
+      Bracket := '';
+      while (Position <= Length(Path)) and (Path[Position] <> ']') do
+      begin
+        Bracket := Bracket + Path[Position];
+        Inc(Position);
+      end;
+      if Position <= Length(Path) then
+        Inc(Position);
+      AppendSegment(Bracket);
+      if (Position <= Length(Path)) and (Path[Position] = '.') then
+        Inc(Position);
+    end
+    else
+    begin
+      Current := Current + Path[Position];
+      Inc(Position);
+    end;
+  end;
+
+  if Current <> '' then
+    AppendSegment(Current);
+end;
+
+function DescribePropertyPath(const ASegments: TArray<string>): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(ASegments) do
+  begin
+    if I > 0 then
+      Result := Result + '.';
+    Result := Result + ASegments[I];
+  end;
+end;
+
+{ Walks the path one segment at a time. Each step uses the same prototype-aware
+  lookup a plain property read would, so inherited members resolve.
+
+  Every step can run user code — an accessor on any segment is a getter call and
+  therefore a GC safe point — while the only reference to the previous step's
+  result is the local `Current`, and the only reference to a freshly boxed
+  primitive wrapper is the local `Container`. Both are rooted for as long as they
+  are live. The nest-safe TGocciaTempRoot form is used because the roots are
+  re-pointed on every iteration: re-adding releases the previous target, and the
+  finally releases whatever the last iteration left rooted. }
+function TryResolvePropertyPath(const ARoot: TGocciaValue;
+  const ASegments: TArray<string>; out AValue: TGocciaValue): Boolean;
+var
+  Current: TGocciaValue;
+  Container: TGocciaObjectValue;
+  ContainerRoot: TGocciaTempRoot;
+  CurrentRoot: TGocciaTempRoot;
+  I: Integer;
+begin
+  Result := False;
+  AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Current := ARoot;
+
+  InitializeTempRoot(ContainerRoot);
+  InitializeTempRoot(CurrentRoot);
+  try
+    for I := 0 to High(ASegments) do
+    begin
+      if Current is TGocciaObjectValue then
+        Container := TGocciaObjectValue(Current)
+      else
+      begin
+        // A primitive still exposes its wrapper's members ("a.length" on a
+        // string); null and undefined box to nil and end the walk. The wrapper
+        // is created here and reachable from nowhere else, so root it before
+        // the lookup that may collect it.
+        Container := Current.Box;
+        if not Assigned(Container) then
+          Exit;
+        Goccia.GarbageCollector.AddTempRootIfNeeded(ContainerRoot, Container);
+      end;
+
+      if not Container.HasProperty(ASegments[I]) then
+        Exit;
+      Current := Container.GetPropertyWithContext(ASegments[I], Current);
+      if Current = nil then
+        Current := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Goccia.GarbageCollector.AddTempRootIfNeeded(CurrentRoot, Current);
+    end;
+
+    AValue := Current;
+    Result := True;
+  finally
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(CurrentRoot);
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ContainerRoot);
+  end;
+end;
+
 function IsNativeFunctionInstanceOf(const AObj: TGocciaObjectValue;
   const AConstructor: TGocciaNativeFunctionValue): Boolean;
 var
@@ -534,6 +719,296 @@ begin
     end;
     CurrentProto := CurrentProto.Prototype;
   end;
+end;
+
+{ The message a thrown value contributes to string and RegExp comparisons.
+  Jest reads the "message" property of Error-like values and falls back to the
+  string form of anything else, so `throw 42` matches toThrow('42'). }
+function ThrownValueMessage(const AValue: TGocciaValue): string;
+var
+  MessageValue: TGocciaValue;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if MessageValue is TGocciaStringLiteralValue then
+      Exit(TGocciaStringLiteralValue(MessageValue).Value);
+  end;
+
+  if AValue is TGocciaSymbolValue then
+    Exit(TGocciaSymbolValue(AValue).ToDisplayString.Value);
+
+  Result := AValue.ToStringLiteral.Value;
+end;
+
+{ Errors carry non-enumerable fields and would otherwise render as an empty
+  object, so describe them by name and message in assertion output. }
+function DescribeThrowValue(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+  MessageValue: TGocciaValue;
+begin
+  if AValue is TGocciaObjectValue then
+  begin
+    NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if (NameValue is TGocciaStringLiteralValue) and
+       (MessageValue is TGocciaStringLiteralValue) then
+      Exit(TGocciaStringLiteralValue(NameValue).Value + ': ' +
+        TGocciaStringLiteralValue(MessageValue).Value);
+  end;
+
+  Result := FormatForDisplay(AValue);
+end;
+
+{ How the reason of a rejected returned Promise is reported. The reason is the
+  only evidence the failure line carries, and an Error keeps "name" on its
+  prototype and "message" non-enumerable, so serializing the value rendered
+  `new Error('boom')` as an empty object and named neither the error nor what
+  went wrong. The prototype-chain read DescribeThrowValue already uses for
+  assertion output recovers both.
+
+  A user class extending Error inherits Error.prototype.name, so its own
+  identity -- the one thing that says which of a suite's error types rejected
+  -- lives only on the constructor; prefer that name while the resolved "name"
+  is still the default "Error", and keep any assigned name -- instance or
+  prototype -- when the author supplied one. }
+function DescribeRejectionReason(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+  MessageValue: TGocciaValue;
+  ConstructorValue: TGocciaValue;
+
+  { The object in AValue's prototype chain that owns the "name" the read above
+    resolved to, or nil when nothing in the chain does. }
+  function OwnNameHolder: TGocciaObjectValue;
+  var
+    Current: TGocciaObjectValue;
+  begin
+    Result := nil;
+    Current := TGocciaObjectValue(AValue);
+    while Assigned(Current) do
+    begin
+      if Current.HasOwnProperty(PROP_NAME) then
+        Exit(Current);
+      Current := Current.Prototype;
+    end;
+  end;
+
+begin
+  Result := DescribeThrowValue(AValue);
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+
+  { Only the name DescribeThrowValue just read off the prototype chain is up
+    for replacement, and only while it is still the default "Error" that
+    Error.prototype supplies: any other name — assigned on the instance or on
+    a prototype — is already the author's answer to this question. }
+  NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+  MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+  if not ((NameValue is TGocciaStringLiteralValue) and
+          (MessageValue is TGocciaStringLiteralValue)) then
+    Exit;
+  if TGocciaStringLiteralValue(NameValue).Value <> 'Error' then
+    Exit;
+  { The value "Error" is not enough on its own: an author who wrote
+    `MyErr.prototype.name = 'Error'` chose that spelling deliberately. Only a
+    name that Error.prototype itself supplies is the inherited default, so ask
+    which object in the chain actually owns it rather than only checking the
+    instance. }
+  if OwnNameHolder <> GetErrorProto then
+    Exit;
+
+  { Only a declared class narrows the name: a built-in error's constructor
+    already agrees with its "name", and a plain object's is Object, which would
+    report every object-literal reason as "Object". }
+  ConstructorValue := TGocciaObjectValue(AValue).GetProperty(PROP_CONSTRUCTOR);
+  if (ConstructorValue is TGocciaClassValue) and
+     (TGocciaClassValue(ConstructorValue).Name <> '') then
+    Result := TGocciaClassValue(ConstructorValue).Name + ': ' +
+      TGocciaStringLiteralValue(MessageValue).Value;
+end;
+
+{ The name a value's own "name" property reports, or '' when it has none. }
+function OwnNamePropertyOf(const AValue: TGocciaValue): string;
+var
+  NameValue: TGocciaValue;
+begin
+  Result := '';
+  if not (AValue is TGocciaObjectValue) then
+    Exit;
+  NameValue := TGocciaObjectValue(AValue).GetProperty(PROP_NAME);
+  if NameValue is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(NameValue).Value;
+end;
+
+{ How a constructor is named in assertion output. Serializing the class object
+  itself renders every class as an empty object literal, which tells a reader
+  nothing about which constructor the assertion expected — Vitest prints the
+  name instead. }
+function DescribeConstructor(const AValue: TGocciaValue): string;
+begin
+  if AValue is TGocciaClassValue then
+    Result := TGocciaClassValue(AValue).Name
+  else if AValue is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(AValue).Name
+  else
+    Result := OwnNamePropertyOf(AValue);
+
+  if Result = '' then
+    Result := FormatForDisplay(AValue);
+end;
+
+{ How the subject of an instance-of assertion is described. Errors read as
+  "Error: boom"; anything else built by a named constructor is prefixed with
+  that constructor's name, so two structurally identical instances of different
+  classes do not both render as a bare empty object literal. }
+function DescribeInstanceOfSubject(const AValue: TGocciaValue): string;
+var
+  ConstructorValue: TGocciaValue;
+  ConstructorName, Rendered: string;
+begin
+  Rendered := DescribeThrowValue(AValue);
+  if not (AValue is TGocciaObjectValue) then
+    Exit(Rendered);
+  if Rendered <> FormatForDisplay(AValue) then
+    Exit(Rendered);
+
+  ConstructorValue := TGocciaObjectValue(AValue).GetProperty(PROP_CONSTRUCTOR);
+  ConstructorName := '';
+  if Assigned(ConstructorValue) then
+    ConstructorName := DescribeConstructor(ConstructorValue);
+
+  if (ConstructorName <> '') and (ConstructorName <> CONSTRUCTOR_OBJECT) and
+    (ConstructorName <> Rendered) then
+    Result := ConstructorName + Rendered
+  else
+    Result := Rendered;
+end;
+
+{ The JavaScript error name whose prototype an engine-level Pascal error maps
+  onto, so a rebuilt error object matches the same constructors a JS throw of
+  the equivalent error would. }
+function EngineErrorName(const AError: TGocciaError): string;
+begin
+  if AError is TGocciaTypeError then
+    Result := TYPE_ERROR_NAME
+  else if AError is TGocciaReferenceError then
+    Result := REFERENCE_ERROR_NAME
+  else if AError is TGocciaSyntaxError then
+    Result := SYNTAX_ERROR_NAME
+  else
+    Result := ERROR_NAME;
+end;
+
+{ The subject the string and RegExp forms match against. Vitest reads the
+  thrown value's message, falling back to the thrown value itself only when it
+  is already a string; a thrown number, boolean or message-less object offers
+  no subject and matches nothing. A thrown null or undefined is the one shape
+  Vitest lets match anything. }
+type
+  TGocciaThrowSubject = (tsAnything, tsText, tsNothing);
+
+function ThrownMessageSubject(const AValue: TGocciaValue;
+  out AText: string): TGocciaThrowSubject;
+var
+  MessageValue: TGocciaValue;
+begin
+  AText := '';
+
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaNullLiteralValue) then
+    Exit(tsAnything);
+
+  if AValue is TGocciaObjectValue then
+  begin
+    MessageValue := TGocciaObjectValue(AValue).GetProperty(PROP_MESSAGE);
+    if MessageValue is TGocciaStringLiteralValue then
+    begin
+      AText := TGocciaStringLiteralValue(MessageValue).Value;
+      Exit(tsText);
+    end;
+    Exit(tsNothing);
+  end;
+
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    AText := TGocciaStringLiteralValue(AValue).Value;
+    Exit(tsText);
+  end;
+
+  Result := tsNothing;
+end;
+
+{ toThrow accepts a substring, a RegExp, an error constructor, an Error
+  instance, or an asymmetric matcher. Anything else is a usage error. }
+function IsSupportedThrowExpectation(const AValue: TGocciaValue): Boolean;
+begin
+  Result := (AValue is TGocciaStringLiteralValue) or
+    (AValue is TGocciaObjectValue) or AValue.IsCallable;
+end;
+
+function ThrowExpectationDescription(const AValue: TGocciaValue): string;
+begin
+  if IsRegExpInstance(AValue) then
+    Result := RegExpObjectToString(AValue)
+  else if AValue is TGocciaClassValue then
+    Result := TGocciaClassValue(AValue).Name
+  else if AValue is TGocciaNativeFunctionValue then
+    Result := TGocciaNativeFunctionValue(AValue).Name
+  else
+    Result := DescribeThrowValue(AValue);
+end;
+
+{ Applies the argument form the expectation was given:
+  - string: the thrown message contains it
+  - RegExp: the thrown message matches it
+  - constructor: the thrown value is an instance of it, subclasses included
+  - Error instance: the messages are equal
+  - asymmetric matcher: delegated to the matcher }
+function ThrownValueMatchesExpectation(const AThrownValue,
+  AExpected: TGocciaValue): Boolean;
+var
+  ExpectedSubstring: string;
+  Subject: string;
+  MatchValue: TGocciaValue;
+  MatchIndex: Integer;
+  MatchEnd: Integer;
+  NextIndex: Integer;
+begin
+  if AExpected is TGocciaAsymmetricMatcherValue then
+    Exit(IsDeepEqual(AThrownValue, AExpected));
+
+  if (AExpected is TGocciaStringLiteralValue) or
+     IsRegExpInstance(AExpected) then
+  begin
+    case ThrownMessageSubject(AThrownValue, Subject) of
+      tsAnything: Exit(True);
+      tsNothing: Exit(False);
+    end;
+
+    if IsRegExpInstance(AExpected) then
+      Exit(MatchRegExpObject(AExpected, Subject, 0, False, False, MatchValue,
+        MatchIndex, MatchEnd, NextIndex));
+
+    ExpectedSubstring := TGocciaStringLiteralValue(AExpected).Value;
+    { An empty expected string asserts an empty message rather than matching
+      everything, the way Vitest compiles it to /^$/. }
+    if ExpectedSubstring = '' then
+      Exit(Subject = '');
+    Exit(Pos(ExpectedSubstring, Subject) > 0);
+  end;
+
+  // ES2026 §13.10.2 InstanceofOperator(value, target) — the same prototype
+  // walk the instanceof operator uses, so `class Derived extends Error {}`
+  // satisfies both toThrow(Derived) and toThrow(Error).
+  if AExpected.IsCallable then
+    Exit(InstanceofOperatorResult(AThrownValue, AExpected));
+
+  { An expected error instance is compared as a value: name, message, own
+    enumerable properties and an expected-side cause all participate, so a
+    TypeError never satisfies an expected plain Error. }
+  Result := IsDeepEqual(AThrownValue, AExpected);
 end;
 
 function FormatThrowValueDetail(const AValue: TGocciaValue): string;
@@ -832,12 +1307,28 @@ end;
 
 { TGocciaExpectationValue }
 
-constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean);
+{ The actual value is held in a native field, not as a property, so the
+  inherited walk cannot see it. `expect(<expression>)` is the common case where
+  nothing else refers to it — a literal or call result, alive only because this
+  expectation holds it — and every matcher then re-enters user code through
+  getters on the expected side before it is done reading the actual. Without
+  this the value is collected mid-assertion. FTestAssertions is a builtin, not a
+  collected value, so it is deliberately not marked. }
+procedure TGocciaExpectationValue.MarkReferences;
+begin
+  inherited;
+  if Assigned(FActualValue) then
+    FActualValue.MarkReferences;
+end;
+
+constructor TGocciaExpectationValue.Create(const AActualValue: TGocciaValue; const ATestAssertions: TGocciaTestAssertions; const AIsNegated: Boolean;
+  const AIsRejectionReason: Boolean);
 begin
   inherited Create;
   FActualValue := AActualValue;
   FTestAssertions := ATestAssertions;
   FIsNegated := AIsNegated;
+  FIsRejectionReason := AIsRejectionReason;
 
   // Add matcher methods
   DefineProperty('toBe', TGocciaPropertyDescriptorData.Create(
@@ -894,6 +1385,9 @@ begin
   // Mock matchers
   DefineProperty('toHaveBeenCalled', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveBeenCalled, 'toHaveBeenCalled', 0), [pfConfigurable, pfWritable]));
+  DefineProperty('toHaveBeenCalledOnce', TGocciaPropertyDescriptorData.Create(
+    TGocciaNativeFunctionValue.Create(ToHaveBeenCalledOnce,
+      'toHaveBeenCalledOnce', 0), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveBeenCalledTimes', TGocciaPropertyDescriptorData.Create(
     TGocciaNativeFunctionValue.Create(ToHaveBeenCalledTimes, 'toHaveBeenCalledTimes', 1), [pfConfigurable, pfWritable]));
   DefineProperty('toHaveBeenCalledWith', TGocciaPropertyDescriptorData.Create(
@@ -988,29 +1482,49 @@ function TGocciaExpectationValue.ToContainEqual(const AArgs: TGocciaArgumentsCol
 var
   Expected: TGocciaValue;
   I: Integer;
+  SetCursor: Integer;
+  SetItem: TGocciaValue;
   Contains: Boolean;
 begin
   TGocciaArgumentValidator.RequireExactly(AArgs, 1, 'toContainEqual', FTestAssertions.ThrowError);
 
-  if not (FActualValue is TGocciaArrayValue) then
+  if not ((FActualValue is TGocciaArrayValue) or
+     (FActualValue is TGocciaSetValue)) then
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionPassed('toContainEqual')
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toContainEqual',
-        'Expected an array but received ' + FormatForDisplay(FActualValue));
+        'Expected an array or a Set but received ' +
+        FormatForDisplay(FActualValue));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
 
   Expected := AArgs.GetElement(0);
   Contains := False;
-  for I := 0 to TGocciaArrayValue(FActualValue).Elements.Count - 1 do
-    if IsDeepEqual(TGocciaArrayValue(FActualValue).Elements[I], Expected) then
-    begin
-      Contains := True;
-      Break;
+  if FActualValue is TGocciaSetValue then
+  begin
+    SetCursor := 0;
+    TGocciaSetValue(FActualValue).RetainIterator;
+    try
+      while TGocciaSetValue(FActualValue).NextItem(SetCursor, SetItem) do
+        if IsDeepEqual(SetItem, Expected) then
+        begin
+          Contains := True;
+          Break;
+        end;
+    finally
+      TGocciaSetValue(FActualValue).ReleaseIterator;
     end;
+  end
+  else
+    for I := 0 to TGocciaArrayValue(FActualValue).Elements.Count - 1 do
+      if IsDeepEqual(TGocciaArrayValue(FActualValue).Elements[I], Expected) then
+      begin
+        Contains := True;
+        Break;
+      end;
 
   if FIsNegated then
     Contains := not Contains;
@@ -1578,13 +2092,16 @@ begin
                    (FActualValue.ClassName = 'TGocciaFunctionPrototypeMethod') or
                    (FActualValue.ClassName = 'TGocciaBoundFunctionValue');
     end
-    else
+    else if FActualValue is TGocciaObjectValue then
     begin
-      // Check if the actual value is an instance of the class
-      if FActualValue is TGocciaInstanceValue then
-      begin
-        IsInstance := IsObjectInstanceOfClass(TGocciaInstanceValue(FActualValue), TGocciaClassValue(ExpectedConstructor));
-      end;
+      // ES2026 §13.10.2 InstanceofOperator(value, target) — the same prototype
+      // walk the instanceof operator and toThrow(Class) use. Gating on
+      // TGocciaInstanceValue instead missed every value a class produces
+      // through some other representation, `class Failure extends Error {}`
+      // above all: its instances carry the right prototype chain but are error
+      // values, so the matcher disagreed with both `instanceof` and
+      // `toThrow(Failure)` on the same object.
+      IsInstance := InstanceofOperatorResult(FActualValue, ExpectedConstructor);
     end;
   end;
 
@@ -1600,10 +2117,12 @@ begin
   begin
     if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FormatForDisplay(FActualValue) + ' not to be an instance of ' + FormatForDisplay(ExpectedConstructor))
+        'Expected ' + DescribeInstanceOfSubject(FActualValue) +
+        ' not to be an instance of ' + DescribeConstructor(ExpectedConstructor))
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toBeInstanceOf',
-        'Expected ' + FormatForDisplay(FActualValue) + ' to be an instance of ' + FormatForDisplay(ExpectedConstructor));
+        'Expected ' + DescribeInstanceOfSubject(FActualValue) +
+        ' to be an instance of ' + DescribeConstructor(ExpectedConstructor));
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
@@ -1620,6 +2139,15 @@ begin
   if FActualValue is TGocciaArrayValue then
   begin
     HasLength := TGocciaArrayValue(FActualValue).Elements.Count = Expected.ToNumberLiteral.Value;
+  end
+  // A Set and a Map report their entry count as size rather than length.
+  else if FActualValue is TGocciaSetValue then
+  begin
+    HasLength := TGocciaSetValue(FActualValue).Count = Expected.ToNumberLiteral.Value;
+  end
+  else if FActualValue is TGocciaMapValue then
+  begin
+    HasLength := TGocciaMapValue(FActualValue).Count = Expected.ToNumberLiteral.Value;
   end
   else if FActualValue is TGocciaObjectValue then
   begin
@@ -1657,7 +2185,16 @@ end;
 function TGocciaExpectationValue.ToHaveProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   HasProperty: Boolean;
-  PropertyName: string;
+  Segments: TArray<string>;
+  PathDescription: string;
+  PathArgument: TGocciaValue;
+  ResolvedValue: TGocciaValue;
+  ResolvedRoot: TGocciaTempRoot;
+  ExpectedValue: TGocciaValue;
+  ExpectedRoot: TGocciaTempRoot;
+  ExpectsValue: Boolean;
+  LiteralKey: string;
+  HasLiteralKey: Boolean;
 begin
   TGocciaArgumentValidator.RequireBetween(AArgs, 1, 2, 'toHaveProperty',
     FTestAssertions.ThrowError);
@@ -1673,216 +2210,259 @@ begin
     Exit;
   end;
 
-  PropertyName := AArgs.GetElement(0).ToStringLiteral.Value;
-  HasProperty := TGocciaObjectValue(FActualValue).HasProperty(PropertyName);
-  if HasProperty and (AArgs.Length = 2) then
-    HasProperty := IsDeepEqual(
-      TGocciaObjectValue(FActualValue).GetProperty(PropertyName),
-      AArgs.GetElement(1));
-
-  if FIsNegated then
-    HasProperty := not HasProperty;
-
-  if HasProperty then
+  PathArgument := AArgs.GetElement(0);
+  if not ((PathArgument is TGocciaStringLiteralValue) or
+     (PathArgument is TGocciaNumberLiteralValue) or
+     (PathArgument is TGocciaArrayValue)) then
   begin
-    TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end
+    ThrowTypeError(SErrorToHavePropertyExpectsPath, SSuggestTestUsage);
+    Exit;
+  end;
+
+  // A string or number path is first tried as a single literal own key, and only
+  // split into segments if that key is absent. Vitest does the same
+  // (`Object.prototype.hasOwnProperty.call(actual, path)` ahead of its path
+  // walk), which is what makes `expect({ "a.b": 5 }).toHaveProperty("a.b")` pass
+  // and what lets a number reach an index without any dedicated numeric path
+  // support. The check is deliberately own-only and ignores enumerability, so an
+  // inherited "a.b" is not found this way but a non-enumerable own one is. It
+  // also applies to the whole path only — a dotted key nested deeper in the
+  // object still needs an array path.
+  HasLiteralKey := (PathArgument is TGocciaStringLiteralValue) or
+    (PathArgument is TGocciaNumberLiteralValue);
+  if HasLiteralKey then
+    LiteralKey := PathArgument.ToStringLiteral.Value
   else
-  begin
+    LiteralKey := '';
+
+  Segments := ParsePropertyPath(PathArgument);
+  PathDescription := DescribePropertyPath(Segments);
+  ExpectsValue := AArgs.Length = 2;
+
+  // The path walk calls accessors, and every accessor is a GC safe point. The
+  // expected value lives only in the argument collection, which is not itself a
+  // root, so root it before the walk can collect it.
+  InitializeTempRoot(ExpectedRoot);
+  InitializeTempRoot(ResolvedRoot);
+  try
+    if ExpectsValue then
+    begin
+      ExpectedValue := AArgs.GetElement(1);
+      Goccia.GarbageCollector.AddTempRootIfNeeded(ExpectedRoot, ExpectedValue);
+    end
+    else
+      ExpectedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+
+    if HasLiteralKey and
+       TGocciaObjectValue(FActualValue).HasOwnProperty(LiteralKey) then
+    begin
+      // Reading the key runs any accessor on it, exactly like a path step.
+      ResolvedValue := TGocciaObjectValue(FActualValue)
+        .GetPropertyWithContext(LiteralKey, FActualValue);
+      if ResolvedValue = nil then
+        ResolvedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      PathDescription := LiteralKey;
+      HasProperty := True;
+    end
+    else if Length(Segments) = 0 then
+    begin
+      // Every segment of the path was empty ("", ".", ".."), and no own key
+      // spells it literally, so there is nothing to resolve. Vitest throws a
+      // TypeError out of its path parser here; reporting a plain assertion
+      // failure is the same verdict without the crash.
+      ResolvedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+      HasProperty := False;
+    end
+    else
+      HasProperty := TryResolvePropertyPath(FActualValue, Segments, ResolvedValue);
+
+    // The walk releases its own roots on return, and a resolved value produced
+    // by an accessor (or by a computed member such as `length`) is reachable
+    // from nowhere else. The comparison and the failure formatting below both
+    // allocate, so root it for the rest of the matcher.
+    Goccia.GarbageCollector.AddTempRootIfNeeded(ResolvedRoot, ResolvedValue);
+
+    if HasProperty and ExpectsValue then
+      HasProperty := IsDeepEqual(ResolvedValue, ExpectedValue);
+
     if FIsNegated then
+      HasProperty := not HasProperty;
+
+    if HasProperty then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toHaveProperty');
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      Exit;
+    end;
+
+    if ExpectsValue then
+    begin
+      if FIsNegated then
+        TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+          'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
+          PathDescription + ' with value ' +
+          FormatForDisplay(ExpectedValue))
+      else
+        TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
+          'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
+          PathDescription + ' with value ' +
+          FormatForDisplay(ExpectedValue) + ' but received ' +
+          FormatForDisplay(ResolvedValue));
+    end
+    else if FIsNegated then
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' + AArgs.GetElement(0).ToStringLiteral.Value)
+        'Expected ' + FormatForDisplay(FActualValue) + ' not to have property ' +
+        PathDescription)
     else
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('toHaveProperty',
-        'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' + AArgs.GetElement(0).ToStringLiteral.Value);
+        'Expected ' + FormatForDisplay(FActualValue) + ' to have property ' +
+        PathDescription);
+
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ResolvedRoot);
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(ExpectedRoot);
   end;
 end;
 
 function TGocciaExpectationValue.ToThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ExpectedErrorType: string;
+  Expected: TGocciaValue;
+  HasExpectation: Boolean;
+  ThrownValue: TGocciaValue;
+  DidThrow: Boolean;
+  Matches: Boolean;
   EmptyArgs: TGocciaArgumentsCollection;
-  TestFunc: TGocciaFunctionBase;
-  ThrownObj: TGocciaObjectValue;
-  ErrorConstructor: TGocciaValue;
-  ConstructorName: string;
-  ErrorName: string;
-  ErrorClassArg: TGocciaValue;
+  TestFunction: TGocciaFunctionBase;
+  SubjectDescription: string;
+  ExpectedDescription: string;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 
-  ExpectedErrorType := '';
-  if AArgs.Length > 0 then
+  Expected := nil;
+  // toThrow(undefined) is the no-argument form, matching Jest.
+  HasExpectation := (AArgs.Length > 0) and
+    not (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue);
+  if HasExpectation then
   begin
-    // If args are provided, expect a specific error type
-    ErrorClassArg := AArgs.GetElement(0);
-    // If it's a class, get its name; otherwise use string representation
-    if ErrorClassArg is TGocciaClassValue then
-      ExpectedErrorType := TGocciaClassValue(ErrorClassArg).Name
-    else if ErrorClassArg is TGocciaNativeFunctionValue then
-      ExpectedErrorType := TGocciaNativeFunctionValue(ErrorClassArg).Name
-    else
-      ExpectedErrorType := ErrorClassArg.ToStringLiteral.Value;
+    Expected := AArgs.GetElement(0);
+    if not IsSupportedThrowExpectation(Expected) then
+    begin
+      ThrowTypeError(SErrorToThrowExpectsMatchableValue, SSuggestTestUsage);
+      Exit;
+    end;
   end;
 
-  if not (FActualValue is TGocciaFunctionBase) then
+  ThrownValue := nil;
+  DidThrow := False;
+
+  if FIsRejectionReason then
   begin
-    // Support .rejects.toThrow(TypeError) — actual value is the rejection reason
-    if (FActualValue is TGocciaObjectValue) and TGocciaObjectValue(FActualValue).HasErrorData then
+    // .rejects already unwrapped the rejection reason for us.
+    DidThrow := True;
+    ThrownValue := FActualValue;
+  end
+  else
+  begin
+    if not (FActualValue is TGocciaFunctionBase) then
     begin
-      if ExpectedErrorType = '' then
-      begin
-        TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end;
-      ThrownObj := TGocciaObjectValue(FActualValue);
-      if ThrownObj.HasProperty(PROP_NAME) then
-      begin
-        ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
-        if (ErrorName = ExpectedErrorType) or
-           (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-          Exit;
-        end;
-      end;
-      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-        'Expected error of type ' + ExpectedErrorType + ' but got: ' + FormatForDisplay(FActualValue));
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+      ThrowTypeError(SErrorToThrowExpectsFunction, SSuggestTestUsage);
       Exit;
     end;
 
-    ThrowTypeError(SErrorToThrowExpectsFunction, SSuggestTestUsage);
-    Exit;
-  end;
-
-    TestFunc := TGocciaFunctionBase(FActualValue);
-  EmptyArgs := TGocciaArgumentsCollection.Create;
-
-  try
+    TestFunction := TGocciaFunctionBase(FActualValue);
+    EmptyArgs := TGocciaArgumentsCollection.Create;
     try
-      TestFunc.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
-    except
-      on E: TGocciaThrowValue do
-      begin
-        // Handle thrown JavaScript values (e.g., throw new TypeError())
-        if ExpectedErrorType = '' then
+      try
+        TestFunction.Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: TGocciaThrowValue do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
+          DidThrow := True;
+          ThrownValue := E.Value;
         end;
-
-        // Check if thrown value matches expected error type
-        if E.Value is TGocciaObjectValue then
+        on E: EGocciaBytecodeThrow do
         begin
-          ThrownObj := TGocciaObjectValue(E.Value);
-
-          // Check if the error object has a name property that matches
-          if ThrownObj.HasProperty(PROP_NAME) then
-          begin
-            ErrorName := ThrownObj.GetProperty(PROP_NAME).ToStringLiteral.Value;
-            // Direct comparison: "TypeError" == "TypeError"
-            if (ErrorName = ExpectedErrorType) or
-               (LowerCase(ErrorName) = LowerCase(ExpectedErrorType)) then
-            begin
-              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-              Exit;
-            end;
-          end;
-
-          // Fallback: check constructor property
-          if ThrownObj.HasProperty(PROP_CONSTRUCTOR) then
-          begin
-            ErrorConstructor := ThrownObj.GetProperty(PROP_CONSTRUCTOR);
-            if ErrorConstructor.ToStringLiteral.Value = ExpectedErrorType then
-            begin
-              TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-              Exit;
-            end;
-            if ErrorConstructor is TGocciaNativeFunctionValue then
-            begin
-              ConstructorName := TGocciaNativeFunctionValue(ErrorConstructor).Name;
-              if (Pos(ConstructorName, ExpectedErrorType) > 0) or
-                 (Pos(LowerCase(ConstructorName), LowerCase(ExpectedErrorType)) > 0) then
-              begin
-                TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-                Exit;
-              end;
-            end;
-          end;
+          // The bytecode VM reports a JS throw with its own exception type.
+          DidThrow := True;
+          ThrownValue := E.ThrownValue;
         end;
-
-        // Fallback to string matching in the thrown value
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Value.ToStringLiteral.Value)) > 0) then
+        on E: TGocciaError do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
+          // Engine-level errors carry no JavaScript value; rebuild one so the
+          // constructor and message forms see the same shape as a JS throw.
+          DidThrow := True;
+          ThrownValue := CreateErrorObject(EngineErrorName(E), E.Message);
+        end;
+        { An expired per-test/per-describe/per-file deadline is not something
+          the callable threw, so it must never satisfy the expectation. Listed
+          before the generic arm because TGocciaTimeoutError descends from
+          Exception: absorbing it here would report toThrow as passing and let
+          execution continue past the limit instead of unwinding to
+          ExecuteSuite (see the same guard at RunCallbacks). }
+        on E: TGocciaTimeoutError do
+          raise;
+        { A refused allocation is the same shape of event as an expired
+          deadline: absorbing it would let `expect(fn).toThrow()` report the
+          memory ceiling as a satisfied expectation, which is precisely the
+          "catch the limit and keep going" the budget exists to prevent. }
+        on E: TGocciaMemoryLimitError do
+          raise;
+        on E: Exception do
         begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + FormatForDisplay(E.Value));
-          Exit;
+          if IsEngineIntegrityFault(E) then
+            raise;
+          DidThrow := True;
+          ThrownValue := CreateErrorObject(ERROR_NAME,
+            E.ClassName + ': ' + E.Message);
         end;
       end;
-      on E: TGocciaError do
-      begin
-        if ExpectedErrorType = '' then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end;
-
-        if ((ExpectedErrorType = TYPE_ERROR_NAME) and (E is TGocciaTypeError)) or
-           ((ExpectedErrorType = REFERENCE_ERROR_NAME) and (E is TGocciaReferenceError)) or
-           ((ExpectedErrorType = SYNTAX_ERROR_NAME) and (E is TGocciaSyntaxError)) or
-           ((ExpectedErrorType = ERROR_NAME) and (E is TGocciaRuntimeError)) or
-           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.Message);
-          Exit;
-        end;
-      end;
-      on E: Exception do
-      begin
-        // Handle other Pascal exceptions (including EInvalidCast)
-        if ExpectedErrorType = '' then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end;
-
-        // For non-Goccia errors, be more lenient with type matching
-        if (Pos(LowerCase(ExpectedErrorType), LowerCase(E.ClassName)) > 0) or
-           (Pos(LowerCase(ExpectedErrorType), LowerCase(E.Message)) > 0) then
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
-          Exit;
-        end
-        else
-        begin
-          TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-            'Expected ' + FormatForDisplay(FActualValue) + ' to throw ' + ExpectedErrorType + ' but threw: ' + E.ClassName + ': ' + E.Message);
-          Exit;
-        end;
-      end;
+    finally
+      EmptyArgs.Free;
     end;
-  finally
-    EmptyArgs.Free;
   end;
 
-  TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
-    'Expected ' + FormatForDisplay(FActualValue) + ' to throw an exception');
+  if DidThrow and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.AddTempRoot(ThrownValue);
+  try
+    Matches := DidThrow and
+      (not HasExpectation or ThrownValueMatchesExpectation(ThrownValue, Expected));
+
+    if FIsNegated then
+      Matches := not Matches;
+
+    if Matches then
+    begin
+      TGocciaTestAssertions(FTestAssertions).AssertionPassed('toThrow');
+      Exit;
+    end;
+
+    if FIsRejectionReason then
+      SubjectDescription := 'the rejected promise'
+    else
+      SubjectDescription := 'the function';
+
+    if HasExpectation then
+      ExpectedDescription := ' to throw ' + ThrowExpectationDescription(Expected)
+    else
+      ExpectedDescription := ' to throw an exception';
+
+    if FIsNegated then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ' not' + ExpectedDescription +
+        ' but it threw: ' + DescribeThrowValue(ThrownValue))
+    else if DidThrow then
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ExpectedDescription +
+        ' but it threw: ' + DescribeThrowValue(ThrownValue))
+    else
+      TGocciaTestAssertions(FTestAssertions).AssertionFailed('toThrow',
+        'Expected ' + SubjectDescription + ExpectedDescription +
+        ' but it did not throw');
+  finally
+    if DidThrow and (TGarbageCollector.Instance <> nil) then
+      TGarbageCollector.Instance.RemoveTempRoot(ThrownValue);
+  end;
 end;
 
 function TGocciaExpectationValue.ToBeCloseTo(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2245,6 +2825,43 @@ begin
         Format('Expected mock to have been called %d time(s) but was called %d time(s)',
           [ExpectedTimes, MockFn.MockCalls.Count]));
   end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaExpectationValue.ToHaveBeenCalledOnce(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  MockFn: TGocciaMockFunctionValue;
+  Matches: Boolean;
+begin
+  TGocciaArgumentValidator.RequireExactly(AArgs, 0, 'toHaveBeenCalledOnce',
+    TGocciaTestAssertions(FTestAssertions).ThrowError);
+
+  if not (FActualValue is TGocciaMockFunctionValue) then
+  begin
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce', 'Value must be a mock or spy function');
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+
+  MockFn := TGocciaMockFunctionValue(FActualValue);
+  Matches := MockFn.MockCalls.Count = 1;
+  if FIsNegated then
+    Matches := not Matches;
+
+  if Matches then
+    TGocciaTestAssertions(FTestAssertions).AssertionPassed(
+      'toHaveBeenCalledOnce')
+  else if FIsNegated then
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce',
+      'Expected mock not to have been called exactly once')
+  else
+    TGocciaTestAssertions(FTestAssertions).AssertionFailed(
+      'toHaveBeenCalledOnce', Format(
+        'Expected mock to have been called exactly once but was called %d time(s)',
+        [MockFn.MockCalls.Count]));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -2721,7 +3338,8 @@ end;
 
 function TGocciaExpectationValue.GetNot(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True);
+  Result := TGocciaExpectationValue.Create(FActualValue, FTestAssertions, True,
+    FIsRejectionReason);
 end;
 
 function TGocciaExpectationValue.GetResolves(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -2781,7 +3399,7 @@ begin
     WaitForFetchPromise(Promise);
 
     if Promise.State = gpsRejected then
-      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated)
+      Result := TGocciaExpectationValue.Create(Promise.PromiseResult, FTestAssertions, FIsNegated, True)
     else if Promise.State = gpsFulfilled then
     begin
       TGocciaTestAssertions(FTestAssertions).AssertionFailed('rejects',
@@ -2806,7 +3424,8 @@ constructor TGocciaTestAssertions.Create(const AName: string;
   const AScope: TGocciaScope; const AThrowError: TGocciaThrowErrorCallback;
   const ASnapshotHost: IGocciaSnapshotHost;
   const ASnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-  const ASnapshotFormatter: IGocciaSnapshotFormatter);
+  const ASnapshotFormatter: IGocciaSnapshotFormatter;
+  const AInjectGlobals: Boolean);
 var
   GlobalObject: TGocciaObjectValue;
   ExpectFunction: TGocciaNativeFunctionValue;
@@ -2823,8 +3442,14 @@ var
   MockFunctionValue: TGocciaNativeFunctionValue;
   SpyOnFunction: TGocciaNativeFunctionValue;
 
+  { Global injection is the half a host can decline. A host that only
+    registers the `goccia:test` module namespace passes AInjectGlobals=False
+    and gets every helper on FBuiltinObject with nothing added to the global
+    object or the global scope. }
   procedure RegisterPublicGlobal(const AName: string; const AValue: TGocciaValue);
   begin
+    if not AInjectGlobals then
+      Exit;
     if Assigned(GlobalObject) then
       GlobalObject.DefineProperty(AName,
         TGocciaPropertyDescriptorData.Create(AValue, [pfWritable, pfConfigurable]))
@@ -2919,10 +3544,15 @@ begin
   RegisterPublicGlobal('test', TestFunction);
 
   // Private aliases used by generated Test262 wrappers.  Some conformance
-  // tests intentionally declare globals named describe/test.
-  AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
-    dtConst, True);
-  AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst, True);
+  // tests intentionally declare globals named describe/test.  These are
+  // global-scope bindings, so they belong to the global-injection half.
+  if AInjectGlobals then
+  begin
+    AScope.DefineLexicalBinding('__gocciaTest262Describe', DescribeFunction,
+      dtConst, True);
+    AScope.DefineLexicalBinding('__gocciaTest262Test', TestFunction, dtConst,
+      True);
+  end;
 
   ItFunction := TGocciaNativeFunctionValue.Create(It, 'it', 2);
   ConfigureTestFunction(ItFunction);
@@ -3186,6 +3816,52 @@ begin
       TGocciaTestSuite(ASuite.Entries[I]).ClearRegisteredContent;
 end;
 
+{ ': <message>' when there is one, otherwise ''. Keeps the detail
+  string readable when a hook failed without a usable payload. }
+function FormatHookFailureSuffix(const AMessage: string): string;
+begin
+  if AMessage = '' then
+    Result := ''
+  else
+    Result := ': ' + AMessage;
+end;
+
+{ Error objects render as an empty object literal through
+  FormatForDisplay because their data lives on non-enumerable own
+  properties, which loses exactly the text both oracles print. Prefer
+  'Name: message' when the value looks like an Error, and fall back to
+  the generic formatter otherwise. }
+function DescribeThrownValue(const AValue: TGocciaValue): string;
+var
+  NameValue, MessageValue: TGocciaValue;
+  NameText, MessageText: string;
+begin
+  Result := '';
+  if not Assigned(AValue) then
+    Exit;
+
+  if AValue is TGocciaObjectValue then
+  begin
+    NameValue := AValue.GetProperty('name');
+    MessageValue := AValue.GetProperty('message');
+    if Assigned(MessageValue) and not (MessageValue is TGocciaUndefinedLiteralValue) then
+    begin
+      MessageText := MessageValue.ToStringLiteral.Value;
+      NameText := '';
+      if Assigned(NameValue) and not (NameValue is TGocciaUndefinedLiteralValue) then
+        NameText := NameValue.ToStringLiteral.Value;
+      if (NameText <> '') and (MessageText <> '') then
+        Exit(NameText + ': ' + MessageText);
+      if MessageText <> '' then
+        Exit(MessageText);
+      if NameText <> '' then
+        Exit(NameText);
+    end;
+  end;
+
+  Result := FormatForDisplay(AValue);
+end;
+
 procedure TGocciaTestAssertions.BuildNestedRegistrations(
   const ASuite: TGocciaTestSuite; const AFailedTestDetails: TStringList);
 var
@@ -3196,6 +3872,10 @@ var
 begin
   for I := 0 to ASuite.Entries.Count - 1 do
   begin
+    { Collection died in an earlier describe: stop walking the tree. }
+    if FCollectionAborted then
+      Exit;
+
     Entry := ASuite.Entries[I];
     if not (Entry is TGocciaTestSuite) then
       Continue;
@@ -3220,13 +3900,51 @@ begin
             ChildSuite.SuiteFunction.Call(ChildSuite.SuiteArguments,
               TGocciaUndefinedLiteralValue.UndefinedValue);
         except
+          { A refused allocation is uncatchable and must unwind to the host on
+            every execution path, not be converted into a describe failure.
+            Pending host work is cleared before the unwind for the same reason
+            as the per-test arm: later files run in this process. }
+          on E: TGocciaMemoryLimitError do
+          begin
+            if (TGocciaMicrotaskQueue.Instance <> nil) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
+            DiscardRealTimers;
+            raise;
+          end;
           on E: Exception do
           begin
+            if IsEngineIntegrityFault(E) then
+            begin
+              { Terminal like the refusal above: clear pending host work before
+                unwinding, because later files run in this process. }
+              if (TGocciaMicrotaskQueue.Instance <> nil) then
+                TGocciaMicrotaskQueue.Instance.ClearQueue;
+              DiscardFetchCompletions;
+              DiscardRealTimers;
+              raise;
+            end;
             if not FSuppressOutput then
               WriteLn('Error in describe block "', ChildSuite.GetFullName,
                 '": ', E.Message);
-            AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
-              '": ' + E.Message);
+            { E.Message is empty for a thrown JS value; the payload lives
+              on TGocciaThrowValue.Value. }
+            if (E is TGocciaThrowValue) and Assigned(TGocciaThrowValue(E).Value) then
+              AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+                '": ' + DescribeThrownValue(TGocciaThrowValue(E).Value))
+            else
+              AFailedTestDetails.Add('Describe "' + ChildSuite.GetFullName +
+                '": ' + E.Message);
+            { A throw in a describe CALLBACK is a collection failure, and
+              Vitest discards the entire file for it: zero tests run, even
+              ones in suites collected before the throwing describe.
+              Registration stops here and RunTests skips execution
+              entirely. `suiteErrors` makes the file not-ok, which drives
+              the envelope `ok` and the exit code. Execution-time failures
+              (hooks, tests) keep their own accounting and do NOT abort
+              collection. }
+            Inc(FTestStats.SuiteErrors);
+            FCollectionAborted := True;
           end;
         end;
       finally
@@ -3360,7 +4078,8 @@ end;
 
 procedure TGocciaTestAssertions.ExecuteSuite(const ASuite: TGocciaTestSuite;
   const AHasFocusedEntries, AExitOnFirstFailure: Boolean;
-  const AFailedTestDetails: TStringList; var AShouldStop: Boolean);
+  const AFailedTestDetails: TStringList; var AShouldStop: Boolean;
+  const ASetupFailed: Boolean);
 var
   I: Integer;
   Entry: TGocciaRegisteredEntry;
@@ -3371,15 +4090,26 @@ var
   RejectionReason: string;
   ExceptionDetail, ExceptionSummary: string;
   FailureRecorded: Boolean;
+  TerminalUnwinding: Boolean;
+  TimerErrorValue: TGocciaValue;
+  TimerErrorRoot: TGocciaTempRoot;
   EffectiveSuiteName: string;
   HookFailed: Boolean;
+  HookMessage: string;
   RunSuiteHooks: Boolean;
+  SetupFailed: Boolean;
 begin
+  { Inherited from an ancestor whose beforeAll threw; set below when this
+    suite's own beforeAll fails. }
+  SetupFailed := ASetupFailed;
   if AShouldStop then
     Exit;
 
   EffectiveSuiteName := ASuite.GetFullName;
-  RunSuiteHooks := not IsSuiteSkipped(ASuite) and
+  { ASetupFailed (not SetupFailed) gates both hooks: a suite whose own
+    beforeAll throws still runs its afterAll, but a descendant of a
+    failed suite runs neither. Both match Vitest. }
+  RunSuiteHooks := not ASetupFailed and not IsSuiteSkipped(ASuite) and
     SuiteHasRunnableEntries(ASuite, AHasFocusedEntries);
 
   { The per-describe deadline is no longer pushed here.  It now lives in
@@ -3395,11 +4125,18 @@ begin
     ResetCurrentTestState;
     RunCallbacks(ASuite.BeforeAllCallbacks);
     HookFailed := FTestStats.CurrentTestHasFailures;
+    HookMessage := FTestStats.CurrentFailureMessage;
     ResetCurrentTestState;
     if HookFailed then
     begin
       AFailedTestDetails.Add('Hook "beforeAll" in suite "' + EffectiveSuiteName +
-        '" failed');
+        '" failed' + FormatHookFailureSuffix(HookMessage));
+      { Record the hook failure as a suite error, not a failed test:
+        Vitest reports this suite's tests as SKIPPED with fail=0 and
+        fails the file instead. SetupFailed below carries that decision
+        into the entry loop and into descendant suites. }
+      Inc(FTestStats.SuiteErrors);
+      SetupFailed := True;
       if AExitOnFirstFailure then
       begin
         AShouldStop := True;
@@ -3417,7 +4154,7 @@ begin
     if Entry is TGocciaTestSuite then
     begin
       ExecuteSuite(TGocciaTestSuite(Entry), AHasFocusedEntries,
-        AExitOnFirstFailure, AFailedTestDetails, AShouldStop);
+        AExitOnFirstFailure, AFailedTestDetails, AShouldStop, SetupFailed);
       Continue;
     end;
 
@@ -3444,7 +4181,8 @@ begin
           WriteLn('    📝 ', TestCase.Name, ': TODO');
       end;
     end
-    else if TestCase.IsSkipped or IsSuiteSkipped(TestCase.ParentSuite) or
+    else if SetupFailed or TestCase.IsSkipped or
+      IsSuiteSkipped(TestCase.ParentSuite) or
       (AHasFocusedEntries and not IsTestSelected(TestCase, True)) then
     begin
       FTestStats.CurrentTestIsSkipped := True;
@@ -3472,6 +4210,7 @@ begin
         RunCallbacks(BeforeCallbacks);
 
         FailureRecorded := False;
+        TerminalUnwinding := False;
         TestResult := nil;
         try
           { Per-test deadline. Push unconditionally — a 0 value
@@ -3481,7 +4220,16 @@ begin
           PushTimeoutScope(tsTest, GTestRunnerTestTimeoutMs);
           try
             try
-              if Assigned(TestCase.TestFunction) then
+              { A failed beforeEach leaves the fixture the body depends on
+                broken, so the body must not run -- Vitest and bun both
+                skip it and still fail the test. RunCallbacks routes a
+                throwing/rejecting hook through AssertionFailed, so this
+                flag is exactly "a beforeEach for this test failed". The
+                counts are unchanged; only the side effects of executing
+                a body against a broken fixture go away. }
+              if FTestStats.CurrentTestHasFailures then
+                TestResult := TGocciaUndefinedLiteralValue.UndefinedValue
+              else if Assigned(TestCase.TestFunction) then
                 TestResult := TestCase.TestFunction.Call(TestCase.TestArguments,
                   TGocciaUndefinedLiteralValue.UndefinedValue)
               else
@@ -3495,7 +4243,7 @@ begin
                   WaitForFetchPromise(TGocciaPromiseValue(TestResult));
                   if TGocciaPromiseValue(TestResult).State = gpsRejected then
                   begin
-                    RejectionReason := FormatForDisplay(
+                    RejectionReason := DescribeRejectionReason(
                       TGocciaPromiseValue(TestResult).PromiseResult);
                     AssertionFailed('async test', 'Returned Promise rejected: ' +
                       RejectionReason);
@@ -3524,9 +4272,60 @@ begin
                 end
                 else
                   DrainMicrotasksAndFetchCompletions;
+
+                { Timers the body scheduled are work the body started, so they
+                  run here — at the end of the test that owns them — rather
+                  than at the engine's idle point, which under this runner is
+                  reached while the entry module is still evaluating and every
+                  test body is still ahead of it. Without this a
+                  `setTimeout` written inside a `test()` never ran at all and
+                  was discarded on the way out, silently.
+
+                  Timeouts only and bounded, so an uncleared interval cannot
+                  hold the test open. }
+                DrainRealTimersForHost;
+
+                { A throwing timer callback is an uncaught error in Node, not
+                  something the awaiting frame catches, so the queue parks it
+                  instead of raising it at whatever happened to be waiting.
+                  Attributing it is the runner's job, and this is the point
+                  where the test that scheduled it is still the current one. }
+                if TakeUncaughtTimerError(TimerErrorValue) then
+                begin
+                  { TakeUncaughtTimerError clears the queue's root, so this value
+                    is now marked by nothing. DescribeRejectionReason reads guest
+                    properties through GetProperty, which can run arbitrary code
+                    and collect, so keep it rooted across that call. }
+                  InitializeTempRoot(TimerErrorRoot);
+                  Goccia.GarbageCollector.AddTempRootIfNeeded(TimerErrorRoot,
+                    TimerErrorValue);
+                  try
+                    RejectionReason := DescribeRejectionReason(TimerErrorValue);
+                  finally
+                    Goccia.GarbageCollector.RemoveTempRootIfNeeded(TimerErrorRoot);
+                  end;
+                  AssertionFailed('timer callback',
+                    'Uncaught exception in a timer callback: ' +
+                    RejectionReason);
+                  if FTestStats.CurrentSuiteName <> '' then
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '" in suite "' + FTestStats.CurrentSuiteName +
+                      '": uncaught exception in a timer callback: ' +
+                      RejectionReason)
+                  else
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '": uncaught exception in a timer callback: ' +
+                      RejectionReason);
+                  FailureRecorded := True;
+                end;
               finally
                 if Assigned(TestResult) then
                   RemoveTempRootIfNeeded(TestResult);
+                { Whatever the bounded drain left — an uncleared interval, or a
+                  chain it did not reach — belongs to this test and must not
+                  fire inside the next one. Fake-timer state is untouched: that
+                  queue belongs to the suite. }
+                DiscardRealTimers;
               end;
             except
               { Test-scope timeout: record TIMEOUT and let execution
@@ -3540,6 +4339,7 @@ begin
                   if (TGocciaMicrotaskQueue.Instance <> nil) then
                     TGocciaMicrotaskQueue.Instance.ClearQueue;
                   DiscardFetchCompletions;
+                  DiscardRealTimers;
                   AssertionFailed('test execution',
                     Format('Test exceeded per-test timeout of %dms',
                       [E.DurationMs]));
@@ -3553,13 +4353,45 @@ begin
                   FailureRecorded := True;
                 end
                 else
+                begin
+                  TerminalUnwinding := True;
                   raise;
+                end;
               end;
-              on E: Exception do
+              { A refused allocation is uncatchable and must unwind to the host,
+                not be converted into a test failure and swallowed here. Pending
+                host work is cleared first: the host catches this error and later
+                files still run in the same process, so stale microtasks or fetch
+                completions from the aborted file must not leak into them. }
+              on E: TGocciaMemoryLimitError do
               begin
                 if (TGocciaMicrotaskQueue.Instance <> nil) then
                   TGocciaMicrotaskQueue.Instance.ClearQueue;
                 DiscardFetchCompletions;
+                DiscardRealTimers;
+                TerminalUnwinding := True;
+                raise;
+              end;
+              on E: Exception do
+              begin
+                if IsEngineIntegrityFault(E) then
+                begin
+                  { Terminal for the same reason as the refusal above, and with
+                    the same bookkeeping: the run is unwinding to the host, so
+                    pending host work must not leak into the next file and the
+                    guest afterEach / onTestFinished hooks must not run on a
+                    heap that is no longer sound. }
+                  if (TGocciaMicrotaskQueue.Instance <> nil) then
+                    TGocciaMicrotaskQueue.Instance.ClearQueue;
+                  DiscardFetchCompletions;
+                  DiscardRealTimers;
+                  TerminalUnwinding := True;
+                  raise;
+                end;
+                if (TGocciaMicrotaskQueue.Instance <> nil) then
+                  TGocciaMicrotaskQueue.Instance.ClearQueue;
+                DiscardFetchCompletions;
+                DiscardRealTimers;
                 if E is TGocciaError then
                 begin
                   ExceptionDetail := TGocciaError(E).GetDetailedMessage;
@@ -3591,12 +4423,37 @@ begin
             PopTimeoutScope;
           end;
         finally
-          RunCallbacks(AfterCallbacks);
-          if FOnTestFinishedCallbacks.Length > 0 then
+          { When an uncatchable fault is tearing the run down -- a resource
+            limit, an out-of-test-scope timeout, or an engine-integrity fault --
+            the guest afterEach / onTestFinished hooks must NOT run: the limit
+            has already fired, or the heap is no longer sound, and guest code
+            may not execute past either. Keep the engine bookkeeping (root
+            removal / Clear) so no callback roots leak while the exception
+            unwinds to the host. The flag is set explicitly by the terminal
+            re-raise arms above rather than inferred from
+            the RTL ExceptObject: on SEH targets (i386-win32) ExceptObject is
+            populated only inside except handlers, not while a finally runs
+            during unwinding, so an ExceptObject-based check silently ran the
+            hooks there. Every normal path (pass, ordinary failure, recorded
+            test-scope timeout) leaves the flag False, so the hooks run exactly
+            as before. }
+          if TerminalUnwinding then
           begin
-            RunCallbacks(FOnTestFinishedCallbacks);
-            RemoveCollectionRoots(FOnTestFinishedCallbacks);
-            FOnTestFinishedCallbacks.Clear;
+            if FOnTestFinishedCallbacks.Length > 0 then
+            begin
+              RemoveCollectionRoots(FOnTestFinishedCallbacks);
+              FOnTestFinishedCallbacks.Clear;
+            end;
+          end
+          else
+          begin
+            RunCallbacks(AfterCallbacks);
+            if FOnTestFinishedCallbacks.Length > 0 then
+            begin
+              RunCallbacks(FOnTestFinishedCallbacks);
+              RemoveCollectionRoots(FOnTestFinishedCallbacks);
+              FOnTestFinishedCallbacks.Clear;
+            end;
           end;
         end;
       finally
@@ -3606,13 +4463,20 @@ begin
 
       EndTest;
 
+      { Reached when the failure came from somewhere that did not write its
+        own detail line — most often a beforeEach that threw, which skips
+        the body entirely. The name alone leaves the JSON payload without
+        any explanation, so carry the first recorded failure message (the
+        one AssertionFailed kept) into the entry. }
       if FTestStats.CurrentTestHasFailures and not FailureRecorded then
       begin
         if FTestStats.CurrentSuiteName <> '' then
           AFailedTestDetails.Add('Test "' + TestCase.Name + '" in suite "' +
-            FTestStats.CurrentSuiteName + '"')
+            FTestStats.CurrentSuiteName + '"' +
+            FormatHookFailureSuffix(FTestStats.CurrentFailureMessage))
         else
-          AFailedTestDetails.Add('Test "' + TestCase.Name + '"');
+          AFailedTestDetails.Add('Test "' + TestCase.Name + '"' +
+            FormatHookFailureSuffix(FTestStats.CurrentFailureMessage));
       end;
 
       if FTestStats.CurrentTestHasFailures and AExitOnFirstFailure then
@@ -3635,11 +4499,17 @@ begin
     ResetCurrentTestState;
     RunCallbacks(ASuite.AfterAllCallbacks);
     HookFailed := FTestStats.CurrentTestHasFailures;
+    HookMessage := FTestStats.CurrentFailureMessage;
     ResetCurrentTestState;
     if HookFailed then
     begin
       AFailedTestDetails.Add('Hook "afterAll" in suite "' + EffectiveSuiteName +
-        '" failed');
+        '" failed' + FormatHookFailureSuffix(HookMessage));
+      { Teardown failure: the suite's tests have already run and keep
+        their results, so nothing is skipped here. Like the beforeAll
+        hook, Vitest leaves this out of the test counts (fail=0) and
+        fails the file, which `suiteErrors` expresses. }
+      Inc(FTestStats.SuiteErrors);
       if AExitOnFirstFailure then
         AShouldStop := True;
     end;
@@ -3678,9 +4548,12 @@ begin
   FTestStats.PassedTests := 0;
   FTestStats.FailedTests := 0;
   FTestStats.SkippedTests := 0;
+  FTestStats.SuiteErrors := 0;
+  FCollectionAborted := False;
   FTestStats.CurrentSuiteName := '';
   FTestStats.CurrentTestName := '';
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
   FTestStats.TotalAssertionCount := 0;
@@ -3715,7 +4588,7 @@ begin
               Promise := TGocciaPromiseValue(CallbackResult);
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
-                AssertionFailed('callback execution', 'Async callback rejected: ' + FormatForDisplay(Promise.PromiseResult))
+                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult))
               else if Promise.State = gpsPending then
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
             end
@@ -3733,8 +4606,41 @@ begin
             execution keep running past the limit. }
           on E: TGocciaTimeoutError do
             raise;
+          { A thrown JS value carries its payload on TGocciaThrowValue.Value;
+            E.Message is empty for it, which dropped the text both oracles
+            print. }
+          { A refused allocation is uncatchable and must unwind to the host, not
+            be converted into a hook failure and swallowed here. Pending host
+            work is cleared first: the host catches this error and later files
+            still run in the same process, so stale microtasks or fetch
+            completions from the aborted file must not leak into them. }
+          on E: TGocciaMemoryLimitError do
+          begin
+            if (TGocciaMicrotaskQueue.Instance <> nil) then
+              TGocciaMicrotaskQueue.Instance.ClearQueue;
+            DiscardFetchCompletions;
+            DiscardRealTimers;
+            raise;
+          end;
+          on E: TGocciaThrowValue do
+            AssertionFailed('callback execution',
+              'Callback threw an exception: ' + DescribeThrownValue(E.Value));
           on E: Exception do
+          begin
+            if IsEngineIntegrityFault(E) then
+            begin
+              { Terminal for the same reason as the refusal above, and with the
+                same bookkeeping: the run is unwinding to the host, so pending
+                host work must not leak into the next file and the remaining
+                hooks must not run on a heap that is no longer sound. }
+              if (TGocciaMicrotaskQueue.Instance <> nil) then
+                TGocciaMicrotaskQueue.Instance.ClearQueue;
+              DiscardFetchCompletions;
+              DiscardRealTimers;
+              raise;
+            end;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
+          end;
         end;
       end;
     end;
@@ -3747,6 +4653,7 @@ procedure TGocciaTestAssertions.StartTest(const ATestName: string);
 begin
   FTestStats.CurrentTestName := ATestName;
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestIsSkipped := False;
   FTestStats.CurrentTestAssertionCount := 0;
 end;
@@ -3769,6 +4676,7 @@ end;
 procedure TGocciaTestAssertions.ResetCurrentTestState;
 begin
   FTestStats.CurrentTestHasFailures := False;
+  FTestStats.CurrentFailureMessage := '';
   FTestStats.CurrentTestAssertionCount := 0;
 end;
 
@@ -3783,6 +4691,11 @@ begin
   Inc(FTestStats.CurrentTestAssertionCount);
   Inc(FTestStats.TotalAssertionCount);
   FTestStats.CurrentTestHasFailures := True;
+  { Keep the first message: later assertions in the same hook must not
+    overwrite the one that actually explains the failure. Recorded
+    before the suppress-output exit so JSON runs keep it too. }
+  if FTestStats.CurrentFailureMessage = '' then
+    FTestStats.CurrentFailureMessage := AMessage;
 
   if FSuppressOutput then
     Exit;
@@ -4252,6 +5165,8 @@ var
   ShouldStop: Boolean;
   SnapshotErrors: TStringList;
   FloatingPointState: TGocciaFloatingPointState;
+  FailedDetailsRoot: TGocciaTempRoot;
+  ResultObjRoot: TGocciaTempRoot;
 begin
   ExitOnFirstFailure := False;
   ShowTestResults := True;
@@ -4292,8 +5207,11 @@ begin
 
     HasFocusedEntries := SuiteHasSelectedEntries(FRootSuite, True);
     ShouldStop := False;
-    ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
-      FailedTestDetails, ShouldStop);
+    { Collection aborted: the file is discarded whole, so nothing runs.
+      Counts stay at zero and `suiteErrors` carries the failure. }
+    if not FCollectionAborted then
+      ExecuteSuite(FRootSuite, HasFocusedEntries, ExitOnFirstFailure,
+        FailedTestDetails, ShouldStop);
 
     if Assigned(FSnapshotState) then
     begin
@@ -4335,7 +5253,14 @@ begin
       Summary := Summary + ')';
     end;
 
+    { The detail strings and the summary string below are GC safe points;
+      root the containers while they fill. }
+    Goccia.GarbageCollector.InitializeTempRoot(FailedDetailsRoot);
+    Goccia.GarbageCollector.InitializeTempRoot(ResultObjRoot);
+    try
     FailedTestDetailsArray := TGocciaArrayValue.Create;
+    Goccia.GarbageCollector.AddTempRootIfNeeded(FailedDetailsRoot,
+      FailedTestDetailsArray);
     if FailedTestDetails.Count > 0 then
     begin
       for I := 0 to FailedTestDetails.Count - 1 do
@@ -4345,8 +5270,16 @@ begin
 
      // Create result object
     ResultObj := TGocciaObjectValue.Create;
-    ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(
-      CountRegisteredTests(FRootSuite)));
+    Goccia.GarbageCollector.AddTempRootIfNeeded(ResultObjRoot, ResultObj);
+    { Collection aborted: Vitest discards the whole file, so the tests
+      registered before the throwing describe are not collected either.
+      Reporting them here contradicted the zero run counts beside it — the
+      envelope claimed a total the runner never intended to run. }
+    if FCollectionAborted then
+      ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.ZeroValue)
+    else
+      ResultObj.AssignProperty('totalTests', TGocciaNumberLiteralValue.Create(
+        CountRegisteredTests(FRootSuite)));
     ResultObj.AssignProperty('totalRunTests', TGocciaNumberLiteralValue.Create(
       FTestStats.TotalTests));
     ResultObj.AssignProperty('passed', TGocciaNumberLiteralValue.Create(
@@ -4355,6 +5288,8 @@ begin
       FTestStats.FailedTests));
     ResultObj.AssignProperty('skipped', TGocciaNumberLiteralValue.Create(
       FTestStats.SkippedTests));
+    ResultObj.AssignProperty('suiteErrors', TGocciaNumberLiteralValue.Create(
+      FTestStats.SuiteErrors));
     ResultObj.AssignProperty('assertions', TGocciaNumberLiteralValue.Create(
       FTestStats.TotalAssertionCount));
     ResultObj.AssignProperty('duration', TGocciaNumberLiteralValue.Create(
@@ -4377,7 +5312,10 @@ begin
           WriteLn('  • ', FailedTestDetails[I]);
       end;
 
-      if FTestStats.FailedTests = 0 then
+      { A suite-level error (throwing describe, failed beforeAll/afterAll)
+        never enters FailedTests, so checking that alone printed "All tests
+        passed!" for a file the runner is about to mark not-ok. }
+      if (FTestStats.FailedTests = 0) and (FTestStats.SuiteErrors = 0) then
       begin
         if FTestStats.SkippedTests > 0 then
           WriteLn(Format('✅ All tests passed! (%d skipped)',
@@ -4392,6 +5330,10 @@ begin
     end;
 
     Result := ResultObj;
+    finally
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(ResultObjRoot);
+      Goccia.GarbageCollector.RemoveTempRootIfNeeded(FailedDetailsRoot);
+    end;
     finally
       FailedTestDetails.Free;
       SuiteNames.Free;

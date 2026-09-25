@@ -1119,7 +1119,8 @@ begin
     if HarnessPrelude = '' then
       Exit(OriginalContent);
     Result := TGocciaModuleContent.Create(HarnessPrelude + sLineBreak +
-      OriginalContent.Text, OriginalContent.LastModified);
+      OriginalContent.Text, OriginalContent.LastModified,
+      OriginalContent.CanonicalIdentity, OriginalContent.IdentityRequired);
   except
     OriginalContent.Free;
     raise;

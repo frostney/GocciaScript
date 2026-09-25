@@ -26,6 +26,7 @@ type
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
     FAliases: TRepeatableOption;
+    FAllowNodeModules: TOptionalStringOption;
     FTimeout: TIntegerOption;
     FMaxMemory: TInt64Option;
     FMaxInstructions: TInt64Option;
@@ -37,6 +38,10 @@ type
     FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
     FAllowedHosts: TRepeatableOption;
+    FFetchDenyPrivateRanges: TFlagOption;
+    FFetchMaxResponseBytes: TIntegerOption;
+    FNoHostFilesystem: TFlagOption;
+    FExperimentalAST: TFlagOption;
     FInspectDepth: TIntegerOption;
     FModule: TRepeatableOption;
     FModules: TRepeatableOption;
@@ -52,6 +57,7 @@ type
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
     property Aliases: TRepeatableOption read FAliases;
+    property AllowNodeModules: TOptionalStringOption read FAllowNodeModules;
     property Timeout: TIntegerOption read FTimeout;
     property MaxMemory: TInt64Option read FMaxMemory;
     property MaxInstructions: TInt64Option read FMaxInstructions;
@@ -63,6 +69,10 @@ type
     property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
     property AllowedHosts: TRepeatableOption read FAllowedHosts;
+    property FetchDenyPrivateRanges: TFlagOption read FFetchDenyPrivateRanges;
+    property FetchMaxResponseBytes: TIntegerOption read FFetchMaxResponseBytes;
+    property NoHostFilesystem: TFlagOption read FNoHostFilesystem;
+    property ExperimentalAST: TFlagOption read FExperimentalAST;
     property InspectDepth: TIntegerOption read FInspectDepth;
     property ModuleDefinitions: TRepeatableOption read FModule;
     property ModuleManifests: TRepeatableOption read FModules;
@@ -116,7 +126,7 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 implementation
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 18;
+  ENGINE_FIXED_OPTION_COUNT = 23;
 
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
@@ -206,6 +216,9 @@ begin
     'Path to import map JSON file', 'Engine');
   FAliases := TRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
+  FAllowNodeModules := TOptionalStringOption.Create('allow-node-modules',
+    'Resolve bare specifiers against node_modules, optionally confined to <dir>',
+    'Engine');
   FTimeout := TIntegerOption.Create('timeout',
     'Per-file timeout in milliseconds', 'Engine');
   FMaxMemory := TInt64Option.Create('max-memory',
@@ -231,6 +244,16 @@ begin
   FAllowedHosts := TRepeatableOption.Create('allowed-host',
     'Hostname allowed for fetch requests (repeatable)', 'Engine');
   FAllowedHosts.ConfigName := 'allowed-hosts';
+  FFetchDenyPrivateRanges := TFlagOption.Create('fetch-deny-private-ranges',
+    'Reject fetch targets resolving to private, loopback, or link-local addresses',
+    'Runtime');
+  FFetchMaxResponseBytes := TIntegerOption.Create('fetch-max-response-bytes',
+    'Maximum fetch response body size in bytes (TypeError on exceed)',
+    'Runtime');
+  FNoHostFilesystem := TFlagOption.Create('no-host-filesystem',
+    'Disable ambient host-filesystem module loading', 'Runtime');
+  FExperimentalAST := TFlagOption.Create('experimental-ast',
+    'Enable the experimental goccia:ast parse module', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
     'Maximum object inspection depth for console output (default: 5)', 'Engine');
   FModule := TRepeatableOption.Create('module',
@@ -249,6 +272,7 @@ begin
     FCompatibilityFlags[Flag].Free;
   FImportMap.Free;
   FAliases.Free;
+  FAllowNodeModules.Free;
   FTimeout.Free;
   FMaxMemory.Free;
   FMaxInstructions.Free;
@@ -260,6 +284,10 @@ begin
   FStackSize.Free;
   FStrictTypes.Free;
   FAllowedHosts.Free;
+  FFetchDenyPrivateRanges.Free;
+  FFetchMaxResponseBytes.Free;
+  FNoHostFilesystem.Free;
+  FExperimentalAST.Free;
   FInspectDepth.Free;
   FModule.Free;
   FModules.Free;
@@ -286,6 +314,8 @@ begin
   Inc(Index);
   Result[Index] := FAliases;
   Inc(Index);
+  Result[Index] := FAllowNodeModules;
+  Inc(Index);
   Result[Index] := FTimeout;
   Inc(Index);
   Result[Index] := FMaxMemory;
@@ -307,6 +337,14 @@ begin
   Result[Index] := FStrictTypes;
   Inc(Index);
   Result[Index] := FAllowedHosts;
+  Inc(Index);
+  Result[Index] := FFetchDenyPrivateRanges;
+  Inc(Index);
+  Result[Index] := FFetchMaxResponseBytes;
+  Inc(Index);
+  Result[Index] := FNoHostFilesystem;
+  Inc(Index);
+  Result[Index] := FExperimentalAST;
   Inc(Index);
   Result[Index] := FInspectDepth;
   Inc(Index);

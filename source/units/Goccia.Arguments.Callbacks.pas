@@ -9,6 +9,10 @@ uses
   Goccia.Values.Primitives;
 
 type
+  // These hand out values from their own slots rather than from the inherited
+  // FArgs list, so they root those slots themselves. The index in particular is
+  // a number allocated fresh on every iteration and reachable from nowhere else
+  // while the callback runs.
   TGocciaArrayCallbackArgs = class(TGocciaArgumentsCollection)
   private
     FElement: TGocciaValue;
@@ -19,6 +23,7 @@ type
 
     function GetElement(const AIndex: Integer): TGocciaValue; override;
     function GetLength: Integer; override;
+    procedure MarkRootReferences; override;
 
     property Element: TGocciaValue read FElement write FElement;
     property Index: TGocciaNumberLiteralValue read FIndex write FIndex;
@@ -35,6 +40,7 @@ type
 
     function GetElement(const AIndex: Integer): TGocciaValue; override;
     function GetLength: Integer; override;
+    procedure MarkRootReferences; override;
 
     property Accumulator: TGocciaValue read FAccumulator write FAccumulator;
     property Element: TGocciaValue read FElement write FElement;
@@ -66,6 +72,17 @@ begin
   Result := 3;
 end;
 
+procedure TGocciaArrayCallbackArgs.MarkRootReferences;
+begin
+  inherited;
+  if Assigned(FElement) then
+    FElement.MarkReferences;
+  if Assigned(FIndex) then
+    FIndex.MarkReferences;
+  if Assigned(FThisArray) then
+    FThisArray.MarkReferences;
+end;
+
 { TGocciaReduceCallbackArgs }
 
 constructor TGocciaReduceCallbackArgs.Create(const AThisArray: TGocciaValue);
@@ -88,6 +105,19 @@ end;
 function TGocciaReduceCallbackArgs.GetLength: Integer;
 begin
   Result := 4;
+end;
+
+procedure TGocciaReduceCallbackArgs.MarkRootReferences;
+begin
+  inherited;
+  if Assigned(FAccumulator) then
+    FAccumulator.MarkReferences;
+  if Assigned(FElement) then
+    FElement.MarkReferences;
+  if Assigned(FIndex) then
+    FIndex.MarkReferences;
+  if Assigned(FThisArray) then
+    FThisArray.MarkReferences;
 end;
 
 end.

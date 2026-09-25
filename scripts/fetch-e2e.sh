@@ -35,9 +35,58 @@ BASE="http://127.0.0.1:${PORT}"
 echo "=== fetch CLI end-to-end tests (server on port $PORT) ==="
 echo ""
 
+# fetch() refuses to run at all unless an allowlist is configured, so every
+# invocation here has to name the test server's host. Without it the whole
+# script fails with "fetch requires allowed hosts to be configured" long
+# before reaching any assertion.
+ALLOW_HOST="--allowed-host=127.0.0.1"
+
 run_js() {
   echo "$1" > "$TMPFILE"
-  "$LOADER" "$TMPFILE" --compat-asi 2>&1
+  "$LOADER" "$ALLOW_HOST" "$TMPFILE" --compat-asi 2>&1
+}
+
+# Same as run_js, but with extra loader flags before the script path, so the
+# policy flags can be exercised against the same live server.
+run_js_with() {
+  local extra="$1"
+  echo "$2" > "$TMPFILE"
+  # $extra is a deliberate flag list, so word splitting is wanted here.
+  # shellcheck disable=SC2086
+  "$LOADER" "$ALLOW_HOST" $extra "$TMPFILE" --compat-asi 2>&1
+}
+
+check_with() {
+  local desc="$1"
+  local extra="$2"
+  local expected_exit="$3"
+  local source="$4"
+  shift 4
+  local expected_output="${1:-}"
+  local actual
+  local exit_code
+
+  actual="$(run_js_with "$extra" "$source")" && exit_code=0 || exit_code=$?
+
+  if [ "$exit_code" -ne "$expected_exit" ]; then
+    echo "FAIL: $desc (exit code: expected $expected_exit, got $exit_code)"
+    echo "  output: $actual"
+    FAIL=$((FAIL + 1))
+    return
+  fi
+
+  if [ -n "$expected_output" ]; then
+    if echo "$actual" | grep -qF "$expected_output"; then
+      PASS=$((PASS + 1))
+    else
+      echo "FAIL: $desc"
+      echo "  expected to contain: $expected_output"
+      echo "  actual: $actual"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    PASS=$((PASS + 1))
+  fi
 }
 
 check() {
@@ -149,6 +198,72 @@ console.log(r.status, r.ok)
 check "POST is rejected" 1 \
   "fetch('${BASE}/', { method: 'POST' })" \
   "TypeError"
+
+# --- Private-range policy (WP-2) ---
+#
+# The test server listens on loopback, so it is itself a private target. That
+# makes it the honest fixture for this policy: with the flag off the request
+# must still work (no behavior change for existing hosts), and with it on the
+# very same request must be refused.
+
+check_with "loopback reachable without the deny flag" "" 0 "
+const r = await fetch('${BASE}/text')
+console.log(r.status)
+" "200"
+
+check_with "loopback refused with --fetch-deny-private-ranges" \
+  "--fetch-deny-private-ranges" 1 "
+await fetch('${BASE}/text')
+" "TypeError"
+
+# Exits 0: the script catches the rejection, so the assertion is on the
+# message, which must name the address the host actually resolved to.
+check_with "private-range rejection names the resolved address" \
+  "--fetch-deny-private-ranges" 0 "
+try {
+  await fetch('${BASE}/text')
+} catch (e) {
+  console.log(e.message)
+}
+" "127.0.0.1"
+
+# A redirect hop must be resolved and validated exactly like the first
+# request; validating only the initial target would leave the hole open.
+#
+# The initial request goes to loopback (allowed), so it is NOT rejected up
+# front — the 302 then points at a private, off-allowlist address. Only per-hop
+# revalidation can catch that, and the rejection must name the redirect target
+# (10.255.255.1), not the initial host, proving the hop itself was checked. A
+# regression that validates only the first request would instead attempt to
+# connect to the redirect target and fail with a different, connect-level error.
+#
+# --timeout bounds that regression: the fetch connect timeout derives from the
+# remaining execution budget (FetchManager: RequestTimeoutMilliseconds :=
+# RemainingExecutionTimeoutMilliseconds), so a hard loader timeout caps an
+# otherwise-unbounded blocking connect to 10.255.255.1:1 if per-hop validation
+# regresses. In the passing case the hop is rejected before any connect, so the
+# timeout never fires.
+check_with "redirect hop is policy-checked, not just the initial request" \
+  "--timeout=15000" 0 "
+try {
+  await fetch('${BASE}/redirect-external')
+} catch (e) {
+  console.log(e.message)
+}
+" "not allowed: 10.255.255.1"
+
+# --- Response body cap (WP-2) ---
+
+check_with "response under the cap succeeds" \
+  "--fetch-max-response-bytes=1048576" 0 "
+const r = await fetch('${BASE}/text')
+console.log((await r.text()).trim())
+" "hello world"
+
+check_with "response over the cap is refused" \
+  "--fetch-max-response-bytes=4" 1 "
+await fetch('${BASE}/text')
+" "TypeError"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

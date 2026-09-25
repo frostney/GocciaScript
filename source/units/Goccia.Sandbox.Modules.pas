@@ -50,6 +50,9 @@ type
 
 implementation
 
+uses
+  Goccia.FileExtensions;
+
 const
   CURRENT_DIRECTORY_PREFIX = './';
   PARENT_DIRECTORY_PREFIX = '../';
@@ -224,11 +227,22 @@ var
   Extensions: TModuleResolverExtensionArray;
   I: Integer;
   Candidate: string;
+  TypeScriptCandidates: TFileExtensionArray;
 begin
   if FFs.IsFile(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
+  end;
+
+  TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
+  for I := 0 to High(TypeScriptCandidates) do
+  begin
+    if FFs.IsFile(TypeScriptCandidates[I]) then
+    begin
+      AResolvedPath := TypeScriptCandidates[I];
+      Exit(True);
+    end;
   end;
 
   Extensions := GetExtensions;
@@ -302,8 +316,11 @@ begin
       [AModulePath, Candidate]);
   end;
 
-  raise EModuleNotFound.CreateFmt(
-    'Cannot resolve bare module specifier "%s". Imports must start with "./" or "../"',
+  { The sandbox host stays sealed: its filesystem is seeded by the embedder, so
+    a bare specifier has no ancestor node_modules to walk and the
+    --allow-node-modules capability is deliberately not offered here.
+    The message is the shared one so the two resolvers cannot drift. }
+  raise EModuleNotFound.CreateFmt(BARE_SPECIFIER_MESSAGE_FORMAT,
     [AModulePath]);
 end;
 

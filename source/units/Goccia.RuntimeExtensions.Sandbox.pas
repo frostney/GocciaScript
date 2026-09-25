@@ -156,6 +156,7 @@ uses
   Goccia.Realm,
   Goccia.Sandbox.FileSystemErrors,
   Goccia.Shims,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
@@ -280,8 +281,20 @@ end;
 function RejectedPromiseFromException(
   const AException: Exception): TGocciaPromiseValue;
 begin
-  if AException is EGocciaCapabilityAuditDeliveryError then
-    raise AException
+  { Opacity is decided before conversion, because everything below this test
+    turns a Pascal exception into something `.catch` can absorb.
+
+    This runs inside the `on E: Exception` handler that caught AException, but
+    not lexically, so a bare `raise` will not compile. `raise AException`
+    re-raised the object by name, which starts a second propagation of an
+    exception the enclosing handler still owns and frees on exit — the dangling
+    re-raise behind the spurious access violations on the async paths (see the
+    same note at PromiseRejectionReasonFromException in
+    Goccia.Builtins.GlobalPromise.pas). AcquireExceptionObject takes a
+    reference to the in-flight exception so the enclosing handler no longer
+    frees it out from under this re-raise. }
+  if IsUncatchableFault(AException) then
+    raise Exception(AcquireExceptionObject)
   else if AException is EGocciaBytecodeThrow then
     Result := RejectedPromise(EGocciaBytecodeThrow(AException).ThrownValue)
   else if AException is TGocciaThrowValue then
@@ -424,10 +437,16 @@ begin
       CompleteFailure(E.Value);
       Exit;
     end;
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
     begin
+      { CompleteFailure settles the promise the guest is awaiting (or calls its
+        callback with an Error), so absorbing a ceiling or an integrity fault
+        here would hand it straight to `catch`. The job runs from
+        TGocciaMicrotaskQueue.ExecuteTask on the engine's own thread, and the
+        task carries no result promise, so every arm there re-raises too and
+        the fault keeps unwinding out of DrainQueue to the host. }
+      if IsUncatchableFault(E) then
+        raise;
       CompleteFailure(CreateErrorObject(ERROR_NAME, E.Message));
       Exit;
     end;
@@ -1023,9 +1042,16 @@ begin
 end;
 
 function TGocciaSandboxShellCommandValue.ResultObject: TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
 begin
+  { The stdout/stderr strings below are GC safe points (and can be large);
+    root the object while it fills. }
+  InitializeTempRoot(ResultRoot);
+  try
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
     4);
+  AddTempRootIfNeeded(ResultRoot, Result);
   Result.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(FResult.ExitCode));
   if FQuiet then
@@ -1042,6 +1068,9 @@ begin
   end;
   Result.SetProperty('ok',
     TGocciaBooleanLiteralValue.Create(FResult.ExitCode = 0));
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
 end;
 
 function TGocciaSandboxShellCommandValue.Fulfilled(
@@ -1060,10 +1089,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 
@@ -1080,10 +1113,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 
@@ -1106,10 +1143,14 @@ begin
   except
     on E: TGocciaThrowValue do
       Result := RejectedPromise(E.Value);
-    on E: EGocciaCapabilityAuditDeliveryError do
-      raise;
     on E: Exception do
+    begin
+      { A rejected promise is guest-catchable, so the opaque families must be
+        turned away before the conversion below. }
+      if IsUncatchableFault(E) then
+        raise;
       Result := RejectedPromise(TGocciaStringLiteralValue.Create(E.Message));
+    end;
   end;
 end;
 
@@ -1460,6 +1501,7 @@ var
   Options: TGocciaSandboxRunOptions;
   RunResult: TGocciaSandboxRunResult;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   EntryPath := RequireStringArg(AArgs, 0, 'runScript');
   if not Assigned(FContext.RunScriptCallback) then
@@ -1468,7 +1510,12 @@ begin
   Options := ParseRunScriptOptions(FContext, AArgs.GetElement(1), 'runScript');
   RunResult := FContext.RunScriptCallback(FContext, FContext.Fs.Normalize(
     EntryPath, FContext.Shell.WorkingDirectory), Options);
+  { The stdout/stderr/diff strings below are GC safe points (and can be
+    large); root the result object while it fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype, 8);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   Obj.SetProperty('ok', TGocciaBooleanLiteralValue.Create(RunResult.Ok));
   Obj.SetProperty('exitCode',
     TGocciaNumberLiteralValue.Create(RunResult.ExitCode));
@@ -1488,7 +1535,17 @@ begin
     Obj.SetProperty('diff', TGocciaStringLiteralValue.Create(RunResult.Diff))
   else
     Obj.SetProperty('diff', TGocciaNullLiteralValue.NullValue);
+  { Why the run ended, next to the message that says it in prose.  A
+    caller orchestrating nested runs has to tell "the child is buggy"
+    from "the child hit a ceiling I set" to decide whether retrying or
+    raising the ceiling is the answer, and `error` alone forces that
+    decision to be made by matching on message text. }
+  Obj.SetProperty('failureKind', TGocciaStringLiteralValue.Create(
+    SandboxFailureKindName(RunResult.FailureKind)));
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 function TGocciaSandboxRuntimeExtension.FsReadFileSync(

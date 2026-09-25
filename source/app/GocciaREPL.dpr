@@ -24,6 +24,7 @@ uses
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
+  Goccia.Modules.Resolver,
   Goccia.REPL.Formatter,
   Goccia.REPL.LineEditor,
   Goccia.Runtime,
@@ -206,10 +207,11 @@ begin
             begin
               ExecEnd := GetNanoseconds;
               if E is TGocciaError then
-                WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+                WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
               else if E is TGocciaThrowValue then
                 WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
                   REPL_FILE_NAME, Source, IsColorTerminal,
+                  Eng.ModuleLoader.DiagnosticScope.Principal,
                   TGocciaThrowValue(E).Suggestion))
               else
                 WriteLn('Error: ', E.Message);
@@ -261,10 +263,11 @@ begin
             on E: Exception do
             begin
               if E is TGocciaError then
-                WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+                WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
               else if E is TGocciaThrowValue then
                 WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value,
                   REPL_FILE_NAME, Source, IsColorTerminal,
+                  Eng.ModuleLoader.DiagnosticScope.Principal,
                   TGocciaThrowValue(E).Suggestion))
               else
                 WriteLn('Error: ', E.Message);

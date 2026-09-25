@@ -15,6 +15,7 @@ uses
   Goccia.Builtins.Benchmark,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.ConfigFile,
@@ -29,6 +30,7 @@ uses
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -246,6 +248,7 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
   end;
 
@@ -338,7 +341,9 @@ var
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
   BenchStart: Int64;
+  ExpectedPrincipal: Int64;
 begin
+  ExpectedPrincipal := 0;
   Source := nil;
   try
     try
@@ -357,6 +362,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
           StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -399,15 +405,17 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
+          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source,
+            IsColorTerminal, ExpectedPrincipal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
+          FormatThrowDetail(E.Value, AFileName, Source, False,
+            ExpectedPrincipal, E.Suggestion), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -435,8 +443,10 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
+  ExpectedPrincipal: Int64;
 begin
   Source := nil;
+  ExpectedPrincipal := 0;
   SourcePipelineResult := nil;
   try
     try
@@ -456,6 +466,7 @@ begin
       try
         Engine := CreateEngine(AFileName, Source, Executor);
         try
+          ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           LexStart := GetNanoseconds;
           PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
           PipelineOptions.Preprocessors := Engine.Preprocessors;
@@ -535,22 +546,26 @@ begin
       on E: TGocciaError do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+          WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
         MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
       end;
       on E: TGocciaThrowValue do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source, IsColorTerminal, E.Suggestion));
+          WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, Source,
+            IsColorTerminal, ExpectedPrincipal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.Value, AFileName, Source, False, E.Suggestion), AReporter);
+          FormatThrowDetail(E.Value, AFileName, Source, False,
+            ExpectedPrincipal, E.Suggestion), AReporter);
       end;
       on E: EGocciaBytecodeThrow do
       begin
         if not GIsWorkerThread then
-          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, Source, IsColorTerminal));
+          WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName,
+            Source, IsColorTerminal, ExpectedPrincipal, E.Suggestion));
         MakeErrorFileResult(AFileName,
-          FormatThrowDetail(E.ThrownValue, AFileName, Source, False), AReporter);
+          FormatThrowDetail(E.ThrownValue, AFileName, Source, False,
+            ExpectedPrincipal, E.Suggestion), AReporter);
       end;
       on E: Exception do
         MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -588,12 +603,15 @@ var
   ScriptResult: TGocciaObjectValue;
   FileResult: TBenchmarkFileResult;
   BenchStart: Int64;
+  ExpectedPrincipal: Int64;
 begin
+  ExpectedPrincipal := 0;
   try
     Executor := TGocciaInterpreterExecutor.Create;
     try
       Engine := CreateEngine(AFileName, ASource, Executor);
       try
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
         StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
@@ -636,15 +654,17 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource,
+          IsColorTerminal, ExpectedPrincipal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
+        FormatThrowDetail(E.Value, AFileName, ASource, False,
+          ExpectedPrincipal, E.Suggestion), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -666,13 +686,16 @@ var
   ScriptResult: TGocciaObjectValue;
   LexStart, CompileStart, CompileEnd, ExecEnd, BenchStart: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
+  ExpectedPrincipal: Int64;
 begin
   SourcePipelineResult := nil;
+  ExpectedPrincipal := 0;
   try
     Executor := TGocciaBytecodeExecutor.Create;
     try
       Engine := CreateEngine(AFileName, ASource, Executor);
       try
+        ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         LexStart := GetNanoseconds;
         PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
         PipelineOptions.Preprocessors := Engine.Preprocessors;
@@ -751,22 +774,26 @@ begin
     on E: TGocciaError do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, E.GetDetailedMessage(IsColorTerminal));
+        WriteLn(ErrOutput, FormatHostErrorDiagnostic(E, IsColorTerminal));
       MakeErrorFileResult(AFileName, E.GetDetailedMessage, AReporter);
     end;
     on E: TGocciaThrowValue do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource, IsColorTerminal, E.Suggestion));
+        WriteLn(ErrOutput, FormatThrowDetail(E.Value, AFileName, ASource,
+          IsColorTerminal, ExpectedPrincipal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.Value, AFileName, ASource, False, E.Suggestion), AReporter);
+        FormatThrowDetail(E.Value, AFileName, ASource, False,
+          ExpectedPrincipal, E.Suggestion), AReporter);
     end;
     on E: EGocciaBytecodeThrow do
     begin
       if not GIsWorkerThread then
-        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName, ASource, IsColorTerminal));
+        WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue, AFileName,
+          ASource, IsColorTerminal, ExpectedPrincipal, E.Suggestion));
       MakeErrorFileResult(AFileName,
-        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False), AReporter);
+        FormatThrowDetail(E.ThrownValue, AFileName, ASource, False,
+          ExpectedPrincipal, E.Suggestion), AReporter);
     end;
     on E: Exception do
       MakeErrorFileResult(AFileName, E.Message, AReporter);
@@ -1056,6 +1083,11 @@ end;
 function TBenchmarkRunnerApp.UsageLine: string;
 begin
   Result := '[path...|-] [options]';
+end;
+
+function TBenchmarkRunnerApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefault;
 end;
 
 procedure TBenchmarkRunnerApp.Configure;

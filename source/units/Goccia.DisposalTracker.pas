@@ -164,12 +164,21 @@ function CreateSuppressedErrorObject(const AError, ASuppressed: TGocciaValue;
 var
   ErrorObj: TGocciaObjectValue;
   SuppressedErrorProto: TGocciaObjectValue;
+  ErrorRoot: TGocciaTempRoot;
 begin
   SuppressedErrorProto := GetSuppressedErrorProto;
+  { The name/message/stack strings below are GC safe points; root the error
+    while it fills. }
+  InitializeTempRoot(ErrorRoot);
+  try
+  // Build the automatic SuppressedError as the error subclass so its genuine
+  // throw provenance (the double-fault site) is captured and its code frame
+  // renders, matching an explicit `throw`.
   if Assigned(SuppressedErrorProto) then
-    ErrorObj := TGocciaObjectValue.Create(SuppressedErrorProto)
+    ErrorObj := TGocciaErrorObjectValue.Create(SuppressedErrorProto)
   else
-    ErrorObj := TGocciaObjectValue.Create(GetErrorProto);
+    ErrorObj := TGocciaErrorObjectValue.Create(GetErrorProto);
+  AddTempRootIfNeeded(ErrorRoot, ErrorObj);
   ErrorObj.HasErrorData := True;
   ErrorObj.DefineProperty(PROP_NAME,
     TGocciaPropertyDescriptorData.Create(
@@ -196,8 +205,12 @@ begin
     ErrorObj.AssignProperty(PROP_STACK,
       TGocciaStringLiteralValue.Create(
         TGocciaCallStack.Instance.CaptureStackTrace(SUPPRESSED_ERROR_NAME, AMessage)));
+  AttachErrorSourceProvenance(ErrorObj, 0);
 
   Result := ErrorObj;
+  finally
+    RemoveTempRootIfNeeded(ErrorRoot);
+  end;
 end;
 
 // TC39 Explicit Resource Management §3.3 GetDisposeMethod(V, hint)

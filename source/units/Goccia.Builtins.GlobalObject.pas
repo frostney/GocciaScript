@@ -60,7 +60,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -78,14 +77,6 @@ uses
   Goccia.Values.ToPrimitive,
   Goccia.Values.TypedArrayValue;
 
-threadvar
-  FStaticMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FStaticMembers, 0);
-end;
-
 type
   TPendingDefineProperty = record
     Name: string;
@@ -96,10 +87,21 @@ type
 
   TPendingDefinePropertyArray = array of TPendingDefineProperty;
 
+// AStagingRoots roots what the appended descriptor points at for as long as
+// the batch is staged. §20.1.2.3.1 collects every descriptor before it defines
+// any of them, and each collection step reads through the properties object —
+// an accessor or a Proxy trap, so a guest-code safe point. A staged
+// TGocciaPropertyDescriptor is a plain class the collector does not trace, and
+// this array is a native local it cannot see either, so without this push the
+// values captured for the first key are reachable from nowhere while the
+// second key's getter runs. A shared frame, not a temp root per descriptor:
+// the same function can legitimately appear as several keys' getter, and a
+// temp-root set would collapse those into one entry.
 procedure AppendPendingDefineProperty(
   var APendingProperties: TPendingDefinePropertyArray;
   const AName: string; const ASymbol: TGocciaSymbolValue;
-  const AIsSymbol: Boolean; const ADescriptor: TGocciaPropertyDescriptor);
+  const AIsSymbol: Boolean; const ADescriptor: TGocciaPropertyDescriptor;
+  var AStagingRoots: TGocciaActiveRootFrame);
 var
   Index: Integer;
 begin
@@ -109,6 +111,9 @@ begin
   APendingProperties[Index].Symbol := ASymbol;
   APendingProperties[Index].IsSymbol := AIsSymbol;
   APendingProperties[Index].Descriptor := ADescriptor;
+  AStagingRoots.Add(ASymbol);
+  if Assigned(ADescriptor) then
+    ADescriptor.PushRoots(AStagingRoots);
 end;
 
 procedure ReleasePendingDefineProperties(
@@ -214,11 +219,10 @@ begin
     Members.AddMethod(ObjectIsExtensible, 1, gmkStaticMethod);
     Members.AddMethod(ObjectSetPrototypeOf, 2, gmkStaticMethod);
     Members.AddMethod(ObjectGroupBy, 2, gmkStaticMethod);
-    FStaticMembers := Members.ToDefinitions;
+    RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
   finally
     Members.Free;
   end;
-  RegisterMemberDefinitions(FBuiltinObject, FStaticMembers);
   FBuiltinObject.DefineProperty(PROP_LENGTH,
     TGocciaPropertyDescriptorData.Create(TGocciaNumberLiteralValue.Create(1),
       [pfConfigurable]));
@@ -251,6 +255,7 @@ function TGocciaGlobalObject.ObjectKeys(const AArgs: TGocciaArgumentsCollection;
 var
   Obj: TGocciaObjectValue;
   Keys: TGocciaArrayValue;
+  KeysRoot: TGocciaTempRoot;
   Names: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -262,8 +267,14 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(KeysRoot);
   try
     Keys := TGocciaArrayValue.Create;
+    { The key strings below are charged against the memory ceiling, so each
+      TGocciaStringLiteralValue.Create is a GC safe point.  Without a root the
+      half-built result array is unreachable and gets swept mid-loop, leaving
+      Keys dangling. }
+    AddTempRootIfNeeded(KeysRoot, Keys);
 
     // Step 2: Let nameList be ? EnumerableOwnProperties(obj, key).
     if Obj is TGocciaStringObjectValue then
@@ -280,6 +291,7 @@ begin
 
     Result := Keys;
   finally
+    RemoveTempRootIfNeeded(KeysRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -291,6 +303,7 @@ function TGocciaGlobalObject.ObjectValues(const AArgs: TGocciaArgumentsCollectio
 var
   Obj: TGocciaObjectValue;
   Values: TGocciaArrayValue;
+  ValuesRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -302,8 +315,12 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(ValuesRoot);
   try
     Values := TGocciaArrayValue.Create;
+    { GetProperty below can run an accessor, and accessors allocate, so the
+      half-built result array must stay reachable across the loop. }
+    AddTempRootIfNeeded(ValuesRoot, Values);
 
     // Step 2: Let valueList be ? EnumerableOwnProperties(obj, value).
     if Obj is TGocciaStringObjectValue then
@@ -320,6 +337,7 @@ begin
 
     Result := Values;
   finally
+    RemoveTempRootIfNeeded(ValuesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -331,7 +349,9 @@ function TGocciaGlobalObject.ObjectEntries(const AArgs: TGocciaArgumentsCollecti
 var
   Obj: TGocciaObjectValue;
   Entries: TGocciaArrayValue;
+  EntriesRoot: TGocciaTempRoot;
   Entry: TGocciaArrayValue;
+  EntryRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
@@ -343,8 +363,14 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(EntriesRoot);
+  InitializeTempRoot(EntryRoot);
   try
     Entries := TGocciaArrayValue.Create;
+    { Both the key string and the accessor call below are GC safe points, so
+      the outer array and the in-flight pair need roots.  A pair is only
+      unrooted once Entries owns it. }
+    AddTempRootIfNeeded(EntriesRoot, Entries);
 
     // Step 2: Let entryList be ? EnumerableOwnProperties(obj, key+value).
     if Obj is TGocciaStringObjectValue then
@@ -359,6 +385,7 @@ begin
         Continue;
 
       Entry := TGocciaArrayValue.Create;
+      AddTempRootIfNeeded(EntryRoot, Entry);
       Entry.Elements.Add(TGocciaStringLiteralValue.Create(PropertyNames[I]));
       Entry.Elements.Add(Obj.GetProperty(PropertyNames[I]));
       Entries.Elements.Add(Entry);
@@ -366,6 +393,8 @@ begin
 
     Result := Entries;
   finally
+    RemoveTempRootIfNeeded(EntryRoot);
+    RemoveTempRootIfNeeded(EntriesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -614,6 +643,7 @@ function TGocciaGlobalObject.ObjectGetOwnPropertyNames(const AArgs: TGocciaArgum
 var
   Obj: TGocciaObjectValue;
   Names: TGocciaArrayValue;
+  NamesRoot: TGocciaTempRoot;
   PropertyNames: TArray<string>;
   I: Integer;
 begin
@@ -624,8 +654,12 @@ begin
   if (TGarbageCollector.Instance <> nil) and
      not (AArgs.GetElement(0) is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
+  InitializeTempRoot(NamesRoot);
   try
     Names := TGocciaArrayValue.Create;
+    { Each name string is charged against the memory ceiling and is therefore
+      a GC safe point; keep the half-built result reachable. }
+    AddTempRootIfNeeded(NamesRoot, Names);
 
     // Step 1: Return GetOwnPropertyKeys(O, string)
     PropertyNames := Obj.GetAllPropertyNames;
@@ -634,6 +668,7 @@ begin
 
     Result := Names;
   finally
+    RemoveTempRootIfNeeded(NamesRoot);
     if (TGarbageCollector.Instance <> nil) and
        not (AArgs.GetElement(0) is TGocciaObjectValue) then
       TGarbageCollector.Instance.RemoveTempRoot(Obj);
@@ -825,7 +860,22 @@ var
   KeyValue: TGocciaValue;
   GC: TGarbageCollector;
   I: Integer;
+  StagingRoots: TGocciaActiveRootFrame;
 
+  // PropertyDescriptor is read for its Enumerable flag and then dropped, and
+  // it is deliberately NOT freed. Whether GetOwnPropertyDescriptor's result is
+  // caller-owned cannot be decided here: an ordinary object returns the
+  // descriptor its property map owns, and freeing that corrupts the map; a
+  // proxy returns a freshly completed one when it has a
+  // getOwnPropertyDescriptor trap but forwards to the target — map-owned
+  // again — when it does not; a String object synthesises for index and
+  // `length` keys and returns a map-owned descriptor for every other key. So
+  // the receiver's type does not answer the question, and probing for the trap
+  // would re-run guest code the spec only permits once per key.
+  //
+  // The consequence is a small leak per synthesising key, shared with every
+  // other GetOwnPropertyDescriptor caller in the engine. Closing it needs an
+  // ownership signal on the accessor itself, not a rule at this call site.
   procedure CaptureStringDescriptor(const AName: string);
   begin
     PropertyDescriptor := PropertiesObject.GetOwnPropertyDescriptor(AName);
@@ -833,7 +883,7 @@ var
     begin
       DescriptorValue := PropertiesObject.GetProperty(AName);
       AppendPendingDefineProperty(PendingProperties, AName, nil, False,
-        ToPropertyDescriptor(DescriptorValue, nil));
+        ToPropertyDescriptor(DescriptorValue, nil), StagingRoots);
     end;
   end;
 
@@ -844,7 +894,7 @@ var
     begin
       DescriptorValue := PropertiesObject.GetSymbolProperty(ASymbol);
       AppendPendingDefineProperty(PendingProperties, '', ASymbol, True,
-        ToPropertyDescriptor(DescriptorValue, nil));
+        ToPropertyDescriptor(DescriptorValue, nil), StagingRoots);
     end;
   end;
 begin
@@ -859,6 +909,12 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and not (AArgs.GetElement(1) is TGocciaObjectValue) then
     GC.AddTempRoot(PropertiesObject);
+  { The staged batch and the proxy key list are both native locals holding
+    values nothing else refers to while the capture loop runs guest code; see
+    AppendPendingDefineProperty. The frame spans the apply loop as well, so a
+    descriptor still staged when an earlier DefineProperty runs a Proxy
+    defineProperty trap stays rooted too. }
+  StagingRoots.Initialize;
   try
     try
       // ES2026 §20.1.2.3.1 steps 2-4: collect descriptors before
@@ -866,6 +922,8 @@ begin
       if PropertiesObject is TGocciaProxyValue then
       begin
         PropertyKeyValues := TGocciaProxyValue(PropertiesObject).GetOwnPropertyKeyValues;
+        for I := 0 to High(PropertyKeyValues) do
+          StagingRoots.Add(PropertyKeyValues[I]);
         for KeyValue in PropertyKeyValues do
         begin
           if KeyValue is TGocciaSymbolValue then
@@ -884,6 +942,8 @@ begin
           CaptureStringDescriptor(PropertyNames[I]);
 
         SymbolKeys := PropertiesObject.GetOwnSymbols;
+        for I := 0 to High(SymbolKeys) do
+          StagingRoots.Add(SymbolKeys[I]);
         for I := 0 to High(SymbolKeys) do
           CaptureSymbolDescriptor(SymbolKeys[I]);
       end;
@@ -914,6 +974,7 @@ begin
     end;
   finally
     ReleasePendingDefineProperties(PendingProperties);
+    StagingRoots.Clear;
     if Assigned(GC) and not (AArgs.GetElement(1) is TGocciaObjectValue) then
       GC.RemoveTempRoot(PropertiesObject);
   end;
@@ -1051,6 +1112,7 @@ var
   PropertyKey: TGocciaValue;
   Value: TGocciaValue;
   IteratorRoot, ResultRoot: TGocciaTempRoot;
+  EntryRoot, KeyRoot, ValueRoot: TGocciaTempRoot;
 begin
   if AArgs.Length > 0 then
     Iterable := AArgs.GetElement(0)
@@ -1066,6 +1128,9 @@ begin
 
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(EntryRoot);
+  InitializeTempRoot(KeyRoot);
+  InitializeTempRoot(ValueRoot);
   AddTempRootIfNeeded(IteratorRoot, Iterator);
   try
     // Step 2: Let obj be OrdinaryObjectCreate(%Object.prototype%).
@@ -1079,18 +1144,27 @@ begin
         if Done then
           Exit(Obj);
 
+        AddTempRootIfNeeded(EntryRoot, Entry);
+
         try
           if not (Entry is TGocciaObjectValue) then
             ThrowTypeError(SErrorObjectFromEntriesRequiresPairs, SSuggestNotIterable);
           EntryObject := TGocciaObjectValue(Entry);
 
+          { All three reads below can run user code — two accessors and then a
+            @@toPrimitive or toString — and each is a GC safe point. The entry
+            pair is a value the iterator just produced, so the key read first is
+            reachable from nowhere else while the value accessor runs, and the
+            value is likewise exposed while ToPropertyKey coerces the key. }
           // ES2026 §24.1.1.2 steps 2.d-f: Get(entry, "0") and Get(entry, "1").
           Key := EntryObject.GetProperty('0');
           if not Assigned(Key) then
             Key := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AddTempRootIfNeeded(KeyRoot, Key);
           Value := EntryObject.GetProperty('1');
           if not Assigned(Value) then
             Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+          AddTempRootIfNeeded(ValueRoot, Value);
 
           // ES2026 §20.1.2.7 steps 4.a-b: ToPropertyKey and CreateDataProperty.
           PropertyKey := ToPropertyKey(Key);
@@ -1101,6 +1175,9 @@ begin
         end;
       end;
     finally
+      RemoveTempRootIfNeeded(ValueRoot);
+      RemoveTempRootIfNeeded(KeyRoot);
+      RemoveTempRootIfNeeded(EntryRoot);
       RemoveTempRootIfNeeded(ResultRoot);
     end;
   finally
@@ -1304,6 +1381,7 @@ var
   Done: Boolean;
   I: Integer;
   ItemsRoot, IteratorRoot, CallbackRoot, ResultRoot: TGocciaTempRoot;
+  ItemRoot, KeyValueRoot: TGocciaTempRoot;
 begin
   TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Object.groupBy', ThrowError);
 
@@ -1322,6 +1400,8 @@ begin
   InitializeTempRoot(IteratorRoot);
   InitializeTempRoot(CallbackRoot);
   InitializeTempRoot(ResultRoot);
+  InitializeTempRoot(ItemRoot);
+  InitializeTempRoot(KeyValueRoot);
   AddTempRootIfNeeded(ItemsRoot, Items);
   AddTempRootIfNeeded(IteratorRoot, Iterator);
   AddTempRootIfNeeded(CallbackRoot, Callback);
@@ -1336,6 +1416,12 @@ begin
       if Done then
         Break;
 
+      { The item the iterator just produced, and the key the callback returned
+        for it, are reachable only from these locals once CallArgs is gone —
+        and ToPropertyKey below runs the key's @@toPrimitive or toString, which
+        is a GC safe point. The item is only stored into its group after that. }
+      AddTempRootIfNeeded(ItemRoot, Item);
+
       try
         CallArgs := TGocciaArgumentsCollection.Create;
         try
@@ -1348,6 +1434,7 @@ begin
           CallArgs.Free;
         end;
 
+        AddTempRootIfNeeded(KeyValueRoot, KeyValue);
         PropertyKey := ToPropertyKey(KeyValue);
 
         if PropertyKey is TGocciaSymbolValue then
@@ -1388,14 +1475,13 @@ begin
     // Step 4: Return obj
     Result := ResultObj;
   finally
+    RemoveTempRootIfNeeded(KeyValueRoot);
+    RemoveTempRootIfNeeded(ItemRoot);
     RemoveTempRootIfNeeded(ResultRoot);
     RemoveTempRootIfNeeded(CallbackRoot);
     RemoveTempRootIfNeeded(IteratorRoot);
     RemoveTempRootIfNeeded(ItemsRoot);
   end;
 end;
-
-initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
 
 end.

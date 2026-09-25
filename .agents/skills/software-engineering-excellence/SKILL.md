@@ -1,98 +1,140 @@
 ---
 name: software-engineering-excellence
 description: >-
-  Applies the user's ambient engineering bar: current evidence, complete
-  in-scope solutions, reuse, real validation, right-sized value, and
-  maintainability. Use for planning, implementing, debugging, reviewing,
-  refactoring, architecture, or substantial technical investigation.
+  Apply the user's engineering standards during substantial technical work:
+  preserve scope, use current evidence, and complete authorized outcomes.
 license: Unlicense OR MIT
 ---
 
 # Software engineering excellence
 
-Apply this standard throughout technical work. Workflow skills own mechanics;
-this skill defines the completion and judgment bar above them.
+Carry the user's intent to a verified result with less steering and rework.
+Maintainability governs tradeoffs. Establish the requested outcome, constraints
+and acceptance criteria before choosing implementation mechanics; reuse settled
+answers instead of reopening them.
 
-## North Star
+## Discover and choose the right layer
 
-Leave the system more maintainable and the next change easier. Prefer the
-smallest complete solution at the right structural layer, not the smallest diff
-that hides the symptom and not speculative architecture beyond the request.
+Read applicable project instructions, relevant code, tests and durable decisions.
+Run the named reproduction or inspect the requested artifact when possible.
+Treat historical notes and issue descriptions as leads to verify.
 
-## Principles
+Before replacing a selected toolkit's capabilities, inspect its overview and
+consumer guidance as well as the immediate subcommand. Reuse project build,
+test, formatting and workflow commands. Add an adapter only for a demonstrated
+missing capability. Generic execution mechanics belong in the harness or a
+reusable helper; product-specific contracts belong in the repository.
 
-### 1. Ground in current reality
+Make the smallest complete change at the layer that owns the behavior. Preserve
+required success, failure and transition paths. Include blockers that invalidate
+the requested result; keep unrelated improvements outside its completion bar.
+For multi-layer systems, establish a thin runnable path and deepen it in working
+increments. Follow native language idioms and the project's conventions.
 
-Read the current source, applicable instructions, project-defined commands,
-primary specifications, and decisions before concluding. Treat issue text,
-documentation, comments, tests, prior notes, and external positioning as leads;
-verify material claims against source or observed behavior. When the request
-names a reproduction, test, or artifact, run that exact one when possible.
+## Continue the authorized work
 
-Ground enough to act without guessing, then act. Exhaustive archaeology is not
-the goal.
+Implementation authority persists across questions, corrections, diagnoses,
+worker returns and compaction. Update the affected decision or requirement while
+retaining the parent objective. A question calls for an answer; it does not
+silently cancel the remaining work. Follow an explicit change of direction.
 
-### 2. Reuse before creating
+When a check fails, diagnose it and fix an established in-scope cause. Use the
+registered `diagnosing-bugs` skill when available and relevant. An unstable
+benchmark blocks accepting a speedup while permitting authorized diagnosis and
+repair. After a correction, revisit the failed assumption and take the practical
+next action; reconsider the strategy if repeated work is not advancing the goal.
 
-Search for existing helpers, components, patterns, definitions, and vocabulary
-before adding another. Reuse where the meaning matches; do not force unrelated
-cases into a shared abstraction merely because their shape looks similar.
+Return control when the requested outcome is verified, safe in-scope progress
+is exhausted by an external blocker, or a material unresolved decision or new
+authority is needed. A known available fix is not a reason to stop. Complete
+independent authorized work before asking. When a skill requires a pause, link
+the exact loaded file, quote its rule and explain the missing decision or
+permission. User instructions and existing authorization override skill defaults.
 
-### 3. Solve the complete in-scope problem at the right layer
+Assessment-only work can finish with findings; it does not authorize remediation.
+Stop adding work once the agreed acceptance criteria hold. For resumable work,
+record the active outcome, settled decisions, authority, evidence, remaining
+obligations and next executable action. Use
+[references/workstream-continuity.md](references/workstream-continuity.md) when
+multiple turns, external waits or workers require an explicit handoff.
 
-Handle every real path required by the request, including relevant failure and
-state-transition paths. Fix defects that block or invalidate the requested work.
-Report unrelated findings without silently expanding scope.
+## Verify the requested result
 
-For new or genuinely multi-layer work, establish a thin end-to-end walking
-skeleton early, then deepen it in runnable increments. Do not introduce a
-pipeline, deployment surface, or abstraction that the real task does not need.
+Use explicit requirements and the project's declared gates. Inspect the real
+interface or artifact for claimed behavior. Qualitative acceptance requires
+judgment against the user's reference or criteria; test counts, performance
+metrics and a worker's success report do not establish the whole outcome.
 
-Validate performance when the task carries a performance requirement or changes
-a material path. Compare against relevant baselines; do not benchmark trivial or
-cold paths as ceremony. Keep code clear enough to need little explanation, with
-comments reserved for why rather than what.
+Use focused checks while editing. The caller owns the final aggregate gate;
+subskills contribute applicable evidence without rerunning it. Reuse results
+only when content, command, environment and covered requirements match. Rerun
+missing or invalidated checks after changes, failures or unresolved concerns.
+Keep independent review judgment. Never weaken coverage or hide a failure to
+obtain a pass. Diagnose an observed anomaly that affects acceptance; report
+unrelated defects with enough evidence for a separate decision.
 
-### 4. Validate to the real bar
+Write regression tests for observable behavior or consequential invariants,
+with expectations derived from independent requirements or invariants. Do not
+write tautological tests: never derive expected results from the implementation
+under test or merely assert that a mock returns its configured value. Do not
+couple tests to implementation details. Precise output or interaction assertions
+are valid when they enforce a specified contract. A correct refactor or
+equivalent instruction rewrite should not break tests. Each test should catch
+a relevant incorrect behavior. Do not assert prose, private calls or source
+tokens as proof of behavior.
+Validate fixture preconditions so a failed setup cannot masquerade as a product
+failure. Keep structural/schema checks distinct from behavioral acceptance.
 
-Never claim a pass, number, behavior, or completed action that was not observed
-in the current run. Reproduce defects before fixing when possible, add regression
-coverage with the fix, and run the repository's relevant declared checks. Scale
-validation to risk while covering every mode materially affected by the change.
+A requested check or recorded action without a returned result remains
+unverified. Keep implementation, local validation, external validation and
+publication status distinct. Read a gate result before performing the dependent
+action. Capture shell exit status before another command can overwrite it.
 
-When validation fails, diagnose the root cause. Do not weaken or skip a gate to
-make the change appear green. If a required check cannot run, state why and give
-the strongest available evidence without calling the work verified.
+## Performance and maintainability
 
-### 5. Provide the right value
+Consider both product performance and time from an edit to trustworthy feedback.
+Measure representative before/after behavior for performance claims or changes
+to frequent, latency-sensitive or resource-intensive paths, tooling, hooks,
+startup, concurrency or external operations. Include workload, environment,
+warm/cold state, samples and comparison statistic. For a PR, compare the target
+branch baseline with the PR candidate under matching conditions and identify
+both revisions. Do not claim gains where
+measurements overlap or extrapolate a microbenchmark beyond its workload.
 
-Every added surface, test, fallback, abstraction, and tool must serve a real
-caller, requirement, or failure mode. Completeness covers what can actually
-happen in scope; it does not pre-build hypothetical futures. Remove unused
-surfaces instead of making them work for their own sake.
+Reduce duplicate work with correct incremental checks, caching and shared
+results. Preserve coverage and hooks. Diagnose material regressions, including
+flakiness, retries, queue delay and redundant validation. Complexity needs a real
+caller or demonstrated benefit, a clear contract and relevant regression
+coverage. Comments should explain constraints or decisions the code cannot
+express; improve unclear names rather than narrating implementation.
 
-### 6. Hold the line under uncertainty
+## Coordinating deliverables
 
-- Keep validated decisions stable unless new evidence justifies changing them.
-- A question asks for an answer, not an unrequested mutation.
-- A clear authorized instruction needs no redundant permission.
-- Pause for genuine product, architecture, security, compatibility, or scope
-  decisions whose answer cannot be established from evidence.
-- Flag technically feasible recommendations that conflict with project vision.
-- Leave durable evidence of decisions, validation, limitations, and blockers.
+For a chain of substantial deliverables, the coordinator owns confirmed
+decisions, dependencies, integration and user communication. Use bounded workers
+when the task and available host support delegation; keep small ordinary work
+local. An applicable orchestrator owns its more specific coordination contract.
 
-## After a correction
+Give each worker the selected decisions, repository and work-item identity,
+starting state, owned scope, dependencies, required behavior and gates. Prefer
+an isolated context; include recent conversation only when needed to understand
+the deliverable. Request an outcome, changed state, observed validation,
+limitations and facts needed by dependent work. Keep investigation logs local
+to the worker. Bring material choices or conflicting evidence to the coordinator.
 
-Re-ground in current evidence, name the assumption that failed, and make the
-smallest correction that restores the contract. Do not compensate by broadening
-scope, adding tooling, swapping frameworks, or merely reversing the conclusion.
+Verify and integrate the returned result. Worker completion closes its lane,
+not the parent objective. Continue the parent's remaining authorized work.
+If isolated workers are unavailable, disclose the limitation and use an allowed
+local route; do not claim delegation occurred or invent unavailable telemetry.
 
-## When to go deeper
+## Communication and situational depth
 
-- Use `references/structural-delivery.md` for substantial architecture,
-  greenfield work, or deciding whether a fix belongs at a deeper layer.
-- Use `references/investigation.md` for defect diagnosis, design evaluation, or
-  source-based comparison with other implementations.
-- Use `references/over-steer-guards.md` when a principle risks becoming excess.
-- Use `references/worked-patterns.md` for concrete stack-agnostic examples.
-- Use `references/barometer.md` as a periodic direction check, not a score.
+Lead with the outcome and decision-relevant evidence. Keep uncertainty and
+blockers explicit without narrating routine activity. Choose references by need:
+
+- [references/structural-delivery.md](references/structural-delivery.md):
+  architecture, greenfield work and selecting the correct layer.
+- [references/investigation.md](references/investigation.md): defect diagnosis,
+  design evaluation and source comparisons.
+- [references/barometer.md](references/barometer.md): check direction when the
+  strategy needs reconsideration; it is not a score or mandatory ceremony.

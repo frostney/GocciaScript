@@ -420,20 +420,29 @@ var
   Self_: TGocciaURLSearchParamsValue;
   Name: string;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   I: Integer;
 begin
   if not (AThisValue is TGocciaURLSearchParamsValue) then
     ThrowTypeError(SErrorURLSearchParamsGetAllNotInstance, SSuggestURLSearchParamsThisType);
   Self_ := TGocciaURLSearchParamsValue(AThisValue);
-  Arr := TGocciaArrayValue.Create;
-  if AArgs.Length > 0 then
-  begin
-    Name := AArgs.GetElement(0).ToStringLiteral.Value;
-    for I := 0 to Self_.FList.Count - 1 do
-      if Self_.FList[I].Name = Name then
-        Arr.Elements.Add(TGocciaStringLiteralValue.Create(Self_.FList[I].Value));
+  { Each value string is charged against the memory ceiling — a GC safe
+    point — so the result array needs a temp root. }
+  InitializeTempRoot(ArrRoot);
+  try
+    Arr := TGocciaArrayValue.Create;
+    AddTempRootIfNeeded(ArrRoot, Arr);
+    if AArgs.Length > 0 then
+    begin
+      Name := AArgs.GetElement(0).ToStringLiteral.Value;
+      for I := 0 to Self_.FList.Count - 1 do
+        if Self_.FList[I].Name = Name then
+          Arr.Elements.Add(TGocciaStringLiteralValue.Create(Self_.FList[I].Value));
+    end;
+    Result := Arr;
+  finally
+    RemoveTempRootIfNeeded(ArrRoot);
   end;
-  Result := Arr;
 end;
 
 // WHATWG URL §6.2 URLSearchParams.prototype.has(name[, value]) → boolean

@@ -2,6 +2,175 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.13.0] - 2026-08-19
+
+### ⚡ Performance
+
+- perf(gc): O(1) active-root frame ops; descriptors learn PushRoots (#1169)
+- perf(objects): sort array-index keys in O(n log n) during own-key ordering (#1144)
+
+### 🌐 Website
+
+- docs(aeo): name GocciaScript as a JavaScript engine in citation surfaces (#1186)
+- fix(website): make the installers work against the real release-archive layout (#1150)
+
+### 🏗️ Internal
+
+- chore(toml-test): bump pin to d168c2a4 (#1176)
+- chore(skills): sync provisioned skills (#1178)
+- chore(test262): bump pin to 3655e746 (#1175)
+- chore(docs): enforce the no-hand-typed-test262-number rule mechanically (#1149)
+- docs: sync docs and website claims to shipped reality for release prep (#1147)
+- docs(sandbox): specify the out-of-process execution protocol (WP-5 Phase A) (#1138)
+- docs(sandbox): record the hardening scope decisions and limit vocabulary (#1134)
+- docs(contributing): record the probe invariant and the PR-title rule (#1127)
+- style(pascal): quote JavaScript in star-parenthesis comments, drop the switch (#1125)
+- test(cli): report every failing section instead of stopping at the first (#1123)
+- chore: install run-retro, and apply its findings for stacked PR automation (#1122)
+- chore(jetstream): bump pin to 7769b693 (#1121)
+- chore(skills): sync provisioned skills (#1120)
+- chore(tc39-mcp): bump pin to v0.6.2 (#1119)
+- chore(test262): bump pin to be13516f (#1118)
+
+### 🐛 Fixed
+
+- fix(spec): true up TC39 stages, spec anchors, and shipped-surface claims (#1185)
+- fix(ci): coverage CLI checks no longer flake on broken-pipe races (#1183)
+- fix(test): pool-cancel bound asserts a design quantity, not a scheduler race (#1177)
+- fix(gc): computed class keys survive collections during static initializers (#1182)
+- fix(gc): builders and proxy traps root their in-flight values (#1179)
+- fix(gc): root the evaluator's remaining guest-call windows (#1174)
+- fix(gc): the element-storage gate roots its store window (#1172)
+- fix(gc): the property-map growth gate roots its store window (#1170)
+- fix(testrunner): parallel aborts report exactly once; iterator close can no longer swallow ceilings (#1165)
+- fix(engine): fault unwinds no longer leak iterator roots or pending host work (#1164)
+- fix(sandbox): stop promise boundaries from swallowing uncatchable faults (#1162)
+- fix(vm): read a compound assignment's target before the right-hand side (#1161)
+- fix(interpreter): perform compound assignment's GetValue exactly once (#1160)
+- fix(gc): root evaluator temporaries and make engine-integrity faults uncatchable (#1158)
+- fix(testing): replace growth-gate probe calibration with construction and measurement (#1155)
+- fix: gate the install path and fuzz exits, harden the sentinel, true up vi claims (#1154)
+- fix(ci): create the heaptrc -FU dir and hard-bound the fuzz timeout (#1148)
+- fix(gc): attempt a collection before refusing a charged reservation (#1152)
+- fix(testing): lift the parked parser-probe ceilings clear of the refusal bands (#1151)
+- fix(gc): root parser and builtin containers across collecting safe points (#1146)
+- fix(modules): keep expanded host paths out of script-visible module errors (#1141)
+- fix(testing): detect terminal limit unwind with a flag, not ExceptObject (#1145)
+- fix(sandbox): clear pending work on memory-limit unwind, bound AFL timeout, specify pipe I/O (#1142)
+- fix(gc): root builtin result containers across allocation safe points (#1140)
+- fix(sandbox): harden fuzz-input bounds, fetch URL validation, and resource-limit propagation (#1139)
+- fix(modules): report a missing content provider as a coded JavaScript Error (#1136)
+- fix(sandbox): apply engine options in the sandbox runner and classify failures (#1135)
+
+### 🚀 Added
+
+- feat(gc): the growth gate collects once before refusing (#1181)
+- feat(testrunner): abort the run when an engine-integrity fault escapes (#1163)
+- feat(memory): gate object property storage growth against the budget (#1137)
+- feat(memory): gate uncharged allocation paths and add a host-catchable limit (#1132)
+- feat(fetch): pin resolved addresses and add private-range and size policy (#1131)
+- feat(fuzz): add fuzz harness and memory-safety CI (#1130)
+- feat(vitest): close the drop-in gap in module resolution, generics, and the vi surface (#1126)
+
+## [0.12.0] - 2026-08-10
+
+### 🌐 Website
+
+- feat(website): Vitest drop-in direction on VISION and the homepage (#1096)
+- fix(website): vendored playground versions reach the page and stay fresh (#1087)
+
+### 🏗️ Internal
+
+- test(cli): look up coverage entries by basename, not native path (#1111)
+- test(cli): match boundary lines in containsLine and drop the workarounds (#1110)
+- docs: call them differential suites, not batteries (#1108)
+- test(cli): split coverage keys on both path separators (#1100)
+- ci(testing): gate testing-API suites on a pinned Vitest oracle (#1097)
+- ci(testing): differential suites gate goccia against bun (#1082)
+
+### 🐛 Fixed
+
+- fix(changelog): require website predominance before the Website group (#1115)
+- fix(review): CodeRabbit round-7 findings on the round-6 layer (#1113)
+- fix(review): CodeRabbit round-6 findings across the five unreviewed layers (#1112)
+- fix(review): CodeRabbit round-5 findings across the stack (#1109)
+- fix(coverage): canonicalize report path keys and document the parallel bail (#1107)
+- fix(testing): close the last Vitest and ECMA-262 semantic divergences (#1104)
+- fix(threading): give each run its own cancellation flag after abandonment (#1103)
+- fix(threading): guard the pool cancellation flag behind a lock (#1102)
+- fix(review): CodeRabbit round-2 findings across the stack (#1101)
+- fix(cli): print usage instead of blocking when run without input at a TTY (#1098)
+- fix(gc): root builtin argument collections and re-entry temporaries (#1095)
+- fix(testing): Vitest comparison parity across equality, Set/Map, and errors (#1093)
+- fix(testing): count beforeAll/afterAll hook failures as failures (#1090)
+- fix(parser): bound the arrow return-type probe; hard-gate web-tooling outcomes (#1089)
+- fix(testing): count throwing describe callbacks as failures (#1088)
+- fix(cli): keep JSON envelope stdout clean for every failure shape (#1086)
+- fix(review): CodeRabbit round-1 findings across the stack (#1085)
+- fix(testing): compare Error objects by value in deep equality (#1084)
+- fix(coverage): imply bytecode mode, sum parallel merges, register declaration lines (#1081)
+- fix(testing): bring deep-equality and property matchers to Vitest parity (#1078)
+- fix(testing): apply negation and full argument semantics to toThrow (#1077)
+- fix(engine): check nullish base before property-key coercion (#1076)
+- fix(jsx): guarantee transformer scan progress and positioned errors (#1075)
+
+### 🚀 Added
+
+- feat(testing): make goccia:test importable without injecting globals (#1106)
+- feat(testing): support vi.mock factory-form module mocking (#1105)
+- feat(testing): goccia:test module and default-on vitest compatibility shim (#1099)
+- feat(testing): abort file collection when a describe callback throws (#1092)
+- feat(testing): Vitest-exact suite-error attribution and hook control flow (#1091)
+- feat(runtime): WHATWG EventTarget base with AbortSignal abort events (#1080)
+- feat(parser): parse TS type-syntax edges as annotations (#1079)
+
+## [0.11.0] - 2026-08-05
+
+### ⚡ Performance
+
+- perf(compiler): avoid redundant this property moves (#1051)
+- perf(array): fast-path guarded dense appends (#1049)
+- perf(vm): avoid per-opcode instruction-limit TLS lookup (#1048)
+- perf(typed-array): specialize fixed-length indexed access (#1046)
+- perf(modules): retain resolved import bindings (#1045)
+- perf(json): recover UTF-16 parser hot paths (#1000)
+
+### 🌐 Website
+
+- docs: sync release preparation claims (#1073)
+- fix(security): harden untrusted execution boundaries (#1057)
+- docs(positioning): lead with agent sandboxing (#1052)
+- feat(website): add Homebrew install and polish navigation (#1027)
+
+### 🏗️ Internal
+
+- test(coverage): handle Windows LCOV line endings (#1069)
+- chore(skills): sync provisioned skills (#1060)
+- chore(test262): bump pin to b363f29d (#1059)
+- chore(timezone): bump data to 2026c (#1058)
+- chore(skills): sync provisioned skills (#1056)
+- chore(test262): bump pin to 07dbcbca (#1055)
+- refactor(compliance): native TOML runner and generated JSON5 tests (#1047)
+- docs(examples): add experimental runtime demos (#1028)
+
+### 🐛 Fixed
+
+- fix(parser): parse structured function return types (#1061)
+- fix(modules): root relative CLI aliases (#1068)
+- fix(coverage): exclude parallel runner warm-up (#1066)
+- fix(bytecode): preserve module lexical captures (#1063)
+- fix(modules): preserve live import bindings across module graphs (#999)
+- fix(conformance): preserve ceil boundaries and pin truthful library probes (#998)
+
+### 🚀 Added
+
+- feat(runtime): add fetch abort signals (#1067)
+- feat(testing): add async mock helpers (#1065)
+- feat(coverage): report function hits (#1064)
+- feat(parser): erase TypeScript expression types (#1062)
+- feat(ffi): expand native call capabilities (#1034)
+- feat(iterator): implement Iterator.prototype.includes (#1026)
+
 ## [0.10.0] - 2026-07-21
 
 ### ⚡ Performance

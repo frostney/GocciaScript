@@ -46,6 +46,8 @@ type
     procedure TestDirectoryEntryChangesUpdateParentMetadata;
     procedure TestRecursiveMkdirReportsFirstCreatedPath;
     procedure TestDefaultClockUsesUnixEpoch;
+    procedure TestDefaultQuotasAreBounded;
+    procedure TestNodeQuotaRejectsAtomically;
     procedure TestRootClampCallback;
   end;
 
@@ -69,6 +71,8 @@ begin
   Test('Recursive mkdir reports its first created path',
     TestRecursiveMkdirReportsFirstCreatedPath);
   Test('Default clock tracks the Unix epoch', TestDefaultClockUsesUnixEpoch);
+  Test('Default quotas are bounded', TestDefaultQuotasAreBounded);
+  Test('Node quota rejects atomically', TestNodeQuotaRejectsAtomically);
   Test('Root clamp callback reports one attempted escape',
     TestRootClampCallback);
 end;
@@ -281,6 +285,42 @@ begin
 
   Expect<Boolean>((ActualMilliseconds >= BeforeMilliseconds - 1) and
     (ActualMilliseconds <= AfterMilliseconds + 1)).ToBe(True);
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestDefaultQuotasAreBounded;
+var
+  DefaultFs: TSandboxVirtualFileSystem;
+begin
+  DefaultFs := TSandboxVirtualFileSystem.Create;
+  try
+    Expect<Int64>(DefaultFs.QuotaBytes).ToBe(16 * 1024 * 1024);
+    Expect<Integer>(DefaultFs.NodeQuota).ToBe(4096);
+  finally
+    DefaultFs.Free;
+  end;
+end;
+
+procedure TTestSandboxVirtualFileSystem.TestNodeQuotaRejectsAtomically;
+var
+  LimitedFs: TSandboxVirtualFileSystem;
+  Raised: Boolean;
+begin
+  LimitedFs := TSandboxVirtualFileSystem.Create(0, 1, FClock);
+  try
+    LimitedFs.MakeDirectory('/first');
+    Raised := False;
+    try
+      LimitedFs.MakeDirectory('/second');
+    except
+      on E: ESandboxFsQuotaExceeded do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Integer>(LimitedFs.NodeCount).ToBe(1);
+    Expect<Boolean>(LimitedFs.Exists('/second')).ToBe(False);
+  finally
+    LimitedFs.Free;
+  end;
 end;
 
 procedure TTestSandboxVirtualFileSystem.TestRootClampCallback;

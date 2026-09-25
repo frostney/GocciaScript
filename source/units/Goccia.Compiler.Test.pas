@@ -41,7 +41,8 @@ type
       const AGlobalBackedTopLevel: Boolean = False;
       const AEnableConstantFolding: Boolean = True;
       const AEnableConstPropagation: Boolean = True;
-      const AEnableDeadBranchElimination: Boolean = True): TGocciaBytecodeModule;
+      const AEnableDeadBranchElimination: Boolean = True;
+      const ATraditionalForLoops: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -76,12 +77,16 @@ type
     procedure TestCompileFunction;
     procedure TestThisPropertyReadUsesLocalRegister;
     procedure TestThisPropertyReadRetainsDerivedGuard;
+    procedure TestLocalPropertyReadUsesFusedOpcode;
+    procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
+    procedure TestBinaryRoundTripFunctionDeclarationPosition;
     procedure TestBinaryLittleEndian;
     procedure TestBinaryRoundTripConstants;
+    procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -96,6 +101,7 @@ type
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
+    procedure TestKnownNumericLocalUsesAddImmediate;
     procedure TestGenericAdditionDefersToPrimitiveToOpcode;
     procedure TestAssignmentClearsStaleNumericHint;
     procedure TestGlobalBackedAssignmentClearsStaleNumericHint;
@@ -109,6 +115,11 @@ type
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
+    procedure TestCountedForLessThanUsesJumpIfNotLt;
+    procedure TestConstSelfIncrementUsesGenericAssignment;
+    procedure TestGlobalBackedCountedForLimitIsNotSnapshotted;
+    procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
+    procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
@@ -136,14 +147,22 @@ begin
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
     TestThisPropertyReadRetainsDerivedGuard);
+  Test('local property read uses fused opcode',
+    TestLocalPropertyReadUsesFusedOpcode);
+  Test('optional local property read skips fused opcode',
+    TestOptionalLocalPropertyReadSkipsFusedOpcode);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
   Test('Binary round-trip closed numeric self-call',
     TestBinaryRoundTripClosedNumericSelfCall);
   Test('Binary round-trip upvalue names', TestBinaryRoundTripUpvalueNames);
+  Test('Binary round-trip function declaration position',
+    TestBinaryRoundTripFunctionDeclarationPosition);
   Test('Binary little-endian format', TestBinaryLittleEndian);
   Test('Binary round-trip constants', TestBinaryRoundTripConstants);
+  Test('Binary loader rejects malformed artifacts',
+    TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
   Test('Constant folds BigInt', TestConstantFoldsBigInt);
@@ -162,6 +181,8 @@ begin
     TestMixedOrEscapedCallsCancelNumericProof);
   Test('Known numeric local uses subtract immediate',
     TestKnownNumericLocalUsesSubtractImmediate);
+  Test('Known numeric local uses add immediate',
+    TestKnownNumericLocalUsesAddImmediate);
   Test('Generic addition defers ToPrimitive to opcode',
     TestGenericAdditionDefersToPrimitiveToOpcode);
   Test('Assignment clears stale numeric hint', TestAssignmentClearsStaleNumericHint);
@@ -176,6 +197,16 @@ begin
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
+  Test('counted-for less-than uses jump-if-not-lt',
+    TestCountedForLessThanUsesJumpIfNotLt);
+  Test('const self-increment uses generic assignment',
+    TestConstSelfIncrementUsesGenericAssignment);
+  Test('global-backed counted-for limit is not snapshotted',
+    TestGlobalBackedCountedForLimitIsNotSnapshotted);
+  Test('if and conditional less-than use jump-if-not-lt',
+    TestIfAndConditionalLessThanUseJumpIfNotLt);
+  Test('less-than value keeps generic compare',
+    TestLessThanValueKeepsGenericCompare);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -253,7 +284,8 @@ function TTestCompiler.CompileSource(
   const AGlobalBackedTopLevel: Boolean;
   const AEnableConstantFolding: Boolean;
   const AEnableConstPropagation: Boolean;
-  const AEnableDeadBranchElimination: Boolean): TGocciaBytecodeModule;
+  const AEnableDeadBranchElimination: Boolean;
+  const ATraditionalForLoops: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -261,10 +293,17 @@ var
   Compiler: TGocciaCompiler;
   SourceLines: TStringList;
   Options: TGocciaCompilerOptimizationOptions;
+  ParserOptions: TGocciaParserOptions;
 begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+  if ATraditionalForLoops then
+  begin
+    ParserOptions := Parser.Options;
+    ParserOptions.TraditionalForLoopsEnabled := True;
+    Parser.ApplyOptions(ParserOptions);
+  end;
   ProgramNode := Parser.Parse;
 
   Compiler := TGocciaCompiler.Create('<test>');
@@ -371,6 +410,7 @@ begin
     CountOp(ATemplate, OP_DIV_FLOAT) +
     CountOp(ATemplate, OP_MOD_FLOAT);
   Result := Result + CountOp(ATemplate, OP_SUB_NUM_IMM);
+  Result := Result + CountOp(ATemplate, OP_ADD_NUM_IMM);
 end;
 
 function TTestCompiler.HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -632,6 +672,42 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestLocalPropertyReadUsesFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a.x;');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_LOCAL_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL_PROP_CONST)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestOptionalLocalPropertyReadSkipsFusedOpcode;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const read = (a) => a?.x;');
+  try
+    Expect<Boolean>(FindFunctionWithOp(Module.TopLevel,
+      OP_GET_LOCAL_PROP_CONST) = nil).ToBe(True);
+    Func := FindFunctionWithOp(Module.TopLevel, OP_GET_PROP_CONST);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestBinaryRoundTrip;
 var
   Original, Loaded: TGocciaBytecodeModule;
@@ -713,6 +789,71 @@ begin
       Expect<Integer>(LoadedFunc.UpvalueCount).ToBe(1);
       LoadedDesc := LoadedFunc.GetUpvalueDescriptor(0);
       Expect<string>(LoadedDesc.Name).ToBe(OriginalDesc.Name);
+    finally
+      Loaded.Free;
+    end;
+  finally
+    Original.Free;
+    DeleteFile(TempFile);
+  end;
+end;
+
+{ Coverage reports a function at its declaration site (LCOV FN:), which is a
+  different position from the first executed instruction of its body. The
+  declaration position must therefore be carried on the template and survive a
+  .gbc round-trip, so precompiled bytecode reports the same lines as source. }
+function FindTemplateByDeclarationLine(
+  const AParent: TGocciaFunctionTemplate;
+  const ALine: UInt32): TGocciaFunctionTemplate;
+var
+  I: Integer;
+begin
+  Result := nil;
+  for I := 0 to AParent.FunctionCount - 1 do
+    if Assigned(AParent.GetFunction(I).DebugInfo) and
+       (AParent.GetFunction(I).DebugInfo.DeclarationLine = ALine) then
+    begin
+      Result := AParent.GetFunction(I);
+      Exit;
+    end;
+end;
+
+procedure TTestCompiler.TestBinaryRoundTripFunctionDeclarationPosition;
+var
+  Original, Loaded: TGocciaBytecodeModule;
+  OriginalFunc, LoadedFunc: TGocciaFunctionTemplate;
+  TempFile: string;
+begin
+  // `multi` is declared on line 2; its body's first statement is on line 3.
+  Original := CompileSource(
+    'const oneLine = () => 1;'#10 +
+    'const multi = (a) => {'#10 +
+    '  const b = a + 1;'#10 +
+    '  return b;'#10 +
+    '};'#10,
+    False, False, False, False, False, False);
+  TempFile := GetTempFileName + '.gbc';
+  try
+    Expect<Integer>(Original.TopLevel.FunctionCount).ToBe(2);
+    Expect<Boolean>(Assigned(
+      FindTemplateByDeclarationLine(Original.TopLevel, 1))).ToBe(True);
+
+    OriginalFunc := FindTemplateByDeclarationLine(Original.TopLevel, 2);
+    Expect<Boolean>(Assigned(OriginalFunc)).ToBe(True);
+    // The body's first instruction is on a later line than the declaration,
+    // so the two positions cannot be conflated.
+    Expect<Integer>(
+      Integer(OriginalFunc.DebugInfo.GetLineMapEntry(0).Line)).ToBe(3);
+    Expect<Integer>(Integer(OriginalFunc.DebugInfo.CoverageLine)).ToBe(2);
+
+    SaveModuleToFile(Original, TempFile);
+    Loaded := LoadModuleFromFile(TempFile);
+    try
+      LoadedFunc := FindTemplateByDeclarationLine(Loaded.TopLevel, 2);
+      Expect<Boolean>(Assigned(LoadedFunc)).ToBe(True);
+      Expect<Integer>(Integer(LoadedFunc.DebugInfo.DeclarationColumn)).ToBe(
+        Integer(OriginalFunc.DebugInfo.DeclarationColumn));
+      Expect<Integer>(Integer(LoadedFunc.DebugInfo.CoverageLine)).ToBe(2);
     finally
       Loaded.Free;
     end;
@@ -814,6 +955,142 @@ begin
     Original.Free;
     DeleteFile(TempFile);
   end;
+end;
+
+procedure TTestCompiler.TestBinaryRejectsMalformedArtifacts;
+var
+  Loaded, Module: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  TempFile: string;
+
+  procedure ExpectRejected(const ATemplate: TGocciaFunctionTemplate);
+  var
+    ErrorMessage: string;
+    Raised: Boolean;
+  begin
+    Module := TGocciaBytecodeModule.Create('test', '<malformed>');
+    Module.TopLevel := ATemplate;
+    TempFile := GetTempFileName + '.gbc';
+    try
+      SaveModuleToFile(Module, TempFile);
+      Loaded := nil;
+      ErrorMessage := '';
+      Raised := False;
+      try
+        Loaded := LoadModuleFromFile(TempFile);
+      except
+        on E: Exception do
+        begin
+          Raised := True;
+          ErrorMessage := E.Message;
+        end;
+      end;
+      Loaded.Free;
+      Expect<Boolean>(Raised).ToBe(True);
+      Expect<Boolean>(Pos('Invalid bytecode', ErrorMessage) > 0).ToBe(True);
+    finally
+      Module.Free;
+      DeleteFile(TempFile);
+    end;
+  end;
+
+begin
+  Module := nil;
+  Loaded := nil;
+
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_CLOSE_UPVALUE)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_DATA_PROP)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_DEFINE_METHOD_PROP)).ToBe(True);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_LOAD_TRUE, 1, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-wide-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 256, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-data-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_DATA_PROP, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-method-property-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_DEFINE_METHOD_PROP, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-compact-c-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_ADD, 0, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-call-register-window');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_CALL, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-bx-register');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_TO_PRIMITIVE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-local-write');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_SET_LOCAL, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-close-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSE_UPVALUE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_GET_UPVALUE, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-upvalue-reference');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABC(OP_RESOLVE_UPVALUE_REF, 0, 0, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-constant');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-function');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeABx(OP_CLOSURE, 0, 1));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-jump');
+  Template.MaxRegisters := 1;
+  Template.EmitInstruction(EncodeAx(OP_JUMP, -2));
+  ExpectRejected(Template);
 end;
 
 procedure TTestCompiler.TestUndeclaredPrivateNameRaisesSyntaxError;
@@ -1135,6 +1412,33 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestKnownNumericLocalUsesAddImmediate;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('let i = 2; i + 3;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let i = 2; 3 + i;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestGenericAdditionDefersToPrimitiveToOpcode;
 var
   Module: TGocciaBytecodeModule;
@@ -1326,6 +1630,114 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_POP_HANDLER)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCountedForLessThanUsesJumpIfNotLt;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'for (let i = 0; i < 5; i = i + 1) { i; }',
+    False, False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_GTE_INT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const run = (n) => { let c = 0; for (let i = 0; i < n; i = i + 1) c = c + 1; return c; }; run(3);',
+    False, False, False, False, False, False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_JUMP_IF_NOT_LT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_JUMP_IF_NOT_LT)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_LT)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstSelfIncrementUsesGenericAssignment;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const x = (x = x + 1);');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_INC_NUMERIC)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('let x = 0; x = x + 1;');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_INC_NUMERIC)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestGlobalBackedCountedForLimitIsNotSnapshotted;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let n = 5; for (let i = 0; i < n; i = i + 1) { i; }',
+    False, False, True, True, True, True, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_INT)).ToBe(0);
+    Expect<Boolean>(CountOp(Module.TopLevel, OP_INC_NUMERIC) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestIfAndConditionalLessThanUseJumpIfNotLt;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; let b = 2; if (a < b) { a; }',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'let a = 1; let b = 2; a < b ? 1 : 0;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_LT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLessThanValueKeepsGenericCompare;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'let a = 1; let b = 2; a < b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Boolean>((CountOp(Module.TopLevel, OP_LT) +
+      CountOp(Module.TopLevel, OP_LT_INT) +
+      CountOp(Module.TopLevel, OP_LT_FLOAT)) > 0).ToBe(True);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(0);
   finally
     Module.Free;
   end;

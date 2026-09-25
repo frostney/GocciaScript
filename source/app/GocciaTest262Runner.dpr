@@ -1111,10 +1111,6 @@ var
   Diagnostic: string;
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
-  ErrorColumn: Integer;
-  ErrorFileName: string;
-  ErrorLine: Integer;
-  ErrorMessage: string;
   ErrorName: string;
   ExecutionFailed: Boolean;
   Executor: TGocciaExecutor;
@@ -1212,18 +1208,18 @@ begin
         on E: EGocciaBytecodeThrow do
         begin
           ExecutionFailed := True;
-          ExtractThrowLocation(E.ThrownValue, ErrorName, ErrorMessage,
-            ErrorFileName, ErrorLine, ErrorColumn);
+          ErrorName := ThrownErrorName(E.ThrownValue);
           Diagnostic := FormatThrowDetail(E.ThrownValue, ACase.Path,
-            Source, False);
+            Source, False, Engine.ModuleLoader.DiagnosticScope.Principal,
+            E.Suggestion);
         end;
         on E: TGocciaThrowValue do
         begin
           ExecutionFailed := True;
-          ExtractThrowLocation(E.Value, ErrorName, ErrorMessage,
-            ErrorFileName, ErrorLine, ErrorColumn);
+          ErrorName := ThrownErrorName(E.Value);
           Diagnostic := FormatThrowDetail(E.Value, ACase.Path, Source,
-            False, E.Suggestion);
+            False, Engine.ModuleLoader.DiagnosticScope.Principal,
+            E.Suggestion);
         end;
         on E: TGocciaError do
         begin
@@ -1770,13 +1766,15 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         WriteLn(ErrOutput, FormatThrowDetail(E.ThrownValue,
-          '<test262-host-eval>', Source, False));
+          '<test262-host-eval>', Source, False,
+          Engine.ModuleLoader.DiagnosticScope.Principal, E.Suggestion));
         Result := 1;
       end;
       on E: TGocciaThrowValue do
       begin
         WriteLn(ErrOutput, FormatThrowDetail(E.Value,
-          '<test262-host-eval>', Source, False, E.Suggestion));
+          '<test262-host-eval>', Source, False,
+          Engine.ModuleLoader.DiagnosticScope.Principal, E.Suggestion));
         Result := 1;
       end;
       on E: TGocciaError do

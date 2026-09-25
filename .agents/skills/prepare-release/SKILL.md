@@ -70,7 +70,7 @@ Then the **two-layer currency check** nothing else covers — stale numbers and 
 **Layer 2 — verify each candidate against the source of truth.** Fan out to subagents when the surface is large. Check every numeric, factual, and characterization claim against:
 - the **code** (does the feature exist? is the flag spelled right, e.g. `--compat-asi`?),
 - the **live test262 report** (conformance numbers),
-- the **measured binary size** of the built loader (e.g. the "under 6MB" claim),
+- the **measured binary size** of the built loader (measure it fresh from the current release/nightly artifact; never carry a prior figure forward),
 - **`CONTEXT.md`** as the canonical language — subset-implies-ceiling prose is a finding against *"Recommended defaults → Avoid: language ceiling, hard limit."*
 
 Fix to current truth. **Governing rule: no hand-maintained conformance number anywhere** — a hand-typed test262 % is itself a finding (the kind that read "80%" long after the real figure had moved well past it), replaced by the `/compatibility` dashboard link or a freshly-sourced, **version-stamped** figure.

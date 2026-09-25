@@ -12,6 +12,7 @@ import {
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   TYPE_ANNOTATIONS_ANSWER,
+  VITEST_COMPATIBILITY_ANSWER,
 } from "./positioning";
 
 export const API_CATALOG_PATH = "/.well-known/api-catalog";
@@ -151,6 +152,7 @@ Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Vitest compatibility: ${VITEST_COMPATIBILITY_ANSWER}
 - Compiler support: ${COMPILER_SUPPORT_ANSWER}
 
 ## Execute code
@@ -169,7 +171,7 @@ POST JSON to \`/api/execute\`:
 
 Options:
 
-- \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (8 KiB).
+- \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (${MAX_GOCCIA_CODE_BYTES / 1024} KiB).
 - \`mode\` — \`interpreted\` or \`bytecode\`, matching \`--mode=bytecode\`.
 - \`asi\` — enables automatic semicolon insertion. The website API keeps this short field name for version compatibility; selected binaries may map it to \`--asi\` or \`--compat-asi\` depending on their supported flags. The website API defaults this to \`true\`.
 - \`compatVar\` — enables legacy \`var\` declarations, matching \`--compat-var\`.
@@ -194,7 +196,7 @@ Prefer modern JavaScript forms that GocciaScript supports by default. Compatibil
 
 ## Limits
 
-Requests are rate-limited and source code is capped at 8 KiB. These APIs are intended for short examples, docs checks, and agent-assisted exploration.
+Requests are rate-limited and source code is capped at ${MAX_GOCCIA_CODE_BYTES / 1024} KiB. These APIs are intended for short examples, docs checks, and agent-assisted exploration.
 `;
 }
 
@@ -208,6 +210,7 @@ export function buildLlmsTxt(origin: string) {
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
 - Type annotations: ${TYPE_ANNOTATIONS_ANSWER}
 - Host compatibility: ${NODE_COMPATIBILITY_ANSWER}
+- Vitest compatibility: ${VITEST_COMPATIBILITY_ANSWER}
 - Compiler support: ${COMPILER_SUPPORT_ANSWER}
 
 ## Canonical sources

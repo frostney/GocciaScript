@@ -22,6 +22,13 @@ source/app/__history/
 # Node modules
 node_modules/
 
+# Except the hand-written node_modules fixtures the bare-specifier suites
+# resolve against. They are source, not installs: no package manager ever writes
+# to them, and the differential one is deliberately kept away from the
+# npm-managed scripts/differential/node_modules so `bun install` cannot prune it.
+!scripts/differential/mods/nodemods/node_modules/
+!tests/language/modules/node-modules/node_modules/
+
 scripts/__pycache__/
 
 tests-wasm/*.wasm
@@ -36,3 +43,7 @@ fixtures/ffi/*.pdb
 # Claude Code agent runtime state
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# check-conformance-claims.ts --self-test symlink fixtures. Removed in a
+# `finally`, but a SIGKILL mid-run would otherwise leave untracked litter.
+.conformance-selftest-*/

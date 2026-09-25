@@ -40,6 +40,7 @@ The current event kinds are:
 | `function.constructor` | Dynamic Function construction was allowed or denied |
 | `shadow-realm.construct` | An installed ShadowRealm constructor was invoked |
 | `sandbox.fs.path` | A sandbox path attempted to cross above the virtual root |
+| `modules.node-modules` | A host granted bare-specifier resolution against `node_modules` |
 
 `fetch.host` subjects contain only the checked host. URL user information,
 paths, and query parameters are not included in host-authorization events.
@@ -52,6 +53,13 @@ Sandbox root escapes retain their existing behavior: the escape portion is
 denied and reported once for the path normalization request, while the
 resulting in-jail path remains clamped and the filesystem operation continues.
 Ordinary sandbox reads and writes do not generate events.
+
+`modules.node-modules` is a configuration-time grant rather than a script
+action: it is emitted once per engine when `--allow-node-modules` (or the
+matching config key) is applied, with the effective ceiling directory as the
+subject and an empty subject when the ancestor walk is unbounded. Individual
+resolutions afterwards produce no events. See
+[Module Resolution](module-resolution.md) for what the grant permits.
 
 Fetch authorization and dispatch events are emitted synchronously on the
 runtime thread. The HTTP worker does not call the sink.

@@ -16,6 +16,7 @@ uses
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Module,
   Goccia.CLI.Application,
+  Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
@@ -34,10 +35,12 @@ uses
   Goccia.GarbageCollector,
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
+  Goccia.Modules.Resolver,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
   Goccia.Scope,
@@ -107,6 +110,7 @@ type
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
+    FLastDiagnosticPrincipal: Int64;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
@@ -148,6 +152,7 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
+    function StdinUsage: TGocciaStdinUsage; override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure HandleError(const AException: Exception); override;
@@ -257,7 +262,8 @@ procedure TScriptLoaderApp.InitializeRuntime(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine,
+    not EngineOptions.NoHostFilesystem.Present);
   ApplyLoaderRuntimeProfile(Runtime);
 end;
 
@@ -271,6 +277,11 @@ end;
 function TScriptLoaderApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
+end;
+
+function TScriptLoaderApp.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suStdinDefaultWithREPL;
 end;
 
 procedure TScriptLoaderApp.Configure;
@@ -301,7 +312,8 @@ var
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine);
+  Runtime := AttachRuntime(AEngine,
+    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
 
   if FHostEnvironmentModule.FromCommandLine then
     HostEnvironmentModulePath := FHostEnvironmentModule.Value
@@ -323,6 +335,9 @@ begin
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
     Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  if Assigned(EngineOptions) and
+     ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and
@@ -356,6 +371,18 @@ begin
 
   // Profiling requires bytecode mode regardless of the --mode option.
   if ProfilerOptions.Mode.Present then
+    EngineOptions.Mode.Apply('bytecode');
+
+  // --coverage-format / --coverage-output imply --coverage, so every later
+  // reader can test Enabled alone instead of repeating the three-way check.
+  // Mirrors TTestRunnerApp.Validate.
+  if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
+    CoverageOptions.Enabled.Apply('');
+
+  // Coverage requires bytecode mode regardless of the --mode option: the
+  // interpreter only instruments the entry file and counts statements per
+  // AST node instead of per executed line.
+  if CoverageOptions.Enabled.Present then
     EngineOptions.Mode.Apply('bytecode');
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
@@ -544,6 +571,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
+      FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       Engine.SuppressWarnings := GIsWorkerThread or
         IsJsonOutput;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
@@ -603,6 +631,7 @@ begin
   try
     Engine := CreateEngine(AFileName, ASource, Executor);
     try
+      FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
 
@@ -677,6 +706,7 @@ begin
     try
       Engine := CreateEngine(AFileName, nil, Executor);
       try
+        FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         Engine.RetainModule(Module);
         RetainedModule := Module;
         Module := nil;
@@ -764,6 +794,7 @@ var
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   StartTime: Int64;
 begin
+  FLastDiagnosticPrincipal := 0;
   FillChar(Report, SizeOf(Report), 0);
   Report.ResultValue := nil;
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
@@ -808,11 +839,15 @@ begin
           if IsJsonOutput then
             PrintJSONError(E, Report, Capture, AFileName, IsCompactJsonOutput)
           else if E is TGocciaError then
-            WriteLn(TGocciaError(E).GetDetailedMessage(IsColorTerminal))
+            WriteLn(FormatHostErrorDiagnostic(TGocciaError(E), IsColorTerminal))
           else if E is TGocciaThrowValue then
-            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName, ASource, IsColorTerminal, TGocciaThrowValue(E).Suggestion))
+            WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
+              ASource, IsColorTerminal, FLastDiagnosticPrincipal,
+              TGocciaThrowValue(E).Suggestion))
           else if E is EGocciaBytecodeThrow then
-            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue, AFileName, ASource, IsColorTerminal))
+            WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+              AFileName, ASource, IsColorTerminal, FLastDiagnosticPrincipal,
+              EGocciaBytecodeThrow(E).Suggestion))
           else
             WriteLn('Fatal error: ', E.Message);
         end;
@@ -987,6 +1022,8 @@ var
   MainMemoryStats: TCLIJSONMemoryStats;
   WorkerMemoryStats: TCLIJSONMemoryStats;
   Pool: TGocciaThreadPool;
+  CoverageTracker: TGocciaCoverageTracker;
+  CoverageWasEnabled: Boolean;
   I, JobCount: Integer;
 begin
   WorkerMemoryStats := DefaultCLIJSONMemoryStats;
@@ -995,17 +1032,39 @@ begin
 
   if JobCount > 1 then
   begin
-    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-      EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
-    else
-      EnsureSharedPrototypesInitialized(InitializeRuntime);
+    // Force all shared prototypes to be initialised on the main thread before
+    // any worker starts. That throwaway engine is loader infrastructure, so do
+    // not register its <thread-init> source in the user's coverage report.
+    // Preserve the tracker state instead of filtering by file name so a user
+    // source can never be hidden. Mirrors TTestRunnerApp.RunScriptsFromFilesParallel.
+    CoverageTracker := TGocciaCoverageTracker.Instance;
+    CoverageWasEnabled := False;
+    if Assigned(CoverageTracker) then
+    begin
+      CoverageWasEnabled := CoverageTracker.Enabled;
+      CoverageTracker.Enabled := False;
+    end;
+    try
+      if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+        EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+      else
+        EnsureSharedPrototypesInitialized(InitializeRuntime);
+    finally
+      if Assigned(CoverageTracker) then
+        CoverageTracker.Enabled := CoverageWasEnabled;
+    end;
     BeginCLIJSONMemoryMeasurement(MemoryMeasurement);
     Pool := TGocciaThreadPool.Create(JobCount);
     try
+      Pool.EnableCoverage := CoverageOptions.Enabled.Present;
       if (TGarbageCollector.Instance <> nil) then
         Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
       Pool.RunAll(AFiles, ScriptWorkerProc, @Results[0]);
       WorkerMemoryStats := Pool.MemoryStats;
+      // Worker hits live in per-thread trackers; without this merge every
+      // --coverage run under --jobs=N reports only the main thread's hits.
+      if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
+        Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
     finally
       Pool.Free;
     end;
@@ -1125,18 +1184,42 @@ procedure TScriptLoaderApp.RunScriptsParallel(const AFiles: TStringList;
   const AJobCount: Integer);
 var
   Pool: TGocciaThreadPool;
+  CoverageTracker: TGocciaCoverageTracker;
+  CoverageWasEnabled: Boolean;
   I: Integer;
 begin
-  if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-    EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
-  else
-    EnsureSharedPrototypesInitialized(InitializeRuntime);
+  // Force all shared prototypes to be initialised on the main thread before any
+  // worker starts. That throwaway engine is loader infrastructure, so do not
+  // register its <thread-init> source in the user's coverage report. Preserve
+  // the tracker state instead of filtering by file name so a user source can
+  // never be hidden. Mirrors TTestRunnerApp.RunScriptsFromFilesParallel.
+  CoverageTracker := TGocciaCoverageTracker.Instance;
+  CoverageWasEnabled := False;
+  if Assigned(CoverageTracker) then
+  begin
+    CoverageWasEnabled := CoverageTracker.Enabled;
+    CoverageTracker.Enabled := False;
+  end;
+  try
+    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
+      EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
+    else
+      EnsureSharedPrototypesInitialized(InitializeRuntime);
+  finally
+    if Assigned(CoverageTracker) then
+      CoverageTracker.Enabled := CoverageWasEnabled;
+  end;
 
   Pool := TGocciaThreadPool.Create(AJobCount);
   try
+    Pool.EnableCoverage := CoverageOptions.Enabled.Present;
     if (TGarbageCollector.Instance <> nil) then
       Pool.MaxBytes := TGarbageCollector.Instance.MaxBytes;
     Pool.RunAll(AFiles, ScriptWorkerProc);
+    // Worker hits live in per-thread trackers; without this merge every
+    // --coverage run under --jobs=N reports only the main thread's hits.
+    if Pool.EnableCoverage and (TGocciaCoverageTracker.Instance <> nil) then
+      Pool.MergeCoverageInto(TGocciaCoverageTracker.Instance);
 
     for I := 0 to AFiles.Count - 1 do
       if Pool.Results[I].ErrorMessage <> '' then

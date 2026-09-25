@@ -96,3 +96,33 @@ test("resolve with rejected promise adopts its reason", () => {
     expect(e).toBe("original error");
   });
 });
+
+// Reading then off a thenable runs a user getter, which is a GC safe point.
+// The thenable and both reaction handlers are native locals at that moment.
+describe.runIf(typeof Goccia !== "undefined")("thenable adoption under explicit GC", () => {
+  // A bare gc() usually leaves the freed slot readable; the allocation churn
+  // afterwards is what makes a collected value observable.
+  const gcChurn = () => {
+    Goccia.gc();
+    let total = 0;
+    for (const i of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      const scratch = { a: i * 7.5, b: [i, i + 1], c: "x" + i };
+      total += scratch.a + scratch.b[0];
+    }
+    return total;
+  };
+
+  test("survives a collection inside the then getter", () => {
+    const thenable = {
+      get then() {
+        gcChurn();
+        return (resolve) => resolve({ deep: [1, 2, 3], label: "ok" });
+      },
+    };
+
+    return Promise.resolve(thenable).then((value) => {
+      expect(value.label).toBe("ok");
+      expect(value.deep).toEqual([1, 2, 3]);
+    });
+  });
+});

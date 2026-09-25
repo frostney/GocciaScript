@@ -62,24 +62,45 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToPrimitive;
 
+// Scopes created for a pattern match are ordinary GC-managed lexical
+// environments, and the garbage collector owns their lifetime. A clause body
+// or an `is`-guard body may hand a scope to something that outlives the match
+// — a closure keeps it in TGocciaFunctionValue.Closure, a class keeps it in
+// TGocciaClassValue.DefinitionScope — so the evaluator must never free one
+// itself. It only holds a temporary GC root for the window in which the scope
+// is reachable from Pascal locals alone, the same protocol EvaluateBlock uses
+// for ordinary block scopes.
 function CreatePatternChildContext(const AContext: TGocciaEvaluationContext;
   const ALabel: string): TGocciaEvaluationContext;
+var
+  GC: TGarbageCollector;
 begin
   Result := AContext;
   Result.Scope := AContext.Scope.CreateChild(skBlock, ALabel);
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.AddTempRoot(Result.Scope);
 end;
 
+// Drops the temporary roots taken by CreatePatternChildContext for every scope
+// between the match context and its enclosing context (exclusive). Whatever the
+// clause body let escape stays reachable through whoever captured it; whatever
+// did not escape becomes unreachable and is reclaimed by the next collection.
 procedure ReleaseMatchContext(const AMatchContext,
   AParentContext: TGocciaEvaluationContext);
 var
   CurrentScope, ParentScope, StopScope: TGocciaScope;
+  GC: TGarbageCollector;
 begin
+  GC := TGarbageCollector.Instance;
+  if not Assigned(GC) then
+    Exit;
   StopScope := AParentContext.Scope;
   CurrentScope := AMatchContext.Scope;
   while Assigned(CurrentScope) and (CurrentScope <> StopScope) do
   begin
     ParentScope := CurrentScope.Parent;
-    CurrentScope.Free;
+    GC.RemoveTempRoot(CurrentScope);
     CurrentScope := ParentScope;
   end;
 end;
@@ -551,6 +572,7 @@ var
   I: Integer;
   CurrentContext, NextContext: TGocciaEvaluationContext;
   RestArray: TGocciaArrayValue;
+  RestArrayRoot: TGocciaTempRoot;
   Success: Boolean;
 begin
   if not Assigned(ARestPattern) and not AHasRestWildcard and
@@ -580,9 +602,20 @@ begin
       RestArray := TGocciaArrayValue.Create;
       for I := AElements.Count to AItems.Count - 1 do
         RestArray.Elements.Add(AItems[I]);
-      if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext,
-         NextContext) then
-        Exit(False);
+      { The rest array is derived here, so the caller's subject root does not
+        cover it and this local is its only reference. The subpattern below can
+        run guest code — a guard, a custom matcher, a computed key — and any of
+        that is a collecting safe point that would free it out from under the
+        binding. }
+      InitializeTempRoot(RestArrayRoot);
+      AddTempRootIfNeeded(RestArrayRoot, RestArray);
+      try
+        if not TryMatchPatternInternal(RestArray, ARestPattern, CurrentContext,
+           NextContext) then
+          Exit(False);
+      finally
+        RemoveTempRootIfNeeded(RestArrayRoot);
+      end;
       CurrentContext := NextContext;
     end;
 
@@ -619,6 +652,7 @@ var
   MatchedKeys: TStringList;
   MatchedSymbols: TList<TGocciaSymbolValue>;
   Remainder: TGocciaObjectValue;
+  RemainderRoot: TGocciaTempRoot;
   RestSubject: TGocciaObjectValue;
   Entry: TPair<string, TGocciaValue>;
   SymbolEntry: TPair<TGocciaSymbolValue, TGocciaValue>;
@@ -669,20 +703,30 @@ begin
         Exit(False);
 
       Remainder := TGocciaObjectValue.Create;
-      for Entry in RestSubject.GetEnumerablePropertyEntries do
-      begin
-        if MatchedKeys.IndexOf(Entry.Key) < 0 then
-          Remainder.AssignProperty(Entry.Key, Entry.Value);
-      end;
-      for SymbolEntry in RestSubject.GetEnumerableSymbolProperties do
-      begin
-        if not MatchedSymbols.Contains(SymbolEntry.Key) then
-          Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
-      end;
+      { Same reason the array rest subject is rooted: the remainder object is
+        derived here, is reachable from this local alone, and the subpattern
+        below can run guest code that collects. Rooted from creation because
+        the property copies below allocate too. }
+      InitializeTempRoot(RemainderRoot);
+      AddTempRootIfNeeded(RemainderRoot, Remainder);
+      try
+        for Entry in RestSubject.GetEnumerablePropertyEntries do
+        begin
+          if MatchedKeys.IndexOf(Entry.Key) < 0 then
+            Remainder.AssignProperty(Entry.Key, Entry.Value);
+        end;
+        for SymbolEntry in RestSubject.GetEnumerableSymbolProperties do
+        begin
+          if not MatchedSymbols.Contains(SymbolEntry.Key) then
+            Remainder.AssignSymbolProperty(SymbolEntry.Key, SymbolEntry.Value);
+        end;
 
-      if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
-        CurrentContext, NextContext) then
-        Exit(False);
+        if not TryMatchPatternInternal(Remainder, APattern.RestPattern,
+          CurrentContext, NextContext) then
+          Exit(False);
+      finally
+        RemoveTempRootIfNeeded(RemainderRoot);
+      end;
       CurrentContext := NextContext;
     end;
 
@@ -851,7 +895,7 @@ begin
         ReleaseMatchContext(BranchContext, AContext);
         raise;
       end;
-      BranchContext.Scope.Free;
+      ReleaseMatchContext(BranchContext, AContext);
     end;
     Exit(False);
   end;
@@ -864,13 +908,16 @@ begin
       InnerMatched := TryMatchPatternInternal(ASubject,
         TGocciaNotMatchPattern(APattern).Pattern, BranchContext, NextContext);
     except
-      ReleaseMatchContext(NextContext, AContext);
+      // BranchContext, not NextContext: the inner match's own handler has
+      // already released everything deeper than the branch scope, and its
+      // advanced NextContext may point at a scope it just un-rooted.
+      ReleaseMatchContext(BranchContext, AContext);
       raise;
     end;
     if InnerMatched then
       ReleaseMatchContext(NextContext, AContext)
-    else if Assigned(BranchContext.Scope) then
-      BranchContext.Scope.Free;
+    else
+      ReleaseMatchContext(BranchContext, AContext);
     Result := not InnerMatched;
     Exit;
   end;
@@ -899,13 +946,13 @@ begin
   try
     Result := TryMatchPatternInternal(ASubject, APattern, ScratchContext, AMatchContext);
   except
-    ScratchContext.Scope.Free;
+    ReleaseMatchContext(ScratchContext, AContext);
     AMatchContext := AContext;
     raise;
   end;
   if not Result then
   begin
-    ScratchContext.Scope.Free;
+    ReleaseMatchContext(ScratchContext, AContext);
     AMatchContext := AContext;
   end;
 end;
@@ -915,11 +962,21 @@ function EvaluateIsExpression(const AExpression: TGocciaIsExpression;
 var
   Subject: TGocciaValue;
   MatchContext: TGocciaEvaluationContext;
+  SubjectRoot: TGocciaTempRoot;
 begin
   Subject := EvaluateExpression(AExpression.Subject, AContext);
-  Result := TGocciaBooleanLiteralValue.FromBoolean(
-    TryEvaluateMatchPattern(Subject, AExpression.Pattern, AContext,
-    MatchContext));
+  // Patterns run arbitrary user code (computed keys, guards, custom matchers),
+  // any of which is a collecting safe point. Until a binding pattern stores the
+  // subject in the match scope it is reachable from this local alone.
+  InitializeTempRoot(SubjectRoot);
+  AddTempRootIfNeeded(SubjectRoot, Subject);
+  try
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      TryEvaluateMatchPattern(Subject, AExpression.Pattern, AContext,
+      MatchContext));
+  finally
+    RemoveTempRootIfNeeded(SubjectRoot);
+  end;
   if TGocciaBooleanLiteralValue(Result).Value then
     ReleaseMatchContext(MatchContext, AContext);
 end;
@@ -930,27 +987,36 @@ var
   Subject: TGocciaValue;
   MatchContext: TGocciaEvaluationContext;
   I: Integer;
+  SubjectRoot: TGocciaTempRoot;
 begin
   Subject := EvaluateExpression(AExpression.Subject, AContext);
 
-  for I := 0 to AExpression.Clauses.Count - 1 do
-  begin
-    if TryEvaluateMatchPattern(Subject, AExpression.Clauses[I].Pattern,
-       AContext, MatchContext) then
+  // The subject outlives every clause attempt but is reachable from this local
+  // alone, and each attempt can run user code at a collecting safe point.
+  InitializeTempRoot(SubjectRoot);
+  AddTempRootIfNeeded(SubjectRoot, Subject);
+  try
+    for I := 0 to AExpression.Clauses.Count - 1 do
     begin
-      try
-        Exit(EvaluateExpression(AExpression.Clauses[I].Expression, MatchContext));
-      finally
-        ReleaseMatchContext(MatchContext, AContext);
+      if TryEvaluateMatchPattern(Subject, AExpression.Clauses[I].Pattern,
+         AContext, MatchContext) then
+      begin
+        try
+          Exit(EvaluateExpression(AExpression.Clauses[I].Expression, MatchContext));
+        finally
+          ReleaseMatchContext(MatchContext, AContext);
+        end;
       end;
     end;
+
+    if Assigned(AExpression.DefaultExpression) then
+      Exit(EvaluateExpression(AExpression.DefaultExpression, AContext));
+
+    ThrowNoMatchingPattern;
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  finally
+    RemoveTempRootIfNeeded(SubjectRoot);
   end;
-
-  if Assigned(AExpression.DefaultExpression) then
-    Exit(EvaluateExpression(AExpression.DefaultExpression, AContext));
-
-  ThrowNoMatchingPattern;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 function EvaluateConditionWithPatternBindings(const ACondition: TGocciaExpression;
@@ -963,6 +1029,7 @@ var
   LeftHandled, RightHandled: Boolean;
   LeftResult, RightResult: Boolean;
   LeftContext, RightContext: TGocciaEvaluationContext;
+  SubjectRoot: TGocciaTempRoot;
 begin
   AHandled := False;
   ABodyContext := AContext;
@@ -972,8 +1039,16 @@ begin
     AHandled := True;
     IsExpression := TGocciaIsExpression(ACondition);
     Subject := EvaluateExpression(IsExpression.Subject, AContext);
-    Result := TryEvaluateMatchPattern(Subject, IsExpression.Pattern, AContext,
-      ABodyContext);
+    // See EvaluateIsExpression: the subject is reachable from this local alone
+    // while the pattern runs user code.
+    InitializeTempRoot(SubjectRoot);
+    AddTempRootIfNeeded(SubjectRoot, Subject);
+    try
+      Result := TryEvaluateMatchPattern(Subject, IsExpression.Pattern, AContext,
+        ABodyContext);
+    finally
+      RemoveTempRootIfNeeded(SubjectRoot);
+    end;
     if not Result then
       ABodyContext := AContext;
     Exit;

@@ -8,6 +8,7 @@
 - **Secondary goal** — A modern ECMAScript platform embeddable in desktop applications, enabling portable code that runs both on the desktop (via FreePascal) and on the web (via standard browsers)
 - **Design philosophy** — Default to the parts of JavaScript that lead to clear and predictable code; keep legacy and high-risk behavior opt-in
 - **Release-track objective** — Reach full ECMAScript conformance as closely as possible for the next major version, measured by the generated test262 reports
+- **Toolchain objective** — A test runner developers can point at the suites they already write: the Vitest API with Vitest's semantics, verified against a pinned Vitest release, running as a single native binary
 - **Not a goal** — Node.js host compatibility, a full browser host environment, or unbounded server workloads
 
 ## Primary: Sandboxed Runtime for AI Agents
@@ -20,10 +21,10 @@ AI agents need to execute generated code in a constrained environment. GocciaScr
 - **Deterministic core execution** — For core-language execution with the same source, config, and host-provided runtime surface, behavior is repeatable and intrinsic state does not leak between engine instances; hosts that install time, network, or other external runtime extensions own those sources of nondeterminism
 - **Timeout enforcement** — The `--timeout` option and embedding API allow hosts to kill runaway scripts
 - **Controlled runtime surface** — The host chooses which runtime extensions or profiles to install (see [Embedding](docs/embedding.md))
-- **No dynamic code generation by default** — normal runtime hosts do not install `eval()`, and the `Function()` constructor stays disabled unless the host opts in via `--unsafe-function-constructor`; the private test262 host exposes a conformance-only eval hook
+- **No dynamic code generation by default** — normal runtime hosts do not install `eval()`, the `Function()` constructor stays disabled unless the host opts in via `--unsafe-function-constructor`, and `ShadowRealm` — whose `prototype.evaluate` performs dynamic source evaluation — is registered only under `--unsafe-shadowrealm`; the private test262 host exposes a conformance-only eval hook
 - **Modern function syntax by default** — Arrow functions, methods, accessors, and class methods are the recommended forms; the `function` keyword (declarations and expressions) is available only through `--compat-function` for ECMAScript compatibility
 
-The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being absent from normal runtimes, on the test262 eval hook remaining private to `GocciaTest262Runner`, and on the host not opting in to `--unsafe-function-constructor` (which would re-enable dynamic code generation via `Function()`).
+The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being absent from normal runtimes, on the test262 eval hook remaining private to `GocciaTest262Runner`, and on the host not opting in to `--unsafe-function-constructor` or `--unsafe-shadowrealm` (either of which would re-enable dynamic code generation, via `Function()` and `ShadowRealm.prototype.evaluate` respectively).
 
 ## Secondary: Embeddable Desktop Platform
 
@@ -33,6 +34,15 @@ Desktop applications built with FreePascal (Lazarus, command-line tools, game en
 - **Single-binary deployment** — GocciaScript compiles into the host application with no external runtime dependencies
 - **Custom globals** — The host injects application-specific APIs through `DefineLexicalBinding` and custom built-in types (see [Embedding](docs/embedding.md) and [Adding Built-in Types](docs/adding-built-in-types.md))
 - **Cross-platform** — Runs on macOS, Linux, Windows, and FreeBSD via FreePascal's cross-compilation
+
+## Toolchain: a Vitest-Compatible Test Runner
+
+Testing is where a sandboxed runtime meets ordinary developer work. The built-in runner therefore targets the API developers already write — `describe`/`test`/`expect`, lifecycle hooks, and mocks — and treats Vitest as the reference for what those names *mean*, not merely what they are called.
+
+- **Behavior checked against the reference, not against its documentation** — Equality, `Set`/`Map`, error, and `toThrow` semantics are probed against a pinned Vitest release and reconciled; where GocciaScript still differs, the divergence is deliberate and recorded rather than discovered by users
+- **Agreement is gated, not asserted** — Shared differential suites run against an external JavaScript runtime as the semantics oracle in continuous integration, so a drift in either direction fails a build instead of quietly changing what tests mean
+- **One binary, no host toolchain** — Suites run without a Node.js installation, package resolution, or a transform step in front of them. That is a claim about what a run has to do, not about raw engine throughput; the ceiling described under *What GocciaScript is Not* still applies
+- **A drop-in replacement is the direction, not a finished claim** — A full drop-in audit is still ahead, but importing `vi` from `"vitest"` now resolves to a bundled compatibility shim covering `vi.fn`, `vi.spyOn`, factory-form `vi.mock` (a synchronous arrow factory returning an object literal; no automock, no spread-based partial mock), `vi.unmock`, `vi.mocked`, `vi.stubGlobal`/`vi.unstubAllGlobals`, and `vi.clearAllMocks`/`vi.resetAllMocks`/`vi.restoreAllMocks`, so suites built on those members run unchanged; `vi.stubEnv`/`vi.unstubAllEnvs` work too, but over a host-injected `process.env`, since the engine has no `process` of its own. The members that are not implemented — the fake-timer family, `vi.waitFor`/`vi.waitUntil`, `vi.hoisted`, `vi.doMock`/`vi.doUnmock`/`vi.resetModules`, `vi.importActual`/`vi.importMock`, and `vi.setConfig`/`vi.resetConfig` — throw a named, actionable error rather than failing quietly; see [Test Framework API](docs/testing-api.md) for the current divergence list
 
 ## What GocciaScript is Not
 

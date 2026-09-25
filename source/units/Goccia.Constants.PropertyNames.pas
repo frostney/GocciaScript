@@ -207,6 +207,27 @@ const
   PROP_JSON                = 'json';
   PROP_ARRAY_BUFFER_METHOD = 'arrayBuffer';
   PROP_METHOD              = 'method';
+  PROP_SIGNAL              = 'signal';
+  PROP_ABORT               = 'abort';
+  PROP_ABORTED             = 'aborted';
+  PROP_REASON              = 'reason';
+  PROP_THROW_IF_ABORTED    = 'throwIfAborted';
+  PROP_TIMEOUT             = 'timeout';
+
+  PROP_ADD_EVENT_LISTENER    = 'addEventListener';
+  PROP_REMOVE_EVENT_LISTENER = 'removeEventListener';
+  PROP_DISPATCH_EVENT        = 'dispatchEvent';
+  PROP_HANDLE_EVENT          = 'handleEvent';
+  PROP_ONABORT               = 'onabort';
+  PROP_TARGET                = 'target';
+  PROP_CURRENT_TARGET        = 'currentTarget';
+  PROP_DEFAULT_PREVENTED     = 'defaultPrevented';
+  PROP_PREVENT_DEFAULT       = 'preventDefault';
+  PROP_BUBBLES               = 'bubbles';
+  PROP_CANCELABLE            = 'cancelable';
+  PROP_ONCE                  = 'once';
+  PROP_CAPTURE               = 'capture';
+  PROP_PASSIVE               = 'passive';
 
 implementation
 

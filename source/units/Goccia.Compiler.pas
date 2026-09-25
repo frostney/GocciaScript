@@ -1222,7 +1222,7 @@ begin
     if FGlobalBackedTopLevel then
       MarkTopLevelGlobalBackedLocals(FCurrentScope);
     Ctx := BuildContext;
-    if FGlobalBackedTopLevel then
+    if FGlobalBackedTopLevel and not FPreinitializedTopLevelFunctions then
       EmitGlobalLexicalPredeclarations(Ctx, FCurrentScope,
         PredeclaredLexicalStart);
     for PredeclaredLexicalIndex := PredeclaredLexicalStart to

@@ -225,8 +225,17 @@ begin
   FEngine.ModuleLoader.SetContentProvider(AParentEngine.ContentProvider, False);
   FEngine.ModuleLoader.CopyVirtualModulesFrom(AParentEngine.ModuleLoader);
   FEngine.ModuleLoader.Preprocessors := AParentEngine.Preprocessors;
+  FEngine.ModuleLoader.Resolver.BaseDirectory :=
+    AParentEngine.ModuleLoader.Resolver.BaseDirectory;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
+  // The node_modules capability travels with the aliases for the same reason:
+  // a child realm that resolved bare specifiers differently from its creator
+  // would make --allow-node-modules silently stop working inside importValue.
+  // It grants the child nothing the creating realm was not already given.
+  if AParentEngine.ModuleLoader.Resolver.NodeModulesEnabled then
+    FEngine.ModuleLoader.Resolver.AllowNodeModules(
+      AParentEngine.ModuleLoader.Resolver.NodeModulesCeiling);
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
   // keeps eval out of normal realms, so mirror the creating realm: when it
   // exposes `eval`, give the child its own realm-bound eval (which evaluates in
@@ -382,6 +391,16 @@ end;
 
 destructor TGocciaShadowRealmHost.Destroy;
 begin
+  // Install pinned FPrototype so ShadowRealm.prototype survives collection for
+  // the engine's whole life; the pin has to be released at teardown, or it
+  // outlives the engine as a dangling GC root. On a worker thread that runs
+  // several engines in sequence, the next collection after this engine is torn
+  // down would mark the freed prototype and walk into its torn-down realm
+  // graph (e.g. a module import binding left pointing at a released runtime
+  // module), faulting during MarkRoots. This mirrors FRealm.Free unpinning the
+  // intrinsic prototype graph at engine teardown.
+  if Assigned(FPrototype) and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.UnpinObject(FPrototype);
   FChildRealms.Free;
   FWrappedHosts.Free;
   inherited;

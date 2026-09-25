@@ -118,6 +118,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.NativeLimits,
   Goccia.RegExp.Runtime,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -2195,9 +2196,10 @@ end;
 // ES2026 §22.1.3.18 String.prototype.repeat(count)
 function TGocciaStringObjectValue.StringRepeat(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue: string;
+  RepeatedValue, StringValue: string;
   CountValue: TGocciaNumberLiteralValue;
   Count: Integer;
+  ReservedBytes: Int64;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2219,19 +2221,31 @@ begin
   // Step 4: If n < 0 or n = +∞, throw a RangeError exception
   if CountValue.IsInfinity or CountValue.IsNegativeInfinity or (CountValue.Value < 0) then
     ThrowRangeError(Format(SErrorInvalidRepeatCount, [CountValue.ToStringLiteral.Value]), SSuggestRepeatCountRange);
+  if CountValue.Value > High(Integer) then
+    ThrowRangeError(Format(SErrorInvalidRepeatCount,
+      [CountValue.ToStringLiteral.Value]), SSuggestRepeatCountRange);
 
   // Step 5: If n = 0, return ""
   // Step 6: Return S repeated n times
   Count := Trunc(CountValue.Value);
-  Result := TGocciaStringLiteralValue.Create(
-    RepeatUTF16String(StringValue, Count));
+  ReservedBytes := CheckedNativeByteSize(
+    UTF16CodeUnitLength(StringValue) * Int64(Count), SizeOf(Char));
+  ReserveNativeBytes(ReservedBytes);
+  try
+    CheckNativeWork;
+    RepeatedValue := RepeatUTF16String(StringValue, Count);
+  finally
+    ReleaseNativeBytes(ReservedBytes);
+  end;
+  Result := TGocciaStringLiteralValue.Create(RepeatedValue);
 end;
 
 // ES2026 §22.1.3.15 String.prototype.padStart(maxLength [, fillString])
 function TGocciaStringObjectValue.StringPadStart(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, PadString, Padding: string;
+  StringValue, PadString, Padding, PaddedValue: string;
   StringLength, TargetLength, PadNeeded, PadUnitLength: Integer;
+  ReservedBytes: Int64;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2267,18 +2281,27 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := RepeatUTF16String(PadString,
-    (PadNeeded + PadUnitLength - 1) div PadUnitLength);
-  Padding := UTF16Substring(Padding, 0, PadNeeded);
-
-  Result := TGocciaStringLiteralValue.Create(Padding + StringValue);
+  ReservedBytes := CheckedNativeByteSize(
+    Int64(TargetLength) + PadNeeded, SizeOf(Char));
+  ReserveNativeBytes(ReservedBytes);
+  try
+    CheckNativeWork;
+    Padding := RepeatUTF16String(PadString,
+      Integer((Int64(PadNeeded) + PadUnitLength - 1) div PadUnitLength));
+    Padding := UTF16Substring(Padding, 0, PadNeeded);
+    PaddedValue := Padding + StringValue;
+  finally
+    ReleaseNativeBytes(ReservedBytes);
+  end;
+  Result := TGocciaStringLiteralValue.Create(PaddedValue);
 end;
 
 // ES2026 §22.1.3.14 String.prototype.padEnd(maxLength [, fillString])
 function TGocciaStringObjectValue.StringPadEnd(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  StringValue, PadString, Padding: string;
+  StringValue, PadString, Padding, PaddedValue: string;
   StringLength, TargetLength, PadNeeded, PadUnitLength: Integer;
+  ReservedBytes: Int64;
 begin
   // Step 1: Let O be RequireObjectCoercible(this value)
   // Step 2: Let S be ToString(O)
@@ -2314,11 +2337,19 @@ begin
   // Repeat arithmetically instead of re-measuring the growing padding each
   // iteration (which was O(PadNeeded^2) in code-unit re-scans plus concat).
   PadUnitLength := UTF16CodeUnitLength(PadString);
-  Padding := RepeatUTF16String(PadString,
-    (PadNeeded + PadUnitLength - 1) div PadUnitLength);
-  Padding := UTF16Substring(Padding, 0, PadNeeded);
-
-  Result := TGocciaStringLiteralValue.Create(StringValue + Padding);
+  ReservedBytes := CheckedNativeByteSize(
+    Int64(TargetLength) + PadNeeded, SizeOf(Char));
+  ReserveNativeBytes(ReservedBytes);
+  try
+    CheckNativeWork;
+    Padding := RepeatUTF16String(PadString,
+      Integer((Int64(PadNeeded) + PadUnitLength - 1) div PadUnitLength));
+    Padding := UTF16Substring(Padding, 0, PadNeeded);
+    PaddedValue := StringValue + Padding;
+  finally
+    ReleaseNativeBytes(ReservedBytes);
+  end;
+  Result := TGocciaStringLiteralValue.Create(PaddedValue);
 end;
 
 // ES2026 §22.1.3.4 String.prototype.concat(...args)

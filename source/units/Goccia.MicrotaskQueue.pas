@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.AsyncContext,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
 
@@ -27,6 +28,10 @@ type
     ResultPromise: TGocciaValue;
     Value: TGocciaValue;
     ReactionType: TPromiseReactionType;
+    { The async context this job runs under. Never set by the code that builds
+      the record — Enqueue always overwrites it — so no enqueue site can leave
+      it holding whatever the stack frame happened to contain. }
+    Context: TGocciaAsyncContextSnapshot;
   end;
 
   TGocciaMicrotaskQueue = class
@@ -49,7 +54,13 @@ type
     constructor Create;
     destructor Destroy; override;
 
+    { Enqueue captures the async context in effect right now. Use
+      EnqueueWithContext for a job whose context was captured earlier — a
+      promise reaction registered on a promise that was still pending runs
+      under the context of its registration, not of its settlement. }
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
+    procedure EnqueueWithContext(const AMicrotask: TGocciaMicrotask;
+      const AContext: TGocciaAsyncContextSnapshot);
     procedure EnqueueJob(const AJob: TGocciaMicrotaskJob);
     procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask);
     function DrainOneJob: Boolean;
@@ -66,9 +77,11 @@ uses
   Goccia.Builtins.Atomics,
   Goccia.CapabilityAudit,
   Goccia.Constants.ErrorNames,
+  Goccia.EngineFault,
   Goccia.Error,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -183,8 +196,17 @@ end;
 procedure RejectPromiseWithException(const APromise: TGocciaPromiseValue;
   const AException: Exception);
 begin
+  { Precondition, shared with the sibling reject helpers in Goccia.Values.Await
+    and Goccia.Interpreter: invoke this only from inside the `on E: Exception`
+    handler that caught AException. With no promise to reject there is nothing
+    to absorb the exception into, so it keeps unwinding to the host. `raise
+    AException` re-raised the object by name, which starts a second propagation
+    of an exception the enclosing handler still owns and frees on exit (the
+    dangling re-raise behind the async-path access violations); a bare `raise`
+    will not compile outside a lexical handler, so AcquireExceptionObject takes
+    a reference to the in-flight exception and re-raises that same object. }
   if not Assigned(APromise) then
-    raise AException;
+    raise Exception(AcquireExceptionObject);
 
   if AException is EGocciaBytecodeThrow then
     APromise.Reject(EGocciaBytecodeThrow(AException).ThrownValue)
@@ -238,10 +260,16 @@ begin
           raise;
         on E: TGocciaInstructionLimitError do
           raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
         on E: EGocciaCapabilityAuditDeliveryError do
           raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           ResolvingFunctions.RejectException(E);
+        end;
       end;
     finally
       if Assigned(GC) then
@@ -294,8 +322,19 @@ end;
 
 procedure TGocciaMicrotaskQueue.Enqueue(const AMicrotask: TGocciaMicrotask);
 begin
-  AddQueuedRoots(AMicrotask);
-  FQueue.Add(AMicrotask);
+  EnqueueWithContext(AMicrotask, CurrentAsyncContext);
+end;
+
+procedure TGocciaMicrotaskQueue.EnqueueWithContext(
+  const AMicrotask: TGocciaMicrotask;
+  const AContext: TGocciaAsyncContextSnapshot);
+var
+  Task: TGocciaMicrotask;
+begin
+  Task := AMicrotask;
+  Task.Context := AContext;
+  AddQueuedRoots(Task);
+  FQueue.Add(Task);
 end;
 
 procedure TGocciaMicrotaskQueue.EnqueueJob(const AJob: TGocciaMicrotaskJob);
@@ -340,9 +379,13 @@ end;
 
 procedure TGocciaMicrotaskQueue.EnqueueFinalizationCleanup(
   const AMicrotask: TGocciaMicrotask);
+var
+  Task: TGocciaMicrotask;
 begin
-  AddQueuedRoots(AMicrotask);
-  FFinalizationQueue.Add(AMicrotask);
+  Task := AMicrotask;
+  Task.Context := CurrentAsyncContext;
+  AddQueuedRoots(Task);
+  FFinalizationQueue.Add(Task);
 end;
 
 procedure TGocciaMicrotaskQueue.AddQueuedRoots(
@@ -359,6 +402,8 @@ begin
     GC.AddQueuedRoot(AMicrotask.Value);
   if Assigned(AMicrotask.ResultPromise) then
     GC.AddQueuedRoot(AMicrotask.ResultPromise);
+  if Assigned(AMicrotask.Context) then
+    GC.AddQueuedRoot(AMicrotask.Context);
 end;
 
 procedure TGocciaMicrotaskQueue.RemoveQueuedRoots(
@@ -376,6 +421,8 @@ begin
       GC.RemoveQueuedRoot(AMicrotask.Value);
     if Assigned(AMicrotask.ResultPromise) then
       GC.RemoveQueuedRoot(AMicrotask.ResultPromise);
+    if Assigned(AMicrotask.Context) then
+      GC.RemoveQueuedRoot(AMicrotask.Context);
   end;
   if Assigned(AMicrotask.Handler) and
      FJobs.TryGetValue(AMicrotask.Handler, Job) then
@@ -392,6 +439,7 @@ var
   Capability: TGocciaPromiseReactionCapability;
   HandlerResult: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
+  ContextToken: Integer;
   procedure ResolveResult(const AValue: TGocciaValue);
   begin
     if Assigned(Capability) then
@@ -420,6 +468,20 @@ var
       RejectResult(CreateErrorObject(ERROR_NAME, AException.Message));
   end;
 begin
+  { Every job runs under the async context that was in effect where its
+    continuation was created, and leaves the enclosing context untouched. The
+    restore is what keeps a nested drain — an `await` inside a handler pumps
+    this queue re-entrantly — from leaking one continuation's bindings into
+    the frame that drained it.
+
+    EnterAsyncContext rather than a saved local: the displaced snapshot has to
+    stay reachable for the collector while the handler runs. It happens to be
+    reachable here anyway, through the queued root of the task that is still
+    in flight, but that is a property of the drain loop rather than of this
+    function — one reordering of RemoveQueuedRoots away from being false. }
+  ContextToken := EnterAsyncContext(ATask.Context);
+  try
+
   Promise := nil;
   Capability := nil;
   if ATask.ResultPromise is TGocciaPromiseValue then
@@ -462,6 +524,8 @@ begin
           raise;
         on E: TGocciaInstructionLimitError do
           raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
         on E: EGocciaCapabilityAuditDeliveryError do
           raise;
         on E: TGocciaTypeError do
@@ -480,10 +544,14 @@ begin
           else
             raise;
         on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
           if Assigned(Promise) or Assigned(Capability) then
             RejectExceptionResult(E)
           else
             raise;
+        end;
       end;
     finally
       CallArgs.Free;
@@ -499,6 +567,10 @@ begin
         prtThenableResolve:;
       end;
     end;
+  end;
+
+  finally
+    LeaveAsyncContext(ContextToken);
   end;
 end;
 

@@ -12,16 +12,25 @@ type
   TGocciaModuleContent = class
   private
     FByteLength: Integer;
+    FCanonicalIdentity: string;
+    FIdentityRequired: Boolean;
     FLastModified: TDateTime;
     FSourceLines: TStringList;
     FText: string;
     function GetByteLength: Integer;
     function GetText: string;
   public
-    constructor Create(const AText: string; const ALastModified: TDateTime);
+    constructor Create(const AText: string; const ALastModified: TDateTime;
+      const ACanonicalIdentity: string = '';
+      const AIdentityRequired: Boolean = False);
     destructor Destroy; override;
 
     property ByteLength: Integer read GetByteLength;
+    { Stable file-object identity captured from the same open handle used to
+      read Text. Empty with IdentityRequired=True means identity acquisition
+      failed and diagnostics must not retain the source under a path key. }
+    property CanonicalIdentity: string read FCanonicalIdentity;
+    property IdentityRequired: Boolean read FIdentityRequired;
     property LastModified: TDateTime read FLastModified;
     property SourceLines: TStringList read FSourceLines;
     property Text: string read GetText;
@@ -61,9 +70,17 @@ type
 implementation
 
 uses
+{$IFDEF UNIX}
+  BaseUnix,
+{$ENDIF}
+{$IFDEF WINDOWS}
+  Windows,
+{$ENDIF}
+
   TextEncoding,
   TextSemantics,
 
+  Goccia.Modules.Errors,
   Goccia.TextFiles;
 
 function TryGetFileLastModified(const APath: string;
@@ -82,10 +99,13 @@ end;
 { TGocciaModuleContent }
 
 constructor TGocciaModuleContent.Create(const AText: string;
-  const ALastModified: TDateTime);
+  const ALastModified: TDateTime; const ACanonicalIdentity: string;
+  const AIdentityRequired: Boolean);
 begin
   inherited Create;
   FByteLength := Length(EncodeUTF8WithReplacement(AText));
+  FCanonicalIdentity := ACanonicalIdentity;
+  FIdentityRequired := AIdentityRequired;
   FLastModified := ALastModified;
   FText := AText;
   FSourceLines := CreateFileTextLines(FText);
@@ -133,8 +153,16 @@ end;
 function TGocciaUnavailableModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 begin
-  raise EStreamError.Create(
-    'No module content provider configured for: ' + APath);
+  { An embedder that runs untrusted source without installing a provider must
+    not get an RTL exception through its engine boundary, so the refusal is
+    reported to source as a plain Error carrying a stable code. LoadContentBytes
+    inherits this: the base implementation calls LoadContent first.
+
+    APath is deliberately dropped: it is the resolved address, which the default
+    resolver expands against the host filesystem, and this refusal is reported
+    to potentially untrusted source. See Goccia.Modules.Errors. }
+  Result := nil;
+  ThrowModuleLoadingUnsupported;
 end;
 
 function TGocciaUnavailableModuleContentProvider.TryGetLastModified(
@@ -155,13 +183,50 @@ end;
 function TGocciaFileSystemModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
 var
+  Bytes: TBytes;
+  CanonicalIdentity: string;
+  ErrorOffset: Integer;
+{$IFDEF UNIX}
+  Information: Stat;
+{$ENDIF}
+{$IFDEF WINDOWS}
+  Information: BY_HANDLE_FILE_INFORMATION;
+{$ENDIF}
   LastModified: TDateTime;
   SourceText: string;
+  Stream: TFileStream;
 begin
-  SourceText := ReadUTF8FileText(APath);
+  CanonicalIdentity := '';
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+{$IFDEF UNIX}
+    if fpFStat(Stream.Handle, Information) = 0 then
+      CanonicalIdentity := '#id:' + IntToStr(Int64(Information.st_dev)) + ':' +
+        IntToStr(Int64(Information.st_ino));
+{$ENDIF}
+{$IFDEF WINDOWS}
+    if GetFileInformationByHandle(Windows.THandle(Stream.Handle),
+       Information) then
+      CanonicalIdentity := '#id:' +
+        IntToStr(Int64(Information.dwVolumeSerialNumber)) + ':' +
+        IntToStr(Int64(Information.nFileIndexHigh)) + ':' +
+        IntToStr(Int64(Information.nFileIndexLow));
+{$ENDIF}
+    SetLength(Bytes, Stream.Size);
+    if Length(Bytes) > 0 then
+      Stream.ReadBuffer(Bytes[0], Length(Bytes));
+  finally
+    Stream.Free;
+  end;
+  if not TryDecodeUTF8(Bytes, SourceText, ErrorOffset) then
+    { Report only the byte offset: this message reaches guest code through
+      TGocciaRuntimeError, and the resolved host path must not be disclosed
+      (ADR 0108). }
+    raise EConvertError.CreateFmt('Invalid UTF-8 at byte %d', [ErrorOffset]);
   if not TryGetFileLastModified(APath, LastModified) then
     LastModified := 0;
-  Result := TGocciaModuleContent.Create(SourceText, LastModified);
+  Result := TGocciaModuleContent.Create(SourceText, LastModified,
+    CanonicalIdentity, True);
 end;
 
 function TGocciaFileSystemModuleContentProvider.LoadContentBytes(

@@ -28,6 +28,7 @@ type
     procedure TestConfigureModuleResolverPreservesUTF8ImportMap;
     procedure TestConfigureModuleResolverDiscoversProjectConfig;
     procedure TestConfigureModuleResolverAppliesInlineAliasAfterImportMap;
+    procedure TestConfigureModuleResolverResolvesInlineAliasFromExplicitBaseDirectory;
     procedure TestConfigureModuleResolverPrefersExplicitImportMap;
   protected
     procedure BeforeAll; override;
@@ -46,6 +47,8 @@ begin
     TestConfigureModuleResolverDiscoversProjectConfig);
   Test('ConfigureModuleResolver applies inline aliases after the import map',
     TestConfigureModuleResolverAppliesInlineAliasAfterImportMap);
+  Test('ConfigureModuleResolver resolves inline aliases from their explicit base directory',
+    TestConfigureModuleResolverResolvesInlineAliasFromExplicitBaseDirectory);
   Test('ConfigureModuleResolver prefers an explicit import map over discovered goccia.json',
     TestConfigureModuleResolverPrefersExplicitImportMap);
 end;
@@ -264,6 +267,36 @@ begin
 
   Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
     ProjectDirectory) + 'config' + PathDelim + 'override.js');
+end;
+
+procedure TModuleConfigurationTests.TestConfigureModuleResolverResolvesInlineAliasFromExplicitBaseDirectory;
+var
+  EntryPath, ProjectDirectory, ResolvedPath: string;
+  InlineAliases: TStringList;
+  Resolver: TGocciaModuleResolver;
+begin
+  ProjectDirectory := CreateTempDirectory;
+  EntryPath := IncludeTrailingPathDelimiter(ProjectDirectory) + 'api-tests' +
+    PathDelim + 'alias.test.js';
+
+  WriteTextFile(EntryPath, 'import { value } from "@/value";');
+  WriteTextFile(IncludeTrailingPathDelimiter(ProjectDirectory) + 'src' +
+    PathDelim + 'value.js', 'export const value = "project-root";');
+
+  InlineAliases := TStringList.Create;
+  Resolver := TGocciaModuleResolver.Create(ExtractFilePath(EntryPath));
+  try
+    InlineAliases.Add('@/=./src/');
+    ConfigureModuleResolver(Resolver, EntryPath, '', InlineAliases,
+      ProjectDirectory);
+    ResolvedPath := Resolver.Resolve('@/value', EntryPath);
+  finally
+    Resolver.Free;
+    InlineAliases.Free;
+  end;
+
+  Expect<string>(ResolvedPath).ToBe(IncludeTrailingPathDelimiter(
+    ProjectDirectory) + 'src' + PathDelim + 'value.js');
 end;
 
 procedure TModuleConfigurationTests.TestConfigureModuleResolverPrefersExplicitImportMap;

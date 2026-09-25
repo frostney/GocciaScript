@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1000 -->
+<!-- doc-length-limit: 1010 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, and `goccia:semver`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ For files, load `app.js` into the `Source` list, pass the real filename to `TGoc
 
 ### Class Methods (One-Shot Execution)
 
-These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, or `goccia:semver`.
+These helpers create, execute, and clean up in a single call. The `TGocciaEngine` methods create a core-language-only engine. The `TGocciaRuntime` methods attach the runtime layer for file loading, but they do not apply a runtime profile; install runtime extensions explicitly when scripts need runtime globals such as `console`, `fetch`, and `URL`, or import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, or `node:async_hooks`.
 
 | Method | Description |
 |--------|-------------|
@@ -47,7 +47,7 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided. File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
 
 `TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place.
 
@@ -174,7 +174,7 @@ The engine uses a pluggable module resolver (`TGocciaModuleResolver`) that suppo
 
 ### Extension-Free Imports
 
-Import paths can omit file extensions. The resolver tries extensions in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.json`, `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.txt`, `.md`:
+Import paths can omit file extensions. The engine's own list comes first, in order: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`, `.json`, `.txt`, `.md`. Installed runtime extensions append the structured-data extensions they own, so a host that applies the loader runtime profile also resolves `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv`:
 
 ```javascript
 // These all resolve through the shared module extension list:
@@ -199,7 +199,7 @@ Engine.AddAlias('@/', 'src/');                       // prefix match
 Engine.AddAlias('@/components/', 'ui/lib/');         // more specific prefix
 ```
 
-The alias target is resolved relative to the entry file's directory.
+For an embedded engine, the alias target is resolved relative to the resolver's base directory, which defaults to the entry file's directory. In the shared CLI hosts, relative `--alias` targets use the invocation directory, while aliases loaded from configuration use the active project configuration file's directory, including aliases inherited through `extends`.
 
 **Exact vs prefix matching:** A key without a trailing `/` is an exact match only. A key with a trailing `/` is a prefix match and appends the unmatched suffix to the target. This means `lodash` matches `import "lodash"` but not `import "lodash/fp"`, while `@/` matches `@/utils/math`.
 
@@ -215,9 +215,18 @@ import { formatDate } from "@/utils/dates";
 
 **Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
+### Bare Specifiers and node_modules
+
+A bare specifier is refused for an embedded engine too; grant it explicitly, optionally capping the ancestor walk. See [Module Resolution](module-resolution.md) for the supported `exports` subset, the `module`-field deviation from Node, and the CommonJS refusal.
+
+```pascal
+Engine.AllowNodeModules;              // walk up from each importing file
+Engine.AllowNodeModules('/srv/app');  // ...but never above /srv/app
+```
+
 ### Custom Resolver
 
-For advanced resolution logic (e.g., `node_modules` lookup, URL imports, or in-memory modules), subclass `TGocciaModuleResolver` and override the `Resolve` method:
+For resolution logic outside that surface (URL imports, in-memory modules, or a package layout of your own), subclass `TGocciaModuleResolver` and override the `Resolve` method:
 
 ```pascal
 uses
@@ -350,7 +359,7 @@ begin
 end;
 ```
 
-`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached; core-language-only embedders that need imports should inject their own provider.
+`TGocciaEngine` also accepts an injected module loader via its constructor. When no loader is supplied, it creates a default `TGocciaModuleLoader` with the standard resolver but no filesystem content provider. `TGocciaRuntime` installs the filesystem provider when attached unless `AttachRuntime(Engine, False)` is used. Untrusted-source hosts should pass `False` and supply virtual modules, host modules, or a bounded custom content provider explicitly. Core-language-only embedders that need imports should inject their own provider. With no provider installed, a module load that gets as far as retrieval is refused with a script-catchable `Error` carrying `code === "ERR_MODULE_LOADING_UNSUPPORTED"` rather than a Pascal exception. That covers retrieval only: resolution runs first, so a specifier the resolver rejects — with the default resolver, one whose file is absent from the host filesystem — fails before the provider is consulted, carries no `code`, and raises `TGocciaRuntimeError` across the engine boundary for a static import. Keep guarding the boundary; see [Module loading errors](errors.md#module-loading-errors).
 
 ### Virtual Modules
 
@@ -456,7 +465,7 @@ The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, Benchm
 
 ## Built-in Registration
 
-Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
+Core language built-ins (Math, Object, Array, JSON, Promise, Temporal, typed arrays, etc.) are registered by `TGocciaEngine`. Runtime globals that are not part of the language core (Console, TextEncoder/TextDecoder, URL, fetch, performance, etc.) and import-only runtime modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`, `goccia:test`, `node:async_hooks`) are provided by concrete runtime units. Hosts can call `ApplyLoaderRuntimeProfile` for the ordinary CLI runtime surface or install only the extension classes they need for a smaller runtime surface. `ApplyLoaderRuntimeProfile(ARuntime, False)` suppresses the `goccia:test` registration for a host that installs `TGocciaTestingLibraryRuntimeExtension` itself — the testing globals are opt-in through that extension and are never part of the profile. The `goccia:` modules expose named exports only; callers can use namespace imports such as `import * as CSV from "goccia:csv"` when they want namespace-style access.
 
 When you already have an engine, pass it to the runtime constructor:
 
@@ -519,7 +528,7 @@ Runtime globals and runtime modules can be reduced by installing only concrete e
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
 | `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
-| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` file names infer `stModule` |
+| `SourceType` | `TGocciaSourceType` | `stScript` | Load entry as script source (default) or module source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations (works in both interpreter and bytecode); setter propagates to the active executor and interpreter scope |
 
 ```pascal
@@ -545,7 +554,7 @@ finally
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` entry files are loaded as module source.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source.
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript`, the engine reuses `Interpreter.GlobalScope` across every call to `Execute`, which is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, keep `SourceType` at `stScript` (the default) or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.Interpreter.GlobalScope.DefineLexicalBinding(...)`).
 
@@ -819,6 +828,7 @@ end;
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
 | `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError` |
+| `EObjectCheck`, `EAccessViolation`, `EInvalidPointer`, `EDivByZero`, `EPrivilege`, `EExternalException` | Engine-integrity faults. The engine re-raises these past every guest `catch`, so they escape `Engine.Execute` even while guest code is running: they mean a pointer, a mapping, or the heap is no longer trustworthy. Report and exit — do not resume the process, and do not treat one as a script failure. `EOutOfMemory` is deliberately *not* one of them and stays catchable. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) |
 
 ## Execution Limits
 
@@ -858,7 +868,7 @@ finally
 end;
 ```
 
-Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) skips all counter increments and limit comparisons — only the guard read of `GMaxInstructions` remains on the hot path.
+Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the instrumented loop, which increments and checks the counter on every dispatched instruction.
 
 ### Call Stack Depth Limit
 
@@ -942,7 +952,7 @@ The repository includes five embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
+| `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with the test-runner runtime profile |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with the benchmark-runner runtime profile from files or stdin |

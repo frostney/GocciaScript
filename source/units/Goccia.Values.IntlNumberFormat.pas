@@ -2029,9 +2029,15 @@ function TGocciaIntlNumberFormatValue.IntlNumberFormatResolvedOptions(const AArg
 var
   NF: TGocciaIntlNumberFormatValue;
   Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
 begin
   NF := UnwrapNumberFormat(AThisValue, 'Intl.NumberFormat.prototype.resolvedOptions');
+  { The option strings below are GC safe points; root the object while it
+    fills. }
+  InitializeTempRoot(ObjRoot);
+  try
   Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  AddTempRootIfNeeded(ObjRoot, Obj);
   Obj.CreateDataPropertyOrThrow('locale', TGocciaStringLiteralValue.Create(NF.FLocale));
   Obj.CreateDataPropertyOrThrow('numberingSystem',
     TGocciaStringLiteralValue.Create(NF.FNumberingSystem));
@@ -2085,6 +2091,9 @@ begin
   Obj.CreateDataPropertyOrThrow('trailingZeroDisplay',
     TGocciaStringLiteralValue.Create(NF.FTrailingZeroDisplay));
   Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
 end;
 
 initialization

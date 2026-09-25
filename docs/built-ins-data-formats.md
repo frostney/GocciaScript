@@ -7,7 +7,7 @@
 - **JSON remains standard** — `JSON` is the ECMAScript global object and is always registered by the engine.
 - **Non-standard formats are modules** — JSON5, YAML, JSONL, CSV, TSV, and TOML runtime APIs are named-export-only `goccia:` modules, not auto-installed globals.
 - **Namespace imports preserve the old call shape** — Use `import * as CSV from "goccia:csv"` when you want `CSV.parse(...)`; there is no default export.
-- **File-backed imports are unchanged** — `.json5`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv` files keep their structured-data import behavior.
+- **File-backed imports are unchanged** — `.json5`, `.jsonc`, `.jsonl`, `.toml`, `.yaml`, `.yml`, `.csv`, and `.tsv` files keep their structured-data import behavior.
 - **Shared parser utilities** — Runtime modules and file-backed imports continue to share the same underlying parser utilities.
 
 ## Runtime module access
@@ -135,6 +135,8 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 **Replacer:** The optional replacer callback `(key, value)` is called for each cell during `TSV.stringify`, enabling value transformation before serialization.
 
 TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
+
+CSV and TSV share callback selection, reviver argument construction, replacer row conversion, and chunk result assembly in `Goccia.Builtins.DelimitedText`. The adapters retain their own options, parser calls, reviver contexts, and stringifiers. Shared conversion roots intermediate values across callbacks; each adapter keeps the converted array rooted until serialization finishes.
 
 ## TOML (`goccia:toml`, `Goccia.Builtins.TOML.pas`)
 

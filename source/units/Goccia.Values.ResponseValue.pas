@@ -86,6 +86,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.JSON,
   Goccia.Realm,
+  Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ErrorHelper,
@@ -350,7 +351,19 @@ begin
       P.Resolve(Parsed);
     except
       on E: Exception do
+      begin
+        { Two live paths reach this arm, and rejecting with a SyntaxError would
+          let `res.json().catch(...)` absorb either. The parser materializes
+          objects, arrays and strings for a body the guest controls the size
+          of, so a refused allocation and the use-after-free an unrooted
+          temporary produces both arrive here. And Resolve is inside the try:
+          ES2026 §27.2.1.3.2 step 9 reads `then` off the parsed value, which a
+          guest `Object.prototype.then` getter can answer with arbitrary code —
+          including a capability-guarded call whose audit sink fails. }
+        if IsUncatchableFault(E) then
+          raise;
         P.Reject(CreateErrorObject('SyntaxError', E.Message));
+      end;
     end;
   finally
     Parser.Free;

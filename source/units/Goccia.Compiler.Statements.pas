@@ -2165,6 +2165,22 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+function EmitJumpIfConditionFalse(const ACtx: TGocciaCompilationContext;
+  const ACondition: TGocciaExpression): Integer;
+var
+  CondReg: UInt16;
+begin
+  if TryEmitJumpIfNotLessThan(ACtx, ACondition, Result) then
+    Exit;
+  CondReg := ACtx.Scope.AllocateRegister;
+  try
+    ACtx.CompileExpression(ACondition, CondReg);
+    Result := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
@@ -2210,10 +2226,13 @@ begin
   try
     HasPatternBindings := CompileConditionWithPatternBindings(ACtx,
       AStmt.Condition, CondReg, PatternSubjectReg, PatternFailJumps);
-    if not HasPatternBindings then
+    if HasPatternBindings then
+      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg)
+    else if not TryEmitJumpIfNotLessThan(ACtx, AStmt.Condition, ElseJump) then
+    begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
-
-    ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+      ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
+    end;
     ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
 
     if HasPatternBindings then
@@ -3175,6 +3194,162 @@ begin
     ExpressionCreatesClosureBoundary(AExpr);
 end;
 
+function IsUnitNumberLiteral(const AExpr: TGocciaExpression): Boolean;
+var
+  NumberValue: Double;
+begin
+  Result := False;
+  if not Assigned(AExpr) or not (AExpr is TGocciaLiteralExpression) or
+     not (TGocciaLiteralExpression(AExpr).Value is TGocciaNumberLiteralValue) then
+    Exit;
+  NumberValue := TGocciaNumberLiteralValue(
+    TGocciaLiteralExpression(AExpr).Value).Value;
+  Result := NumberValue = 1;
+end;
+
+function CountedForLimitHasNumberProof(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): Boolean;
+var
+  LocalIndex: Integer;
+begin
+  if IsKnownNumeric(ExpressionType(AScope, AExpr)) then
+    Exit(True);
+  if AExpr is TGocciaIdentifierExpression then
+  begin
+    LocalIndex := AScope.ResolveLocal(
+      TGocciaIdentifierExpression(AExpr).Name);
+    if LocalIndex >= 0 then
+      Exit(AScope.GetLocal(LocalIndex).IsCallProvenNumeric);
+  end;
+  Result := False;
+end;
+
+function TryMatchCountedForStep(const AUpdate: TGocciaExpression;
+  const ALoopName: string; const AIsAscending: Boolean;
+  out AStepOpcode: TGocciaOpCode): Boolean;
+var
+  IncExpr: TGocciaIncrementExpression;
+  Assign: TGocciaAssignmentExpression;
+  Compound: TGocciaCompoundAssignmentExpression;
+  Binary: TGocciaBinaryExpression;
+  ExpectedInc: TGocciaTokenType;
+  ExpectedBinary: TGocciaTokenType;
+  ExpectedCompound: TGocciaTokenType;
+begin
+  Result := False;
+  if AIsAscending then
+  begin
+    ExpectedInc := gttIncrement;
+    ExpectedBinary := gttPlus;
+    ExpectedCompound := gttPlusAssign;
+    AStepOpcode := OP_ADD_INT;
+  end
+  else
+  begin
+    ExpectedInc := gttDecrement;
+    ExpectedBinary := gttMinus;
+    ExpectedCompound := gttMinusAssign;
+    AStepOpcode := OP_SUB_INT;
+  end;
+
+  if AUpdate is TGocciaIncrementExpression then
+  begin
+    IncExpr := TGocciaIncrementExpression(AUpdate);
+    if not (IncExpr.Operand is TGocciaIdentifierExpression) then
+      Exit;
+    if TGocciaIdentifierExpression(IncExpr.Operand).Name <> ALoopName then
+      Exit;
+    if IncExpr.Operator <> ExpectedInc then
+      Exit;
+    Exit(True);
+  end;
+
+  if AUpdate is TGocciaAssignmentExpression then
+  begin
+    Assign := TGocciaAssignmentExpression(AUpdate);
+    if Assign.Name <> ALoopName then
+      Exit;
+    if not (Assign.Value is TGocciaBinaryExpression) then
+      Exit;
+    Binary := TGocciaBinaryExpression(Assign.Value);
+    if Binary.Operator <> ExpectedBinary then
+      Exit;
+    if not (Binary.Left is TGocciaIdentifierExpression) then
+      Exit;
+    if TGocciaIdentifierExpression(Binary.Left).Name <> ALoopName then
+      Exit;
+    if not IsUnitNumberLiteral(Binary.Right) then
+      Exit;
+    Exit(True);
+  end;
+
+  if AUpdate is TGocciaCompoundAssignmentExpression then
+  begin
+    Compound := TGocciaCompoundAssignmentExpression(AUpdate);
+    if Compound.Name <> ALoopName then
+      Exit;
+    if Compound.Operator <> ExpectedCompound then
+      Exit;
+    if not IsUnitNumberLiteral(Compound.Value) then
+      Exit;
+    Exit(True);
+  end;
+end;
+
+function TryMatchCountedForLimit(const ACtx: TGocciaCompilationContext;
+  const ALimit: TGocciaExpression; const ABody: TGocciaASTNode;
+  const ALoopName: string; out AUseIntCompare: Boolean): Boolean;
+var
+  LimitIdent: TGocciaIdentifierExpression;
+  LocalIndex: Integer;
+  LimitLocal: TGocciaCompilerLocal;
+begin
+  Result := False;
+  AUseIntCompare := False;
+
+  if ALimit is TGocciaLiteralExpression then
+  begin
+    if not (TGocciaLiteralExpression(ALimit).Value is TGocciaNumberLiteralValue) then
+      Exit;
+    if Frac(TGocciaNumberLiteralValue(
+         TGocciaLiteralExpression(ALimit).Value).Value) <> 0 then
+      Exit;
+    AUseIntCompare := True;
+    Exit(True);
+  end;
+
+  if not (ALimit is TGocciaIdentifierExpression) then
+    Exit;
+  LimitIdent := TGocciaIdentifierExpression(ALimit);
+  if LimitIdent.Name = ALoopName then
+    Exit;
+  LocalIndex := ACtx.Scope.ResolveLocal(LimitIdent.Name);
+  if LocalIndex < 0 then
+    Exit;
+  LimitLocal := ACtx.Scope.GetLocal(LocalIndex);
+  // ES2026 §14.7.4.4 evaluates the test each iteration. Snapshotting LimitReg
+  // is valid only when the binding cannot change during the loop. Direct
+  // writes are rejected; mutable captured bindings and bodies that create
+  // closures (which can assign through the capture) fall back too. const
+  // bindings cannot be assigned, so they remain snapshot-safe even when the
+  // body creates closures that capture the loop index. Global-backed vars can
+  // still change through the global object from a callee the body analysis
+  // does not see.
+  if LimitLocal.IsGlobalBacked then
+    Exit;
+  if ForBodyAssignsIdentifier(ABody, LimitIdent.Name) then
+    Exit;
+  if not LimitLocal.IsConst then
+  begin
+    if LimitLocal.IsCaptured then
+      Exit;
+    if StatementNeedsPerIterationEnvironment(ABody) then
+      Exit;
+  end;
+  AUseIntCompare := CountedForLimitHasNumberProof(ACtx.Scope, ALimit);
+  Result := True;
+end;
+
 function TryCompileCountedFor(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement): Boolean;
 var
@@ -3186,8 +3361,6 @@ var
   StartInt: Integer;
   CondExpr: TGocciaBinaryExpression;
   CondLeftIdent: TGocciaIdentifierExpression;
-  IncExpr: TGocciaIncrementExpression;
-  IncOperandIdent: TGocciaIdentifierExpression;
   StartReg, LimitReg, OneReg, CmpReg: UInt16;
   Slot, OuterSlot: UInt16;
   LoopStart, ExitJump, I: Integer;
@@ -3195,7 +3368,9 @@ var
   ClosedCount: Integer;
   LoopControl: TLoopControlState;
   IsAscending: Boolean;
-  ExitOpcode, StepOpcode: TGocciaOpCode;
+  UseIntCompare: Boolean;
+  UseFusedLessThanExit: Boolean;
+  ExitOpcode, ExitJumpOp, StepOpcode: TGocciaOpCode;
 begin
   Result := False;
 
@@ -3243,45 +3418,46 @@ begin
   if CondLeftIdent.Name <> LoopName then
     Exit;
   // ES2026 §14.7.4.4 evaluates the test expression each iteration. The fast
-  // path snapshots LimitReg once before the loop, so anything that can change
-  // between iterations would diverge from the spec. Restrict to integer-valued
-  // numeric literals only — `ForBodyAssignsIdentifier` doesn't see writes
-  // through IIFEs/callbacks/property setters, so a bare-identifier RHS is
-  // unsafe; and the emitted compare uses OP_GTE_INT/OP_LTE_INT, so a
-  // non-integer literal like `i < 3.5` would round in surprising ways
-  // relative to the spec's IEEE 754 compare.
-  if not (CondExpr.Right is TGocciaLiteralExpression) then
-    Exit;
-  if not (TGocciaLiteralExpression(CondExpr.Right).Value is TGocciaNumberLiteralValue) then
-    Exit;
-  if Frac(TGocciaNumberLiteralValue(
-       TGocciaLiteralExpression(CondExpr.Right).Value).Value) <> 0 then
+  // path snapshots LimitReg once before the loop. Integer-valued numeric
+  // literals are immutable. Identifier limits are accepted only when the
+  // binding is snapshot-safe (see TryMatchCountedForLimit). Proven Number
+  // limits use OP_GTE_INT/OP_LTE_INT; untyped stable locals use generic
+  // OP_LT/OP_GT so mixed BigInt comparison keeps spec TypeError/compare
+  // behavior instead of RegisterToDouble. Ascending `<` fuses compare and
+  // exit jump as OP_JUMP_IF_NOT_LT with the same generic semantics.
+  if not TryMatchCountedForLimit(ACtx, CondExpr.Right, AStmt.Body, LoopName,
+       UseIntCompare) then
     Exit;
 
   case CondExpr.Operator of
-    gttLess: begin IsAscending := True; ExitOpcode := OP_GTE_INT; end;
-    gttGreater: begin IsAscending := False; ExitOpcode := OP_LTE_INT; end;
+    gttLess:
+      begin
+        IsAscending := True;
+        UseFusedLessThanExit := True;
+      end;
+    gttGreater:
+      begin
+        IsAscending := False;
+        UseFusedLessThanExit := False;
+        if UseIntCompare then
+        begin
+          ExitOpcode := OP_LTE_INT;
+          ExitJumpOp := OP_JUMP_IF_TRUE;
+        end
+        else
+        begin
+          ExitOpcode := OP_GT;
+          ExitJumpOp := OP_JUMP_IF_FALSE;
+        end;
+      end;
   else
     Exit;
   end;
 
-  if not Assigned(AStmt.Update) or
-     not (AStmt.Update is TGocciaIncrementExpression) then
+  if not Assigned(AStmt.Update) then
     Exit;
-  IncExpr := TGocciaIncrementExpression(AStmt.Update);
-  if not (IncExpr.Operand is TGocciaIdentifierExpression) then
+  if not TryMatchCountedForStep(AStmt.Update, LoopName, IsAscending, StepOpcode) then
     Exit;
-  IncOperandIdent := TGocciaIdentifierExpression(IncExpr.Operand);
-  if IncOperandIdent.Name <> LoopName then
-    Exit;
-  if IsAscending and (IncExpr.Operator <> gttIncrement) then
-    Exit;
-  if (not IsAscending) and (IncExpr.Operator <> gttDecrement) then
-    Exit;
-  if IsAscending then
-    StepOpcode := OP_ADD_INT
-  else
-    StepOpcode := OP_SUB_INT;
 
   if ForBodyAssignsIdentifier(AStmt.Body, LoopName) then
     Exit;
@@ -3300,7 +3476,8 @@ begin
 
   LimitReg := ACtx.Scope.AllocateRegister;
   OneReg := ACtx.Scope.AllocateRegister;
-  CmpReg := ACtx.Scope.AllocateRegister;
+  if not UseFusedLessThanExit then
+    CmpReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(CondExpr.Right, LimitReg);
   EmitInstruction(ACtx, EncodeAsBx(OP_LOAD_INT, OneReg, 1));
@@ -3309,8 +3486,13 @@ begin
   try
     LoopStart := CurrentCodePosition(ACtx);
 
-    EmitInstruction(ACtx, EncodeABC(ExitOpcode, CmpReg, StartReg, LimitReg));
-    ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CmpReg);
+    if UseFusedLessThanExit then
+      ExitJump := EmitJumpIfNotLessThan(ACtx, StartReg, LimitReg)
+    else
+    begin
+      EmitInstruction(ACtx, EncodeABC(ExitOpcode, CmpReg, StartReg, LimitReg));
+      ExitJump := EmitJumpInstruction(ACtx, ExitJumpOp, CmpReg);
+    end;
 
     OuterSlot := StartReg;
     ACtx.Scope.BeginScope;
@@ -3340,7 +3522,8 @@ begin
     EndLoopControl(LoopControl);
   end;
 
-  ACtx.Scope.FreeRegister; // CmpReg
+  if not UseFusedLessThanExit then
+    ACtx.Scope.FreeRegister; // CmpReg
   ACtx.Scope.FreeRegister; // OneReg
   ACtx.Scope.FreeRegister; // LimitReg
   // StartReg is popped by EndScope of the outer for-scope below.
@@ -3701,7 +3884,6 @@ end;
 procedure CompileForStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForStatement);
 var
-  CondReg: UInt16;
   LoopStart, ExitJump, I: Integer;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
@@ -3842,15 +4024,7 @@ begin
         end;
 
         if Assigned(AStmt.Condition) then
-        begin
-          CondReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Condition, CondReg);
-            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.CompileStatement(AStmt.Body);
 
@@ -3912,15 +4086,7 @@ begin
         ExitJump := -1;
 
         if Assigned(AStmt.Condition) then
-        begin
-          CondReg := ACtx.Scope.AllocateRegister;
-          try
-            ACtx.CompileExpression(AStmt.Condition, CondReg);
-            ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-          finally
-            ACtx.Scope.FreeRegister;
-          end;
-        end;
+          ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
         ACtx.Scope.BeginScope;
         SetLoopContinueScopeDepth(ACtx);
@@ -4008,7 +4174,6 @@ end;
 procedure CompileWhileStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaWhileStatement);
 var
-  CondReg: UInt16;
   LoopStart, ExitJump: Integer;
   LoopControl: TLoopControlState;
 begin
@@ -4016,13 +4181,7 @@ begin
   try
     SetLabeledContinueCleanupBase(AStmt);
     LoopStart := CurrentCodePosition(ACtx);
-    CondReg := ACtx.Scope.AllocateRegister;
-    try
-      ACtx.CompileExpression(AStmt.Condition, CondReg);
-      ExitJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
-    finally
-      ACtx.Scope.FreeRegister;
-    end;
+    ExitJump := EmitJumpIfConditionFalse(ACtx, AStmt.Condition);
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -4238,6 +4397,7 @@ var
   BindingName: string;
   IsNamedDefaultFunction: Boolean;
   IsNamedDefaultClass: Boolean;
+  UsePreinitializedBinding: Boolean;
 begin
   BindingName := AStmt.LocalName;
   IsNamedDefaultFunction := (BindingName <> GOCCIA_DEFAULT_EXPORT_BINDING) and
@@ -4247,6 +4407,12 @@ begin
     (AStmt.Expression is TGocciaClassExpression) and
     (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name =
     BindingName);
+  // Only declaration-form default functions are instantiated during linking;
+  // assignment expressions initialize *default* during module evaluation.
+  UsePreinitializedBinding := AStmt.IsDirectDeclaration and
+    ACtx.PreinitializedTopLevelFunctions and
+    (ACtx.Scope.Depth = 0) and
+    (AStmt.Expression is TGocciaFunctionExpression);
   LocalIdx := ACtx.Scope.ResolveLocal(BindingName);
   if (LocalIdx >= 0) and
      (ACtx.Scope.GetLocal(LocalIdx).Depth = ACtx.Scope.Depth) then
@@ -4263,7 +4429,12 @@ begin
   end;
 
   FuncCount := ACtx.Template.FunctionCount;
-  if (AStmt.Expression is TGocciaClassExpression) and
+  if UsePreinitializedBinding then
+  begin
+    NameIdx := ACtx.Template.AddConstantString(BindingName);
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, Slot, NameIdx));
+  end
+  else if (AStmt.Expression is TGocciaClassExpression) and
      (TGocciaClassExpression(AStmt.Expression).ClassDefinition.Name = '') then
     CompileClassExpression(ACtx,
       TGocciaClassExpression(AStmt.Expression).ClassDefinition, Slot,
@@ -4294,7 +4465,8 @@ begin
   if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
     EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
-  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) then
+  if ACtx.GlobalBackedTopLevel and (ACtx.Scope.Depth = 0) and
+     not UsePreinitializedBinding then
     EmitGlobalDefine(ACtx, Slot, BindingName,
       not (IsNamedDefaultFunction or IsNamedDefaultClass));
 
@@ -4906,7 +5078,8 @@ begin
   DisplayName := DisplayClassElementName(AMethodName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create(DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AMethod.Line), UInt16(AMethod.Column));
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;
@@ -5028,7 +5201,8 @@ begin
   DisplayName := DisplayClassElementName(AName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('get ' + DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   ChildTemplate.SourceText := AGetter.SourceText;
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
@@ -5101,7 +5275,8 @@ begin
   DisplayName := DisplayClassElementName(AName);
 
   ChildTemplate := TGocciaFunctionTemplate.Create('set ' + DisplayName);
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   ChildTemplate.SourceText := ASetter.SourceText;
   SetterParams := ASetter.Parameters;
   if Length(SetterParams) = 0 then
@@ -5196,7 +5371,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<get [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AGetter.Line), UInt16(AGetter.Column));
   // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
   // the arguments object when the body never references it, matching the other
   // (non-computed) accessor and method body builders.
@@ -5270,7 +5446,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<set [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(ASetter.Line), UInt16(ASetter.Column));
   // Propagate the accessor source so DeclareArgumentsObjectLocal below can elide
   // the arguments object when the body never references it, matching the other
   // (non-computed) accessor and method body builders.
@@ -5368,7 +5545,8 @@ begin
   OldScope := ACtx.Scope;
 
   ChildTemplate := TGocciaFunctionTemplate.Create('<method [computed]>');
-  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath,
+    UInt32(AMethod.Line), UInt16(AMethod.Column));
   ChildTemplate.IsAsync := AMethod.IsAsync;
   ChildTemplate.IsGenerator := AMethod.IsGenerator;
   ChildTemplate.HasOwnPrototype := AMethod.IsGenerator;
@@ -5908,20 +6086,36 @@ var
   ClosedCount, I: Integer;
   ThisReg: UInt16;
   OldRejectArgumentsInDirectEval: Boolean;
+  StrictCtx: TGocciaCompilationContext;
 begin
   OldRejectArgumentsInDirectEval := ACtx.Template.RejectArgumentsInDirectEval;
   ACtx.Template.RejectArgumentsInDirectEval := True;
   ACtx.Scope.BeginScope;
+  { ES2026 §15.7.1: a ClassBody is strict-mode code whatever the enclosing
+    script's mode is. An instance field initializer gets that for free — it is
+    compiled into the `<fields>` child template, whose StrictCode defaults to
+    True — but a static one is emitted straight into the enclosing template, so
+    under the non-strict compatibility profile it inherited the script's sloppy
+    flags and an assignment to an undeclared name compiled to a global create
+    instead of a throw. Both the compiler-wide flag and the context copy are
+    cleared, the same pair the computed-element-key path above clears. }
+  StrictCtx := ACtx;
+  StrictCtx.NonStrictMode := False;
+  StrictCtx.CompatibilityNonStrictMode := False;
+  if Assigned(ACtx.SetNonStrictMode) then
+    ACtx.SetNonStrictMode(False);
   try
     ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
-    CompileFieldValueWithInferredName(ACtx, AExpression, ADest,
+    CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
       AInferredName);
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx,
         EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   finally
+    if Assigned(ACtx.SetNonStrictMode) then
+      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
     ACtx.Template.RejectArgumentsInDirectEval :=
       OldRejectArgumentsInDirectEval;
   end;

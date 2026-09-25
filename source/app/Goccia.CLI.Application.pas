@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.CapabilityAudit,
   Goccia.CLI.Options,
+  Goccia.CLI.Stdin,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -56,6 +57,13 @@ type
   protected
     procedure Configure; virtual; abstract;
     function UsageLine: string; virtual; abstract;
+    { How this command relates to standard input.  suNone (the default)
+      opts out of the no-argument rule entirely — for commands like
+      GocciaREPL and GocciaSandboxRunner that never source a program
+      from stdin.  Stdin-defaulting commands override this so they get
+      the "Input:" help section and the clig.dev no-argument behaviour
+      from the shared base instead of restating it per binary. }
+    function StdinUsage: TGocciaStdinUsage; virtual;
     procedure Execute; override;
     procedure ExecuteWithPaths(const APaths: TStringList); virtual; abstract;
     procedure Validate; virtual;
@@ -71,6 +79,12 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure ConfigureCapabilityAudit(const AEngine: TGocciaEngine);
+    { Grants the node_modules capability when --allow-node-modules was given on
+      the command line, in the per-file config, or in the root config, in that
+      precedence order. Without it the resolver stays sealed against bare
+      specifiers. }
+    procedure ApplyNodeModulesResolution(const AEngine: TGocciaEngine;
+      const AFileConfig: TConfigEntryArray; const AFileConfigPath: string);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -131,6 +145,16 @@ function ResolveSourceTypeOption(
 procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray);
+{ The single place engine-affecting options reach an engine.  CreateEngine
+  calls it for every binary that builds its engine through the base class;
+  binaries that must construct the engine themselves — GocciaSandboxRunner
+  needs its own module resolver — call it directly rather than restating
+  the option set, which is how the sandbox runner previously lost
+  --max-memory and the fetch policy.  Pass an empty AFileConfig when there
+  is no host file to discover a per-file config for. }
+procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
+  const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray; const AFileName: string);
 
 implementation
 
@@ -139,11 +163,14 @@ uses
   Math,
 
   CLI.Parser,
+  HTTPTypes,
+  ProcessorDetection,
   TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.FetchManager,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -325,40 +352,6 @@ begin
   RegisterConfigParser(EXT_JSON5, @ParseJSON5Config);
   RegisterConfigParser(EXT_TOML, @ParseTOMLConfig);
   GConfigParsersRegistered := True;
-end;
-
-{ FPC 3.2.2 GetCPUCount uses wrong _SC_NPROCESSORS_ONLN constants on
-  macOS (expects Linux 84, actual macOS value is 58) and may also fail
-  on some Linux configurations.  Call sysconf / sysctlbyname directly
-  with the correct per-OS constant so we always detect all cores. }
-
-{$IFDEF UNIX}
-function libc_sysconf(Name: Integer): Int64; cdecl; external 'c' name 'sysconf';
-{$ENDIF}
-
-function GetProcessorCount: Integer;
-{$IFDEF UNIX}
-const
-  {$IFDEF DARWIN}
-  SC_NPROCESSORS_ONLN = 58;
-  {$ELSE}
-  SC_NPROCESSORS_ONLN = 84;   { Linux }
-  {$ENDIF}
-var
-  N: Int64;
-{$ENDIF}
-begin
-  {$IFDEF UNIX}
-  N := libc_sysconf(SC_NPROCESSORS_ONLN);
-  if N > 0 then
-    Result := Integer(N)
-  else
-    Result := 1;
-  {$ELSE}
-  Result := TThread.ProcessorCount;
-  if Result < 1 then
-    Result := 1;
-  {$ENDIF}
 end;
 
 { TGocciaCLIApplication }
@@ -619,6 +612,8 @@ procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
 var
   ValueStr: string;
   MemoryLimit: Int64;
+  ResponseLimit: Integer;
+  FetchPolicy: THTTPRequestPolicy;
   GC: TGarbageCollector;
   FileHosts: TStringList;
   HasFileHosts: Boolean;
@@ -703,11 +698,86 @@ begin
     else if AEngineOptions.AllowedHosts.Present then
       AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values);
   end;
+
+  { fetch-deny-private-ranges / fetch-max-response-bytes: CLI flag > per-file
+    config > root config > defaults. Always assigned, for the same reason
+    max-memory is: the fetch manager is process-global, so leaving a previous
+    file's policy in place would silently apply it to the next one. }
+  FetchPolicy := DefaultHTTPPolicy;
+  FetchPolicy.DenyPrivateRanges := ResolveFlagOption(
+    AEngineOptions.FetchDenyPrivateRanges, AFileConfig);
+
+  if AEngineOptions.FetchMaxResponseBytes.FromCommandLine then
+    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value
+  else if FindConfigEntry(AFileConfig, 'fetch-max-response-bytes',
+    ValueStr) then
+  begin
+    if not TryStrToInt(ValueStr, ResponseLimit) then
+      raise Exception.CreateFmt(
+        'Invalid fetch-max-response-bytes value in config: %s', [ValueStr]);
+    FetchPolicy.MaxResponseBytes := ResponseLimit;
+  end
+  else if AEngineOptions.FetchMaxResponseBytes.Present then
+    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value;
+
+  if FetchPolicy.MaxResponseBytes < 0 then
+    raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
+
+  SetFetchRequestPolicy(FetchPolicy);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
   const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray);
 begin
+end;
+
+procedure TGocciaCLIApplication.ApplyNodeModulesResolution(
+  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath: string);
+var
+  BaseDirectory, Setting: string;
+  Option: TOptionalStringOption;
+begin
+  if not Assigned(FEngineOptions) then
+    Exit;
+
+  { A relative ceiling is anchored to whichever source supplied it: the
+    invocation directory for the flag, and the configuration file's own
+    directory for a config key — the same rule relative --alias targets
+    follow. Without it, a relative ceiling written in a config file would name
+    a different directory for every working directory the command runs from. }
+  Option := FEngineOptions.AllowNodeModules;
+  if Option.FromCommandLine then
+  begin
+    Setting := Option.Value;
+    BaseDirectory := GetCurrentDir;
+  end
+  else if FindConfigEntry(AFileConfig, Option.LongName, Setting) then
+    BaseDirectory := ExtractFilePath(AFileConfigPath)
+  else
+  begin
+    if not Option.Present then
+      Exit;
+    Setting := Option.Value;
+    if FRootConfigPath <> '' then
+      BaseDirectory := ExtractFilePath(FRootConfigPath)
+    else
+      BaseDirectory := GetCurrentDir;
+  end;
+
+  if BaseDirectory = '' then
+    BaseDirectory := GetCurrentDir;
+
+  ConfigureNodeModulesResolution(AEngine.Resolver, True, Setting,
+    BaseDirectory);
+
+  { The grant is a host decision, not a script action, so it is emitted once at
+    configuration time. The subject is the effective ceiling — empty when the
+    walk is unbounded, which is the part an auditor most needs to see. }
+  if AEngine.Resolver.NodeModulesEnabled then
+    AEngine.EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
+      AEngine.Resolver.NodeModulesCeiling,
+      'bare specifiers resolve against node_modules');
 end;
 
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
@@ -746,7 +816,7 @@ begin
     ManifestLoader.BindRuntime(AEngine.Interpreter.GlobalScope,
       AEngine.ThrowError);
 
-    ManifestModule := ManifestLoader.LoadModule(APath, APath);
+    ManifestModule := ManifestLoader.LoadHostModule(APath, APath);
     if not ManifestModule.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
       raise EArgumentException.Create(
         'Virtual modules manifest module must have a default export.');
@@ -1077,6 +1147,7 @@ end;
 function TGocciaCLIApplication.CreateEngine(const AFileName: string;
   const ASource: TStringList; const AExecutor: TGocciaExecutor): TGocciaEngine;
 var
+  AliasBaseDirectory: string;
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
 begin
@@ -1090,8 +1161,15 @@ begin
       SetLength(FileConfig, 0);
     if Assigned(FEngineOptions) then
     begin
+      if FEngineOptions.Aliases.FromCommandLine or
+         (FRootConfigPath = '') then
+        AliasBaseDirectory := GetCurrentDir
+      else
+        AliasBaseDirectory := ExtractFilePath(FRootConfigPath);
       ConfigureModuleResolver(Result.Resolver, AFileName,
-        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values);
+        FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
+        AliasBaseDirectory);
+      ApplyNodeModulesResolution(Result, FileConfig, FileConfigPath);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;
@@ -1210,6 +1288,11 @@ end;
 procedure TGocciaCLIApplication.Validate;
 begin
   // Override point for subclasses
+end;
+
+function TGocciaCLIApplication.StdinUsage: TGocciaStdinUsage;
+begin
+  Result := suNone;
 end;
 
 procedure TGocciaCLIApplication.AfterExecute;
@@ -1500,8 +1583,17 @@ end;
 procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
-  HelpText, ConfigPath, ConfigStartDir: string;
+  ConfigPath, ConfigStartDir: string;
   I: Integer;
+
+  { Built on demand — the common case never renders help at all. }
+  function BuildHelpText: string;
+  begin
+    Result := GenerateHelpText(Name, UsageLine, FAllOptions);
+    if StdinUsage <> suNone then
+      Result := Result + sLineBreak + StdinUsageNote(Name, StdinUsage);
+  end;
+
 begin
   Configure;
 
@@ -1537,8 +1629,26 @@ begin
   try
     if FHelp.Present then
     begin
-      HelpText := GenerateHelpText(Name, UsageLine, FAllOptions);
-      Write(HelpText);
+      Write(BuildHelpText);
+      Exit;
+    end;
+
+    { clig.dev: "If your command is expecting to have something piped
+      to it and stdin is an interactive terminal, display help
+      immediately and quit."  Without this, a bare invocation at a
+      terminal blocks on ReadLn until the platform's end-of-input keys
+      (EndOfInputKeys) are pressed and looks stuck.  Help
+      goes to stderr because this is an error, not a request for help,
+      which also keeps stdout clean for --output=json callers. }
+    if (StdinUsage <> suNone) and
+       (DecideStdinInput(Paths.Count > 0,
+          (Paths.Count = 1) and IsStdinPath(Paths[0]),
+          IsInputTerminal) = sdShowUsage) then
+    begin
+      Write(ErrOutput, BuildHelpText);
+      WriteLn(ErrOutput);
+      Write(ErrOutput, NoInputAtTerminalMessage(Name, StdinUsage));
+      ExitCode := EXIT_CODE_USAGE;
       Exit;
     end;
 

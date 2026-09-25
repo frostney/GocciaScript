@@ -10,7 +10,8 @@ uses
   CriticalSections,
   OrderedStringMap,
 
-  Goccia.Bytecode.Debug;
+  Goccia.Bytecode.Debug,
+  Goccia.Error.CallDiagnostics;
 
 type
   TGocciaBytecodeConstantKind = (
@@ -134,6 +135,21 @@ type
   end;
   PGocciaPropertyReadCacheEntry = ^TGocciaPropertyReadCacheEntry;
 
+  // Runtime-only inline cache for OP_SET_PROP_CONST sites, indexed by the
+  // instruction's name-constant index. Same (shape, entry index) validation
+  // as the own-property read cache; hits store only own writable data
+  // properties. The descriptor kind and Writable flag are re-checked on
+  // every hit because data-to-accessor / writable-to-nonwritable
+  // redefinition keeps the entry index. Proxies, accessors, private
+  // fields, deletion, and non-ordinary receivers stay on AssignProperty.
+  // Not serialised to .gbc.
+  TGocciaPropertyWriteCacheEntry = record
+    Shape: Pointer;
+    EntryIndex: Integer;
+    MissStreak: Byte;
+  end;
+  PGocciaPropertyWriteCacheEntry = ^TGocciaPropertyWriteCacheEntry;
+
   // Runtime-only inline cache for OP_GET_PROP_CONST sites that resolve on
   // the receiver's prototype chain (methods on class prototype objects are
   // the dominant case). Shapes[0] is the receiver's own shape — proving
@@ -153,6 +169,22 @@ type
     MissStreak: Byte;
   end;
   PGocciaProtoReadCacheEntry = ^TGocciaProtoReadCacheEntry;
+
+  // One call/construct site's callee, as the author wrote it. Recorded by the
+  // compiler at emit time and read by the VM only on the throw path, so a
+  // non-callable callee is named identically in both execution modes (see
+  // Goccia.Error.CallDiagnostics).
+  TGocciaCallSiteEntry = record
+    PC: UInt32;
+    Callee: TGocciaCalleeDescriptor;
+    // The call expression's own position, which is where the tree-walk
+    // evaluator points a "not a function" diagnostic. The instruction line map
+    // resolves to the enclosing statement instead, so the position is carried
+    // here rather than read back off the debug info.
+    Line: Integer;
+    Column: Integer;
+    Recorded: Boolean;
+  end;
 
   TGocciaFunctionTemplate = class
   private
@@ -195,6 +227,10 @@ type
     FClosedNumericSelfName: string;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
+    // Runtime-only cache for immutable string constants. ECMAScript strings
+    // have no observable identity, so reusing one pinned wrapper avoids
+    // repeatedly charging the same ref-counted Pascal backing store.
+    FStringConstantCaches: array of TObject;
     // Runtime-only cache for bckTemplateObject constants.  Indexed by the slot
     // number stored in the constant's IntValue field.  Not serialised to .gbc.
     FTemplateObjectCaches: array of TObject;  // TGocciaValue — typed as TObject to keep GC import out of interface
@@ -202,8 +238,9 @@ type
     FRegExpProgramCaches: array of TObject;
     FRegExpProgramCacheCount: Integer;
     FGlobalReadCaches: array of TGocciaGlobalReadCacheEntry;
-    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST name
-    // constants are a small subset of the constant pool, so a per-constant
+    // Property/proto read caches use DENSE slots: OP_GET_PROP_CONST and
+    // OP_GET_LOCAL_PROP_CONST name constants are a small subset of the
+    // constant pool, so a per-constant
     // UInt16 map (0 = unassigned, else dense slot + 1) assigns slots on
     // first use and the entry arrays grow only to the number of distinct
     // property-name constants actually read. Both tiers share one slot id
@@ -213,7 +250,19 @@ type
     FPropertyReadCaches: array of TGocciaPropertyReadCacheEntry;
     FProtoReadCaches: array of TGocciaProtoReadCacheEntry;
     FPropertyReadSlotCount: Integer;
+    // Write-IC slots are independent of the read/proto map so a GET of a
+    // name that is never written does not allocate a write entry, and the
+    // read-side PIC is not expanded (ADR 0088).
+    FPropertyWriteSlotMap: array of UInt32;
+    FPropertyWriteCaches: array of TGocciaPropertyWriteCacheEntry;
+    FPropertyWriteSlotCount: Integer;
+    // Runtime-only, appended in ascending PC order by the compiler and never
+    // serialised to .gbc — a module loaded from binary bytecode simply falls
+    // back to the runtime-type-name form of the "is not a function" message.
+    FCallSites: array of TGocciaCallSiteEntry;
+    FCallSiteCount: Integer;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
+    function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
   public
     constructor Create(const AName: string);
@@ -222,6 +271,17 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { Records the callee of the call/construct instruction that starts at APC.
+      APC must be the value CodeCount had immediately before the instruction
+      was emitted, which is what the VM sees as the instruction's start IP
+      (an OP_WIDE prefix included). Call sites must be recorded in ascending
+      PC order. }
+    procedure AddCallSite(const APC: UInt32;
+      const ACallee: TGocciaCalleeDescriptor; const ALine, AColumn: Integer);
+    { The call site recorded for the instruction starting at APC. Result.Recorded
+      is False when none was (binary-loaded bytecode, or a call the compiler
+      emits itself rather than from a source call expression). }
+    function CallSiteAt(const APC: UInt32): TGocciaCallSiteEntry;
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
     function AddConstantInteger(const AValue: Int64): UInt16;
@@ -236,6 +296,9 @@ type
     function AddConstantRegExpLiteral(const APattern, AFlags: string): UInt16;
     function GetTemplateObjectCache(const ASlot: Integer): TObject;
     procedure SetTemplateObjectCache(const ASlot: Integer; const AValue: TObject);
+    function GetStringConstantCache(const AIndex: Integer): TObject;
+    procedure SetStringConstantCache(const AIndex: Integer;
+      const AValue: TObject);
     function GetRegExpProgramCache(const ASlot: Integer): TObject;
     procedure SetRegExpProgramCache(const ASlot: Integer; const AValue: TObject);
     function GlobalReadCacheSlot(
@@ -244,6 +307,8 @@ type
       const AConstIndex: Integer): PGocciaPropertyReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function ProtoReadCacheSlot(
       const AConstIndex: Integer): PGocciaProtoReadCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
+    function PropertyWriteCacheSlot(
+      const AConstIndex: Integer): PGocciaPropertyWriteCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
@@ -378,19 +443,53 @@ destructor TGocciaFunctionTemplate.Destroy;
 var
   I: Integer;
 begin
-  // Unpin any template objects that were built and cached during VM execution.
+  // Unpin any runtime values that were built and cached during VM execution.
   // Guard against the GC already having been shut down.
   if (TGarbageCollector.Instance <> nil) then
+  begin
+    for I := 0 to High(FStringConstantCaches) do
+      if Assigned(FStringConstantCaches[I]) then
+        TGarbageCollector.Instance.UnpinObject(
+          TGCManagedObject(FStringConstantCaches[I]));
     for I := 0 to FTemplateObjectCacheCount - 1 do
       if Assigned(FTemplateObjectCaches[I]) then
         TGarbageCollector.Instance.UnpinObject(
           TGCManagedObject(FTemplateObjectCaches[I]));
+  end;
   for I := 0 to FRegExpProgramCacheCount - 1 do
     FRegExpProgramCaches[I].Free;
   FStringConstantIndex.Free;
   FFunctions.Free;
   FDebugInfo.Free;
   inherited;
+end;
+
+function TGocciaFunctionTemplate.GetStringConstantCache(
+  const AIndex: Integer): TObject;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FStringConstantCaches)) then
+    Exit(nil);
+  Result := FStringConstantCaches[AIndex];
+end;
+
+procedure TGocciaFunctionTemplate.SetStringConstantCache(
+  const AIndex: Integer; const AValue: TObject);
+begin
+  if (AIndex < 0) or (AIndex >= FConstantCount) then
+    raise ERangeError.CreateFmt(
+      'SetStringConstantCache: index %d out of range 0..%d',
+      [AIndex, FConstantCount - 1]);
+  if Length(FStringConstantCaches) < FConstantCount then
+    SetLength(FStringConstantCaches, FConstantCount);
+  if FStringConstantCaches[AIndex] = AValue then
+    Exit;
+  if Assigned(FStringConstantCaches[AIndex]) and
+     (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.UnpinObject(
+      TGCManagedObject(FStringConstantCaches[AIndex]));
+  FStringConstantCaches[AIndex] := AValue;
+  if Assigned(AValue) and (TGarbageCollector.Instance <> nil) then
+    TGarbageCollector.Instance.PinObject(TGCManagedObject(AValue));
 end;
 
 function TGocciaFunctionTemplate.EmitInstruction(
@@ -414,6 +513,43 @@ begin
   FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
+end;
+
+procedure TGocciaFunctionTemplate.AddCallSite(const APC: UInt32;
+  const ACallee: TGocciaCalleeDescriptor; const ALine, AColumn: Integer);
+begin
+  if FCallSiteCount >= Length(FCallSites) then
+    SetLength(FCallSites, FCallSiteCount * 2 + 8);
+  FCallSites[FCallSiteCount].PC := APC;
+  FCallSites[FCallSiteCount].Callee := ACallee;
+  FCallSites[FCallSiteCount].Line := ALine;
+  FCallSites[FCallSiteCount].Column := AColumn;
+  FCallSites[FCallSiteCount].Recorded := True;
+  Inc(FCallSiteCount);
+end;
+
+function TGocciaFunctionTemplate.CallSiteAt(
+  const APC: UInt32): TGocciaCallSiteEntry;
+var
+  Low, High, Middle: Integer;
+begin
+  Result.PC := APC;
+  Result.Callee := EmptyCalleeDescriptor;
+  Result.Line := 0;
+  Result.Column := 0;
+  Result.Recorded := False;
+  Low := 0;
+  High := FCallSiteCount - 1;
+  while Low <= High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if FCallSites[Middle].PC = APC then
+      Exit(FCallSites[Middle])
+    else if FCallSites[Middle].PC < APC then
+      Low := Middle + 1
+    else
+      High := Middle - 1;
+  end;
 end;
 
 procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;
@@ -712,6 +848,41 @@ begin
   Result := @FProtoReadCaches[Slot];
 end;
 
+function TGocciaFunctionTemplate.PropertyWriteSlot(
+  const AConstIndex: Integer): Integer;
+var
+  NewCapacity: Integer;
+begin
+  if (AConstIndex < 0) or (AConstIndex >= FConstantCount) then
+    Exit(-1);
+  if AConstIndex >= Length(FPropertyWriteSlotMap) then
+    SetLength(FPropertyWriteSlotMap, FConstantCount);
+  if FPropertyWriteSlotMap[AConstIndex] = 0 then
+  begin
+    if FPropertyWriteSlotCount >= Length(FPropertyWriteCaches) then
+    begin
+      NewCapacity := Length(FPropertyWriteCaches) * 2;
+      if NewCapacity < 4 then
+        NewCapacity := 4;
+      SetLength(FPropertyWriteCaches, NewCapacity);
+    end;
+    Inc(FPropertyWriteSlotCount);
+    FPropertyWriteSlotMap[AConstIndex] := UInt32(FPropertyWriteSlotCount);
+  end;
+  Result := Integer(FPropertyWriteSlotMap[AConstIndex]) - 1;
+end;
+
+function TGocciaFunctionTemplate.PropertyWriteCacheSlot(
+  const AConstIndex: Integer): PGocciaPropertyWriteCacheEntry;
+var
+  Slot: Integer;
+begin
+  Slot := PropertyWriteSlot(AConstIndex);
+  if Slot < 0 then
+    Exit(nil);
+  Result := @FPropertyWriteCaches[Slot];
+end;
+
 function TGocciaFunctionTemplate.AddFunction(
   const AFunction: TGocciaFunctionTemplate): UInt16;
 begin
@@ -822,11 +993,9 @@ end;
 function TGocciaFunctionTemplate.GetUpvalueDescriptor(
   const AIndex: Integer): TGocciaUpvalueDescriptor;
 begin
-  {$IFDEF DEBUG}
   if (AIndex < 0) or (AIndex >= FUpvalueCount) then
     raise ERangeError.CreateFmt('GetUpvalueDescriptor: index %d out of range 0..%d',
       [AIndex, FUpvalueCount - 1]);
-  {$ENDIF}
   Result := FUpvalueDescriptors[AIndex];
 end;
 

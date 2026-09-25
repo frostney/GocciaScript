@@ -9,6 +9,7 @@
 | [Workflow](docs/contributing/workflow.md) | Local setup, branch workflow, issues & PRs, verification |
 | [Code Style](docs/contributing/code-style.md) | Pascal naming, constants, spec annotations, generics, hash maps, file organization |
 | [Tooling](docs/contributing/tooling.md) | Auto-formatting, Lefthook, editor config, platform-specific pitfalls |
+| [CLI Conventions](docs/contributing/cli-conventions.md) | Stdin and no-argument rules, exit codes, stdout/stderr discipline, help output |
 
 ## Documentation
 
@@ -27,6 +28,7 @@ When your change affects behavior visible to users or contributors, update the r
 
 - **Executive summary** — Every `docs/` file except ADR files must include a `## Executive Summary` heading with 3–6 bulleted key points, placed after the title and subtitle. Root-level files (README, CONTRIBUTING, AGENTS) are navigation entry points and are exempt. An italic subtitle alone does not satisfy this requirement.
 - **No duplication** — Each topic has one authoritative document with the full detail. Other documents that reference it use a one-liner and link back. Do not maintain the same content in two places.
+- **No hand-typed conformance numbers** — Never type a test262 pass rate, pass count, or percentage into documentation or website copy. Link the [compatibility dashboard](https://www.gocciascript.dev/compatibility) or render the figure from the generated reports; a frozen number is stale by the next main-branch run. `scripts/check-conformance-claims.ts` enforces this in the pre-commit hook and in CI. A deliberate version-stamped figure needs an explicit `conformance-claim-ok: <reason>` comment, placed on the claim line or on the nearest non-blank line above it.
 - **Spikes are snapshots** — Files under `docs/spikes/` are point-in-time investigation records. Do not update them after the initial creation; if findings change, add a new ADR and link to it.
 - **Decision records are immutable** — Each ADR under `docs/adr/` records what was decided at that point in time. Do not retroactively update ADRs to match the current implementation. If the implementation changes, add a new ADR with the new decision. Links from ADRs to other docs may be updated if targets are renamed.
 
@@ -87,6 +89,26 @@ such as broad Annex B support remain deferred. Do **not** remove those gates or
 add deferred features without an explicit project decision. See
 [docs/language.md](docs/language.md) for the implementation, profile, and
 compatibility-path detail.
+
+### 5. Speculative Parser Probes Must Be Able to Back Out
+
+The parser decides several constructs by trying one reading, then rewinding when
+it does not fit — generic arrow functions, arrow return types, and call-site type
+arguments all work this way. A probe runs over source whose shape is not yet
+known, so **code reached from inside a probe must never raise**. Report the
+problem from the committed parse instead, once the parser has decided what it is
+looking at.
+
+Raising inside a probe turns valid JavaScript into a `SyntaxError`. The
+arrow-return-type probe reaches the ternary `c ? (a, b) : d << 2`, collects
+`d << 2` as a would-be return type, and rewinds; a validator that rejected
+`<<` there failed the whole file. Minified bundles are full of such shapes, so
+the first sign of this is usually a third-party corpus that stops parsing rather
+than a first-party test.
+
+Type annotations already carry the committed/probed distinction: pass
+`ARequireType` when the call site has consumed a `:` and is no longer guessing,
+and validate only then. See [docs/type-annotations.md](docs/type-annotations.md).
 
 ## Quick reference
 

@@ -1,6 +1,10 @@
 # Build System
 
-<!-- doc-length-limit: 850 -->
+<!-- doc-length-limit: 900 -->
+<!-- This is the authoritative command reference (build targets, CLI options,
+     config-file behaviour) and grows with each runtime feature, so it carries
+     a higher line budget than a human-narrative doc. Keep it dense and
+     reference-shaped rather than splitting the single source of truth. -->
 
 *For contributors setting up their development environment or troubleshooting builds.*
 
@@ -153,7 +157,7 @@ Useful test-runner forms:
 
 ### Bytecode Mode
 
-All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter:
+All execution tools support `--mode=bytecode` to compile and run via the Goccia bytecode VM instead of the tree-walk interpreter. `--profile` (see [Profiling](profiling.md)) and `--coverage` (see [Testing — Coverage](testing.md#coverage)) select bytecode on their own and ignore `--mode`.
 
 ```bash
 # Execute via bytecode VM
@@ -185,14 +189,19 @@ printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
 printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
-# `--global name=value` parses inline values as JSON only; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension.
+# `--global name=value` parses the value as JSON and keeps it as a string when that fails; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension. GocciaTestRunner accepts both — that is how a suite gets `process` (docs/testing-api.md).
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
 ./build/GocciaScriptLoader app.js --import-map=imports.json
 
-# Add one-off import-map-style aliases from the CLI
+# Add one-off import-map-style aliases from the CLI (relative targets use the invocation directory)
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
+
+# Resolve bare specifiers against node_modules (off by default; see docs/module-resolution.md).
+# Bare form walks up from each importing file; the value form caps the walk at that directory.
+./build/GocciaScriptLoader app.js --allow-node-modules
+./build/GocciaScriptLoader app.js --allow-node-modules=./project
 
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
@@ -276,7 +285,7 @@ The first file found is loaded and applied as the **root config**. When running 
 1. **CLI options** (highest priority — always win)
 2. **Per-file config** (`goccia.toml`, `goccia.json5`, or `goccia.json` nearest to the file being processed)
 3. **Root config** (discovered from the entry file's directory at startup, or supplied via `--config`)
-4. **File extension default** (`.mjs` infers module source)
+4. **File extension default** (`.mjs` and `.mts` infer module source)
 5. **System default** (engine defaults)
 
 `GocciaTestRunner` keeps explicit multi-file test invocations isolated: when you pass more than one input path and do not pass `--config`, the first file's auto-discovered config is not promoted to a root config for the rest of the list. Each file still gets its nearest per-file config. Pass `--config=<path>` when you intentionally want one shared root config across an explicit test file list.
@@ -296,7 +305,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` entry files are parsed and evaluated as module source; other script extensions default to script source.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source; other script extensions default to script source.
 
 ```json
 {
@@ -435,7 +444,7 @@ See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary
 
 ### GocciaSandboxRunner (Virtual Filesystem Sandbox)
 
-GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths are import baselines: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
+GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths establish a seed baseline: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
 
 ```bash
 ./build.pas sandboxrunner
@@ -448,6 +457,7 @@ GocciaSandboxRunner executes a sandbox entry path after populating an isolated v
 
 # Use the same sandbox runtime modules through the bytecode executor.
 ./build/GocciaSandboxRunner /main.js --seed-config=seed.json --mode=bytecode
+
 ```
 
 `--seed=<host>[=<sandbox>]` resolves the host path relative to the invocation current working directory. When the sandbox target is omitted, directories import their contents to `/` and files import as `/<filename>`.
@@ -491,7 +501,31 @@ const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /ch
 
 Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
 
+Engine options apply to sandboxed execution exactly as they do to the other binaries — `--max-memory`, `--timeout`, `--max-instructions`, `--allowed-host`, `--fetch-deny-private-ranges`, and `--fetch-max-response-bytes` all bound the sandboxed program:
+
+```bash
+# Refuse allocations past 64 MiB and any fetch that resolves into private space.
+./build/GocciaSandboxRunner /main.js --seed-config=seed.json \
+  --max-memory=67108864 --allowed-host=api.example.com --fetch-deny-private-ranges
+```
+
+Config-file values reach the sandbox runner **only** through an explicit `--config`. It is the one binary that does not auto-discover a `goccia.json`, because the entry path names a file in the virtual filesystem: walking up from it leaves the sandbox namespace and climbs the host filesystem instead, from wherever the spelling happens to start — the host root for `/main.js`, the current directory for `main.js`. Config picked up by accident of spelling is a poor default for the binary that runs untrusted code, so the operator has to name the file.
+
+The cost is that limits an operator sets in a discovered `goccia.json` apply to every other binary and not to this one, and the omission is in the permissive direction. When a config file is discoverable and skipped for that reason, the runner says so on stderr:
+
+```text
+Warning: ignoring discovered configuration /path/to/goccia.json. GocciaSandboxRunner applies configuration files only when named with --config.
+```
+
+Pass `--config=<file>` to apply it, and note that `--config` is the only way to bound a sandboxed run from a file rather than from flags.
+
 Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
+
+Keeping what a run produced is explicit too. `--write-back` writes the files a run changed to the host paths they were seeded from, once, after the run is over. The guest never writes to the host; it writes into its own filesystem, and this is the host deciding afterwards to materialize the result — so a program that reports and a program that fixes are the same program, and the word that makes the difference is on the host's command line. Only paths a `--seed` supplied are eligible: a file with no seeded origin is reported and skipped, a deletion is never applied, and a host target that is a symlink is skipped. Each file is written to an exclusively created temporary beside it and then replaces it in one rename, so a symlink at the temporary name is refused rather than followed and a failed write leaves the original as it was. A run that failed writes nothing. See [ADR 0119](adr/0119-host-applied-sandbox-write-back.md).
+
+```bash
+./build/GocciaSandboxRunner /fix.mjs --seed fix.mjs=/fix.mjs --seed src=/src --write-back
+```
 
 ## Build Output
 
@@ -718,7 +752,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, and diff output.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 
@@ -738,9 +772,9 @@ Commits are categorized by their leading verb into groups:
 | `Replace`, `Optimize`, `Promote`, `Eliminate`, `Bypass`, `Inline` | ⚡ Performance |
 | `Remove` | 🗑️ Removed |
 | `Refactor`, `Extract`, `Update`, `Strip` | 🏗️ Internal |
-| Commits touching `website/` | 🌐 Website |
+| Commits whose changed paths are at least half under `website/` | 🌐 Website |
 
-This table shows common prefixes. See `cliff.toml` for the complete list of patterns, which includes additional verb-specific and phrase-specific matchers. Website commits are detected by changed path before prefix grouping so site changes stay separate from language/runtime changes. Release sections are generated only for semver-style tags such as `0.7.0` or `v0.7.0`; moving tags such as `nightly` are ignored.
+This table shows common prefixes. See `cliff.toml` for the complete list of patterns, which includes additional verb-specific and phrase-specific matchers. Website commits are detected by changed path before prefix grouping so site changes stay separate from language/runtime changes. The path check requires the website to be the *predominant* surface — at least half the commit's changed paths — so a cross-stack change that happens to touch one file under `website/` still lands in its prefix group rather than 🌐 Website. Release sections are generated only for semver-style tags such as `0.7.0` or `v0.7.0`; moving tags such as `nightly` are ignored.
 
 ### Generating the Changelog
 

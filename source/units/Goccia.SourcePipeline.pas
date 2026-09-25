@@ -13,6 +13,8 @@ uses
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Constants,
+  Goccia.Lexer,
+  Goccia.OriginMap,
   Goccia.SourceMap;
 
 type
@@ -35,6 +37,10 @@ type
     WarningUnsupportedFeatures: Boolean;
     SourceType: TGocciaSourceType;
     InheritedStrictMode: Boolean;
+    { Opt-in comment trivia. The parser has no use for comments; a tool that
+      reads the parse result may. Off by default so an ordinary run does not
+      pay for the array. }
+    CollectComments: Boolean;
   end;
 
   TGocciaFunctionBodyParseResult = record
@@ -55,9 +61,11 @@ type
   private
     FProgramNode: TGocciaProgram;
     FSourceMap: TGocciaSourceMap;
+    FOriginMap: TGocciaOriginMap;
     FGeneratedSourceLines: TStringList;
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
+    FComments: TGocciaCommentSpanArray;
     FWarnings: array of TGocciaSourcePipelineWarning;
     FWarningCount: Integer;
 
@@ -73,7 +81,13 @@ type
 
     property ProgramNode: TGocciaProgram read FProgramNode;
     property SourceMap: TGocciaSourceMap read FSourceMap;
+    { Which offsets of the generated source are which offsets of the original.
+      Assigned exactly when a preprocessor rewrote the text; nil means the two
+      are the same string. }
+    property OriginMap: TGocciaOriginMap read FOriginMap;
     property GeneratedSourceLines: TStringList read FGeneratedSourceLines;
+    { Empty unless the run asked for comments. Ordered by start offset. }
+    property Comments: TGocciaCommentSpanArray read FComments;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
     property WarningCount: Integer read FWarningCount;
@@ -152,7 +166,6 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.Transformer,
-  Goccia.Lexer,
   Goccia.Parser,
   Goccia.Token;
 
@@ -174,20 +187,29 @@ begin
     Result.Assign(ASource);
 end;
 
-function ApplyPreprocessors(const ASource: string;
+function ApplyPreprocessors(const ASource, AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
-  out ASourceMap: TGocciaSourceMap): string;
+  out ASourceMap: TGocciaSourceMap;
+  out AOriginMap: TGocciaOriginMap): string;
 var
   JSXResult: TGocciaJSXTransformResult;
 begin
   Result := ASource;
   ASourceMap := nil;
+  AOriginMap := nil;
 
-  if ppJSX in AOptions.Preprocessors then
+  // '.ts' sources never contain JSX, so '<' stays type syntax there: running
+  // the transformer would rewrite generic annotations such as
+  // `const g: <T>(x: T) => T` into a bogus JSX element before the parser sees
+  // them. Every other extension keeps its current behaviour, including JSX in
+  // '.js' (transformed, with the non-JSX-extension warning).
+  if (ppJSX in AOptions.Preprocessors) and
+     not IsJSXExcludedExtension(ExtractFileExt(AFileName)) then
   begin
-    JSXResult := TGocciaJSXTransformer.Transform(Result);
+    JSXResult := TGocciaJSXTransformer.Transform(Result, AFileName);
     Result := JSXResult.Source;
     ASourceMap := JSXResult.SourceMap;
+    AOriginMap := JSXResult.OriginMap;
   end;
 end;
 
@@ -387,6 +409,7 @@ destructor TGocciaSourcePipelineResult.Destroy;
 begin
   FProgramNode.Free;
   FSourceMap.Free;
+  FOriginMap.Free;
   FGeneratedSourceLines.Free;
   inherited;
 end;
@@ -475,6 +498,7 @@ begin
   Result.WarningUnsupportedFeatures := False;
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
+  Result.CollectComments := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
@@ -501,6 +525,7 @@ var
   Parser: TGocciaParser;
   ParserWarning: TGocciaParserWarning;
   PreprocessorSourceMap: TGocciaSourceMap;
+  PreprocessorOriginMap: TGocciaOriginMap;
   StartTime, ParseStart, ParseEnd, ParsePhaseTime: Int64;
   OrigLine, OrigCol, I: Integer;
 begin
@@ -513,8 +538,21 @@ begin
       SourceText := '';
     OriginalSourceText := SourceText;
 
-    SourceText := ApplyPreprocessors(SourceText, AOptions, PreprocessorSourceMap);
+    try
+      SourceText := ApplyPreprocessors(SourceText, AFileName, AOptions,
+        PreprocessorSourceMap, PreprocessorOriginMap);
+    except
+      on E: TGocciaError do
+      begin
+        // A preprocessor error is already positioned in the original source —
+        // no source map exists yet — so only the source context is missing for
+        // the caret display the parser errors below get for free.
+        E.TranslatePosition(E.Line, E.Column, ASource);
+        raise;
+      end;
+    end;
     Result.FSourceMap := PreprocessorSourceMap;
+    Result.FOriginMap := PreprocessorOriginMap;
     if Assigned(Result.FSourceMap) then
     begin
       Result.FSourceMap.SetSourceContent(0, OriginalSourceText);
@@ -527,6 +565,7 @@ begin
 
     try
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
+      Lexer.CollectComments := AOptions.CollectComments;
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);
@@ -551,6 +590,8 @@ begin
           else
             Result.FParseTimeNanoseconds := 0;
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
+          if AOptions.CollectComments then
+            Result.FComments := Lexer.TakeComments;
 
           for I := 0 to Parser.WarningCount - 1 do
           begin
@@ -732,13 +773,26 @@ var
   Source: string;
   OriginalSourceLines: TStringList;
   SourceMap: TGocciaSourceMap;
+  OriginMap: TGocciaOriginMap;
   OrigLine, OrigCol: Integer;
 begin
   Source := DynamicFunctionWrapperSource(AParametersSource, ABodySource, AKind);
 
   OriginalSourceLines := CreateECMAScriptSourceLines(Source);
   try
-    Source := ApplyPreprocessors(Source, AOptions, SourceMap);
+    try
+      Source := ApplyPreprocessors(Source, AFileName, AOptions, SourceMap,
+        OriginMap);
+    except
+      on E: TGocciaError do
+      begin
+        // A preprocessor error is positioned in the wrapper source, which is
+        // exactly what OriginalSourceLines holds — attach it so the caret
+        // display matches the coordinates the error already carries.
+        E.TranslatePosition(E.Line, E.Column, OriginalSourceLines);
+        raise;
+      end;
+    end;
     try
       Lexer := TGocciaLexer.Create(Source, AFileName);
       try
@@ -765,6 +819,7 @@ begin
       end;
     finally
       SourceMap.Free;
+      OriginMap.Free;
     end;
   finally
     OriginalSourceLines.Free;

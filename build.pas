@@ -398,6 +398,22 @@ begin
   WriteLn('');
 end;
 
+procedure BuildFuzzHarness;
+var
+  Output: string;
+begin
+  WriteLn('');
+  WriteLn('Building GocciaFuzzHarness...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaFuzzHarness.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('fuzzharness'))),
+      Output) then
+    PrintBuildFailureAndExit(Output, 'GocciaFuzzHarness build failed',
+      'fuzzharness');
+  WriteLn(Output);
+  WriteLn('GocciaFuzzHarness built successfully');
+  WriteLn('');
+end;
+
 procedure BuildTests;
 var
   AllUnitFiles: TStringList;
@@ -571,6 +587,8 @@ begin
     BuildScriptLoaderBare
   else if ATrigger = 'sandboxrunner' then
     BuildSandboxRunner
+  else if ATrigger = 'fuzzharness' then
+    BuildFuzzHarness
   else if ATrigger = 'tests' then
     BuildTests
   else if ATrigger = 'testrunner' then
@@ -639,6 +657,10 @@ begin
     BuildTriggers.Add('loader');
     BuildTriggers.Add('loaderbare');
     BuildTriggers.Add('sandboxrunner');
+    { Built by default so the harness cannot silently rot: it links most of
+      the engine, so a signature change elsewhere breaks the ordinary build
+      rather than the nightly fuzz job days later. }
+    BuildTriggers.Add('fuzzharness');
     BuildTriggers.Add('testrunner');
     BuildTriggers.Add('test262runner');
     BuildTriggers.Add('tomlcompliancerunner');
