@@ -864,7 +864,7 @@ await section("Bare Loader: Test262 host option belongs to GocciaTest262Runner..
 });
 
 await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--compat-loose-equality"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-loose-equality"], {
     stdin: new TextEncoder().encode([
       "print(Goccia.test262Host);",
       "print(typeof Goccia.test262);",
@@ -1165,7 +1165,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
 });
 
 await section("Test262 Runner: child realms expose host records...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(typeof child.evalScript);",
@@ -1205,7 +1205,7 @@ await section("Test262 Runner: child realms expose host records...", async () =>
 });
 
 await section("Test262 Runner: child realm globals expose host hooks...", async () => {
-  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host"], {
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted"], {
     stdin: new TextEncoder().encode([
       "const child = Goccia.test262.createRealm();",
       "print(child.global.Goccia.test262Host);",
@@ -1233,7 +1233,7 @@ await section("Test262 Runner: child realm globals expose host hooks...", async 
 
 console.log("Test262 Runner: cross-realm weak constructors use the newTarget realm prototype...");
 for (const { label, args } of [
-  { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-function"] },
+  { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function"] },
   { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--compat-function", "--mode=bytecode"] },
 ]) {
   const proc = Bun.spawnSync(args, {
@@ -1292,7 +1292,7 @@ console.log("Test262 Runner: rejected eval source preserves primitive singletons
 for (const { label, args } of [
   {
     label: "interpreted",
-    args: [TEST262RUNNER, "--eval-host", "--compat-function", "--unsafe-function-constructor"],
+    args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function", "--unsafe-function-constructor"],
   },
   {
     label: "bytecode",
@@ -1615,7 +1615,7 @@ await section("Test262 Runner: generator parameter eval uses the parameter var e
     "inside,inside,outside",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync([
@@ -1649,7 +1649,7 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync([
@@ -1680,7 +1680,7 @@ await section("Test262 Runner: eval reports strict delete identifier as SyntaxEr
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
@@ -1724,7 +1724,7 @@ await section("Test262 Runner: eval validates destructuring pattern early errors
     "SyntaxError",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
@@ -1804,7 +1804,7 @@ await section("Test262 Runner: eval rejects arguments in class field initializer
     "false",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
@@ -1840,7 +1840,7 @@ await section("Test262 Runner: eval rejects arguments in generator method defaul
     "async-generator:SyntaxError",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-var", "--compat-non-strict-mode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-var", "--compat-non-strict-mode"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-var", "--compat-non-strict-mode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
@@ -1874,7 +1874,7 @@ await section("Test262 Runner: eval super permissions stop at ordinary function 
     "",
   ].join("\n");
   for (const mode of [
-    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--compat-function", "--compat-non-strict-mode"] },
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted", "--compat-function", "--compat-non-strict-mode"] },
     { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function", "--compat-non-strict-mode"] },
   ]) {
     const proc = Bun.spawnSync(mode.args, {
