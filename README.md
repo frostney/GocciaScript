@@ -39,6 +39,13 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
   --diff
 ```
 
+Nothing the script writes reaches the host unless the host asks for it:
+`--write-back` writes the files a successful run changed to the host paths they
+were seeded from, and without it the virtual filesystem is discarded. A program
+that only reports and a program that fixes are therefore the same program, and
+the difference is a word on the host's command line. See
+[ADR 0119](docs/adr/0119-host-applied-sandbox-write-back.md).
+
 The host can also define globals, virtual modules, allowed network hosts,
 instruction and memory limits, deterministic time/randomness, and
 application-specific APIs. See [Build System — Sandbox Runner](docs/build-system.md#gocciasandboxrunner-virtual-filesystem-sandbox)

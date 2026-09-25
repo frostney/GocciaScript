@@ -6403,6 +6403,99 @@ await section("SandboxRunner: unified diff includes deleted seeded files...", as
   }
 });
 
+await section("SandboxRunner: a sandbox write does not reach the host without --write-back...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, "kept.txt"), "before");
+    const entry = join(tmp, "main.js");
+    writeFileSync(entry, [
+      'import fs from "fs";',
+      'fs.writeFileSync("/src/kept.txt", "after");',
+    ].join("\n"));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner write without --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "before")
+      throw new Error("SECURITY: SandboxRunner wrote to a seeded host file without --write-back");
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: --write-back materializes changes onto the seeded host paths...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = join(tmp, "tree");
+    mkdirSync(join(tree, "nested"), { recursive: true });
+    writeFileSync(join(tree, "kept.txt"), "before");
+    writeFileSync(join(tree, "gone.txt"), "still here");
+    const entry = join(tmp, "main.js");
+    writeFileSync(entry, [
+      'import fs from "fs";',
+      'fs.writeFileSync("/src/kept.txt", "after");',
+      'fs.writeFileSync("/src/nested/added.txt", "new");',
+      'fs.writeFileSync("/loose.txt", "nowhere to go");',
+      'fs.rmSync("/src/gone.txt");',
+    ].join("\n"));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module", "--write-back"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0)
+      throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const stdout = normalizeLineEndings(proc.stdout.toString());
+    if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "after")
+      throw new Error("SandboxRunner --write-back should update a changed seeded file");
+    if (readFileSync(join(tree, "nested", "added.txt"), "utf-8") !== "new")
+      throw new Error("SandboxRunner --write-back should create a file added under a seeded directory");
+    if (!existsSync(join(tree, "gone.txt")))
+      throw new Error("SandboxRunner --write-back should not delete a host file the sandbox removed");
+    if (existsSync(join(tmp, "loose.txt")))
+      throw new Error("SECURITY: SandboxRunner --write-back materialized a path nothing seeded");
+    if (!containsLine(stdout, "write-back: /loose.txt has no seeded host path, skipped"))
+      throw new Error(`SandboxRunner --write-back should report the unseeded path, got: ${stdout}`);
+    if (!stdout.includes("write-back: 2 file(s) written, 1 skipped"))
+      throw new Error(`SandboxRunner --write-back should summarize what it wrote, got: ${stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: --write-back keeps nothing from a run that failed...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, "kept.txt"), "before");
+    const entry = join(tmp, "main.js");
+    writeFileSync(entry, [
+      'import fs from "fs";',
+      'fs.writeFileSync("/src/kept.txt", "after");',
+      'throw new Error("halfway");',
+    ].join("\n"));
+
+    const proc = Bun.spawnSync(
+      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module", "--write-back"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode === 0)
+      throw new Error("SandboxRunner --write-back test expected the guest run to fail");
+    if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "before")
+      throw new Error("SandboxRunner --write-back should keep nothing from a failed run");
+    if (!proc.stderr.toString().includes("write-back: skipped, the run did not succeed."))
+      throw new Error(`SandboxRunner --write-back should say why it kept nothing, got: ${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("SandboxRunner: bytecode uses the same sandbox runtime modules...", async () => {
   const tmp = makeTmp();
   try {

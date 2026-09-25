@@ -58,15 +58,28 @@ const
   MAX_RUN_SCRIPT_DEPTH = 32;
 
 type
+  { Where a seeded sandbox path came from on the host. A seed is an import
+    baseline and never a mount, so this is not a live mapping — it is the
+    record of one, kept so that the host can decide, after the run is over,
+    to materialize what the run produced. See
+    [ADR 0119](../../docs/adr/0119-host-applied-sandbox-write-back.md). }
+  TSandboxSeedOrigin = record
+    SandboxPath: string;
+    HostPath: string;
+    IsDirectory: Boolean;
+  end;
+
   TSandboxRunnerApp = class(TGocciaCLIApplication)
   private
     FContext: TGocciaSandboxContext;
+    FSeedOrigins: array of TSandboxSeedOrigin;
     FSeedPaths: TRepeatableOption;
     FSeedConfigFiles: TRepeatableOption;
     FDiff: TFlagOption;
     FDiffMetadata: TFlagOption;
     FDiffFormat: TStringOption;
     FDiffOutput: TStringOption;
+    FWriteBack: TFlagOption;
     FPrint: TFlagOption;
     FFsQuotaBytes: TInt64Option;
     FFsNodeLimit: TIntegerOption;
@@ -91,6 +104,13 @@ type
     procedure ApplySeedConfigEntry(const AEntry: TGocciaObjectValue;
       const ABaseDirectory: string);
     procedure LoadSeeds;
+    procedure RecordSeedOrigin(const AHostPath, ASandboxPath: string;
+      const AIsDirectory: Boolean);
+    function HostPathForSandboxPath(const ASandboxPath: string;
+      out AHostPath: string): Boolean;
+    procedure WriteBackIfRequested(const ARunOk: Boolean);
+    function WriteHostFile(const AHostPath: string;
+      const ABytes: TBytes): Boolean;
 
     procedure EnsureSandboxParentDirectory(const AContext:
       TGocciaSandboxContext; const APath: string);
@@ -229,6 +249,8 @@ begin
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
+  FWriteBack := AddFlag('write-back',
+    'After a successful run, write files it changed back to the host paths they were seeded from');
   FPrint := AddFlag('print', 'Print the script result value');
   FFsQuotaBytes := TInt64Option.Create('fs-quota-bytes',
     'Maximum bytes in the sandbox filesystem (default: 16777216)');
@@ -416,7 +438,10 @@ begin
   TargetPath := EnsureSandboxAbsolute(ASandboxPath);
 
   if IsDirectoryPath(HostPath) then
-    ImportDirectoryContents(HostPath, TargetPath)
+  begin
+    ImportDirectoryContents(HostPath, TargetPath);
+    RecordSeedOrigin(HostPath, FContext.Fs.Normalize(TargetPath), True);
+  end
   else
   begin
     if (TargetPath = '/') or SandboxPathHasTrailingSeparator(ASandboxPath) or
@@ -424,7 +449,20 @@ begin
       TargetPath := FContext.Fs.Normalize(SandboxJoinPath(TargetPath,
         ExtractFileName(HostPath)));
     ImportFile(HostPath, TargetPath);
+    RecordSeedOrigin(HostPath, FContext.Fs.Normalize(TargetPath), False);
   end;
+end;
+
+procedure TSandboxRunnerApp.RecordSeedOrigin(const AHostPath,
+  ASandboxPath: string; const AIsDirectory: Boolean);
+var
+  Index: Integer;
+begin
+  Index := Length(FSeedOrigins);
+  SetLength(FSeedOrigins, Index + 1);
+  FSeedOrigins[Index].SandboxPath := ASandboxPath;
+  FSeedOrigins[Index].HostPath := ExcludeTrailingPathDelimiter(AHostPath);
+  FSeedOrigins[Index].IsDirectory := AIsDirectory;
 end;
 
 procedure TSandboxRunnerApp.SeedHostPathSpec(const ASpec,
@@ -1054,6 +1092,209 @@ begin
   end;
 end;
 
+function SameSandboxBytes(const ALeft, ARight: TBytes): Boolean;
+begin
+  Result := (Length(ALeft) = Length(ARight)) and
+    ((Length(ALeft) = 0) or
+     CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
+end;
+
+// The host path a sandbox path was seeded from, or False when nothing seeded
+// it. The longest matching seed wins, so a directory seeded inside another
+// resolves against the one that actually supplied the file.
+function TSandboxRunnerApp.HostPathForSandboxPath(const ASandboxPath: string;
+  out AHostPath: string): Boolean;
+var
+  I: Integer;
+  Origin: TSandboxSeedOrigin;
+  Best: Integer;
+  Relative: string;
+begin
+  Result := False;
+  AHostPath := '';
+  Best := -1;
+  for I := 0 to High(FSeedOrigins) do
+  begin
+    Origin := FSeedOrigins[I];
+    if not Origin.IsDirectory then
+    begin
+      if Origin.SandboxPath = ASandboxPath then
+      begin
+        Best := I;
+        Break;
+      end;
+      Continue;
+    end;
+
+    if (ASandboxPath = Origin.SandboxPath) or
+       (Copy(ASandboxPath, 1, Length(Origin.SandboxPath)) =
+        Origin.SandboxPath) and
+       ((Origin.SandboxPath = '/') or
+        (ASandboxPath[Length(Origin.SandboxPath) + 1] = '/')) then
+      if (Best < 0) or
+         (Length(Origin.SandboxPath) > Length(FSeedOrigins[Best].SandboxPath)) then
+        Best := I;
+  end;
+
+  if Best < 0 then
+    Exit;
+
+  Origin := FSeedOrigins[Best];
+  if not Origin.IsDirectory then
+  begin
+    AHostPath := Origin.HostPath;
+    Exit(True);
+  end;
+
+  Relative := Copy(ASandboxPath, Length(Origin.SandboxPath) + 1, MaxInt);
+  while (Relative <> '') and (Relative[1] = '/') do
+    Delete(Relative, 1, 1);
+  if Relative = '' then
+    Exit;
+
+  AHostPath := IncludeTrailingPathDelimiter(Origin.HostPath) +
+    StringReplace(Relative, '/', DirectorySeparator, [rfReplaceAll]);
+  { The sandbox normalizes its own paths, so `Relative` cannot climb out on
+    its own. Checking the result anyway costs nothing and means the guarantee
+    does not depend on a normalizer two units away. }
+  Result := Copy(ExpandFileName(AHostPath), 1,
+    Length(IncludeTrailingPathDelimiter(Origin.HostPath))) =
+    IncludeTrailingPathDelimiter(Origin.HostPath);
+  if not Result then
+    AHostPath := '';
+end;
+
+// A write that either replaces the file or leaves it as it was: the temporary
+// lands in the same directory, so the rename is within one filesystem.
+function TSandboxRunnerApp.WriteHostFile(const AHostPath: string;
+  const ABytes: TBytes): Boolean;
+var
+  Temporary: string;
+  Stream: TFileStream;
+begin
+  Result := False;
+  Temporary := AHostPath + '.goccia-write-back';
+  try
+    ForceDirectories(ExtractFilePath(AHostPath));
+    Stream := TFileStream.Create(Temporary, fmCreate);
+    try
+      if Length(ABytes) > 0 then
+        Stream.WriteBuffer(ABytes[0], Length(ABytes));
+    finally
+      Stream.Free;
+    end;
+    if FileExists(AHostPath) then
+      DeleteFile(AHostPath);
+    Result := RenameFile(Temporary, AHostPath);
+  except
+    on E: Exception do
+    begin
+      WriteLn(ErrOutput, 'write-back: ' + AHostPath + ': ' + E.Message);
+      Result := False;
+    end;
+  end;
+  if not Result and FileExists(Temporary) then
+    DeleteFile(Temporary);
+end;
+
+{ The guest never writes to the host. It writes into its own filesystem, and
+  this is the host deciding, afterwards and on its own command line, to keep
+  what came out. A run that failed is not kept: a fixer that threw halfway
+  has written some of its files and not the rest, and a half-applied fix is
+  worse than none. Deletions are never applied — this makes a file say
+  something different, it does not make one stop existing. }
+procedure TSandboxRunnerApp.WriteBackIfRequested(const ARunOk: Boolean);
+var
+  Paths: TStringList;
+  PendingSandbox, PendingHost: TStringList;
+  Path, HostPath: string;
+  I: Integer;
+  Written, Skipped: Integer;
+
+  procedure Collect(const ADirectory: string);
+  var
+    Index: Integer;
+    Listing: TSandboxFsStatArray;
+  begin
+    Listing := FContext.Fs.SnapshotList(ADirectory);
+    for Index := 0 to High(Listing) do
+      if Listing[Index].Kind = nkFile then
+        Paths.Add(Listing[Index].Path)
+      else
+        Collect(Listing[Index].Path);
+  end;
+
+begin
+  if not FWriteBack.Present then
+    Exit;
+
+  if not ARunOk then
+  begin
+    WriteLn(ErrOutput,
+      'write-back: skipped, the run did not succeed.');
+    Exit;
+  end;
+
+  Paths := TStringList.Create;
+  PendingSandbox := TStringList.Create;
+  PendingHost := TStringList.Create;
+  try
+    Collect('/');
+    Paths.Sort;
+    Written := 0;
+    Skipped := 0;
+
+    { Every target is resolved before any is written, so a path with no host
+      origin is reported rather than discovered halfway through. }
+    for I := 0 to Paths.Count - 1 do
+    begin
+      Path := Paths[I];
+      if Assigned(FContext.Baseline) and FContext.Baseline.IsFile(Path) and
+         SameSandboxBytes(FContext.Baseline.SnapshotReadAllBytes(Path),
+           FContext.Fs.SnapshotReadAllBytes(Path)) then
+        Continue;
+
+      if not HostPathForSandboxPath(Path, HostPath) then
+      begin
+        WriteLn('write-back: ' + Path + ' has no seeded host path, skipped');
+        Inc(Skipped);
+        Continue;
+      end;
+
+      if HostPathIsSymlink(ExcludeTrailingPathDelimiter(HostPath)) then
+      begin
+        WriteLn('write-back: ' + HostPath + ' is a symlink, skipped');
+        Inc(Skipped);
+        Continue;
+      end;
+
+      PendingSandbox.Add(Path);
+      PendingHost.Add(HostPath);
+    end;
+
+    for I := 0 to PendingSandbox.Count - 1 do
+    begin
+      Path := PendingSandbox[I];
+      HostPath := PendingHost[I];
+      if WriteHostFile(HostPath,
+           FContext.Fs.SnapshotReadAllBytes(Path)) then
+      begin
+        WriteLn('write-back: ' + HostPath);
+        Inc(Written);
+      end
+      else
+        Inc(Skipped);
+    end;
+
+    WriteLn(Format('write-back: %d file(s) written, %d skipped',
+      [Written, Skipped]));
+  finally
+    PendingHost.Free;
+    PendingSandbox.Free;
+    Paths.Free;
+  end;
+end;
+
 procedure TSandboxRunnerApp.WriteDiffIfRequested;
 var
   DiffText: string;
@@ -1112,6 +1353,7 @@ begin
     WriteLn(RunResult.ResultValue.ToStringLiteral.Value);
   if not RunResult.Ok then
     ExitCode := RunResult.ExitCode;
+  WriteBackIfRequested(RunResult.Ok);
   WriteDiffIfRequested;
 end;
 
