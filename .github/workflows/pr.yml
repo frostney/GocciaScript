@@ -1362,7 +1362,9 @@ jobs:
             const marker = '<!-- suite-timing -->';
             body = marker + '\n' + body;
 
-            const { data: comments } = await github.rest.issues.listComments({
+            // No checkout in this job, so it cannot load the shared upsert
+            // helper; paginate the same way so later-page comments are found.
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
