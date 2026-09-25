@@ -26,7 +26,7 @@ function getBucketStore(): Map<string, Bucket> {
 }
 const buckets = getBucketStore();
 const CLEANUP_INTERVAL_MS = 1_000;
-let nextCleanupAt = 0;
+let lastCleanupAt = Number.NEGATIVE_INFINITY;
 
 export type RateLimitResult = {
   ok: boolean;
@@ -45,8 +45,13 @@ export function rateLimit(key: string): RateLimitResult {
   b.count += 1;
   // A large active map rarely contains expired entries. Sweep at most once
   // per second instead of scanning it again for every request in the window.
-  if (buckets.size > 4096 && now >= nextCleanupAt) {
-    nextCleanupAt = now + CLEANUP_INTERVAL_MS;
+  // `Date.now()` is wall-clock time and can step backwards; sweep then too so
+  // the throttle does not stall cleanup until the clock catches up.
+  if (
+    buckets.size > 4096 &&
+    (now - lastCleanupAt >= CLEANUP_INTERVAL_MS || now < lastCleanupAt)
+  ) {
+    lastCleanupAt = now;
     for (const [k, v] of buckets) {
       if (v.resetAt <= now) buckets.delete(k);
     }

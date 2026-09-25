@@ -139,6 +139,32 @@ describe("rateLimit — token-bucket window", () => {
       }
     }
   });
+
+  test("a backwards wall-clock step does not stall cleanup", () => {
+    let now = 50_000_000;
+    Date.now = () => now;
+    const prefix = uniqueKey("clock-step");
+    for (let i = 0; i < 5_000; i++) rateLimit(`${prefix}:${i}`);
+
+    const store = (
+      globalThis as typeof globalThis & {
+        __GOCCIA_RL_BUCKETS__: Map<string, { count: number; resetAt: number }>;
+      }
+    ).__GOCCIA_RL_BUCKETS__;
+    try {
+      // Step the clock back an hour, then let a bucket opened there expire.
+      now -= 3_600_000;
+      const behindKey = `${prefix}:behind`;
+      const behind = rateLimit(behindKey);
+      now = behind.resetAt;
+      rateLimit(`${prefix}:probe`);
+      expect(store.has(behindKey)).toBe(false);
+    } finally {
+      for (const key of store.keys()) {
+        if (key.startsWith(prefix)) store.delete(key);
+      }
+    }
+  });
 });
 
 describe("clientIp — header preference order", () => {
