@@ -1630,6 +1630,50 @@ console.log("Executable manifests keep --no-host-filesystem in force...");
       }
     }
 
+    // A JavaScript manifest runs host code. Under --no-host-filesystem it is
+    // evaluated in an isolated loader, so a function it leaves on the global
+    // object imports as the guest, not as the host that loaded the manifest.
+    writeFileSync(
+      join(projDir, "trampoline.js"),
+      `globalThis.readLater = () => import(${JSON.stringify(outside)});\n` +
+        manifestSource,
+    );
+    writeFileSync(
+      join(projDir, "trampoline.mjs"),
+      "const m = await readLater(); console.log(m.secret);\n",
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const trampoline = runCwd(
+        LOADER,
+        [
+          join(projDir, "trampoline.mjs"),
+          "--no-host-filesystem",
+          `--mode=${mode}`,
+          "--modules",
+          join(projDir, "trampoline.js"),
+        ],
+        tmp,
+        { expectFail: true },
+      );
+      if (trampoline.combined.includes("HOST-FILE-READ"))
+        throw new Error(`A manifest's global function imported as the host under --no-host-filesystem (${mode}): ${trampoline.combined}`);
+      if (!trampoline.combined.includes(`PermissionDenied: read: ${outside}`))
+        throw new Error(`A manifest's global function import should be refused by the read capability (${mode}): ${trampoline.combined}`);
+      // Without the deny the manifest is evaluated in place, as host code.
+      const inPlace = runCwd(
+        LOADER,
+        [
+          join(projDir, "trampoline.mjs"),
+          `--mode=${mode}`,
+          "--modules",
+          join(projDir, "trampoline.js"),
+        ],
+        tmp,
+      );
+      if (!containsLine(inPlace.stdout, "HOST-FILE-READ"))
+        throw new Error(`A manifest evaluated in place keeps its host imports (${mode}): ${inPlace.combined}`);
+    }
+
     writeFileSync(
       join(projDir, "manifest.test.js"),
       [

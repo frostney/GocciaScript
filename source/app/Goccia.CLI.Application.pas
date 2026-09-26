@@ -799,15 +799,16 @@ begin
      (Extension = '.ts') then
   begin
     { The manifest is a host file named by the host, so it always loads from
-      the filesystem. Only an engine that already has host-filesystem module
-      loading may evaluate it in place; any other engine (for example under
-      --no-host-filesystem) uses an isolated loader so the script's own
-      content provider is never widened. }
-    if AEngine.ContentProvider is
-       TGocciaFileSystemModuleContentProvider then
-      AEngine.InjectModulesFromModule(APath)
+      the filesystem. Evaluated through the engine's own loader it and its
+      imports become host-owned there, so anything it leaves behind (a global
+      function that calls import(), say) would import as the host. Under an
+      outright read deny (--no-host-filesystem) it is therefore evaluated in
+      an isolated loader, and a later import made from its code is a guest
+      read the deny refuses. }
+    if AEngine.Capabilities.DeniesAll(gcRead) then
+      InjectModulesFromFileSystemModule(AEngine, APath)
     else
-      InjectModulesFromFileSystemModule(AEngine, APath);
+      AEngine.InjectModulesFromModule(APath);
     Exit;
   end;
 
