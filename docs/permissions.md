@@ -123,7 +123,8 @@ A computed specifier is detected at compile time: the interpreter checks the
 
 A **deny** removes the exemption too. A deny scope covering a project file
 refuses even its static imports, and an unscoped `read` deny refuses every host
-read — the runtime then installs no filesystem content provider at all.
+read. Either way the refusal is an audited `PermissionDenied`, like any other
+denial.
 
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
@@ -193,7 +194,7 @@ Capabilities := TGocciaCapabilities.None
 
 Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Executor,
   Capabilities);
-Runtime := AttachRuntime(Engine);   // filesystem provider unless read is denied
+Runtime := AttachRuntime(Engine);   // filesystem provider, reads checked
 InstallFFIIfGranted(Runtime);       // installs FFI only when ffi is granted
 Engine.FetchMaxResponseBytes := 1024 * 1024;
 ```
@@ -208,7 +209,7 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |
 | `Engine.ProjectRoot` | The exemption's project directory; override before executing |
 | `Engine.FetchMaxResponseBytes` | Response-body ceiling for `fetch` (0 = default) |
-| `AttachRuntime(Engine)` | Installs the filesystem provider unless `read` is denied outright |
+| `AttachRuntime(Engine)` | Installs the filesystem provider; the loader checks every read through it |
 | `InstallFFIIfGranted(Runtime)` | Installs the FFI extension only when `ffi` is granted; installing it directly without the grant raises `EGocciaFFINotGranted` |
 
 Every builder deep-copies the rules, so a value handed to an engine is never

@@ -107,8 +107,8 @@ type
 
 procedure TEngineCapabilitiesTests.SetupTests;
 begin
-  Test('The filesystem provider follows the read capability',
-    TestProviderFollowsReadCapability);
+  Test('The runtime installs the filesystem provider whatever the read ' +
+    'capability says', TestProviderFollowsReadCapability);
   Test('A static literal import inside the project needs no grant',
     TestStaticImportInsideProjectIsExempt);
   Test('A static import outside the project is denied without a host path',
@@ -335,12 +335,13 @@ begin
     finally
       Engine.Free;
     end;
+    { Under an outright deny the provider stays, so the loader can refuse
+      each read with an audited PermissionDenied. }
     Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
       TGocciaCapabilities.None.Deny(gcRead));
     try
       AttachRuntime(Engine);
-      Expect<Boolean>(Engine.ContentProvider is
-        TGocciaUnavailableModuleContentProvider).ToBe(True);
+      Expect<Boolean>(Engine.ContentProvider.ReadsHostFileSystem).ToBe(True);
     finally
       Engine.Free;
     end;
@@ -460,14 +461,30 @@ begin
   Expect<string>(Outcome.ErrorMessage).ToBe('read: ./lib.js');
 end;
 
+{ An outright read deny — the replacement for --no-host-filesystem — refuses
+  every host read with a catchable, audited PermissionDenied: static,
+  dynamic, and bytes imports alike. }
 procedure TEngineCapabilitiesTests.TestUnscopedDenyRemovesExemption;
 var
   Outcome: TRunOutcome;
 begin
   Outcome := Run('import { value } from "./lib.js"; globalThis.result = value;',
     TGocciaCapabilities.None.Deny(gcRead));
-  Expect<Boolean>(Outcome.ErrorMessage <> '').ToBe(True);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: ./lib.js');
   Expect<string>(Outcome.Result).ToBe('undefined');
+  Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
+    CanonicalCapabilityPath(ProjectPath('lib.js'))) >= 0).ToBe(True);
+
+  Outcome := Run('globalThis.result = "pending";' + sLineBreak +
+    'Promise.all([import("./lib.js"), import("./li" + "b.js"),' +
+    ' import("./lib.js", { with: { type: "bytes" } })].map((p) =>' +
+    ' p.then(() => "loaded", (e) => e.name + ":" + e.message)))' +
+    '.then((r) => { globalThis.result = r.join("|"); });',
+    TGocciaCapabilities.None.Deny(gcRead));
+  Expect<string>(Outcome.Result).ToBe(
+    'PermissionDenied:read: ./lib.js|PermissionDenied:read: ./lib.js|' +
+    'PermissionDenied:read: ./lib.js');
 end;
 
 procedure TEngineCapabilitiesTests.TestBytesImportOutsideProjectIsDenied;

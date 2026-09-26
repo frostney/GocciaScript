@@ -62,9 +62,10 @@ type
     function InjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean;
   public
-    { Installs the host filesystem content provider unless the engine's read
-      capability is denied outright. Reads through it are then checked against
-      the engine's capability set by the module loader. }
+    { Installs the host filesystem content provider. Every read through it is
+      checked against the engine's capability set by the module loader, so an
+      outright read deny refuses each read with an audited PermissionDenied
+      rather than by leaving the engine without a provider. }
     constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
 
@@ -155,8 +156,9 @@ type
     property Core: TGocciaRuntimeCore read FCore;
   end;
 
-{ Attaches the runtime layer. Whether host files can be loaded follows the
-  engine's capability set; see TGocciaRuntimeCore.Create. }
+{ Attaches the runtime layer, including the host filesystem content provider
+  whose reads the engine's capability set governs; see
+  TGocciaRuntimeCore.Create. }
 function AttachRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 function GetRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 
@@ -257,11 +259,7 @@ begin
 
   FEngine := AEngine;
   FExtensions := TObjectList<TGocciaRuntimeExtension>.Create(True);
-  { An outright read deny also removes the module-graph exemption, so there is
-    nothing the provider could legitimately load. Otherwise the provider is
-    installed and every read is judged by the module loader. }
-  if not FEngine.Capabilities.DeniesAll(gcRead) then
-    ConfigureFileLoading;
+  ConfigureFileLoading;
   CaptureResolverExtensions;
   RefreshModuleExtensions;
   FPrevRuntimeModuleLoader := FEngine.ModuleLoader.RuntimeModuleLoader;
