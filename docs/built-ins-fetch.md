@@ -43,21 +43,20 @@ request has no observable side effect. The request then checks the address the
 name resolved to, and repeats both checks on **every redirect hop**; a hop the
 capability refuses rejects the returned promise with `PermissionDenied`.
 
-Until the next layer of [ADR 0122](adr/0122-unified-capability-model.md)
-replaces the flags, the command line fills the `net` capability from today's
-options:
-
-| Option | Config key | Effect |
-|--------|-----------|--------|
-| `--allowed-host=<host>` | `allowed-hosts` | Allows that host; hosts that resolve into private ranges stay reachable |
-| `--fetch-deny-private-ranges` | `fetch-deny-private-ranges` | Denies private, loopback, link-local, CGNAT, and IPv6 ULA destinations |
-| `--fetch-max-response-bytes=<n>` | `fetch-max-response-bytes` | Response-body ceiling (default 8388608, 8 MiB); a setting, not a capability |
+On the command line `--allow-net` and `--deny-net` fill the capability, and a
+config file's `permissions` block does the same. Private, loopback, and
+link-local destinations are refused unless the grant names them: with
+`private`, or with an IP or CIDR scope covering the address. A host-name grant,
+even an unscoped `--allow-net`, does not reach a name that resolves privately.
+`--max-fetch-bytes` sets the response-body ceiling (default `8MiB`); it is a
+setting, not a capability. See [Permissions](permissions.md#command-line) for
+the grammar and [Limits and units](permissions.md#limits-and-units) for the
+accepted sizes:
 
 ```bash
 ./build/GocciaScriptLoader example.js \
-  --allowed-host=api.example.com \
-  --fetch-deny-private-ranges \
-  --fetch-max-response-bytes=1048576
+  --allow-net=api.example.com,127.0.0.1:8080 \
+  --max-fetch-bytes=1MiB
 ```
 
 A response over the ceiling rejects with `TypeError`. Both checks and the
@@ -82,8 +81,8 @@ TLS verification still runs against the **hostname**, never the pinned
 literal. Pinning changes which address is dialed, not which identity the peer
 must prove.
 
-**SSRF is reduced, not eliminated.** Refusing private ranges blocks the common
-targets — cloud instance metadata at `169.254.169.254`, loopback services,
+**SSRF is reduced, not eliminated.** Private ranges are refused unless a grant
+names them, which blocks the common targets — cloud instance metadata at `169.254.169.254`, loopback services,
 RFC1918 hosts. It cannot stop a *public* address that proxies to an internal
 one.
 

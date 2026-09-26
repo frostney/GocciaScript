@@ -9,12 +9,13 @@
 - **The module graph is exempt** — static imports with literal specifiers of files inside the project need no `read` grant; every other host read does
 - **Nested contexts only narrow** — ShadowRealm children, sandbox `runScript` children, and test262 realms inherit their parent's set and can never reach more
 - **Denials are catchable and auditable** — a denied operation throws `PermissionDenied` naming the capability and the requested scope, never a host path, and emits an audit event
+- **One command-line grammar** — `--allow-<cap>[=scope,...]` and `--deny-<cap>[=scope,...]`, a `permissions` block in config files, and `--max-*` limits with units
 
 The design is recorded in [ADR 0122](adr/0122-unified-capability-model.md).
-This page describes the engine mechanism. The command-line grammar that fills
-the set (`--allow-<cap>` / `--deny-<cap>`) arrives in the next layer of that
-work; until then the CLI builds the set from today's flags, as described in
-[Command line](#command-line).
+This page is the single reference for the engine mechanism, the
+[command line](#command-line) and [config files](#config-files) that fill the
+set, [limits](#limits-and-units), and the
+[flags GocciaScript 0.14.0 removed](#removed-flags-and-keys).
 
 ## Capabilities
 
@@ -71,7 +72,7 @@ the platform loader, so only an unscoped `ffi` allow covers it.
 | `*.example.com` | any subdomain of `example.com`, not `example.com` itself |
 | `203.0.113.7`, `[2001:db8::1]:8080` | that address literal |
 | `10.0.0.0/8`, `2001:db8::/32` | any address literal in the range |
-| `private` | lifts the private-range refusal; matches no destination by itself |
+| `private` | every private, loopback, and link-local destination |
 
 Host scopes are matched against the URL's host before any name lookup, so a
 refused request never becomes an observable side effect. An IP or CIDR scope
@@ -83,8 +84,14 @@ are **named**: either the `private` scope is allowed, or the destination address
 is covered by an explicit IP or CIDR allow. An unscoped allow does not name
 them. This is checked twice: against an address literal in the URL, and against
 the address a host name resolved to — so `api.example.com` whose DNS answers
-with `169.254.169.254` is refused unless `private` is allowed. Both checks run
-again on every redirect hop.
+with `169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
+allowed. Both checks run again on every redirect hop.
+
+`private` is a grant of its own: `--allow-net=private` reaches
+`http://127.0.0.1:8080` and `http://localhost:8080`, but no public address. A
+host name that only `private` allows passes the check on its name and is
+judged on the address it resolves to. A deny of `private`, or of an IP or CIDR
+covering the address, refuses the destination whatever allows it.
 
 ### `import` scopes
 
@@ -214,24 +221,168 @@ affected by later builder calls on the original.
 
 ## Command line
 
-The command-line flags change in the next layer of ADR 0122. Until then every
-binary builds its set from today's flags with the precedence those flags
-already have (command line, then per-file config, then root config), and
-honors exactly the flags it honors today:
+Every binary fills the set from the same grammar:
 
-| Today's flag | Capability |
+```text
+--allow-<cap>[=<scope>,<scope>...]
+--deny-<cap>[=<scope>,<scope>...]
+```
+
+`<cap>` is `read`, `net`, `ffi`, or `import`. The flags repeat and
+accumulate, and a deny wins regardless of order. A scope attaches only with
+`=`: `--allow-read foo.js` is an unscoped grant followed by an input file.
+Commas separate scopes, so a path containing a comma can only be named in a
+config file. There is no `--allow-all` and no environment-variable form.
+
+| Flag | Without a scope | With scopes |
+|---|---|---|
+| `--allow-read` | every path | paths, relative to the working directory |
+| `--allow-net` | every public host | `host`, `host:port`, `*.domain`, IP, CIDR, `private` |
+| `--allow-ffi` | every library (installs the `FFI` global) | library paths, relative to the working directory |
+| `--allow-import` | not accepted: a scope is required | `node_modules`, `node_modules=<dir>`, a provider such as `github` |
+| `--deny-read` | every read, including the project's own imports | paths |
+| `--deny-net` | every host | as for `--allow-net` |
+| `--deny-ffi` | every library | library paths |
+| `--deny-import` | not accepted: a scope is required | as for `--allow-import` |
+
+`--allow-net=` (an empty list) and `--allow-read=a,,b` (an empty item) are
+errors, as is a scope the capability does not accept:
+
+```text
+Error: Invalid scope for --allow-net: "http://x" (use host, host:port, *.domain, an IP, a CIDR range, or private)
+```
+
+### Defaults
+
+With no flags an engine reaches nothing beyond the
+[module-graph exemption](#the-module-graph-exemption): static imports of files
+inside the project work, and everything else is refused with
+`PermissionDenied`:
+
+```sh
+GocciaScriptLoader app.js                        # imports inside the project only
+GocciaScriptLoader app.js --allow-read=../shared # plus reads under ../shared
+GocciaScriptLoader app.js --allow-net=api.example.com --allow-net=127.0.0.1
+GocciaScriptLoader app.js --allow-import=node_modules
+GocciaScriptLoader app.js --deny-read            # not even the project's imports
+```
+
+### Config files
+
+A config file declares the permissions its files need in a `permissions`
+object. Its keys are the eight flag names; each value is `true` (no scope),
+`false` (absent, so a config can cancel what its `extends` base declared), or
+an array of scopes:
+
+```json
+{
+  "extends": "../goccia.json",
+  "permissions": {
+    "allow-read": ["../../fixtures/modules"],
+    "allow-net": ["127.0.0.1", "example.com"],
+    "allow-ffi": true,
+    "allow-import": ["node_modules=."],
+    "deny-net": ["10.0.0.0/8"]
+  }
+}
+```
+
+```toml
+[permissions]
+allow-ffi = ["../fixtures/ffi"]
+```
+
+- Relative path scopes, and the directory of `node_modules=<dir>`, resolve
+  against the directory of the file that declares them.
+- With `extends`, a child's key replaces its base's key; keys the child does
+  not name are inherited.
+- One config governs each file: its nearest `goccia.*`, or the root config
+  (`--config`, or the one discovered from the working directory) when it has
+  none. Configs compose only through `extends`.
+- An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
+  `true`, `false`, or an array of strings fails the run with status 2.
+- `allow-*` and `deny-*` at the top level of a config are errors: they belong
+  in `permissions`.
+
+A command-line allow adds to a config's grants, and every deny, from either
+source, subtracts. In this release a config's `permissions` block applies
+without any further step; [ADR 0122](adr/0122-unified-capability-model.md)
+adds a trust step for it.
+
+### What each binary honors
+
+A binary rejects an `--allow-*` flag for a capability it cannot grant (exit
+2) and warns once when a config requests one:
+
+```text
+Error: GocciaSandboxRunner cannot grant read; it supports net. Remove --allow-read.
+Warning: /repo/goccia.json requests allow-read, which GocciaBundler cannot grant; ignoring it
+```
+
+A `--deny-*` flag is always accepted. Limits follow the same rule on the
+command line; a limit a binary does not apply is ignored in config.
+
+| Binary | Capabilities | Limits | Config |
+|---|---|---|---|
+| `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner` | read, net, ffi, import | all | root and per-file |
+| `GocciaREPL` | read, net, ffi, import | all, per evaluated input | discovered from the working directory |
+| `GocciaBundler` | none | none | per-file, for compatibility flags |
+| `GocciaSandboxRunner` | net | all, plus `--max-fs-bytes` and `--max-fs-nodes` | `--config` only |
+| `GocciaScriptLoaderBare` | none | `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack` | none |
+| `GocciaTest262Runner` | none | `--timeout`, `--max-memory` | none |
+| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file |
+
+## Limits and units
+
+Limits are settings, not capabilities. Each takes a unit:
+
+| Option | Value | `0` means |
+|---|---|---|
+| `--timeout` | a duration: `500ms`, `5s`, `2m`, or plain milliseconds | no timeout |
+| `--max-memory` | a size: `64MiB`, `1GiB`, or plain bytes | no ceiling |
+| `--max-instructions` | a count | no limit |
+| `--max-stack` | a count | no limit |
+| `--max-fetch-bytes` | a size (default `8MiB`) | the default |
+| `--max-fs-bytes`, `--max-fs-nodes` (sandbox) | a size (default `16MiB`) / a count (default 4096) | rejected |
+
+Sizes accept `KiB`, `MiB`, and `GiB` (binary, case-insensitive, with or
+without the `B`). `K`, `KB`, `M`, `MB`, `G`, and `GB` are rejected as
+ambiguous, and so are fractions and signs. Config files take the same
+spellings: `"timeout": "5s"`, `"max-memory": "64MiB"`, `"max-stack": 5000`. A
+plain number keeps meaning milliseconds or bytes, so existing values still
+work.
+
+## Removed flags and keys
+
+GocciaScript 0.14.0 removed the earlier capability flags without aliases.
+Each now fails with status 2 and names its replacement:
+
+| Removed | Replacement |
 |---|---|
-| host-filesystem module loading (the default) | `read` allowed everywhere |
-| `--no-host-filesystem` | `read` denied outright |
-| `--allowed-host=<host>` / `"allowed-hosts"` | `net` allowed for each host, plus `private` |
-| `--fetch-deny-private-ranges` | `net` `private` denied |
-| `--unsafe-ffi` | `ffi` allowed everywhere |
-| `--allow-node-modules[=<dir>]` | `import` `node_modules[=<dir>]` |
+| `--allowed-host`, `"allowed-hosts"` | `--allow-net=<host>[,<host>...]`, `"permissions": { "allow-net": [...] }` |
+| `--fetch-deny-private-ranges` | private ranges are denied by default; `--allow-net=private` allows them and `--deny-net=private` refuses them outright |
+| `--fetch-max-response-bytes` | `--max-fetch-bytes` (units: `1MiB`) |
+| `--unsafe-ffi` | `--allow-ffi[=<library>,...]`, `"permissions": { "allow-ffi": true }` |
+| `--allow-node-modules[=<dir>]` | `--allow-import=node_modules[=<dir>]` |
+| `--no-host-filesystem` | host reads are denied by default; `--deny-read` also refuses the project's imports |
+| `--stack-size` | `--max-stack` |
+| `--fs-quota-bytes`, `--fs-node-limit` (sandbox) | `--max-fs-bytes`, `--max-fs-nodes` |
+| `--timeout-ms` (test262) | `--timeout` (units: `20s`) |
 
-The REPL and the benchmark runner ignore `--no-host-filesystem`, as before. The
-sandbox runner loads no host files and grants only `net` and `ffi`. The
-test262 runner, the bare loader, and the fuzz harness run core-language engines
-with `None`.
+The config keys of the same names (`"unsafe-ffi"`, `"allow-node-modules"`,
+`"no-host-filesystem"`, `"fetch-deny-private-ranges"`,
+`"fetch-max-response-bytes"`, `"stack-size"`, and the sandbox runner's
+`"fs-quota-bytes"` and `"fs-node-limit"`) fail the same way, naming the config
+spelling of the replacement:
+
+```text
+Error: --unsafe-ffi was removed in GocciaScript 0.14.0; use --allow-ffi[=<library>,...] instead
+Error: /repo/goccia.json: "allowed-hosts" was removed in GocciaScript 0.14.0; use "permissions": { "allow-net": [...] } instead
+```
+
+Boolean flags no longer take a value: `--compat-asi=false` is an error (exit
+2) rather than a silent enable. In a config file a flag must be exactly `true`
+or `false`; any other value is an invalid value (exit 1).
 
 ## Related documents
 

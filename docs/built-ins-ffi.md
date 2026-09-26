@@ -13,7 +13,7 @@
 
 ## Runtime Opt-in
 
-The Foreign Function Interface calls native shared libraries. It is available only when the engine's capability set grants `ffi` and `TGocciaFFIRuntimeExtension` is installed; hosts use `InstallFFIIfGranted`, and the extension refuses to attach without the grant. CLI tools grant `ffi` for `--unsafe-ffi` or `"unsafe-ffi": true` in configuration.
+The Foreign Function Interface calls native shared libraries. It is available only when the engine's capability set grants `ffi` and `TGocciaFFIRuntimeExtension` is installed; hosts use `InstallFFIIfGranted`, and the extension refuses to attach without the grant. CLI tools grant `ffi` for `--allow-ffi` (every library) or `--allow-ffi=<library>,...` (only those paths, relative to the working directory), or for `"allow-ffi"` in a config file's `permissions` block, whose relative scopes resolve against that file. A `--deny-ffi` scope refuses a library whatever allows it.
 
 `FFI.open(path)` checks the path against the `ffi` scopes and throws `PermissionDenied` (`ffi: <path>`) for a library outside them; see [Permissions](permissions.md#read-and-ffi-paths).
 

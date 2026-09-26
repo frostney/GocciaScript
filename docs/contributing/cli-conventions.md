@@ -60,7 +60,7 @@ The codes actually in use, which new commands should follow:
 |---|---|
 | `0` | Success |
 | `1` | The work was attempted and failed — a script threw, a test failed, a path did not exist, an option value was invalid |
-| `2` | The command could not be run as invoked — no input at a terminal, a missing required argument |
+| `2` | The command could not be run as invoked — no input at a terminal, a missing required argument, a removed flag or config key, a value given to a boolean flag, an `--allow-*` or limit the binary cannot honor, a command-line-only key or malformed `permissions` block in a config file |
 | `70` | The engine abandoned the run: an engine-integrity fault reached the host, `GocciaTestRunner` only |
 | `124` | test262 timeout marker, `GocciaScriptLoaderBare` only |
 
@@ -68,13 +68,22 @@ Code `70` is sysexits' `EX_SOFTWARE`, "an internal software error has been detec
 
 Code `2` is the narrower one: it means the process did no work because the invocation itself was unusable. `GocciaWasmTestRunner` has used it for a missing manifest since it was introduced, and `GocciaTOMLComplianceRunner` uses it for an unusable invocation.
 
-Be aware that the boundary is not clean everywhere yet. Errors raised out of `Execute` are caught centrally and become exit `1` regardless of whether they were a bad flag or a failed script, so some invocation errors — an unknown option, a rejected flag combination — still exit `1`. Do not treat that as the pattern to copy; route genuinely new usage errors to `2`.
+Raise `TCLIUsageError` (in `CLI.Options`) for a usage error. `TGocciaApplication.Run` catches it, prints `Error: <message>` to stderr, and exits `2` (`EXIT_CODE_USAGE`); binaries with their own argument parser do the same. The option layer already raises it for:
+
+- a removed flag or config key, with a message naming the replacement (see [Removed flags and keys](../permissions.md#removed-flags-and-keys));
+- a value given to a boolean flag, such as `--print=false`;
+- an `--allow-*` flag for a capability, or a limit, the binary does not honor;
+- a command-line-only key, such as `allow-net`, at the top level of a config file, and a malformed `permissions` block.
+
+An invalid *value* for an accepted option — a bad unit, an empty or malformed scope, a config flag that is not exactly `true` or `false` — is still a `TParseError` and exits `1`.
+
+Be aware that the boundary is not clean everywhere yet. Other errors raised out of `Execute` are caught centrally and become exit `1` regardless of whether they were a bad flag or a failed script, so some invocation errors — an unknown option, a rejected flag combination — still exit `1`. Do not treat that as the pattern to copy; route genuinely new usage errors to `2` through `TCLIUsageError`.
 
 ## Streams
 
 - **A machine-readable output mode owns stdout.** When `--output=json` or another structured mode is active, stdout must contain the envelope and nothing else — no progress markers, no per-test symbols, no summaries. Anything a human would want during such a run goes to stderr or is suppressed. This is why the runners gate reporter output on the output mode rather than only gating the final summary.
 - **New diagnostics go to stderr.** The no-argument help, path-not-found errors in the runners, and configuration warnings are all written there.
-- **Existing placement is uneven.** `GocciaScriptLoader` routes uncaught errors, syntax errors, and option errors through the shared error handler, which writes to stdout; the runners write their inline errors to stderr. Match the surrounding code when editing an existing path, and prefer stderr for anything new.
+- **Existing placement is uneven.** `GocciaScriptLoader` routes uncaught errors, syntax errors, and invalid option values through the shared error handler, which writes to stdout (usage errors exiting `2` go to stderr); the runners write their inline errors to stderr. Match the surrounding code when editing an existing path, and prefer stderr for anything new.
 
 ## Help output
 
@@ -88,5 +97,6 @@ Be aware that the boundary is not clean everywhere yet. Errors raised out of `Ex
 1. Derive from `TGocciaCLIApplication` unless there is a concrete reason not to — it supplies option parsing, config discovery, `--help`, logging, the multifile split, and the no-argument rule.
 2. Implement `Configure` (declare options), `UsageLine`, and `ExecuteWithPaths`.
 3. If the command reads a program from stdin when given no path, override `StdinUsage`. Point users at `GocciaREPL` only where an interactive session is a sensible alternative.
-4. Register the build target in `build.pas` and add the binary path to `scripts/test-cli/binaries.ts`.
-5. Add CLI behavior coverage under `scripts/test-cli-*.ts`; see [Testing](../testing.md) for which harness owns what.
+4. Override `HonoredCapabilities` and `HonoredSettings` to declare which capabilities the binary can grant (default: none) and which limits it applies (default: all). The base class hides the rest from `--help`, rejects them on the command line with exit `2`, and ignores or warns about them in config; add the binary to the table in [Permissions — What each binary honors](../permissions.md#what-each-binary-honors).
+5. Register the build target in `build.pas` and add the binary path to `scripts/test-cli/binaries.ts`.
+6. Add CLI behavior coverage under `scripts/test-cli-*.ts`; see [Testing](../testing.md) for which harness owns what.

@@ -61,7 +61,7 @@ JavaScript and TypeScript manifests must default-export the module map. A
 manifest is evaluated before its definitions are registered, so it cannot
 import modules that it defines itself. The manifest is a host file, so it is
 always read from the filesystem, but evaluating it never grants the script
-host-filesystem module loading: under `--no-host-filesystem` the manifest runs
+host-filesystem module loading: under `--deny-read` the manifest runs
 in an isolated loader and the script's own imports stay restricted.
 
 Project config may contain a module map directly:

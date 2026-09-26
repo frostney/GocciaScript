@@ -262,7 +262,7 @@ The harness passes every suite the same goccia flags (`--source-type=module
 profile seals names it in its classification's `gocciaFlags`, and only that
 suite gets it — enabling a capability for one file cannot quietly change what
 the others are testing. `m-nodemods.test.js` and `n-nodemods.goccia.test.js`
-use it for `--allow-node-modules`.
+use it for `--allow-import=node_modules`.
 
 A suite belongs in the bun-gated column only when the flag makes goccia do what
 the oracle already does natively. Bun resolves `node_modules` on its own, so
