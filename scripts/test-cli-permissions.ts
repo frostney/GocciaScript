@@ -307,6 +307,32 @@ console.log("Binaries with their own parser follow the same grammar...");
     const bareFlag = run(BARE, ["--compat-var=false", "main.js"], { cwd: tmp });
     expectExit(bareFlag, 2, "Bare --compat-var=false");
     expectIncludes(bareFlag.stderr, "--compat-var does not take a value", "Bare --compat-var=false");
+    const test262Flag = run(TEST262RUNNER, ["--verbose=false"], { cwd: tmp });
+    expectExit(test262Flag, 2, "Test262 --verbose=false");
+    expectIncludes(test262Flag.stderr, "--verbose does not take a value", "Test262 --verbose=false");
+    const bareShort = run(BARE, ["-A", "main.js"], { cwd: tmp });
+    expectExit(bareShort, 1, "Bare -A");
+    expectIncludes(bareShort.stderr, "Unknown option: -A", "Bare -A");
+
+    // Grammar comes before support, as in the shared parser: a malformed
+    // --allow-* is an invalid value (1) everywhere, a well-formed unsupported
+    // one a usage error (2).
+    for (const [flag, message] of [
+      ["--allow-net=", "--allow-net= has an empty scope list"],
+      ["--allow-read=a,,b", "Empty scope in --allow-read=a,,b"],
+      ["--allow-import", "--allow-import needs a scope"],
+    ] as const) {
+      for (const [binary, args] of [[BARE, [flag, "main.js"]], [TEST262RUNNER, [flag]], [BUNDLER, [flag, "main.js"]], [LOADER, [flag, "main.js"]]] as const) {
+        const result = run(binary, [...args], { cwd: tmp });
+        expectExit(result, 1, `${binary} ${flag}`);
+        expectIncludes(result.combined, message, `${binary} ${flag}`);
+      }
+    }
+    for (const [binary, args] of [[BARE, ["--allow-net=example.com", "main.js"]], [TEST262RUNNER, ["--allow-net=example.com"]], [BUNDLER, ["--allow-net=example.com", "main.js"]]] as const) {
+      const result = run(binary, [...args], { cwd: tmp });
+      expectExit(result, 2, `${binary} well-formed unsupported --allow-net`);
+      expectIncludes(result.stderr, "cannot grant net", `${binary} well-formed unsupported --allow-net`);
+    }
 
     // Limits a binary does not apply are rejected like the bundler's.
     const unsupportedLimits: [string, string[], string][] = [
