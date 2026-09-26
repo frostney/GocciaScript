@@ -1,6 +1,6 @@
 # Permissions
 
-<!-- doc-length-limit: 900 -->
+<!-- doc-length-limit: 1000 -->
 <!-- The single reference for grants, config trust, and sandbox mode (ADR 0122). -->
 
 *The capability model: what an engine may reach outside its process, how grants and denies combine, and how a denial surfaces.*
