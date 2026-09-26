@@ -8,7 +8,7 @@
  * config permissions blocks, and the --max-* limits with units.
  */
 
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -23,7 +23,10 @@ import {
 } from "./test-cli/binaries";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
-const makeTmp = makeTmpFactory("goccia-permissions-");
+// Resolved, so expected paths match what the binaries report: macOS's
+// /var is /private/var, and Windows expands 8.3 short names.
+const makeTmpUnresolved = makeTmpFactory("goccia-permissions-");
+const makeTmp = (): string => realpathSync.native(makeTmpUnresolved());
 
 type RunResult = { exitCode: number; stdout: string; stderr: string; combined: string };
 
@@ -39,8 +42,9 @@ function run(
     stderr: "pipe",
     timeout: 60_000,
   });
-  const stdout = proc.stdout.toString();
-  const stderr = proc.stderr.toString();
+  // Windows consoles end lines with CRLF; compare lines as LF.
+  const stdout = proc.stdout.toString().replace(/\r\n/g, "\n");
+  const stderr = proc.stderr.toString().replace(/\r\n/g, "\n");
   return { exitCode: proc.exitCode ?? -1, stdout, stderr, combined: stdout + stderr };
 }
 
