@@ -287,7 +287,7 @@ begin
       if not TryEncodeUTF8NullTerminated(Parts[I], PathBytes, ErrorOffset) then
         Refuse(APath, 'the path cannot be encoded for the host');
       Next := HostOpenAt(Directory, PAnsiChar(@PathBytes[0]),
-        O_RDONLY or O_NOFOLLOW or O_NONBLOCK);
+        O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
       if Next < 0 then
       begin
         { Nothing creates a missing directory for an output, as before. }
@@ -307,7 +307,8 @@ begin
       Refuse(APath, 'the path cannot be encoded for the host');
     { Not truncated yet: what is there has to be a plain file first. }
     Next := HostOpenAt(Directory, PAnsiChar(@PathBytes[0]),
-      O_WRONLY or O_CREAT or O_NOFOLLOW or O_NONBLOCK, cint(NEW_FILE_MODE));
+      O_WRONLY or O_CREAT or HOST_O_NOFOLLOW or O_NONBLOCK,
+      cint(NEW_FILE_MODE));
     if Next < 0 then
       Refuse(APath, 'it is a symbolic link or cannot be created (' +
         HostErrorText + ')');

@@ -10,6 +10,36 @@ uses
   Classes,
   SysUtils;
 
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  { open(2)/openat(2) flags and *at(2) arguments FPC 3.2.2's BaseUnix does
+    not declare on every host. Linux takes FPC's own O_* values, which vary
+    by architecture; its AT_* values are the same on every architecture
+    (linux/fcntl.h). Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h,
+    FreeBSD's from sys/sys/fcntl.h. }
+  {$IF DEFINED(LINUX)}
+  HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
+  HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $100;
+  HOST_AT_REMOVEDIR = $200;
+  {$ELSEIF DEFINED(DARWIN)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $100000;
+  HOST_AT_FDCWD = -2;
+  HOST_AT_SYMLINK_NOFOLLOW = $20;
+  HOST_AT_REMOVEDIR = $80;
+  {$ELSEIF DEFINED(FREEBSD)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $20000;
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $200;
+  HOST_AT_REMOVEDIR = $800;
+  {$ELSE}
+    {$ERROR Declare the open(2) and *at(2) constants for this host in FileUtils}
+  {$IFEND}
+{$IFEND}
+
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
