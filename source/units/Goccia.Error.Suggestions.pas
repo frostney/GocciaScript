@@ -400,6 +400,8 @@ resourcestring
   // Fetch API
   SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
   SSuggestFetchAllowedHosts = 'grant it with --allow-net=<host>, or "allow-net" in the "permissions" block of goccia.json';
+  SSuggestFetchDeniedScope = 'refused by the net deny %s (--deny-net=%s, or "deny-net" in the "permissions" block of goccia.json); a deny always wins over an allow';
+  SSuggestFetchDeniedAll = 'a net deny refuses every host (--deny-net, or "deny-net": true in the "permissions" block of goccia.json); a deny always wins over an allow';
   SSuggestFetchPrivateDestination = 'private, loopback, and link-local destinations need --allow-net=private or --allow-net=<address>, and --deny-net=private refuses them';
   // Capability denials (ADR 0122). %s is the canonical host path; the
   // second %s the directory a grant would name.

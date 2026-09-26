@@ -136,16 +136,30 @@ begin
     Result := Result + ':' + IntToStr(AParsed.Port);
 end;
 
-{ The host-side hint for a refused destination: a private address literal is
-  refused by the private-range rule rather than by a missing host grant. }
-function NetDenialSuggestion(const AHost: string): string;
+{ The host-side hint for a refused destination, chosen by why the net
+  capability refused it: the deny that matched, a private address nothing
+  names, or a missing host grant. }
+function NetDenialSuggestion(const ACapabilities: TGocciaCapabilities;
+  const AHost: string; const APort: Integer): string;
 var
+  Scope: string;
   Address: TNetworkAddress;
 begin
-  if TryParseIPAddress(AHost, Address) and IsPrivateIPAddress(Address) then
-    Result := SSuggestFetchPrivateDestination
+  case ACapabilities.NetHostVerdict(AHost, APort) of
+    nhvDenied:
+      if ACapabilities.NetDenyScope(AHost, APort, Scope) and
+         (Scope <> '') then
+        Result := Format(SSuggestFetchDeniedScope, [Scope, Scope])
+      else
+        Result := SSuggestFetchDeniedAll;
+    nhvPrivateNotNamed:
+      Result := SSuggestFetchPrivateDestination;
   else
-    Result := SSuggestFetchAllowedHosts;
+    if TryParseIPAddress(AHost, Address) and IsPrivateIPAddress(Address) then
+      Result := SSuggestFetchPrivateDestination
+    else
+      Result := SSuggestFetchAllowedHosts;
+  end;
 end;
 
 procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
@@ -181,7 +195,7 @@ begin
       FCapabilityAuditEmitter(gckNetFetch, gcdDeny, Host,
         FCapabilities.ExplainNetHostDenial(Parsed.Host, Parsed.Port));
     ThrowPermissionDenied(CapabilityName(gcNet), NetDenialScope(Parsed),
-      NetDenialSuggestion(Parsed.Host));
+      NetDenialSuggestion(FCapabilities, Parsed.Host, Parsed.Port));
   end;
 
   if Assigned(FCapabilityAuditEmitter) then
