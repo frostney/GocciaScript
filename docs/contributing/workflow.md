@@ -73,6 +73,18 @@ git commit -m "Short imperative description of the change"
   whole: `feat` when the net effect is new capability, even if most of the
   commits under it are fixes.
 
+### Code review scope
+
+CodeRabbit reads `.coderabbit.config.ts`, which inherits the central
+`frostney/coderabbit` settings and the web-UI settings and skips the vendored
+Agent Skills. Every skill listed in `skills-lock.json` is installed from
+upstream by the skills CLI and refreshed by
+`.github/workflows/agent-skills-bump.yml`, so findings on it belong upstream. A
+skill under `.agents/skills/` that the lock does not list is project-authored
+and is reviewed like any other file. The config reads the lock through
+`skills-lock.yaml`, a symlink, because CodeRabbit's config sandbox imports
+`.yaml` but not `.json`.
+
 ### Stacked pull requests
 
 A stacked pull request targets the layer below it rather than `main`, and
