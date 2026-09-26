@@ -373,7 +373,8 @@ Limits are settings, not capabilities. Each takes a unit:
 
 Sizes accept `KiB`, `MiB`, and `GiB` (binary, case-insensitive, with or
 without the `B`). `K`, `KB`, `M`, `MB`, `G`, and `GB` are rejected as
-ambiguous, and so are fractions and signs. Config files take the same
+ambiguous, and so are fractions and signs. Duration units (`ms`, `s`, `m`)
+are case-insensitive too. Config files take the same
 spellings: `"timeout": "5s"`, `"max-memory": "64MiB"`, `"max-stack": 5000`. A
 plain number keeps meaning milliseconds or bytes, so existing values still
 work.
