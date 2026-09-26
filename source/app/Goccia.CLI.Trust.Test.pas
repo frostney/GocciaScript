@@ -32,6 +32,7 @@ type
     procedure TestSymlinkedConfigKeysToTarget;
     procedure TestSymlinkedConfigFileHasItsOwnKey;
     procedure TestSymlinkedDirectoryHashesAtItsTarget;
+    procedure TestRetargetedScopesNeedTrust;
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestMalformedStoresRefused;
     procedure TestLockContention;
@@ -103,6 +104,8 @@ begin
     TestSymlinkedConfigFileHasItsOwnKey);
   Test('A config in a symlinked directory hashes at its target',
     TestSymlinkedDirectoryHashesAtItsTarget);
+  Test('A re-pointed path scope needs trusting again',
+    TestRetargetedScopesNeedTrust);
   Test('Newer and corrupt stores are refused',
     TestNewerAndCorruptStoresRefused);
   Test('Stores of the wrong shape are refused', TestMalformedStoresRefused);
@@ -197,6 +200,7 @@ begin
   Result.BlockJSON := NormalizedPermissionBlock(Request);
   Result.TrustedAt := '2026-09-20T10:12:03Z';
   Result.TrustedBy := 'GocciaTestRunner 0.14.0';
+  Result.Targets := PathScopeTargets(Request);
 end;
 
 function TTrustTests.StoreError(const APath: string): string;
@@ -416,6 +420,92 @@ begin
   finally
     Gate.Free;
   end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestRetargetedScopesNeedTrust;
+{$IFDEF UNIX}
+var
+  Base, ConfigPath, StorePath, Elsewhere: string;
+  Store: TGocciaTrustStore;
+  Verdict: TGocciaConfigTrustVerdict;
+  Reloaded: TGocciaTrustStore;
+  Found: TGocciaTrustEntry;
+
+  function VerifyNow: TGocciaConfigTrustVerdict;
+  var
+    Gate: TGocciaConfigTrustGate;
+  begin
+    Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+      ALL_CAPABILITIES, True, LoadConfig);
+    try
+      Result := Gate.Verify(ConfigPath);
+    finally
+      Gate.Free;
+    end;
+  end;
+
+begin
+  Base := FRoot + PathDelim + 'retarget';
+  ConfigPath := WriteFile('retarget/project/goccia.json',
+    '{"permissions": {"allow-read": ["./data", "./build"]}}');
+  WriteFile('retarget/project/data/x.txt', 'x');
+  Elsewhere := Base + PathDelim + 'elsewhere';
+  ForceDirectories(Elsewhere);
+  StorePath := Base + PathDelim + 'trust.json';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(ConfigPath));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  { The targets round-trip through the store, outside the hash. }
+  Reloaded := TGocciaTrustStore.Load(StorePath);
+  try
+    Expect<Boolean>(Reloaded.TryFind(ConfigPath, Found)).ToBe(True);
+    Expect<Integer>(Length(Found.Targets)).ToBe(2);
+    Expect<string>(Found.Targets[0].Target).ToBe(TRUST_TARGET_ABSENT);
+    Expect<string>(Found.Targets[1].Target).ToBe(Base + PathDelim +
+      'project' + PathDelim + 'data');
+  finally
+    Reloaded.Free;
+  end;
+  Expect<Boolean>(VerifyNow.State = ctsTrusted).ToBe(True);
+
+  { A build output appearing in place of an absent scope is expected. }
+  ForceDirectories(Base + PathDelim + 'project' + PathDelim + 'build');
+  Expect<Boolean>(VerifyNow.State = ctsTrusted).ToBe(True);
+  RemoveDir(Base + PathDelim + 'project' + PathDelim + 'build');
+
+  { data/ replaced by a link elsewhere: same block, different place. }
+  DeleteFile(Base + PathDelim + 'project' + PathDelim + 'data' + PathDelim +
+    'x.txt');
+  RemoveDir(Base + PathDelim + 'project' + PathDelim + 'data');
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'project' + PathDelim + 'data'))))
+    .ToBe(0);
+  Verdict := VerifyNow;
+  Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
+  Expect<Integer>(Length(Verdict.TargetChanges)).ToBe(1);
+  Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Base +
+    PathDelim + 'project' + PathDelim + 'data: ' + Base + PathDelim +
+    'project' + PathDelim + 'data -> ' + Elsewhere);
+
+  { An absent scope appearing as a link out of its own place is a change. }
+  DeleteFile(Base + PathDelim + 'project' + PathDelim + 'data');
+  ForceDirectories(Base + PathDelim + 'project' + PathDelim + 'data');
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'project' + PathDelim +
+    'build')))).ToBe(0);
+  Verdict := VerifyNow;
+  Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
+  Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Base +
+    PathDelim + 'project' + PathDelim + 'build: absent -> ' + Elsewhere);
 end;
 {$ELSE}
 begin

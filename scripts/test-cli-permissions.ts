@@ -1112,6 +1112,31 @@ console.log("Trust follows each file's own config...");
       expectIncludes(result.stderr, "can only be given on the command line", `config ${key}`);
     }
 
+    // A trusted path scope re-pointed by a symlink is a change: same block,
+    // different place.
+    if (!isWindows) {
+      mkdirSync(join(tmp, "retarget", "data"), { recursive: true });
+      mkdirSync(join(tmp, "secrets"));
+      writeFileSync(join(tmp, "secrets", "key.txt"), "SECRET\n");
+      writeFileSync(join(tmp, "retarget", "data", "key.txt"), "ok\n");
+      writeFileSync(join(tmp, "retarget", "goccia.json"), '{"permissions": {"allow-read": ["./data"]}}\n');
+      writeFileSync(join(tmp, "retarget", "main.mjs"),
+        'const p = "./data/" + "key.txt"; const m = await import(p, { with: { type: "text" } }); console.log("READ", m.default.trim());\n');
+      run(LOADER, ["--trust-store=trust.json", "--trust", "retarget", "--yes"], { cwd: tmp });
+      expectIncludes(run(LOADER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp }).stdout, "READ ok", "trusted scope");
+      rmSync(join(tmp, "retarget", "data"), { recursive: true });
+      symlinkSync(join(tmp, "secrets"), join(tmp, "retarget", "data"));
+      const retargeted = run(LOADER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp });
+      expectExit(retargeted, 2, "re-pointed scope");
+      expectExcludes(retargeted.stdout, "SECRET", "re-pointed scope runs nothing");
+      expectIncludes(retargeted.stderr, "(changed since trusted", "re-pointed scope");
+      expectIncludes(retargeted.stderr, `  ~ target of ${realpathSync(tmp)}/retarget/data: `, "re-pointed scope");
+      expectIncludes(retargeted.stderr, ` -> ${realpathSync(join(tmp, "secrets"))}`, "re-pointed scope");
+      expectIncludes(run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "  ~ target of ", "--list-trusted shows the re-pointed scope");
+      run(LOADER, ["--trust-store=trust.json", "--trust", "retarget", "--yes"], { cwd: tmp });
+      expectIncludes(run(LOADER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp }).stdout, "READ SECRET", "re-trusted scope");
+    }
+
     // 21. Trusting through a symlink covers the real path.
     if (!isWindows) {
       mkdirSync(join(tmp, "real"));

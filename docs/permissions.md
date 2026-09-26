@@ -540,6 +540,24 @@ change to a base reached through `extends` invalidates every child. Trust
 covers what code may do, not what the code is: new code under a trusted block
 runs with its permissions.
 
+The block is lexical, so replacing a trusted path with a symbolic link would
+keep its hash while pointing the grant somewhere else. Each entry therefore
+also records, outside the hash, where every path scope (`read` and `ffi`
+paths, allow and deny, and the directory of `node_modules=<dir>`) resolved
+when it was trusted, or that nothing existed there. A scope that now resolves
+to a different place makes the config changed since trusted, and the report
+and `--list-trusted` show it:
+
+```text
+  project/goccia.json (changed since trusted 2026-09-20T10:12:03Z)
+    allow-read: /home/u/project/data
+  ~ target of /home/u/project/data: /home/u/project/data -> /etc
+```
+
+A scope that did not exist when trusted may appear later without a change, as
+a build output does, unless it resolves outside its own path. A scope that no
+longer exists is not a change: it grants nothing.
+
 ### The store
 
 | Platform | Path |
@@ -556,6 +574,7 @@ runs with its permissions.
     "/abs/tests/built-ins/fetch/goccia.json": {
       "sha256": "9f2c…",
       "block": {"permissions":{"allow-net":["0.0.0.0","127.0.0.1","example.com"]},"version":1},
+      "targets": {},
       "trustedAt": "2026-09-25T10:12:03Z",
       "trustedBy": "GocciaTestRunner 0.14.0"
     }
@@ -580,7 +599,8 @@ is removed with a warning.
 A missing store is empty. A store that is not JSON, that has the wrong shape
 (anything but the schema above: a missing or non-integer `version`, a
 `trusted` that is not an object, an entry missing a field or with a field of
-the wrong type or an unknown key, a `sha256` that is not 64 lower-case hex
+the wrong type or an unknown key (`targets` is optional; its values are
+strings), a `sha256` that is not 64 lower-case hex
 digits), or that a newer GocciaScript wrote, is an error with status 1 for
 `--trust`, `--untrust`, and `--list-trusted`, which never overwrite it; at run
 time its configs are treated as untrusted and the report names the problem:
