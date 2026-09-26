@@ -1678,8 +1678,10 @@ console.log("Executable manifests keep --deny-read in force...");
         throw new Error(`A manifest's global function imported as the host under --deny-read (${mode}): ${trampoline.combined}`);
       if (!trampoline.combined.includes(`PermissionDenied: read: ${outside}`))
         throw new Error(`A manifest's global function import should be refused by the read capability (${mode}): ${trampoline.combined}`);
-      // Without the deny the manifest is evaluated in place, as host code.
-      const inPlace = runCwd(
+      // Without the deny the manifest is evaluated in place, but a function
+      // it leaves behind still runs later as guest code: its import() is a
+      // guest read, refused without a grant and allowed with one.
+      const inPlaceDenied = runCwd(
         LOADER,
         [
           join(projDir, "trampoline.mjs"),
@@ -1688,9 +1690,23 @@ console.log("Executable manifests keep --deny-read in force...");
           join(projDir, "trampoline.js"),
         ],
         tmp,
+        { expectFail: true },
+      );
+      if (!inPlaceDenied.combined.includes(`PermissionDenied: read: ${outside}`))
+        throw new Error(`A manifest function's later import is a guest read (${mode}): ${inPlaceDenied.combined}`);
+      const inPlace = runCwd(
+        LOADER,
+        [
+          join(projDir, "trampoline.mjs"),
+          `--mode=${mode}`,
+          `--allow-read=${outside}`,
+          "--modules",
+          join(projDir, "trampoline.js"),
+        ],
+        tmp,
       );
       if (!containsLine(inPlace.stdout, "HOST-FILE-READ"))
-        throw new Error(`A manifest evaluated in place keeps its host imports (${mode}): ${inPlace.combined}`);
+        throw new Error(`A granted guest read from a manifest function succeeds (${mode}): ${inPlace.combined}`);
     }
 
     // The same holds for a --globals module: host code while it is enrolled,
@@ -1705,7 +1721,7 @@ console.log("Executable manifests keep --deny-read in force...");
         LOADER,
         [
           join(projDir, "trampoline.mjs"),
-          "--no-host-filesystem",
+          "--deny-read",
           `--mode=${mode}`,
           `--globals=${join(projDir, "host-globals.js")}`,
         ],
@@ -1713,7 +1729,7 @@ console.log("Executable manifests keep --deny-read in force...");
         { expectFail: true },
       );
       if (late.combined.includes("HOST-FILE-READ"))
-        throw new Error(`A --globals function imported as the host under --no-host-filesystem (${mode}): ${late.combined}`);
+        throw new Error(`A --globals function imported as the host under --deny-read (${mode}): ${late.combined}`);
       if (!late.combined.includes(`PermissionDenied: read: ${outside}`))
         throw new Error(`A --globals function import should be refused by the read capability (${mode}): ${late.combined}`);
     }
