@@ -58,8 +58,16 @@ directory through a link. A path that does not exist yet is judged by its
 deepest existing ancestor. Matching stops at a separator: `/a/b` covers
 `/a/b/c.js` but not `/a/bc`.
 
-`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path, so
-the file checked is the file opened. A bare library name such as `libc.so.6`
+`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path. A
+directory on that path could be swapped between the check and the load, so the
+load is pinned to what was judged as far as the platform allows. On Linux the
+file is opened first, the kernel's path for that descriptor is judged, and the
+loader maps the descriptor itself, so the file checked is the file loaded.
+On Windows the path the loader reports for the loaded module is judged again,
+and a library outside the grant is unloaded and refused. On macOS and other
+Unix systems the path is canonicalized again after the load and must still be
+the judged one; a swap that is undone again within the load window cannot be
+detected there. A bare library name such as `libc.so.6`
 has no directory part and is searched for by the platform loader, which no
 path scope can describe: it is allowed only when every layer allows `ffi`
 unscoped and no layer has an `ffi` deny scope.

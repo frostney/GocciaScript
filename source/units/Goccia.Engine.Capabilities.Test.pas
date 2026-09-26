@@ -20,6 +20,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
@@ -125,6 +126,7 @@ type
     procedure TestStaticImportDenialSitesMatchAcrossExecutors;
     procedure TestHostModuleCodeImportsAsTheGuestLater;
     procedure TestDeferredGraphDependenciesAreJudged;
+    procedure TestFFIOpenLoadsTheJudgedLibrary;
   public
     procedure SetupTests; override;
   end;
@@ -206,6 +208,8 @@ begin
     'read', TestHostModuleCodeImportsAsTheGuestLater);
   Test('import defer judges every module of the deferred graph before ' +
     'reading it', TestDeferredGraphDependenciesAreJudged);
+  Test('FFI.open loads the library it judged even if a directory is swapped ' +
+    'before the load', TestFFIOpenLoadsTheJudgedLibrary);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -1611,6 +1615,108 @@ begin
     Expect<string>(Outcome.ErrorMessage).ToBe('');
     Expect<string>(Outcome.Result).ToBe('linked');
   end;
+end;
+
+
+var
+  GSwapDirectory, GSwapMovedTo, GSwapLinkTarget: string;
+
+{ Runs between FFI.open's check and its load: moves the judged directory away
+  and puts a symlink to another directory in its place. }
+procedure SwapJudgedLibraryDirectory;
+begin
+  {$IFDEF UNIX}
+  RenameFile(GSwapDirectory, GSwapMovedTo);
+  fpSymlink(PAnsiChar(AnsiString(GSwapLinkTarget)),
+    PAnsiChar(AnsiString(GSwapDirectory)));
+  {$ENDIF}
+end;
+
+procedure CopyFileContents(const ASource, ATarget: string);
+var
+  Input, Output: TFileStream;
+begin
+  ForceDirectories(ExtractFileDir(ATarget));
+  Input := TFileStream.Create(ASource, fmOpenRead or fmShareDenyNone);
+  try
+    Output := TFileStream.Create(ATarget, fmCreate);
+    try
+      Output.CopyFrom(Input, 0);
+    finally
+      Output.Free;
+    end;
+  finally
+    Input.Free;
+  end;
+end;
+
+{ The check judges <project>/ffilibs/good/libfixture.so. If the directory is
+  swapped for a symlink to a directory outside the grant before the load, the
+  library mapped must still be the judged file, never the outside copy. }
+procedure TEngineCapabilitiesTests.TestFFIOpenLoadsTheJudgedLibrary;
+{$IFDEF LINUX}
+var
+  Fixture, Good, Outside, Maps: string;
+  MapsLines: TStringList;
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF LINUX}
+  Fixture := ExpandFileName('fixtures/ffi/libfixture.so');
+  if not FileExists(Fixture) then
+  begin
+    { The FFI fixture is built by the testrunner target. }
+    Expect<Boolean>(True).ToBe(True);
+    Exit;
+  end;
+  Good := ProjectPath('ffilibs/good');
+  Outside := OutsidePath('ffilibs-evil');
+  CopyFileContents(Fixture, Good + '/libfixture.so');
+  CopyFileContents(Fixture, Outside + '/libfixture.so');
+  GSwapDirectory := Good;
+  GSwapMovedTo := Good + '.moved';
+  GSwapLinkTarget := Outside;
+  Outcome := Default(TRunOutcome);
+  Maps := '';
+  Source := TStringList.Create;
+  Source.Text := 'globalThis.lib = FFI.open("' + Good + '/libfixture.so");' +
+    ' globalThis.result = "opened";';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  GocciaFFIAfterOpenCheck := SwapJudgedLibraryDirectory;
+  try
+    InstallFFIIfGranted(AttachRuntime(Engine));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Outcome);
+    end;
+    MapsLines := TStringList.Create;
+    try
+      MapsLines.LoadFromFile('/proc/self/maps');
+      Maps := MapsLines.Text;
+    finally
+      MapsLines.Free;
+    end;
+  finally
+    GocciaFFIAfterOpenCheck := nil;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    DeleteFile(Good);
+    RenameFile(GSwapMovedTo, Good);
+  end;
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<Boolean>(Pos(Outside, Maps) > 0).ToBe(False);
+  Expect<Boolean>(Pos(GSwapMovedTo + '/libfixture.so', Maps) > 0).ToBe(True);
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
 end;
 
 begin

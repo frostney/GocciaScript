@@ -107,6 +107,12 @@ type
     function AllowsPath(const ACapability: TGocciaCapability;
       const APath: string): Boolean;
 
+    { read/ffi: APath is already canonical — for example the path the kernel
+      reports for a file descriptor already opened — and is matched as
+      written, without touching the filesystem again. }
+    function AllowsCanonicalPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
+
     { net, before name resolution. An IP-literal host in a private range also
       needs private ranges to be named (see AllowsNetAddress). }
     function AllowsNetHost(const AHost: string; const APort: Integer): Boolean;
@@ -817,13 +823,23 @@ end;
 
 function TGocciaCapabilities.AllowsPath(
   const ACapability: TGocciaCapability; const APath: string): Boolean;
+begin
+  Result := AllowsCanonicalPath(ACapability,
+    CanonicalPathRequest(ACapability, APath));
+end;
+
+function TGocciaCapabilities.AllowsCanonicalPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
 var
   I, J: Integer;
   Path: string;
   LayerAllows: Boolean;
   Rule: TGocciaCapabilityRule;
 begin
-  Path := CanonicalPathRequest(ACapability, APath);
+  if not (ACapability in [gcRead, gcFFI]) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s is not a path capability', [CapabilityName(ACapability)]);
+  Path := APath;
   if (Length(FLayers) = 0) or (Path = '') then
     Exit(False);
   if LayersDenyCanonicalPath(FLayers, ACapability, Path) then
