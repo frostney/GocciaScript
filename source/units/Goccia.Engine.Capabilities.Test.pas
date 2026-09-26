@@ -7,21 +7,29 @@ program Goccia.Engine.Capabilities.Test;
 {$I Goccia.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}
+  cthreads,
+  BaseUnix,
+  Sockets,
+  {$ENDIF}
   Classes,
   SysUtils,
 
   FileUtils,
+  HTTPTypes,
   TestingPascalLibrary,
 
+  Goccia.Arguments.Collection,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Executor,
+  Goccia.GarbageCollector,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FetchManager,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Runtime,
@@ -29,8 +37,11 @@ uses
   Goccia.RuntimeExtensions.FFI,
   Goccia.TestSetup,
   Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue,
+  Goccia.Values.ResponseValue,
   Goccia.VM.Exception;
 
 type
@@ -49,13 +60,18 @@ type
     FProject: string;
     FOutside: string;
     FEvents: TStringList;
+    FEventSources: TStringList;
+    FAuditedHopIndex: Integer;
+    function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
     function ProjectPath(const AName: string): string;
     function OutsidePath(const AName: string): string;
     function Run(const ASource: string;
       const ACapabilities: TGocciaCapabilities;
       const ABytecode: Boolean = False;
-      const AShadowRealm: Boolean = False): TRunOutcome;
+      const AShadowRealm: Boolean = False;
+      const AEntry: string = ''): TRunOutcome;
     function EventsOfKind(const AKind: string): Integer;
   protected
     procedure BeforeAll; override;
@@ -77,17 +93,27 @@ type
     procedure TestBytesImportOutsideProjectIsDenied;
     procedure TestFFIRefusesWithoutGrant;
     procedure TestFFIOpenChecksLibraryScopes;
+    procedure TestFFIBareNamesNeedAnUnscopedGrant;
+    procedure TestImportMetaResolveDoesNotProbeOutsideTheGrant;
+    procedure TestAbortedFetchStillAuditsItsHops;
+    procedure TestAbortedFetchAuditEndsWithItsEngine;
+    procedure TestDenyScopeHidesExistenceOfProbedFiles;
+    procedure TestHostLoadedModuleIsCheckedForTheGuest;
+    function OpenLibrary(const ALibrary: string;
+      const ACapabilities: TGocciaCapabilities): TRunOutcome;
     procedure TestNodeModulesDenyThrowsPermissionDenied;
     procedure TestShadowRealmInheritsCapabilities;
     procedure TestFetchPolicyTravelsWithEachEngine;
+    procedure TestSymlinkOutOfProjectNeedsRead;
+    procedure TestGrantedNodeModulesArePartOfTheGraph;
   public
     procedure SetupTests; override;
   end;
 
 procedure TEngineCapabilitiesTests.SetupTests;
 begin
-  Test('The filesystem provider follows the read capability',
-    TestProviderFollowsReadCapability);
+  Test('The runtime installs the filesystem provider whatever the read ' +
+    'capability says', TestProviderFollowsReadCapability);
   Test('A static literal import inside the project needs no grant',
     TestStaticImportInsideProjectIsExempt);
   Test('A static import outside the project is denied without a host path',
@@ -116,12 +142,28 @@ begin
     TestFFIRefusesWithoutGrant);
   Test('FFI.open checks library path scopes',
     TestFFIOpenChecksLibraryScopes);
+  Test('A bare library name needs an unscoped ffi grant and no deny scope',
+    TestFFIBareNamesNeedAnUnscopedGrant);
+  Test('import.meta.resolve does not probe the host outside the read grant',
+    TestImportMetaResolveDoesNotProbeOutsideTheGrant);
+  Test('An aborted fetch still audits its hops, attributed to its fetch() call',
+    TestAbortedFetchStillAuditsItsHops);
+  Test('An aborted fetch''s audit is dropped when its engine discards its ' +
+    'requests', TestAbortedFetchAuditEndsWithItsEngine);
+  Test('A deny scope the resolver could probe into refuses before probing',
+    TestDenyScopeHidesExistenceOfProbedFiles);
+  Test('A module the host loaded is still read-checked for the guest',
+    TestHostLoadedModuleIsCheckedForTheGuest);
   Test('A node_modules deny throws PermissionDenied',
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
     TestShadowRealmInheritsCapabilities);
-  Test('Two engines on one thread keep their own fetch policy',
+  Test('Two in-flight requests on one thread keep their own engine''s policy',
     TestFetchPolicyTravelsWithEachEngine);
+  Test('A symlink inside the project to a file outside it needs read',
+    TestSymlinkOutOfProjectNeedsRead);
+  Test('Packages reached through a granted node_modules scope need no read',
+    TestGrantedNodeModulesArePartOfTheGraph);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -168,13 +210,18 @@ begin
   WriteFile(ProjectPath('node_modules/pkg/package.json'),
     '{"name":"pkg","type":"module","exports":"./index.js"}');
   WriteFile(ProjectPath('node_modules/pkg/index.js'),
-    'export const value = "package";');
+    'import { detail } from "./detail.js"; export const value = detail;');
+  WriteFile(ProjectPath('node_modules/pkg/detail.js'),
+    'export const detail = "package";');
+  WriteFile(ProjectPath('nested/goccia.json'), '{}');
   FEvents := TStringList.Create;
+  FEventSources := TStringList.Create;
 end;
 
 procedure TEngineCapabilitiesTests.AfterAll;
 begin
   FEvents.Free;
+  FEventSources.Free;
   DeleteTree(FRoot);
   inherited AfterAll;
 end;
@@ -183,6 +230,7 @@ procedure TEngineCapabilitiesTests.BeforeEach;
 begin
   inherited BeforeEach;
   FEvents.Clear;
+  FEventSources.Clear;
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -190,6 +238,8 @@ procedure TEngineCapabilitiesTests.RecordEvent(
 begin
   FEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
     CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
+  FEventSources.Add(ExtractFileName(AEvent.Source.FilePath) + ':' +
+    IntToStr(AEvent.Source.Line));
 end;
 
 function TEngineCapabilitiesTests.ProjectPath(const AName: string): string;
@@ -234,7 +284,7 @@ end;
 
 function TEngineCapabilitiesTests.Run(const ASource: string;
   const ACapabilities: TGocciaCapabilities; const ABytecode: Boolean;
-  const AShadowRealm: Boolean): TRunOutcome;
+  const AShadowRealm: Boolean; const AEntry: string): TRunOutcome;
 var
   Source: TStringList;
   Executor: TGocciaExecutor;
@@ -248,8 +298,11 @@ begin
     Executor := TGocciaBytecodeExecutor.Create
   else
     Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
-    ACapabilities);
+  if AEntry <> '' then
+    Engine := TGocciaEngine.Create(AEntry, Source, Executor, ACapabilities)
+  else
+    Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+      ACapabilities);
   try
     Engine.CapabilityAuditSink := RecordEvent;
     AttachRuntime(Engine);
@@ -299,12 +352,13 @@ begin
     finally
       Engine.Free;
     end;
+    { Under an outright deny the provider stays, so the loader can refuse
+      each read with an audited PermissionDenied. }
     Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
       TGocciaCapabilities.None.Deny(gcRead));
     try
       AttachRuntime(Engine);
-      Expect<Boolean>(Engine.ContentProvider is
-        TGocciaUnavailableModuleContentProvider).ToBe(True);
+      Expect<Boolean>(Engine.ContentProvider.ReadsHostFileSystem).ToBe(True);
     finally
       Engine.Free;
     end;
@@ -471,14 +525,30 @@ begin
   Expect<string>(Outcome.ErrorMessage).ToBe('read: ./lib.js');
 end;
 
+{ An outright read deny — the replacement for --no-host-filesystem — refuses
+  every host read with a catchable, audited PermissionDenied: static,
+  dynamic, and bytes imports alike. }
 procedure TEngineCapabilitiesTests.TestUnscopedDenyRemovesExemption;
 var
   Outcome: TRunOutcome;
 begin
   Outcome := Run('import { value } from "./lib.js"; globalThis.result = value;',
     TGocciaCapabilities.None.Deny(gcRead));
-  Expect<Boolean>(Outcome.ErrorMessage <> '').ToBe(True);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: ./lib.js');
   Expect<string>(Outcome.Result).ToBe('undefined');
+  Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
+    CanonicalCapabilityPath(ProjectPath('lib.js'))) >= 0).ToBe(True);
+
+  Outcome := Run('globalThis.result = "pending";' + sLineBreak +
+    'Promise.all([import("./lib.js"), import("./li" + "b.js"),' +
+    ' import("./lib.js", { with: { type: "bytes" } })].map((p) =>' +
+    ' p.then(() => "loaded", (e) => e.name + ":" + e.message)))' +
+    '.then((r) => { globalThis.result = r.join("|"); });',
+    TGocciaCapabilities.None.Deny(gcRead));
+  Expect<string>(Outcome.Result).ToBe(
+    'PermissionDenied:read: ./lib.js|PermissionDenied:read: ./lib.js|' +
+    'PermissionDenied:read: ./lib.js');
 end;
 
 procedure TEngineCapabilitiesTests.TestBytesImportOutsideProjectIsDenied;
@@ -577,6 +647,262 @@ begin
     .ToBe(True);
 end;
 
+function TEngineCapabilitiesTests.OpenLibrary(const ALibrary: string;
+  const ACapabilities: TGocciaCapabilities): TRunOutcome;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Result := Default(TRunOutcome);
+  Source := TStringList.Create;
+  Source.Text := 'FFI.open("' + ALibrary + '");';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    ACapabilities);
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    InstallFFIIfGranted(AttachRuntime(Engine));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Result);
+    end;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+{ A name with no directory part is found by the platform loader's search
+  path, not the working directory, so a path scope can never describe where
+  it loads from: only an unscoped grant with no deny scope covers it. }
+procedure TEngineCapabilitiesTests.TestFFIBareNamesNeedAnUnscopedGrant;
+const
+  BARE_NAME = 'libgoccia-capability-probe.so';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := OpenLibrary(BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('ffi: ' + BARE_NAME);
+
+  Outcome := OpenLibrary(BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI).Deny(gcFFI, FOutside));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+
+  { Unscoped and undenied: the capability allows it, and the load itself
+    fails without naming any host path. }
+  Outcome := OpenLibrary(BARE_NAME, TGocciaCapabilities.None.Allow(gcFFI));
+  Expect<string>(Outcome.ErrorName).ToBe('TypeError');
+  Expect<Boolean>(Pos(GetCurrentDir, Outcome.ErrorMessage) > 0).ToBe(False);
+
+  { A path with a directory part is judged, and loaded, where it resolves. }
+  Outcome := OpenLibrary('./' + BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
+  Expect<string>(Outcome.ErrorName).ToBe('TypeError');
+  Expect<Boolean>(Pos(GetCurrentDir, Outcome.ErrorMessage) > 0).ToBe(False);
+end;
+
+{ Resolution probes the host for extensions and index files, so resolving an
+  existing file differs from resolving a missing one. Outside what the
+  engine may read, import.meta.resolve must answer without probing, so the
+  two are indistinguishable. Inside the project it still probes. }
+procedure TEngineCapabilitiesTests.TestImportMetaResolveDoesNotProbeOutsideTheGrant;
+const
+  SOURCE_TEXT =
+    'globalThis.result = [' +
+    'import.meta.resolve("../outside/secret"),' +
+    'import.meta.resolve("../outside/missing"),' +
+    'import.meta.resolve("./lib")].map((u) => u.split("/").pop()).join("|");';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None);
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('secret|missing|lib.js');
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead,
+    FOutside));
+  Expect<string>(Outcome.Result).ToBe('secret.js|missing|lib.js');
+end;
+
+{ The worker still resolves and checks an aborted request's destination;
+  its decisions must reach the audit sink when the completion arrives while
+  the engine is still running, even though the abort already settled the
+  promise, and be attributed to the fetch() call that started it. The script
+  hands control to PumpUntilAudited, standing in for any later work that
+  drains fetch completions. }
+function TEngineCapabilitiesTests.PumpUntilAudited(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+const
+  SETTLE_DEADLINE_MS = 5000;
+var
+  Waited: Integer;
+begin
+  FAuditedHopIndex := -1;
+  Waited := 0;
+  while (FAuditedHopIndex < 0) and (Waited < SETTLE_DEADLINE_MS) do
+  begin
+    TGocciaFetchManager.Instance.PumpCompletions;
+    if (FEvents.Count > 3) and (Pos('net.fetch|', FEvents[3]) = 1) then
+      FAuditedHopIndex := 3
+    else
+    begin
+      Sleep(1);
+      Inc(Waited);
+    end;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TEngineCapabilitiesTests.TestAbortedFetchStillAuditsItsHops;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'const controller = new AbortController();' + sLineBreak +
+    'const request = fetch("http://localhost:1/", ' +
+    '{ signal: controller.signal });' + sLineBreak +
+    'request.catch(() => {});' + sLineBreak +
+    'controller.abort();' + sLineBreak +
+    'pumpUntilAudited();';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('abort.mjs'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+      .Allow(gcNet, NET_PRIVATE_SCOPE));
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+    Engine.RegisterGlobal('pumpUntilAudited',
+      TGocciaNativeFunctionValue.Create(PumpUntilAudited, 'pumpUntilAudited',
+        0));
+    Engine.Execute;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  { capabilities.effective, the name check, net.dispatch, then the replayed
+    address check for the aborted request. }
+  Expect<Integer>(FAuditedHopIndex).ToBe(3);
+  Expect<string>(FEventSources[3]).ToBe('abort.mjs:2');
+end;
+
+{ Execute discards the engine's requests when it returns, so a completion
+  that arrives afterwards — here pumped by another engine still using the
+  thread's fetch manager — must find nothing to report to: the first engine
+  and its audit sink are gone. }
+procedure TEngineCapabilitiesTests.TestAbortedFetchAuditEndsWithItsEngine;
+const
+  DRAIN_MS = 300;
+var
+  KeeperSource, Source: TStringList;
+  KeeperExecutor, Executor: TGocciaInterpreterExecutor;
+  Keeper, Engine: TGocciaEngine;
+  EventsAfterFree, Waited: Integer;
+begin
+  KeeperSource := TStringList.Create;
+  KeeperExecutor := TGocciaInterpreterExecutor.Create;
+  Keeper := TGocciaEngine.Create(ProjectPath('keeper.js'), KeeperSource,
+    KeeperExecutor);
+  try
+    AttachRuntime(Keeper).Install(TGocciaFetchRuntimeExtension.Create);
+    Source := TStringList.Create;
+    Source.Text :=
+      'const controller = new AbortController();' + sLineBreak +
+      'fetch("http://localhost:1/", { signal: controller.signal })' +
+      '.catch(() => {});' + sLineBreak +
+      'controller.abort();';
+    Executor := TGocciaInterpreterExecutor.Create;
+    Engine := TGocciaEngine.Create(ProjectPath('gone.mjs'), Source, Executor,
+      TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+        .Allow(gcNet, NET_PRIVATE_SCOPE));
+    try
+      Engine.CapabilityAuditSink := RecordEvent;
+      AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+      Engine.Execute;
+    finally
+      Engine.Free;
+      Executor.Free;
+      Source.Free;
+    end;
+    EventsAfterFree := FEvents.Count;
+    Waited := 0;
+    while Waited < DRAIN_MS do
+    begin
+      TGocciaFetchManager.Instance.PumpCompletions;
+      Sleep(1);
+      Inc(Waited);
+    end;
+    Expect<Integer>(FEvents.Count).ToBe(EventsAfterFree);
+  finally
+    Keeper.Free;
+    KeeperExecutor.Free;
+    KeeperSource.Free;
+  end;
+end;
+
+{ The resolver probes `<candidate>.js` and `<candidate>/index.js`. When a
+  deny scope names one of those, whether the file exists must not decide
+  between PermissionDenied and "Module not found". }
+procedure TEngineCapabilitiesTests.TestDenyScopeHidesExistenceOfProbedFiles;
+const
+  SOURCE_TEXT =
+    'globalThis.result = "pending";' + sLineBreak +
+    'const names = ["../outside/secret", "../outside/absent"];' + sLineBreak +
+    'Promise.all(names.map((n) => import(n).then(() => "loaded",' +
+    ' (e) => e.name))).then((r) => { globalThis.result = r.join("|"); });';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead, FOutside)
+    .Deny(gcRead, OutsidePath('secret.js'))
+    .Deny(gcRead, OutsidePath('absent.js')));
+  Expect<string>(Outcome.Result).ToBe('PermissionDenied|PermissionDenied');
+end;
+
+{ A module the host enrolled itself (globals, host environment, manifests)
+  is cached under its address. A guest import of the same address is still a
+  guest read and must be judged, not served from the cache. }
+procedure TEngineCapabilitiesTests.TestHostLoadedModuleIsCheckedForTheGuest;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Outcome: TRunOutcome;
+begin
+  Outcome := Default(TRunOutcome);
+  Source := TStringList.Create;
+  Source.Text :=
+    'import { value } from "../outside/secret.js";' + sLineBreak +
+    'globalThis.result = value;';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor);
+  try
+    AttachRuntime(Engine);
+    Engine.InjectGlobalsFromModule(OutsidePath('secret.js'));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Outcome);
+    end;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
+end;
+
 procedure TEngineCapabilitiesTests.TestNodeModulesDenyThrowsPermissionDenied;
 var
   Outcome: TRunOutcome;
@@ -608,27 +934,105 @@ begin
   Expect<string>(Outcome.Result).ToBe('outside');
 end;
 
-{ Two engines live on this thread at once and share its fetch manager, but
-  each request carries its own engine's capability set. `localhost` passes
-  both engines' name check; only the engine that names `private` may connect
-  to the loopback address it resolves to. Port 1 refuses the connection, so
-  the permitted request settles with a network TypeError instead. }
-procedure TEngineCapabilitiesTests.TestFetchPolicyTravelsWithEachEngine;
-const
-  SOURCE_TEXT =
-    'globalThis.result = "pending";' + sLineBreak +
-    'fetch("http://localhost:1/").then(() => { globalThis.result = "ok"; },' +
-    ' (e) => { globalThis.result = e.name + "|" + e.message; });';
+{ A one-shot HTTP responder on the loopback interface: accepts up to
+  AConnections connections and answers each with 200 "ok". }
+{$IFDEF UNIX}
+type
+  TLoopbackResponder = class(TThread)
+  private
+    FListener: TSocket;
+    FConnections: Integer;
+    FPort: Word;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AConnections: Integer);
+    destructor Destroy; override;
+    property Port: Word read FPort;
+  end;
+
+constructor TLoopbackResponder.Create(const AConnections: Integer);
 var
+  Address: TInetSockAddr;
+  AddressLength: TSockLen;
+begin
+  FConnections := AConnections;
+  FListener := fpSocket(AF_INET, SOCK_STREAM, 0);
+  FillChar(Address, SizeOf(Address), 0);
+  Address.sin_family := AF_INET;
+  Address.sin_port := 0;
+  Address.sin_addr := StrToNetAddr('127.0.0.1');
+  fpBind(FListener, @Address, SizeOf(Address));
+  fpListen(FListener, AConnections);
+  AddressLength := SizeOf(Address);
+  fpGetSockName(FListener, @Address, @AddressLength);
+  FPort := NToHs(Address.sin_port);
+  inherited Create(False);
+end;
+
+destructor TLoopbackResponder.Destroy;
+begin
+  CloseSocket(FListener);
+  inherited;
+end;
+
+procedure TLoopbackResponder.Execute;
+const
+  RESPONSE: AnsiString = 'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10 +
+    'Connection: close'#13#10#13#10'ok';
+var
+  Client: TSocket;
+  Buffer: array[0..4095] of Byte;
+  I: Integer;
+begin
+  for I := 1 to FConnections do
+  begin
+    Client := fpAccept(FListener, nil, nil);
+    if Client < 0 then
+      Exit;
+    fpRecv(Client, @Buffer[0], SizeOf(Buffer), 0);
+    fpSend(Client, PAnsiChar(RESPONSE), Length(RESPONSE), 0);
+    CloseSocket(Client);
+  end;
+end;
+{$ENDIF}
+
+{ Two engines share this thread's fetch manager and have a request in flight
+  at the same time. `localhost` passes both engines' name check; only the
+  engine that names `private` may connect to the loopback address it resolves
+  to. Each request is judged by the set it carries, not by whichever engine
+  happens to pump the completions. }
+procedure TEngineCapabilitiesTests.TestFetchPolicyTravelsWithEachEngine;
+{$IFDEF UNIX}
+const
+  SETTLE_DEADLINE_MS = 10000;
+var
+  Responder: TLoopbackResponder;
   SourceA, SourceB: TStringList;
   ExecutorA, ExecutorB: TGocciaInterpreterExecutor;
   EngineA, EngineB: TGocciaEngine;
-  ResultA, ResultB: string;
+  PromiseA, PromiseB: TGocciaPromiseValue;
+  URL: string;
+  Waited: Integer;
+
+  function StartRequest(const AEngine: TGocciaEngine): TGocciaPromiseValue;
+  var
+    Policy: TGocciaFetchPolicy;
+    Headers: THTTPHeaders;
+  begin
+    Policy := Default(TGocciaFetchPolicy);
+    Policy.Capabilities := AEngine.Capabilities;
+    SetLength(Headers, 0);
+    Result := TGocciaPromiseValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(Result);
+    TGocciaFetchManager.Instance.StartFetch(URL, 'GET', Headers, Policy,
+      AEngine.Realm, Result);
+  end;
+
 begin
+  Responder := TLoopbackResponder.Create(1);
   SourceA := TStringList.Create;
   SourceB := TStringList.Create;
-  SourceA.Text := SOURCE_TEXT;
-  SourceB.Text := SOURCE_TEXT;
   ExecutorA := TGocciaInterpreterExecutor.Create;
   ExecutorB := TGocciaInterpreterExecutor.Create;
   EngineA := TGocciaEngine.Create(ProjectPath('a.mjs'), SourceA, ExecutorA,
@@ -636,27 +1040,116 @@ begin
       .Allow(gcNet, NET_PRIVATE_SCOPE));
   EngineB := TGocciaEngine.Create(ProjectPath('b.mjs'), SourceB, ExecutorB,
     TGocciaCapabilities.None.Allow(gcNet, 'localhost'));
+  PromiseA := nil;
+  PromiseB := nil;
   try
     AttachRuntime(EngineA).Install(TGocciaFetchRuntimeExtension.Create);
     AttachRuntime(EngineB).Install(TGocciaFetchRuntimeExtension.Create);
-    EngineB.Execute;
-    EngineB.WaitForRuntimeIdle;
-    EngineA.Execute;
-    EngineA.WaitForRuntimeIdle;
-    ResultA := TGocciaObjectValue(EngineA.Realm.GlobalObject)
-      .GetProperty('result').ToStringLiteral.Value;
-    ResultB := TGocciaObjectValue(EngineB.Realm.GlobalObject)
-      .GetProperty('result').ToStringLiteral.Value;
+    URL := 'http://localhost:' + IntToStr(Responder.Port) + '/';
+    PromiseA := StartRequest(EngineA);
+    PromiseB := StartRequest(EngineB);
+    Expect<Boolean>(TGocciaFetchManager.Instance.HasPendingFor(EngineA.Realm))
+      .ToBe(True);
+    Expect<Boolean>(TGocciaFetchManager.Instance.HasPendingFor(EngineB.Realm))
+      .ToBe(True);
+    Waited := 0;
+    while ((PromiseA.State = gpsPending) or (PromiseB.State = gpsPending)) and
+          (Waited < SETTLE_DEADLINE_MS) do
+      if TGocciaFetchManager.Instance.PumpCompletions = 0 then
+      begin
+        Sleep(1);
+        Inc(Waited);
+      end;
+    Expect<Boolean>(PromiseA.State = gpsFulfilled).ToBe(True);
+    Expect<Integer>(TGocciaResponseValue(PromiseA.PromiseResult).Status)
+      .ToBe(200);
+    Expect<Boolean>(PromiseB.State = gpsRejected).ToBe(True);
+    Expect<string>(TGocciaObjectValue(PromiseB.PromiseResult)
+      .GetProperty('message').ToStringLiteral.Value)
+      .ToBe('net: localhost:' + IntToStr(Responder.Port));
   finally
+    if Assigned(PromiseA) then
+      TGarbageCollector.Instance.RemoveTempRoot(PromiseA);
+    if Assigned(PromiseB) then
+      TGarbageCollector.Instance.RemoveTempRoot(PromiseB);
     EngineB.Free;
     EngineA.Free;
     ExecutorB.Free;
     ExecutorA.Free;
     SourceB.Free;
     SourceA.Free;
+    Responder.WaitFor;
+    Responder.Free;
   end;
-  Expect<string>(ResultB).ToBe('PermissionDenied|net: localhost:1');
-  Expect<Boolean>(Pos('TypeError|', ResultA) = 1).ToBe(True);
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+{$ENDIF}
+end;
+
+{ A symbolic link inside the project that names a file outside it is judged
+  where it resolves: the static import is not exempt, so it needs a read
+  grant covering the target. }
+procedure TEngineCapabilitiesTests.TestSymlinkOutOfProjectNeedsRead;
+{$IFDEF UNIX}
+var
+  LinkPath: string;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  LinkPath := ProjectPath('link.js');
+  DeleteFile(LinkPath);
+  if fpSymlink(PAnsiChar(AnsiString(OutsidePath('secret.js'))),
+     PAnsiChar(AnsiString(LinkPath))) <> 0 then
+    Fail('could not create the test symlink');
+  try
+    Outcome := Run(
+      'import { value } from "./link.js"; globalThis.result = value;',
+      TGocciaCapabilities.None);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.ErrorMessage).ToBe('read: ./link.js');
+    Outcome := Run(
+      'import { value } from "./link.js"; globalThis.result = value;',
+      TGocciaCapabilities.None.Allow(gcRead, FOutside));
+    Expect<string>(Outcome.Result).ToBe('outside');
+  finally
+    DeleteFile(LinkPath);
+  end;
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+{ The nested project's root is <project>/nested, so the package in
+  <project>/node_modules lies outside it. Reached through the import grant,
+  the package and its own literal imports belong to the module graph. }
+procedure TEngineCapabilitiesTests.TestGrantedNodeModulesArePartOfTheGraph;
+const
+  SOURCE_TEXT = 'import { value } from "pkg"; globalThis.result = value;';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('package');
+  Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
+
+  { A ceiling below the package's node_modules does not cover it. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport,
+      IMPORT_NODE_MODULES_SCOPE + '=' + ProjectPath('nested')),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<Boolean>(Outcome.Result <> 'package').ToBe(True);
+
+  { A deny still wins over the exemption. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE)
+      .Deny(gcRead, ProjectPath('node_modules/pkg/detail.js')),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
 end;
 
 begin

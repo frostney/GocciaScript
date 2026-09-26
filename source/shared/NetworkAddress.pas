@@ -32,11 +32,15 @@ function TryParseIPv4(const AValue: string; out AOctets: array of Byte): Boolean
   discarded. }
 function TryParseIPv6(const AValue: string; out ABytes: array of Byte): Boolean;
 
-{ Either family. }
+{ Either family. An IPv4-mapped IPv6 address (`::ffff:a.b.c.d`, also written
+  `::ffff:a9fe:a9fe`) is returned as the IPv4 address it names, so every
+  consumer judges one host by one spelling. }
 function TryParseIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 
-{ `<address>/<prefix>`; the prefix may not exceed the family's bit width. }
+{ `<address>/<prefix>`; the prefix may not exceed the family's bit width. An
+  IPv4-mapped network with a prefix of at least 96 becomes the IPv4 network
+  it names. }
 function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
   out APrefixLength: Integer): Boolean;
 
@@ -228,7 +232,31 @@ begin
   Result := True;
 end;
 
-function TryParseIPAddress(const AValue: string;
+function IsIPv4MappedAddress(const AAddress: TNetworkAddress): Boolean;
+var
+  I: Integer;
+begin
+  if AAddress.Family <> nafIPv6 then
+    Exit(False);
+  for I := 0 to 9 do
+    if AAddress.Bytes[I] <> 0 then
+      Exit(False);
+  Result := (AAddress.Bytes[10] = $FF) and (AAddress.Bytes[11] = $FF);
+end;
+
+{ The IPv4 address in bytes AOffset..AOffset+3 of an IPv6 address. }
+function EmbeddedIPv4(const AAddress: TNetworkAddress;
+  const AOffset: Integer): TNetworkAddress;
+var
+  I: Integer;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  Result.Family := nafIPv4;
+  for I := 0 to 3 do
+    Result.Bytes[I] := AAddress.Bytes[AOffset + I];
+end;
+
+function TryParseRawIPAddress(const AValue: string;
   out AAddress: TNetworkAddress): Boolean;
 var
   Octets: array[0..3] of Byte;
@@ -246,6 +274,14 @@ begin
   Result := TryParseIPv6(AValue, AAddress.Bytes);
 end;
 
+function TryParseIPAddress(const AValue: string;
+  out AAddress: TNetworkAddress): Boolean;
+begin
+  Result := TryParseRawIPAddress(AValue, AAddress);
+  if Result and IsIPv4MappedAddress(AAddress) then
+    AAddress := EmbeddedIPv4(AAddress, 12);
+end;
+
 function TryParseCIDR(const AValue: string; out ANetwork: TNetworkAddress;
   out APrefixLength: Integer): Boolean;
 var
@@ -257,7 +293,7 @@ begin
   SlashPos := Pos('/', AValue);
   if (SlashPos <= 1) or (SlashPos = Length(AValue)) then
     Exit;
-  if not TryParseIPAddress(Copy(AValue, 1, SlashPos - 1), ANetwork) then
+  if not TryParseRawIPAddress(Copy(AValue, 1, SlashPos - 1), ANetwork) then
     Exit;
   if not TryStrToInt(Copy(AValue, SlashPos + 1, MaxInt), APrefixLength) then
     Exit;
@@ -266,6 +302,11 @@ begin
   else
     MaxPrefix := 128;
   Result := (APrefixLength >= 0) and (APrefixLength <= MaxPrefix);
+  if Result and IsIPv4MappedAddress(ANetwork) and (APrefixLength >= 96) then
+  begin
+    ANetwork := EmbeddedIPv4(ANetwork, 12);
+    APrefixLength := APrefixLength - 96;
+  end;
 end;
 
 function IsAddressInNetwork(const AAddress, ANetwork: TNetworkAddress;
@@ -346,17 +387,45 @@ begin
     Exit(True);                                                    // fc00::/7
   if (AAddress.Bytes[0] = $FE) and ((AAddress.Bytes[1] and $C0) = $80) then
     Exit(True);                                                    // fe80::/10
-  { ::ffff:0:0/96 — IPv4-mapped space names an IPv4 host the IPv6 checks above
-    cannot classify, so the whole block is treated as private. }
-  Result := True;
-  for I := 0 to 9 do
+  if (AAddress.Bytes[0] = $FE) and ((AAddress.Bytes[1] and $C0) = $C0) then
+    Exit(True);                                                    // fec0::/10
+  if AAddress.Bytes[0] = $FF then
+    Exit(True);                                                    // ff00::/8
+  { ::ffff:0:0/96 — an address that reaches here unconverted names an IPv4
+    host the IPv6 checks cannot classify, so the block is private. }
+  if IsIPv4MappedAddress(AAddress) then
+    Exit(True);
+  { ::/96 — the deprecated IPv4-compatible form (::127.0.0.1). }
+  AllZero := True;
+  for I := 0 to 11 do
     if AAddress.Bytes[I] <> 0 then
     begin
-      Result := False;
+      AllZero := False;
       Break;
     end;
-  if Result then
-    Result := (AAddress.Bytes[10] = $FF) and (AAddress.Bytes[11] = $FF);
+  if AllZero then
+    Exit(True);
+  { 64:ff9b::/96 — NAT64 translates to the embedded IPv4 host;
+    64:ff9b:1::/48 is local-use NAT64 and never public. }
+  if (AAddress.Bytes[0] = $00) and (AAddress.Bytes[1] = $64) and
+     (AAddress.Bytes[2] = $FF) and (AAddress.Bytes[3] = $9B) then
+  begin
+    if (AAddress.Bytes[4] = $00) and (AAddress.Bytes[5] = $01) then
+      Exit(True);
+    AllZero := True;
+    for I := 4 to 11 do
+      if AAddress.Bytes[I] <> 0 then
+      begin
+        AllZero := False;
+        Break;
+      end;
+    if AllZero then
+      Exit(IsPrivateIPAddress(EmbeddedIPv4(AAddress, 12)));
+  end;
+  { 2002::/16 — 6to4 relays to the IPv4 host in bytes 2..5. }
+  if (AAddress.Bytes[0] = $20) and (AAddress.Bytes[1] = $02) then
+    Exit(IsPrivateIPAddress(EmbeddedIPv4(AAddress, 2)));
+  Result := False;
 end;
 
 function IsPrivateNetworkAddress(const AAddressText: string): Boolean;

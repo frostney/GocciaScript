@@ -16,6 +16,7 @@ uses
 
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
+  Goccia.Realm,
   Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
 
@@ -30,39 +31,68 @@ type
     Capabilities: TGocciaCapabilities;
     { Response-body ceiling in bytes; zero selects the default. }
     MaxResponseBytes: Integer;
-    { Receives the per-hop net.fetch decisions made while the request ran.
-      They are delivered on the runtime thread when the request settles. }
-    AuditEmitter: TGocciaCapabilityAuditEmitter;
+    { Receives the per-hop net.fetch decisions made while the request ran,
+      attributed to AuditSource (the fetch() call). They are delivered on the
+      runtime thread when the completion arrives, even after an abort, until
+      the engine discards its requests. }
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
   end;
 
+  { One manager serves every engine on a thread: engines nest there (a sandbox
+    runScript child runs inside its parent's call), and they share the worker
+    cap. The manager therefore holds no per-engine state of its own. Each
+    request carries its engine's network policy, and is tagged with that
+    engine's realm, which scopes waits and discards to the engine that started
+    the request and is the realm its settlement values are created in. }
   TGocciaFetchManager = class
   public
     class function Instance: TGocciaFetchManager;
-    class procedure Initialize;
-    class procedure Shutdown;
+    { Registers one user of this thread's manager, creating it on first use.
+      The manager lives until its last user calls ReleaseInstance, so a nested
+      engine that ends cannot free the manager an outer engine is still using —
+      possibly from inside one of the manager's own methods further up the
+      stack. Pair every AcquireInstance with exactly one ReleaseInstance. }
+    class procedure AcquireInstance;
+    class procedure ReleaseInstance;
 
+    { APolicy is the dispatching engine's network policy (capability set,
+      response ceiling, audit emitter). It is passed per request rather than
+      stored here because engines on one thread may hold different policies;
+      the caller reads it from host configuration, never from script space.
+      ARealm is the dispatching engine's realm. }
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
-      const APromise: TGocciaPromiseValue;
+      const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
+    { True while any engine on the thread has a request in flight. }
     function HasPending: Boolean; virtual; abstract;
+    { True while the engine owning ARealm has a request in flight. }
+    function HasPendingFor(const ARealm: TGocciaRealm): Boolean;
+      virtual; abstract;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; virtual; abstract;
-    procedure WaitForIdle; virtual; abstract;
-    procedure DiscardPending; virtual; abstract;
+    { Waits until the engine owning ARealm has no request in flight. }
+    procedure WaitForIdle(const ARealm: TGocciaRealm); virtual; abstract;
+    { Detaches the in-flight requests of the engine owning ARealm; their late
+      completions are discarded. Other engines' requests are untouched. }
+    procedure DiscardPending(const ARealm: TGocciaRealm); virtual; abstract;
   end;
 
 procedure DrainMicrotasksAndFetchCompletions;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
-procedure WaitForFetchIdle;
-procedure DiscardFetchCompletions;
+{ The realm-less forms act on the current realm's engine. }
+procedure WaitForFetchIdle; overload;
+procedure WaitForFetchIdle(const ARealm: TGocciaRealm); overload;
+procedure DiscardFetchCompletions; overload;
+procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
 implementation
 
 // The DEFAULT WORKER BACKEND (TThread + HTTPClient + polling Sleep)
 // is gated on platforms with real threads and sockets; the Lakon
 // WASM lane compiles only the abstract manager and the drain/wait
-// helpers — Initialize leaves Instance nil there, so fetch() is
+// helpers — AcquireInstance leaves Instance nil there, so fetch() is
 // unavailable until a WASI backend exists (the host-integration
 // slice). Everything the shared helpers need stays outside the gate.
 
@@ -154,7 +184,10 @@ type
 
   TGocciaPendingFetch = record
     RequestID: Integer;
-    AuditEmitter: TGocciaCapabilityAuditEmitter;
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
+    // Realm of the engine that started the request; see TGocciaFetchManager.
+    Realm: TGocciaRealm;
     Promise: TGocciaPromiseValue;
     Signal: TGocciaAbortSignalValue;
     // WHATWG DOM §3.2 abort algorithm registration for this request, removed
@@ -170,6 +203,7 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
+
     FTimeoutMilliseconds: Integer;
     { The worker's own copy of the dispatching engine's policy. }
     FPolicy: TGocciaFetchPolicy;
@@ -195,7 +229,13 @@ type
     FState: TGocciaFetchState;
     FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
+    { Requests settled early (aborted) whose completion has not arrived yet:
+      kept only so the worker's hop decisions still reach the audit sink. }
+    FAbandoned: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
+    procedure ReplayHopDecisions(const APending: TGocciaPendingFetch;
+      const ACompletion: TGocciaFetchCompletion);
+    procedure KeepForAudit(const APending: TGocciaPendingFetch);
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
@@ -208,19 +248,21 @@ type
 
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
-      const APromise: TGocciaPromiseValue;
+      const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
+    function HasPendingFor(const ARealm: TGocciaRealm): Boolean; override;
     function WaitForPromise(const APromise: TGocciaPromiseValue): Boolean; override;
-    procedure WaitForIdle; override;
-    procedure DiscardPending; override;
+    procedure WaitForIdle(const ARealm: TGocciaRealm); override;
+    procedure DiscardPending(const ARealm: TGocciaRealm); override;
   end;
 
 {$ENDIF}
 
 threadvar
   FetchManagerThreadInstance: TGocciaFetchManager;
+  FetchManagerThreadUsers: Integer;
 
 {$IFNDEF LAKON}
 
@@ -490,17 +532,22 @@ begin
   Result := FetchManagerThreadInstance;
 end;
 
-class procedure TGocciaFetchManager.Initialize;
+class procedure TGocciaFetchManager.AcquireInstance;
 begin
   {$IFNDEF LAKON}
   if not Assigned(FetchManagerThreadInstance) then
     FetchManagerThreadInstance := TGocciaFetchManagerImpl.Create;
+  Inc(FetchManagerThreadUsers);
   {$ENDIF}
 end;
 
-class procedure TGocciaFetchManager.Shutdown;
+class procedure TGocciaFetchManager.ReleaseInstance;
 begin
-  FreeAndNil(FetchManagerThreadInstance);
+  if FetchManagerThreadUsers <= 0 then
+    Exit;
+  Dec(FetchManagerThreadUsers);
+  if FetchManagerThreadUsers = 0 then
+    FreeAndNil(FetchManagerThreadInstance);
 end;
 
 {$IFNDEF LAKON}
@@ -513,22 +560,28 @@ begin
   FState := TGocciaFetchState.Create;
   FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
+  FAbandoned := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
 end;
 
 destructor TGocciaFetchManagerImpl.Destroy;
+var
+  I: Integer;
 begin
-  DiscardPending;
+  for I := 0 to FPending.Count - 1 do
+    ReleasePendingRoots(FPending[I]);
+  FPending.Clear;
   FState.Abandon;
   FState.Release;
   FLimiter.Release;
   FPending.Free;
+  FAbandoned.Free;
   inherited;
 end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
-  const APromise: TGocciaPromiseValue;
+  const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
   const ASignal: TGocciaAbortSignalValue);
 var
   Pending: TGocciaPendingFetch;
@@ -559,7 +612,9 @@ begin
 
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
+  Pending.Realm := ARealm;
   Pending.AuditEmitter := APolicy.AuditEmitter;
+  Pending.AuditSource := APolicy.AuditSource;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
@@ -673,11 +728,38 @@ begin
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
+  KeepForAudit(Pending);
   try
     Pending.Promise.Reject(Pending.Signal.Reason);
   finally
     ReleasePendingRoots(Pending);
   end;
+end;
+
+procedure TGocciaFetchManagerImpl.KeepForAudit(
+  const APending: TGocciaPendingFetch);
+begin
+  if Assigned(APending.AuditEmitter) then
+    FAbandoned.Add(APending);
+end;
+
+procedure TGocciaFetchManagerImpl.ReplayHopDecisions(
+  const APending: TGocciaPendingFetch;
+  const ACompletion: TGocciaFetchCompletion);
+var
+  I: Integer;
+begin
+  if not Assigned(APending.AuditEmitter) then
+    Exit;
+  for I := 0 to High(ACompletion.HopDecisions) do
+    if ACompletion.HopDecisions[I].Allowed then
+      APending.AuditEmitter(gckNetFetch, gcdAllow,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource)
+    else
+      APending.AuditEmitter(gckNetFetch, gcdDeny,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource);
 end;
 
 // Settles fetches whose signal has aborted. Controller-driven aborts already
@@ -688,10 +770,17 @@ var
   I, CountBefore: Integer;
   Signal: TGocciaAbortSignalValue;
   AbortedSignals: TGocciaAbortSignalList;
+  SignalRealms: TList<TGocciaRealm>;
   SignalRoot: TGocciaTempRoot;
+  PreviousRealm: TGocciaRealm;
 begin
   CountBefore := FPending.Count;
+  // As in SettleCompletion: the abort reason and the "abort" event belong to
+  // the realm of the engine that started the request, not to whichever
+  // engine's drain observed the expired timeout.
+  PreviousRealm := CurrentRealm;
   AbortedSignals := TGocciaAbortSignalList.Create(False);
+  SignalRealms := TList<TGocciaRealm>.Create;
   try
     // Phase 1 flips expired timeouts only. RefreshTimeout deliberately does not
     // run abort algorithms, because an algorithm mutates FPending and this
@@ -701,11 +790,18 @@ begin
       Signal := FPending[I].Signal;
       if not Assigned(Signal) then
         Continue;
+      if Assigned(FPending[I].Realm) then
+        SetCurrentRealm(FPending[I].Realm)
+      else
+        SetCurrentRealm(PreviousRealm);
       Signal.RefreshTimeout;
       if not Signal.IsAborted then
         Continue;
       if AbortedSignals.IndexOf(Signal) < 0 then
+      begin
         AbortedSignals.Add(Signal);
+        SignalRealms.Add(CurrentRealm);
+      end;
     end;
 
     // Phase 2 runs with no walk in progress, so each signal may now run its
@@ -716,6 +812,7 @@ begin
     for I := 0 to AbortedSignals.Count - 1 do
     begin
       Signal := AbortedSignals[I];
+      SetCurrentRealm(SignalRealms[I]);
       Signal.RunPendingAbortAlgorithms;
       // Those algorithms dropped the pending entries that were rooting this
       // signal, so root it for the dispatch itself. AddTempRootIfNeeded is a
@@ -730,6 +827,8 @@ begin
       end;
     end;
   finally
+    SetCurrentRealm(PreviousRealm);
+    SignalRealms.Free;
     AbortedSignals.Free;
   end;
   Result := CountBefore - FPending.Count;
@@ -759,51 +858,65 @@ var
   PendingIndex, I: Integer;
   RespHeaders: TGocciaHeadersValue;
   RespValue: TGocciaResponseValue;
+  PreviousRealm: TGocciaRealm;
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
+  begin
+    { Settled early by an abort: only the audit trail is still owed. }
+    for I := FAbandoned.Count - 1 downto 0 do
+      if FAbandoned[I].RequestID = ACompletion.RequestID then
+      begin
+        Pending := FAbandoned[I];
+        FAbandoned.Delete(I);
+        ReplayHopDecisions(Pending, ACompletion);
+        Break;
+      end;
     Exit;
+  end;
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
 
+  // Build the settlement values in the realm of the engine that started the
+  // request. A completion can be pumped while a nested engine's realm is
+  // current, and values made there would keep that realm's prototypes alive
+  // past the nested engine's end.
+  PreviousRealm := CurrentRealm;
   try
-    if Assigned(Pending.AuditEmitter) then
-      for I := 0 to High(ACompletion.HopDecisions) do
-        if ACompletion.HopDecisions[I].Allowed then
-          Pending.AuditEmitter(gckNetFetch, gcdAllow,
-            ACompletion.HopDecisions[I].Host,
-            ACompletion.HopDecisions[I].Reason)
-        else
-          Pending.AuditEmitter(gckNetFetch, gcdDeny,
-            ACompletion.HopDecisions[I].Host,
-            ACompletion.HopDecisions[I].Reason);
+    if Assigned(Pending.Realm) then
+      SetCurrentRealm(Pending.Realm);
+    try
+      ReplayHopDecisions(Pending, ACompletion);
 
-    if ACompletion.Success then
-    begin
-      RespHeaders := TGocciaHeadersValue.Create;
-      RespHeaders.Immutable := True;
-      for I := 0 to High(ACompletion.Response.Headers) do
-        RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
-          ACompletion.Response.Headers[I].Value);
+      if ACompletion.Success then
+      begin
+        RespHeaders := TGocciaHeadersValue.Create;
+        RespHeaders.Immutable := True;
+        for I := 0 to High(ACompletion.Response.Headers) do
+          RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
+            ACompletion.Response.Headers[I].Value);
 
-      RespValue := TGocciaResponseValue.Create;
-      RespValue.InitFromHTTP(
-        ACompletion.Response.StatusCode,
-        ACompletion.Response.StatusText,
-        ACompletion.Response.FinalURL,
-        RespHeaders,
-        ACompletion.Response.Body,
-        ACompletion.Response.Redirected);
+        RespValue := TGocciaResponseValue.Create;
+        RespValue.InitFromHTTP(
+          ACompletion.Response.StatusCode,
+          ACompletion.Response.StatusText,
+          ACompletion.Response.FinalURL,
+          RespHeaders,
+          ACompletion.Response.Body,
+          ACompletion.Response.Redirected);
 
-      Pending.Promise.Resolve(RespValue);
-    end
-    else if ACompletion.DeniedScope <> '' then
-      Pending.Promise.Reject(CreatePermissionDeniedError(
-        CapabilityName(gcNet), ACompletion.DeniedScope))
-    else
-      Pending.Promise.Reject(CreateErrorObject('TypeError',
-        ACompletion.ErrorMessage));
+        Pending.Promise.Resolve(RespValue);
+      end
+      else if ACompletion.DeniedScope <> '' then
+        Pending.Promise.Reject(CreatePermissionDeniedError(
+          CapabilityName(gcNet), ACompletion.DeniedScope))
+      else
+        Pending.Promise.Reject(CreateErrorObject('TypeError',
+          ACompletion.ErrorMessage));
+    finally
+      SetCurrentRealm(PreviousRealm);
+    end;
 
     if (TGocciaMicrotaskQueue.Instance <> nil) then
       TGocciaMicrotaskQueue.Instance.DrainQueue;
@@ -855,13 +968,24 @@ begin
   end;
 end;
 
-procedure TGocciaFetchManagerImpl.WaitForIdle;
+function TGocciaFetchManagerImpl.HasPendingFor(
+  const ARealm: TGocciaRealm): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to FPending.Count - 1 do
+    if FPending[I].Realm = ARealm then
+      Exit(True);
+  Result := False;
+end;
+
+procedure TGocciaFetchManagerImpl.WaitForIdle(const ARealm: TGocciaRealm);
 begin
   repeat
     DrainMicrotasksAndFetchCompletions;
-    if not HasPending then
+    if not HasPendingFor(ARealm) then
       Break;
-    while HasPending and (PumpCompletions = 0) do
+    while HasPendingFor(ARealm) and (PumpCompletions = 0) do
     begin
       CheckExecutionTimeout;
       Sleep(FETCH_POLL_INTERVAL_MS);
@@ -870,20 +994,34 @@ begin
   DrainMicrotasksAndFetchCompletions;
 end;
 
-procedure TGocciaFetchManagerImpl.DiscardPending;
+procedure TGocciaFetchManagerImpl.DiscardPending(const ARealm: TGocciaRealm);
 var
   I: Integer;
   HadPending: Boolean;
   OldState: TGocciaFetchState;
   Pending: TGocciaPendingFetch;
 begin
-  HadPending := FPending.Count > 0;
-  for I := 0 to FPending.Count - 1 do
+  HadPending := False;
+  for I := FPending.Count - 1 downto 0 do
   begin
     Pending := FPending[I];
+    if Pending.Realm <> ARealm then
+      Continue;
+    FPending.Delete(I);
     ReleasePendingRoots(Pending);
+    HadPending := True;
   end;
-  FPending.Clear;
+  { The engine is discarding its requests, so its audit emitter must not
+    outlive this call. }
+  for I := FAbandoned.Count - 1 downto 0 do
+    if FAbandoned[I].Realm = ARealm then
+      FAbandoned.Delete(I);
+
+  { Another engine still has requests in flight, so the completion queue is
+    shared with live work. The detached requests' late completions no longer
+    match a pending entry and are dropped when popped. }
+  if (FPending.Count > 0) or (FAbandoned.Count > 0) then
+    Exit;
 
   if not HadPending then
   begin
@@ -1021,24 +1159,33 @@ begin
 end;
 
 procedure WaitForFetchIdle;
+begin
+  WaitForFetchIdle(CurrentRealm);
+end;
+
+procedure WaitForFetchIdle(const ARealm: TGocciaRealm);
 var
   Manager: TGocciaFetchManager;
 begin
   Manager := TGocciaFetchManager.Instance;
-  if Assigned(Manager) and Manager.HasPending then
-    Manager.WaitForIdle
+  if Assigned(Manager) and Manager.HasPendingFor(ARealm) then
+    Manager.WaitForIdle(ARealm)
   else
     DrainMicrotasksAndFetchCompletions;
 end;
 
 procedure DiscardFetchCompletions;
+begin
+  DiscardFetchCompletions(CurrentRealm);
+end;
+
+procedure DiscardFetchCompletions(const ARealm: TGocciaRealm);
 var
   Manager: TGocciaFetchManager;
 begin
   Manager := TGocciaFetchManager.Instance;
   if Assigned(Manager) then
-    Manager.DiscardPending;
+    Manager.DiscardPending(ARealm);
 end;
-
 
 end.

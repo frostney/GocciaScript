@@ -935,6 +935,70 @@ await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", asy
     throw new Error(`Test262 runner should expose realm hooks, got: ${proc.stdout.toString()}`);
 });
 
+await section("test262 runner: computed imports and importValue may read the suite...", async () => {
+  // test262 loads its fixtures through computed import() specifiers and
+  // ShadowRealm.prototype.importValue, neither of which is part of the static
+  // module graph; the case engine's capability set has to grant reads of the
+  // suite (ADR 0122).
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), [
+      "function $DONE(error) {",
+      "  if (error) print('Test262:AsyncTestFailure:' + error.name + ': ' + error.message);",
+      "  else print('Test262:AsyncTestComplete');",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "value_FIXTURE.js"), "export const value = 1;\n");
+    writeFileSync(join(tests, "computed-import.js"), [
+      "/*---",
+      "flags: [async]",
+      "---*/",
+      "const name = './value' + '_FIXTURE.js';",
+      "import(name).then((ns) => {",
+      "  if (ns.value !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "import-value.js"), [
+      "/*---",
+      "flags: [async]",
+      "features: [ShadowRealm]",
+      "---*/",
+      "new ShadowRealm().importValue('./value_FIXTURE.js', 'value').then((v) => {",
+      "  if (v !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = join(tmp, `computed-${mode}.json`);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "language",
+          `--mode=${mode}`,
+          "--jobs=1",
+          "--output", out,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+      );
+      const report = JSON.parse(readFileSync(out, "utf8"));
+      if (proc.exitCode !== 0 || report.summary.passed !== 2)
+        throw new Error(`${mode}: computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("test262 runner: engine timeout is classified as TIMEOUT...", async () => {
   const tmp = makeTmp();
   try {
@@ -7237,6 +7301,25 @@ await section("Loader: --allow-net blocks unlisted host...", async () => {
   }
 });
 
+await section("Loader: a denied fetch host is audited with the reason it was refused...", async () => {
+  const tmp = makeTmp();
+  try {
+    const cases: Array<[string, string]> = [
+      ["http://blocked.test/", "the net capability does not allow this host"],
+      ["http://example.com:8080/", "the net capability does not allow port 8080 of this host"],
+    ];
+    for (const [url, reason] of cases) {
+      const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
+      await $`echo ${`fetch("${url}");`} | ${LOADER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      const { events } = readCapabilityEvents(audit);
+      if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
+        throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: no --allow-net blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allow-net should fail");
@@ -8813,6 +8896,321 @@ await section("SandboxRunner: --allow-net and --deny-net reach the sandboxed fet
     }
   } finally {
     clean(tmp);
+  }
+});
+
+// ── Fetch across a nested runScript ────────────────────────────────────
+//
+// Every engine on the runner thread shares one fetch manager. The nested
+// child's teardown used to free it outright: the parent's next fetch then ran
+// on a lazily recreated manager with the default policy (private ranges
+// allowed again, default body ceiling), and a parent resuming inside the
+// freed manager's own wait loop hung or aborted in glibc. Async spawns, with
+// a kill timer, because a hang is one of the failures under test and the
+// body-limit arm needs this process's event loop free to serve the response.
+
+const runNestedFetchSandbox = async (
+  files: Record<string, string>,
+  mode: "interpreted" | "bytecode",
+  extraArgs: string[],
+): Promise<{ exitCode: number | null; stdout: string; combined: string; timedOut: boolean }> => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "seed.json");
+    writeFileSync(seed, JSON.stringify({
+      files: Object.entries(files).map(([path, text]) => ({ path, text })),
+    }));
+    const proc = Bun.spawn(
+      [
+        SANDBOXRUNNER,
+        "/main.js",
+        `--seed-config=${seed}`,
+        "--source-type=module",
+        `--mode=${mode}`,
+        "--allow-net=127.0.0.1,localhost",
+        ...extraArgs,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return {
+        exitCode,
+        stdout: normalizeLineEndings(stdout).trim(),
+        combined: stdout + stderr,
+        timedOut,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    clean(tmp);
+  }
+};
+
+const NESTED_FETCH_CHILD = "console.log('child ran');\n";
+// `localhost` passes the net capability's name check, so the request is
+// dispatched and the private-range refusal happens on the worker, against the
+// address the name resolved to, under the requesting engine's own set.
+const PRIVATE_DENIAL = "net: localhost:1";
+const fetchPort1Lines = (label: string): string[] => [
+  "try {",
+  "  await fetch('http://localhost:1/');",
+  `  console.log('${label}:no-error');`,
+  "} catch (error) {",
+  `  console.log('${label}:' + error.message);`,
+  "}",
+];
+
+await section("SandboxRunner: a nested runScript child inherits its set silently and its fetch events name the child...", async () => {
+  // A child inherits its parent's capability set, so like a ShadowRealm child
+  // it reports no capabilities.effective of its own. The worker's address
+  // check for the child's request is pumped by the parent, but belongs to the
+  // child's fetch() call.
+  const tmp = makeTmp();
+  try {
+    const main = [
+      "import { runScript } from 'goccia';",
+      "runScript('/child.js');",
+      "",
+    ].join("\n");
+    const child = [
+      "const pending = fetch('http://localhost:1/');",
+      "pending.catch(() => {});",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `nested-${mode}.jsonl`);
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": child },
+        mode,
+        [`--audit-log=${audit}`],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: nested run should exit 0: ${run.combined}`);
+      const { effective, events } = readCapabilityEvents(audit);
+      if (effective.length !== 1)
+        throw new Error(`${mode}: only the root engine should report its set: ${JSON.stringify(effective)}`);
+      const fetchEvents = events.filter((event) => event.kind.startsWith("net."));
+      if (fetchEvents.length === 0 ||
+          fetchEvents.some((event) => event.source?.file !== "/child.js"))
+        throw new Error(`${mode}: the child's fetch events should name /child.js: ${JSON.stringify(fetchEvents)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("SandboxRunner: a nested runScript leaves the parent's --deny-net=private in place...", async () => {
+  const main = [
+    "import { runScript } from 'goccia';",
+    "const child = runScript('/child.js');",
+    "console.log('child ok ' + child.ok);",
+    ...fetchPort1Lines("after"),
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+      mode,
+      ["--deny-net=private"],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    if (!run.stdout.includes("child ok true"))
+      throw new Error(`${mode}: the nested child should run, got:\n${run.combined}`);
+    if (!run.stdout.includes(`after:${PRIVATE_DENIAL}`))
+      throw new Error(`SECURITY: ${mode}: the parent's private-range denial was lost after a nested runScript, got:\n${run.combined}`);
+  }
+});
+
+await section("SandboxRunner: a nested runScript leaves the parent's --max-fetch-bytes in place...", async () => {
+  const body = "x".repeat(64);
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return new Response(body, { status: 200 });
+    },
+  });
+  try {
+    const url = `http://127.0.0.1:${server.port}/`;
+    const main = [
+      "import { runScript } from 'goccia';",
+      "runScript('/child.js');",
+      "try {",
+      `  const response = await fetch('${url}');`,
+      "  console.log('after:status ' + response.status);",
+      "} catch (error) {",
+      "  console.log('after:' + error.message);",
+      "}",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+        mode,
+        ["--max-fetch-bytes=16"],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      if (!/after:HTTP response (body )?exceeds 16 byte limit/.test(run.stdout))
+        throw new Error(`SECURITY: ${mode}: the parent's response-body ceiling was lost after a nested runScript, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
+  }
+});
+
+await section("SandboxRunner: a fetch followed by a nested runScript completes...", async () => {
+  const main = [
+    "import { runScript } from 'goccia';",
+    ...fetchPort1Lines("before"),
+    "const child = runScript('/child.js');",
+    "console.log('child ok ' + child.ok);",
+    "console.log('done');",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+      mode,
+      ["--deny-net=private"],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`${mode}: fetch then runScript should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    for (const expected of [`before:${PRIVATE_DENIAL}`, "child ok true", "done"])
+      if (!run.stdout.includes(expected))
+        throw new Error(`${mode}: fetch then runScript should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
+  }
+});
+
+await section("SandboxRunner: fetch, nested runScript, fetch completes without a crash...", async () => {
+  const main = [
+    "import { runScript } from 'goccia';",
+    ...fetchPort1Lines("before"),
+    "runScript('/child.js');",
+    ...fetchPort1Lines("after"),
+    "console.log('done');",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    for (const [policyArgs, expectedError] of [
+      [["--deny-net=private"], `${PRIVATE_DENIAL}`],
+      [[], "Failed to connect to 127.0.0.1:1"],
+    ] as const) {
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
+        mode,
+        [...policyArgs],
+      );
+      const label = `${mode} ${policyArgs.join(" ") || "(default policy)"}`;
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${label}: fetch, runScript, fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      for (const expected of [`before:${expectedError}`, `after:${expectedError}`, "done"])
+        if (!run.stdout.includes(expected))
+          throw new Error(`${label}: fetch, runScript, fetch should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
+    }
+  }
+});
+
+await section("SandboxRunner: a failing nested runScript keeps the parent's in-flight fetch...", async () => {
+  // A failed run discards its engine's pending requests, which used to mean
+  // every request on the thread. The parent's request is still in flight
+  // across the whole nested run and must settle afterwards with the parent's
+  // policy. The child starts no request of its own: a request abandoned at
+  // process exit can crash its still-running worker, independently of this
+  // fix, which would make this section flaky. The native fetch runtime
+  // extension test covers a discard that drops only the child's requests.
+  const child = "throw new Error('child failed');\n";
+  const main = [
+    "import { runScript } from 'goccia';",
+    "const pending = fetch('http://localhost:1/parent');",
+    "const child = runScript('/child.js');",
+    "console.log('child ok ' + child.ok);",
+    "try {",
+    "  await pending;",
+    "  console.log('parent:no-error');",
+    "} catch (error) {",
+    "  console.log('parent:' + error.message);",
+    "}",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const run = await runNestedFetchSandbox(
+      { "/main.js": main, "/child.js": child },
+      mode,
+      ["--deny-net=private"],
+    );
+    if (run.timedOut || run.exitCode !== 0)
+      throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+    if (!run.stdout.includes("child ok false"))
+      throw new Error(`${mode}: the nested child should fail, got:\n${run.combined}`);
+    if (!run.stdout.includes(`parent:${PRIVATE_DENIAL}`))
+      throw new Error(`${mode}: the parent's in-flight fetch should settle under its own policy, got:\n${run.combined}`);
+  }
+});
+
+await section("SandboxRunner: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
+  // The child's end-of-run drain is what notices the parent's expired
+  // AbortSignal.timeout. The TimeoutError it creates must belong to the
+  // parent's realm: made in the child's, it failed instanceof in the parent
+  // and its constructor ran against the freed child realm.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      await Bun.sleep(3_000);
+      return new Response("late", { status: 200 });
+    },
+  });
+  try {
+    const url = `http://127.0.0.1:${server.port}/`;
+    // A busy wait long enough for the parent's 50 ms timeout to expire while
+    // the child runs. An iterator, because while and for(;;) are compat-only.
+    const child = [
+      "const start = Date.now();",
+      "const spin = { [Symbol.iterator]() {",
+      "  return { next: () => ({ done: Date.now() - start >= 300, value: 0 }) };",
+      "} };",
+      "for (const _ of spin) {}",
+      "console.log('child waited');",
+    ].join("\n");
+    const main = [
+      "import { runScript } from 'goccia';",
+      "const signal = AbortSignal.timeout(50);",
+      `const pending = fetch('${url}', { signal });`,
+      "const child = runScript('/child.js');",
+      "console.log('child ok ' + child.ok + ', parent signal aborted ' + signal.aborted);",
+      "try {",
+      "  await pending;",
+      "  console.log('parent:no-error');",
+      "} catch (error) {",
+      "  console.log('parent:' + error.name + ' ' + (error instanceof DOMException));",
+      "  const again = new (Object.getPrototypeOf(error).constructor)('again');",
+      "  console.log('again:' + (again instanceof DOMException));",
+      "}",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": child },
+        mode,
+        [],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      // The first line proves the child's drain is what observed the
+      // timeout; without it the rest would pass vacuously.
+      for (const expected of ["child ok true, parent signal aborted true", "parent:TimeoutError true", "again:true"])
+        if (!run.stdout.includes(expected))
+          throw new Error(`${mode}: the parent's timeout should abort in its own realm, expected ${JSON.stringify(expected)}, got:\n${run.combined}`);
+    }
+  } finally {
+    server.stop(true);
   }
 });
 

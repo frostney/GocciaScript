@@ -69,7 +69,8 @@ Ordinary sandbox reads and writes do not generate events.
 `capabilities.effective` is emitted when a host calls
 `AuditEffectiveCapabilities` after installing the sink (the CLI does), or
 otherwise just before the engine's first other event. Child contexts that
-inherit the set — ShadowRealm realms — do not repeat it. Its `subject` is
+inherit the set — ShadowRealm realms and sandbox `runScript` children — do not
+repeat it. Its `subject` is
 `TGocciaCapabilities.ToJSON`: one object per layer, each with `allowAll`,
 `allow`, `denyAll`, and `deny` for every capability.
 
@@ -79,7 +80,9 @@ for what the grant permits.
 
 Every event is delivered on the runtime thread. The decisions a fetch worker
 makes for resolved addresses and redirect hops are recorded with the request
-and delivered when it settles; the HTTP worker never calls the sink.
+and delivered when its completion arrives — also after an abort, until the
+engine discards its requests — attributed to the `fetch()` call that started
+it. The HTTP worker never calls the sink.
 
 ## Embedding
 

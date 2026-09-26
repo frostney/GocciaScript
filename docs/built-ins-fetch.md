@@ -62,9 +62,11 @@ accepted sizes:
 A response over the ceiling rejects with `TypeError`. Both checks and the
 ceiling apply identically in interpreter and bytecode modes.
 
-Each request carries its engine's capability set and ceiling to the worker that
-performs it, so engines that share a thread — a sandbox `runScript` child
-inside its parent — never see each other's policy.
+The capability set and the ceiling belong to one engine: embedders fix the set
+at engine construction and set `FetchMaxResponseBytes` on the engine. Each
+request carries them to the worker that performs it, so engines that share a
+thread — a sandbox `runScript` child inside its parent — neither see nor
+change each other's policy.
 
 ### Threat model notes
 
@@ -96,7 +98,7 @@ refused rather than parsed.
 
 Requests run on fetch-specific background workers and settle promises on the owning runtime thread. `await fetch(...)` synchronously waits by pumping fetch completions; the Promise microtask queue is not a general I/O event loop.
 
-Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout.
+Each host thread caps active fetch workers at 16; runtimes on the same thread share that cap. Additional calls reject their returned promise with `TypeError` until a worker finishes. An abort rejects the pending promise and discards any late completion. Controller-driven abort does not interrupt an already-blocking platform socket call; `AbortSignal.timeout()` also supplies its deadline to the HTTP worker so platform I/O is bounded by that timeout. An engine waits for, and on failure discards, only the requests it started itself, so a nested engine ending leaves its parent's in-flight requests running.
 
 The focused subset has no `Request` object, streaming request or response body, or CORS processing.
 

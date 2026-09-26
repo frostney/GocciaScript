@@ -59,9 +59,11 @@ directory through a link. A path that does not exist yet is judged by its
 deepest existing ancestor. Matching stops at a separator: `/a/b` covers
 `/a/b/c.js` but not `/a/bc`.
 
-`FFI.open("./lib.so")` is judged where the dynamic loader looks for it, the
-working directory. A bare library name such as `libc.so.6` is searched for by
-the platform loader, so only an unscoped `ffi` allow covers it.
+`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path, so
+the file checked is the file opened. A bare library name such as `libc.so.6`
+has no directory part and is searched for by the platform loader, which no
+path scope can describe: it is allowed only when every layer allows `ffi`
+unscoped and no layer has an `ffi` deny scope.
 
 ### `net` scopes and private ranges
 
@@ -75,16 +77,24 @@ the platform loader, so only an unscoped `ffi` allow covers it.
 | `private` | every private, loopback, and link-local destination |
 
 Host scopes are matched against the URL's host before any name lookup, so a
-refused request never becomes an observable side effect. An IP or CIDR scope
-matches only a URL that names an address; host names are never resolved to
-match one.
+refused request never becomes an observable side effect. One trailing dot is
+ignored on both sides, so `tracker.example.com.` is the host
+`tracker.example.com`. An IP or CIDR scope matches only a URL that names an
+address; host names are never resolved to match one. An IPv4-mapped IPv6
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
 is covered by an explicit IP or CIDR allow. An unscoped allow does not name
-them. This is checked twice: against an address literal in the URL, and against
-the address a host name resolved to — so `api.example.com` whose DNS answers
-with `169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
+them, but an explicit range does, however broad: `0.0.0.0/0` covers loopback,
+RFC 1918, and the `169.254.169.254` metadata address too. A `private` **deny**
+wins over every allow, explicit addresses and ranges included. IPv6 forms that
+embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
+6to4 `2002::/16` — are private when the host they embed is.
+
+This is checked twice: against an address literal in the URL, and against the
+address a host name resolved to — so `api.example.com` whose DNS answers with
+`169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
 allowed. Both checks run again on every redirect hop.
 
 `private` is a grant of its own: `--allow-net=private` reaches
@@ -106,12 +116,18 @@ message; one it explicitly denies throws `PermissionDenied`.
 Provider hosts (`github`) are modeled so a set can carry them, but provider
 resolution is not implemented yet.
 
+Files the import capability grants are part of the module graph (see below):
+once a package is reached through a granted `node_modules` scope, its files
+need no `read` grant, wherever that `node_modules` directory is. Provider
+packages will follow the same rule.
+
 ## The module-graph exemption
 
 Code needs to import its own files. Reads of the host filesystem made by a
 **static import with a literal specifier** — including `json`, `text`, and
 `bytes` imports, and `import()` whose specifier is a string literal — of a file
-inside the **project** need no `read` grant. The project is the directory of the
+inside the **project**, or inside a `node_modules` directory the `import`
+capability grants, need no `read` grant. The project is the directory of the
 nearest `goccia.json`, `goccia.json5`, or `goccia.toml` above the entry file,
 or the entry file's own directory when there is none (the `ProjectRoot` property of `TGocciaEngine`).
 
@@ -128,15 +144,20 @@ A computed specifier is detected at compile time: the interpreter checks the
 
 A **deny** removes the exemption too. A deny scope covering a project file
 refuses even its static imports, and an unscoped `read` deny refuses every host
-read — the runtime then installs no filesystem content provider at all.
+read. Either way the refusal is an audited `PermissionDenied`, like any other
+denial.
 
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
 Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
-and their imports) are host-owned and never checked. Before the resolver probes
-the host for a relative or absolute specifier the request is checked against
-its lexical candidate, so a request the set refuses cannot learn whether the
-file exists.
+and their imports) are host requests and never checked; a guest importing the
+same file later is checked like any other guest read, cached or not. Before the
+resolver probes the host for a relative or absolute specifier the request is
+checked against its lexical candidate — and refused when a deny scope names a
+file the extension or index probe could reach — so a request the set refuses
+cannot learn whether the file exists. For the same reason
+`import.meta.resolve` answers with the unprobed URL for a path the engine may
+not read.
 
 ## PermissionDenied
 
@@ -168,7 +189,11 @@ Every decision that consults a capability emits a
 `read.file`, `net.fetch`, `net.dispatch`, `ffi.open`, and `import.node-modules`
 (`import.provider` is reserved). Exempt module-graph loads emit nothing. Each
 root engine also emits one `capabilities.effective` event carrying
-`TGocciaCapabilities.ToJSON`.
+`TGocciaCapabilities.ToJSON`; nested contexts that inherit their parent's set —
+ShadowRealm children and sandbox `runScript` children — report through the
+same sink without repeating it. A fetch's address and redirect decisions are
+attributed to the `fetch()` call that started it, even when they are delivered
+later or after the request was aborted.
 
 ## Nested contexts
 
@@ -198,7 +223,7 @@ Capabilities := TGocciaCapabilities.None
 
 Engine := TGocciaEngine.Create('/srv/app/main.js', Source, Executor,
   Capabilities);
-Runtime := AttachRuntime(Engine);   // filesystem provider unless read is denied
+Runtime := AttachRuntime(Engine);   // filesystem provider, reads checked
 InstallFFIIfGranted(Runtime);       // installs FFI only when ffi is granted
 Engine.FetchMaxResponseBytes := 1024 * 1024;
 ```
@@ -208,12 +233,13 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaCapabilities.None` / `.Unrestricted` | Grants nothing / everything including `private` (tests, fully trusted hosts) |
 | `.Allow(cap, scope)` / `.Deny(cap, scope)` | Return a copy with the scope added to the innermost layer |
 | `.Narrow(child)` | Return a copy with the child's layers appended |
-| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath` | Queries |
+| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesPathsStartingWith`, `.DeniesNodeModules`, `.AllowsProvider` | Queries |
+| `.ExplainNetHostDenial` | The host-side reason a net host is refused, for audit |
 | `.ToJSON` | The layers, as `capabilities.effective` reports them |
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |
 | `Engine.ProjectRoot` | The exemption's project directory; override before executing |
 | `Engine.FetchMaxResponseBytes` | Response-body ceiling for `fetch` (0 = default) |
-| `AttachRuntime(Engine)` | Installs the filesystem provider unless `read` is denied outright |
+| `AttachRuntime(Engine)` | Installs the filesystem provider; the loader checks every read through it |
 | `InstallFFIIfGranted(Runtime)` | Installs the FFI extension only when `ffi` is granted; installing it directly without the grant raises `EGocciaFFINotGranted` |
 
 Every builder deep-copies the rules, so a value handed to an engine is never

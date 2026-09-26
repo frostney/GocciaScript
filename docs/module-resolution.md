@@ -66,12 +66,10 @@ scope with `TGocciaCapabilities.Allow(gcImport, 'node_modules')`. See
 [Permissions](permissions.md#import-scopes) for how grants and denies combine;
 an explicit deny throws `PermissionDenied` instead of the sealed message.
 
-The `import` grant decides only whether the walk may run. Reading the file it
-finds follows the [module-graph exemption](permissions.md#the-module-graph-exemption)
-like any other import: a package inside the project (usually the project's own
-`node_modules`) needs nothing more, while one the walk finds above the project
-also needs a `read` grant covering it, and is refused with
-`PermissionDenied` (`read: <specifier>`) without one.
+A package the walk reaches through a granted `node_modules` scope is part of
+the [module graph](permissions.md#the-module-graph-exemption): its files need
+no `read` grant, wherever that `node_modules` directory is, though a `read`
+deny covering them still refuses them.
 
 The optional value is a **ceiling**, not a starting point. The walk still
 begins at the importing file's directory, so a package that ships its own

@@ -13,6 +13,7 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
+  Goccia.Realm,
   Goccia.Scope,
   Goccia.Values.Primitives;
 
@@ -22,24 +23,36 @@ type
     runtime is attached. }
   TGocciaFetchMaxResponseBytesProvider = function: Integer of object;
 
+  { One engine's fetch global. Everything that decides what this engine's
+    requests may reach — its capability set and response ceiling — lives here,
+    per engine, and travels with each request it starts. }
   TGocciaGlobalFetch = class(TGocciaBuiltin)
   private
     FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FSourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
+    FRealm: TGocciaRealm;
+    FAcquiredFetchManager: Boolean;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure ValidateHost(const AURLStr: string);
   public
     { ACapabilities is the owning engine's set, fixed for its lifetime; every
-      request is checked against its net rules (ADR 0122). }
+      request is checked against its net rules (ADR 0122). ARealm is the
+      owning engine's realm: this engine's requests are tagged with it, and it
+      is where their results are created. }
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
       const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
-      const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider);
+      const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+      const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
+      const ARealm: TGocciaRealm);
+    destructor Destroy; override;
 
     property Capabilities: TGocciaCapabilities read FCapabilities;
+    property Realm: TGocciaRealm read FRealm;
   end;
 
 implementation
@@ -55,6 +68,7 @@ uses
   Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -69,6 +83,7 @@ uses
 
 const
   INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
+  FETCH_BACKEND_UNAVAILABLE_ERROR = 'no fetch backend is available';
 
 { TGocciaGlobalFetch }
 
@@ -77,17 +92,35 @@ constructor TGocciaGlobalFetch.Create(const AName: string;
   const AThrowError: TGocciaThrowErrorCallback;
   const ACapabilities: TGocciaCapabilities;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
-  const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider);
+  const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+  const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
+  const ARealm: TGocciaRealm);
 begin
   inherited Create(AName, AScope, AThrowError);
 
   FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
+  FSourcedAuditEmitter := ASourcedAuditEmitter;
   FMaxResponseBytesProvider := AMaxResponseBytesProvider;
+  FRealm := ARealm;
+  TGocciaFetchManager.AcquireInstance;
+  FAcquiredFetchManager := True;
 
   // Register fetch as a global function
   AScope.DefineLexicalBinding('fetch',
     TGocciaNativeFunctionValue.Create(FetchCallback, 'fetch', 1), dtConst, True);
+end;
+
+destructor TGocciaGlobalFetch.Destroy;
+begin
+  if FAcquiredFetchManager then
+  begin
+    // Detach this engine's in-flight requests before its realm goes away;
+    // other engines' requests on the thread are left running.
+    DiscardFetchCompletions(FRealm);
+    TGocciaFetchManager.ReleaseInstance;
+  end;
+  inherited Destroy;
 end;
 
 { The net scope a guest sees in a denial: the host, plus the port when the URL
@@ -146,8 +179,7 @@ begin
   begin
     if Assigned(FCapabilityAuditEmitter) then
       FCapabilityAuditEmitter(gckNetFetch, gcdDeny, Host,
-        Format('the net capability does not allow port %d of this host',
-          [Parsed.Port]));
+        FCapabilities.ExplainNetHostDenial(Parsed.Host, Parsed.Port));
     ThrowPermissionDenied(CapabilityName(gcNet), NetDenialScope(Parsed),
       NetDenialSuggestion(Parsed.Host));
   end;
@@ -170,6 +202,8 @@ var
   PropNames: TArray<string>;
   I: Integer;
   Policy: TGocciaFetchPolicy;
+  Manager: TGocciaFetchManager;
+  CallSite: TGocciaCallSite;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -249,20 +283,30 @@ begin
 
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
-  if (TGocciaFetchManager.Instance = nil) then
-    TGocciaFetchManager.Initialize;
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
       'fetch dispatch is allowed');
   Policy.Capabilities := FCapabilities;
-  Policy.AuditEmitter := FCapabilityAuditEmitter;
+  Policy.AuditEmitter := FSourcedAuditEmitter;
+  { The worker's decisions are delivered later, from whatever code is
+    running then; attribute them to this fetch() call. }
+  Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
+  if CurrentGocciaCallSite(CallSite) then
+  begin
+    Policy.AuditSource.FilePath := CallSite.FilePath;
+    Policy.AuditSource.Line := CallSite.Line;
+    Policy.AuditSource.Column := CallSite.Column;
+  end;
   if Assigned(FMaxResponseBytesProvider) then
     Policy.MaxResponseBytes := FMaxResponseBytesProvider()
   else
     Policy.MaxResponseBytes := 0;
   try
-    TGocciaFetchManager.Instance.StartFetch(URLStr, Method, RequestHeaders,
-      Policy, Promise, Signal);
+    Manager := TGocciaFetchManager.Instance;
+    if not Assigned(Manager) then
+      raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
+    Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
+      Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;

@@ -1619,8 +1619,10 @@ console.log("Executable manifests keep --deny-read in force...");
         );
         if (blocked.combined.includes("HOST-FILE-READ"))
           throw new Error(`${name} manifest re-enabled host filesystem loading (${mode}): ${blocked.combined}`);
-        if (!blocked.combined.includes("no module content provider is configured"))
-          throw new Error(`${name} host import should fail for a missing provider (${mode}): ${blocked.combined}`);
+        // --deny-read denies read outright, so the import is refused
+        // with a PermissionDenied naming the specifier as written.
+        if (!blocked.combined.includes(`PermissionDenied: read: ${outside}`))
+          throw new Error(`${name} host import should be refused by the read capability (${mode}): ${blocked.combined}`);
 
         const resolved = runCwd(
           LOADER,

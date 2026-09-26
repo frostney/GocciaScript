@@ -18,6 +18,7 @@ uses
   TimingUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.Capabilities,
   Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
@@ -1208,6 +1209,12 @@ begin
       EngineOptions.TimeoutMs := FOptions.TimeoutMs;
       EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
       EngineOptions.StackSize := DEFAULT_STACK_DEPTH;
+      { test262 reaches its fixtures through computed import() specifiers and
+        ShadowRealm.prototype.importValue, which are outside the module graph,
+        so the case may read the suite checkout. Realms and agents the case
+        creates inherit this set through EngineOptions. }
+      EngineOptions.Capabilities := TGocciaCapabilities.None.Allow(gcRead,
+        FOptions.SuiteDir);
 
       StartExecutionTimeout(FOptions.TimeoutMs);
       StartInstructionLimit(0);
@@ -1220,7 +1227,8 @@ begin
       end;
 
       Executor := CreateTest262Executor(FOptions.Mode);
-      Engine := TGocciaEngine.Create(ACase.Path, Source, Executor);
+      Engine := TGocciaEngine.Create(ACase.Path, Source, Executor,
+        EngineOptions.Capabilities);
       ConfigureTest262Engine(Engine, Executor, EngineOptions);
       Host := TGocciaTest262Host.Create(EngineOptions);
       Host.ConfigureHostEnvironment(Engine.HostEnvironment);
@@ -1806,10 +1814,14 @@ begin
     EngineOptions.TimeoutMs := FOptions.TimeoutMs;
     EngineOptions.MaxMemoryBytes := FOptions.MaxMemoryBytes;
     EngineOptions.StackSize := DEFAULT_STACK_DEPTH;
+    { A host probe resolves imports against the working directory. }
+    EngineOptions.Capabilities := TGocciaCapabilities.None.Allow(gcRead,
+      GetCurrentDir);
     StartExecutionTimeout(FOptions.TimeoutMs);
     SetMaxStackDepth(DEFAULT_STACK_DEPTH);
     Executor := CreateTest262Executor(FOptions.Mode);
-    Engine := TGocciaEngine.Create('<test262-host-eval>', Source, Executor);
+    Engine := TGocciaEngine.Create('<test262-host-eval>', Source, Executor,
+      EngineOptions.Capabilities);
     ConfigureTest262Engine(Engine, Executor, EngineOptions);
     if FOptions.HostEvalDeterministic then
       Engine.HostEnvironment.UseDeterministicProfile;

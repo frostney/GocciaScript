@@ -92,15 +92,25 @@ type
     FCapabilities: TGocciaCapabilities;
     FProjectRoot: string;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    { The root request of a host enrollment in progress (LoadHostModule).
+      Its imports are recognized by their host-owned importer instead. }
+    FHostRequestSpecifier: string;
+    FHostRequestImporter: string;
+    FHostRequestDepth: Integer;
 
     function EnforcesHostReads: Boolean;
     procedure EnforceHostRead(const ASpecifier, APath: string;
       const AIsLiteral, AIsHostOwned, APreResolution: Boolean);
     procedure PreCheckHostRead(const ASpecifier, AImportingFilePath: string;
       const AIsLiteral: Boolean);
-    function DeniedProbeCandidate(const ACandidate: string;
-      out ADeniedPath: string): Boolean;
+    function TryHostCandidate(const ASpecifier, AImportingFilePath: string;
+      out ACandidate: string): Boolean;
+    function MayProbeHostPath(const ASpecifier,
+      AImportingFilePath: string): Boolean;
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
+    function IsHostRequest(const ASpecifier,
+      AImportingFilePath: string): Boolean;
+    function IsInGrantedNodeModules(const APath: string): Boolean;
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
@@ -282,7 +292,6 @@ uses
   Goccia.ImportMeta,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
-  Goccia.ModuleResolver,
   Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
@@ -784,9 +793,18 @@ begin
   CanonicalPath := CanonicalCapabilityPath(APath);
   if FCapabilities.DeniesPath(gcRead, CanonicalPath) then
     Deny('read is denied for this path');
+  { Before probing, a deny scope the extension or index probe could land on
+    refuses too, so whether that file exists stays hidden. }
+  if APreResolution and
+     FCapabilities.DeniesPathsStartingWith(gcRead, CanonicalPath) then
+    Deny('read is denied for a path this request could resolve to');
 
   if AIsLiteral and (FProjectRoot <> '') and
      IsPathWithinScope(CanonicalPath, FProjectRoot) then
+    Exit;
+  { Packages the import capability grants are part of the module graph too:
+    the package a bare specifier resolved to, and its own literal imports. }
+  if AIsLiteral and IsInGrantedNodeModules(APath) then
     Exit;
 
   Allowed := FCapabilities.AllowsPath(gcRead, CanonicalPath);
@@ -804,59 +822,26 @@ begin
       'a read grant covers the path');
 end;
 
-{ Every path the resolver could probe for ACandidate: the candidate itself,
-  its TypeScript sources, and each resolver extension, directly and as an
-  index file. True when a deny covers one of them, so the request is refused
-  before the resolver reveals whether a denied file exists. }
-function TGocciaModuleLoader.DeniedProbeCandidate(const ACandidate: string;
-  out ADeniedPath: string): Boolean;
+{ The lexical host candidate for a relative or absolute specifier that the
+  resolver would probe the host for; False for anything else (virtual
+  modules, aliases, bare specifiers, host-owned importers). }
+function TGocciaModuleLoader.TryHostCandidate(const ASpecifier,
+  AImportingFilePath: string; out ACandidate: string): Boolean;
 var
-  Extensions: TModuleResolverExtensionArray;
-  TypeScriptCandidates: TFileExtensionArray;
-  I: Integer;
-
-  function Denies(const APath: string): Boolean;
-  begin
-    Result := FCapabilities.DeniesPath(gcRead, APath);
-    if Result then
-      ADeniedPath := APath;
-  end;
-
+  BaseDirectory, VirtualAddress: string;
 begin
-  ADeniedPath := '';
-  if Denies(ACandidate) then
-    Exit(True);
-  TypeScriptCandidates := TypeScriptSourceCandidates(ACandidate);
-  for I := 0 to High(TypeScriptCandidates) do
-    if Denies(TypeScriptCandidates[I]) then
-      Exit(True);
-  if Assigned(FResolver) then
-  begin
-    Extensions := FResolver.GetExtensions;
-    for I := 0 to High(Extensions) do
-      if Denies(ACandidate + Extensions[I]) or
-         Denies(IncludeTrailingPathDelimiter(ACandidate) + 'index' +
-           Extensions[I]) then
-        Exit(True);
-  end;
+  ACandidate := '';
   Result := False;
-end;
-
-procedure TGocciaModuleLoader.PreCheckHostRead(const ASpecifier,
-  AImportingFilePath: string; const AIsLiteral: Boolean);
-var
-  BaseDirectory, Candidate, DeniedPath, VirtualAddress: string;
-begin
   if not EnforcesHostReads then
     Exit;
   if IsAbsoluteHostPath(ASpecifier) then
-    Candidate := ASpecifier
+    ACandidate := ASpecifier
   else if StartsStr('./', ASpecifier) or StartsStr('../', ASpecifier) then
   begin
     BaseDirectory := ExtractFilePath(AImportingFilePath);
     if BaseDirectory = '' then
       BaseDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
-    Candidate := BaseDirectory + ASpecifier;
+    ACandidate := BaseDirectory + ASpecifier;
   end
   else
     Exit;
@@ -866,14 +851,39 @@ begin
   if Assigned(FResolver) and
      (FResolver.ApplyAlias(ASpecifier, AImportingFilePath) <> ASpecifier) then
     Exit;
-  { A module the host itself asked for (LoadHostModule marks its address
-    before loading), or one it imports, is host-owned and never checked. }
-  if IsHostOwnedLoad(ExpandFileName(Candidate), AImportingFilePath) then
+  if IsHostRequest(ASpecifier, AImportingFilePath) then
     Exit;
-  if DeniedProbeCandidate(ExpandFileName(Candidate), DeniedPath) then
-    EnforceHostRead(ASpecifier, DeniedPath, AIsLiteral, False, True);
-  EnforceHostRead(ASpecifier, ExpandFileName(Candidate), AIsLiteral, False,
-    True);
+  ACandidate := ExpandFileName(ACandidate);
+  Result := True;
+end;
+
+procedure TGocciaModuleLoader.PreCheckHostRead(const ASpecifier,
+  AImportingFilePath: string; const AIsLiteral: Boolean);
+var
+  Candidate: string;
+begin
+  if TryHostCandidate(ASpecifier, AImportingFilePath, Candidate) then
+    EnforceHostRead(ASpecifier, Candidate, AIsLiteral, False, True);
+end;
+
+{ The non-throwing form of PreCheckHostRead for callers that only learn
+  whether a file exists (import.meta.resolve): True when probing the host for
+  the specifier reveals nothing the engine may not read. Inside the project
+  the module-graph exemption already exposes existence to a literal import. }
+function TGocciaModuleLoader.MayProbeHostPath(const ASpecifier,
+  AImportingFilePath: string): Boolean;
+var
+  Candidate: string;
+begin
+  if not TryHostCandidate(ASpecifier, AImportingFilePath, Candidate) then
+    Exit(True);
+  Candidate := CanonicalCapabilityPath(Candidate);
+  if FCapabilities.DeniesPath(gcRead, Candidate) then
+    Exit(False);
+  if (FProjectRoot <> '') and IsPathWithinScope(Candidate, FProjectRoot) then
+    Exit(True);
+  Result := FCapabilities.AllowsPath(gcRead, Candidate) or
+    FCapabilities.AllowsPath(gcRead, ExtractFileDir(Candidate));
 end;
 
 function TGocciaModuleLoader.ResolveModuleRequestWithAttribute(
@@ -1089,12 +1099,15 @@ begin
       Exit(VirtualCandidate);
   end;
 
-  try
-    ResolvedAddress := ResolveModuleAddress(AModulePath, AImportingFilePath);
-    Exit(FilePathToUrl(ResolvedAddress));
-  except
-    on E: Exception do;
-  end;
+  { Resolution probes the host for extensions and index files; outside what
+    the engine may read, answer lexically so existence stays hidden. }
+  if MayProbeHostPath(AModulePath, AImportingFilePath) then
+    try
+      ResolvedAddress := ResolveModuleAddress(AModulePath, AImportingFilePath);
+      Exit(FilePathToUrl(ResolvedAddress));
+    except
+      on E: Exception do;
+    end;
 
   if (AModulePath <> '') and
      ((AModulePath[1] = '/') or (AModulePath[1] = '\') or
@@ -1435,9 +1448,62 @@ begin
   else
     ResolvedPath := ResolveModuleAddress(AModulePath, AImportingFilePath);
   MarkHostOwnedAddress(ResolvedPath);
-  Result := LoadModule(AModulePath, AImportingFilePath);
+  Inc(FHostRequestDepth);
+  FHostRequestSpecifier := AModulePath;
+  FHostRequestImporter := AImportingFilePath;
+  try
+    Result := LoadModule(AModulePath, AImportingFilePath);
+  finally
+    Dec(FHostRequestDepth);
+    if FHostRequestDepth = 0 then
+    begin
+      FHostRequestSpecifier := '';
+      FHostRequestImporter := '';
+    end;
+  end;
   if Assigned(Result) then
     Result.IsHostOwned := True;
+end;
+
+{ True when APath lies in a node_modules directory whose owner the import
+  capability grants the node_modules walk for (ADR 0122). Compared on the
+  expanded spelling, as node_modules ceilings are. }
+function TGocciaModuleLoader.IsInGrantedNodeModules(
+  const APath: string): Boolean;
+const
+  NODE_MODULES_SEGMENT = PathDelim + 'node_modules' + PathDelim;
+var
+  Expanded, Owner, Ceiling: string;
+  SegmentIndex, SearchFrom: Integer;
+begin
+  Expanded := ExpandFileName(APath);
+  SegmentIndex := 0;
+  SearchFrom := Pos(NODE_MODULES_SEGMENT, Expanded);
+  while SearchFrom > 0 do
+  begin
+    SegmentIndex := SearchFrom;
+    SearchFrom := PosEx(NODE_MODULES_SEGMENT, Expanded, SegmentIndex + 1);
+  end;
+  if SegmentIndex = 0 then
+    Exit(False);
+  Owner := Copy(Expanded, 1, SegmentIndex - 1);
+  if Owner = '' then
+    Owner := PathDelim;
+  Result := FCapabilities.NodeModulesCeiling(Owner, Ceiling);
+end;
+
+{ Whether a module request is made by the host rather than by guest code:
+  the root of a host enrollment, or an import whose importer is host-owned.
+  Host requests are never read-checked. Whether the *target* was ever loaded
+  by the host does not matter: a guest importing the same file is a guest
+  read. }
+function TGocciaModuleLoader.IsHostRequest(const ASpecifier,
+  AImportingFilePath: string): Boolean;
+begin
+  Result := ((FHostRequestDepth > 0) and
+    (ASpecifier = FHostRequestSpecifier) and
+    (AImportingFilePath = FHostRequestImporter)) or
+    IsHostOwnedImporter(AImportingFilePath);
 end;
 
 procedure TGocciaModuleLoader.EvaluateLinkedModule(
@@ -2087,11 +2153,11 @@ begin
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
 
-  { A computed request is judged even when the module is already loaded: it
-    is not part of the module graph however it got into the cache. }
-  if IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, False, IsHostOwned,
-      False);
+  { Judged before any cache: a module already loaded — by the host, or through
+    another request — is no reason to serve it to a request that may not read
+    it. }
+  EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
+    IsHostRequest(RequestedModulePath, ImportingFilePath), False);
 
   if TryGetCachedFailedModuleError(ResolvedPath, CacheKey, FailedValue) then
     raise TGocciaThrowValue.Create(FailedValue);
@@ -2114,10 +2180,6 @@ begin
       CheckForModuleReload(Result, CacheKey);
     Exit;
   end;
-
-  if not IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, True, IsHostOwned,
-      False);
 
   if AttributeType = 'json' then
   begin
@@ -2386,14 +2448,10 @@ begin
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
-  if IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, False, IsHostOwned,
-      False);
+  EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
+    IsHostRequest(RequestedModulePath, AImportingFilePath), False);
   if FModuleSourceValues.TryGetValue(CacheKey, SourceValue) then
     Exit(SourceValue);
-  if not IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, True, IsHostOwned,
-      False);
 
   if (AttributeType <> '') or
      ((not FVirtualModules.GetContentType(ResolvedPath,
@@ -2804,7 +2862,7 @@ begin
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
 
   EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
-    IsHostOwned, False);
+    IsHostRequest(RequestedModulePath, AImportingFilePath), False);
 
   if FDeferredModuleNamespaces.TryGetValue(CacheKey, Result) then
     Exit;
