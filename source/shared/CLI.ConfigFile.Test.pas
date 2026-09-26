@@ -30,6 +30,19 @@ type
     procedure TestJSONArrayProducesMultipleEntries;
     procedure TestJSONNestedObjectSkipped;
     procedure TestJSONNullSkipped;
+    procedure TestJSONNestedObjectFlattened;
+    procedure TestJSONValueKinds;
+
+    { SourcePath }
+    procedure TestSourcePathOnOwnAndBaseEntries;
+
+    { Validation }
+    procedure TestRemovedKeyRaises;
+    procedure TestCommandLineOnlyKeyRaises;
+    procedure TestFlagValueMustBeBoolean;
+    procedure TestRequiresTrustKeySkipped;
+    procedure TestValidateConfigEntries;
+    procedure TestInvalidOptionValueNamesConfig;
 
     { ApplyConfigEntries }
     procedure TestApplyFlagOption;
@@ -73,7 +86,7 @@ type
     procedure TestResolveFlagOptionPerFileOverridesRoot;
     procedure TestResolveFlagOptionPerFileFalseOverridesRoot;
     procedure TestResolveFlagOptionFallsBackToRoot;
-    procedure TestResolveFlagOptionEmptyStringEnablesFlag;
+    procedure TestResolveFlagOptionOnlyTrueEnablesFlag;
     procedure TestResolveFlagOptionUsesConfigName;
     procedure TestResolveFlagOptionMixedAliasExtendsPrecedence;
     procedure TestResolveFlagOptionDefaultsFalse;
@@ -93,6 +106,20 @@ begin
   Test('JSON: array produces multiple entries', TestJSONArrayProducesMultipleEntries);
   Test('JSON: nested object is skipped', TestJSONNestedObjectSkipped);
   Test('JSON: null is skipped', TestJSONNullSkipped);
+  Test('JSON: nested objects flatten one level', TestJSONNestedObjectFlattened);
+  Test('JSON: entries record their value kind', TestJSONValueKinds);
+  Test('SourcePath names the declaring file through extends',
+    TestSourcePathOnOwnAndBaseEntries);
+  Test('A removed key raises a usage error naming its replacement',
+    TestRemovedKeyRaises);
+  Test('A command-line-only key raises a usage error',
+    TestCommandLineOnlyKeyRaises);
+  Test('A flag value must be exactly true or false', TestFlagValueMustBeBoolean);
+  Test('RequiresTrust keys are not applied', TestRequiresTrustKeySkipped);
+  Test('ValidateConfigEntries checks without applying',
+    TestValidateConfigEntries);
+  Test('An invalid option value names the config file',
+    TestInvalidOptionValueNamesConfig);
 
   Test('ApplyConfigEntries sets flag option', TestApplyFlagOption);
   Test('ApplyConfigEntries does not set flag for false', TestApplyFlagFalseNotSet);
@@ -129,7 +156,7 @@ begin
   Test('ResolveFlagOption uses per-file config over root config', TestResolveFlagOptionPerFileOverridesRoot);
   Test('ResolveFlagOption per-file false overrides root true', TestResolveFlagOptionPerFileFalseOverridesRoot);
   Test('ResolveFlagOption falls back to root when no per-file config', TestResolveFlagOptionFallsBackToRoot);
-  Test('ResolveFlagOption treats empty string as enabled', TestResolveFlagOptionEmptyStringEnablesFlag);
+  Test('ResolveFlagOption enables a flag only for true', TestResolveFlagOptionOnlyTrueEnablesFlag);
   Test('ResolveFlagOption uses option ConfigName', TestResolveFlagOptionUsesConfigName);
   Test('ResolveFlagOption preserves extends precedence across aliases',
     TestResolveFlagOptionMixedAliasExtendsPrecedence);
@@ -1030,21 +1057,273 @@ begin
   end;
 end;
 
-procedure TConfigFileTests.TestResolveFlagOptionEmptyStringEnablesFlag;
+procedure TConfigFileTests.TestResolveFlagOptionOnlyTrueEnablesFlag;
 var
   Flag: TFlagOption;
   FileConfig: TConfigEntryArray;
 begin
   Flag := TFlagOption.Create('feature', 'Flag');
   try
-    { Per-file config with empty string — matches ApplyConfigEntries behavior }
     SetLength(FileConfig, 1);
     FileConfig[0].Key := 'feature';
     FileConfig[0].Value := '';
-
+    Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(False);
+    FileConfig[0].Value := 'true';
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
   finally
     Flag.Free;
+  end;
+end;
+
+{ ── Flattening, kinds, and SourcePath ──────────────────────── }
+
+function EntryText(const AEntries: TConfigEntryArray): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(AEntries) do
+  begin
+    if I > 0 then
+      Result := Result + ';';
+    Result := Result + AEntries[I].Key + '=' + AEntries[I].Value;
+  end;
+end;
+
+procedure TConfigFileTests.TestJSONNestedObjectFlattened;
+var
+  Dir, Path: string;
+  Entries: TConfigEntryArray;
+begin
+  Dir := CreateTempDirectory;
+  Path := IncludeTrailingPathDelimiter(Dir) + 'goccia.json';
+  WriteTextFile(Path, '{"timeout": "5s", "permissions": {"allow-net": ' +
+    '["a.test", "b.test"], "allow-ffi": true, "deny-read": [], ' +
+    '"deep": {"x": 1}}, "list": [{"y": 2}, "z"], "after": 1}');
+  Entries := ParseConfigFile(Path);
+  Expect<string>(EntryText(Entries)).ToBe('timeout=5s;' +
+    'permissions.allow-net=a.test;permissions.allow-net=b.test;' +
+    'permissions.allow-ffi=true;permissions.deny-read=;list=z;after=1');
+end;
+
+procedure TConfigFileTests.TestJSONValueKinds;
+var
+  Dir, Path: string;
+  Entries: TConfigEntryArray;
+begin
+  Dir := CreateTempDirectory;
+  Path := IncludeTrailingPathDelimiter(Dir) + 'goccia.json';
+  WriteTextFile(Path, '{"a": "s", "b": 1, "c": true, "d": [], ' +
+    '"e": ["x"]}');
+  Entries := ParseConfigFile(Path);
+  Expect<Integer>(Length(Entries)).ToBe(5);
+  Expect<Boolean>(Entries[0].Kind = cvkString).ToBe(True);
+  Expect<Boolean>(Entries[0].InArray).ToBe(False);
+  Expect<Boolean>(Entries[1].Kind = cvkNumber).ToBe(True);
+  Expect<Boolean>(Entries[2].Kind = cvkBoolean).ToBe(True);
+  Expect<Boolean>(Entries[3].Kind = cvkEmptyArray).ToBe(True);
+  Expect<Boolean>(Entries[3].InArray).ToBe(True);
+  Expect<Boolean>(Entries[4].Kind = cvkString).ToBe(True);
+  Expect<Boolean>(Entries[4].InArray).ToBe(True);
+end;
+
+procedure TConfigFileTests.TestSourcePathOnOwnAndBaseEntries;
+var
+  Dir, BasePath, ChildPath: string;
+  Entries: TConfigEntryArray;
+begin
+  Dir := CreateTempDirectory;
+  BasePath := IncludeTrailingPathDelimiter(Dir) + 'base' + PathDelim +
+    'goccia.json';
+  ChildPath := IncludeTrailingPathDelimiter(Dir) + 'child' + PathDelim +
+    'goccia.json';
+  WriteTextFile(BasePath, '{"permissions": {"allow-read": ["./data"]}}');
+  WriteTextFile(ChildPath, '{"extends": "../base/goccia.json", ' +
+    '"mode": "bytecode"}');
+  Entries := ParseConfigFile(ChildPath);
+  Expect<Integer>(Length(Entries)).ToBe(2);
+  Expect<string>(Entries[0].Key).ToBe('mode');
+  Expect<string>(Entries[0].SourcePath).ToBe(ExpandFileName(ChildPath));
+  Expect<string>(Entries[1].Key).ToBe('permissions.allow-read');
+  Expect<string>(Entries[1].SourcePath).ToBe(ExpandFileName(BasePath));
+end;
+
+{ ── Validation ─────────────────────────────────────────────── }
+
+function SingleEntry(const AKey, AValue: string): TConfigEntryArray;
+begin
+  SetLength(Result, 1);
+  Result[0].Key := AKey;
+  Result[0].Value := AValue;
+  Result[0].SourcePath := '/project/goccia.json';
+end;
+
+procedure TConfigFileTests.TestRemovedKeyRaises;
+var
+  Removed: TRemovedOption;
+  Options: TOptionArray;
+  Message: string;
+  IsUsageError: Boolean;
+begin
+  Removed := TRemovedOption.Create('allowed-host', 'allowed-hosts',
+    'use --allow-net instead', 'use "permissions" instead');
+  try
+    SetLength(Options, 1);
+    Options[0] := Removed;
+    Message := '';
+    IsUsageError := False;
+    try
+      ApplyConfigEntries(SingleEntry('allowed-hosts', 'example.com'),
+        Options);
+    except
+      on E: TCLIUsageError do
+      begin
+        IsUsageError := True;
+        Message := E.Message;
+      end;
+    end;
+    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<string>(Message).ToBe('/project/goccia.json: "allowed-hosts" ' +
+      'was removed in GocciaScript 0.14.0; use "permissions" instead');
+  finally
+    Removed.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestCommandLineOnlyKeyRaises;
+var
+  Scopes: TScopeListOption;
+  Options: TOptionArray;
+  Message: string;
+begin
+  Scopes := TScopeListOption.Create('allow-net', 'Allow', '<host>');
+  try
+    Scopes.CommandLineOnly := True;
+    Scopes.ConfigHint := '; declare it under "permissions" instead';
+    SetLength(Options, 1);
+    Options[0] := Scopes;
+    Message := '';
+    try
+      ApplyConfigEntries(SingleEntry('allow-net', 'example.com'), Options);
+    except
+      on E: TCLIUsageError do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/project/goccia.json: "allow-net" can ' +
+      'only be given on the command line; declare it under "permissions" ' +
+      'instead');
+    Expect<Boolean>(Scopes.Present).ToBe(False);
+  finally
+    Scopes.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestFlagValueMustBeBoolean;
+var
+  Flag: TFlagOption;
+  Options: TOptionArray;
+  Message: string;
+  IsUsageError: Boolean;
+begin
+  Flag := TFlagOption.Create('strict-types', 'Strict');
+  try
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    Message := '';
+    IsUsageError := False;
+    try
+      ApplyConfigEntries(SingleEntry('strict-types', 'yes'), Options);
+    except
+      on E: TParseError do
+      begin
+        Message := E.Message;
+        IsUsageError := E is TCLIUsageError;
+      end;
+    end;
+    Expect<string>(Message).ToBe('/project/goccia.json: "strict-types" ' +
+      'must be true or false, got "yes"');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+    ApplyConfigEntries(SingleEntry('strict-types', 'false'), Options);
+    Expect<Boolean>(Flag.Present).ToBe(False);
+    ApplyConfigEntries(SingleEntry('strict-types', 'true'), Options);
+    Expect<Boolean>(Flag.Present).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestRequiresTrustKeySkipped;
+var
+  Flag: TFlagOption;
+  Options: TOptionArray;
+begin
+  Flag := TFlagOption.Create('unsafe-thing', 'Unsafe');
+  try
+    Flag.RequiresTrust := True;
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    ApplyConfigEntries(SingleEntry('unsafe-thing', 'true'), Options);
+    Expect<Boolean>(Flag.Present).ToBe(False);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestValidateConfigEntries;
+var
+  Flag: TFlagOption;
+  Removed: TRemovedOption;
+  Options: TOptionArray;
+  Raised: Boolean;
+begin
+  Flag := TFlagOption.Create('strict-types', 'Strict');
+  Removed := TRemovedOption.Create('unsafe-ffi', 'unsafe-ffi',
+    'use --allow-ffi instead', 'use "permissions" instead');
+  try
+    SetLength(Options, 2);
+    Options[0] := Flag;
+    Options[1] := Removed;
+    ValidateConfigEntries(SingleEntry('strict-types', 'true'), Options);
+    Expect<Boolean>(Flag.Present).ToBe(False);
+    ValidateConfigEntries(SingleEntry('unknown-key', 'x'), Options);
+    Raised := False;
+    try
+      ValidateConfigEntries(SingleEntry('unsafe-ffi', 'true'), Options);
+    except
+      on E: TCLIUsageError do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+  finally
+    Flag.Free;
+    Removed.Free;
+  end;
+end;
+
+procedure TConfigFileTests.TestInvalidOptionValueNamesConfig;
+var
+  MaxMemory: TByteSizeOption;
+  Options: TOptionArray;
+  Message: string;
+begin
+  MaxMemory := TByteSizeOption.Create('max-memory', 'Memory');
+  try
+    SetLength(Options, 1);
+    Options[0] := MaxMemory;
+    Message := '';
+    try
+      ApplyConfigEntries(SingleEntry('max-memory', '64MB'), Options);
+    except
+      on E: TParseError do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe('/project/goccia.json: Invalid value for ' +
+      '--max-memory: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, or a ' +
+      'plain byte count)');
+    ApplyConfigEntries(SingleEntry('max-memory', '64MiB'), Options);
+    Expect<Int64>(MaxMemory.Value).ToBe(64 * 1024 * 1024);
+  finally
+    MaxMemory.Free;
   end;
 end;
 

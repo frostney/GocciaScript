@@ -8,10 +8,20 @@ uses
   CLI.Options;
 
 type
+  { What a config value was before it became text. }
+  TConfigValueKind = (cvkString, cvkNumber, cvkBoolean, cvkEmptyArray);
+
   { A single key-value pair extracted from a configuration file. }
   TConfigEntry = record
     Key: string;
     Value: string;
+    { The file that declared the entry. With `extends`, base entries keep
+      their own file, so relative values resolve against where they were
+      written. }
+    SourcePath: string;
+    Kind: TConfigValueKind;
+    { True for each element of an array value. }
+    InArray: Boolean;
   end;
   TConfigEntryArray = array of TConfigEntry;
 
@@ -19,7 +29,11 @@ type
     Keys are option long names or config names (e.g. 'mode', 'timeout').
     Values are their string representations (e.g. 'bytecode', '5000').
     Boolean true produces 'true'; false produces 'false'.
-    Arrays produce multiple entries with the same key. }
+    Arrays produce multiple entries with the same key; an empty array
+    produces one cvkEmptyArray entry with an empty value.
+    Nested objects are flattened one level: an "allow-net" array inside a
+    "permissions" object produces `permissions.allow-net` entries. Deeper
+    objects are skipped. }
   TConfigParseFunc = function(const AContent: string): TConfigEntryArray;
 
 { Register a parser for a file extension.
@@ -34,9 +48,17 @@ procedure RegisterConfigParser(const AExtension: string;
   parsed before this call naturally take precedence.
   Unknown keys are silently skipped (config files may contain
   keys for other subsystems).
-  Flag options are only set when the value is 'true' or empty.
+  A removed option's key or a command-line-only key raises TCLIUsageError; a
+  flag whose value is not exactly true or false raises TParseError. Options
+  marked RequiresTrust are skipped.
   For repeatable options, values are accumulated even when Present. }
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
+  const AOptions: TOptionArray);
+
+{ The checks ApplyConfigEntries makes, without applying anything. For
+  per-file configs, which are read through FindConfigEntry instead of being
+  applied to the options. }
+procedure ValidateConfigEntries(const AEntries: TConfigEntryArray;
   const AOptions: TOptionArray);
 
 { Parse a configuration file and return its entries without
@@ -72,6 +94,9 @@ function DiscoverConfigFile(const AStartDirectory: string;
   the first match wins. }
 function FindConfigEntry(const AEntries: TConfigEntryArray;
   const AKey: string; out AValue: string): Boolean;
+{ As FindConfigEntry, returning the whole entry. }
+function TryFindConfigEntry(const AEntries: TConfigEntryArray;
+  const AKey: string; out AEntry: TConfigEntry): Boolean;
 
 { Resolve an effective boolean for a flag option using the
   standard precedence: CLI flag > per-file config > root config >
@@ -139,20 +164,28 @@ end;
 
 { ── Built-in JSON config parser (SAX-based) ────────────────── }
 
+const
+  NESTED_KEY_SEPARATOR = '.';
+
 type
-  { SAX parser that extracts top-level key-value pairs from a
-    JSON object.  Only the top-level object's scalar properties
-    and flat arrays of scalars are collected; nested objects and
-    null values are silently skipped. }
+  { SAX parser that extracts the top-level key-value pairs of a JSON object:
+    scalars, flat arrays of scalars, and one level of nested objects, whose
+    keys are flattened to `parent.child`. Deeper objects and null values are
+    silently skipped. }
   TConfigJSONParser = class(TAbstractJSONParser)
   private
     FEntries: TConfigEntryArray;
     FCount: Integer;
-    FCurrentKey: string;
+    FTopKey: string;
+    FChildKey: string;
     FDepth: Integer;
-    FInTopArray: Boolean;
+    FInNestedObject: Boolean;
+    FArrayDepth: Integer;
     FArrayHadElements: Boolean;
-    procedure AddEntry(const AValue: string);
+    function CurrentKey: string;
+    procedure AddEntry(const AValue: string; const AKind: TConfigValueKind;
+      const AInArray: Boolean);
+    procedure AddScalar(const AValue: string; const AKind: TConfigValueKind);
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -168,13 +201,42 @@ type
     function Parse(const AText: string): TConfigEntryArray;
   end;
 
-procedure TConfigJSONParser.AddEntry(const AValue: string);
+function TConfigJSONParser.CurrentKey: string;
+begin
+  if FInNestedObject then
+    Result := FTopKey + NESTED_KEY_SEPARATOR + FChildKey
+  else
+    Result := FTopKey;
+end;
+
+procedure TConfigJSONParser.AddEntry(const AValue: string;
+  const AKind: TConfigValueKind; const AInArray: Boolean);
 begin
   if FCount >= Length(FEntries) then
     SetLength(FEntries, Length(FEntries) * 2 + 8);
-  FEntries[FCount].Key := FCurrentKey;
+  FEntries[FCount].Key := CurrentKey;
   FEntries[FCount].Value := AValue;
+  FEntries[FCount].SourcePath := '';
+  FEntries[FCount].Kind := AKind;
+  FEntries[FCount].InArray := AInArray;
   Inc(FCount);
+end;
+
+{ A scalar is collected when it is a top-level value, a nested object's
+  value, or an element directly inside a collected array. }
+procedure TConfigJSONParser.AddScalar(const AValue: string;
+  const AKind: TConfigValueKind);
+begin
+  if FArrayDepth > 0 then
+  begin
+    if FDepth = FArrayDepth then
+    begin
+      FArrayHadElements := True;
+      AddEntry(AValue, AKind, True);
+    end;
+  end
+  else if (FDepth = 1) or ((FDepth = 2) and FInNestedObject) then
+    AddEntry(AValue, AKind, False);
 end;
 
 procedure TConfigJSONParser.OnNull;
@@ -184,43 +246,20 @@ end;
 
 procedure TConfigJSONParser.OnBoolean(const AValue: Boolean);
 begin
-  if FDepth = 1 then
-  begin
-    if AValue then
-      AddEntry('true')
-    else
-      AddEntry('false');
-  end;
-  if FInTopArray and (FDepth = 2) then
-  begin
-    FArrayHadElements := True;
-    if AValue then
-      AddEntry('true')
-    else
-      AddEntry('false');
-  end;
+  if AValue then
+    AddScalar('true', cvkBoolean)
+  else
+    AddScalar('false', cvkBoolean);
 end;
 
 procedure TConfigJSONParser.OnString(const AValue: string);
 begin
-  if FDepth = 1 then
-    AddEntry(AValue)
-  else if FInTopArray and (FDepth = 2) then
-  begin
-    FArrayHadElements := True;
-    AddEntry(AValue);
-  end;
+  AddScalar(AValue, cvkString);
 end;
 
 procedure TConfigJSONParser.OnInteger(const AValue: Int64);
 begin
-  if FDepth = 1 then
-    AddEntry(IntToStr(AValue))
-  else if FInTopArray and (FDepth = 2) then
-  begin
-    FArrayHadElements := True;
-    AddEntry(IntToStr(AValue));
-  end;
+  AddScalar(IntToStr(AValue), cvkNumber);
 end;
 
 procedure TConfigJSONParser.OnFloat(const AValue: Double);
@@ -228,48 +267,53 @@ var
   FormatSettings: TFormatSettings;
 begin
   FormatSettings := CreateInvariantFormatSettings;
-  if FDepth = 1 then
-    AddEntry(FloatToStr(AValue, FormatSettings))
-  else if FInTopArray and (FDepth = 2) then
-  begin
-    FArrayHadElements := True;
-    AddEntry(FloatToStr(AValue, FormatSettings));
-  end;
+  AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
 end;
 
 procedure TConfigJSONParser.OnBeginObject;
 begin
   Inc(FDepth);
+  if (FDepth = 2) and (FArrayDepth = 0) then
+  begin
+    FInNestedObject := True;
+    FChildKey := '';
+  end;
 end;
 
 procedure TConfigJSONParser.OnObjectKey(const AKey: string);
 begin
   if FDepth = 1 then
-    FCurrentKey := AKey;
+    FTopKey := AKey
+  else if (FDepth = 2) and FInNestedObject then
+    FChildKey := AKey;
 end;
 
 procedure TConfigJSONParser.OnEndObject;
 begin
+  if (FDepth = 2) and FInNestedObject then
+    FInNestedObject := False;
   Dec(FDepth);
 end;
 
 procedure TConfigJSONParser.OnBeginArray;
 begin
   Inc(FDepth);
-  if FDepth = 2 then
+  if (FArrayDepth = 0) and
+     (((FDepth = 2) and not FInNestedObject) or
+      ((FDepth = 3) and FInNestedObject)) then
   begin
-    FInTopArray := True;
+    FArrayDepth := FDepth;
     FArrayHadElements := False;
   end;
 end;
 
 procedure TConfigJSONParser.OnEndArray;
 begin
-  if FDepth = 2 then
+  if FDepth = FArrayDepth then
   begin
+    FArrayDepth := 0;
     if not FArrayHadElements then
-      AddEntry('');
-    FInTopArray := False;
+      AddEntry('', cvkEmptyArray, True);
   end;
   Dec(FDepth);
 end;
@@ -278,9 +322,11 @@ function TConfigJSONParser.Parse(const AText: string): TConfigEntryArray;
 begin
   FCount := 0;
   FDepth := 0;
-  FInTopArray := False;
+  FInNestedObject := False;
+  FArrayDepth := 0;
   FArrayHadElements := False;
-  FCurrentKey := '';
+  FTopKey := '';
+  FChildKey := '';
   SetLength(FEntries, 16);
 
   DoParse(AText);
@@ -332,6 +378,47 @@ begin
   Result := False;
 end;
 
+function ConfigEntryLocation(const AEntry: TConfigEntry): string;
+begin
+  if AEntry.SourcePath <> '' then
+    Result := AEntry.SourcePath
+  else
+    Result := 'config';
+end;
+
+{ The checks shared by ApplyConfigEntries and ValidateConfigEntries. False
+  when the entry must not be applied (a RequiresTrust key). }
+function CheckConfigEntry(const AEntry: TConfigEntry;
+  const AOption: TOptionBase): Boolean;
+begin
+  if AOption is TRemovedOption then
+    raise TCLIUsageError.Create(TRemovedOption(AOption).RemovedConfigMessage(
+      ConfigEntryLocation(AEntry)));
+  if AOption.CommandLineOnly then
+    raise TCLIUsageError.CreateFmt(
+      '%s: "%s" can only be given on the command line%s',
+      [ConfigEntryLocation(AEntry), AEntry.Key, AOption.ConfigHint]);
+  if (AOption is TFlagOption) and (AEntry.Value <> 'true') and
+     (AEntry.Value <> 'false') then
+    raise TParseError.CreateFmt('%s: "%s" must be true or false, got "%s"',
+      [ConfigEntryLocation(AEntry), AEntry.Key, AEntry.Value]);
+  Result := not AOption.RequiresTrust;
+end;
+
+procedure ValidateConfigEntries(const AEntries: TConfigEntryArray;
+  const AOptions: TOptionArray);
+var
+  I: Integer;
+  Option: TOptionBase;
+begin
+  for I := 0 to High(AEntries) do
+  begin
+    Option := FindOptionByName(AOptions, AEntries[I].Key);
+    if Option <> nil then
+      CheckConfigEntry(AEntries[I], Option);
+  end;
+end;
+
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
   const AOptions: TOptionArray);
 var
@@ -342,6 +429,8 @@ begin
   begin
     Option := FindOptionByName(AOptions, AEntries[I].Key);
     if Option = nil then
+      Continue;
+    if not CheckConfigEntry(AEntries[I], Option) then
       Continue;
 
     { Skip options already set by a higher-priority source (CLI or
@@ -366,11 +455,19 @@ begin
 
     if Option is TFlagOption then
     begin
-      if (AEntries[I].Value = 'true') or (AEntries[I].Value = '') then
+      if AEntries[I].Value = 'true' then
         Option.Apply('');
     end
     else
-      Option.Apply(AEntries[I].Value);
+      try
+        Option.Apply(AEntries[I].Value);
+      except
+        on E: TCLIUsageError do
+          raise;
+        on E: TParseError do
+          raise TParseError.CreateFmt('%s: %s',
+            [ConfigEntryLocation(AEntries[I]), E.Message]);
+      end;
   end;
 end;
 
@@ -414,6 +511,8 @@ begin
   Parser := ResolveParser(Extension);
   Content := ReadFileContent(APath);
   OwnEntries := Parser(Content);
+  for I := 0 to High(OwnEntries) do
+    OwnEntries[I].SourcePath := APath;
 
   { Look for an "extends" entry. }
   ExtendsIndex := -1;
@@ -538,6 +637,21 @@ begin
   Result := False;
 end;
 
+function TryFindConfigEntry(const AEntries: TConfigEntryArray;
+  const AKey: string; out AEntry: TConfigEntry): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AEntries) do
+    if AEntries[I].Key = AKey then
+    begin
+      AEntry := AEntries[I];
+      Exit(True);
+    end;
+  AEntry := Default(TConfigEntry);
+  Result := False;
+end;
+
 { ── Flag resolution ────────────────────────────────────────── }
 
 function ResolveFlagOption(const AFlag: TFlagOption;
@@ -548,7 +662,7 @@ begin
   if AFlag.FromCommandLine then
     Result := True
   else if FindOptionConfigEntry(AFileConfig, AFlag, ValueStr) then
-    Result := (ValueStr = 'true') or (ValueStr = '')
+    Result := ValueStr = 'true'
   else
     Result := AFlag.Present;
 end;

@@ -126,7 +126,7 @@ begin
           Value := AArgs[I];
         end;
 
-        Option.Apply(Value);
+        Option.ApplyExplicit(Value, HasEquals);
       end
       else if (Length(Arg) = 2) and
               (Arg[1] = SHORT_FLAG_CHAR) and

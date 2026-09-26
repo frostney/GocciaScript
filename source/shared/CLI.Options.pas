@@ -10,8 +10,20 @@ uses
   SysUtils,
   TypInfo;
 
+const
+  { The release that removed the pre-ADR-0122 flags; removed-option errors
+    name it. }
+  OPTIONS_REMOVED_IN_VERSION = '0.14.0';
+  { Exit status for an unusable invocation (TCLIUsageError, and the
+    no-argument rule); script and run failures exit 1. }
+  EXIT_CODE_USAGE = 2;
+
 type
   TParseError = class(Exception);
+  { The invocation itself is unusable: a removed option, a value given to a
+    flag, a capability the binary cannot grant, or a command-line-only key in
+    a config file. Applications exit with status 2 for it. }
+  TCLIUsageError = class(TParseError);
 
   TOptionBase = class
   private
@@ -22,10 +34,19 @@ type
     FGroup: string;
     FPresent: Boolean;
     FFromCommandLine: Boolean;
+    FHidden: Boolean;
+    FCommandLineOnly: Boolean;
+    FRequiresTrust: Boolean;
+    FConfigHint: string;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
 
     procedure Apply(const AValue: string); virtual; abstract;
+    { Applies a command-line occurrence. AHasEquals distinguishes `--x=` from
+      `--x`, which both arrive with an empty AValue. The default forwards to
+      Apply. }
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); virtual;
     function ConsumesSeparateValue: Boolean; virtual;
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
@@ -50,6 +71,17 @@ type
     property Group: string read FGroup;
     property Present: Boolean read FPresent;
     property FromCommandLine: Boolean read FFromCommandLine;
+    { Omitted from --help. Still parsed. }
+    property Hidden: Boolean read FHidden write FHidden;
+    { A config file that sets this key is a usage error. }
+    property CommandLineOnly: Boolean read FCommandLineOnly
+      write FCommandLineOnly;
+    { Appended to the command-line-only error, e.g. where the config form
+      lives instead. }
+    property ConfigHint: string read FConfigHint write FConfigHint;
+    { Skipped when a config file is applied: the value only takes effect once
+      the config is trusted (ADR 0122). }
+    property RequiresTrust: Boolean read FRequiresTrust write FRequiresTrust;
   end;
 
   TOptionArray = array of TOptionBase;
@@ -57,6 +89,10 @@ type
   TFlagOption = class(TOptionBase)
   public
     procedure Apply(const AValue: string); override;
+    { `--flag=anything`, including `--flag=` and `--flag=false`, is a usage
+      error: a flag is either given or not. }
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
     function FormatForHelp: string; override;
   end;
 
@@ -104,6 +140,79 @@ type
     function ValueOr(const ADefault: Int64): Int64;
 
     property Value: Int64 read FValue;
+  end;
+
+  { A byte size: a whole number of bytes, or KiB/MiB/GiB (CLI.Units). }
+  TByteSizeOption = class(TInt64Option)
+  public
+    procedure Apply(const AValue: string); override;
+    function FormatForHelp: string; override;
+  end;
+
+  { A duration in milliseconds: plain milliseconds, or ms/s/m (CLI.Units). }
+  TDurationOption = class(TInt64Option)
+  public
+    procedure Apply(const AValue: string); override;
+    function FormatForHelp: string; override;
+    function Milliseconds(const ADefault: Integer): Integer;
+  end;
+
+  { A non-negative whole number. }
+  TCountOption = class(TInt64Option)
+  public
+    procedure Apply(const AValue: string); override;
+  end;
+
+  { `--name[=scope,...]`: an unscoped occurrence, a comma-separated scope
+    list, or both, accumulated across repeats. The option never consumes the
+    next argument, so `--allow-read foo.js` is an unscoped grant followed by
+    an input file. }
+  TScopeListOption = class(TOptionBase)
+  private
+    FScopePlaceholder: string;
+    FRequiresScope: Boolean;
+    FUnscopedMeaning: string;
+    FScopeRequirement: string;
+    FUnscoped: Boolean;
+    FScopes: TStringList;
+  public
+    { AUnscopedMeaning completes the empty-list error: `omit "=" to ...`.
+      AScopeRequirement completes the missing-scope error of an option that
+      requires a scope: `--x needs a scope: ...`. }
+    constructor Create(const ALongName, AHelpText, AScopePlaceholder: string;
+      const AGroup: string = ''; const ARequiresScope: Boolean = False;
+      const AUnscopedMeaning: string = '';
+      const AScopeRequirement: string = '');
+    destructor Destroy; override;
+
+    procedure Apply(const AValue: string); override;
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
+    function FormatForHelp: string; override;
+
+    property Unscoped: Boolean read FUnscoped;
+    property Scopes: TStringList read FScopes;
+    property RequiresScope: Boolean read FRequiresScope;
+    property ScopePlaceholder: string read FScopePlaceholder;
+  end;
+
+  { An option that no longer exists. It stays parseable, hidden from help,
+    so using it fails with a message naming its replacement rather than an
+    "unknown option" error. AConfigName is its config key ('' when it never
+    had one). }
+  TRemovedOption = class(TOptionBase)
+  private
+    FFlagReplacement: string;
+    FConfigReplacement: string;
+  public
+    constructor Create(const ALongName, AConfigName, AFlagReplacement,
+      AConfigReplacement: string);
+    procedure Apply(const AValue: string); override;
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
+    function FormatForHelp: string; override;
+    function RemovedFlagMessage: string;
+    function RemovedConfigMessage(const AConfigPath: string): string;
   end;
 
   TRepeatableOption = class(TOptionBase)
@@ -165,6 +274,9 @@ function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
 
 implementation
 
+uses
+  CLI.Units;
+
 { ConcatOptions }
 
 function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
@@ -199,6 +311,16 @@ begin
   FGroup := AGroup;
   FPresent := False;
   FFromCommandLine := False;
+  FHidden := False;
+  FCommandLineOnly := False;
+  FRequiresTrust := False;
+  FConfigHint := '';
+end;
+
+procedure TOptionBase.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  Apply(AValue);
 end;
 
 procedure TOptionBase.MarkFromCommandLine;
@@ -226,6 +348,16 @@ end;
 procedure TFlagOption.Apply(const AValue: string);
 begin
   FPresent := True;
+end;
+
+procedure TFlagOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  if AHasEquals then
+    raise TCLIUsageError.CreateFmt(
+      '--%s does not take a value; got "%s". Omit the flag to leave it off',
+      [LongName, AValue]);
+  Apply(AValue);
 end;
 
 function TFlagOption.FormatForHelp: string;
@@ -337,6 +469,203 @@ end;
 function TInt64Option.ConsumesSeparateValue: Boolean;
 begin
   Result := True;
+end;
+
+{ TByteSizeOption }
+
+procedure TByteSizeOption.Apply(const AValue: string);
+var
+  Bytes: Int64;
+  ErrorText: string;
+begin
+  if not TryParseByteSize(AValue, Bytes, ErrorText) then
+    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
+      [LongName, AValue, ErrorText]);
+  FValue := Bytes;
+  FPresent := True;
+end;
+
+function TByteSizeOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '=<bytes>';
+end;
+
+{ TDurationOption }
+
+procedure TDurationOption.Apply(const AValue: string);
+var
+  ParsedMilliseconds: Int64;
+  ErrorText: string;
+begin
+  if not TryParseDurationMilliseconds(AValue, ParsedMilliseconds,
+     ErrorText) then
+    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
+      [LongName, AValue, ErrorText]);
+  FValue := ParsedMilliseconds;
+  FPresent := True;
+end;
+
+function TDurationOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '=<duration>';
+end;
+
+{ TryParseDurationMilliseconds caps a duration at High(Integer), so the
+  narrowing is lossless. }
+function TDurationOption.Milliseconds(const ADefault: Integer): Integer;
+begin
+  if FPresent then
+    Result := Integer(FValue)
+  else
+    Result := ADefault;
+end;
+
+{ TCountOption }
+
+procedure TCountOption.Apply(const AValue: string);
+var
+  Count: Int64;
+  ErrorText: string;
+begin
+  if not TryParseNonNegativeCount(AValue, Count, ErrorText) then
+    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
+      [LongName, AValue, ErrorText]);
+  FValue := Count;
+  FPresent := True;
+end;
+
+{ TScopeListOption }
+
+constructor TScopeListOption.Create(const ALongName, AHelpText,
+  AScopePlaceholder: string; const AGroup: string;
+  const ARequiresScope: Boolean; const AUnscopedMeaning: string;
+  const AScopeRequirement: string);
+begin
+  inherited Create(ALongName, AHelpText, AGroup);
+  FScopePlaceholder := AScopePlaceholder;
+  FRequiresScope := ARequiresScope;
+  FUnscopedMeaning := AUnscopedMeaning;
+  FScopeRequirement := AScopeRequirement;
+  FUnscoped := False;
+  FScopes := TStringList.Create;
+end;
+
+destructor TScopeListOption.Destroy;
+begin
+  FScopes.Free;
+  inherited Destroy;
+end;
+
+procedure TScopeListOption.Apply(const AValue: string);
+begin
+  ApplyExplicit(AValue, AValue <> '');
+end;
+
+procedure TScopeListOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+var
+  Items: TStringList;
+  I: Integer;
+begin
+  if (not AHasEquals) or (FRequiresScope and (AValue = '')) then
+  begin
+    if FRequiresScope then
+    begin
+      if FScopeRequirement <> '' then
+        raise TParseError.CreateFmt('--%s needs a scope: %s',
+          [LongName, FScopeRequirement]);
+      raise TParseError.CreateFmt('--%s needs a scope', [LongName]);
+    end;
+    FUnscoped := True;
+    FPresent := True;
+    Exit;
+  end;
+
+  if AValue = '' then
+  begin
+    if FUnscopedMeaning = '' then
+      raise TParseError.CreateFmt('--%s= has an empty scope list',
+        [LongName]);
+    raise TParseError.CreateFmt(
+      '--%s= has an empty scope list; omit "=" to %s',
+      [LongName, FUnscopedMeaning]);
+  end;
+
+  Items := TStringList.Create;
+  try
+    Items.StrictDelimiter := True;
+    Items.Delimiter := ',';
+    Items.QuoteChar := #0;
+    Items.DelimitedText := AValue;
+    { DelimitedText drops a trailing empty item, so count separators. }
+    if (AValue[Length(AValue)] = ',') or (AValue[1] = ',') then
+      raise TParseError.CreateFmt('Empty scope in --%s=%s',
+        [LongName, AValue]);
+    for I := 0 to Items.Count - 1 do
+      if Items[I] = '' then
+        raise TParseError.CreateFmt('Empty scope in --%s=%s',
+          [LongName, AValue]);
+    FScopes.AddStrings(Items);
+  finally
+    Items.Free;
+  end;
+  FPresent := True;
+end;
+
+function TScopeListOption.FormatForHelp: string;
+begin
+  if FRequiresScope then
+    Result := '--' + LongName + '=' + FScopePlaceholder + ',...'
+  else
+    Result := '--' + LongName + '[=' + FScopePlaceholder + ',...]';
+end;
+
+{ TRemovedOption }
+
+constructor TRemovedOption.Create(const ALongName, AConfigName,
+  AFlagReplacement, AConfigReplacement: string);
+begin
+  inherited Create(ALongName, '');
+  if AConfigName <> ALongName then
+    ConfigName := AConfigName;
+  FFlagReplacement := AFlagReplacement;
+  FConfigReplacement := AConfigReplacement;
+  Hidden := True;
+end;
+
+procedure TRemovedOption.Apply(const AValue: string);
+begin
+  raise TCLIUsageError.Create(RemovedFlagMessage);
+end;
+
+procedure TRemovedOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  raise TCLIUsageError.Create(RemovedFlagMessage);
+end;
+
+function TRemovedOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName;
+end;
+
+function TRemovedOption.RemovedFlagMessage: string;
+begin
+  Result := Format('--%s was removed in GocciaScript %s; %s',
+    [LongName, OPTIONS_REMOVED_IN_VERSION, FFlagReplacement]);
+end;
+
+function TRemovedOption.RemovedConfigMessage(
+  const AConfigPath: string): string;
+var
+  Key: string;
+begin
+  if ConfigName <> '' then
+    Key := ConfigName
+  else
+    Key := LongName;
+  Result := Format('%s: "%s" was removed in GocciaScript %s; %s',
+    [AConfigPath, Key, OPTIONS_REMOVED_IN_VERSION, FConfigReplacement]);
 end;
 
 { TRepeatableOption }
