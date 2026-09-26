@@ -471,12 +471,16 @@ end;
 procedure TTest262App.ParseArguments;
 const
   TEST262_PROGRAM_NAME = 'GocciaTest262Runner';
+  TEST262_BOOLEAN_FLAGS: array[0..5] of string = ('--help', '--verbose',
+    '--eval-host', '--deterministic', '--warning-unsupported-features',
+    '--unsafe-function-constructor');
 var
   Argument: string;
   I: Integer;
   Value: string;
   Parsed: Int64;
   ParseError: string;
+  FlagIndex: Integer;
 
   function ArgumentValue(const AName: string): string;
   begin
@@ -515,6 +519,13 @@ begin
     Argument := ParamStr(I);
     RejectUnsupportedSettingArgument(Argument, TEST262_PROGRAM_NAME,
       [grsTimeout, grsMaxMemory]);
+    for FlagIndex := Low(TEST262_BOOLEAN_FLAGS) to High(TEST262_BOOLEAN_FLAGS) do
+      if StartsStr(TEST262_BOOLEAN_FLAGS[FlagIndex] + '=', Argument) then
+        raise TCLIUsageError.CreateFmt(
+          '%s does not take a value; got "%s". Omit the flag to leave it off',
+          [TEST262_BOOLEAN_FLAGS[FlagIndex],
+           Copy(Argument, Length(TEST262_BOOLEAN_FLAGS[FlagIndex]) + 2,
+             MaxInt)]);
     if (Argument = '--help') or (Argument = '-h') then
     begin
       PrintUsage;
