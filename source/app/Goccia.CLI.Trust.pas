@@ -236,8 +236,9 @@ function TrustKeyForPath(const APath: string): string;
   --untrust <dir>). }
 function TrustKeyForDirectory(const APath: string): string;
 
-{ Each path scope of ARequest (read and ffi paths, allow and deny, and the
-  directory of node_modules=<dir>) with where it resolves now. }
+{ Each path scope of ARequest (read and ffi paths, allow and deny, the
+  directory of node_modules=<dir>, and the host paths of a sandbox section)
+  with where it resolves now. }
 function PathScopeTargets(
   const ARequest: TGocciaConfigPermissionRequest): TGocciaTrustTargets;
 { One line per recorded scope that has been re-pointed since it was trusted,
@@ -469,6 +470,12 @@ begin
         AddScopes(ARequest.Allow[Capability], Capability);
         AddScopes(ARequest.Deny[Capability], Capability);
       end;
+    { The host paths a sandbox section copies in, writes back, and writes its
+      diff to are path scopes too. }
+    for I := 0 to High(ARequest.Sandbox.Inputs) do
+      Scopes.Add(ARequest.Sandbox.Inputs[I].HostPath);
+    if ARequest.Sandbox.DiffFile <> '' then
+      Scopes.Add(ARequest.Sandbox.DiffFile);
     SetLength(Result, Scopes.Count);
     for I := 0 to Scopes.Count - 1 do
     begin
