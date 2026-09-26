@@ -1572,6 +1572,93 @@ console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScrip
   }
 }
 
+console.log("Executable manifests keep --no-host-filesystem in force...");
+{
+  const tmp = makeTmp();
+  const projDir = join(tmp, "proj");
+  const configDir = join(tmp, "configured");
+  try {
+    mkdirSync(projDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    const outside = join(tmp, "outside.js");
+    writeFileSync(outside, 'export const secret = "HOST-FILE-READ";\n');
+    const manifestSource =
+      'export default {"host:virtual": {content: "export default 31;"}};\n';
+    writeFileSync(join(projDir, "modules.js"), manifestSource);
+    writeFileSync(join(projDir, "modules.ts"), manifestSource);
+    writeFileSync(join(configDir, "modules.js"), manifestSource);
+    writeFileSync(
+      join(configDir, "goccia.json"),
+      JSON.stringify({ modules: "modules.js" }),
+    );
+    const hostImport =
+      `import { secret } from ${JSON.stringify(outside)}; secret;\n`;
+    const virtualImport = 'import value from "host:virtual"; value;\n';
+    writeFileSync(join(projDir, "host.mjs"), hostImport);
+    writeFileSync(join(projDir, "virtual.mjs"), virtualImport);
+    writeFileSync(join(configDir, "host.mjs"), hostImport);
+    writeFileSync(join(configDir, "virtual.mjs"), virtualImport);
+
+    const cases = [
+      { name: "JavaScript --modules", dir: projDir, args: ["--modules", join(projDir, "modules.js")] },
+      { name: "TypeScript --modules", dir: projDir, args: ["--modules", join(projDir, "modules.ts")] },
+      { name: "config modules", dir: configDir, args: [] as string[] },
+    ];
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      for (const { name, dir, args } of cases) {
+        const blocked = runCwd(
+          LOADER,
+          [join(dir, "host.mjs"), "--print", "--no-host-filesystem", `--mode=${mode}`, ...args],
+          tmp,
+          { expectFail: true },
+        );
+        if (blocked.combined.includes("HOST-FILE-READ"))
+          throw new Error(`${name} manifest re-enabled host filesystem loading (${mode}): ${blocked.combined}`);
+        if (!blocked.combined.includes("no module content provider is configured"))
+          throw new Error(`${name} host import should fail for a missing provider (${mode}): ${blocked.combined}`);
+
+        const resolved = runCwd(
+          LOADER,
+          [join(dir, "virtual.mjs"), "--print", "--no-host-filesystem", `--mode=${mode}`, ...args],
+          tmp,
+        );
+        if (!containsLine(resolved.stdout, "31"))
+          throw new Error(`${name} manifest modules should resolve under --no-host-filesystem (${mode}): ${resolved.combined}`);
+      }
+    }
+
+    writeFileSync(
+      join(projDir, "manifest.test.js"),
+      [
+        'import value from "host:virtual";',
+        'test("manifest modules resolve", () => { expect(value).toBe(31); });',
+        'test("host imports stay blocked", async () => {',
+        `  await expect(import(${JSON.stringify(outside)})).rejects.toThrow();`,
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = runCwd(
+        TESTRUNNER,
+        [
+          join(projDir, "manifest.test.js"),
+          "--no-progress",
+          "--no-host-filesystem",
+          `--mode=${mode}`,
+          "--modules",
+          join(projDir, "modules.js"),
+        ],
+        tmp,
+      );
+      if (!out.stdout.includes("Passed: 2"))
+        throw new Error(`TestRunner manifest should keep --no-host-filesystem in force (${mode}): ${out.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Executable manifests cannot replace an already loaded module record...");
 {
   const tmp = makeTmp();
