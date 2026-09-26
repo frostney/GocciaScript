@@ -3,7 +3,7 @@
  * test-cli-config.ts
  *
  * Config file loading and per-file config: goccia.json, goccia.toml,
- * goccia.json5, priority, discovery, timeout, stack-size, imports, extends,
+ * goccia.json5, priority, discovery, timeout, max-stack, imports, extends,
  * TestRunner integration, per-file engine flags, multi-directory, CLI override.
  */
 
@@ -323,7 +323,7 @@ console.log("Config timeout...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"timeout": 50}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"timeout": "50ms"}\n');
     writeFileSync(
       join(tmp, "test.js"),
       "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n",
@@ -337,20 +337,20 @@ console.log("Config timeout...");
   }
 }
 
-// -- Config stack-size ----------------------------------------------------------
+// -- Config max-stack -----------------------------------------------------------
 
-console.log("Config stack-size...");
+console.log("Config max-stack...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"stack-size": 50, "compat-asi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"max-stack": 50, "compat-asi": true}\n');
     writeFileSync(
       join(tmp, "test.js"),
       "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
     );
 
     const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("50")) throw new Error(`Stack-size config should limit to 50, got: ${out}`);
+    if (!out.includes("50")) throw new Error(`max-stack config should limit to 50, got: ${out}`);
   } finally {
     clean(tmp);
   }
@@ -604,24 +604,24 @@ console.log("Per-file ASI config across all apps...");
   }
 }
 
-// -- Per-file unsafe-ffi config across runtime apps ----------------------------
+// -- Per-file allow-ffi permission across runtime apps -------------------------
 
-console.log("Per-file unsafe-ffi config across runtime apps...");
+console.log("Per-file allow-ffi config across runtime apps...");
 {
   const tmp = makeTmp();
   const noConfigDir = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-ffi": true}}\n');
     writeFileSync(join(tmp, "test.js"), "typeof FFI;\n");
     writeFileSync(join(noConfigDir, "test.js"), "typeof FFI;\n");
     writeFileSync(
       join(tmp, "test-runner.js"),
-      'test("unsafe ffi config", () => { expect(typeof FFI).toBe("object"); });\n',
+      'test("allow-ffi config", () => { expect(typeof FFI).toBe("object"); });\n',
     );
     writeFileSync(
       join(tmp, "bench.js"),
       microbenchScript([
-        'group("unsafe-ffi", () => {',
+        'group("allow-ffi", () => {',
         '  bench("global", () => {',
         '      if (typeof FFI !== "object") throw new Error("FFI missing");',
         "      return FFI.suffix;",
@@ -631,23 +631,23 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
     );
 
     const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without unsafe-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
+    if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without allow-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
 
     const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
-    if (!containsLine(loaderOut, "object")) throw new Error(`Loader unsafe-ffi config should expose FFI, got: ${loaderOut}`);
+    if (!containsLine(loaderOut, "object")) throw new Error(`Loader allow-ffi config should expose FFI, got: ${loaderOut}`);
 
     const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
-    if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode unsafe-ffi config should expose FFI, got: ${loaderBc}`);
+    if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode allow-ffi config should expose FFI, got: ${loaderBc}`);
 
     const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
-    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner unsafe-ffi config should pass, got: ${trInterp}`);
+    if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner allow-ffi config should pass, got: ${trInterp}`);
 
     const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
-    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode unsafe-ffi config should pass, got: ${trBc}`);
+    if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode allow-ffi config should pass, got: ${trBc}`);
 
     const parallelLoaderDir = join(tmp, "loader-parallel");
     mkdirSync(parallelLoaderDir);
-    writeFileSync(join(parallelLoaderDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(join(parallelLoaderDir, "goccia.json"), '{"permissions": {"allow-ffi": true}}\n');
     writeFileSync(
       join(parallelLoaderDir, "a.js"),
       'if (typeof FFI !== "object") throw new Error("FFI missing");\n',
@@ -660,18 +660,18 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
 
     const parallelTestDir = join(tmp, "test-parallel");
     mkdirSync(parallelTestDir);
-    writeFileSync(join(parallelTestDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(join(parallelTestDir, "goccia.json"), '{"permissions": {"allow-ffi": true}}\n');
     writeFileSync(
       join(parallelTestDir, "a.js"),
-      'test("unsafe ffi config a", () => { expect(typeof FFI).toBe("object"); });\n',
+      'test("allow-ffi config a", () => { expect(typeof FFI).toBe("object"); });\n',
     );
     writeFileSync(
       join(parallelTestDir, "b.js"),
-      'test("unsafe ffi config b", () => { expect(typeof FFI).toBe("object"); });\n',
+      'test("allow-ffi config b", () => { expect(typeof FFI).toBe("object"); });\n',
     );
     const trParallel = runCwd(TESTRUNNER, [".", "--jobs=2", "--no-progress"], parallelTestDir);
     if (!trParallel.combined.includes("Passed: 2"))
-      throw new Error(`TestRunner parallel unsafe-ffi config should pass, got: ${trParallel.combined}`);
+      throw new Error(`TestRunner parallel allow-ffi config should pass, got: ${trParallel.combined}`);
 
     for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
       const bench = Bun.spawnSync(
@@ -684,19 +684,19 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
         },
       );
       if (bench.exitCode !== 0)
-        throw new Error(`BenchmarkRunner unsafe-ffi config ${modeArgs.join(" ")} exited ${bench.exitCode}: ${bench.stderr.toString()}`);
-      if (!bench.stdout.toString().includes("unsafe-ffi"))
-        throw new Error(`BenchmarkRunner unsafe-ffi config output should mention 'unsafe-ffi', got: ${bench.stdout.toString()}`);
+        throw new Error(`BenchmarkRunner allow-ffi config ${modeArgs.join(" ")} exited ${bench.exitCode}: ${bench.stderr.toString()}`);
+      if (!bench.stdout.toString().includes("allow-ffi"))
+        throw new Error(`BenchmarkRunner allow-ffi config output should mention 'allow-ffi', got: ${bench.stdout.toString()}`);
     }
 
     const parallelBenchDir = join(tmp, "bench-parallel");
     mkdirSync(parallelBenchDir);
-    writeFileSync(join(parallelBenchDir, "goccia.json"), '{"unsafe-ffi": true}\n');
+    writeFileSync(join(parallelBenchDir, "goccia.json"), '{"permissions": {"allow-ffi": true}}\n');
     for (const name of ["a", "b"]) {
       writeFileSync(
         join(parallelBenchDir, `${name}.js`),
         microbenchScript([
-          `group("unsafe-ffi-${name}", () => {`,
+          `group("allow-ffi-${name}", () => {`,
           '  bench("global", () => {',
           '      if (typeof FFI !== "object") throw new Error("FFI missing");',
           "      return FFI.suffix;",
@@ -715,12 +715,12 @@ console.log("Per-file unsafe-ffi config across runtime apps...");
       },
     );
     if (benchParallel.exitCode !== 0)
-      throw new Error(`BenchmarkRunner parallel unsafe-ffi config exited ${benchParallel.exitCode}: ${benchParallel.stderr.toString()}`);
+      throw new Error(`BenchmarkRunner parallel allow-ffi config exited ${benchParallel.exitCode}: ${benchParallel.stderr.toString()}`);
 
     const replOut = runCwd(REPL, [`--config=${join(tmp, "goccia.json")}`], tmp, {
       stdin: "typeof FFI;\n",
     });
-    if (!replOut.combined.includes("object")) throw new Error(`REPL unsafe-ffi config should expose FFI, got: ${replOut.combined}`);
+    if (!replOut.combined.includes("object")) throw new Error(`REPL allow-ffi config should expose FFI, got: ${replOut.combined}`);
   } finally {
     clean(tmp);
     clean(noConfigDir);
@@ -1087,13 +1087,13 @@ console.log("CLI options override file config...");
   }
 }
 
-// -- Config allowed-hosts ---------------------------------------------------------
+// -- Config permissions: allow-net ---------------------------------------------
 
-console.log("Config allowed-hosts blocks unlisted host...");
+console.log("Config allow-net blocks unlisted host...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
     writeFileSync(join(tmp, "test.js"), 'fetch("http://blocked.test");\n');
 
     const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
@@ -1103,13 +1103,13 @@ console.log("Config allowed-hosts blocks unlisted host...");
   }
 }
 
-console.log("Config allowed-hosts allows listed host...");
+console.log("Config allow-net allows listed host...");
 {
   const tmp = makeTmp();
   try {
     // 0.0.0.0:1 is unreachable, so the promise rejects with a network error
     // rather than a host-not-allowed TypeError.
-    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["0.0.0.0"]}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["0.0.0.0"]}}\n');
     writeFileSync(
       join(tmp, "test.js"),
       'const p = fetch("http://0.0.0.0:1/"); p.catch(() => {}); typeof p.then;\n',
@@ -1122,16 +1122,16 @@ console.log("Config allowed-hosts allows listed host...");
   }
 }
 
-console.log("Config allowed-hosts per-file overrides root...");
+console.log("Config allow-net per-file overrides root...");
 {
   const tmp = makeTmp();
   try {
     // Root config allows example.com
-    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
     // Subdirectory config allows only other.com
     const subDir = join(tmp, "sub");
     mkdirSync(subDir);
-    writeFileSync(join(subDir, "goccia.json"), '{"allowed-hosts": ["other.com"]}\n');
+    writeFileSync(join(subDir, "goccia.json"), '{"permissions": {"allow-net": ["other.com"]}}\n');
     writeFileSync(join(subDir, "test.js"), 'fetch("http://example.com");\n');
 
     // example.com is NOT in the subdirectory config, so it should be blocked
@@ -1142,52 +1142,56 @@ console.log("Config allowed-hosts per-file overrides root...");
   }
 }
 
-console.log("CLI --allowed-host overrides config allowed-hosts...");
+console.log("CLI --allow-net adds to and --deny-net subtracts from config permissions...");
 {
   const tmp = makeTmp();
   try {
     // Config allows example.com
-    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
-    // Script fetches example.com — allowed by config, but NOT by CLI list
-    writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
+    // Script fetches example.com — allowed by config.
+    writeFileSync(join(tmp, "test.js"), 'const p = fetch("http://example.com"); p.catch(() => {}); p;\n');
 
-    // CLI specifies only other.test — CLI wins outright, so example.com
-    // from config should be blocked.
-    const res = runCwd(LOADER, ["test.js", "--allowed-host=other.test"], tmp, { expectFail: true });
-    if (!res.combined.includes("example.com")) throw new Error(`CLI override should block config-only host, got: ${res.combined}`);
+    // A CLI allow adds to the config's grants rather than replacing them.
+    const out = runCwd(LOADER, ["--print", "test.js", "--allow-net=other.test"], tmp);
+    if (!out.combined.includes("[object Promise]") && !out.combined.includes("Promise"))
+      throw new Error(`CLI allow should keep the config-granted host, got: ${out.combined}`);
+
+    // A CLI deny subtracts from the config's grants.
+    const res = runCwd(LOADER, ["test.js", "--deny-net=example.com"], tmp, { expectFail: true });
+    if (!res.combined.includes("PermissionDenied: net: example.com"))
+      throw new Error(`CLI deny should subtract a config-granted host, got: ${res.combined}`);
   } finally {
     clean(tmp);
   }
 }
 
-console.log("Config allowed-hosts empty array overrides parent via extends...");
+console.log("Config allow-net false cancels a parent's grant via extends...");
 {
   const tmp = makeTmp();
   try {
     // Base config allows example.com
-    writeFileSync(join(tmp, "base.json"), '{"allowed-hosts": ["example.com"]}\n');
-    // Child config extends base but explicitly empties allowed-hosts
-    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "allowed-hosts": []}\n');
+    writeFileSync(join(tmp, "base.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
+    // Child config extends base but cancels the grant
+    writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "permissions": {"allow-net": false}}\n');
     writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
 
-    // Empty allowed-hosts in child should override parent — fetch blocked
     const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
     if (!res.combined.includes("PermissionDenied: net: example.com"))
-      throw new Error(`Empty allowed-hosts should block fetch, got: ${res.combined}`);
+      throw new Error(`allow-net false should block fetch, got: ${res.combined}`);
   } finally {
     clean(tmp);
   }
 }
 
-console.log("Config allowed-hosts TestRunner integration...");
+console.log("Config allow-net TestRunner integration...");
 {
   const tmp = makeTmp();
   try {
-    writeFileSync(join(tmp, "goccia.json"), '{"allowed-hosts": ["example.com"]}\n');
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
     writeFileSync(
       join(tmp, "test.js"),
       [
-        'describe("allowed-hosts", () => {',
+        'describe("allow-net", () => {',
         '  test("blocks unlisted host", () => {',
         '    expect(() => fetch("http://blocked.test")).toThrow(PermissionDenied);',
         "  });",
@@ -1196,7 +1200,7 @@ console.log("Config allowed-hosts TestRunner integration...");
     );
 
     const out = runCwd(TESTRUNNER, ["test.js", "--no-progress"], tmp);
-    if (!out.combined.includes("Passed: 1")) throw new Error(`TestRunner should pass with allowed-hosts config, got: ${out.combined}`);
+    if (!out.combined.includes("Passed: 1")) throw new Error(`TestRunner should pass with allow-net permission, got: ${out.combined}`);
   } finally {
     clean(tmp);
   }
@@ -1573,7 +1577,7 @@ console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScrip
   }
 }
 
-console.log("Executable manifests keep --no-host-filesystem in force...");
+console.log("Executable manifests keep --deny-read in force...");
 {
   const tmp = makeTmp();
   const projDir = join(tmp, "proj");
@@ -1609,7 +1613,7 @@ console.log("Executable manifests keep --no-host-filesystem in force...");
       for (const { name, dir, args } of cases) {
         const blocked = runCwd(
           LOADER,
-          [join(dir, "host.mjs"), "--print", "--no-host-filesystem", `--mode=${mode}`, ...args],
+          [join(dir, "host.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
           tmp,
           { expectFail: true },
         );
@@ -1620,11 +1624,11 @@ console.log("Executable manifests keep --no-host-filesystem in force...");
 
         const resolved = runCwd(
           LOADER,
-          [join(dir, "virtual.mjs"), "--print", "--no-host-filesystem", `--mode=${mode}`, ...args],
+          [join(dir, "virtual.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
           tmp,
         );
         if (!containsLine(resolved.stdout, "31"))
-          throw new Error(`${name} manifest modules should resolve under --no-host-filesystem (${mode}): ${resolved.combined}`);
+          throw new Error(`${name} manifest modules should resolve under --deny-read (${mode}): ${resolved.combined}`);
       }
     }
 
@@ -1645,7 +1649,7 @@ console.log("Executable manifests keep --no-host-filesystem in force...");
         [
           join(projDir, "manifest.test.js"),
           "--no-progress",
-          "--no-host-filesystem",
+          "--deny-read",
           `--mode=${mode}`,
           "--modules",
           join(projDir, "modules.js"),
@@ -1653,7 +1657,7 @@ console.log("Executable manifests keep --no-host-filesystem in force...");
         tmp,
       );
       if (!out.stdout.includes("Passed: 2"))
-        throw new Error(`TestRunner manifest should keep --no-host-filesystem in force (${mode}): ${out.combined}`);
+        throw new Error(`TestRunner manifest should keep --deny-read in force (${mode}): ${out.combined}`);
     }
   } finally {
     clean(tmp);
