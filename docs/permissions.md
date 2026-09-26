@@ -82,10 +82,13 @@ ignored on both sides, for names and IPv4 literals alike, so
 `tracker.example.com.` is the host `tracker.example.com` and `127.0.0.1.` the
 address `127.0.0.1`. An IP or CIDR scope matches only a URL that names an
 address; host names are never resolved to match one. An IPv4-mapped IPv6
-address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names, and
-an IP or CIDR scope also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names. An IP
+or CIDR **deny** also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
 (`2002::/16`) address reaches: a deny on `169.254.169.254` covers
-`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`.
+`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`. An **allow** does not extend that
+way — a 6to4 prefix names a relay site, not the IPv4 host, and NAT64 follows
+the same rule — so allowing `10.0.0.5` does not allow `2002:a00:5::1` or
+`64:ff9b::a00:5`; name those spellings explicitly to reach them.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
@@ -162,18 +165,29 @@ Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
 and their imports) are host requests and never checked; a guest importing the
 same file later is checked like any other guest read, cached or not.
 
-For a relative or absolute specifier the resolver tries candidates in order —
-the exact path, the extension variants, then `<path>/index.<ext>` — and each
-candidate is judged, canonically, before the host is asked whether it exists. A
+For a relative or absolute specifier — and for the path an alias or import map
+rewrites a specifier to — the resolver tries candidates in order: the exact
+path, the extension variants, then `<path>/index.<ext>`. Each candidate is
+judged, canonically, before the host is asked whether it exists; the same
+holds for the files a bare specifier's package target is probed as, where a
+literal import's candidates inside that package are part of the graph. A
 candidate the set refuses stops resolution with `PermissionDenied` there, so
 whether a file the engine may not read exists can never decide between
-`PermissionDenied`, "Module not found", or a later candidate loading. Deny
-scopes that no candidate reaches do not matter: denying `lib.js.map` or
-`lib-private` leaves `import "./lib"` alone, and a deny naming the directory
-`lib` refuses `import "./lib"` because `lib` itself is the first candidate. The
-path a request finally resolves to is judged again before any cache serves it.
-`import.meta.resolve` runs the same judgment and, when a candidate is refused,
-answers with the unprobed URL instead.
+`PermissionDenied`, "Module not found", or a later candidate loading, and a
+`..` in an alias tail cannot probe past the alias target unjudged. Deny scopes
+that no candidate reaches do not matter: denying `lib.js.map` or `lib-private`
+leaves `import "./lib"` alone, and a deny naming the directory `lib` refuses
+`import "./lib"` because `lib` itself is the first candidate.
+
+Because the first candidate is the specifier's own path, a grant must cover it:
+a file-level grant such as `read` on `/x/mod.js` admits `import("/x/mod.js")`
+but refuses the extensionless computed `import("/x/mod")`, whose first candidate
+`/x/mod` it does not cover. Grant the directory, or write the extension.
+
+The path a request finally resolves to is judged again before any cache serves
+it. `import.meta.resolve` runs the same judgment and, when a candidate is
+refused, answers with the unprobed URL instead — for an aliased specifier, the
+path the alias maps it to.
 
 ## PermissionDenied
 

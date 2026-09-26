@@ -52,6 +52,7 @@ type
     FNodeModulesGrant: TModuleResolverNodeModulesGrant;
     FProbeGuard: TModuleResolverProbeGuard;
     FLastPackageDirectory: string;
+    FProbePackageDirectory: string;
   protected
     function ProbeHostFile(const APath: string): Boolean;
     function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
@@ -83,6 +84,9 @@ type
       the node_modules walk spelled it; empty when that resolution did not go
       through node_modules. }
     property LastPackageDirectory: string read FLastPackageDirectory;
+    { The package directory whose files a bare-specifier resolution is
+      probing right now, for ProbeGuard; empty otherwise. }
+    property ProbePackageDirectory: string read FProbePackageDirectory;
   end;
 
   { Raised when a specifier cannot be resolved. Message is safe to hand to
@@ -429,8 +433,13 @@ begin
   if not IsPathInsideDirectory(TargetCandidate, PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
 
-  if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
-    raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+  FProbePackageDirectory := PackageDirectory;
+  try
+    if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
+      raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+  finally
+    FProbePackageDirectory := '';
+  end;
 
   { The post-probe gate is the physical one. The candidate above is a name that
     may not exist yet, so only its spelling can be judged; by here a real file

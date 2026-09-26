@@ -231,10 +231,11 @@ begin
     ExpectedPrincipal := 0;
   if AException is TGocciaThrowValue then
     Exit(FormatThrowDetail(TGocciaThrowValue(AException).Value, '', nil, False,
-      ExpectedPrincipal, TGocciaThrowValue(AException).Suggestion));
+      ExpectedPrincipal, TGocciaThrowValue(AException).Suggestion, True));
   if AException is EGocciaBytecodeThrow then
     Exit(FormatThrowDetail(EGocciaBytecodeThrow(AException).ThrownValue, '',
-      nil, False, ExpectedPrincipal, EGocciaBytecodeThrow(AException).Suggestion));
+      nil, False, ExpectedPrincipal,
+      EGocciaBytecodeThrow(AException).Suggestion, True));
   Result := AException.Message;
 end;
 

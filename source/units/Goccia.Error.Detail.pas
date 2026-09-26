@@ -19,11 +19,16 @@ uses
   Security: the code frame is rendered ONLY from provenance the engine captured
   onto the error object at creation (Goccia.Values.ErrorHelper), never from the
   thrown value's guest-writable `stack` string. A forged error object gets no
-  code frame. See docs/module-resolution.md "Runtime code frames". }
+  code frame. See docs/module-resolution.md "Runtime code frames".
+
+  AGuestBound marks output that is handed back to guest code (a sandbox
+  runScript child's stderr, a benchmark result's error). It then carries no
+  host-side suggestion: neither the one recorded on the error nor an
+  ASuggestion equal to it. }
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
-  const ASuggestion: string = ''): string;
+  const ASuggestion: string = ''; const AGuestBound: Boolean = False): string;
 
 { Returns the thrown value's `name` when it is a string data property on the
   object or its prototype chain, and 'Error' otherwise. Like FormatThrowDetail,
@@ -94,21 +99,30 @@ end;
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
-  const ASuggestion: string = ''): string;
+  const ASuggestion: string; const AGuestBound: Boolean): string;
 var
   ErrorObject: TGocciaErrorObjectValue;
   ErrorName, ErrorMessage: string;
   StackText, MessageText, NameText: string;
   ExcerptLines: TStringList;
   SourceAuthorized: Boolean;
-  Suggestion: string;
+  HostSuggestion, Suggestion: string;
 begin
   { A denial's host-side suggestion travels on the error itself, so it is
     shown even when the error reached the host through a rejected promise
     rather than the exception that first carried it. }
   Suggestion := ASuggestion;
-  if (Suggestion = '') and (AThrown is TGocciaErrorObjectValue) then
-    Suggestion := TGocciaErrorObjectValue(AThrown).ErrorHostSuggestion;
+  if AThrown is TGocciaErrorObjectValue then
+  begin
+    HostSuggestion := TGocciaErrorObjectValue(AThrown).ErrorHostSuggestion;
+    if AGuestBound then
+    begin
+      if (HostSuggestion <> '') and (Suggestion = HostSuggestion) then
+        Suggestion := '';
+    end
+    else if Suggestion = '' then
+      Suggestion := HostSuggestion;
+  end;
 
   // A code frame is rendered ONLY from the engine's own recorded provenance,
   // captured onto the error object when the engine created it (see
