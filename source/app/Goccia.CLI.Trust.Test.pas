@@ -6,6 +6,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
+  DateUtils,
   SysUtils,
 
   CLI.ConfigFile,
@@ -29,8 +30,16 @@ type
     procedure TestRoundTripLeavesNoTemporaryFile;
     procedure TestKeysCaseSensitivity;
     procedure TestSymlinkedConfigKeysToTarget;
+    procedure TestSymlinkedConfigFileHasItsOwnKey;
+    procedure TestSymlinkedDirectoryHashesAtItsTarget;
+    procedure TestRetargetedScopesNeedTrust;
     procedure TestNewerAndCorruptStoresRefused;
+    procedure TestMalformedStoresRefused;
     procedure TestLockContention;
+    function SaveWithLock(const AName, ALockContent: string): string;
+    procedure TestTimestampIgnoresLocale;
+    procedure TestStaleLocksAreReplaced;
+    procedure TestPrivateDirectoryIsTightened;
     procedure TestSaveMergesConcurrentChanges;
     procedure TestRemoveAtOrUnderRespectsBoundaries;
     procedure TestDefaultPathPerPlatform;
@@ -89,12 +98,24 @@ begin
     TestRoundTripLeavesNoTemporaryFile);
   Test('Keys compare case-sensitively unless the platform folds case',
     TestKeysCaseSensitivity);
-  Test('A config reached through a symlink keys to its target',
+  Test('A config in a symlinked directory keys to its target',
     TestSymlinkedConfigKeysToTarget);
+  Test('A symlinked config file has its own key and location',
+    TestSymlinkedConfigFileHasItsOwnKey);
+  Test('A config in a symlinked directory hashes at its target',
+    TestSymlinkedDirectoryHashesAtItsTarget);
+  Test('A re-pointed path scope needs trusting again',
+    TestRetargetedScopesNeedTrust);
   Test('Newer and corrupt stores are refused',
     TestNewerAndCorruptStoresRefused);
+  Test('Stores of the wrong shape are refused', TestMalformedStoresRefused);
   Test('A held lock fails with a message naming the lock file',
     TestLockContention);
+  Test('Timestamps ignore the locale''s separators',
+    TestTimestampIgnoresLocale);
+  Test('A stale lock is replaced; a live one is not', TestStaleLocksAreReplaced);
+  Test('The default store''s directory is made private',
+    TestPrivateDirectoryIsTightened);
   Test('Save applies its changes to the store as it is on disk',
     TestSaveMergesConcurrentChanges);
   Test('RemoveAtOrUnder stops at directory boundaries',
@@ -169,14 +190,17 @@ end;
 function TTrustTests.EntryFor(const AConfigPath: string): TGocciaTrustEntry;
 var
   Request: TGocciaConfigPermissionRequest;
+  Location: string;
 begin
-  Request := ReadConfigPermissionRequest(ParseConfigFile(AConfigPath),
-    AConfigPath);
+  { As --trust does: the request is read at the config's key location. }
+  Location := TrustKeyForPath(AConfigPath);
+  Request := ReadConfigPermissionRequest(ParseConfigFile(Location), Location);
   Result.ConfigPath := AConfigPath;
   Result.Hash := PermissionBlockHash(Request);
   Result.BlockJSON := NormalizedPermissionBlock(Request);
   Result.TrustedAt := '2026-09-20T10:12:03Z';
   Result.TrustedBy := 'GocciaTestRunner 0.14.0';
+  Result.Targets := PathScopeTargets(Request);
 end;
 
 function TTrustTests.StoreError(const APath: string): string;
@@ -308,6 +332,187 @@ begin
 end;
 {$ENDIF}
 
+procedure TTrustTests.TestSymlinkedConfigFileHasItsOwnKey;
+{$IFDEF UNIX}
+var
+  Trusted, Evil, StorePath: string;
+  Store: TGocciaTrustStore;
+  Gate: TGocciaConfigTrustGate;
+begin
+  { evil/goccia.json -> ../trusted/goccia.json: trusting trusted/ must not
+    trust evil/, whose files the same text would govern. }
+  Trusted := WriteFile('symfile/trusted/goccia.json',
+    '{"unsafe-function-constructor": true, ' +
+    '"permissions": {"allow-read": ["./data"]}}');
+  ForceDirectories(FRoot + PathDelim + 'symfile' + PathDelim + 'evil');
+  Evil := FRoot + PathDelim + 'symfile' + PathDelim + 'evil' + PathDelim +
+    'goccia.json';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString('../trusted/goccia.json')),
+    PAnsiChar(AnsiString(Evil)))).ToBe(0);
+  Expect<string>(TrustKeyForPath(Evil)).ToBe(Evil);
+  Expect<string>(TrustKeyForPath(Trusted)).ToBe(Trusted);
+
+  StorePath := FRoot + PathDelim + 'symfile' + PathDelim + 'trust.json';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(Trusted));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<Boolean>(Gate.Verify(Trusted).State = ctsTrusted).ToBe(True);
+    Expect<Boolean>(Gate.Verify(Evil).State = ctsNotTrusted).ToBe(True);
+    { The request is read at the config's own location: ./data is under
+      evil/, not trusted/. }
+    Expect<string>(Gate.Verify(Evil).Request.Allow[gcRead].Scopes[0]).ToBe(
+      FRoot + PathDelim + 'symfile' + PathDelim + 'evil' + PathDelim +
+      'data');
+  finally
+    Gate.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestSymlinkedDirectoryHashesAtItsTarget;
+{$IFDEF UNIX}
+var
+  Real, Link, StorePath: string;
+  Store: TGocciaTrustStore;
+  Gate: TGocciaConfigTrustGate;
+begin
+  { A config reached through a symlinked directory governs the same files,
+    so it keys, and resolves its relative scopes, at the target: one key,
+    one hash, whichever spelling is used. }
+  Real := WriteFile('symdir/real/goccia.json',
+    '{"permissions": {"allow-read": ["./data"]}}');
+  Link := FRoot + PathDelim + 'symdir' + PathDelim + 'link';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(ExtractFileDir(Real))),
+    PAnsiChar(AnsiString(Link)))).ToBe(0);
+  StorePath := FRoot + PathDelim + 'symdir' + PathDelim + 'trust.json';
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<string>(Gate.Verify(Link + PathDelim + 'goccia.json').Hash)
+      .ToBe(Gate.Verify(Real).Hash);
+    Expect<string>(Gate.Verify(Link + PathDelim + 'goccia.json').ConfigPath)
+      .ToBe(Real);
+  finally
+    Gate.Free;
+  end;
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(Link + PathDelim + 'goccia.json'));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<Boolean>(Gate.Verify(Real).State = ctsTrusted).ToBe(True);
+  finally
+    Gate.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestRetargetedScopesNeedTrust;
+{$IFDEF UNIX}
+var
+  Base, ConfigPath, StorePath, Elsewhere: string;
+  Store: TGocciaTrustStore;
+  Verdict: TGocciaConfigTrustVerdict;
+  Reloaded: TGocciaTrustStore;
+  Found: TGocciaTrustEntry;
+
+  function VerifyNow: TGocciaConfigTrustVerdict;
+  var
+    Gate: TGocciaConfigTrustGate;
+  begin
+    Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+      ALL_CAPABILITIES, True, LoadConfig);
+    try
+      Result := Gate.Verify(ConfigPath);
+    finally
+      Gate.Free;
+    end;
+  end;
+
+begin
+  Base := FRoot + PathDelim + 'retarget';
+  ConfigPath := WriteFile('retarget/project/goccia.json',
+    '{"permissions": {"allow-read": ["./data", "./build"]}}');
+  WriteFile('retarget/project/data/x.txt', 'x');
+  Elsewhere := Base + PathDelim + 'elsewhere';
+  ForceDirectories(Elsewhere);
+  StorePath := Base + PathDelim + 'trust.json';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(ConfigPath));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  { The targets round-trip through the store, outside the hash. }
+  Reloaded := TGocciaTrustStore.Load(StorePath);
+  try
+    Expect<Boolean>(Reloaded.TryFind(ConfigPath, Found)).ToBe(True);
+    Expect<Integer>(Length(Found.Targets)).ToBe(2);
+    Expect<string>(Found.Targets[0].Target).ToBe(TRUST_TARGET_ABSENT);
+    Expect<string>(Found.Targets[1].Target).ToBe(Base + PathDelim +
+      'project' + PathDelim + 'data');
+  finally
+    Reloaded.Free;
+  end;
+  Expect<Boolean>(VerifyNow.State = ctsTrusted).ToBe(True);
+
+  { A build output appearing in place of an absent scope is expected. }
+  ForceDirectories(Base + PathDelim + 'project' + PathDelim + 'build');
+  Expect<Boolean>(VerifyNow.State = ctsTrusted).ToBe(True);
+  RemoveDir(Base + PathDelim + 'project' + PathDelim + 'build');
+
+  { data/ replaced by a link elsewhere: same block, different place. }
+  DeleteFile(Base + PathDelim + 'project' + PathDelim + 'data' + PathDelim +
+    'x.txt');
+  RemoveDir(Base + PathDelim + 'project' + PathDelim + 'data');
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'project' + PathDelim + 'data'))))
+    .ToBe(0);
+  Verdict := VerifyNow;
+  Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
+  Expect<Integer>(Length(Verdict.TargetChanges)).ToBe(1);
+  Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Base +
+    PathDelim + 'project' + PathDelim + 'data: ' + Base + PathDelim +
+    'project' + PathDelim + 'data -> ' + Elsewhere);
+
+  { An absent scope appearing as a link out of its own place is a change. }
+  DeleteFile(Base + PathDelim + 'project' + PathDelim + 'data');
+  ForceDirectories(Base + PathDelim + 'project' + PathDelim + 'data');
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'project' + PathDelim +
+    'build')))).ToBe(0);
+  Verdict := VerifyNow;
+  Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
+  Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Base +
+    PathDelim + 'project' + PathDelim + 'build: absent -> ' + Elsewhere);
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
 procedure TTrustTests.TestNewerAndCorruptStoresRefused;
 var
   Newer, Corrupt, Unversioned: string;
@@ -321,8 +526,56 @@ begin
   Expect<string>(StoreError(Corrupt)).ToBe('trust store ' + Corrupt +
     ' is not valid JSON; fix or delete it');
   Unversioned := WriteFile('refused/unversioned.json', '{"trusted": {}}');
-  Expect<Boolean>(Pos('has no valid "version"', StoreError(Unversioned)) > 0)
-    .ToBe(True);
+  Expect<string>(StoreError(Unversioned)).ToBe('trust store ' + Unversioned +
+    ' is not a valid trust store (no "version"); fix or delete it');
+end;
+
+procedure TTrustTests.TestMalformedStoresRefused;
+const
+  VALID_HASH = '"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"';
+  VALID_ENTRY = '{"sha256": ' + VALID_HASH + ', "block": {"version": 1}, ' +
+    '"trustedAt": "2026-09-20T10:12:03Z", "trustedBy": "GocciaTestRunner"}';
+
+  function Detail(const AName, AText: string): string;
+  var
+    Path, Message: string;
+  begin
+    Path := WriteFile('malformed/' + AName + '.json', AText);
+    Message := StoreError(Path);
+    Result := Copy(Message, Pos('(', Message) + 1, MaxInt);
+    Result := Copy(Result, 1, Pos('); fix or delete it', Result) - 1);
+    if Pos('is not a valid trust store', Message) = 0 then
+      Result := 'accepted: ' + Message;
+  end;
+
+begin
+  Expect<string>(Detail('array', '[]')).ToBe('the top level is not an object');
+  Expect<string>(Detail('no-trusted', '{"version": 1}')).ToBe('no "trusted"');
+  Expect<string>(Detail('trusted-array', '{"version": 1, "trusted": []}'))
+    .ToBe('"trusted" is not an object');
+  Expect<string>(Detail('version-string', '{"version": "1", "trusted": {}}'))
+    .ToBe('"version" is not an integer');
+  Expect<string>(Detail('unknown-key',
+    '{"version": 1, "trusted": {}, "extra": true}'))
+    .ToBe('unknown key "extra"');
+  Expect<string>(Detail('hash-number',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": 5, ' +
+    '"block": {"version": 1}, "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('"sha256" of /a/goccia.json is not a string');
+  Expect<string>(Detail('hash-short',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": "abc", ' +
+    '"block": {"version": 1}, "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('"sha256" of /a/goccia.json is not a SHA-256');
+  Expect<string>(Detail('missing-block',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": ' + VALID_HASH +
+    ', "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('/a/goccia.json has no "block"');
+  Expect<string>(Detail('entry-array',
+    '{"version": 1, "trusted": {"/a/goccia.json": []}}'))
+    .ToBe('the entry for /a/goccia.json is not an object');
+  Expect<string>(Detail('valid',
+    '{"version": 1, "trusted": {"/a/goccia.json": ' + VALID_ENTRY + '}}'))
+    .ToBe('accepted: ');
 end;
 
 procedure TTrustTests.TestLockContention;
@@ -358,6 +611,110 @@ begin
   Expect<Boolean>(FileExists(StorePath + '.lock')).ToBe(True);
 end;
 
+function TTrustTests.SaveWithLock(const AName, ALockContent: string): string;
+var
+  StorePath: string;
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+begin
+  Result := '';
+  StorePath := FRoot + PathDelim + 'stale-' + AName + PathDelim +
+    'trust.json';
+  ForceDirectories(ExtractFileDir(StorePath));
+  WriteUTF8FileText(StorePath + '.lock', ALockContent);
+  Entry := Default(TGocciaTrustEntry);
+  Entry.ConfigPath := ExtractFileDir(StorePath) + PathDelim + 'goccia.json';
+  Entry.Hash := 'abc';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(Entry);
+    try
+      Store.Save;
+      Result := 'saved';
+    except
+      on E: EGocciaTrustStoreError do
+        Result := E.Message;
+    end;
+  finally
+    Store.Free;
+  end;
+end;
+
+function UnixSecondsAgo(const ASeconds: Integer): string;
+begin
+  Result := IntToStr(DateTimeToUnix(LocalTimeToUniversal(Now)) - ASeconds);
+end;
+
+procedure TTrustTests.TestTimestampIgnoresLocale;
+var
+  Previous: TFormatSettings;
+  Stamp: string;
+begin
+  Previous := DefaultFormatSettings;
+  try
+    DefaultFormatSettings.TimeSeparator := '.';
+    DefaultFormatSettings.DateSeparator := '/';
+    Stamp := TrustTimestamp;
+  finally
+    DefaultFormatSettings := Previous;
+  end;
+  { yyyy-mm-ddThh:nn:ssZ whatever the locale's separators. }
+  Expect<Integer>(Length(Stamp)).ToBe(20);
+  Expect<string>(Stamp[5] + Stamp[8] + Stamp[11] + Stamp[14] + Stamp[17] +
+    Stamp[20]).ToBe('--T::Z');
+end;
+
+procedure TTrustTests.TestStaleLocksAreReplaced;
+const
+  VANISHED_PROCESS = '999999999';
+begin
+  { A crashed writer's lock: its process is gone. }
+  Expect<string>(SaveWithLock('gone', VANISHED_PROCESS + ' ' +
+    UnixSecondsAgo(0))).ToBe('saved');
+  Expect<Boolean>(FileExists(FRoot + PathDelim + 'stale-gone' + PathDelim +
+    'trust.json.lock')).ToBe(False);
+  { A live process, but held for far longer than any write takes. }
+  Expect<string>(SaveWithLock('old', IntToStr(GetProcessID) + ' ' +
+    UnixSecondsAgo(3600))).ToBe('saved');
+  { A live, recent owner still excludes the writer. }
+  Expect<Boolean>(Pos('is locked by another process', SaveWithLock('live',
+    IntToStr(GetProcessID) + ' ' + UnixSecondsAgo(0))) > 0).ToBe(True);
+end;
+
+procedure TTrustTests.TestPrivateDirectoryIsTightened;
+{$IFDEF UNIX}
+const
+  OPEN_DIRECTORY = &755;
+  PRIVATE_DIRECTORY = &700;
+  PERMISSION_BITS = &777;
+var
+  Directory: string;
+  Store: TGocciaTrustStore;
+  Info: Stat;
+begin
+  Directory := FRoot + PathDelim + 'tighten';
+  ForceDirectories(Directory);
+  fpChmod(Directory, OPEN_DIRECTORY);
+  Store := TGocciaTrustStore.Load(Directory + PathDelim + 'trust.json');
+  try
+    Expect<Boolean>(Store.PrivateDirectory).ToBe(False);
+    Store.Save;
+    Expect<Integer>(FpStat(Directory, Info)).ToBe(0);
+    Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(OPEN_DIRECTORY);
+    Store.PrivateDirectory := True;
+    Store.Save;
+    Expect<Integer>(FpStat(Directory, Info)).ToBe(0);
+    Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(PRIVATE_DIRECTORY);
+  finally
+    Store.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
 procedure TTrustTests.TestSaveMergesConcurrentChanges;
 var
   StorePath: string;
@@ -367,10 +724,10 @@ begin
   StorePath := FRoot + PathDelim + 'merge' + PathDelim + 'trust.json';
   A := Default(TGocciaTrustEntry);
   A.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'a.json';
-  A.Hash := 'a';
+  A.Hash := StringOfChar('a', 64);
   B := A;
   B.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'b.json';
-  B.Hash := 'b';
+  B.Hash := StringOfChar('b', 64);
   First := TGocciaTrustStore.Load(StorePath);
   Second := TGocciaTrustStore.Load(StorePath);
   try
@@ -629,8 +986,8 @@ begin
     'trust store /s.json is not valid JSON; fix or delete it', '/s.json',
     ['a b'], FRoot);
   Expect<Boolean>(Pos('1 config file requests', Report) = 1).ToBe(True);
-  Expect<Boolean>(Pos('Nothing was run. trust store /s.json is not valid ' +
-    'JSON; fix or delete it. Then, to trust these requests:' + sLineBreak +
+  Expect<Boolean>(Pos('Nothing was run. Trust store /s.json is not valid ' +
+    'JSON; fix or delete it. Then trust these requests:' + sLineBreak +
     '  GocciaTestRunner --trust-store=/s.json --trust', Report) > 0)
     .ToBe(True);
   {$IFNDEF MSWINDOWS}
@@ -648,15 +1005,19 @@ begin
   WriteFile('scan/goccia.toml', '');
   WriteFile('scan/a/goccia.json5', '{}');
   WriteFile('scan/a/goccia.json', '{}');
+  WriteFile('scan/Z/goccia.json', '{}');
   WriteFile('scan/b/other.json', '{}');
   WriteFile('scan/node_modules/p/goccia.json', '{}');
   WriteFile('scan/.git/goccia.json', '{}');
   Configs := TStringList.Create;
   try
     FindTrustableConfigs(Base, Configs);
-    Expect<Integer>(Configs.Count).ToBe(2);
+    { Byte order: Z (0x5A) before a (0x61), whatever the locale. }
+    Expect<Integer>(Configs.Count).ToBe(3);
     Expect<string>(Configs[0]).ToBe(Base + PathDelim + 'goccia.toml');
-    Expect<string>(Configs[1]).ToBe(Base + PathDelim + 'a' + PathDelim +
+    Expect<string>(Configs[1]).ToBe(Base + PathDelim + 'Z' + PathDelim +
+      'goccia.json');
+    Expect<string>(Configs[2]).ToBe(Base + PathDelim + 'a' + PathDelim +
       'goccia.json5');
     Configs.Clear;
     FindTrustableConfigs(Base + PathDelim + 'b' + PathDelim + 'other.json',

@@ -129,7 +129,7 @@ uses
 
   FileUtils,
 
-  Goccia.Capabilities,
+  Goccia.CLI.Application,
   Goccia.FileExtensions,
   Goccia.Sandbox.Context,
   Goccia.ScriptLoader.Input;
@@ -304,18 +304,16 @@ end;
   config's own directory tree, compared canonically so a symbolic link cannot
   lead out of it. The command line can write anywhere. }
 procedure RequireInsideConfigDirectory(const APath, AConfigPath, AKey,
-  AWritten: string);
+  AFlag: string);
 var
-  Root: string;
+  Problem: string;
 begin
-  Root := CanonicalCapabilityPath(ExtractFileDir(ExpandHostFileName(
-    AConfigPath)));
-  if not IsPathWithinScope(CanonicalCapabilityPath(APath), Root) then
-    raise TCLIUsageError.CreateFmt(
-      '%s: "%s" entry "%s" is outside the config''s directory; a config ' +
-      'may only write inside its own directory tree (pass it on the ' +
+  Problem := ConfigOutputPathProblem(APath, AConfigPath);
+  if Problem <> '' then
+    raise TParseError.CreateFmt('%s: "%s" writes to %s, which %s; a ' +
+      'config may only write inside its own directory (pass %s on the ' +
       'command line to write elsewhere)',
-      [AConfigPath, AKey, AWritten]);
+      [AConfigPath, AKey, APath, Problem, AFlag]);
 end;
 
 function ConfigInputs(const AConfig: TGocciaSandboxRequest): TGocciaSandboxInputs;
@@ -347,7 +345,7 @@ begin
     Input.FromConfig := True;
     if Input.ReadWrite then
       RequireInsideConfigDirectory(Input.HostPath,
-        AConfig.Inputs[I].SourcePath, Key, Input.Spec);
+        AConfig.Inputs[I].SourcePath, Key, COPY_READ_WRITE_FLAG);
     Result[I] := Input;
   end;
 end;
@@ -400,8 +398,7 @@ begin
   begin
     RequireInsideConfigDirectory(AConfig.DiffFile,
       AConfig.DiffFileSourcePath, SANDBOX_CONFIG_KEY + '.diff-file',
-      ExtractRelativePath(ExtractFilePath(AConfig.DiffFileSourcePath),
-        AConfig.DiffFile));
+      '--diff-file');
     ARequest.DiffFile := AConfig.DiffFile;
   end;
 

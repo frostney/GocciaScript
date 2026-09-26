@@ -1622,8 +1622,23 @@ console.log("Executable manifests keep --deny-read in force...");
     const cases = [
       { name: "JavaScript --modules", dir: projDir, args: ["--modules", join(projDir, "modules.js")] },
       { name: "TypeScript --modules", dir: projDir, args: ["--modules", join(projDir, "modules.ts")] },
-      { name: "config modules", dir: configDir, args: [] as string[] },
     ];
+    // A manifest the config names is read under the script's own set, so an
+    // outright --deny-read refuses the manifest itself, before any import.
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      for (const entry of ["host.mjs", "virtual.mjs"]) {
+        const refused = runCwd(
+          RUNNER,
+          [join(configDir, entry), "--print", "--deny-read", `--mode=${mode}`],
+          tmp,
+          { expectFail: true },
+        );
+        if (refused.combined.includes("HOST-FILE-READ"))
+          throw new Error(`config modules manifest re-enabled host filesystem loading (${mode}): ${refused.combined}`);
+        if (!refused.combined.includes("PermissionDenied: read: modules.js"))
+          throw new Error(`config modules manifest should be refused under --deny-read (${mode}): ${refused.combined}`);
+      }
+    }
     for (const mode of ["interpreted", "bytecode"] as const) {
       for (const { name, dir, args } of cases) {
         const blocked = runCwd(
@@ -1814,9 +1829,11 @@ console.log("Virtual module config precedence and inherited manifest origins..."
       'import choice from "host:choice"; import inherited from "host:inherited"; choice + inherited;\n',
     );
 
+    // base/ is outside the entry's project (app/), so the manifest its config
+    // names needs a read grant, like any other read outside the project.
     const perFile = runCwd(
       RUNNER,
-      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json")],
+      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json"), `--allow-read=${baseDir}`],
       tmp,
     );
     if (!containsLine(perFile.stdout, "12"))
@@ -1826,6 +1843,7 @@ console.log("Virtual module config precedence and inherited manifest origins..."
       RUNNER,
       [
         join(appDir, "entry.mjs"),
+        `--allow-read=${baseDir}`,
         "--print",
         "--config",
         join(tmp, "root.json"),

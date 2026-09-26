@@ -387,8 +387,11 @@ allow-ffi = ["../fixtures/ffi"]
   `a/goccia.json` is the root config, but `c/y.js` (with no config of its
   own) gets no permissions or `unsafe-*` keys from it. Its other settings
   apply to every input as before. An explicit `--config` governs every
-  input. `GocciaTestRunner` given several inputs applies no root config at
-  all, only each file's own.
+  input that has no config of its own. `GocciaTestRunner` given several
+  inputs applies no root config at all, only each file's own.
+- A file with its own config takes its `permissions` and `unsafe-*` keys from
+  that config (and its `extends` chain) alone, even inside the root config's
+  tree: a root key the file's config does not set is not inherited.
 - An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
   `true`, `false`, or an array of strings (including `null`, an object, or a
   nested array) is a malformed block and fails the run with status 2. A
@@ -396,6 +399,18 @@ allow-ffi = ["../fixtures/ffi"]
   value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
+- A module manifest a config names (`"modules"`) is read and evaluated under
+  the capability set of the script the config governs: inside the project it
+  is part of the module graph, elsewhere it needs a read grant, and a
+  JavaScript or TypeScript manifest runs in an engine of its own (see
+  [Virtual Modules](virtual-modules.md)). `--modules` on the command line
+  stays a host request.
+- A config writes host files only inside its own directory: `log`,
+  `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
+  and the `sandbox` section's `copy-rw` inputs and `diff-file` resolve against
+  the declaring file and fail with status 1 if they lead outside it, through a
+  symbolic link or otherwise (see
+  [Build System](build-system.md#configuration-file-gocciajson)).
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 
@@ -497,7 +512,12 @@ code, so a config with grants only warns there.
 
 `--trust`, `--untrust`, and `--list-trusted` run on their own: combining two
 of them, or one with input files, `-P`, or `--ignore-config-permissions`, is a
-usage error, as is `-P` with `--ignore-config-permissions`. All of these
+usage error, as is `-P` with `--ignore-config-permissions`. So is an empty
+`--trust` or `--untrust` path (`--untrust=` would otherwise mean the working
+directory), `-P` given a value (`-P=1`), and `--trust-store` without `=`: the
+store path attaches only as `--trust-store=<path>`, so it never takes an
+input file as its value. A `--trust` path that does not exist fails with
+status 1. All of these
 options are command-line-only; in a config file they fail with status 2. There
 is no environment variable for the store: one set ambiently, by a repository's
 tooling for example, could point at a store the repository pre-trusted.
@@ -538,6 +558,24 @@ change to a base reached through `extends` invalidates every child. Trust
 covers what code may do, not what the code is: new code under a trusted block
 runs with its permissions.
 
+The block is lexical, so replacing a trusted path with a symbolic link would
+keep its hash while pointing the grant somewhere else. Each entry therefore
+also records, outside the hash, where every path scope (`read` and `ffi`
+paths, allow and deny, and the directory of `node_modules=<dir>`) resolved
+when it was trusted, or that nothing existed there. A scope that now resolves
+to a different place makes the config changed since trusted, and the report
+and `--list-trusted` show it:
+
+```text
+  project/goccia.json (changed since trusted 2026-09-20T10:12:03Z)
+    allow-read: /home/u/project/data
+  ~ target of /home/u/project/data: /home/u/project/data -> /etc
+```
+
+A scope that did not exist when trusted may appear later without a change, as
+a build output does, unless it resolves outside its own path. A scope that no
+longer exists is not a change: it grants nothing.
+
 ### The store
 
 | Platform | Path |
@@ -554,6 +592,7 @@ runs with its permissions.
     "/abs/tests/built-ins/fetch/goccia.json": {
       "sha256": "9f2c…",
       "block": {"permissions":{"allow-net":["0.0.0.0","127.0.0.1","example.com"]},"version":1},
+      "targets": {},
       "trustedAt": "2026-09-25T10:12:03Z",
       "trustedBy": "GocciaTestRunner 0.14.0"
     }
@@ -564,21 +603,35 @@ runs with its permissions.
 Keys are compared case-insensitively on macOS and Windows. The stored `block`
 is only used to show what changed; grants always come from the current file,
 and only when its hash matches. The directory is created private to the user
-(`0700`) and the file is `0600`. A run reads the store once and never locks
-it. A writer takes an exclusive `trust.json.lock` (retrying for 2 seconds, then
-failing with an error that names the lock file), applies its changes to the
-store as it is on disk at that moment, and replaces the file in one rename, so
-concurrent readers and writers always see a whole store.
+(`0700`), and the per-user default directory is made private again if it is
+not; a `--trust-store` directory is left as it is. The file is written `0600`
+from creation, before it replaces the store. A run reads the store once and
+never locks it. A writer takes an exclusive `trust.json.lock` (retrying for 2
+seconds, then failing with an error that names the lock file), applies its
+changes to the store as it is on disk at that moment, and replaces the file in
+one rename, so concurrent readers and writers always see a whole store. The
+lock records its writer's process ID and start time; a lock whose process is
+gone, or that is older than 60 seconds, was left by a writer that crashed, and
+is removed with a warning.
 
-A missing store is empty. A store that is not JSON, or that a newer
-GocciaScript wrote, is an error for `--trust`, `--untrust`, and
-`--list-trusted`, which never overwrite it; at run time its configs are
-treated as untrusted and the report names the problem:
+A missing store is empty. A store that is not JSON, that has the wrong shape
+(anything but the schema above: a missing or non-integer `version`, a
+`trusted` that is not an object, an entry missing a field or with a field of
+the wrong type or an unknown key (`targets` is optional; its values are
+strings), a `sha256` that is not 64 lower-case hex
+digits), or that a newer GocciaScript wrote, is an error with status 1 for
+`--trust`, `--untrust`, and `--list-trusted`, which never overwrite it; at run
+time its configs are treated as untrusted and the report names the problem:
 
 ```text
 Error: trust store /home/u/.config/goccia/trust.json is not valid JSON; fix or delete it
+Error: trust store /home/u/.config/goccia/trust.json is not a valid trust store (no "trusted"); fix or delete it
 Error: trust store /home/u/.config/goccia/trust.json was written by a newer GocciaScript (version 2); upgrade GocciaScript or remove the file
 ```
+
+A store that cannot be located (`cannot locate the per-user trust store (HOME
+is not set); pass --trust-store=<path>`), a held lock, or a failed write is
+also an error with status 1.
 
 ### `GocciaWasmTestRunner`
 
@@ -699,7 +752,8 @@ copy-rw = ["out"]
   entries are gone.
 - An empty section, `"sandbox": {}`, turns sandbox mode on with no inputs.
 - Only the root config's section is read: `--config`, or the one discovered
-  from the entry file.
+  from the entry file (from the working directory when `--entry` names the
+  entry).
 - `max-fs-bytes` and `max-fs-nodes` are ordinary limits at the top level of any
   config, not part of the section.
 
@@ -712,8 +766,9 @@ sandbox mode warn that they ignore the section instead of asking for trust.
 
 **Confinement.** The host paths a config can write — its `copy-rw` inputs and
 its `diff-file` — must lie inside the declaring config's own directory tree,
-judged canonically, so a symbolic link cannot lead out of it. The same values
-on the command line may name any path.
+judged canonically, so a symbolic link cannot lead out of it; otherwise the run
+fails with status 1, naming the key and the config. The same values on the
+command line may name any path.
 
 **Combining with the command line.** Command-line `--copy` and `--copy-rw`
 inputs add to the section's. When a command-line input has the same sandbox

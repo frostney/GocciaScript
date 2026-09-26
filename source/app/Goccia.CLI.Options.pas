@@ -891,6 +891,7 @@ begin
     'Coverage output format', 'Coverage');
   FOutputPath := TStringOption.Create('coverage-output',
     'Coverage output file path', 'Coverage');
+  FOutputPath.WritesHostFile := True;
 end;
 
 destructor TGocciaCoverageOptions.Destroy;
@@ -918,6 +919,7 @@ begin
     'Profiling mode', 'Profiler');
   FOutputPath := TStringOption.Create('profile-output',
     'Profile output file path', 'Profiler');
+  FOutputPath.WritesHostFile := True;
   FFormat := TEnumOption<TGocciaProfileFormat>.Create('profile-format',
     'Profile output format', 'Profiler');
 end;

@@ -36,6 +36,7 @@ type
     procedure TestCanonicalHostPathIsUnknownForAMissingPath;
     procedure TestCanonicalHostPathIsStableForARealFile;
     procedure TestCanonicalHostPathFollowsASymlink;
+    procedure TestReplaceHostFileCreatesWithPermissions;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -74,6 +75,14 @@ begin
   Skip('CanonicalHostPath resolves a symlink to its target',
     TestCanonicalHostPathFollowsASymlink,
     'creating a symlink is not available on this platform');
+  {$ENDIF}
+  {$IFDEF UNIX}
+  Test('ReplaceHostFile creates the temporary with the given permissions',
+    TestReplaceHostFileCreatesWithPermissions);
+  {$ELSE}
+  Skip('ReplaceHostFile creates the temporary with the given permissions',
+    TestReplaceHostFileCreatesWithPermissions,
+    'POSIX modes are not available on this platform');
   {$ENDIF}
 end;
 
@@ -441,6 +450,34 @@ begin
     physically. }
   Expect<string>(CanonicalHostPath(LinkPath)).ToBe(TargetCanonical);
 end;
+
+procedure TFileUtilsTests.TestReplaceHostFileCreatesWithPermissions;
+{$IFDEF UNIX}
+const
+  PRIVATE_FILE = &600;
+  PERMISSION_BITS = &777;
+var
+  Target, Error: string;
+  Info: Stat;
+  PreviousMask: TMode;
+begin
+  Target := FTempDir + PathDelim + 'private.json';
+  { With no umask, a 0666 temporary would be world-readable until renamed;
+    the mode given is applied at creation instead. }
+  PreviousMask := fpUmask(0);
+  try
+    Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+      TBytes.Create(Ord('x')), PRIVATE_FILE, Error)).ToBe(True);
+  finally
+    fpUmask(PreviousMask);
+  end;
+  Expect<Integer>(FpStat(Target, Info)).ToBe(0);
+  Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(PRIVATE_FILE);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 begin
   Randomize;

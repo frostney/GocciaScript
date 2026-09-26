@@ -80,7 +80,14 @@ function ReadFileBytes(const APath: string): TBytes;
   Returns False with AError describing the failure; the temporary is removed
   whenever the replacement did not happen. }
 function ReplaceHostFile(const APath, ATemporaryPath: string;
-  const ABytes: TBytes; out AError: string): Boolean;
+  const ABytes: TBytes; out AError: string): Boolean; overload;
+{ As ReplaceHostFile, creating the temporary with APermissions (POSIX mode
+  bits, narrowed by the umask) instead of 0666, so the file is never more
+  readable than intended, not even before the rename. Ignored where the host
+  has no POSIX modes. }
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  out AError: string): Boolean; overload;
 
 implementation
 
@@ -344,7 +351,8 @@ begin
 end;
 
 function ReplaceHostFile(const APath, ATemporaryPath: string;
-  const ABytes: TBytes; out AError: string): Boolean;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  out AError: string): Boolean; overload;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   TemporaryBytes, PathBytes: TBytes;
@@ -373,7 +381,7 @@ begin
     DeleteFile(ATemporaryPath);
 
   Handle := fpOpen(PAnsiChar(@TemporaryBytes[0]),
-    O_WRONLY or O_CREAT or O_EXCL, &666);
+    O_WRONLY or O_CREAT or O_EXCL, APermissions);
   if Handle < 0 then
   begin
     AError := SysErrorMessage(fpgeterrno);
@@ -495,6 +503,15 @@ begin
     DeleteFile(ATemporaryPath);
 end;
 {$ENDIF}
+
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; out AError: string): Boolean;
+const
+  DEFAULT_FILE_PERMISSIONS = &666;
+begin
+  Result := ReplaceHostFile(APath, ATemporaryPath, ABytes,
+    DEFAULT_FILE_PERMISSIONS, AError);
+end;
 
 {$IFDEF LAKON}
 

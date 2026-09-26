@@ -374,6 +374,10 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 }
 ```
 
+**Module manifests in config** — A `modules` manifest path in a config is read, and a JavaScript or TypeScript manifest evaluated in an engine of its own, under the capability set of the script the config governs: outside the project it needs a read grant. `--modules` on the command line is unchanged. See [Virtual Modules](virtual-modules.md).
+
+**Output paths in config** — A config may set the options that write host files — `log`, `audit-log`, `coverage-output`, `profile-output`, `source-map`, the test runner's, benchmark runner's, and bundler's `output` (when it names a file), and, in `GocciaRunner`'s `sandbox` section, the `copy-rw` inputs and `diff-file` — only to a path inside its own directory. A relative value resolves against the directory of the config file that declares it, existing directories along the path are resolved, and a symbolic link at the name itself is refused; anything else fails with status 1, naming the key and the config. The same options on the command line write wherever they are told to.
+
 **Config trust** — A config's `allow-*` permissions and `unsafe-*` keys are requests: they take effect only once trusted, while every other key (`compat-*`, limits, import maps, aliases, and `deny-*` permissions) applies automatically. Before any file runs, the CLI checks every config that governs its inputs; an untrusted one fails the run with status 2 and a report naming each config and the command that would fix it. Trust is recorded in a per-user store outside the repository:
 
 ```bash

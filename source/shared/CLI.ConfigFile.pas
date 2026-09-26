@@ -27,6 +27,9 @@ type
     Kind: TConfigValueKind;
     { True for each element of an array value. }
     InArray: Boolean;
+    { A number's spelling in the file when it differs from Value (1e8 for
+      Value 100000000), for messages; '' otherwise. }
+    Written: string;
   end;
   TConfigEntryArray = array of TConfigEntry;
 
@@ -45,6 +48,15 @@ type
     empty. Lookups and option application skip both kinds except where an
     option accepts an object (TOptionBase.AcceptsObject). }
   TConfigParseFunc = function(const AContent: string): TConfigEntryArray;
+
+{ The value text of a config number, the same for every config format: an
+  exact whole number as plain digits (so 1e8 reads as 100000000 and an
+  oversized one is reported as too large), anything else in the invariant
+  float spelling. }
+function ConfigNumberText(const AValue: Double): string;
+
+{ An entry's value as the config wrote it (Written when set), for messages. }
+function ConfigEntryText(const AEntry: TConfigEntry): string;
 
 { Register a parser for a file extension.
   The extension must include the leading dot and is matched
@@ -121,6 +133,7 @@ implementation
 
 uses
   Classes,
+  Math,
   SysUtils,
 
   FileUtils,
@@ -195,6 +208,8 @@ type
     FArrayHadElements: Boolean;
     { Depth of an unrepresentable object or array being skipped; 0 when none. }
     FSkipDepth: Integer;
+    { The spelling of the number about to be added, when it differs. }
+    FPendingWritten: string;
     function CurrentKey: string;
     { True, after recording it, when a container opened at FDepth has no flat
       form: an element of a collected array, or an object as a nested
@@ -236,6 +251,8 @@ begin
   FEntries[FCount].SourcePath := '';
   FEntries[FCount].Kind := AKind;
   FEntries[FCount].InArray := AInArray;
+  FEntries[FCount].Written := FPendingWritten;
+  FPendingWritten := '';
   Inc(FCount);
 end;
 
@@ -309,19 +326,15 @@ end;
 
 procedure TConfigJSONParser.OnFloat(const AValue: Double);
 var
-  FormatSettings: TFormatSettings;
+  Text: string;
 begin
   if FSkipDepth > 0 then
     Exit;
-  { A number keeps its spelling, so an error echoes the value as written
-    and a unit parser reports an oversized whole number as too large. }
-  if LastNumberText <> '' then
-    AddScalar(LastNumberText, cvkNumber)
-  else
-  begin
-    FormatSettings := CreateInvariantFormatSettings;
-    AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
-  end;
+  Text := ConfigNumberText(AValue);
+  if (LastNumberText <> '') and (LastNumberText <> Text) then
+    FPendingWritten := LastNumberText;
+  AddScalar(Text, cvkNumber);
+  FPendingWritten := '';
 end;
 
 procedure TConfigJSONParser.OnBeginObject;
@@ -413,6 +426,22 @@ begin
   end;
 end;
 
+function ConfigNumberText(const AValue: Double): string;
+const
+  { Beyond this a whole number has no exact digits worth showing; every
+    such value is far past any limit, so digits still read as too large. }
+  LARGEST_PRINTED_WHOLE = 1e300;
+var
+  FormatSettings: TFormatSettings;
+begin
+  FormatSettings := CreateInvariantFormatSettings;
+  if (not IsNan(AValue)) and (not IsInfinite(AValue)) and
+     (Frac(AValue) = 0) and (Abs(AValue) < LARGEST_PRINTED_WHOLE) then
+    Result := Format('%.0f', [AValue], FormatSettings)
+  else
+    Result := FloatToStr(AValue, FormatSettings);
+end;
+
 { ── Apply entries to options ───────────────────────────────── }
 
 { True for an entry that carries a value: not an unrepresentable value and
@@ -474,14 +503,22 @@ begin
     Result := AEntry.Value;
 end;
 
+function ConfigEntryText(const AEntry: TConfigEntry): string;
+begin
+  if AEntry.Written <> '' then
+    Result := AEntry.Written
+  else
+    Result := AEntry.Value;
+end;
+
 { Restates an option's value error in config spelling. }
 procedure RaiseConfigValueError(const AEntry: TConfigEntry;
   const AError: TParseError);
 begin
   if AError is EOptionValueError then
     raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
-      [AEntry.Key, ConfigEntryLocation(AEntry),
-       EOptionValueError(AError).Value, EOptionValueError(AError).Reason]);
+      [AEntry.Key, ConfigEntryLocation(AEntry), ConfigEntryText(AEntry),
+       EOptionValueError(AError).Reason]);
   raise TParseError.CreateFmt('%s: %s',
     [ConfigEntryLocation(AEntry), AError.Message]);
 end;

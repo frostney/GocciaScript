@@ -24,10 +24,21 @@ uses
   CLI.Options,
   CriticalSections,
 
+  Goccia.Capabilities,
   Goccia.CLI.Permissions,
   Goccia.FileExtensions;
 
 type
+  { Where a path scope of a trusted block pointed when it was trusted. }
+  TGocciaTrustTarget = record
+    { The scope as the normalized block holds it: absolute and lexical. }
+    Scope: string;
+    { The scope with symbolic links resolved, or TRUST_TARGET_ABSENT when
+      nothing existed there. }
+    Target: string;
+  end;
+  TGocciaTrustTargets = array of TGocciaTrustTarget;
+
   TGocciaTrustEntry = record
     { The canonical path of the config file. }
     ConfigPath: string;
@@ -37,6 +48,9 @@ type
     BlockJSON: string;
     TrustedAt: string;
     TrustedBy: string;
+    { Outside the hash: the block is lexical, so a scope re-pointed by a
+      symbolic link keeps its hash; these catch that. }
+    Targets: TGocciaTrustTargets;
   end;
 
   { An unreadable store: not JSON, or written by a newer GocciaScript. }
@@ -57,6 +71,7 @@ type
   private
     FPath: string;
     FCaseInsensitive: Boolean;
+    FPrivateDirectory: Boolean;
     FEntries: array of TGocciaTrustEntry;
     FChanges: array of TChange;
     function IndexOf(const AKey: string): Integer;
@@ -99,6 +114,11 @@ type
     function Count: Integer;
     function EntryAt(const AIndex: Integer): TGocciaTrustEntry;
     property Path: string read FPath;
+    { Save makes the store's directory private (0700) even when it already
+      exists. True for the per-user default store, whose directory is its
+      own; a --trust-store directory is the user's and is left alone. }
+    property PrivateDirectory: Boolean read FPrivateDirectory
+      write FPrivateDirectory;
   end;
 
   { How a run treats config permission requests. }
@@ -125,6 +145,9 @@ type
     State: TGocciaConfigTrustState;
     { The stored entry, for ctsChanged. }
     Previous: TGocciaTrustEntry;
+    { For ctsChanged with an unchanged block: one line per path scope that
+      now resolves somewhere else, `target of <scope>: <old> -> <new>`. }
+    TargetChanges: TGocciaCapabilityScopes;
     { The config's allows and unsafe-* keys may be applied. Its denies apply
       in every state. }
     function GrantsAccepted: Boolean;
@@ -192,6 +215,8 @@ const
   CONFIG_FILE_EXTENSIONS: array[0..2] of string = (EXT_TOML, EXT_JSON5,
     EXT_JSON);
   TRUST_STORE_VERSION = 1;
+  { A recorded target for a scope whose path did not exist when trusted. }
+  TRUST_TARGET_ABSENT = 'absent';
   IGNORE_CONFIG_PERMISSIONS_FLAG = 'ignore-config-permissions';
   TRUST_STORE_FLAG = 'trust-store';
   {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
@@ -200,9 +225,27 @@ const
   TRUST_KEYS_CASE_INSENSITIVE = False;
   {$IFEND}
 
-{ The store key of a config path: its canonical path with symbolic links
-  resolved, or the expanded path when it cannot be resolved. }
+{ The store key, and the location a request is read at, of a config path:
+  its directory with symbolic links resolved, plus its own file name, which
+  is not resolved. A config reached through a symlinked directory keys to the
+  target; a symlinked config file keys to where the link is, because it
+  governs the files beside the link. }
 function TrustKeyForPath(const APath: string): string;
+{ TrustKeyForPath, except that an existing directory is itself resolved (for
+  --untrust <dir>). }
+function TrustKeyForDirectory(const APath: string): string;
+
+{ Each path scope of ARequest (read and ffi paths, allow and deny, and the
+  directory of node_modules=<dir>) with where it resolves now. }
+function PathScopeTargets(
+  const ARequest: TGocciaConfigPermissionRequest): TGocciaTrustTargets;
+{ One line per recorded scope that has been re-pointed since it was trusted,
+  `target of <scope>: <old> -> <new>`: a scope that existed now resolves to a
+  different canonical path, or a scope that was absent now exists and resolves
+  outside its own lexical path. A scope that no longer exists is not a change:
+  it grants nothing. }
+function DescribeTargetChanges(
+  const ARecorded: TGocciaTrustTargets): TGocciaCapabilityScopes;
 
 { The platform this build keeps its store for. }
 function CurrentTrustStorePlatform: TGocciaTrustStorePlatform;
@@ -278,7 +321,6 @@ uses
   StringBuffer,
   TextEncoding,
 
-  Goccia.Capabilities,
   Goccia.CLI.Stdin,
   Goccia.JSON.Utils,
   Goccia.Version;
@@ -290,10 +332,19 @@ const
   BLOCK_KEY = 'block';
   TRUSTED_AT_KEY = 'trustedAt';
   TRUSTED_BY_KEY = 'trustedBy';
+  TARGETS_KEY = 'targets';
   LOCK_SUFFIX = '.lock';
   TEMPORARY_SUFFIX = '.tmp';
   LOCK_TIMEOUT_MILLISECONDS = 2000;
   LOCK_RETRY_MILLISECONDS = 50;
+  { A lock older than this, or whose process is gone, was left by a writer
+    that crashed: writers hold it for milliseconds. }
+  LOCK_STALE_SECONDS = 60;
+  { Initial capacities: a normalized block, a whole store, a report. They
+    only size the first allocation; the buffers grow as needed. }
+  BLOCK_BUFFER_CAPACITY = 128;
+  STORE_BUFFER_CAPACITY = 256;
+  REPORT_BUFFER_CAPACITY = 512;
   REPORT_INDENT = '  ';
   REPORT_DETAIL_INDENT = '    ';
   MAX_LISTED_TRUST_TARGETS = 3;
@@ -305,13 +356,38 @@ const
 
 { ── Paths ─────────────────────────────────────────────────────── }
 
-function TrustKeyForPath(const APath: string): string;
+function CanonicalDirectory(const APath: string): string;
 begin
   Result := ExpandHostFileName(APath);
   if CanonicalHostPath(Result) <> '' then
     Result := CanonicalHostPath(Result);
   if (Length(Result) > 1) and IsPathDelimiter(Result, Length(Result)) then
     Result := ExcludeTrailingPathDelimiter(Result);
+end;
+
+function TrustKeyForPath(const APath: string): string;
+var
+  Expanded, Name: string;
+begin
+  Expanded := ExpandHostFileName(APath);
+  if (Length(Expanded) > 1) and IsPathDelimiter(Expanded, Length(Expanded)) then
+    Expanded := ExcludeTrailingPathDelimiter(Expanded);
+  Name := ExtractFileName(Expanded);
+  if Name = '' then
+    Exit(CanonicalDirectory(Expanded));
+  { The directory is resolved, the file name is not: a symlinked directory
+    holds the same files as its target, while a symlinked config file
+    governs different files than the one it points at. }
+  Result := IncludeTrailingPathDelimiter(
+    CanonicalDirectory(ExtractFileDir(Expanded))) + Name;
+end;
+
+function TrustKeyForDirectory(const APath: string): string;
+begin
+  if DirectoryExists(APath) then
+    Result := CanonicalDirectory(APath)
+  else
+    Result := TrustKeyForPath(APath);
 end;
 
 function CurrentTrustStorePlatform: TGocciaTrustStorePlatform;
@@ -348,6 +424,115 @@ begin
     Result := APath;
 end;
 
+function PathScopeTargets(
+  const ARequest: TGocciaConfigPermissionRequest): TGocciaTrustTargets;
+const
+  NODE_MODULES_DIRECTORY_PREFIX = IMPORT_NODE_MODULES_SCOPE + '=';
+var
+  Scopes: TStringList;
+
+  procedure AddScopes(const AScopes: TGocciaPermissionScopes;
+    const ACapability: TGocciaCapability);
+  var
+    I: Integer;
+    Scope: string;
+  begin
+    for I := 0 to High(AScopes.Scopes) do
+    begin
+      Scope := AScopes.Scopes[I];
+      if ACapability = gcImport then
+      begin
+        if not SameText(Copy(Scope, 1, Length(NODE_MODULES_DIRECTORY_PREFIX)),
+           NODE_MODULES_DIRECTORY_PREFIX) then
+          Continue;
+        Scope := Copy(Scope, Length(NODE_MODULES_DIRECTORY_PREFIX) + 1,
+          MaxInt);
+      end;
+      Scopes.Add(Scope);
+    end;
+  end;
+
+var
+  Capability: TGocciaCapability;
+  I: Integer;
+begin
+  Scopes := TStringList.Create;
+  try
+    Scopes.UseLocale := False;
+    Scopes.CaseSensitive := True;
+    Scopes.Sorted := True;
+    Scopes.Duplicates := dupIgnore;
+    for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+      if Capability in [gcRead, gcFFI, gcImport] then
+      begin
+        AddScopes(ARequest.Allow[Capability], Capability);
+        AddScopes(ARequest.Deny[Capability], Capability);
+      end;
+    SetLength(Result, Scopes.Count);
+    for I := 0 to Scopes.Count - 1 do
+    begin
+      Result[I].Scope := Scopes[I];
+      Result[I].Target := CanonicalHostPath(Scopes[I]);
+      if Result[I].Target = '' then
+        Result[I].Target := TRUST_TARGET_ABSENT;
+    end;
+  finally
+    Scopes.Free;
+  end;
+end;
+
+{ AResolved is AScope's own lexical place, or under it. The comparison is
+  against the scope with its directory resolved, so a symlinked ancestor
+  such as a checkout reached through a link is not an escape. }
+function ResolvesWithinScope(const AResolved, AScope: string): Boolean;
+var
+  Place: string;
+begin
+  Place := TrustKeyForPath(AScope);
+  Result := SameFileName(AResolved, Place) or
+    PathStartsWith(AResolved, IncludeTrailingPathDelimiter(Place));
+end;
+
+{ Report lines for re-pointed scopes, marked `~` like the `+`/`-` lines of a
+  changed block. }
+function TargetChangeLines(const AChanges: TGocciaCapabilityScopes): string;
+const
+  TARGET_CHANGE_MARKER = '  ~ ';
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(AChanges) do
+    Result := Result + TARGET_CHANGE_MARKER + AChanges[I] + sLineBreak;
+end;
+
+function DescribeTargetChanges(
+  const ARecorded: TGocciaTrustTargets): TGocciaCapabilityScopes;
+var
+  I: Integer;
+  Current: string;
+  Changed: Boolean;
+begin
+  Result := nil;
+  for I := 0 to High(ARecorded) do
+  begin
+    Current := CanonicalHostPath(ARecorded[I].Scope);
+    if Current = '' then
+      Continue;
+    if ARecorded[I].Target = TRUST_TARGET_ABSENT then
+      { Something appearing in place, a build output say, is expected. }
+      Changed := not ResolvesWithinScope(Current, ARecorded[I].Scope)
+    else
+      Changed := not SameFileName(Current, ARecorded[I].Target);
+    if Changed then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := Format('target of %s: %s -> %s',
+        [ARecorded[I].Scope, ARecorded[I].Target, Current]);
+    end;
+  end;
+end;
+
 function QuoteShellArgument(const AArgument: string): string;
 const
   {$IFDEF MSWINDOWS}
@@ -381,19 +566,33 @@ end;
 
 function TrustTimestamp: string;
 begin
-  Result := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"',
-    LocalTimeToUniversal(Now));
+  { Separators are quoted literals and the settings invariant, so no locale
+    changes the stored text. }
+  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"',
+    LocalTimeToUniversal(Now), CreateInvariantFormatSettings);
 end;
 
 { ── Store reader ──────────────────────────────────────────────── }
 
 type
+  TStoreValueKind = (svkObject, svkArray, svkString, svkInteger, svkFloat,
+    svkBoolean, svkNull);
+  TStoreEntryField = (sefHash, sefBlock, sefTrustedAt, sefTrustedBy);
+  TStoreEntryFields = set of TStoreEntryField;
+
   { Reads a trust store without building JSON values. Each entry's `block`
     is re-serialized compactly, which reproduces the normalized block that
-    was written. Unknown keys are skipped, so a newer store still parses far
-    enough to report its version. }
+    was written. The shape is checked strictly, and the first problem kept in
+    Error; the version is read regardless, so a newer store is reported as
+    newer rather than as malformed. }
   TTrustStoreReader = class(TAbstractJSONParser)
   private
+    FError: string;
+    FSawRoot: Boolean;
+    FHasVersion: Boolean;
+    FHasTrusted: Boolean;
+    FEntryFields: TStoreEntryFields;
+    FTargetScope: string;
     FDepth: Integer;
     FTopKey: string;
     FField: string;
@@ -410,6 +609,8 @@ type
     procedure BlockOpen(const AContainer: Char; const AText: string);
     procedure BlockClose(const AText: string);
     function InEntry: Boolean;
+    procedure Fail(const AProblem: string);
+    procedure CheckValue(const AKind: TStoreValueKind);
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -424,11 +625,92 @@ type
   public
     procedure Read(const AText: string);
     property Version: Int64 read FVersion;
+    property HasVersion: Boolean read FHasVersion;
+    { The first shape problem, or ''. }
+    property Error: string read FError;
   end;
+
+const
+  SHA256_HEX_LENGTH = 64;
+  ENTRY_FIELD_KEYS: array[TStoreEntryField] of string = (SHA256_KEY,
+    BLOCK_KEY, TRUSTED_AT_KEY, TRUSTED_BY_KEY);
+
+function IsSHA256Hex(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AText) <> SHA256_HEX_LENGTH then
+    Exit(False);
+  for I := 1 to Length(AText) do
+    if not (AText[I] in ['0'..'9', 'a'..'f']) then
+      Exit(False);
+  Result := True;
+end;
 
 function TTrustStoreReader.InEntry: Boolean;
 begin
   Result := (FTopKey = TRUSTED_KEY) and (FDepth = 3);
+end;
+
+procedure TTrustStoreReader.Fail(const AProblem: string);
+begin
+  if FError = '' then
+    FError := AProblem;
+end;
+
+{ Called for each value outside a block, before a container's depth is
+  entered: FDepth is the depth of the object that holds the value. }
+procedure TTrustStoreReader.CheckValue(const AKind: TStoreValueKind);
+var
+  Field: TStoreEntryField;
+begin
+  case FDepth of
+    0:
+      if AKind = svkObject then
+        FSawRoot := True
+      else
+        Fail('the top level is not an object');
+    1:
+      if FTopKey = VERSION_KEY then
+      begin
+        FHasVersion := AKind = svkInteger;
+        if not FHasVersion then
+          Fail('"version" is not an integer');
+      end
+      else if FTopKey = TRUSTED_KEY then
+      begin
+        FHasTrusted := AKind = svkObject;
+        if not FHasTrusted then
+          Fail('"trusted" is not an object');
+      end;
+    2:
+      if (FTopKey = TRUSTED_KEY) and (AKind <> svkObject) then
+        Fail(Format('the entry for %s is not an object',
+          [FEntry.ConfigPath]));
+    3:
+      if FTopKey = TRUSTED_KEY then
+      begin
+        if (FField = TARGETS_KEY) and (AKind <> svkObject) then
+          Fail(Format('"%s" of %s is not an object',
+            [FField, FEntry.ConfigPath]));
+        for Field := Low(TStoreEntryField) to High(TStoreEntryField) do
+          if FField = ENTRY_FIELD_KEYS[Field] then
+          begin
+            Include(FEntryFields, Field);
+            if (Field = sefBlock) and (AKind <> svkObject) then
+              Fail(Format('"%s" of %s is not an object',
+                [FField, FEntry.ConfigPath]))
+            else if (Field <> sefBlock) and (AKind <> svkString) then
+              Fail(Format('"%s" of %s is not a string',
+                [FField, FEntry.ConfigPath]));
+          end;
+      end;
+    4:
+      if (FTopKey = TRUSTED_KEY) and (FField = TARGETS_KEY) and
+         (AKind <> svkString) then
+        Fail(Format('the target of %s in %s is not a string',
+          [FTargetScope, FEntry.ConfigPath]));
+  end;
 end;
 
 procedure TTrustStoreReader.BlockValuePrefix;
@@ -464,13 +746,18 @@ begin
   begin
     BlockValuePrefix;
     FBlock.Append('null');
-  end;
+  end
+  else
+    CheckValue(svkNull);
 end;
 
 procedure TTrustStoreReader.OnBoolean(const AValue: Boolean);
 begin
   if not FInBlock then
+  begin
+    CheckValue(svkBoolean);
     Exit;
+  end;
   BlockValuePrefix;
   if AValue then
     FBlock.Append('true')
@@ -485,14 +772,30 @@ begin
     BlockValuePrefix;
     FBlock.Append(QuoteJSONString(AValue));
   end
-  else if InEntry then
+  else
   begin
-    if FField = SHA256_KEY then
-      FEntry.Hash := AValue
-    else if FField = TRUSTED_AT_KEY then
-      FEntry.TrustedAt := AValue
-    else if FField = TRUSTED_BY_KEY then
-      FEntry.TrustedBy := AValue;
+    CheckValue(svkString);
+    if (FDepth = 4) and (FTopKey = TRUSTED_KEY) and
+       (FField = TARGETS_KEY) then
+    begin
+      SetLength(FEntry.Targets, Length(FEntry.Targets) + 1);
+      FEntry.Targets[High(FEntry.Targets)].Scope := FTargetScope;
+      FEntry.Targets[High(FEntry.Targets)].Target := AValue;
+    end
+    else if InEntry then
+    begin
+      if FField = SHA256_KEY then
+      begin
+        FEntry.Hash := AValue;
+        if not IsSHA256Hex(AValue) then
+          Fail(Format('"%s" of %s is not a SHA-256',
+            [SHA256_KEY, FEntry.ConfigPath]));
+      end
+      else if FField = TRUSTED_AT_KEY then
+        FEntry.TrustedAt := AValue
+      else if FField = TRUSTED_BY_KEY then
+        FEntry.TrustedBy := AValue;
+    end;
   end;
 end;
 
@@ -503,8 +806,12 @@ begin
     BlockValuePrefix;
     FBlock.Append(IntToStr(AValue));
   end
-  else if (FDepth = 1) and (FTopKey = VERSION_KEY) then
-    FVersion := AValue;
+  else
+  begin
+    CheckValue(svkInteger);
+    if (FDepth = 1) and (FTopKey = VERSION_KEY) then
+      FVersion := AValue;
+  end;
 end;
 
 procedure TTrustStoreReader.OnFloat(const AValue: Double);
@@ -514,13 +821,14 @@ begin
     BlockValuePrefix;
     FBlock.Append(FloatToStr(AValue, CreateInvariantFormatSettings));
   end
-  else if (FDepth = 1) and (FTopKey = VERSION_KEY) then
-    { A fractional version is no version this reader knows. }
-    FVersion := High(Int64);
+  else
+    CheckValue(svkFloat);
 end;
 
 procedure TTrustStoreReader.OnBeginObject;
 begin
+  if not FInBlock then
+    CheckValue(svkObject);
   Inc(FDepth);
   if FInBlock then
     BlockOpen('o', '{')
@@ -529,7 +837,7 @@ begin
   begin
     FInBlock := True;
     FBlockDepth := FDepth;
-    FBlock := TStringBuffer.Create(128);
+    FBlock := TStringBuffer.Create(BLOCK_BUFFER_CAPACITY);
     FBlockContainers := '';
     BlockOpen('o', '{');
   end
@@ -540,6 +848,8 @@ begin
     FEntry.TrustedAt := '';
     FEntry.TrustedBy := '';
     FField := '';
+    FEntryFields := [];
+    FEntry.Targets := nil;
   end;
 end;
 
@@ -557,14 +867,30 @@ begin
     FBlock.Append(QuoteJSONString(AKey) + ':');
   end
   else if FDepth = 1 then
-    FTopKey := AKey
+  begin
+    FTopKey := AKey;
+    if (AKey <> VERSION_KEY) and (AKey <> TRUSTED_KEY) then
+      Fail(Format('unknown key "%s"', [AKey]));
+  end
   else if (FDepth = 2) and (FTopKey = TRUSTED_KEY) then
     FEntry.ConfigPath := AKey
   else if InEntry then
+  begin
     FField := AKey;
+    if (AKey <> SHA256_KEY) and (AKey <> BLOCK_KEY) and
+       (AKey <> TRUSTED_AT_KEY) and (AKey <> TRUSTED_BY_KEY) and
+       (AKey <> TARGETS_KEY) then
+      Fail(Format('unknown key "%s" in the entry for %s',
+        [AKey, FEntry.ConfigPath]));
+  end
+  else if (FDepth = 4) and (FTopKey = TRUSTED_KEY) and
+    (FField = TARGETS_KEY) then
+    FTargetScope := AKey;
 end;
 
 procedure TTrustStoreReader.OnEndObject;
+var
+  Field: TStoreEntryField;
 begin
   if FInBlock then
   begin
@@ -577,6 +903,10 @@ begin
   end
   else if InEntry and (FEntry.ConfigPath <> '') then
   begin
+    for Field := Low(TStoreEntryField) to High(TStoreEntryField) do
+      if not (Field in FEntryFields) then
+        Fail(Format('%s has no "%s"', [FEntry.ConfigPath,
+          ENTRY_FIELD_KEYS[Field]]));
     SetLength(FEntries, Length(FEntries) + 1);
     FEntries[High(FEntries)] := FEntry;
   end;
@@ -585,6 +915,8 @@ end;
 
 procedure TTrustStoreReader.OnBeginArray;
 begin
+  if not FInBlock then
+    CheckValue(svkArray);
   Inc(FDepth);
   if FInBlock then
     BlockOpen('a', '[');
@@ -603,7 +935,18 @@ begin
   FVersion := 0;
   FInBlock := False;
   FEntries := nil;
+  FError := '';
+  FSawRoot := False;
+  FHasVersion := False;
+  FHasTrusted := False;
   DoParse(AText);
+  if FSawRoot then
+  begin
+    if not FHasVersion then
+      Fail('no "version"')
+    else if not FHasTrusted then
+      Fail('no "trusted"');
+  end;
 end;
 
 { ── TGocciaTrustStore ─────────────────────────────────────────── }
@@ -614,6 +957,8 @@ begin
   inherited Create;
   FPath := APath;
   FCaseInsensitive := ACaseInsensitive;
+  FPrivateDirectory := (APath <> '') and
+    SameFileName(APath, DefaultPath(nil));
 end;
 
 class function TGocciaTrustStore.DefaultPathFor(
@@ -734,13 +1079,19 @@ begin
         raise EGocciaTrustStoreError.CreateFmt(
           'trust store %s is not valid JSON; fix or delete it', [FPath]);
     end;
-    if Reader.Version > TRUST_STORE_VERSION then
+    { A newer store may have any shape, so its version is reported first. }
+    if Reader.HasVersion and (Reader.Version > TRUST_STORE_VERSION) then
       raise EGocciaTrustStoreError.CreateFmt(
         'trust store %s was written by a newer GocciaScript (version %d); ' +
         'upgrade GocciaScript or remove the file', [FPath, Reader.Version]);
-    if Reader.Version < TRUST_STORE_VERSION then
+    if (Reader.Error = '') and (Reader.Version < TRUST_STORE_VERSION) then
       raise EGocciaTrustStoreError.CreateFmt(
-        'trust store %s has no valid "version"; fix or delete it', [FPath]);
+        'trust store %s is not a valid trust store (unknown "version" %d); ' +
+        'fix or delete it', [FPath, Reader.Version]);
+    if Reader.Error <> '' then
+      raise EGocciaTrustStoreError.CreateFmt(
+        'trust store %s is not a valid trust store (%s); fix or delete it',
+        [FPath, Reader.Error]);
     for I := 0 to High(Reader.FEntries) do
       ApplyPut(Reader.FEntries[I]);
   finally
@@ -836,7 +1187,7 @@ var
   I: Integer;
   Change: TChange;
 begin
-  Key := TrustKeyForPath(APath);
+  Key := TrustKeyForDirectory(APath);
   Result := 0;
   for I := 0 to High(FEntries) do
     if IsAtOrUnder(FEntries[I].ConfigPath, Key) then
@@ -869,7 +1220,7 @@ function TGocciaTrustStore.Serialize: string;
 var
   Buffer: TStringBuffer;
   Sorted: TStringList;
-  I, Index: Integer;
+  I, Index, TargetIndex: Integer;
   Entry: TGocciaTrustEntry;
   Block: string;
 begin
@@ -881,7 +1232,7 @@ begin
       Sorted.AddObject(FEntries[I].ConfigPath, TObject(NativeInt(I)));
     Sorted.Sort;
 
-    Buffer := TStringBuffer.Create(256);
+    Buffer := TStringBuffer.Create(STORE_BUFFER_CAPACITY);
     Buffer.Append('{' + sLineBreak);
     Buffer.Append('  "' + VERSION_KEY + '": ' + IntToStr(TRUST_STORE_VERSION) +
       ',' + sLineBreak);
@@ -900,6 +1251,15 @@ begin
       Buffer.Append('      "' + SHA256_KEY + '": ' +
         QuoteJSONString(Entry.Hash) + ',' + sLineBreak);
       Buffer.Append('      "' + BLOCK_KEY + '": ' + Block + ',' + sLineBreak);
+      Buffer.Append('      "' + TARGETS_KEY + '": {');
+      for TargetIndex := 0 to High(Entry.Targets) do
+      begin
+        if TargetIndex > 0 then
+          Buffer.Append(', ');
+        Buffer.Append(QuoteJSONString(Entry.Targets[TargetIndex].Scope) +
+          ': ' + QuoteJSONString(Entry.Targets[TargetIndex].Target));
+      end;
+      Buffer.Append('},' + sLineBreak);
       Buffer.Append('      "' + TRUSTED_AT_KEY + '": ' +
         QuoteJSONString(Entry.TrustedAt) + ',' + sLineBreak);
       Buffer.Append('      "' + TRUSTED_BY_KEY + '": ' +
@@ -984,30 +1344,146 @@ begin
 end;
 {$IFEND}
 
+function UnixNow: Int64;
+begin
+  Result := DateTimeToUnix(LocalTimeToUniversal(Now));
+end;
+
+{ `<pid> <unix seconds>`: who holds the lock and since when, so a lock a
+  crashed writer left behind can be recognized. }
+procedure RecordLockOwner(const ALockPath: string);
+var
+  Stream: TFileStream;
+  Owner: TBytes;
+begin
+  Owner := EncodeUTF8WithReplacement(IntToStr(GetProcessID) + ' ' +
+    IntToStr(UnixNow) + sLineBreak);
+  try
+    Stream := TFileStream.Create(ALockPath, fmOpenWrite or fmShareDenyNone);
+    try
+      Stream.WriteBuffer(Owner[0], Length(Owner));
+    finally
+      Stream.Free;
+    end;
+  except
+    { The lock still excludes other writers; only staleness detection is
+      weaker without an owner. }
+    on E: EStreamError do;
+  end;
+end;
+
+function ProcessIsGone(const AProcessID: Int64): Boolean;
+begin
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  Result := (AProcessID > 0) and (AProcessID <= High(TPid)) and
+    (fpKill(TPid(AProcessID), 0) <> 0) and (fpgeterrno = ESysESRCH);
+  {$ELSE}
+  { Without a portable liveness probe the age alone decides. }
+  Result := False;
+  {$IFEND}
+end;
+
+{ Whether the lock at ALockPath was left by a writer that no longer holds
+  it: its process is gone, or it is older than LOCK_STALE_SECONDS. AOwner is
+  the lock's content that was judged; AReason says why it is stale. }
+function LockIsStale(const ALockPath: string; out AOwner,
+  AReason: string): Boolean;
+var
+  Owner: string;
+  Separator: Integer;
+  ProcessID, Since: Int64;
+  Modified: TDateTime;
+begin
+  Result := False;
+  AReason := '';
+  try
+    AOwner := ReadUTF8FileText(ALockPath);
+  except
+    { Gone, or unreadable: let the next attempt decide. }
+    on E: Exception do
+      Exit(False);
+  end;
+  Owner := Trim(AOwner);
+  Separator := Pos(' ', Owner);
+  if (Separator > 1) and
+     TryStrToInt64(Copy(Owner, 1, Separator - 1), ProcessID) and
+     TryStrToInt64(Copy(Owner, Separator + 1, MaxInt), Since) then
+  begin
+    if ProcessIsGone(ProcessID) then
+    begin
+      AReason := Format('process %d that held it is gone', [ProcessID]);
+      Exit(True);
+    end;
+    if UnixNow - Since > LOCK_STALE_SECONDS then
+    begin
+      AReason := Format('held for more than %d seconds',
+        [LOCK_STALE_SECONDS]);
+      Exit(True);
+    end;
+    Exit(False);
+  end;
+  { No owner recorded: judge by the file's age. }
+  if FileAge(ALockPath, Modified) and
+     (SecondsBetween(Now, Modified) > LOCK_STALE_SECONDS) then
+  begin
+    AReason := Format('no owner recorded and older than %d seconds',
+      [LOCK_STALE_SECONDS]);
+    Result := True;
+  end;
+end;
+
+{ Removes a stale lock, unless another writer replaced it meanwhile. }
+function RemoveStaleLock(const ALockPath: string): Boolean;
+var
+  Owner, Reason, Current: string;
+begin
+  Result := False;
+  if not LockIsStale(ALockPath, Owner, Reason) then
+    Exit;
+  try
+    Current := ReadUTF8FileText(ALockPath);
+  except
+    on E: Exception do
+      Exit;
+  end;
+  if (Current = Owner) and DeleteFile(ALockPath) then
+  begin
+    WriteLn(ErrOutput, Format('Warning: removed stale trust store lock %s ' +
+      '(%s)', [ALockPath, Reason]));
+    Result := True;
+  end;
+end;
+
 procedure TGocciaTrustStore.WriteFile;
 var
   Error: string;
 begin
+  { Private from creation: the temporary is 0600 before it is renamed. }
   if not ReplaceHostFile(FPath, FPath + '.' + IntToStr(GetProcessID) +
-     TEMPORARY_SUFFIX, EncodeUTF8WithReplacement(Serialize), Error) then
+     TEMPORARY_SUFFIX, EncodeUTF8WithReplacement(Serialize), STORE_FILE_MODE,
+     Error) then
     raise EGocciaTrustStoreError.CreateFmt('cannot write trust store %s: %s',
       [FPath, Error]);
-  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-  fpChmod(FPath, STORE_FILE_MODE);
-  {$IFEND}
 end;
 
 procedure TGocciaTrustStore.Save;
 var
-  LockPath: string;
+  LockPath, Directory: string;
   Waited: Integer;
   I: Integer;
 begin
-  CreateStoreDirectory(ExtractFileDir(FPath));
+  Directory := ExtractFileDir(FPath);
+  CreateStoreDirectory(Directory);
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  if FPrivateDirectory then
+    fpChmod(Directory, STORE_DIRECTORY_MODE);
+  {$IFEND}
   LockPath := FPath + LOCK_SUFFIX;
   Waited := 0;
   while not TryCreateLockFile(LockPath) do
   begin
+    if RemoveStaleLock(LockPath) then
+      Continue;
     if Waited >= LOCK_TIMEOUT_MILLISECONDS then
       raise EGocciaTrustStoreError.CreateFmt(
         'trust store %s is locked by another process (%s exists); retry, or ' +
@@ -1016,6 +1492,7 @@ begin
     Sleep(LOCK_RETRY_MILLISECONDS);
     Inc(Waited, LOCK_RETRY_MILLISECONDS);
   end;
+  RecordLockOwner(LockPath);
   try
     { Another writer may have changed the file since it was read: apply
       this store's changes to the file as it is now. }
@@ -1130,11 +1607,15 @@ function TGocciaConfigTrustGate.Decide(
   const AConfigPath: string): TGocciaConfigTrustVerdict;
 var
   Entry: TGocciaTrustEntry;
+  Location: string;
 begin
   Result := Default(TGocciaConfigTrustVerdict);
-  Result.ConfigPath := AConfigPath;
-  Result.Request := ReadConfigPermissionRequest(FLoadConfig(AConfigPath),
-    AConfigPath);
+  { Read at the key's location, so every spelling of the config yields one
+    key and one hash. }
+  Location := TrustKeyForPath(AConfigPath);
+  Result.ConfigPath := Location;
+  Result.Request := ReadConfigPermissionRequest(FLoadConfig(Location),
+    Location);
   if not Result.Request.RequestsGrants then
   begin
     Result.State := ctsNoRequest;
@@ -1153,10 +1634,21 @@ begin
     ctmIgnoreConfig:
       Result.State := ctsIgnored;
   else
-    if Assigned(Store) and Store.TryFind(AConfigPath, Entry) then
+    if Assigned(Store) and Store.TryFind(Location, Entry) then
     begin
       if Entry.Hash = Result.Hash then
-        Result.State := ctsTrusted
+      begin
+        { Same block, but a path scope may now resolve elsewhere: that is
+          a change too, and needs trusting again. }
+        Result.TargetChanges := DescribeTargetChanges(Entry.Targets);
+        if Length(Result.TargetChanges) = 0 then
+          Result.State := ctsTrusted
+        else
+        begin
+          Result.State := ctsChanged;
+          Result.Previous := Entry;
+        end;
+      end
       else
       begin
         Result.State := ctsChanged;
@@ -1265,7 +1757,7 @@ var
   Paths: array of string;
   TrustCommand, Arguments, Target: string;
 begin
-  Buffer := TStringBuffer.Create(512);
+  Buffer := TStringBuffer.Create(REPORT_BUFFER_CAPACITY);
   if Length(AVerdicts) = 1 then
     Buffer.Append('1 config file requests permissions that have not been ' +
       'trusted:' + sLineBreak)
@@ -1286,6 +1778,7 @@ begin
         ')' + sLineBreak);
       Buffer.Append(DescribePermissionChange(Verdict.Previous.BlockJSON,
         Verdict.Request, REPORT_DETAIL_INDENT));
+      Buffer.Append(TargetChangeLines(Verdict.TargetChanges));
     end
     else
     begin
@@ -1318,7 +1811,9 @@ begin
       AStoreProblem + '); to trust these requests, name a store:' +
       sLineBreak)
   else if AStoreProblem <> '' then
-    Buffer.Append(AStoreProblem + '. Then, to trust these requests:' +
+    { The store's messages start in lower case for the "Error: " prefix. }
+    Buffer.Append(UpperCase(Copy(AStoreProblem, 1, 1)) +
+      Copy(AStoreProblem, 2, MaxInt) + '. Then trust these requests:' +
       sLineBreak)
   else
     Buffer.Append('To trust these requests (stored in ' + AStorePath +
@@ -1366,6 +1861,7 @@ begin
 
   Effective := TStringList.Create;
   try
+    Effective.UseLocale := False;
     Effective.Sorted := True;
     Effective.CaseSensitive := True;
     Found := FindAllFilesExcludingDirectories(APath, CONFIG_FILE_EXTENSIONS,
@@ -1405,10 +1901,31 @@ end;
 
 { `tests/` for a directory, `tests/a/goccia.json` for a file. }
 function DescribeTarget(const ATarget, AWorkingDirectory: string): string;
+var
+  Expanded: string;
 begin
-  Result := DisplayPath(ExpandFileName(ATarget), AWorkingDirectory);
+  Expanded := ExcludeTrailingPathDelimiter(ExpandFileName(ATarget));
+  { The working directory itself is shown as ./, like any path under it. }
+  if (AWorkingDirectory <> '') and
+     SameFileName(Expanded, ExcludeTrailingPathDelimiter(AWorkingDirectory))
+  then
+    Result := '.'
+  else
+    Result := DisplayPath(Expanded, AWorkingDirectory);
   if DirectoryExists(ATarget) then
     Result := IncludeTrailingPathDelimiter(Result);
+end;
+
+{ An empty --trust or --untrust path names nothing, and would otherwise
+  expand to the working directory. }
+procedure RequireTargetPaths(const AOptionName: string;
+  const ATargets: TStrings);
+var
+  I: Integer;
+begin
+  for I := 0 to ATargets.Count - 1 do
+    if Trim(ATargets[I]) = '' then
+      raise TCLIUsageError.CreateFmt('%s needs a path', [AOptionName]);
 end;
 
 function DescribeTargets(const ATargets: TStrings;
@@ -1430,7 +1947,7 @@ procedure RunTrustCommand(const AStorePath: string; const ATargets: TStrings;
   const AProgramName: string);
 var
   Store: TGocciaTrustStore;
-  Configs: TStringList;
+  Configs, Found: TStringList;
   Pending: TGocciaConfigTrustVerdicts;
   Verdict: TGocciaConfigTrustVerdict;
   Entry: TGocciaTrustEntry;
@@ -1438,6 +1955,7 @@ var
   I, Declaring, Unchanged: Integer;
 begin
   WorkingDirectory := GetCurrentDir;
+  RequireTargetPaths('--trust', ATargets);
   Targets := DescribeTargets(ATargets, WorkingDirectory);
   for I := 0 to ATargets.Count - 1 do
     if not FileExists(ATargets[I]) and not DirectoryExists(ATargets[I]) then
@@ -1447,10 +1965,20 @@ begin
   Store := TGocciaTrustStore.Load(AStorePath);
   Configs := TStringList.Create;
   try
+    Configs.UseLocale := False;
+    Configs.CaseSensitive := True;
     Configs.Sorted := True;
     Configs.Duplicates := dupIgnore;
-    for I := 0 to ATargets.Count - 1 do
-      FindTrustableConfigs(ATargets[I], Configs);
+    Found := TStringList.Create;
+    try
+      for I := 0 to ATargets.Count - 1 do
+        FindTrustableConfigs(ATargets[I], Found);
+      { Two spellings of one config are one entry. }
+      for I := 0 to Found.Count - 1 do
+        Configs.Add(TrustKeyForPath(Found[I]));
+    finally
+      Found.Free;
+    end;
 
     Pending := nil;
     Declaring := 0;
@@ -1458,9 +1986,9 @@ begin
     for I := 0 to Configs.Count - 1 do
     begin
       Verdict := Default(TGocciaConfigTrustVerdict);
-      Verdict.ConfigPath := Configs[I];
-      Verdict.Request := ReadConfigPermissionRequest(ALoadConfig(Configs[I]),
-        Configs[I]);
+      Verdict.ConfigPath := TrustKeyForPath(Configs[I]);
+      Verdict.Request := ReadConfigPermissionRequest(
+        ALoadConfig(Verdict.ConfigPath), Verdict.ConfigPath);
       if not Verdict.Request.RequestsGrants then
         Continue;
       Inc(Declaring);
@@ -1468,6 +1996,9 @@ begin
       if Store.TryFind(Configs[I], Entry) then
       begin
         if Entry.Hash = Verdict.Hash then
+          Verdict.TargetChanges := DescribeTargetChanges(Entry.Targets);
+        if (Entry.Hash = Verdict.Hash) and
+           (Length(Verdict.TargetChanges) = 0) then
         begin
           Inc(Unchanged);
           Continue;
@@ -1506,6 +2037,7 @@ begin
           WorkingDirectory), ' (changed)');
         Write(DescribePermissionChange(Pending[I].Previous.BlockJSON,
           Pending[I].Request, REPORT_DETAIL_INDENT));
+        Write(TargetChangeLines(Pending[I].TargetChanges));
       end
       else
       begin
@@ -1545,6 +2077,7 @@ begin
       Entry.ConfigPath := Pending[I].ConfigPath;
       Entry.Hash := Pending[I].Hash;
       Entry.BlockJSON := NormalizedPermissionBlock(Pending[I].Request);
+      Entry.Targets := PathScopeTargets(Pending[I].Request);
       Entry.TrustedAt := TrustTimestamp;
       Entry.TrustedBy := AProgramName + ' ' + GetVersion;
       Store.Put(Entry);
@@ -1560,30 +2093,37 @@ end;
 procedure RunUntrustCommand(const AStorePath: string; const ATargets: TStrings);
 var
   Store: TGocciaTrustStore;
+  Report: TStringList;
   I, Removed: Integer;
   Changed: Boolean;
   WorkingDirectory: string;
 begin
+  RequireTargetPaths('--untrust', ATargets);
   WorkingDirectory := GetCurrentDir;
   Store := TGocciaTrustStore.Load(AStorePath);
+  Report := TStringList.Create;
   try
     Changed := False;
     for I := 0 to ATargets.Count - 1 do
     begin
       Removed := Store.RemoveAtOrUnder(ATargets[I], nil);
       if Removed = 0 then
-        WriteLn('No trusted config at or under ',
+        Report.Add('No trusted config at or under ' +
           DescribeTarget(ATargets[I], WorkingDirectory))
       else
       begin
         Changed := True;
-        WriteLn('Removed trust for ', CountedConfigs(Removed), ' under ',
+        Report.Add('Removed trust for ' + CountedConfigs(Removed) + ' under ' +
           DescribeTarget(ATargets[I], WorkingDirectory));
       end;
     end;
+    { Report only what the saved store holds. }
     if Changed then
       Store.Save;
+    for I := 0 to Report.Count - 1 do
+      WriteLn(Report[I]);
   finally
+    Report.Free;
     Store.Free;
   end;
 end;
@@ -1628,9 +2168,10 @@ begin
         Status := '  (missing)'
       else
         try
-          if PermissionBlockHash(ReadConfigPermissionRequest(
+          if (PermissionBlockHash(ReadConfigPermissionRequest(
              ALoadConfig(Entry.ConfigPath), Entry.ConfigPath)) <>
-             Entry.Hash then
+             Entry.Hash) or
+             (Length(DescribeTargetChanges(Entry.Targets)) > 0) then
             Status := '  (changed)';
         except
           on E: Exception do
@@ -1638,6 +2179,8 @@ begin
         end;
       WriteLn(Entry.ConfigPath, '  trusted ', Entry.TrustedAt, '  ',
         DescribeStoredKeys(Entry.BlockJSON), Status);
+      { Re-pointed scopes are listed under their entry. }
+      Write(TargetChangeLines(DescribeTargetChanges(Entry.Targets)));
     end;
   finally
     Store.Free;

@@ -205,7 +205,8 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
       ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
       ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
-      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (`],
+      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (value is too large)`],
+      ['{"max-memory": 1.5}', `Invalid value for "max-memory" in ${configPath}: 1.5 (use a whole number`],
       ['{"extends": {"path": "base.json"}}', `${configPath}: "extends" must be a path`],
       ['{"extends": 1}', `${configPath}: "extends" must be a path`],
       ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
@@ -221,6 +222,30 @@ console.log("Removed and command-line-only config keys exit 2...");
     const tomlString = run(RUNNER, ["main.js"], { cwd: tmp });
     expectExit(tomlString, 1, "TOML string flag");
     rmSync(join(tmp, "goccia.toml"));
+    // A number reads the same in every format: an exact whole number is
+    // accepted whatever its spelling, anything else is an invalid value.
+    rmSync(configPath);
+    for (const [name, text] of [
+      ["goccia.json", '{"max-memory": 1e8}'],
+      ["goccia.json5", "{ 'max-memory': 1e8 }"],
+      ["goccia.toml", "max-memory = 1e8\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const accepted = run(RUNNER, ["main.js"], { cwd: tmp });
+      expectExit(accepted, 0, `${name} whole-number exponent`);
+      rmSync(join(tmp, name));
+    }
+    for (const [name, text] of [
+      ["goccia.json5", "{ 'max-memory': 1e20 }"],
+      ["goccia.toml", "max-memory = 1e20\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const tooLarge = run(RUNNER, ["main.js"], { cwd: tmp });
+      expectExit(tooLarge, 1, `${name} oversized number`);
+      expectIncludes(tooLarge.combined, "(value is too large)", `${name} oversized number`);
+      rmSync(join(tmp, name));
+    }
+    writeFileSync(configPath, "{}\n");
     writeFileSync(join(tmp, "goccia.toml"), '[extends]\npath = "base.toml"\n');
     const tomlExtends = run(RUNNER, ["main.js"], { cwd: tmp });
     expectExit(tomlExtends, 1, "TOML extends table");
@@ -340,6 +365,9 @@ console.log("Binaries with their own parser follow the same grammar...");
     const test262Flag = run(TEST262RUNNER, ["--verbose=false"], { cwd: tmp });
     expectExit(test262Flag, 2, "Test262 --verbose=false");
     expectIncludes(test262Flag.stderr, "--verbose does not take a value", "Test262 --verbose=false");
+    const test262Realm = run(TEST262RUNNER, ["--unsafe-shadowrealm=1"], { cwd: tmp });
+    expectExit(test262Realm, 2, "Test262 --unsafe-shadowrealm=1");
+    expectIncludes(test262Realm.stderr, "--unsafe-shadowrealm does not take a value", "Test262 --unsafe-shadowrealm=1");
     const bareShort = run(BARE, ["-A", "main.js"], { cwd: tmp });
     expectExit(bareShort, 1, "Bare -A");
     expectIncludes(bareShort.stderr, "Unknown option: -A", "Bare -A");
@@ -694,6 +722,69 @@ console.log("A config's permissions govern only files in its own directory tree.
   }
 }
 
+console.log("A file with its own config inherits no unsafe-* keys or grants from the root config...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a", "sub"), { recursive: true });
+    mkdirSync(join(tmp, "c"));
+    writeFileSync(join(tmp, "a", "goccia.json"), JSON.stringify({
+      "unsafe-function-constructor": true,
+      "unsafe-shadowrealm": true,
+      permissions: { "allow-ffi": true },
+    }) + "\n");
+    writeFileSync(join(tmp, "c", "goccia.json"), '{"compat-var": true}\n');
+    writeFileSync(join(tmp, "a", "sub", "goccia.json"), '{"compat-var": true}\n');
+    const probe = [
+      'let fn = "off"; try { new Function("return 1")(); fn = "on"; } catch (e) {}',
+      'console.log("probe", fn, typeof ShadowRealm, typeof FFI);',
+      "",
+    ].join("\n");
+    for (const file of [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")])
+      writeFileSync(join(tmp, file), probe);
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs"), ...args], { cwd: tmp });
+      const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
+      if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
+      if (probes[0] !== "probe on function object")
+        throw new Error(`a/x.mjs should use a's config: ${probes[0]}`);
+      for (const [index, name] of [[1, "c/x.mjs"], [2, "a/sub/x.mjs"]] as const)
+        if (probes[index] !== "probe off undefined undefined")
+          throw new Error(`${name} has its own config and must inherit nothing from a/goccia.json (${args.join(" ")}): ${probes[index]}`);
+    }
+
+    // The benchmark runner resolves the same way.
+    writeFileSync(join(tmp, "c", "bench.js"), [
+      'import("goccia:microbench").then(({ bench, group }) => {',
+      '  group("inherit", () => {',
+      '    bench("unsafe", () => {',
+      '      if (typeof ShadowRealm !== "undefined" || typeof FFI !== "undefined") throw new Error("LEAKED");',
+      '      let on = false; try { new Function("return 1")(); on = true; } catch (e) {}',
+      '      if (on) throw new Error("LEAKED");',
+      "      return 1;",
+      "    });",
+      "  });",
+      "});",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "a", "bench.js"), 'import("goccia:microbench").then(({ bench, group }) => { group("a", () => { bench("a", () => 1); }); });\n');
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const bench = Bun.spawnSync([resolve(BENCHRUNNER), "-P", join("a", "bench.js"), join("c", "bench.js"), "--no-progress", ...args], {
+        cwd: tmp,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "20", GOCCIA_BENCH_ROUNDS: "1" } as Record<string, string>,
+        timeout: 60_000,
+      });
+      const text = bench.stdout.toString() + bench.stderr.toString();
+      if (bench.exitCode !== 0 || text.includes("LEAKED"))
+        throw new Error(`BenchmarkRunner c/bench.js must inherit nothing from a/goccia.json (${args.join(" ")}): exit ${bench.exitCode}\n${text}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config permissions resolve against the declaring file...");
 {
   const tmp = makeTmp();
@@ -902,6 +993,9 @@ console.log("An untrusted config refuses the run with a report naming the fix...
     expectIncludes(unconfirmed.stderr, "Error: --trust needs confirmation; re-run with --yes to trust without a prompt", "--trust without --yes");
     expectIncludes(unconfirmed.stdout, "(new)\n    allow-read:", "--trust shows the requests first");
     if (existsSync(join(tmp, "trust.json"))) throw new Error("An unconfirmed --trust must not write the store");
+    // The working directory itself is shown as ./.
+    const here = run(RUNNER, [`--trust-store=${join(tmp, "trust.json")}`, "--trust", "."], { cwd: project });
+    expectIncludes(here.stdout, `Permission requests under .${isWindows ? "\\" : "/"}:`, "--trust . header");
 
     // 2. --trust <dir> --yes records it, and the run proceeds.
     const trusted = run(RUNNER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
@@ -946,6 +1040,22 @@ console.log("An untrusted config refuses the run with a report naming the fix...
     expectIncludes(removed.stdout, "Removed trust for 1 config file under copy", "--untrust");
     const after = run(RUNNER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp });
     expectExcludes(after.stdout, "(missing)", "--untrust removed the entry");
+
+    // An empty path names nothing: it is a usage error, not "everything under
+    // the working directory".
+    for (const args of [["--untrust="], ["--untrust", ""], ["--trust", ""], ["--trust="]]) {
+      const empty = run(RUNNER, ["--trust-store=trust.json", ...args], { cwd: tmp });
+      expectExit(empty, 2, `${args.join(" ")} (empty path)`);
+      expectIncludes(empty.stderr, `Error: ${args[0].replace("=", "")} needs a path`, `${args.join(" ")} (empty path)`);
+    }
+    expectIncludes(run(RUNNER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "project", "empty --untrust removed nothing");
+
+    // --untrust reports a removal only once the store is saved.
+    writeFileSync(join(tmp, "trust.json.lock"), "");
+    const locked = run(RUNNER, ["--trust-store=trust.json", "--untrust", "project"], { cwd: tmp });
+    expectExit(locked, 1, "--untrust with a held lock");
+    expectExcludes(locked.stdout, "Removed trust", "--untrust with a held lock");
+    rmSync(join(tmp, "trust.json.lock"));
   } finally {
     clean(tmp);
   }
@@ -984,6 +1094,17 @@ console.log("-P and --ignore-config-permissions decide for one run...");
     const trustedDeny = run(RUNNER, ["--trust-store=trust.json", "--deny-net=127.0.0.1", join("project", "loopback.js")], { cwd: tmp });
     expectExit(trustedDeny, 0, "CLI deny over trusted allow");
     expectIncludes(trustedDeny.stdout, "PermissionDenied net: 127.0.0.1:1", "CLI deny over trusted allow");
+
+    // --trust-store takes its path after "=", so it never swallows an input;
+    // -P never takes a value.
+    for (const args of [["--trust-store", join(project, "loopback.js")], ["--trust-store="]]) {
+      const storeArg = run(RUNNER, args, { cwd: tmp });
+      expectExit(storeArg, 2, args.join(" "));
+      expectIncludes(storeArg.stderr, 'Error: --trust-store needs a path: --trust-store=<path>', args.join(" "));
+    }
+    const shortValue = run(RUNNER, ["-P=1", join(project, "loopback.js")]);
+    expectExit(shortValue, 2, "-P=1");
+    expectIncludes(shortValue.stderr, 'Error: -P does not take a value; got "1"', "-P=1");
 
     // 18. -P and --ignore-config-permissions cannot be combined.
     const both = run(RUNNER, ["-P", "--ignore-config-permissions", join(project, "loopback.js")]);
@@ -1051,6 +1172,22 @@ console.log("Trust follows each file's own config...");
     expectExit(bundled, 0, "Bundler with unsafe config");
     expectIncludes(bundled.stderr, "requests unsafe-function-constructor, which GocciaBundler cannot grant; ignoring it", "Bundler warns");
 
+    // The bundler checks every file argument's config before emitting any:
+    // no partial output, and an audit event for a single file too.
+    mkdirSync(join(tmp, "bundle", "good"), { recursive: true });
+    mkdirSync(join(tmp, "bundle", "bad"), { recursive: true });
+    writeFileSync(join(tmp, "bundle", "good", "a.js"), "1;\n");
+    writeFileSync(join(tmp, "bundle", "bad", "b.js"), "2;\n");
+    writeFileSync(join(tmp, "bundle", "bad", "goccia.json"), '{"permissions": {"deny-nett": true}}\n');
+    mkdirSync(join(tmp, "bundle", "out"));
+    const bundled2 = run(BUNDLER, [join("bundle", "good", "a.js"), join("bundle", "bad", "b.js"), `--output=${join("bundle", "out")}`], { cwd: tmp });
+    expectExit(bundled2, 2, "Bundler with a malformed config among its files");
+    if (existsSync(join(tmp, "bundle", "out", "a.gbc"))) throw new Error("The bundler emitted a.gbc before refusing b's config");
+    const bundleAudit = run(BUNDLER, [join("unsafe", "main.js"), "--output=single.gbc", "--audit-log=bundle.jsonl"], { cwd: tmp });
+    expectExit(bundleAudit, 0, "Bundler audit for a single file");
+    const bundleEvents = readFileSync(join(tmp, "bundle.jsonl"), "utf8");
+    expectIncludes(bundleEvents, '"kind":"config.permissions"', "Bundler audits a single file's config");
+
     // 17. The REPL refuses before its prompt.
     const repl = run(REPL, ["--trust-store=trust.json"], { cwd: join(tmp, "unsafe"), stdin: "1 + 1\n" });
     expectExit(repl, 2, "REPL with an untrusted config");
@@ -1066,6 +1203,31 @@ console.log("Trust follows each file's own config...");
       expectIncludes(result.stderr, "can only be given on the command line", `config ${key}`);
     }
 
+    // A trusted path scope re-pointed by a symlink is a change: same block,
+    // different place.
+    if (!isWindows) {
+      mkdirSync(join(tmp, "retarget", "data"), { recursive: true });
+      mkdirSync(join(tmp, "secrets"));
+      writeFileSync(join(tmp, "secrets", "key.txt"), "SECRET\n");
+      writeFileSync(join(tmp, "retarget", "data", "key.txt"), "ok\n");
+      writeFileSync(join(tmp, "retarget", "goccia.json"), '{"permissions": {"allow-read": ["./data"]}}\n');
+      writeFileSync(join(tmp, "retarget", "main.mjs"),
+        'const p = "./data/" + "key.txt"; const m = await import(p, { with: { type: "text" } }); console.log("READ", m.default.trim());\n');
+      run(RUNNER, ["--trust-store=trust.json", "--trust", "retarget", "--yes"], { cwd: tmp });
+      expectIncludes(run(RUNNER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp }).stdout, "READ ok", "trusted scope");
+      rmSync(join(tmp, "retarget", "data"), { recursive: true });
+      symlinkSync(join(tmp, "secrets"), join(tmp, "retarget", "data"));
+      const retargeted = run(RUNNER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp });
+      expectExit(retargeted, 2, "re-pointed scope");
+      expectExcludes(retargeted.stdout, "SECRET", "re-pointed scope runs nothing");
+      expectIncludes(retargeted.stderr, "(changed since trusted", "re-pointed scope");
+      expectIncludes(retargeted.stderr, `  ~ target of ${realpathSync(tmp)}/retarget/data: `, "re-pointed scope");
+      expectIncludes(retargeted.stderr, ` -> ${realpathSync(join(tmp, "secrets"))}`, "re-pointed scope");
+      expectIncludes(run(RUNNER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "  ~ target of ", "--list-trusted shows the re-pointed scope");
+      run(RUNNER, ["--trust-store=trust.json", "--trust", "retarget", "--yes"], { cwd: tmp });
+      expectIncludes(run(RUNNER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp }).stdout, "READ SECRET", "re-trusted scope");
+    }
+
     // 21. Trusting through a symlink covers the real path.
     if (!isWindows) {
       mkdirSync(join(tmp, "real"));
@@ -1076,7 +1238,153 @@ console.log("Trust follows each file's own config...");
       const viaReal = run(RUNNER, ["--trust-store=trust.json", join("real", "main.js")], { cwd: tmp });
       expectExit(viaReal, 0, "trusted through a symlink");
       expectIncludes(viaReal.stdout, "RAN", "trusted through a symlink");
+
+      // A symlinked config FILE governs the files beside the link, so it does
+      // not inherit the trust of the config it points at.
+      mkdirSync(join(tmp, "trusted"));
+      mkdirSync(join(tmp, "evil"));
+      writeFileSync(join(tmp, "trusted", "goccia.json"), '{"unsafe-function-constructor": true}\n');
+      symlinkSync(join("..", "trusted", "goccia.json"), join(tmp, "evil", "goccia.json"));
+      writeFileSync(join(tmp, "evil", "a.js"), 'console.log("EVIL", new Function("return 7")());\n');
+      run(RUNNER, ["--trust-store=trust.json", "--trust", "trusted", "--yes"], { cwd: tmp });
+      const evil = run(RUNNER, ["--trust-store=trust.json", join("evil", "a.js")], { cwd: tmp });
+      expectExit(evil, 2, "symlinked config file");
+      expectExcludes(evil.stdout, "EVIL", "symlinked config file runs nothing");
+      expectIncludes(evil.stderr, `${join("evil", "goccia.json")} (never trusted)`, "symlinked config file has its own trust");
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Module manifests a config names run under the script's capabilities...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    mkdirSync(join(tmp, "outside"));
+    const secret = join(tmp, "outside", "secret.txt");
+    writeFileSync(secret, "OUTSIDE-SECRET\n");
+    writeFileSync(join(project, "goccia.json"), '{"modules": "./manifest.js"}\n');
+
+    // A manifest's own imports are guest reads.
+    writeFileSync(join(project, "manifest.js"), [
+      `import secret from ${JSON.stringify(secret)} with { type: "text" };`,
+      'export default { "host:leak": { content: "export default " + JSON.stringify(secret.trim()) + ";" } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "main.mjs"), 'import leak from "host:leak"; console.log("LEAK", leak);\n');
+    const refused = run(RUNNER, [join(project, "main.mjs")]);
+    expectExit(refused, 1, "config manifest importing outside the project");
+    expectIncludes(refused.combined, `PermissionDenied: read: ${secret}`, "config manifest importing outside the project");
+    expectExcludes(refused.combined, "OUTSIDE-SECRET", "config manifest importing outside the project");
+    const granted = run(RUNNER, [`--allow-read=${join(tmp, "outside")}`, join(project, "main.mjs")]);
+    expectIncludes(granted.stdout, "LEAK OUTSIDE-SECRET", "config manifest with a read grant");
+
+    // What a manifest leaves on its global object stays in its own engine.
+    writeFileSync(join(project, "manifest.js"), [
+      'globalThis.f = (p) => import(p, { with: { type: "text" } });',
+      'export default { "host:ok": { content: "export default 1;" } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "main.mjs"), [
+      'import ok from "host:ok";',
+      `try { const m = await globalThis.f(${JSON.stringify(secret)}); console.log("LEAK", m.default); }`,
+      'catch (e) { console.log("CAUGHT", typeof globalThis.f, ok); }',
+      "",
+    ].join("\n"));
+    const leftBehind = run(RUNNER, [join(project, "main.mjs")]);
+    expectExit(leftBehind, 0, "a manifest's global");
+    expectIncludes(leftBehind.stdout, "CAUGHT undefined 1", "a manifest's global does not reach the script");
+
+    // A data manifest outside the project needs a read grant too.
+    writeFileSync(join(tmp, "outside", "manifest.json"), '{"host:x": {"content": "export default 2;"}}\n');
+    writeFileSync(join(project, "goccia.json"), '{"modules": "../outside/manifest.json"}\n');
+    writeFileSync(join(project, "main.mjs"), 'import x from "host:x"; console.log("X", x);\n');
+    const data = run(RUNNER, [join(project, "main.mjs")]);
+    expectExit(data, 1, "config data manifest outside the project");
+    expectIncludes(data.combined, "PermissionDenied: read: ../outside/manifest.json", "config data manifest outside the project");
+    const dataAudit = run(RUNNER, [`--audit-log=${join(tmp, "audit.jsonl")}`, join(project, "main.mjs")]);
+    expectExit(dataAudit, 1, "config data manifest audit");
+    expectIncludes(readFileSync(join(tmp, "audit.jsonl"), "utf8"), '"kind":"read.file","decision":"deny"', "config data manifest audit");
+
+    // Inside the project it is part of the module graph; on the command line
+    // it is the user's own choice.
+    writeFileSync(join(project, "manifest.json"), '{"host:x": {"content": "export default 3;"}}\n');
+    writeFileSync(join(project, "goccia.json"), '{"modules": "./manifest.json"}\n');
+    expectIncludes(run(RUNNER, [join(project, "main.mjs")]).stdout, "X 3", "config data manifest in the project");
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    expectIncludes(run(RUNNER, [`--modules=${join(tmp, "outside", "manifest.json")}`, join(project, "main.mjs")]).stdout, "X 2", "--modules outside the project");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Output paths set in a config stay inside the config's directory...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "logs"), { recursive: true });
+    mkdirSync(join(tmp, "elsewhere"));
+    writeFileSync(join(project, "main.js"), 'console.log("RAN");\n');
+    writeFileSync(join(project, "a.test.js"), 'test("t", () => { expect(1).toBe(1); });\n');
+    const victim = join(tmp, "victim.txt");
+    const refused: [string, string, string[]][] = [
+      ["log", JSON.stringify(victim), [RUNNER, "main.js"]],
+      ["audit-log", '"../victim.txt"', [RUNNER, "main.js"]],
+      ["coverage-output", JSON.stringify(victim), [RUNNER, "main.js", "--coverage"]],
+      ["profile-output", JSON.stringify(victim), [RUNNER, "main.js", "--profile=functions"]],
+      ["output", JSON.stringify(victim), [TESTRUNNER, "a.test.js", "--no-progress"]],
+    ];
+    for (const [key, value, [binary, ...args]] of refused) {
+      writeFileSync(join(project, "goccia.json"), `{"${key}": ${value}}\n`);
+      const result = run(binary, args, { cwd: project });
+      expectExit(result, 1, `config "${key}" outside its directory`);
+      expectIncludes(result.combined, `${join(project, "goccia.json")}: "${key}" writes to ${victim}, which is outside ${project}`, `config "${key}"`);
+      expectExcludes(result.stdout, "RAN", `config "${key}" runs nothing`);
+      if (existsSync(victim)) throw new Error(`config "${key}" wrote ${victim}`);
+    }
+
+    // A relative path is relative to the config, wherever the command runs.
+    writeFileSync(join(project, "goccia.json"), '{"log": "logs/run.log"}\n');
+    const inside = run(RUNNER, [join(project, "main.js")], { cwd: join(tmp, "elsewhere") });
+    expectExit(inside, 0, "config log inside its directory");
+    if (!existsSync(join(project, "logs", "run.log"))) throw new Error("config log was not written beside the config");
+
+    // A link at the name, or a linked directory on the way, cannot carry the
+    // write out.
+    if (!isWindows) {
+      symlinkSync(victim, join(project, "link.log"));
+      writeFileSync(join(project, "goccia.json"), '{"log": "link.log"}\n');
+      expectIncludes(run(RUNNER, ["main.js"], { cwd: project }).combined, "is a symbolic link", "config log through a link");
+      symlinkSync(join(tmp, "elsewhere"), join(project, "out"));
+      writeFileSync(join(project, "goccia.json"), '{"log": "out/run.log"}\n');
+      expectIncludes(run(RUNNER, ["main.js"], { cwd: project }).combined, `which is outside ${project}`, "config log through a linked directory");
+      if (existsSync(join(tmp, "elsewhere", "run.log"))) throw new Error("config log escaped through a linked directory");
+    }
+
+    // The sandbox runner's diff file, and the host files its --write-back
+    // rewrites when the config names the seeds, are outputs too.
+    writeFileSync(join(tmp, "outside.txt"), "HOST\n");
+    writeFileSync(join(project, "entry.js"), "1;\n");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "diff-output": victim }) + "\n");
+    const diffOut = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "--seed", `${join(project, "entry.js")}=/entry.js`, "/entry.js"], { cwd: project });
+    expectExit(diffOut, 1, "config diff-output outside its directory");
+    expectIncludes(diffOut.combined, `"diff-output" writes to ${victim}`, "config diff-output");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      seed: [`${join(project, "entry.js")}=/entry.js`, `${join(tmp, "outside.txt")}=/outside.txt`],
+      "write-back": true,
+    }) + "\n");
+    const writeBack = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "/entry.js"], { cwd: project });
+    expectExit(writeBack, 1, "config seed outside its directory with write-back");
+    expectIncludes(writeBack.combined, `"seed" seeds ${join(tmp, "outside.txt")} for --write-back`, "config seed with write-back");
+
+    // The command line writes wherever it is told to.
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    expectExit(run(RUNNER, [`--log=${victim}`, "main.js"], { cwd: project }), 0, "--log outside the config");
+    if (!existsSync(victim)) throw new Error("--log did not write its file");
   } finally {
     clean(tmp);
   }
@@ -1098,7 +1406,8 @@ console.log("Unreadable trust stores are errors, not trust...");
     if (readFileSync(join(tmp, "corrupt.json"), "utf8") !== "{ not json") throw new Error("--trust overwrote a corrupt store");
     const corruptRun = run(RUNNER, ["--trust-store=corrupt.json", join("project", "main.js")], { cwd: tmp });
     expectExit(corruptRun, 2, "run with a corrupt store");
-    expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then, to trust these requests:", "run with a corrupt store");
+    expectIncludes(corruptRun.stderr, "Nothing was run. Trust store ", "run with a corrupt store");
+    expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then trust these requests:", "run with a corrupt store");
 
     writeFileSync(join(tmp, "newer.json"), '{"version": 2, "trusted": {}}\n');
     const newer = run(RUNNER, ["--trust-store=newer.json", "--list-trusted"], { cwd: tmp });
@@ -1175,6 +1484,18 @@ console.log("Audit records config trust and where capabilities came from...");
     const trustedEvent = trusted.find((event) => event.kind === "config.permissions");
     if (!trustedEvent || !/^trusted sha256:[0-9a-f]{64}$/.test(trustedEvent.reason))
       throw new Error(`trusted config.permissions event: ${JSON.stringify(trusted)}`);
+
+    // A deny-only config needs no trust but still shapes the set, so the
+    // provenance names it.
+    mkdirSync(join(tmp, "denies"));
+    writeFileSync(join(tmp, "denies", "goccia.json"), '{"permissions": {"deny-net": ["example.com"]}}\n');
+    writeFileSync(join(tmp, "denies", "main.js"), "1;\n");
+    run(RUNNER, ["--audit-log=denies.jsonl", join("denies", "main.js")], { cwd: tmp });
+    const deniesEffective = readFileSync(join(tmp, "denies.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .find((event) => event.kind === "capabilities.effective");
+    if (!deniesEffective || !String(deniesEffective.reason).startsWith("config ") ||
+        !String(deniesEffective.reason).endsWith("goccia.json denies only"))
+      throw new Error(`deny-only provenance: ${JSON.stringify(deniesEffective)}`);
 
     run(RUNNER, ["--trust-store=none.json", "--audit-log=denied.jsonl", join("project", "main.js")], { cwd: tmp });
     const denied = readFileSync(join(tmp, "denied.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));

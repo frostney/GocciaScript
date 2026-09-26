@@ -97,6 +97,8 @@ begin
     'Output path (single file) or output directory (multiple files)');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
+  FOutputPath.WritesHostFile := True;
+  FSourceMap.WritesHostFile := True;
 end;
 
 { TBundlerApp - Validate }
@@ -448,6 +450,7 @@ end;
 procedure TBundlerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I: Integer;
+  Inputs, Found: TStringList;
 begin
   if FOutputPath.Present and (FOutputPath.Value <> '') and
      not DirectoryExists(FOutputPath.Value) and
@@ -475,6 +478,31 @@ begin
     raise TParseError.Create(
       '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
+
+  { Every config governing the inputs is validated before anything is
+    emitted, so a bad config never leaves some outputs written. }
+  Inputs := TStringList.Create;
+  try
+    if APaths.Count = 0 then
+      Inputs.Add(STDIN_FILE_NAME);
+    for I := 0 to APaths.Count - 1 do
+      if IsStdinPath(APaths[I]) then
+        Inputs.Add(STDIN_FILE_NAME)
+      else if DirectoryExists(APaths[I]) then
+      begin
+        Found := FindAllFiles(APaths[I], ScriptExtensions);
+        try
+          Inputs.AddStrings(Found);
+        finally
+          Found.Free;
+        end;
+      end
+      else if FileExists(APaths[I]) then
+        Inputs.Add(APaths[I]);
+    ValidateFileConfigs(Inputs);
+  finally
+    Inputs.Free;
+  end;
 
   if APaths.Count = 0 then
     EmitFromStdin

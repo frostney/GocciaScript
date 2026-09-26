@@ -507,10 +507,11 @@ begin
   Config := ConfigSection('confined/project/goccia.json',
     '{"sandbox": {"copy-rw": ["../outside"]}}');
   Expect<string>(ResolveError(['main.js'], Config, CommandLine)).ToBe(
-    'TCLIUsageError: ' + ConfigPath + ': "sandbox.copy-rw" entry ' +
-    '"../outside" is outside the config''s directory; a config may only ' +
-    'write inside its own directory tree (pass it on the command line to ' +
-    'write elsewhere)');
+    'TParseError: ' + ConfigPath + ': "sandbox.copy-rw" writes to ' + FRoot +
+    PathDelim + 'confined' + PathDelim + 'outside, which is outside ' +
+    ExtractFileDir(ConfigPath) + '; a config may only write inside its ' +
+    'own directory (pass --copy-rw on the command line to write ' +
+    'elsewhere)');
 
   { Reading from outside is not a write. }
   Config := ConfigSection('confined/project/goccia.json',
@@ -520,10 +521,11 @@ begin
   Config := ConfigSection('confined/project/goccia.json',
     '{"sandbox": {"diff-file": "../changes.json"}}');
   Expect<string>(ResolveError(['main.js'], Config, CommandLine)).ToBe(
-    'TCLIUsageError: ' + ConfigPath + ': "sandbox.diff-file" entry ' +
-    '"../changes.json" is outside the config''s directory; a config may ' +
-    'only write inside its own directory tree (pass it on the command line ' +
-    'to write elsewhere)');
+    'TParseError: ' + ConfigPath + ': "sandbox.diff-file" writes to ' +
+    FRoot + PathDelim + 'confined' + PathDelim + 'changes.json, which is ' +
+    'outside ' + ExtractFileDir(ConfigPath) + '; a config may only write ' +
+    'inside its own directory (pass --diff-file on the command line to ' +
+    'write elsewhere)');
 end;
 
 procedure TSandboxModeTests.TestDiffResolution;
