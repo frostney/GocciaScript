@@ -393,6 +393,21 @@ begin
          DescribeCapabilities(AHonored), FAllow[Capability].LongName]);
 end;
 
+{ The resolved form of one command-line scope. A blank scope raises rather
+  than reaching Allow/Deny, where an empty scope means the whole capability;
+  the parser already rejects one, so this holds for any other route too. }
+function ResolveOptionScope(const AOption: TScopeListOption;
+  const ACapability: TGocciaCapability; const AIndex: Integer;
+  const AWorkingDirectory: string): string;
+begin
+  Result := '';
+  if Trim(AOption.Scopes[AIndex]) <> '' then
+    Result := ResolvePermissionScope(ACapability, AOption.Scopes[AIndex],
+      AWorkingDirectory);
+  if Result = '' then
+    raise TParseError.CreateFmt('Empty scope in --%s', [AOption.LongName]);
+end;
+
 procedure ValidateOptionScopes(const AOption: TScopeListOption;
   const ACapability: TGocciaCapability; const AWorkingDirectory: string);
 var
@@ -400,8 +415,8 @@ var
 begin
   for I := 0 to AOption.Scopes.Count - 1 do
     try
-      TGocciaCapabilities.None.Allow(ACapability, ResolvePermissionScope(
-        ACapability, AOption.Scopes[I], AWorkingDirectory));
+      TGocciaCapabilities.None.Allow(ACapability, ResolveOptionScope(AOption,
+        ACapability, I, AWorkingDirectory));
     except
       on E: EGocciaCapabilityScopeError do
         raise TParseError.CreateFmt('Invalid scope for --%s: "%s" (%s)',
@@ -444,8 +459,7 @@ begin
   end;
   for I := 0 to AOption.Scopes.Count - 1 do
   begin
-    Scope := ResolvePermissionScope(ACapability, AOption.Scopes[I],
-      AWorkingDirectory);
+    Scope := ResolveOptionScope(AOption, ACapability, I, AWorkingDirectory);
     if AAllow then
       Result := Result.Allow(ACapability, Scope)
     else
@@ -469,10 +483,17 @@ begin
       Result := Result.Deny(ACapability);
   end;
   for I := 0 to High(AScopes.Scopes) do
+  begin
+    { ReadConfigPermissionRequest rejects a blank scope; never let one
+      become the unscoped grant an empty scope means. }
+    if AScopes.Scopes[I] = '' then
+      raise TParseError.CreateFmt('Empty scope in %s',
+        [PermissionKeyName(AAllow, ACapability)]);
     if AAllow then
       Result := Result.Allow(ACapability, AScopes.Scopes[I])
     else
       Result := Result.Deny(ACapability, AScopes.Scopes[I]);
+  end;
 end;
 
 function ResolveCapabilities(const AOptions: TGocciaCapabilityOptions;

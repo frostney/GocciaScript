@@ -490,11 +490,11 @@ var
     begin
       Inc(I);
       if I > ParamCount then
-        raise Exception.Create(AName + ' requires a value');
+        raise TCLIUsageError.Create(AName + ' requires a value');
       Result := ParamStr(I);
     end;
     if Result = '' then
-      raise Exception.Create(AName + ' requires a value');
+      raise TCLIUsageError.Create(AName + ' requires a value');
   end;
 
   function NonNegativeInteger(const AName, ARaw: string): Integer;
@@ -640,26 +640,26 @@ begin
           '--profile-mode requires opcodes, functions, or all');
     end
     else
-      raise Exception.Create('Unknown argument: ' + Argument);
+      raise TCLIUsageError.Create('Unknown argument: ' + Argument);
     Inc(I);
   end;
 
   if (FOptions.SuiteDir = '') and not FOptions.HostEval then
-    raise Exception.Create('--suite-dir is required');
+    raise TCLIUsageError.Create('--suite-dir is required');
   if not FOptions.HostEval and
      not DirectoryExists(IncludeTrailingPathDelimiter(FOptions.SuiteDir) +
       'test') then
-    raise Exception.Create('test262 test directory not found under: ' +
+    raise TParseError.Create('test262 test directory not found under: ' +
       FOptions.SuiteDir);
   if (FOptions.ShardIndex >= 0) <> (FOptions.ShardCount > 0) then
-    raise Exception.Create(
+    raise TCLIUsageError.Create(
       '--shard-index and --shard-count must be provided together');
   if (FOptions.ShardIndex >= 0) and
      (FOptions.ShardIndex >= FOptions.ShardCount) then
-    raise Exception.Create('--shard-index must be less than --shard-count');
+    raise TParseError.Create('--shard-index must be less than --shard-count');
   if (FOptions.ProfileDir <> '') and
      (FOptions.Mode <> t262emBytecode) then
-    raise Exception.Create('--profile-dir requires --mode=bytecode');
+    raise TCLIUsageError.Create('--profile-dir requires --mode=bytecode');
 end;
 
 function TTest262App.NormalizeId(const APath: string): string;
@@ -1923,9 +1923,11 @@ begin
     try
       ExitCode := App.Run;
     except
-      { A usage error and an unusable invocation (a missing or unknown
-        argument) exit 2; an invalid option value exits 1, as on every other
-        binary. }
+      { ParseArguments raises TCLIUsageError for an unusable invocation (a
+        missing or unknown argument, a rejected combination), which exits 2,
+        and TParseError for an invalid value, which exits 1. Anything else is
+        a failure of the run itself, such as a report it could not write,
+        and exits 1. }
       on E: TCLIUsageError do
       begin
         WriteLn(ErrOutput, 'Error: ', E.Message);
@@ -1939,7 +1941,7 @@ begin
       on E: Exception do
       begin
         WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := EXIT_CODE_USAGE;
+        ExitCode := 1;
       end;
     end;
   finally

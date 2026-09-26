@@ -41,6 +41,7 @@ type
     procedure TestUnhonoredCommandLineAllowRaises;
     procedure TestCommandLineScopesResolveAgainstWorkingDirectory;
     procedure TestTryHandleCapabilityArgument;
+    procedure TestBlankScopeNeverGrantsUnscoped;
     procedure TestDescribeCapabilities;
     procedure TestUnsafeKeysAreRequests;
     procedure TestHashIgnoresKeyAndScopeOrder;
@@ -94,6 +95,8 @@ begin
     TestCommandLineScopesResolveAgainstWorkingDirectory);
   Test('Custom argument parsers recognize the capability grammar',
     TestTryHandleCapabilityArgument);
+  Test('A blank scope never becomes an unscoped grant',
+    TestBlankScopeNeverGrantsUnscoped);
   Test('DescribeCapabilities lists capabilities in prose',
     TestDescribeCapabilities);
   Test('unsafe-* keys are requests; the nearest file wins',
@@ -583,6 +586,70 @@ begin
   end;
   Expect<string>(Message).ToBe('Bare cannot grant net; it supports no ' +
     'capability flags. Remove --allow-net.');
+end;
+
+function ScopeErrorMessage(const AOptions: TGocciaCapabilityOptions;
+  const ARequest: TGocciaConfigPermissionRequest; const AValidate: Boolean;
+  const ABaseDirectory: string): string;
+begin
+  Result := '';
+  try
+    if AValidate then
+      AOptions.ValidateScopes(ABaseDirectory)
+    else
+      ResolveCapabilities(AOptions, ARequest, True, ALL_CAPABILITIES,
+        ABaseDirectory);
+  except
+    on E: TParseError do
+      Result := E.Message;
+  end;
+end;
+
+procedure TPermissionsTests.TestBlankScopeNeverGrantsUnscoped;
+var
+  Options: TGocciaCapabilityOptions;
+  Request: TGocciaConfigPermissionRequest;
+  Message: string;
+begin
+  { The parser rejects a blank item; a scope list filled by any other route
+    still never resolves a blank scope to the unscoped grant Allow(cap, '')
+    means. }
+  Options := TGocciaCapabilityOptions.Create;
+  try
+    Options.AllowOption(gcNet).Scopes.Add(' ');
+    Expect<string>(ScopeErrorMessage(Options,
+      TGocciaConfigPermissionRequest.Empty, True, FRoot))
+      .ToBe('Empty scope in --allow-net');
+    Expect<string>(ScopeErrorMessage(Options,
+      TGocciaConfigPermissionRequest.Empty, False, FRoot))
+      .ToBe('Empty scope in --allow-net');
+  finally
+    Options.Free;
+  end;
+  Options := TGocciaCapabilityOptions.Create;
+  try
+    { A blank read scope would otherwise resolve to the working directory. }
+    Options.AllowOption(gcRead).Scopes.Add('');
+    Expect<string>(ScopeErrorMessage(Options,
+      TGocciaConfigPermissionRequest.Empty, False, FRoot))
+      .ToBe('Empty scope in --allow-read');
+  finally
+    Options.Free;
+  end;
+  Request := TGocciaConfigPermissionRequest.Empty;
+  SetLength(Request.Allow[gcNet].Scopes, 1);
+  Request.Allow[gcNet].Scopes[0] := '';
+  Message := ScopeErrorMessage(nil, Request, False, FRoot);
+  Expect<string>(Message).ToBe('Empty scope in allow-net');
+  { Every custom parser goes through the same grammar. }
+  Message := '';
+  try
+    TryHandleCapabilityArgument('--deny-net=a.test, ', 'Bare', []);
+  except
+    on E: TParseError do
+      Message := E.Message;
+  end;
+  Expect<string>(Message).ToBe('Empty scope in --deny-net=a.test, ');
 end;
 
 procedure TPermissionsTests.TestDescribeCapabilities;
