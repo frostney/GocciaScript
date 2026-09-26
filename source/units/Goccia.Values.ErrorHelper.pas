@@ -84,7 +84,8 @@ function CreatePermissionDeniedError(const ACapability,
   AScope: string): TGocciaObjectValue;
 
 { Raises CreatePermissionDeniedError. ASuggestion is host-side only: it reaches
-  CLI error output but never the guest, so it may name paths and flags. }
+  CLI error output but never the guest, so it may name paths and flags. The
+  throw marks it SuggestionIsHostOnly, whatever the created value is. }
 procedure ThrowPermissionDenied(const ACapability, AScope,
   ASuggestion: string);
 
@@ -482,7 +483,7 @@ begin
     else
       ClearErrorSourceLocation(ErrorObject);
   end;
-  raise TGocciaThrowValue.Create(ErrorValue, ASuggestion);
+  raise TGocciaThrowValue.Create(ErrorValue, ASuggestion, True);
 end;
 
 end.

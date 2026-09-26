@@ -53,6 +53,7 @@ type
     ErrorScope: string;
     Suggestion: string;
     Location: string;
+    SuggestionIsHostOnly: Boolean;
   end;
 
   TEngineCapabilitiesTests = class(TTestSuite)
@@ -398,11 +399,13 @@ begin
       begin
         CaptureThrown(E.Value, Result);
         Result.Suggestion := E.Suggestion;
+        Result.SuggestionIsHostOnly := E.SuggestionIsHostOnly;
       end;
       on E: EGocciaBytecodeThrow do
       begin
         CaptureThrown(E.ThrownValue, Result);
         Result.Suggestion := E.Suggestion;
+        Result.SuggestionIsHostOnly := E.SuggestionIsHostOnly;
       end;
       on E: Exception do
         Result.ErrorMessage := E.Message;
@@ -1600,6 +1603,11 @@ begin
   Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Interpreted.Location).ToBe('app.mjs:2:28');
   Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
+  { The throw marks the denial's suggestion host-only in both executors,
+    through the VM unwind too, so guest-bound output can drop it. }
+  Expect<Boolean>(Interpreted.Suggestion <> '').ToBe(True);
+  Expect<Boolean>(Interpreted.SuggestionIsHostOnly).ToBe(True);
+  Expect<Boolean>(Bytecode.SuggestionIsHostOnly).ToBe(True);
   Interpreted := Run(FFI_SOURCE, Grant);
   Bytecode := Run(FFI_SOURCE, Grant, True);
   Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
