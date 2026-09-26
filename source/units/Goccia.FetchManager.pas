@@ -482,7 +482,7 @@ begin
     Exit;
   end;
 
-  Result := FPolicy.Capabilities.AllowsNetAddress(AResolvedAddress);
+  Result := FPolicy.Capabilities.AllowsNetAddress(AResolvedAddress, APort);
   if Result then
     AReason := 'resolved to ' + AResolvedAddress +
       ', which the net capability allows'

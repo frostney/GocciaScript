@@ -29,6 +29,8 @@ type
     procedure TestClassifiesPublicAddressesAsRoutable;
     procedure TestRejectsObfuscatedLoopbackForms;
     procedure TestResolvesLiteralAddressWithoutLookup;
+    procedure TestResolvesLocalhostNamesToLoopback;
+    procedure TestResolvesAHostNameToDottedQuad;
     procedure TestDefaultPolicyPreservesHistoricalBehavior;
   end;
 
@@ -51,6 +53,10 @@ begin
     TestClassifiesPublicAddressesAsRoutable);
   Test('Rejects obfuscated loopback forms',
     TestRejectsObfuscatedLoopbackForms);
+  Test('Resolves localhost names to loopback without a lookup',
+    TestResolvesLocalhostNamesToLoopback);
+  Test('Resolves a host name to a dotted-quad address',
+    TestResolvesAHostNameToDottedQuad);
   Test('Resolves literal address without lookup',
     TestResolvesLiteralAddressWithoutLookup);
   Test('Default policy preserves historical behavior',
@@ -255,6 +261,43 @@ end;
 
 { A literal target must round-trip unchanged and perform no lookup, so
   pinning never introduces DNS traffic for a request that had none. }
+{ RFC 6761 section 6.3: `localhost` and every name under it are loopback,
+  answered without asking the platform resolver, whose view of them differs
+  per platform (and is absent for subdomains). }
+procedure THTTPClientTests.TestResolvesLocalhostNamesToLoopback;
+begin
+  Expect<string>(ResolveHostToAddress('localhost')).ToBe('127.0.0.1');
+  Expect<string>(ResolveHostToAddress('LOCALHOST.')).ToBe('127.0.0.1');
+  Expect<string>(ResolveHostToAddress('app.localhost')).ToBe('127.0.0.1');
+  Expect<Boolean>(IsPrivateNetworkAddress(
+    ResolveHostToAddress('app.localhost'))).ToBe(True);
+end;
+
+{ A name the platform resolver answers comes back as dotted-quad text. The
+  Windows lane formats the octets itself; this is what exercises it. }
+procedure THTTPClientTests.TestResolvesAHostNameToDottedQuad;
+var
+  Address, Name: string;
+  Dots, I: Integer;
+begin
+  {$IFDEF MSWINDOWS}
+  Name := GetEnvironmentVariable('COMPUTERNAME');
+  {$ELSE}
+  Name := '';
+  {$ENDIF}
+  if Name = '' then
+  begin
+    Expect<Boolean>(True).ToBe(True);
+    Exit;
+  end;
+  Address := ResolveHostToAddress(Name);
+  Dots := 0;
+  for I := 1 to Length(Address) do
+    if Address[I] = '.' then
+      Inc(Dots);
+  Expect<Integer>(Dots).ToBe(3);
+end;
+
 procedure THTTPClientTests.TestResolvesLiteralAddressWithoutLookup;
 begin
   Expect<string>(ResolveHostToAddress('93.184.216.34')).ToBe('93.184.216.34');
