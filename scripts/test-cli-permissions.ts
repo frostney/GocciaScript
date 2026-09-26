@@ -13,7 +13,19 @@
  * store explicitly with --trust-store.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -33,6 +45,12 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 const makeTmpUnresolved = makeTmpFactory("goccia-permissions-");
 const makeTmp = (): string => realpathSync.native(makeTmpUnresolved());
 const isWindows = process.platform === "win32";
+
+/** Removes a symbolic link itself; Bun's rmSync fails on a Windows directory link. */
+function removeLink(path: string): void {
+  if (isWindows) rmdirSync(path);
+  else unlinkSync(path);
+}
 
 type RunResult = { exitCode: number; stdout: string; stderr: string; combined: string };
 
@@ -1451,7 +1469,7 @@ console.log("Snapshot files committed as symbolic links are refused...");
 
     // A real directory works, for a bare file name too (it sits in the
     // working directory, not at the filesystem root).
-    rmSync(join(repo, "__snapshots__"));
+    removeLink(join(repo, "__snapshots__"));
     const real = run(TESTRUNNER, ["a.test.js", "-u", "--no-progress"], { cwd: repo });
     expectExit(real, 0, "snapshot beside a bare file name");
     if (!existsSync(join(repo, "__snapshots__", "a.test.js.snap")))
@@ -1706,7 +1724,7 @@ if (!isWindows) {
       expectExit(swapped, 1, `config "${key}" with out/ swapped mid-run`);
       expectIncludes(swapped.combined, `Refusing to write ${join(project, "out", file)}`, `config "${key}" with out/ swapped mid-run`);
       if (existsSync(join(outside, file))) throw new Error(`config "${key}" followed the swapped directory to ${outside}`);
-      rmSync(join(project, "out"));
+      removeLink(join(project, "out"));
       rmSync(join(project, "out.real"), { recursive: true, force: true });
     }
   } finally {
