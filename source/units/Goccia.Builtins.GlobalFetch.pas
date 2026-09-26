@@ -179,8 +179,7 @@ begin
   begin
     if Assigned(FCapabilityAuditEmitter) then
       FCapabilityAuditEmitter(gckNetFetch, gcdDeny, Host,
-        Format('the net capability does not allow port %d of this host',
-          [Parsed.Port]));
+        FCapabilities.ExplainNetHostDenial(Parsed.Host, Parsed.Port));
     ThrowPermissionDenied(CapabilityName(gcNet), NetDenialScope(Parsed),
       NetDenialSuggestion(Parsed.Host));
   end;

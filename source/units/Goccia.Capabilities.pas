@@ -48,12 +48,17 @@ type
 
   TGocciaCapabilityLayers = array of TGocciaCapabilityLayer;
 
+  TGocciaNetHostVerdict = (nhvAllowed, nhvDenied, nhvNotAllowed,
+    nhvPrivateNotNamed);
+
   TGocciaCapabilities = record
   private
     FLayers: TGocciaCapabilityLayers;
     function CopyWithScope(const ACapability: TGocciaCapability;
       const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
     function PrivateAddressNamed(const AAddressText: string): Boolean;
+    function NetHostVerdict(const AHost: string;
+      const APort: Integer): TGocciaNetHostVerdict;
   public
     { Grants nothing. The default for an engine created without a set. }
     class function None: TGocciaCapabilities; static;
@@ -111,6 +116,11 @@ type
       needs private ranges to be named (see AllowsNetAddress). }
     function AllowsNetHost(const AHost: string; const APort: Integer): Boolean;
 
+    { Why AllowsNetHost refuses AHost:APort, for audit reasons; empty when it
+      allows it. Host-side text: never shown to the guest. }
+    function ExplainNetHostDenial(const AHost: string;
+      const APort: Integer): string;
+
     { net, after name resolution: the resolved address of a request whose host
       already passed AllowsNetHost. Private, loopback, and link-local addresses
       are denied unless every layer names them, through the `private` scope or
@@ -159,6 +169,10 @@ uses
   NetworkAddress,
 
   Goccia.JSON.Utils;
+
+const
+  { Port argument that matches a scope whatever port it names. }
+  NET_ANY_PORT = -1;
 
 type
   TGocciaNetScopeKind = (nskPrivate, nskHost, nskWildcard, nskAddress,
@@ -441,7 +455,8 @@ function NetScopeMatchesHost(const ANetScope: TGocciaNetScope;
 var
   Suffix: string;
 begin
-  if (ANetScope.Port <> 0) and (ANetScope.Port <> APort) then
+  if (ANetScope.Port <> 0) and (APort <> NET_ANY_PORT) and
+     (ANetScope.Port <> APort) then
     Exit(False);
   case ANetScope.Kind of
     nskHost:
@@ -868,8 +883,8 @@ begin
   Result := True;
 end;
 
-function TGocciaCapabilities.AllowsNetHost(const AHost: string;
-  const APort: Integer): Boolean;
+function TGocciaCapabilities.NetHostVerdict(const AHost: string;
+  const APort: Integer): TGocciaNetHostVerdict;
 var
   Host: string;
   HostAddress: TNetworkAddress;
@@ -879,10 +894,10 @@ var
   Rule: TGocciaCapabilityRule;
 begin
   if Length(FLayers) = 0 then
-    Exit(False);
+    Exit(nhvNotAllowed);
   Host := NormalizeRequestHost(AHost);
   if Host = '' then
-    Exit(False);
+    Exit(nhvNotAllowed);
   HostIsAddress := TryParseIPAddress(Host, HostAddress);
   HostIsPrivate := HostIsAddress and IsPrivateIPAddress(HostAddress);
 
@@ -890,18 +905,18 @@ begin
   begin
     Rule := FLayers[I].Rules[gcNet];
     if Rule.DenyAll then
-      Exit(False);
+      Exit(nhvDenied);
     for J := 0 to High(Rule.DenyScopes) do
       if TryParseNetScope(Rule.DenyScopes[J], NetScope) then
       begin
         if NetScope.Kind = nskPrivate then
         begin
           if HostIsPrivate then
-            Exit(False);
+            Exit(nhvDenied);
         end
         else if NetScopeMatchesHost(NetScope, Host, HostIsAddress,
           HostAddress, APort) then
-          Exit(False);
+          Exit(nhvDenied);
       end;
   end;
 
@@ -919,12 +934,38 @@ begin
       Inc(J);
     end;
     if not LayerAllows then
-      Exit(False);
+      Exit(nhvNotAllowed);
   end;
 
-  if HostIsPrivate then
-    Exit(PrivateAddressNamed(Host));
-  Result := True;
+  if HostIsPrivate and not PrivateAddressNamed(Host) then
+    Exit(nhvPrivateNotNamed);
+  Result := nhvAllowed;
+end;
+
+function TGocciaCapabilities.AllowsNetHost(const AHost: string;
+  const APort: Integer): Boolean;
+begin
+  Result := NetHostVerdict(AHost, APort) = nhvAllowed;
+end;
+
+function TGocciaCapabilities.ExplainNetHostDenial(const AHost: string;
+  const APort: Integer): string;
+begin
+  case NetHostVerdict(AHost, APort) of
+    nhvAllowed:
+      Result := '';
+    nhvDenied:
+      Result := 'a net deny covers this host';
+    nhvPrivateNotNamed:
+      Result := 'the host is a private, loopback, or link-local address ' +
+        'the net capability does not name';
+  else
+    if NetHostVerdict(AHost, NET_ANY_PORT) = nhvAllowed then
+      Result := Format('the net capability does not allow port %d of this ' +
+        'host', [APort])
+    else
+      Result := 'the net capability does not allow this host';
+  end;
 end;
 
 function TGocciaCapabilities.AllowsNetAddress(

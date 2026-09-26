@@ -7275,6 +7275,25 @@ await section("Loader: --allowed-host blocks unlisted host...", async () => {
   }
 });
 
+await section("Loader: a denied fetch host is audited with the reason it was refused...", async () => {
+  const tmp = makeTmp();
+  try {
+    const cases: Array<[string, string]> = [
+      ["http://blocked.test/", "the net capability does not allow this host"],
+      ["http://example.com:8080/", "the net capability does not allow port 8080 of this host"],
+    ];
+    for (const [url, reason] of cases) {
+      const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
+      await $`echo ${`fetch("${url}");`} | ${LOADER} --allowed-host=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      const { events } = readCapabilityEvents(audit);
+      if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
+        throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: no --allowed-host blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");

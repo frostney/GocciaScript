@@ -49,6 +49,7 @@ type
     procedure TestNetEmbeddedIPv4Ranges;
     procedure TestNetCIDRZero;
     procedure TestDeniesPathsStartingWith;
+    procedure TestExplainNetHostDenial;
     procedure TestToJSON;
   public
     procedure SetupTests; override;
@@ -96,6 +97,8 @@ begin
     TestNetCIDRZero);
   Test('DeniesPathsStartingWith sees deny scopes a probe could reach',
     TestDeniesPathsStartingWith);
+  Test('ExplainNetHostDenial names the reason a host is refused',
+    TestExplainNetHostDenial);
   Test('ToJSON serializes every layer', TestToJSON);
 end;
 
@@ -774,6 +777,26 @@ begin
     RootPath('data/public'))).ToBe(False);
   Expect<Boolean>(TGocciaCapabilities.None.Deny(gcRead)
     .DeniesPathsStartingWith(gcRead, RootPath('any'))).ToBe(True);
+end;
+
+procedure TCapabilitiesTests.TestExplainNetHostDenial;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, 'api.example.com:8443')
+    .Deny(gcNet, 'blocked.example.com');
+  Expect<string>(Capabilities.ExplainNetHostDenial('api.example.com', 8443))
+    .ToBe('');
+  Expect<string>(Capabilities.ExplainNetHostDenial('other.example.com', 80))
+    .ToBe('the net capability does not allow this host');
+  Expect<string>(Capabilities.ExplainNetHostDenial('api.example.com', 443))
+    .ToBe('the net capability does not allow port 443 of this host');
+  Expect<string>(Capabilities.ExplainNetHostDenial('blocked.example.com', 80))
+    .ToBe('a net deny covers this host');
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet);
+  Expect<string>(Capabilities.ExplainNetHostDenial('10.0.0.1', 80))
+    .ToBe('the host is a private, loopback, or link-local address the net ' +
+      'capability does not name');
 end;
 
 procedure TCapabilitiesTests.TestToJSON;
