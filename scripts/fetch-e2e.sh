@@ -264,9 +264,9 @@ await fetch('http://93.184.216.34/')
 # front — the 302 then points at a private, off-allowlist address. Only per-hop
 # revalidation can catch that, and the PermissionDenied must name the redirect
 # target (10.255.255.1:1), not the initial host, proving the hop itself was
-# checked. A
-# regression that validates only the first request would instead attempt to
-# connect to the redirect target and fail with a different, connect-level error.
+# checked. A regression that validates only the first request would instead
+# attempt to connect to the redirect target and fail with a different,
+# connect-level error.
 #
 # --timeout bounds that regression: the fetch connect timeout derives from the
 # remaining execution budget (FetchManager: RequestTimeoutMilliseconds :=
