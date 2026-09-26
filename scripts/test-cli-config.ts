@@ -1693,6 +1693,31 @@ console.log("Executable manifests keep --deny-read in force...");
         throw new Error(`A manifest evaluated in place keeps its host imports (${mode}): ${inPlace.combined}`);
     }
 
+    // The same holds for a --globals module: host code while it is enrolled,
+    // but a function it exports runs later as guest code, so its import()
+    // is a guest read the deny refuses.
+    writeFileSync(
+      join(projDir, "host-globals.js"),
+      `export const readLater = () => import(${JSON.stringify(outside)});\n`,
+    );
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const late = runCwd(
+        LOADER,
+        [
+          join(projDir, "trampoline.mjs"),
+          "--no-host-filesystem",
+          `--mode=${mode}`,
+          `--globals=${join(projDir, "host-globals.js")}`,
+        ],
+        tmp,
+        { expectFail: true },
+      );
+      if (late.combined.includes("HOST-FILE-READ"))
+        throw new Error(`A --globals function imported as the host under --no-host-filesystem (${mode}): ${late.combined}`);
+      if (!late.combined.includes(`PermissionDenied: read: ${outside}`))
+        throw new Error(`A --globals function import should be refused by the read capability (${mode}): ${late.combined}`);
+    }
+
     writeFileSync(
       join(projDir, "manifest.test.js"),
       [

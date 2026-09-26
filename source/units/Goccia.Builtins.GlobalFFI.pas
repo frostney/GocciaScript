@@ -14,6 +14,12 @@ uses
   Goccia.Scope,
   Goccia.Values.Primitives;
 
+var
+  { Test seam: called after FFI.open's capability check passes and before
+    the library is loaded, so a test can change the filesystem in between.
+    Nil outside tests. }
+  GocciaFFIAfterOpenCheck: procedure = nil;
+
 type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
   private
@@ -42,6 +48,9 @@ type
 implementation
 
 uses
+  {$IFDEF FPC}{$IFDEF LINUX}
+  BaseUnix,
+  {$ENDIF}{$ENDIF}
   SysUtils,
 
   Goccia.Constants.PropertyNames,
@@ -184,11 +193,55 @@ begin
     (Pos(':', APath) = 0){$ENDIF};
 end;
 
+{ FFI.open judges the library's canonical path and then loads it. Between
+  the two a directory on that path could be swapped, so the load is pinned
+  to what was judged where the platform allows:
+
+  - Linux: the file is opened first, the kernel's path for that descriptor
+    is judged verbatim, and the loader maps the descriptor itself
+    (/proc/self/fd/N), so what is loaded is exactly what was judged.
+  - Windows: after loading, the path the loader reports for the module is
+    judged again; a library outside the grant is unloaded and refused.
+  - Elsewhere (macOS, BSD): after loading, the path is canonicalized again
+    and must still be the judged one; a swap that is undone again inside
+    the load window is not detectable there. }
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  LibPath, LoadPath, DenialDetail: string;
+  LibPath, LoadPath, DenialDetail, PinnedLoadPath: string;
   Allowed: Boolean;
   Handle: TGocciaFFILibraryHandle;
+  {$IFDEF FPC}{$IFDEF LINUX}
+  PinnedDescriptor: LongInt;
+  PinnedPath: string;
+  {$ENDIF}{$ENDIF}
+
+  procedure Deny(const ADetail: string);
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath,
+        'the ffi capability does not cover this library');
+    ThrowPermissionDenied(CapabilityName(gcFFI), LibPath, ADetail);
+  end;
+
+  function LoadedOutsideJudgedPath: Boolean;
+  var
+    Reported: string;
+  begin
+    {$IFDEF MSWINDOWS}
+    Reported := Handle.LoadedPath;
+    Result := (Reported = '') or
+      not FCapabilities.AllowsPath(gcFFI, Reported);
+    {$ELSE}
+      {$IFDEF LINUX}
+    Reported := '';
+    Result := False;
+      {$ELSE}
+    Reported := CanonicalCapabilityPath(LibPath);
+    Result := Reported <> LoadPath;
+      {$ENDIF}
+    {$ENDIF}
+  end;
+
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
@@ -215,21 +268,51 @@ begin
         ExtractFileDir(LoadPath)]);
   end;
   if not Allowed then
-  begin
-    if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath,
-        'the ffi capability does not cover this library');
-    ThrowPermissionDenied(CapabilityName(gcFFI), LibPath, DenialDetail);
-  end;
+    Deny(DenialDetail);
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
       'the ffi capability covers this library');
 
+  PinnedLoadPath := LoadPath;
+  {$IFDEF FPC}{$IFDEF LINUX}
+  PinnedDescriptor := -1;
+  if not IsBareLibraryName(LibPath) then
+  begin
+    PinnedDescriptor := FpOpen(LoadPath, O_RDONLY);
+    if PinnedDescriptor < 0 then
+      ThrowTypeError('Failed to load library: ' + LibPath,
+        SSuggestFFILibraryOpen);
+    PinnedLoadPath := '/proc/self/fd/' + IntToStr(PinnedDescriptor);
+    PinnedPath := fpReadLink(PinnedLoadPath);
+    if (PinnedPath = '') or
+       not FCapabilities.AllowsCanonicalPath(gcFFI, PinnedPath) then
+    begin
+      FpClose(PinnedDescriptor);
+      Deny(Format('the ffi capability does not cover %s', [PinnedPath]));
+    end;
+  end;
   try
-    Handle := TGocciaFFILibraryHandle.Create(LibPath, LoadPath);
-  except
-    on E: Exception do
-      ThrowTypeError(E.Message, SSuggestFFILibraryOpen);
+  {$ENDIF}{$ENDIF}
+    if Assigned(GocciaFFIAfterOpenCheck) then
+      GocciaFFIAfterOpenCheck;
+
+    try
+      Handle := TGocciaFFILibraryHandle.Create(LibPath, PinnedLoadPath);
+    except
+      on E: Exception do
+        ThrowTypeError(E.Message, SSuggestFFILibraryOpen);
+    end;
+  {$IFDEF FPC}{$IFDEF LINUX}
+  finally
+    if PinnedDescriptor >= 0 then
+      FpClose(PinnedDescriptor);
+  end;
+  {$ENDIF}{$ENDIF}
+
+  if (not IsBareLibraryName(LibPath)) and LoadedOutsideJudgedPath then
+  begin
+    Handle.ReleaseOwner;
+    Deny('the library changed between the ffi check and the load');
   end;
 
   try
