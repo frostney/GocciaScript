@@ -1321,8 +1321,9 @@ begin
           Found.Free;
         end;
       end
-      else
+      else if FileExists(APaths[I]) then
         Files.Add(APaths[I]);
+      { A missing path is reported by the run itself. }
     VerifyConfigPermissions(Files);
   finally
     Files.Free;
