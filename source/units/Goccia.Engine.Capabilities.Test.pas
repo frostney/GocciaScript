@@ -69,7 +69,8 @@ type
     function Run(const ASource: string;
       const ACapabilities: TGocciaCapabilities;
       const ABytecode: Boolean = False;
-      const AShadowRealm: Boolean = False): TRunOutcome;
+      const AShadowRealm: Boolean = False;
+      const AEntry: string = ''): TRunOutcome;
     function EventsOfKind(const AKind: string): Integer;
   protected
     procedure BeforeAll; override;
@@ -101,6 +102,7 @@ type
     procedure TestShadowRealmInheritsCapabilities;
     procedure TestFetchPolicyTravelsWithEachEngine;
     procedure TestSymlinkOutOfProjectNeedsRead;
+    procedure TestGrantedNodeModulesArePartOfTheGraph;
   public
     procedure SetupTests; override;
   end;
@@ -153,6 +155,8 @@ begin
     TestFetchPolicyTravelsWithEachEngine);
   Test('A symlink inside the project to a file outside it needs read',
     TestSymlinkOutOfProjectNeedsRead);
+  Test('Packages reached through a granted node_modules scope need no read',
+    TestGrantedNodeModulesArePartOfTheGraph);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -199,7 +203,10 @@ begin
   WriteFile(ProjectPath('node_modules/pkg/package.json'),
     '{"name":"pkg","type":"module","exports":"./index.js"}');
   WriteFile(ProjectPath('node_modules/pkg/index.js'),
-    'export const value = "package";');
+    'import { detail } from "./detail.js"; export const value = detail;');
+  WriteFile(ProjectPath('node_modules/pkg/detail.js'),
+    'export const detail = "package";');
+  WriteFile(ProjectPath('nested/goccia.json'), '{}');
   FEvents := TStringList.Create;
   FEventSources := TStringList.Create;
 end;
@@ -270,7 +277,7 @@ end;
 
 function TEngineCapabilitiesTests.Run(const ASource: string;
   const ACapabilities: TGocciaCapabilities; const ABytecode: Boolean;
-  const AShadowRealm: Boolean): TRunOutcome;
+  const AShadowRealm: Boolean; const AEntry: string): TRunOutcome;
 var
   Source: TStringList;
   Executor: TGocciaExecutor;
@@ -284,8 +291,11 @@ begin
     Executor := TGocciaBytecodeExecutor.Create
   else
     Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
-    ACapabilities);
+  if AEntry <> '' then
+    Engine := TGocciaEngine.Create(AEntry, Source, Executor, ACapabilities)
+  else
+    Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+      ACapabilities);
   try
     Engine.CapabilityAuditSink := RecordEvent;
     AttachRuntime(Engine);
@@ -1055,6 +1065,37 @@ begin
   {$ELSE}
   Expect<Boolean>(True).ToBe(True);
   {$ENDIF}
+end;
+
+{ The nested project's root is <project>/nested, so the package in
+  <project>/node_modules lies outside it. Reached through the import grant,
+  the package and its own literal imports belong to the module graph. }
+procedure TEngineCapabilitiesTests.TestGrantedNodeModulesArePartOfTheGraph;
+const
+  SOURCE_TEXT = 'import { value } from "pkg"; globalThis.result = value;';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('package');
+  Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
+
+  { A ceiling below the package's node_modules does not cover it. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport,
+      IMPORT_NODE_MODULES_SCOPE + '=' + ProjectPath('nested')),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<Boolean>(Outcome.Result <> 'package').ToBe(True);
+
+  { A deny still wins over the exemption. }
+  Outcome := Run(SOURCE_TEXT,
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE)
+      .Deny(gcRead, ProjectPath('node_modules/pkg/detail.js')),
+    False, False, ProjectPath('nested/app.mjs'));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
 end;
 
 begin

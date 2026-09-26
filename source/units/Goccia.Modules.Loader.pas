@@ -110,6 +110,7 @@ type
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
     function IsHostRequest(const ASpecifier,
       AImportingFilePath: string): Boolean;
+    function IsInGrantedNodeModules(const APath: string): Boolean;
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
@@ -801,6 +802,10 @@ begin
   if AIsLiteral and (FProjectRoot <> '') and
      IsPathWithinScope(CanonicalPath, FProjectRoot) then
     Exit;
+  { Packages the import capability grants are part of the module graph too:
+    the package a bare specifier resolved to, and its own literal imports. }
+  if AIsLiteral and IsInGrantedNodeModules(APath) then
+    Exit;
 
   Allowed := FCapabilities.AllowsPath(gcRead, CanonicalPath);
   if (not Allowed) and APreResolution then
@@ -1458,6 +1463,33 @@ begin
   end;
   if Assigned(Result) then
     Result.IsHostOwned := True;
+end;
+
+{ True when APath lies in a node_modules directory whose owner the import
+  capability grants the node_modules walk for (ADR 0122). Compared on the
+  expanded spelling, as node_modules ceilings are. }
+function TGocciaModuleLoader.IsInGrantedNodeModules(
+  const APath: string): Boolean;
+const
+  NODE_MODULES_SEGMENT = PathDelim + 'node_modules' + PathDelim;
+var
+  Expanded, Owner, Ceiling: string;
+  SegmentIndex, SearchFrom: Integer;
+begin
+  Expanded := ExpandFileName(APath);
+  SegmentIndex := 0;
+  SearchFrom := Pos(NODE_MODULES_SEGMENT, Expanded);
+  while SearchFrom > 0 do
+  begin
+    SegmentIndex := SearchFrom;
+    SearchFrom := PosEx(NODE_MODULES_SEGMENT, Expanded, SegmentIndex + 1);
+  end;
+  if SegmentIndex = 0 then
+    Exit(False);
+  Owner := Copy(Expanded, 1, SegmentIndex - 1);
+  if Owner = '' then
+    Owner := PathDelim;
+  Result := FCapabilities.NodeModulesCeiling(Owner, Ceiling);
 end;
 
 { Whether a module request is made by the host rather than by guest code:
