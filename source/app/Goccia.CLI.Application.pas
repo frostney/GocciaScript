@@ -297,15 +297,33 @@ type
     function FormatForHelp: string; override;
   end;
 
-  { `--trust-store=<path>`. }
+  { `--trust-store=<path>`. The path attaches only with `=`, so the option
+    never takes the next argument, an input file, as its value. }
   TPathOption = class(TStringOption)
   public
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
+    function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
   end;
 
 function TPathListOption.FormatForHelp: string;
 begin
   Result := '--' + LongName + ' <path>';
+end;
+
+procedure TPathOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  if (not AHasEquals) or (AValue = '') then
+    raise TCLIUsageError.CreateFmt('--%s needs a path: --%s=<path>',
+      [LongName, LongName]);
+  Apply(AValue);
+end;
+
+function TPathOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := False;
 end;
 
 function TPathOption.FormatForHelp: string;
@@ -636,8 +654,6 @@ begin
   AProblem := '';
   if FTrustStore.Present then
   begin
-    if FTrustStore.Value = '' then
-      raise TParseError.Create('--trust-store needs a file path');
     Exit(ExpandFileName(FTrustStore.Value));
   end;
   Result := TGocciaTrustStore.DefaultPath(@GetEnvironmentValue);

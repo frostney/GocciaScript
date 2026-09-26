@@ -1001,6 +1001,17 @@ console.log("-P and --ignore-config-permissions decide for one run...");
     expectExit(trustedDeny, 0, "CLI deny over trusted allow");
     expectIncludes(trustedDeny.stdout, "PermissionDenied net: 127.0.0.1:1", "CLI deny over trusted allow");
 
+    // --trust-store takes its path after "=", so it never swallows an input;
+    // -P never takes a value.
+    for (const args of [["--trust-store", join(project, "loopback.js")], ["--trust-store="]]) {
+      const storeArg = run(LOADER, args, { cwd: tmp });
+      expectExit(storeArg, 2, args.join(" "));
+      expectIncludes(storeArg.stderr, 'Error: --trust-store needs a path: --trust-store=<path>', args.join(" "));
+    }
+    const shortValue = run(LOADER, ["-P=1", join(project, "loopback.js")]);
+    expectExit(shortValue, 2, "-P=1");
+    expectIncludes(shortValue.stderr, 'Error: -P does not take a value; got "1"', "-P=1");
+
     // 18. -P and --ignore-config-permissions cannot be combined.
     const both = run(LOADER, ["-P", "--ignore-config-permissions", join(project, "loopback.js")]);
     expectExit(both, 2, "-P with --ignore-config-permissions");
