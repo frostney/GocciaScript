@@ -650,7 +650,7 @@ not; a `--trust-store` directory is left as it is. The file is written `0600`
 from creation, before it replaces the store. A run reads the store once and
 never locks it. A writer takes an exclusive operating-system lock on
 `trust.json.lock` (`flock` on Linux and macOS, `LockFileEx` on Windows),
-retrying for 2 seconds and then failing with an error that names the lock
+retrying for 10 seconds and then failing with an error that names the lock
 file. It applies its changes to the store as it is on disk at that moment and
 replaces the file in one rename, so concurrent readers and writers always see
 a whole store and no writer's change is lost. The system releases the lock

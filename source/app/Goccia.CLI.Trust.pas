@@ -337,7 +337,9 @@ const
   TARGETS_KEY = 'targets';
   LOCK_SUFFIX = '.lock';
   TEMPORARY_SUFFIX = '.tmp';
-  LOCK_TIMEOUT_MILLISECONDS = 2000;
+  { Long enough for a queue of concurrent writers on a slow disk; the OS
+    lock is released if its holder dies, so waiting is never for a ghost. }
+  LOCK_TIMEOUT_MILLISECONDS = 10000;
   LOCK_RETRY_MILLISECONDS = 50;
   { Initial capacities: a normalized block, a whole store, a report. They
     only size the first allocation; the buffers grow as needed. }
