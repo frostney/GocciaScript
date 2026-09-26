@@ -312,6 +312,16 @@ begin
     (APort <= MAX_PORT) and (Pos('+', AText) = 0) and (Pos('-', AText) = 0);
 end;
 
+{ A fully qualified name's trailing dot names the same host, so one is
+  dropped before matching; otherwise `host.` would slip past a deny on
+  `host`. }
+function StripTrailingDot(const AHost: string): string;
+begin
+  Result := AHost;
+  if (Length(Result) > 1) and (Result[Length(Result)] = '.') then
+    Delete(Result, Length(Result), 1);
+end;
+
 function TryParseNetScope(const AScope: string;
   out ANetScope: TGocciaNetScope): Boolean;
 var
@@ -384,6 +394,7 @@ begin
   if Pos(':', HostPart) > 0 then
     Exit;
 
+  HostPart := StripTrailingDot(HostPart);
   if Copy(HostPart, 1, 2) = '*.' then
   begin
     ANetScope.Kind := nskWildcard;
@@ -413,6 +424,7 @@ begin
   if (Length(Result) >= 2) and (Result[1] = '[') and
      (Result[Length(Result)] = ']') then
     Result := Copy(Result, 2, Length(Result) - 2);
+  Result := StripTrailingDot(Result);
 end;
 
 { Whether a non-private scope names this destination. APort of zero means the
