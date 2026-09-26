@@ -77,10 +77,14 @@ unscoped and no layer has an `ffi` deny scope.
 
 Host scopes are matched against the URL's host before any name lookup, so a
 refused request never becomes an observable side effect. One trailing dot is
-ignored on both sides, so `tracker.example.com.` is the host
-`tracker.example.com`. An IP or CIDR scope matches only a URL that names an
+ignored on both sides, for names and IPv4 literals alike, so
+`tracker.example.com.` is the host `tracker.example.com` and `127.0.0.1.` the
+address `127.0.0.1`. An IP or CIDR scope matches only a URL that names an
 address; host names are never resolved to match one. An IPv4-mapped IPv6
-address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names.
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names, and
+an IP or CIDR scope also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
+(`2002::/16`) address reaches: a deny on `169.254.169.254` covers
+`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address

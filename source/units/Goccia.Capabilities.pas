@@ -405,7 +405,9 @@ begin
       Exit;
   end;
 
-  if TryParseIPAddress(HostPart, ANetScope.Address) then
+  { One trailing dot is dropped for an IP literal as for a name, matching
+    NormalizeRequestHost on the request side. }
+  if TryParseIPAddress(StripTrailingDot(HostPart), ANetScope.Address) then
   begin
     ANetScope.Kind := nskAddress;
     Exit(True);
@@ -447,6 +449,33 @@ begin
   Result := StripTrailingDot(Result);
 end;
 
+function ScopeCoversExactAddress(const ANetScope: TGocciaNetScope;
+  const AAddress: TNetworkAddress): Boolean;
+begin
+  case ANetScope.Kind of
+    nskAddress:
+      Result := AddressesEqual(AAddress, ANetScope.Address);
+    nskCIDR:
+      Result := IsAddressInNetwork(AAddress, ANetScope.Address,
+        ANetScope.PrefixLength);
+  else
+    Result := False;
+  end;
+end;
+
+{ An IP or CIDR scope covers an address, or the IPv4 host a NAT64 or 6to4
+  address reaches: those spellings name the IPv4 host as surely as the
+  ::ffff: form TryParseIPAddress already unmaps. }
+function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
+  const AAddress: TNetworkAddress): Boolean;
+var
+  Translated: TNetworkAddress;
+begin
+  Result := ScopeCoversExactAddress(ANetScope, AAddress) or
+    (TryGetTranslatedIPv4(AAddress, Translated) and
+     ScopeCoversExactAddress(ANetScope, Translated));
+end;
+
 { Whether a non-private scope names this destination. APort of zero means the
   request did not state one, which only an unported scope can match. }
 function NetScopeMatchesHost(const ANetScope: TGocciaNetScope;
@@ -467,26 +496,9 @@ begin
         Result := (not AHostIsAddress) and (Length(AHost) > Length(Suffix)) and
           (Copy(AHost, Length(AHost) - Length(Suffix) + 1, MaxInt) = Suffix);
       end;
-    nskAddress:
+    nskAddress, nskCIDR:
       Result := AHostIsAddress and
-        AddressesEqual(AHostAddress, ANetScope.Address);
-    nskCIDR:
-      Result := AHostIsAddress and IsAddressInNetwork(AHostAddress,
-        ANetScope.Address, ANetScope.PrefixLength);
-  else
-    Result := False;
-  end;
-end;
-
-function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
-  const AAddress: TNetworkAddress): Boolean;
-begin
-  case ANetScope.Kind of
-    nskAddress:
-      Result := AddressesEqual(AAddress, ANetScope.Address);
-    nskCIDR:
-      Result := IsAddressInNetwork(AAddress, ANetScope.Address,
-        ANetScope.PrefixLength);
+        NetScopeCoversAddress(ANetScope, AHostAddress);
   else
     Result := False;
   end;
