@@ -16,18 +16,25 @@ uses
 const
   DEFAULT_SANDBOX_BYTE_QUOTA = 16 * 1024 * 1024;
   DEFAULT_SANDBOX_NODE_QUOTA = 4096;
+  { The diff formats of runScript's `diff` option and `goccia --diff=`. A
+    JSON diff always carries timestamp metadata; a unified one never does. }
+  SANDBOX_DIFF_FORMAT_JSON = 'json';
+  SANDBOX_DIFF_FORMAT_UNIFIED = 'unified';
 
 type
   TGocciaSandboxContext = class;
 
-  TGocciaSandboxSeedKind = (
-    sskParentPath,
-    sskText,
-    sskBytes
+  { What a nested run copies into its isolated child filesystem: a path of
+    the parent sandbox (runScript's `copy` / `goccia --copy`, the analogue
+    of GocciaRunner's --copy), or inline text or bytes. }
+  TGocciaSandboxCopyKind = (
+    sckParentPath,
+    sckText,
+    sckBytes
   );
 
-  TGocciaSandboxSeedSpec = record
-    Kind: TGocciaSandboxSeedKind;
+  TGocciaSandboxCopySpec = record
+    Kind: TGocciaSandboxCopyKind;
     FromPath: string;
     ToPath: string;
     ToDirectory: Boolean;
@@ -36,13 +43,13 @@ type
     Bytes: TBytes;
   end;
 
-  TGocciaSandboxSeedSpecArray = array of TGocciaSandboxSeedSpec;
+  TGocciaSandboxCopySpecArray = array of TGocciaSandboxCopySpec;
 
   TGocciaSandboxRunOptions = record
     Isolated: Boolean;
-    Seeds: TGocciaSandboxSeedSpecArray;
+    Copies: TGocciaSandboxCopySpecArray;
     IncludeDiff: Boolean;
-    DiffMetadata: Boolean;
+    { SANDBOX_DIFF_FORMAT_JSON or SANDBOX_DIFF_FORMAT_UNIFIED. }
     DiffFormat: string;
   end;
 
@@ -57,7 +64,7 @@ type
     The dividing line is who is at fault, so nothing the guest can
     trigger may classify as sfkHostError: a guest that can name its own
     failure kind has erased the distinction the type exists to draw.
-    Anything the guest chose — a path it passed, a seed it asked for, a
+    Anything the guest chose — a path it passed, a copy it asked for, a
     ceiling it ran into — is its own error or the ceiling it hit.
 
     sfkChildProcessCrash is reserved and never produced in-process: a
@@ -69,7 +76,7 @@ type
     sfkNone,
     { The guest program failed: it threw, failed to parse or link, or
       named a path that the sandbox filesystem does not have — its own
-      entry path, or a path it asked to seed a child from. }
+      entry path, or a path it asked to copy into a child. }
     sfkScriptError,
     { A host-set resource ceiling refused the run: memory budget,
       instruction limit, sandbox filesystem quota, or nesting depth. }
@@ -114,7 +121,7 @@ type
 
     function HandleShellCommand(const ACommand: string;
       const AArgs: TStringArray; var AResult: TExecResult): Boolean;
-    procedure AddParentPathSeed(var AOptions: TGocciaSandboxRunOptions;
+    procedure AddParentPathCopy(var AOptions: TGocciaSandboxRunOptions;
       const ASpec: string);
     function ParseShellRunOptions(const AArgs: TStringArray;
       out AEntryPath: string; out AOptions: TGocciaSandboxRunOptions;
@@ -181,20 +188,19 @@ end;
 function DefaultSandboxRunOptions: TGocciaSandboxRunOptions;
 begin
   Result.Isolated := False;
-  Result.Seeds := nil;
+  Result.Copies := nil;
   Result.IncludeDiff := False;
-  Result.DiffMetadata := False;
-  Result.DiffFormat := 'json';
+  Result.DiffFormat := SANDBOX_DIFF_FORMAT_JSON;
 end;
 
-procedure AppendSeedSpec(var AOptions: TGocciaSandboxRunOptions;
-  const ASeed: TGocciaSandboxSeedSpec);
+procedure AppendCopySpec(var AOptions: TGocciaSandboxRunOptions;
+  const ACopy: TGocciaSandboxCopySpec);
 var
   Index: Integer;
 begin
-  Index := Length(AOptions.Seeds);
-  SetLength(AOptions.Seeds, Index + 1);
-  AOptions.Seeds[Index] := ASeed;
+  Index := Length(AOptions.Copies);
+  SetLength(AOptions.Copies, Index + 1);
+  AOptions.Copies[Index] := ACopy;
 end;
 
 function HasPrefix(const AValue, APrefix: string): Boolean;
@@ -235,13 +241,13 @@ begin
   FBaseline := FFs.Fork;
 end;
 
-procedure TGocciaSandboxContext.AddParentPathSeed(
+procedure TGocciaSandboxContext.AddParentPathCopy(
   var AOptions: TGocciaSandboxRunOptions; const ASpec: string);
 var
   SeparatorIndex: Integer;
   SourcePath: string;
   TargetPath: string;
-  Seed: TGocciaSandboxSeedSpec;
+  CopySpec: TGocciaSandboxCopySpec;
 begin
   SeparatorIndex := Pos('=', ASpec);
   if SeparatorIndex > 0 then
@@ -255,17 +261,17 @@ begin
     TargetPath := '';
   end;
 
-  Seed.Kind := sskParentPath;
-  Seed.FromPath := FFs.Normalize(SourcePath, FShell.WorkingDirectory);
+  CopySpec.Kind := sckParentPath;
+  CopySpec.FromPath := FFs.Normalize(SourcePath, FShell.WorkingDirectory);
   if TargetPath = '' then
-    Seed.ToPath := Seed.FromPath
+    CopySpec.ToPath := CopySpec.FromPath
   else
-    Seed.ToPath := FFs.Normalize(TargetPath, '/');
-  Seed.ToDirectory := IsDirectoryTargetPath(TargetPath);
-  Seed.Path := '';
-  Seed.Text := '';
-  Seed.Bytes := nil;
-  AppendSeedSpec(AOptions, Seed);
+    CopySpec.ToPath := FFs.Normalize(TargetPath, '/');
+  CopySpec.ToDirectory := IsDirectoryTargetPath(TargetPath);
+  CopySpec.Path := '';
+  CopySpec.Text := '';
+  CopySpec.Bytes := nil;
+  AppendCopySpec(AOptions, CopySpec);
   AOptions.Isolated := True;
 end;
 
@@ -292,36 +298,48 @@ begin
       AOptions.IncludeDiff := True;
       AOptions.Isolated := True;
     end
-    else if Arg = '--diff-metadata' then
+    else if HasPrefix(Arg, '--diff=') then
     begin
-      AOptions.DiffMetadata := True;
+      AOptions.DiffFormat := Copy(Arg, Length('--diff=') + 1, MaxInt);
+      if (AOptions.DiffFormat <> SANDBOX_DIFF_FORMAT_JSON) and
+         (AOptions.DiffFormat <> SANDBOX_DIFF_FORMAT_UNIFIED) then
+      begin
+        AError := '--diff must be json or unified';
+        Exit;
+      end;
       AOptions.IncludeDiff := True;
       AOptions.Isolated := True;
     end
-    else if Arg = '--seed' then
+    else if Arg = '--copy' then
     begin
       Inc(Index);
       if Index > High(AArgs) then
       begin
-        AError := '--seed requires a value';
+        AError := '--copy requires a value';
         Exit;
       end;
-      AddParentPathSeed(AOptions, AArgs[Index]);
+      AddParentPathCopy(AOptions, AArgs[Index]);
     end
-    else if HasPrefix(Arg, '--seed=') then
-      AddParentPathSeed(AOptions, Copy(Arg, Length('--seed=') + 1, MaxInt))
-    else if Arg = '--diff-format' then
+    else if HasPrefix(Arg, '--copy=') then
+      AddParentPathCopy(AOptions, Copy(Arg, Length('--copy=') + 1, MaxInt))
+    { The pre-0.14 names fail with their replacement rather than being read
+      as an entry path. }
+    else if (Arg = '--seed') or HasPrefix(Arg, '--seed=') then
     begin
-      Inc(Index);
-      if Index > High(AArgs) then
-      begin
-        AError := '--diff-format requires json or unified';
-        Exit;
-      end;
-      AOptions.DiffFormat := AArgs[Index];
+      AError := '--seed was removed; use --copy <from>[=<to>]';
+      Exit;
     end
-    else if HasPrefix(Arg, '--diff-format=') then
-      AOptions.DiffFormat := Copy(Arg, Length('--diff-format=') + 1, MaxInt)
+    else if (Arg = '--diff-format') or HasPrefix(Arg, '--diff-format=') then
+    begin
+      AError := '--diff-format was removed; use --diff=json or --diff=unified';
+      Exit;
+    end
+    else if Arg = '--diff-metadata' then
+    begin
+      AError := '--diff-metadata was removed; JSON diffs always include ' +
+        'timestamp metadata (use --diff)';
+      Exit;
+    end
     else if AEntryPath = '' then
       AEntryPath := Arg
     else
@@ -334,14 +352,8 @@ begin
 
   if AEntryPath = '' then
   begin
-    AError :=
-      'expected: goccia [--sandbox] [--seed <from[=to]>] <sandbox-entry.js>';
-    Exit;
-  end;
-
-  if (AOptions.DiffFormat <> 'json') and (AOptions.DiffFormat <> 'unified') then
-  begin
-    AError := '--diff-format must be json or unified';
+    AError := 'expected: goccia [--sandbox] [--copy <from[=to]>] ' +
+      '[--diff[=json|unified]] <sandbox-entry.js>';
     Exit;
   end;
 

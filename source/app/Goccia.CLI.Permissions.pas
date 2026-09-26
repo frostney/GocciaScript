@@ -11,7 +11,8 @@ unit Goccia.CLI.Permissions;
 
   The top-level `unsafe-function-constructor` and `unsafe-shadowrealm` keys
   are requests too: they enable dynamic code generation, so they need the same
-  acceptance as an allow.
+  acceptance as an allow. So is a `sandbox` section, which GocciaRunner reads
+  to copy host files into its sandbox and write changed ones back.
 
   A request is not a grant: the application decides whether to accept it. The
   config trust store (Goccia.CLI.Trust) records a SHA-256 of the request's
@@ -44,21 +45,57 @@ type
     function RequestsAny: Boolean;
   end;
 
+  { One `copy` or `copy-rw` entry of a config's `sandbox` section, in the
+    `--copy` grammar `<host>[=<sandbox>]`. }
+  TGocciaSandboxInputRequest = record
+    { The entry as written. }
+    Spec: string;
+    { The host part, made absolute against the declaring file's directory. }
+    HostPath: string;
+    { The sandbox part as written; '' when the entry has none. }
+    SandboxPath: string;
+    ReadWrite: Boolean;
+    { The file that declares the entry. }
+    SourcePath: string;
+  end;
+  TGocciaSandboxInputRequests = array of TGocciaSandboxInputRequest;
+
+  { A config's `sandbox` section (GocciaRunner's sandbox mode). With
+    `extends`, the child overrides the base key by key. }
+  TGocciaSandboxRequest = record
+    { The effective config has a `sandbox` object, even an empty one. }
+    Declared: Boolean;
+    { The nearest file that declares a `sandbox` object. }
+    SourcePath: string;
+    { `copy` then `copy-rw` entries, each in declaration order. }
+    Inputs: TGocciaSandboxInputRequests;
+    Entry: string;
+    { '', SANDBOX_DIFF_DEFAULT (`true`: a diff in the default format, or the
+      one the diff file's extension names), `json`, or `unified`. }
+    Diff: string;
+    { Absolute, against the declaring file's directory; '' when absent. }
+    DiffFile: string;
+    DiffFileSourcePath: string;
+  end;
+
   TGocciaConfigPermissionRequest = record
     ConfigPath: string;
     Allow: array[TGocciaCapability] of TGocciaPermissionScopes;
     Deny: array[TGocciaCapability] of TGocciaPermissionScopes;
     { The unsafe-* keys set to true in the effective config. }
     Unsafe: TGocciaUnsafeRequests;
+    Sandbox: TGocciaSandboxRequest;
     class function Empty: TGocciaConfigPermissionRequest; static;
-    { True when some allow-* key asks for something, or an unsafe-* key is
-      true. A deny-only block asks for nothing. }
+    { True when some allow-* key asks for something, an unsafe-* key is true,
+      or a sandbox section is declared. A deny-only block asks for nothing. }
     function RequestsGrants: Boolean;
-    { As RequestsGrants, counting only the capabilities in AHonored, and the
-      unsafe-* keys only when AHonorsUnsafe. }
+    { As RequestsGrants, counting only the capabilities in AHonored, the
+      unsafe-* keys only when AHonorsUnsafe, and a sandbox section only when
+      AHonorsSandbox. }
     function RequestsHonoredGrants(
       const AHonored: TGocciaHonoredCapabilities;
-      const AHonorsUnsafe: Boolean = True): Boolean;
+      const AHonorsUnsafe: Boolean = True;
+      const AHonorsSandbox: Boolean = False): Boolean;
   end;
 
   { A malformed permissions block: an unknown key or a value of the wrong
@@ -67,6 +104,9 @@ type
 
 const
   PERMISSIONS_CONFIG_KEY = 'permissions';
+  SANDBOX_CONFIG_KEY = 'sandbox';
+  { TGocciaSandboxRequest.Diff for `"diff": true`. }
+  SANDBOX_DIFF_DEFAULT = 'true';
   { What an import scope must name, for the missing-scope errors. }
   IMPORT_SCOPE_REQUIREMENT =
     'node_modules[=<dir>] or a provider such as github';
@@ -102,14 +142,16 @@ function ReadConfigPermissionRequest(const AEntries: TConfigEntryArray;
   const AConfigPath: string): TGocciaConfigPermissionRequest;
 
 { One message per capability the request asks to allow that AHonored does
-  not include, and per unsafe-* request when not AHonorsUnsafe:
+  not include, per unsafe-* request when not AHonorsUnsafe, and for a sandbox
+  section when not AHonorsSandbox:
   `requests allow-<cap>, which <Program> cannot grant; ignoring it`. Callers
   prefix the config path in their own output format. }
 function UnsupportedRequestWarnings(
   const ARequest: TGocciaConfigPermissionRequest;
   const AHonored: TGocciaHonoredCapabilities;
   const AProgramName: string;
-  const AHonorsUnsafe: Boolean = True): TGocciaCapabilityScopes;
+  const AHonorsUnsafe: Boolean = True;
+  const AHonorsSandbox: Boolean = False): TGocciaCapabilityScopes;
 
 { The request as canonical JSON: compact, object keys in byte order, each
   capability's scopes deduplicated and sorted, a capability with an unscoped
@@ -266,16 +308,18 @@ end;
 
 function TGocciaConfigPermissionRequest.RequestsGrants: Boolean;
 begin
-  Result := RequestsHonoredGrants(ALL_CAPABILITIES, True);
+  Result := RequestsHonoredGrants(ALL_CAPABILITIES, True, True);
 end;
 
 function TGocciaConfigPermissionRequest.RequestsHonoredGrants(
   const AHonored: TGocciaHonoredCapabilities;
-  const AHonorsUnsafe: Boolean): Boolean;
+  const AHonorsUnsafe, AHonorsSandbox: Boolean): Boolean;
 var
   Capability: TGocciaCapability;
 begin
   if AHonorsUnsafe and (Unsafe <> []) then
+    Exit(True);
+  if AHonorsSandbox and Sandbox.Declared then
     Exit(True);
   for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
     if (Capability in AHonored) and Allow[Capability].RequestsAny then
@@ -322,6 +366,190 @@ begin
   Result := False;
 end;
 
+const
+  SANDBOX_KEY_PREFIX = SANDBOX_CONFIG_KEY + '.';
+  SANDBOX_COPY_KEY = 'copy';
+  SANDBOX_COPY_READ_WRITE_KEY = 'copy-rw';
+  SANDBOX_ENTRY_KEY = 'entry';
+  SANDBOX_DIFF_KEY = 'diff';
+  SANDBOX_DIFF_FILE_KEY = 'diff-file';
+  SANDBOX_REMOVED_FILES_KEY = 'files';
+  SANDBOX_VALID_KEYS = 'copy, copy-rw, entry, diff, diff-file';
+  DIFF_FORMAT_JSON = 'json';
+  DIFF_FORMAT_UNIFIED = 'unified';
+
+type
+  TSandboxKey = (skCopy, skCopyReadWrite, skEntry, skDiff, skDiffFile);
+  TSandboxKeys = set of TSandboxKey;
+
+function TryParseSandboxKey(const AKey: string; out ASandboxKey: TSandboxKey):
+  Boolean;
+begin
+  Result := True;
+  ASandboxKey := skCopy;
+  if AKey = SANDBOX_COPY_KEY then
+    ASandboxKey := skCopy
+  else if AKey = SANDBOX_COPY_READ_WRITE_KEY then
+    ASandboxKey := skCopyReadWrite
+  else if AKey = SANDBOX_ENTRY_KEY then
+    ASandboxKey := skEntry
+  else if AKey = SANDBOX_DIFF_KEY then
+    ASandboxKey := skDiff
+  else if AKey = SANDBOX_DIFF_FILE_KEY then
+    ASandboxKey := skDiffFile
+  else
+    Result := False;
+end;
+
+{ Splits `<host>[=<sandbox>]` at its first `=`. }
+procedure SplitSandboxInputSpec(const ASpec: string; out AHost,
+  ASandbox: string);
+var
+  Separator: Integer;
+begin
+  Separator := Pos('=', ASpec);
+  if Separator > 0 then
+  begin
+    AHost := Copy(ASpec, 1, Separator - 1);
+    ASandbox := Copy(ASpec, Separator + 1, MaxInt);
+  end
+  else
+  begin
+    AHost := ASpec;
+    ASandbox := '';
+  end;
+end;
+
+{ Reads the `sandbox` and `sandbox.*` entries into ARequest. Entries arrive
+  child first, so the first file to declare a key keeps it. }
+procedure ReadSandboxEntry(var ARequest: TGocciaSandboxRequest;
+  var ADeclaredKeys: TSandboxKeys; var AKeySources: array of string;
+  const AEntry: TConfigEntry; const ALocation: string);
+var
+  SubKey, HostPart, SandboxPart: string;
+  SandboxKey: TSandboxKey;
+  Overridden: Boolean;
+  Input: TGocciaSandboxInputRequest;
+
+  procedure RequireString(const AAllowArray: Boolean);
+  begin
+    if (AEntry.Kind <> cvkString) or (AEntry.InArray and not AAllowArray) then
+    begin
+      if AAllowArray then
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" must be a string or an array of strings in the --copy ' +
+          'grammar <host>[=<sandbox>]', [ALocation, AEntry.Key])
+      else
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" must be a string', [ALocation, AEntry.Key]);
+    end;
+  end;
+
+begin
+  if AEntry.Key = SANDBOX_CONFIG_KEY then
+  begin
+    if AEntry.Kind <> cvkObject then
+      raise EGocciaConfigPermissionError.CreateFmt(
+        '%s: "%s" must be an object with %s keys',
+        [ALocation, SANDBOX_CONFIG_KEY, SANDBOX_VALID_KEYS]);
+    if not ARequest.Declared then
+    begin
+      ARequest.Declared := True;
+      ARequest.SourcePath := ALocation;
+    end;
+    Exit;
+  end;
+
+  if not ARequest.Declared then
+  begin
+    ARequest.Declared := True;
+    ARequest.SourcePath := ALocation;
+  end;
+  SubKey := Copy(AEntry.Key, Length(SANDBOX_KEY_PREFIX) + 1, MaxInt);
+  if SubKey = SANDBOX_REMOVED_FILES_KEY then
+    raise EGocciaConfigPermissionError.CreateFmt(
+      '%s: "%s.%s" was removed in GocciaScript %s; list host inputs as ' +
+      '"copy" or "copy-rw" strings (<host>[=<sandbox>]) instead',
+      [ALocation, SANDBOX_CONFIG_KEY, SANDBOX_REMOVED_FILES_KEY,
+       OPTIONS_REMOVED_IN_VERSION]);
+  if not TryParseSandboxKey(SubKey, SandboxKey) then
+    raise EGocciaConfigPermissionError.CreateFmt(
+      '%s: unknown sandbox key "%s" (valid: %s)',
+      [ALocation, SubKey, SANDBOX_VALID_KEYS]);
+
+  Overridden := (SandboxKey in ADeclaredKeys) and
+    (AKeySources[Ord(SandboxKey)] <> AEntry.SourcePath);
+  if not (SandboxKey in ADeclaredKeys) then
+  begin
+    Include(ADeclaredKeys, SandboxKey);
+    AKeySources[Ord(SandboxKey)] := AEntry.SourcePath;
+  end;
+
+  case SandboxKey of
+    skCopy, skCopyReadWrite:
+    begin
+      if AEntry.Kind = cvkEmptyArray then
+        Exit;
+      RequireString(True);
+      if Trim(AEntry.Value) = '' then
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" has an empty entry', [ALocation, AEntry.Key]);
+      if Overridden then
+        Exit;
+      SplitSandboxInputSpec(AEntry.Value, HostPart, SandboxPart);
+      if HostPart = '' then
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" entry "%s" names no host path',
+          [ALocation, AEntry.Key, AEntry.Value]);
+      Input.Spec := AEntry.Value;
+      Input.HostPath := AbsolutePath(HostPart, ExtractFilePath(ALocation));
+      Input.SandboxPath := SandboxPart;
+      Input.ReadWrite := SandboxKey = skCopyReadWrite;
+      Input.SourcePath := ALocation;
+      SetLength(ARequest.Inputs, Length(ARequest.Inputs) + 1);
+      ARequest.Inputs[High(ARequest.Inputs)] := Input;
+    end;
+    skEntry:
+    begin
+      RequireString(False);
+      if not Overridden then
+        ARequest.Entry := AEntry.Value;
+    end;
+    skDiff:
+    begin
+      if (AEntry.Kind = cvkBoolean) and not AEntry.InArray then
+      begin
+        if not Overridden and (AEntry.Value = SANDBOX_DIFF_DEFAULT) then
+          ARequest.Diff := SANDBOX_DIFF_DEFAULT;
+      end
+      else if (AEntry.Kind = cvkString) and not AEntry.InArray and
+        ((AEntry.Value = DIFF_FORMAT_JSON) or
+         (AEntry.Value = DIFF_FORMAT_UNIFIED)) then
+      begin
+        if not Overridden then
+          ARequest.Diff := AEntry.Value;
+      end
+      else
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" must be true, false, "json", or "unified"',
+          [ALocation, AEntry.Key]);
+    end;
+    skDiffFile:
+    begin
+      RequireString(False);
+      if Trim(AEntry.Value) = '' then
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" names no file', [ALocation, AEntry.Key]);
+      if not Overridden then
+      begin
+        ARequest.DiffFile := AbsolutePath(AEntry.Value,
+          ExtractFilePath(ALocation));
+        ARequest.DiffFileSourcePath := ALocation;
+      end;
+    end;
+  end;
+end;
+
 function ReadConfigPermissionRequest(const AEntries: TConfigEntryArray;
   const AConfigPath: string): TGocciaConfigPermissionRequest;
 var
@@ -334,10 +562,13 @@ var
   UnsafeRequest: TGocciaUnsafeRequest;
   UnsafeSeen: TGocciaUnsafeRequests;
   Overridden: Boolean;
+  SandboxKeys: TSandboxKeys;
+  SandboxKeySources: array[TSandboxKey] of string;
 begin
   Result := TGocciaConfigPermissionRequest.Empty;
   Result.ConfigPath := AConfigPath;
   UnsafeSeen := [];
+  SandboxKeys := [];
   for I := 0 to High(AEntries) do
   begin
     Entry := AEntries[I];
@@ -356,6 +587,14 @@ begin
           [Location, Entry.Key, Entry.Value]);
       if Entry.Value = 'true' then
         Include(Result.Unsafe, UnsafeRequest);
+      Continue;
+    end;
+
+    if (Entry.Key = SANDBOX_CONFIG_KEY) or
+       (Copy(Entry.Key, 1, Length(SANDBOX_KEY_PREFIX)) = SANDBOX_KEY_PREFIX) then
+    begin
+      ReadSandboxEntry(Result.Sandbox, SandboxKeys, SandboxKeySources, Entry,
+        Location);
       Continue;
     end;
 
@@ -460,7 +699,7 @@ function UnsupportedRequestWarnings(
   const ARequest: TGocciaConfigPermissionRequest;
   const AHonored: TGocciaHonoredCapabilities;
   const AProgramName: string;
-  const AHonorsUnsafe: Boolean): TGocciaCapabilityScopes;
+  const AHonorsUnsafe, AHonorsSandbox: Boolean): TGocciaCapabilityScopes;
 var
   Warnings: TGocciaCapabilityScopes;
 
@@ -486,6 +725,13 @@ begin
       High(TGocciaUnsafeRequest) do
       if UnsafeRequest in ARequest.Unsafe then
         AddWarning(UNSAFE_REQUEST_KEYS[UnsafeRequest]);
+  if (not AHonorsSandbox) and ARequest.Sandbox.Declared then
+  begin
+    SetLength(Warnings, Length(Warnings) + 1);
+    Warnings[High(Warnings)] := Format(
+      'declares a "%s" section, which %s does not use; ignoring it',
+      [SANDBOX_CONFIG_KEY, AProgramName]);
+  end;
   Result := Warnings;
 end;
 
@@ -563,6 +809,60 @@ begin
   Result := Result + ']';
 end;
 
+{ The sandbox section as a canonical JSON object. Inputs keep their
+  declaration order and duplicates, because a later input may overwrite an
+  earlier one in the sandbox, so reordering them changes the run. }
+function SandboxBlockJSON(const ASandbox: TGocciaSandboxRequest): string;
+
+  procedure AddMember(const AKey, AValue: string);
+  begin
+    if Result <> '' then
+      Result := Result + ',';
+    Result := Result + QuoteJSONString(AKey) + ':' + AValue;
+  end;
+
+  function InputsJSON(const AReadWrite: Boolean): string;
+  var
+    I: Integer;
+    Text: string;
+  begin
+    Result := '';
+    for I := 0 to High(ASandbox.Inputs) do
+    begin
+      if ASandbox.Inputs[I].ReadWrite <> AReadWrite then
+        Continue;
+      Text := ASandbox.Inputs[I].HostPath;
+      if ASandbox.Inputs[I].SandboxPath <> '' then
+        Text := Text + '=' + ASandbox.Inputs[I].SandboxPath;
+      if Result <> '' then
+        Result := Result + ',';
+      Result := Result + QuoteJSONString(Text);
+    end;
+    if Result <> '' then
+      Result := '[' + Result + ']';
+  end;
+
+var
+  Inputs: string;
+begin
+  Result := '';
+  Inputs := InputsJSON(False);
+  if Inputs <> '' then
+    AddMember(SANDBOX_COPY_KEY, Inputs);
+  Inputs := InputsJSON(True);
+  if Inputs <> '' then
+    AddMember(SANDBOX_COPY_READ_WRITE_KEY, Inputs);
+  if ASandbox.Diff = SANDBOX_DIFF_DEFAULT then
+    AddMember(SANDBOX_DIFF_KEY, JSON_TRUE)
+  else if ASandbox.Diff <> '' then
+    AddMember(SANDBOX_DIFF_KEY, QuoteJSONString(ASandbox.Diff));
+  if ASandbox.DiffFile <> '' then
+    AddMember(SANDBOX_DIFF_FILE_KEY, QuoteJSONString(ASandbox.DiffFile));
+  if ASandbox.Entry <> '' then
+    AddMember(SANDBOX_ENTRY_KEY, QuoteJSONString(ASandbox.Entry));
+  Result := '{' + Result + '}';
+end;
+
 function NormalizedPermissionBlock(
   const ARequest: TGocciaConfigPermissionRequest): string;
 var
@@ -621,6 +921,9 @@ begin
   if Permissions <> '' then
     Result := Result + QuoteJSONString(PERMISSIONS_CONFIG_KEY) + ':{' +
       Permissions + '},';
+  if ARequest.Sandbox.Declared then
+    Result := Result + QuoteJSONString(SANDBOX_CONFIG_KEY) + ':' +
+      SandboxBlockJSON(ARequest.Sandbox) + ',';
   if Unsafe <> '' then
     Result := Result + QuoteJSONString(UNSAFE_BLOCK_KEY) + ':{' + Unsafe +
       '},';
@@ -645,6 +948,9 @@ type
     FKey: string;
     FScopes: string;
     FInScopes: Boolean;
+    { Lines added since the sandbox object opened, to describe an empty
+      one. }
+    FSandboxLines: Integer;
     procedure AddLine(const AValue: string);
   protected
     procedure OnNull; override;
@@ -686,7 +992,13 @@ end;
 
 procedure TPermissionBlockLineParser.AddLine(const AValue: string);
 begin
-  FLines.Add(FKey + ': ' + AValue);
+  if FSection = SANDBOX_CONFIG_KEY then
+  begin
+    FLines.Add(SANDBOX_CONFIG_KEY + '.' + FKey + ': ' + AValue);
+    Inc(FSandboxLines);
+  end
+  else
+    FLines.Add(FKey + ': ' + AValue);
 end;
 
 procedure TPermissionBlockLineParser.OnNull;
@@ -699,12 +1011,18 @@ begin
     Exit;
   if FSection = PERMISSIONS_CONFIG_KEY then
     AddLine(UnscopedDescription(FKey))
-  else if FSection = UNSAFE_BLOCK_KEY then
+  else if (FSection = UNSAFE_BLOCK_KEY) or
+    (FSection = SANDBOX_CONFIG_KEY) then
     AddLine(JSON_TRUE);
 end;
 
 procedure TPermissionBlockLineParser.OnString(const AValue: string);
 begin
+  if (FDepth = 2) and (FSection = SANDBOX_CONFIG_KEY) then
+  begin
+    AddLine(AValue);
+    Exit;
+  end;
   if not FInScopes then
     Exit;
   if FScopes <> '' then
@@ -723,6 +1041,8 @@ end;
 procedure TPermissionBlockLineParser.OnBeginObject;
 begin
   Inc(FDepth);
+  if (FDepth = 2) and (FSection = SANDBOX_CONFIG_KEY) then
+    FSandboxLines := 0;
 end;
 
 procedure TPermissionBlockLineParser.OnObjectKey(const AKey: string);
@@ -735,13 +1055,17 @@ end;
 
 procedure TPermissionBlockLineParser.OnEndObject;
 begin
+  if (FDepth = 2) and (FSection = SANDBOX_CONFIG_KEY) and
+     (FSandboxLines = 0) then
+    FLines.Add(SANDBOX_CONFIG_KEY + ': no inputs (sandbox mode only)');
   Dec(FDepth);
 end;
 
 procedure TPermissionBlockLineParser.OnBeginArray;
 begin
   Inc(FDepth);
-  if (FDepth = 3) and (FSection = PERMISSIONS_CONFIG_KEY) then
+  if (FDepth = 3) and ((FSection = PERMISSIONS_CONFIG_KEY) or
+     (FSection = SANDBOX_CONFIG_KEY)) then
   begin
     FInScopes := True;
     FScopes := '';

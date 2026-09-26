@@ -21,8 +21,12 @@ uses
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
+  Goccia.CLI.SandboxHost,
+  Goccia.CLI.SandboxMode,
+  Goccia.CLI.Trust,
   CLI.ConfigFile,
   CLI.Options,
+  Goccia.Capabilities,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -34,6 +38,7 @@ uses
   Goccia.Error.Detail,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment,
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
   Goccia.Modules.Resolver,
@@ -43,7 +48,9 @@ uses
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
+  Goccia.RuntimeExtensions.Sandbox,
   Goccia.RuntimeProfiles.Loader,
+  Goccia.Sandbox.Context,
   Goccia.Scope,
   Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
@@ -61,7 +68,8 @@ uses
   Goccia.Values.Primitives,
   Goccia.VM.Exception,
 
-  FileUtils;
+  FileUtils,
+  SandboxHostInputs;
 
 type
   TScriptLoaderConsoleCapture = class
@@ -112,8 +120,24 @@ type
     FInlineGlobals: TRepeatableOption;
     FLastPaths: TStringList;
     FLastDiagnosticPrincipal: Int64;
+    { Sandbox mode is on: set from the command line in ValidateCommandLine,
+      or from a trusted root-config sandbox section in ExecuteWithPaths. }
+    FSandboxActive: Boolean;
+    FSandboxHost: TGocciaSandboxHost;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
+    function HostOnlyCommandLineOptions: TGocciaCapabilityScopes;
+    procedure ConfigureSandboxEngine(const AEngine: TGocciaEngine;
+      const AContext: TGocciaSandboxContext; const AEntryPath: string;
+      const AParentEngine: TGocciaEngine;
+      const AParentHostEnvironment: TGocciaHostEnvironment);
+    function ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
+      const ARequest: TGocciaSandboxModeRequest): string;
+    procedure WriteSandboxDiff(const AHost: TGocciaSandboxHost;
+      const ARequest: TGocciaSandboxModeRequest);
+    procedure VerifyRootConfig;
+    procedure RunSandbox(const ARequest: TGocciaSandboxModeRequest);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
@@ -149,11 +173,16 @@ type
     procedure RunScripts(const APath: string);
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
+    function HonorsSandboxSection: Boolean; override;
+    function CapabilityPolicyName: string; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
+    function HasNonPathInput: Boolean; override;
+    function ExtraHelpText: string; override;
+    procedure ValidateCommandLine(const APaths: TStringList); override;
     procedure Validate; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure HandleError(const AException: Exception); override;
@@ -270,7 +299,8 @@ end;
 
 function TRunnerApp.UsageLine: string;
 begin
-  Result := '[file|directory|-] [options]';
+  Result := '[file|directory|-] [options]' + sLineBreak +
+    '       ' + Name + ' <file> [--copy <host>[=<sandbox>]]... [options]';
 end;
 
 function TRunnerApp.StdinUsage: TGocciaStdinUsage;
@@ -278,11 +308,26 @@ begin
   Result := suStdinDefaultWithREPL;
 end;
 
+{ --entry names the program, and the sandbox options switch to a mode that
+  never reads stdin, so neither leaves the run without input. Checked
+  before config is applied, so Present means the command line. }
+function TRunnerApp.HasNonPathInput: Boolean;
+begin
+  Result := (SandboxOptions.CommandLineActivation <> '') or
+    SandboxOptions.Entry.Present;
+end;
+
+function TRunnerApp.ExtraHelpText: string;
+begin
+  Result := SandboxModeHelpNote;
+end;
+
 procedure TRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddCoverageOptions;
   AddProfilerOptions;
+  AddSandboxOptions;
 
   FOutputPath := AddString('output',
     '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
@@ -336,20 +381,101 @@ begin
     ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
+{ A config's `output` is ignored in sandbox mode, whose stdout carries the
+  guest's output and the diff. }
 function TRunnerApp.IsJsonOutput: Boolean;
 begin
-  Result := FOutputPath.Present and
+  Result := (not FSandboxActive) and FOutputPath.Present and
     ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
 end;
 
 function TRunnerApp.IsCompactJsonOutput: Boolean;
 begin
-  Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
+  Result := (not FSandboxActive) and FOutputPath.Present and
+    (FOutputPath.Value = 'compact-json');
 end;
 
+{ Host mode grants everything the command line and trusted config ask for.
+  Sandbox mode loads no host files and has no node_modules lookup, so net is
+  the only capability it grants (ADR 0122). }
 function TRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
-  Result := ALL_CAPABILITIES;
+  if FSandboxActive then
+    Result := [gcNet]
+  else
+    Result := ALL_CAPABILITIES;
+end;
+
+function TRunnerApp.HonorsSandboxSection: Boolean;
+begin
+  Result := True;
+end;
+
+function TRunnerApp.CapabilityPolicyName: string;
+begin
+  if FSandboxActive then
+    Result := Name + ' sandbox mode'
+  else
+    Result := Name;
+end;
+
+{ The --allow-* flags of capabilities sandbox mode cannot grant. They are
+  command-line-only, so Present means the command line. }
+function TRunnerApp.HostCapabilityAllowFlags: TGocciaCapabilityScopes;
+var
+  Capability: TGocciaCapability;
+begin
+  Result := nil;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    if (Capability <> gcNet) and
+       EngineOptions.Capabilities.AllowOption(Capability).Present then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := '--' +
+        EngineOptions.Capabilities.AllowOption(Capability).LongName;
+    end;
+end;
+
+{ The host-mode options given on the command line. The same keys from a
+  config are ignored in sandbox mode, so one project config serves both
+  modes. }
+function TRunnerApp.HostOnlyCommandLineOptions: TGocciaCapabilityScopes;
+
+  procedure Check(const AOption: TOptionBase);
+  begin
+    if Assigned(AOption) and AOption.FromCommandLine then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := '--' + AOption.LongName;
+    end;
+  end;
+
+begin
+  Result := nil;
+  Check(MultifileOption);
+  Check(FOutputPath);
+  Check(CoverageOptions.Enabled);
+  Check(CoverageOptions.Format);
+  Check(CoverageOptions.OutputPath);
+  Check(ProfilerOptions.Mode);
+  Check(ProfilerOptions.OutputPath);
+  Check(ProfilerOptions.Format);
+  Check(FSourceMap);
+  Check(FHostEnvironmentModule);
+  Check(FGlobalFiles);
+  Check(FInlineGlobals);
+end;
+
+{ Sandbox mode switched on from the command line is known before any config
+  is read, so the trust gate and the capability checks see the right set,
+  and a host-filesystem grant gets an error that says why. }
+procedure TRunnerApp.ValidateCommandLine(const APaths: TStringList);
+begin
+  if SandboxOptions.CommandLineActivation = '' then
+    Exit;
+  RejectHostCapabilityFlags(HostCapabilityAllowFlags,
+    SandboxOptions.CommandLineActivation);
+  FSandboxActive := True;
 end;
 
 { TRunnerApp - Validate }
@@ -1298,6 +1424,174 @@ begin
     raise Exception.Create('Path not found: ' + APath);
 end;
 
+{ TRunnerApp - Sandbox mode }
+
+procedure TRunnerApp.ConfigureSandboxEngine(const AEngine: TGocciaEngine;
+  const AContext: TGocciaSandboxContext; const AEntryPath: string;
+  const AParentEngine: TGocciaEngine;
+  const AParentHostEnvironment: TGocciaHostEnvironment);
+var
+  Runtime: TGocciaRuntimeCore;
+  Console: TGocciaConsole;
+  EmptyConfig: TConfigEntryArray;
+  Verdict: TGocciaConfigTrustVerdict;
+begin
+  { A sandbox path is not a host path: a per-file config walk from it would
+    climb the host filesystem from its root and find a config unrelated to
+    the run. The root config, already merged into the options, governs. }
+  EmptyConfig := nil;
+  Verdict := FileConfigVerdict('');
+  if Assigned(AParentEngine) then
+    AEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine)
+  else
+  begin
+    AEngine.CapabilityProvenance := CapabilityProvenance(Verdict);
+    ConfigureCapabilityAudit(AEngine);
+  end;
+  if Assigned(AParentHostEnvironment) then
+    AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
+  else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
+    AEngine.HostEnvironment.UseDeterministicProfile;
+
+  Runtime := AttachRuntime(AEngine);
+  ApplyLoaderRuntimeProfile(Runtime);
+  Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
+  if ResolveFlagOption(EngineOptions.ExperimentalAST, EmptyConfig) then
+    Runtime.Install(TGocciaASTRuntimeExtension.Create);
+
+  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AEntryPath,
+    Verdict.AcceptedUnsafe);
+  ApplyVirtualModulesToEngine(AEngine, '');
+
+  Console := RuntimeConsole(AEngine);
+  if Assigned(Console) then
+  begin
+    Console.Enabled := not FSilent.Present;
+    Console.OutputCallback := FSandboxHost.CaptureConsoleLine;
+    if LogFileOpen then
+      Console.LogCallback := HandleConsoleLog;
+  end;
+end;
+
+{ The sandbox path to run. A host entry inside a copied input runs from
+  there; any other host entry is copied read-only to /<basename>. }
+function TRunnerApp.ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
+  const ARequest: TGocciaSandboxModeRequest): string;
+var
+  Target: string;
+begin
+  if ARequest.EntrySandbox <> '' then
+    Exit(AHost.Context.Fs.Normalize(ARequest.EntrySandbox));
+  if AHost.Inputs.SandboxPathOfHostFile(ARequest.EntryHost, Result) then
+    Exit;
+  Target := DefaultSandboxPathFor(ARequest.EntryHost, ARequest.EntryHost,
+    'the entry');
+  if AHost.Context.Fs.Exists(Target) then
+    raise TCLIUsageError.CreateFmt(
+      'the entry %s would be copied to %s, which a copied input already ' +
+      'fills; name the entry with --entry=%s, or give that input an ' +
+      'explicit =<sandbox> path', [ExtractFileName(ARequest.EntryHost),
+      Target, Target]);
+  Result := AHost.CopyIn(ARequest.EntryHost, Target, False);
+end;
+
+procedure TRunnerApp.WriteSandboxDiff(const AHost: TGocciaSandboxHost;
+  const ARequest: TGocciaSandboxModeRequest);
+var
+  DiffText: string;
+begin
+  if not ARequest.DiffRequested then
+    Exit;
+  DiffText := AHost.DiffText(ARequest.DiffFormat = sdfUnified);
+  if ARequest.DiffFile <> '' then
+    WriteUTF8FileText(ARequest.DiffFile, DiffText)
+  else
+    Write(DiffText);
+end;
+
+procedure TRunnerApp.VerifyRootConfig;
+var
+  ConfigPaths: TStringList;
+begin
+  ConfigPaths := TStringList.Create;
+  try
+    ConfigPaths.Add(RootConfigPath);
+    VerifyGoverningConfigs(ConfigPaths);
+  finally
+    ConfigPaths.Free;
+  end;
+end;
+
+procedure TRunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
+var
+  Host: TGocciaSandboxHost;
+  RunResult: TGocciaSandboxRunResult;
+  Report: TStringList;
+  EntryPath: string;
+  I: Integer;
+begin
+  { The root config is the only one that governs a sandbox run; its
+    requests are checked before anything is copied in. }
+  VerifyRootConfig;
+
+  Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
+  FSandboxHost := Host;
+  try
+    Host.Bytecode := EngineOptions.Mode.Matches(emBytecode);
+    Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
+    Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
+    Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');
+    Host.Aliases.Assign(EngineOptions.Aliases.Values);
+    { Filtered to net by HonoredCapabilities. }
+    Host.RootCapabilities := ResolveEngineCapabilities('');
+    Host.OnConfigureEngine := ConfigureSandboxEngine;
+
+    for I := 0 to High(ARequest.Inputs) do
+      Host.CopyIn(ARequest.Inputs[I].HostPath, ARequest.Inputs[I].SandboxPath,
+        ARequest.Inputs[I].ReadWrite);
+    EntryPath := ResolveSandboxEntry(Host, ARequest);
+    Host.CaptureBaseline;
+
+    RunResult := Host.Run(EntryPath);
+    if RunResult.Output <> '' then
+      Write(RunResult.Output);
+    if RunResult.ErrorOutput <> '' then
+      Write(ErrOutput, RunResult.ErrorOutput)
+    else if (not RunResult.Ok) and (RunResult.ErrorMessage <> '') then
+      WriteLn(ErrOutput, RunResult.ErrorMessage);
+    { Mirrors host mode: the bare value, `undefined` included. }
+    if FPrint.Present and Assigned(RunResult.ResultValue) then
+      WriteLn(RunResult.ResultValue.ToStringLiteral.Value);
+    if not RunResult.Ok then
+      ExitCode := RunResult.ExitCode;
+
+    { ADR 0119: the host, not the guest, writes back, and only after a run
+      that succeeded. The report is diagnostics, so stdout keeps only the
+      guest's output and the diff. }
+    if Host.Inputs.HasReadWriteInput then
+    begin
+      Report := TStringList.Create;
+      try
+        if RunResult.Ok then
+          Host.Inputs.ApplyWriteBack(Host.Inputs.PlanWriteBack(
+            Host.Context.Baseline), Report)
+        else
+          Report.Add(WRITE_BACK_REPORT_PREFIX +
+            'skipped, the run did not succeed.');
+        for I := 0 to Report.Count - 1 do
+          WriteLn(ErrOutput, Report[I]);
+      finally
+        Report.Free;
+      end;
+    end;
+
+    WriteSandboxDiff(Host, ARequest);
+  finally
+    FSandboxHost := nil;
+    Host.Free;
+  end;
+end;
+
 { TRunnerApp - ExecuteWithPaths }
 
 procedure TRunnerApp.ExecuteWithPaths(const APaths: TStringList);
@@ -1308,8 +1602,37 @@ var
   JSONResult: TScriptLoaderJSONFileResult;
   JSONResults: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
+  Verdict: TGocciaConfigTrustVerdict;
+  SandboxCommandLine: TGocciaSandboxCommandLine;
+  SandboxRequest: TGocciaSandboxModeRequest;
 begin
   FLastPaths := APaths;
+
+  { A trusted sandbox section in the root config switches sandbox mode on
+    too; an untrusted one stops the run here, before anything is read from
+    it. The mode is set before the config's requests are checked, so the
+    ones sandbox mode cannot grant are warned about rather than needing
+    trust. --ignore-config-permissions ignores the section. }
+  Verdict := RootConfigVerdict;
+  if Verdict.Request.Sandbox.Declared and (Verdict.State <> ctsIgnored) then
+  begin
+    FSandboxActive := True;
+    VerifyRootConfig;
+    Verdict := RootConfigVerdict;
+  end;
+  SandboxCommandLine.Paths := APaths;
+  SandboxCommandLine.DeniedAllowFlags := HostCapabilityAllowFlags;
+  SandboxCommandLine.HostOnlyOptions := HostOnlyCommandLineOptions;
+  SandboxCommandLine.WorkingDirectory := GetCurrentDir;
+  SandboxRequest := ResolveSandboxMode(SandboxOptions, Verdict.Request.Sandbox,
+    Verdict.GrantsAccepted, SandboxCommandLine);
+  if SandboxRequest.Active then
+  begin
+    FSandboxActive := True;
+    RunSandbox(SandboxRequest);
+    Exit;
+  end;
+  FSandboxActive := False;
 
   if FSourceMap.Present and (FSourceMap.ValueOr('') = '') and
      ((APaths.Count = 0) or
@@ -1475,6 +1798,11 @@ var
   ProfileOpcodes, ProfileFunctions: Boolean;
   ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
 begin
+  { Coverage and profiling are host-mode reports; a config that asks for
+    them is ignored in sandbox mode, which keeps stdout to the guest's
+    output and the diff. }
+  if FSandboxActive then
+    Exit;
   if (CoverageOptions.Enabled.Present or CoverageOptions.Format.Present or
       CoverageOptions.OutputPath.Present) and
      (TGocciaCoverageTracker.Instance <> nil) then

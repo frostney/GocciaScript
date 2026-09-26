@@ -148,6 +148,47 @@ type
     property Format: TEnumOption<TGocciaProfileFormat> read FFormat;
   end;
 
+  { GocciaRunner's sandbox mode (ADR 0122). --copy, --copy-rw, --entry,
+    --diff, and --diff-file are command-line-only: a config file declares the
+    same inputs in its "sandbox" section, which needs trust. --sandbox is
+    RequiresTrust and AcceptsObject only so that the "sandbox" section, which
+    shares its name, is left to the trusted reader instead of being applied
+    or rejected as a flag. --max-fs-bytes and --max-fs-nodes are ordinary
+    limits. }
+  TGocciaSandboxOptions = class
+  private
+    FSandbox: TFlagOption;
+    FCopy: TRepeatableOption;
+    FCopyReadWrite: TRepeatableOption;
+    FEntry: TStringOption;
+    FDiff: TOptionalStringOption;
+    FDiffFile: TStringOption;
+    FMaxFsBytes: TByteSizeOption;
+    FMaxFsNodes: TCountOption;
+    FRemoved: TOptionList;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    function Options: TOptionArray;
+    { The option that switched sandbox mode on from the command line, as the
+      user spelled it: `--sandbox`, `--copy`, or `--copy-rw`. '' when none
+      did. }
+    function CommandLineActivation: string;
+    { The first sandbox-only option given on the command line (--entry,
+      --diff, --diff-file, --max-fs-*), or ''. }
+    function FirstSandboxOnlyCommandLineOption: string;
+
+    property Sandbox: TFlagOption read FSandbox;
+    property Copy: TRepeatableOption read FCopy;
+    property CopyReadWrite: TRepeatableOption read FCopyReadWrite;
+    property Entry: TStringOption read FEntry;
+    property Diff: TOptionalStringOption read FDiff;
+    property DiffFile: TStringOption read FDiffFile;
+    property MaxFsBytes: TByteSizeOption read FMaxFsBytes;
+    property MaxFsNodes: TCountOption read FMaxFsNodes;
+  end;
+
 
 const
   ALL_RUNTIME_SETTINGS: TGocciaHonoredSettings = [grsTimeout, grsMaxMemory,
@@ -895,6 +936,203 @@ begin
   Result[0] := FMode;
   Result[1] := FOutputPath;
   Result[2] := FFormat;
+end;
+
+
+{ TGocciaSandboxOptions }
+
+const
+  SANDBOX_GROUP = 'Sandbox';
+  SANDBOX_CONFIG_HINT =
+    '; declare sandbox inputs in the config''s "sandbox" section instead';
+  SANDBOX_OPTION_COUNT = 8;
+
+type
+  { A repeatable option whose help shows a placeholder of its own. }
+  TSandboxRepeatableOption = class(TRepeatableOption)
+  private
+    FPlaceholder: string;
+  public
+    function FormatForHelp: string; override;
+  end;
+
+  { A string option whose help shows a placeholder of its own. }
+  TSandboxStringOption = class(TStringOption)
+  private
+    FPlaceholder: string;
+  public
+    function FormatForHelp: string; override;
+  end;
+
+  { `--diff` or `--diff=json|unified`. }
+  TSandboxDiffOption = class(TOptionalStringOption)
+  public
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
+    function FormatForHelp: string; override;
+  end;
+
+function TSandboxRepeatableOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + ' ' + FPlaceholder;
+end;
+
+function TSandboxStringOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + ' ' + FPlaceholder;
+end;
+
+procedure TSandboxDiffOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  if AHasEquals and (AValue = '') then
+    raise TParseError.Create(
+      '--diff= needs a format: use --diff=json or --diff=unified, or ' +
+      '--diff alone for json');
+  Apply(AValue);
+end;
+
+function TSandboxDiffOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '[=json|unified]';
+end;
+
+constructor TGocciaSandboxOptions.Create;
+
+  function CreateRepeatable(const AName, APlaceholder,
+    AHelp: string): TSandboxRepeatableOption;
+  begin
+    Result := TSandboxRepeatableOption.Create(AName, AHelp, SANDBOX_GROUP);
+    Result.FPlaceholder := APlaceholder;
+    Result.CommandLineOnly := True;
+    Result.ConfigHint := SANDBOX_CONFIG_HINT;
+  end;
+
+  function CreateString(const AName, APlaceholder,
+    AHelp: string): TSandboxStringOption;
+  begin
+    Result := TSandboxStringOption.Create(AName, AHelp, SANDBOX_GROUP);
+    Result.FPlaceholder := APlaceholder;
+    Result.CommandLineOnly := True;
+    Result.ConfigHint := SANDBOX_CONFIG_HINT;
+  end;
+
+begin
+  inherited Create;
+  FSandbox := TFlagOption.Create('sandbox',
+    'Run in sandbox mode with an empty virtual filesystem; the entry file ' +
+    'is copied to /<name>', SANDBOX_GROUP);
+  FSandbox.AcceptsObject := True;
+  FSandbox.RequiresTrust := True;
+  FCopy := CreateRepeatable('copy', '<host>[=<sandbox>]',
+    'Copy a host file or directory into the sandbox read-only (default ' +
+    '/<basename>); enables sandbox mode');
+  FCopyReadWrite := CreateRepeatable('copy-rw', '<host>[=<sandbox>]',
+    'Copy like --copy, then write changed files back to the host after a ' +
+    'successful run');
+  FEntry := CreateString('entry', '<sandbox-path>',
+    'Run a path inside the sandbox instead of a host file');
+  FDiff := TSandboxDiffOption.Create('diff',
+    'Print sandbox filesystem changes after the run (default: json)',
+    SANDBOX_GROUP);
+  FDiff.CommandLineOnly := True;
+  FDiff.ConfigHint := SANDBOX_CONFIG_HINT;
+  FDiffFile := CreateString('diff-file', '<path>',
+    'Write the diff to a host file instead of printing it; format from ' +
+    '.json or .diff unless --diff=<format>');
+  FMaxFsBytes := TByteSizeOption.Create('max-fs-bytes',
+    'Maximum bytes in the sandbox filesystem (default: 16MiB)',
+    SANDBOX_GROUP);
+  FMaxFsNodes := TCountOption.Create('max-fs-nodes',
+    'Maximum files and directories in the sandbox filesystem ' +
+    '(default: 4096)', SANDBOX_GROUP);
+  FMaxFsNodes.Maximum := High(Integer);
+
+  FRemoved := TOptionList.Create;
+  FRemoved.Add(TRemovedOption.Create('seed', 'seed',
+    'use --copy <host>[=<sandbox>] (default sandbox path is /<basename>)',
+    'use "sandbox": { "copy": ["<host>[=<sandbox>]"] } instead'));
+  FRemoved.Add(TRemovedOption.Create('seed-config', 'seed-config',
+    'declare inputs in the "sandbox" section of goccia.json or pass --copy',
+    'declare inputs in the "sandbox" section instead'));
+  FRemoved.Add(TRemovedOption.Create('write-back', 'write-back',
+    'copy the inputs that may be written with --copy-rw',
+    'use "sandbox": { "copy-rw": ["<host>[=<sandbox>]"] } instead'));
+  FRemoved.Add(TRemovedOption.Create('diff-format', 'diff-format',
+    'use --diff=json|unified',
+    'use "sandbox": { "diff": "json" } or "unified" instead'));
+  FRemoved.Add(TRemovedOption.Create('diff-output', 'diff-output',
+    'use --diff-file=<path>',
+    'use "sandbox": { "diff-file": "<path>" } instead'));
+  FRemoved.Add(TRemovedOption.Create('diff-metadata', 'diff-metadata',
+    'JSON diffs always include timestamp metadata; remove the flag',
+    'JSON diffs always include timestamp metadata; remove the key'));
+  FRemoved.Add(TRemovedOption.Create('fs-quota-bytes', 'fs-quota-bytes',
+    'use --max-fs-bytes instead (units: 16MiB)',
+    'use "max-fs-bytes" instead (units: "16MiB")'));
+  FRemoved.Add(TRemovedOption.Create('fs-node-limit', 'fs-node-limit',
+    'use --max-fs-nodes instead', 'use "max-fs-nodes" instead'));
+end;
+
+destructor TGocciaSandboxOptions.Destroy;
+begin
+  FSandbox.Free;
+  FCopy.Free;
+  FCopyReadWrite.Free;
+  FEntry.Free;
+  FDiff.Free;
+  FDiffFile.Free;
+  FMaxFsBytes.Free;
+  FMaxFsNodes.Free;
+  FRemoved.Free;
+  inherited Destroy;
+end;
+
+function TGocciaSandboxOptions.Options: TOptionArray;
+var
+  Removed: TOptionArray;
+  I: Integer;
+begin
+  Removed := FRemoved.Options;
+  SetLength(Result, SANDBOX_OPTION_COUNT + Length(Removed));
+  Result[0] := FSandbox;
+  Result[1] := FCopy;
+  Result[2] := FCopyReadWrite;
+  Result[3] := FEntry;
+  Result[4] := FDiff;
+  Result[5] := FDiffFile;
+  Result[6] := FMaxFsBytes;
+  Result[7] := FMaxFsNodes;
+  for I := 0 to High(Removed) do
+    Result[SANDBOX_OPTION_COUNT + I] := Removed[I];
+end;
+
+function TGocciaSandboxOptions.CommandLineActivation: string;
+begin
+  if FSandbox.Present then
+    Result := '--sandbox'
+  else if FCopy.Present then
+    Result := '--copy'
+  else if FCopyReadWrite.Present then
+    Result := '--copy-rw'
+  else
+    Result := '';
+end;
+
+function TGocciaSandboxOptions.FirstSandboxOnlyCommandLineOption: string;
+begin
+  if FEntry.Present then
+    Result := '--entry'
+  else if FDiff.Present then
+    Result := '--diff'
+  else if FDiffFile.Present then
+    Result := '--diff-file'
+  else if FMaxFsBytes.FromCommandLine then
+    Result := '--max-fs-bytes'
+  else if FMaxFsNodes.FromCommandLine then
+    Result := '--max-fs-nodes'
+  else
+    Result := '';
 end;
 
 end.

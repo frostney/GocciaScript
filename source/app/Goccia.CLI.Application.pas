@@ -43,6 +43,7 @@ type
     FEngineOptions: TGocciaEngineOptions;
     FCoverageOptions: TGocciaCoverageOptions;
     FProfilerOptions: TGocciaProfilerOptions;
+    FSandboxOptions: TGocciaSandboxOptions;
     FOwnedOptions: TOptionBaseList;
     FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
@@ -84,11 +85,21 @@ type
     function UsageLine: string; virtual; abstract;
     { How this command relates to standard input.  suNone (the default)
       opts out of the no-argument rule entirely — for commands like
-      GocciaREPL and GocciaSandboxRunner that never source a program
-      from stdin.  Stdin-defaulting commands override this so they get
-      the "Input:" help section and the clig.dev no-argument behaviour
-      from the shared base instead of restating it per binary. }
+      GocciaREPL that never source a program from stdin.
+      Stdin-defaulting commands override this so they get the "Input:"
+      help section and the clig.dev no-argument behaviour from the shared
+      base instead of restating it per binary. }
     function StdinUsage: TGocciaStdinUsage; virtual;
+    { True when the command line names the program some other way than a
+      path, so no path is not "no input" and the no-argument rule does not
+      apply (GocciaRunner's --entry and sandbox options). Default: False. }
+    function HasNonPathInput: Boolean; virtual;
+    { Help text appended after the options and the Input: section. }
+    function ExtraHelpText: string; virtual;
+    { Checks the parsed command line before the shared capability and limit
+      checks, so a binary can name a more specific problem than they would.
+      Called once, after --help and the trust modes are handled. }
+    procedure ValidateCommandLine(const APaths: TStringList); virtual;
     procedure Execute; override;
     procedure ExecuteWithPaths(const APaths: TStringList); virtual; abstract;
     procedure Validate; virtual;
@@ -96,6 +107,7 @@ type
     function AddEngineOptions: TGocciaEngineOptions;
     function AddCoverageOptions: TGocciaCoverageOptions;
     function AddProfilerOptions: TGocciaProfilerOptions;
+    function AddSandboxOptions: TGocciaSandboxOptions;
     function AddFlag(const AName, AHelp: string): TFlagOption;
     function AddString(const AName, AHelp: string): TStringOption;
     function AddInteger(const AName, AHelp: string): TIntegerOption;
@@ -115,6 +127,17 @@ type
       requesting them from a binary that does not is warned about instead of
       needing trust. Default: True. }
     function HonorsUnsafeRequests: Boolean; virtual;
+    { Whether this binary reads a config's `sandbox` section (GocciaRunner).
+      Where it does, the section needs trust; elsewhere it is warned about.
+      Default: False. }
+    function HonorsSandboxSection: Boolean; virtual;
+    { Who cannot grant a config's unsupported request, in its warning.
+      Default: the program name. }
+    function CapabilityPolicyName: string; virtual;
+    { The trust verdict of the root config, without the unsupported-request
+      warnings FileConfigVerdict prints. No request when there is no root
+      config. }
+    function RootConfigVerdict: TGocciaConfigTrustVerdict;
     { The engine capability set for a file: command-line grants, plus the
       permission request of the config that governs AFileName (see
       FileConfigVerdict) once the request is trusted or accepted, minus every
@@ -219,7 +242,12 @@ type
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
+    property SandboxOptions: TGocciaSandboxOptions read FSandboxOptions;
     property LogFileOpen: Boolean read FLogFileOpen;
+    property MultifileOption: TFlagOption read FMultifile;
+    { The applied root config: explicit (--config) or discovered; '' when
+      there is none. }
+    property RootConfigPath: string read FRootConfigPath;
   public
     constructor Create(const AName: string); override;
     destructor Destroy; override;
@@ -237,11 +265,11 @@ procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 { The single place engine-affecting options reach an engine.  CreateEngine
   calls it for every binary that builds its engine through the base class;
-  binaries that must construct the engine themselves — GocciaSandboxRunner
+  engines that must be constructed elsewhere — GocciaRunner's sandbox mode
   needs its own module resolver — call it directly rather than restating
-  the option set, which is how the sandbox runner previously lost
-  --max-memory and the fetch policy.  Pass an empty AFileConfig when there
-  is no host file to discover a per-file config for. AAcceptedUnsafe are the
+  the option set, which is how the sandbox runner once lost --max-memory
+  and the fetch policy.  Pass an empty AFileConfig when there is no host
+  file to discover a per-file config for. AAcceptedUnsafe are the
   unsafe-* requests of the file's config that are trusted or accepted for
   the run (TGocciaConfigTrustVerdict.AcceptedUnsafe); the command-line flags
   apply regardless. }
@@ -498,6 +526,7 @@ begin
   FEngineOptions := nil;
   FCoverageOptions := nil;
   FProfilerOptions := nil;
+  FSandboxOptions := nil;
   FHelp := nil;
   FJobs := nil;
   FLog := nil;
@@ -527,6 +556,7 @@ begin
   FEngineOptions.Free;
   FCoverageOptions.Free;
   FProfilerOptions.Free;
+  FSandboxOptions.Free;
   FHelp.Free;
   FJobs.Free;
   FLog.Free;
@@ -689,7 +719,8 @@ begin
     StorePath := ResolveTrustStorePath(Problem);
   end;
   FTrustGate := TGocciaConfigTrustGate.Create(StorePath, Problem, Mode,
-    HonoredCapabilities, HonorsUnsafeRequests, LoadFileConfig);
+    HonoredCapabilities, HonorsUnsafeRequests, LoadFileConfig,
+    HonorsSandboxSection);
 end;
 
 procedure TGocciaCLIApplication.BuildAllOptions;
@@ -698,7 +729,7 @@ var
   Count, I: Integer;
 begin
   Count := 0;
-  SetLength(Combined, 4);
+  SetLength(Combined, 5);
 
   if Assigned(FEngineOptions) then
   begin
@@ -715,6 +746,12 @@ begin
   if Assigned(FProfilerOptions) then
   begin
     Combined[Count] := FProfilerOptions.Options;
+    Inc(Count);
+  end;
+
+  if Assigned(FSandboxOptions) then
+  begin
+    Combined[Count] := FSandboxOptions.Options;
     Inc(Count);
   end;
 
@@ -749,6 +786,12 @@ function TGocciaCLIApplication.AddProfilerOptions: TGocciaProfilerOptions;
 begin
   FProfilerOptions := TGocciaProfilerOptions.Create;
   Result := FProfilerOptions;
+end;
+
+function TGocciaCLIApplication.AddSandboxOptions: TGocciaSandboxOptions;
+begin
+  FSandboxOptions := TGocciaSandboxOptions.Create;
+  Result := FSandboxOptions;
 end;
 
 function TGocciaCLIApplication.AddFlag(const AName, AHelp: string): TFlagOption;
@@ -1048,6 +1091,23 @@ begin
   Result := True;
 end;
 
+function TGocciaCLIApplication.HonorsSandboxSection: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaCLIApplication.CapabilityPolicyName: string;
+begin
+  Result := Name;
+end;
+
+function TGocciaCLIApplication.RootConfigVerdict: TGocciaConfigTrustVerdict;
+begin
+  if not Assigned(FTrustGate) then
+    CreateTrustGate;
+  Result := FTrustGate.Verify(FRootConfigPath);
+end;
+
 function TGocciaCLIApplication.WarmUpCapabilities(
   const AFiles: TStrings): TGocciaCapabilities;
 var
@@ -1107,7 +1167,7 @@ begin
   Result := FTrustGate.Verify(ConfigPath);
 
   Warnings := UnsupportedRequestWarnings(Result.Request, HonoredCapabilities,
-    Name, HonorsUnsafeRequests);
+    CapabilityPolicyName, HonorsUnsafeRequests, HonorsSandboxSection);
   for I := 0 to High(Warnings) do
     WarnOnce(Result.ConfigPath + #0 + Warnings[I],
       'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);
@@ -1348,9 +1408,9 @@ begin
   begin
     { The manifest is a host file named by the host, so it always loads from
       the host filesystem. An engine whose own provider does not read the
-      host (the sandbox runner) cannot evaluate it in place. Evaluated through
-      the engine's own loader, the manifest and its imports become host-owned
-      there, so anything it leaves behind (a global function that calls
+      host (GocciaRunner's sandbox mode) cannot evaluate it in place.
+      Evaluated through the engine's own loader, the manifest and its
+      imports become host-owned there, so anything it leaves behind (a global function that calls
       import(), say) would import as the host; under an outright read deny
       (--deny-read) it is therefore evaluated in an isolated loader
       too, and a later import made from its code is a guest read the deny
@@ -1795,6 +1855,21 @@ begin
   Result := suNone;
 end;
 
+function TGocciaCLIApplication.HasNonPathInput: Boolean;
+begin
+  Result := False;
+end;
+
+function TGocciaCLIApplication.ExtraHelpText: string;
+begin
+  Result := '';
+end;
+
+procedure TGocciaCLIApplication.ValidateCommandLine(const APaths: TStringList);
+begin
+  // Override point for subclasses
+end;
+
 procedure TGocciaCLIApplication.AfterExecute;
 begin
   // Override point for subclasses
@@ -2097,6 +2172,8 @@ var
     Result := GenerateHelpText(Name, UsageLine, FAllOptions);
     if StdinUsage <> suNone then
       Result := Result + sLineBreak + StdinUsageNote(Name, StdinUsage);
+    if ExtraHelpText <> '' then
+      Result := Result + sLineBreak + ExtraHelpText;
   end;
 
 begin
@@ -2164,7 +2241,7 @@ begin
       goes to stderr because this is an error, not a request for help,
       which also keeps stdout clean for --output=json callers. }
     if (StdinUsage <> suNone) and
-       (DecideStdinInput(Paths.Count > 0,
+       (DecideStdinInput((Paths.Count > 0) or HasNonPathInput,
           (Paths.Count = 1) and IsStdinPath(Paths[0]),
           IsInputTerminal) = sdShowUsage) then
     begin
@@ -2174,6 +2251,8 @@ begin
       ExitCode := EXIT_CODE_USAGE;
       Exit;
     end;
+
+    ValidateCommandLine(Paths);
 
     { Capabilities and limits this binary cannot honor are usage errors on
       the command line (ADR 0122); a malformed scope is an invalid value. }

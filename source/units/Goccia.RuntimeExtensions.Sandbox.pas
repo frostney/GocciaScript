@@ -723,14 +723,14 @@ begin
   Result := Promise;
 end;
 
-procedure AppendRunSeed(var AOptions: TGocciaSandboxRunOptions;
-  const ASeed: TGocciaSandboxSeedSpec);
+procedure AppendRunCopy(var AOptions: TGocciaSandboxRunOptions;
+  const ACopy: TGocciaSandboxCopySpec);
 var
   Index: Integer;
 begin
-  Index := Length(AOptions.Seeds);
-  SetLength(AOptions.Seeds, Index + 1);
-  AOptions.Seeds[Index] := ASeed;
+  Index := Length(AOptions.Copies);
+  SetLength(AOptions.Copies, Index + 1);
+  AOptions.Copies[Index] := ACopy;
   AOptions.Isolated := True;
 end;
 
@@ -790,13 +790,13 @@ begin
   Result := TGocciaBooleanLiteralValue(Value).Value;
 end;
 
-procedure AddParentPathSeedFromString(const AContext: TGocciaSandboxContext;
+procedure AddParentPathCopyFromString(const AContext: TGocciaSandboxContext;
   var AOptions: TGocciaSandboxRunOptions; const ASpec: string);
 var
   SeparatorIndex: Integer;
   SourcePath: string;
   TargetPath: string;
-  Seed: TGocciaSandboxSeedSpec;
+  CopySpec: TGocciaSandboxCopySpec;
 begin
   SeparatorIndex := Pos('=', ASpec);
   if SeparatorIndex > 0 then
@@ -810,25 +810,25 @@ begin
     TargetPath := '';
   end;
 
-  Seed.Kind := sskParentPath;
-  Seed.FromPath := AContext.Fs.Normalize(SourcePath,
+  CopySpec.Kind := sckParentPath;
+  CopySpec.FromPath := AContext.Fs.Normalize(SourcePath,
     AContext.Shell.WorkingDirectory);
   if TargetPath = '' then
-    Seed.ToPath := Seed.FromPath
+    CopySpec.ToPath := CopySpec.FromPath
   else
-    Seed.ToPath := AContext.Fs.Normalize(TargetPath, '/');
-  Seed.ToDirectory := IsDirectoryTargetPath(TargetPath);
-  Seed.Path := '';
-  Seed.Text := '';
-  Seed.Bytes := nil;
-  AppendRunSeed(AOptions, Seed);
+    CopySpec.ToPath := AContext.Fs.Normalize(TargetPath, '/');
+  CopySpec.ToDirectory := IsDirectoryTargetPath(TargetPath);
+  CopySpec.Path := '';
+  CopySpec.Text := '';
+  CopySpec.Bytes := nil;
+  AppendRunCopy(AOptions, CopySpec);
 end;
 
-procedure AddRunSeedFromObject(const AContext: TGocciaSandboxContext;
+procedure AddRunCopyFromObject(const AContext: TGocciaSandboxContext;
   var AOptions: TGocciaSandboxRunOptions; const AObject: TGocciaObjectValue;
   const AMethod: string);
 var
-  Seed: TGocciaSandboxSeedSpec;
+  CopySpec: TGocciaSandboxCopySpec;
   SourceCount: Integer;
 begin
   SourceCount := 0;
@@ -837,61 +837,61 @@ begin
   if HasDefinedProperty(AObject, 'base64') then Inc(SourceCount);
   if SourceCount <> 1 then
     ThrowTypeError(AMethod +
-      ' seed entries require exactly one of "from", "text", or "base64"');
+      ' copy entries require exactly one of "from", "text", or "base64"');
 
-  Seed.FromPath := '';
-  Seed.ToPath := '';
-  Seed.ToDirectory := False;
-  Seed.Path := '';
-  Seed.Text := '';
-  Seed.Bytes := nil;
+  CopySpec.FromPath := '';
+  CopySpec.ToPath := '';
+  CopySpec.ToDirectory := False;
+  CopySpec.Path := '';
+  CopySpec.Text := '';
+  CopySpec.Bytes := nil;
 
   if HasDefinedProperty(AObject, 'from') then
   begin
-    Seed.Kind := sskParentPath;
-    Seed.FromPath := AContext.Fs.Normalize(ObjectStringProperty(AObject,
+    CopySpec.Kind := sckParentPath;
+    CopySpec.FromPath := AContext.Fs.Normalize(ObjectStringProperty(AObject,
       'from', AMethod, True), AContext.Shell.WorkingDirectory);
-    Seed.ToPath := ObjectStringProperty(AObject, 'to', AMethod, False);
-    Seed.ToDirectory := IsDirectoryTargetPath(Seed.ToPath);
-    if Seed.ToPath = '' then
-      Seed.ToPath := Seed.FromPath
+    CopySpec.ToPath := ObjectStringProperty(AObject, 'to', AMethod, False);
+    CopySpec.ToDirectory := IsDirectoryTargetPath(CopySpec.ToPath);
+    if CopySpec.ToPath = '' then
+      CopySpec.ToPath := CopySpec.FromPath
     else
-      Seed.ToPath := AContext.Fs.Normalize(Seed.ToPath, '/');
-    AppendRunSeed(AOptions, Seed);
+      CopySpec.ToPath := AContext.Fs.Normalize(CopySpec.ToPath, '/');
+    AppendRunCopy(AOptions, CopySpec);
     Exit;
   end;
 
-  Seed.Path := AContext.Fs.Normalize(ObjectStringProperty(AObject, 'path',
+  CopySpec.Path := AContext.Fs.Normalize(ObjectStringProperty(AObject, 'path',
     AMethod, True), '/');
   if HasDefinedProperty(AObject, 'base64') then
   begin
-    Seed.Kind := sskBytes;
-    Seed.Bytes := DecodeBase64Bytes(ObjectStringProperty(AObject, 'base64',
-      AMethod, True));
+    CopySpec.Kind := sckBytes;
+    CopySpec.Bytes := DecodeBase64Bytes(ObjectStringProperty(AObject,
+      'base64', AMethod, True));
   end
   else
   begin
-    Seed.Kind := sskText;
-    Seed.Text := ObjectStringProperty(AObject, 'text', AMethod, True);
+    CopySpec.Kind := sckText;
+    CopySpec.Text := ObjectStringProperty(AObject, 'text', AMethod, True);
   end;
-  AppendRunSeed(AOptions, Seed);
+  AppendRunCopy(AOptions, CopySpec);
 end;
 
-procedure AddRunSeedFromValue(const AContext: TGocciaSandboxContext;
+procedure AddRunCopyFromValue(const AContext: TGocciaSandboxContext;
   var AOptions: TGocciaSandboxRunOptions; const AValue: TGocciaValue;
   const AMethod: string);
 begin
   if AValue is TGocciaStringLiteralValue then
-    AddParentPathSeedFromString(AContext, AOptions,
+    AddParentPathCopyFromString(AContext, AOptions,
       TGocciaStringLiteralValue(AValue).Value)
   else if AValue is TGocciaObjectValue then
-    AddRunSeedFromObject(AContext, AOptions, TGocciaObjectValue(AValue),
+    AddRunCopyFromObject(AContext, AOptions, TGocciaObjectValue(AValue),
       AMethod)
   else
-    ThrowTypeError(AMethod + ' seed entries must be strings or objects');
+    ThrowTypeError(AMethod + ' copy entries must be strings or objects');
 end;
 
-procedure AddRunSeedsFromValue(const AContext: TGocciaSandboxContext;
+procedure AddRunCopiesFromValue(const AContext: TGocciaSandboxContext;
   var AOptions: TGocciaSandboxRunOptions; const AValue: TGocciaValue;
   const AMethod: string);
 var
@@ -905,10 +905,24 @@ begin
   begin
     Arr := TGocciaArrayValue(AValue);
     for I := 0 to Arr.GetLength - 1 do
-      AddRunSeedFromValue(AContext, AOptions, Arr.GetElement(I), AMethod);
+      AddRunCopyFromValue(AContext, AOptions, Arr.GetElement(I), AMethod);
     Exit;
   end;
-  AddRunSeedFromValue(AContext, AOptions, AValue, AMethod);
+  AddRunCopyFromValue(AContext, AOptions, AValue, AMethod);
+end;
+
+{ The pre-0.14 option names fail with their replacement instead of being
+  silently ignored, so a caller written against them does not run without
+  the copies or the diff it asked for. }
+procedure RejectRemovedRunOption(const AOptionsObject: TGocciaObjectValue;
+  const AName, AReplacement, AMethod: string);
+var
+  Value: TGocciaValue;
+begin
+  Value := AOptionsObject.GetProperty(AName);
+  if Assigned(Value) and not (Value is TGocciaUndefinedLiteralValue) then
+    ThrowTypeError(AMethod + ' option "' + AName + '" was removed; ' +
+      AReplacement);
 end;
 
 function ParseRunScriptOptions(const AContext: TGocciaSandboxContext;
@@ -916,6 +930,7 @@ function ParseRunScriptOptions(const AContext: TGocciaSandboxContext;
   TGocciaSandboxRunOptions;
 var
   OptionsObject: TGocciaObjectValue;
+  DiffValue: TGocciaValue;
   DiffFormat: string;
 begin
   Result := DefaultSandboxRunOptions;
@@ -926,30 +941,48 @@ begin
     ThrowTypeError(AMethod + ' options must be an object');
 
   OptionsObject := TGocciaObjectValue(AValue);
+  RejectRemovedRunOption(OptionsObject, 'seed',
+    'use "copy" (a path, {from, to}, {path, text}, {path, base64}, or an ' +
+    'array of them)', AMethod);
+  RejectRemovedRunOption(OptionsObject, 'seeds', 'use "copy"', AMethod);
+  RejectRemovedRunOption(OptionsObject, 'diffFormat',
+    'use diff: "json" or diff: "unified"', AMethod);
+  RejectRemovedRunOption(OptionsObject, 'diffMetadata',
+    'JSON diffs always include timestamp metadata; use diff: true',
+    AMethod);
+
   if ObjectBooleanProperty(OptionsObject, 'sandbox', AMethod) then
     Result.Isolated := True;
-  if ObjectBooleanProperty(OptionsObject, 'diff', AMethod) then
+
+  DiffValue := OptionsObject.GetProperty('diff');
+  if Assigned(DiffValue) and not (DiffValue is TGocciaUndefinedLiteralValue) and
+     not (DiffValue is TGocciaNullLiteralValue) then
   begin
-    Result.IncludeDiff := True;
-    Result.Isolated := True;
-  end;
-  if ObjectBooleanProperty(OptionsObject, 'diffMetadata', AMethod) then
-  begin
-    Result.DiffMetadata := True;
-    Result.IncludeDiff := True;
-    Result.Isolated := True;
+    if DiffValue is TGocciaBooleanLiteralValue then
+    begin
+      if TGocciaBooleanLiteralValue(DiffValue).Value then
+      begin
+        Result.IncludeDiff := True;
+        Result.Isolated := True;
+      end;
+    end
+    else if DiffValue is TGocciaStringLiteralValue then
+    begin
+      DiffFormat := TGocciaStringLiteralValue(DiffValue).Value;
+      if (DiffFormat <> SANDBOX_DIFF_FORMAT_JSON) and
+         (DiffFormat <> SANDBOX_DIFF_FORMAT_UNIFIED) then
+        ThrowTypeError(AMethod +
+          ' option "diff" must be true, "json", or "unified"');
+      Result.DiffFormat := DiffFormat;
+      Result.IncludeDiff := True;
+      Result.Isolated := True;
+    end
+    else
+      ThrowTypeError(AMethod +
+        ' option "diff" must be true, "json", or "unified"');
   end;
 
-  DiffFormat := ObjectStringProperty(OptionsObject, 'diffFormat', AMethod,
-    False);
-  if DiffFormat <> '' then
-    Result.DiffFormat := DiffFormat;
-  if (Result.DiffFormat <> 'json') and (Result.DiffFormat <> 'unified') then
-    ThrowTypeError(AMethod + ' option "diffFormat" must be "json" or "unified"');
-
-  AddRunSeedsFromValue(AContext, Result, OptionsObject.GetProperty('seed'),
-    AMethod);
-  AddRunSeedsFromValue(AContext, Result, OptionsObject.GetProperty('seeds'),
+  AddRunCopiesFromValue(AContext, Result, OptionsObject.GetProperty('copy'),
     AMethod);
 end;
 
