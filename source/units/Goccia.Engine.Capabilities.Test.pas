@@ -20,6 +20,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.GlobalFFI,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
@@ -69,6 +70,7 @@ type
     FAliasPattern: string;
     FAliasTarget: string;
     FInstallFetchAndFFI: Boolean;
+    FHostGlobalsModule: string;
     FVirtualModuleSource: string;
     function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -127,6 +129,9 @@ type
     procedure TestPackageProbesAreJudged;
     procedure TestCallDenialSitesMatchAcrossExecutors;
     procedure TestStaticImportDenialSitesMatchAcrossExecutors;
+    procedure TestHostModuleCodeImportsAsTheGuestLater;
+    procedure TestDeferredGraphDependenciesAreJudged;
+    procedure TestFFIOpenLoadsTheJudgedLibrary;
   public
     procedure SetupTests; override;
   end;
@@ -210,6 +215,12 @@ begin
   Test('Static import and export-from denials are located at the ' +
     'declaration in both executors',
     TestStaticImportDenialSitesMatchAcrossExecutors);
+  Test('An import a host module''s code makes after enrollment is a guest ' +
+    'read', TestHostModuleCodeImportsAsTheGuestLater);
+  Test('import defer judges every module of the deferred graph before ' +
+    'reading it', TestDeferredGraphDependenciesAreJudged);
+  Test('FFI.open loads the library it judged even if a directory is swapped ' +
+    'before the load', TestFFIOpenLoadsTheJudgedLibrary);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -253,6 +264,10 @@ begin
   WriteFile(ProjectPath('lib.js'), 'export const value = "inside";');
   WriteFile(OutsidePath('secret.js'), 'export const value = "outside";');
   WriteFile(OutsidePath('data.bin'), 'bytes');
+  WriteFile(OutsidePath('host-globals.js'),
+    'import { value } from "./secret.js";' + sLineBreak +
+    'export const enrolled = value;' + sLineBreak +
+    'export const readLater = () => import("./secret.js");');
   WriteFile(ProjectPath('node_modules/pkg/package.json'),
     '{"name":"pkg","type":"module","exports":"./index.js"}');
   WriteFile(ProjectPath('node_modules/pkg/index.js'),
@@ -263,6 +278,9 @@ begin
   WriteFile(ProjectPath('sub/index.js'), 'export const value = "sub";');
   WriteFile(ProjectPath('sub/secret.json'), '{}');
   WriteFile(ProjectPath('hidden.js'), 'export const value = "hidden";');
+  WriteFile(ProjectPath('deferred-dep.js'),
+    'import { value } from "../outside/secret.js";' + sLineBreak +
+    'export const v = value;');
   WriteFile(ProjectPath('shadow/index.js'), 'export const value = "shadow";');
   WriteFile(ProjectPath('node_modules/probe/package.json'),
     '{"name":"probe","type":"module","exports":"./main"}');
@@ -301,6 +319,7 @@ begin
   FAliasPattern := '';
   FAliasTarget := '';
   FInstallFetchAndFFI := False;
+  FHostGlobalsModule := '';
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -393,6 +412,8 @@ begin
       Engine.InjectModule(FVirtualModuleName, FVirtualModuleSource);
     if FAliasPattern <> '' then
       Engine.ModuleLoader.Resolver.AddAlias(FAliasPattern, FAliasTarget);
+    if FHostGlobalsModule <> '' then
+      Engine.InjectGlobalsFromModule(FHostGlobalsModule);
     if AShadowRealm then
       EnableShadowRealm(Engine);
     try
@@ -1661,6 +1682,169 @@ begin
   { export-from belongs to modules. }
   ExpectLocatedAlike(OUTSIDE_REEXPORT, ProjectPath('app.mjs'), 'app.mjs:2:1',
     TGocciaCapabilities.None);
+end;
+
+
+{ A --globals module is host code while the host enrolls it: its own static
+  imports need no grant. A function it exports runs later as guest code, so
+  an import() it makes then is a guest read like any other. }
+procedure TEngineCapabilitiesTests.TestHostModuleCodeImportsAsTheGuestLater;
+const
+  SOURCE_TEXT =
+    'globalThis.result = "pending";' + sLineBreak +
+    'globalThis.enrolledValue = enrolled;' + sLineBreak +
+    'readLater().then((m) => { globalThis.result = m.value; },' +
+    ' (e) => { globalThis.result = e.name; });';
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  FHostGlobalsModule := OutsidePath('host-globals.js');
+  for Bytecode in [False, True] do
+  begin
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Deny(gcRead),
+      Bytecode);
+    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+    { A read grant lets the same late import through. }
+    Outcome := Run(SOURCE_TEXT,
+      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
+    Expect<string>(Outcome.Result).ToBe('outside');
+  end;
+end;
+
+
+{ import defer links the whole graph eagerly and defers only evaluation.
+  Each module that linking reads — here an allowed project module's import
+  of a file outside the project — is judged before it is read, as the eager
+  path judges it. }
+procedure TEngineCapabilitiesTests.TestDeferredGraphDependenciesAreJudged;
+const
+  SOURCE_TEXT =
+    'import defer * as ns from "./deferred-dep.js";' + sLineBreak +
+    'globalThis.result = "linked";';
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  for Bytecode in [False, True] do
+  begin
+    FEvents.Clear;
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
+    Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
+      CanonicalCapabilityPath(OutsidePath('secret.js'))) >= 0).ToBe(True);
+    { With a grant the graph links and evaluation stays deferred. }
+    Outcome := Run(SOURCE_TEXT,
+      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('linked');
+  end;
+end;
+
+
+var
+  GSwapDirectory, GSwapMovedTo, GSwapLinkTarget: string;
+
+{ Runs between FFI.open's check and its load: moves the judged directory away
+  and puts a symlink to another directory in its place. }
+procedure SwapJudgedLibraryDirectory;
+begin
+  {$IFDEF UNIX}
+  RenameFile(GSwapDirectory, GSwapMovedTo);
+  fpSymlink(PAnsiChar(AnsiString(GSwapLinkTarget)),
+    PAnsiChar(AnsiString(GSwapDirectory)));
+  {$ENDIF}
+end;
+
+procedure CopyFileContents(const ASource, ATarget: string);
+var
+  Input, Output: TFileStream;
+begin
+  ForceDirectories(ExtractFileDir(ATarget));
+  Input := TFileStream.Create(ASource, fmOpenRead or fmShareDenyNone);
+  try
+    Output := TFileStream.Create(ATarget, fmCreate);
+    try
+      Output.CopyFrom(Input, 0);
+    finally
+      Output.Free;
+    end;
+  finally
+    Input.Free;
+  end;
+end;
+
+{ The check judges <project>/ffilibs/good/libfixture.so. If the directory is
+  swapped for a symlink to a directory outside the grant before the load, the
+  library mapped must still be the judged file, never the outside copy. }
+procedure TEngineCapabilitiesTests.TestFFIOpenLoadsTheJudgedLibrary;
+{$IFDEF LINUX}
+var
+  Fixture, Good, Outside, Maps: string;
+  MapsLines: TStringList;
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF LINUX}
+  Fixture := ExpandFileName('fixtures/ffi/libfixture.so');
+  if not FileExists(Fixture) then
+  begin
+    { The FFI fixture is built by the testrunner target. }
+    Expect<Boolean>(True).ToBe(True);
+    Exit;
+  end;
+  Good := ProjectPath('ffilibs/good');
+  Outside := OutsidePath('ffilibs-evil');
+  CopyFileContents(Fixture, Good + '/libfixture.so');
+  CopyFileContents(Fixture, Outside + '/libfixture.so');
+  GSwapDirectory := Good;
+  GSwapMovedTo := Good + '.moved';
+  GSwapLinkTarget := Outside;
+  Outcome := Default(TRunOutcome);
+  Maps := '';
+  Source := TStringList.Create;
+  Source.Text := 'globalThis.lib = FFI.open("' + Good + '/libfixture.so");' +
+    ' globalThis.result = "opened";';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  GocciaFFIAfterOpenCheck := SwapJudgedLibraryDirectory;
+  try
+    InstallFFIIfGranted(AttachRuntime(Engine));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Outcome);
+    end;
+    MapsLines := TStringList.Create;
+    try
+      MapsLines.LoadFromFile('/proc/self/maps');
+      Maps := MapsLines.Text;
+    finally
+      MapsLines.Free;
+    end;
+  finally
+    GocciaFFIAfterOpenCheck := nil;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    DeleteFile(Good);
+    RenameFile(GSwapMovedTo, Good);
+  end;
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<Boolean>(Pos(Outside, Maps) > 0).ToBe(False);
+  Expect<Boolean>(Pos(GSwapMovedTo + '/libfixture.so', Maps) > 0).ToBe(True);
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
 end;
 
 begin

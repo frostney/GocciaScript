@@ -134,6 +134,9 @@ type
     function ResolveRequestAddress(const ASpecifier,
       AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
       out APackageRoot: string): string;
+    function ResolveTraversedDependency(const ARequestedPath,
+      AAttributeType, AImportingFilePath: string;
+      const ADeclaration: TGocciaStatement): string;
     procedure EnforceHostRead(const ASpecifier, APath, AImportingFilePath,
       APackageRoot: string; const AIsLiteral, AIsHostOwned: Boolean);
     function GuardsRequest(const ASpecifier,
@@ -966,6 +969,35 @@ begin
   end;
 end;
 
+{ Resolves one static dependency the deferred-graph walks (import defer
+  linking, deferred async evaluation) are about to read and parse, and
+  judges it first exactly as the eager path does: every probe through the
+  guard, then the resolved path, with the declaration as the call site. The
+  result carries the import attribute, as ResolveModuleRequestWithAttribute
+  returns it. }
+function TGocciaModuleLoader.ResolveTraversedDependency(const ARequestedPath,
+  AAttributeType, AImportingFilePath: string;
+  const ADeclaration: TGocciaStatement): string;
+var
+  PackageRoot: string;
+  PreviousCallSite: TGocciaCallSite;
+begin
+  if (AAttributeType = '') and HasGlobalModuleRequest(ARequestedPath) then
+    Exit(ARequestedPath);
+  EnterGocciaCallSite(AImportingFilePath, ADeclaration.Line,
+    ADeclaration.Column, PreviousCallSite);
+  try
+    Result := ResolveRequestAddress(ARequestedPath, AImportingFilePath, True,
+      False, PackageRoot);
+    EnforceHostRead(ARequestedPath, Result, AImportingFilePath, PackageRoot,
+      True, IsHostRequest(ARequestedPath, AImportingFilePath));
+  finally
+    LeaveGocciaCallSite(PreviousCallSite);
+  end;
+  if AAttributeType <> '' then
+    Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
+end;
+
 { Judges the path a request resolved to, before any cache serves it. A
   literal bare import resolved through the import grant records its
   package's canonical root, which makes the package part of the module
@@ -1618,15 +1650,19 @@ begin
 end;
 
 { Whether a module request is made by the host rather than by guest code:
-  the root of a host enrollment, or an import whose importer is host-owned.
-  Host requests are never read-checked. Whether the *target* was ever loaded
-  by the host does not matter: a guest importing the same file is a guest
-  read. }
+  while a host enrollment (LoadHostModule) is in progress, its root request
+  or an import whose importer is host-owned. Host requests are never
+  read-checked. Once the enrollment returns, code a host module left behind
+  (an exported function that calls import(), say) runs as guest code, so its
+  imports are guest reads even though their importer is host-owned. Whether
+  the *target* was ever loaded by the host does not matter either: a guest
+  importing the same file is a guest read. }
 function TGocciaModuleLoader.IsHostRequest(const ASpecifier,
   AImportingFilePath: string): Boolean;
 begin
-  Result := ((FHostRequestDepth > 0) and
-    (ASpecifier = FHostRequestSpecifier) and
+  if FHostRequestDepth <= 0 then
+    Exit(False);
+  Result := ((ASpecifier = FHostRequestSpecifier) and
     (AImportingFilePath = FHostRequestImporter)) or
     IsHostOwnedImporter(AImportingFilePath);
 end;
@@ -2728,8 +2764,8 @@ begin
           else
             Continue;
 
-          ResolvedPath := ResolveModuleRequestWithAttribute(RequestedPath,
-            RequestedAttributeType, PhysicalPath);
+          ResolvedPath := ResolveTraversedDependency(RequestedPath,
+            RequestedAttributeType, PhysicalPath, Stmt);
           if DeferredGraphTouchesEvaluating(ResolvedPath, PhysicalPath,
              ASeen) then
             Exit(True);
@@ -2829,8 +2865,8 @@ begin
           else
             Continue;
 
-          ResolvedPath := ResolveModuleRequestWithAttribute(RequestedPath,
-            RequestedAttributeType, PhysicalPath);
+          ResolvedPath := ResolveTraversedDependency(RequestedPath,
+            RequestedAttributeType, PhysicalPath, Stmt);
           EvaluateDeferredAsyncDependencies(ResolvedPath, PhysicalPath, ASeen,
             ARequestedModules);
         end;
@@ -2913,8 +2949,8 @@ begin
           else
             Continue;
 
-          ResolvedPath := ResolveModuleRequestWithAttribute(RequestedPath,
-            RequestedAttributeType, PhysicalPath);
+          ResolvedPath := ResolveTraversedDependency(RequestedPath,
+            RequestedAttributeType, PhysicalPath, Stmt);
           ValidateDeferredModuleLinks(ResolvedPath, PhysicalPath, ASeen);
         end;
       finally
