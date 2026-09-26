@@ -289,8 +289,14 @@ begin
       Next := HostOpenAt(Directory, PAnsiChar(@PathBytes[0]),
         O_RDONLY or O_NOFOLLOW or O_NONBLOCK);
       if Next < 0 then
+      begin
+        { Nothing creates a missing directory for an output, as before. }
+        if HostErrnoLocation^ = ESysENOENT then
+          raise EHostOutputRefused.CreateFmt('Cannot write %s: the ' +
+            'directory %s does not exist', [APath, Walked]);
         Refuse(APath, Walked + ' is a symbolic link or cannot be opened (' +
           HostErrorText + ')');
+      end;
       fpClose(Directory);
       Directory := Next;
       if (fpFStat(Directory, Info) <> 0) or not fpS_ISDIR(Info.st_mode) then
@@ -326,6 +332,9 @@ begin
     Refuse(APath, 'it names the config''s directory itself');
   if HostPathIsSymlink(APath) then
     Refuse(APath, 'it is a symbolic link');
+  if not DirectoryExists(ExtractFileDir(ExpandFileName(APath))) then
+    raise EHostOutputRefused.CreateFmt('Cannot write %s: the directory %s ' +
+      'does not exist', [APath, ExtractFileDir(ExpandFileName(APath))]);
   Parent := CanonicalHostPath(ExtractFileDir(ExpandFileName(APath)));
   if (Parent <> '') and not SameHostPath(StripTrailingDelimiter(Parent),
      StripTrailingDelimiter(ExtractFileDir(ACanonicalPath))) then

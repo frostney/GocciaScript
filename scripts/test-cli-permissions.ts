@@ -1577,6 +1577,13 @@ console.log("Output paths set in a config stay inside the config's directory..."
     expectExit(inside, 0, "config log inside its directory");
     if (!existsSync(join(project, "logs", "run.log"))) throw new Error("config log was not written beside the config");
 
+    // A directory that does not exist is named as missing.
+    writeFileSync(join(project, "goccia.json"), '{"coverage-output": "missing/cov.lcov", "coverage-format": "lcov"}\n');
+    const missingDirectory = run(LOADER, ["main.js"], { cwd: project });
+    expectExit(missingDirectory, 1, "config output under a missing directory");
+    expectIncludes(missingDirectory.combined, `the directory ${join(realpathSync(project), "missing")} does not exist`, "config output under a missing directory");
+    expectExcludes(missingDirectory.combined, "symbolic link", "config output under a missing directory");
+
     // A link at the name, or a linked directory on the way, cannot carry the
     // write out.
     if (!isWindows) {
@@ -1676,6 +1683,14 @@ console.log("Unreadable trust stores are errors, not trust...");
     expectExit(corruptRun, 2, "run with a corrupt store");
     expectIncludes(corruptRun.stderr, "Nothing was run. Trust store ", "run with a corrupt store");
     expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then trust these requests:", "run with a corrupt store");
+
+    // A directory is not a store: refused up front, before a run or a prompt.
+    mkdirSync(join(tmp, "storedir"));
+    for (const args of [["--trust-store=storedir", join("project", "main.js")], ["--trust-store=storedir", "--trust", "project", "--yes"]]) {
+      const directoryStore = run(LOADER, args, { cwd: tmp });
+      expectExit(directoryStore, 1, `directory store: ${args.join(" ")}`);
+      expectIncludes(directoryStore.combined, "--trust-store=storedir is a directory", `directory store: ${args.join(" ")}`);
+    }
 
     writeFileSync(join(tmp, "newer.json"), '{"version": 2, "trusted": {}}\n');
     const newer = run(LOADER, ["--trust-store=newer.json", "--list-trusted"], { cwd: tmp });

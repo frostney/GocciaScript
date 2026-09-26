@@ -660,8 +660,9 @@ Error: trust store /home/u/.config/goccia/trust.json was written by a newer Gocc
 ```
 
 A store that cannot be located (`cannot locate the per-user trust store (HOME
-is not set); pass --trust-store=<path>`), a held lock, or a failed write is
-also an error with status 1.
+is not set); pass --trust-store=<path>`), a `--trust-store` path that is a
+directory (refused before anything runs or is asked), a held lock, or a
+failed write is also an error with status 1.
 
 ### `GocciaWasmTestRunner`
 

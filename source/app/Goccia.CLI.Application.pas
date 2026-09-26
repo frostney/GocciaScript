@@ -663,6 +663,14 @@ begin
       'cannot be combined; run each on its own');
   if FYes.Present and not FTrust.Present then
     raise TCLIUsageError.Create('--yes only confirms --trust');
+  { The store is one file; a directory would otherwise surface later as a
+    read error on a run, or a failed write after --trust has asked. }
+  if FTrustStore.Present and (FTrustStore.Value <> '') and
+     DirectoryExists(ExpandFileName(FTrustStore.Value)) then
+    raise Exception.CreateFmt('--%s=%s is a directory; pass the path of the ' +
+      'trust store file (for example %s)', [TRUST_STORE_FLAG,
+      FTrustStore.Value, IncludeTrailingPathDelimiter(FTrustStore.Value) +
+      'trust.json']);
   if TrustModeCount = 0 then
     Exit;
   if FTrust.Present then
