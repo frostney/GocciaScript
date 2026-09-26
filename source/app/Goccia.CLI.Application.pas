@@ -186,6 +186,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Profiler,
+  Goccia.RuntimeExtensions.Fetch,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
   Goccia.TextFiles,

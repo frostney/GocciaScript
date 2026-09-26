@@ -8,6 +8,7 @@ uses
   Goccia.Builtins.GlobalAbort,
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
+  Goccia.Engine,
   Goccia.Runtime;
 
 type
@@ -56,7 +57,6 @@ var
   TypeDef: TGocciaTypeDefinition;
 begin
   inherited Attach(ARuntime);
-  TGocciaFetchManager.Initialize;
   // EventTarget must exist before AbortSignal so the signal's prototype and
   // constructor can be linked into the EventTarget chain (WHATWG DOM §3.2).
   FBuiltinEventTarget := TGocciaGlobalEventTarget.Create('EventTarget',
@@ -71,7 +71,7 @@ begin
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
-    EngineMaxResponseBytes);
+    EngineMaxResponseBytes, Runtime.Engine.Realm);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -117,18 +117,19 @@ begin
   FBuiltinAbort := nil;
   FBuiltinEventTarget.Free;
   FBuiltinEventTarget := nil;
-  TGocciaFetchManager.Shutdown;
   inherited;
 end;
 
 procedure TGocciaFetchRuntimeExtension.WaitForIdle;
 begin
-  WaitForFetchIdle;
+  if Assigned(FBuiltinFetch) then
+    WaitForFetchIdle(FBuiltinFetch.Realm);
 end;
 
 procedure TGocciaFetchRuntimeExtension.DiscardPending;
 begin
-  DiscardFetchCompletions;
+  if Assigned(FBuiltinFetch) then
+    DiscardFetchCompletions(FBuiltinFetch.Realm);
 end;
 
 end.
