@@ -113,26 +113,33 @@ const
   WASM_HONORED_CAPABILITIES: TGocciaHonoredCapabilities = [gcRead, gcNet
     {$IFNDEF LAKON}, gcFFI{$ENDIF}];
 
-{ The per-file config's permission request, applied as GocciaTestRunner
-  applies it (ADR 0122 layer 2); this runner takes no capability flags. A
-  request for a capability it cannot grant is reported on stderr. }
-function ResolveFileCapabilities(const AFileConfig: TConfigEntryArray;
-  const AConfigPath: string): TGocciaCapabilities;
 var
-  Request: TGocciaConfigPermissionRequest;
+  { -P: accept config permission requests. This runner has no trust store,
+    so without -P a config that requests a grant fails its files. }
+  GAcceptConfigPermissions: Boolean = False;
+
+{ The per-file config's permission request (ADR 0122); this runner takes no
+  capability flags. A request for a capability it cannot grant is reported
+  on stderr. Raises when the request asks for a grant and -P was not
+  given. }
+function ReadFileRequest(const AFileConfig: TConfigEntryArray;
+  const AConfigPath: string): TGocciaConfigPermissionRequest;
+var
   Warnings: TGocciaCapabilityScopes;
   I: Integer;
 begin
   if AConfigPath <> '' then
-    Request := ReadConfigPermissionRequest(AFileConfig, AConfigPath)
+    Result := ReadConfigPermissionRequest(AFileConfig, AConfigPath)
   else
-    Request := TGocciaConfigPermissionRequest.Empty;
-  Warnings := UnsupportedRequestWarnings(Request, WASM_HONORED_CAPABILITIES,
+    Result := TGocciaConfigPermissionRequest.Empty;
+  Warnings := UnsupportedRequestWarnings(Result, WASM_HONORED_CAPABILITIES,
     WASM_PROGRAM_NAME);
   for I := 0 to High(Warnings) do
     WriteLn(ErrOutput, 'WARN ', AConfigPath, ' :: ', Warnings[I]);
-  Result := ResolveCapabilities(nil, Request, True,
-    WASM_HONORED_CAPABILITIES, GetCurrentDir);
+  if Result.RequestsHonoredGrants(WASM_HONORED_CAPABILITIES) and
+     not GAcceptConfigPermissions then
+    raise Exception.CreateFmt('%s requests permissions; pass -P to accept ' +
+      'them (%s has no trust store)', [AConfigPath, WASM_PROGRAM_NAME]);
 end;
 
 { source-type: per-file config > file-extension default (the
@@ -254,6 +261,7 @@ var
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
   EngineOptions: TGocciaEngineOptions;
+  Request: TGocciaConfigPermissionRequest;
   Compatibility: TGocciaCompatibilityFlags;
   TestResult: TGocciaObjectValue;
   GC: TGarbageCollector;
@@ -275,20 +283,24 @@ begin
       { Removed and command-line-only keys fail the file (ADR 0122). }
       ValidateConfigEntries(FileConfig, EngineOptions.Options);
 
+      Request := ReadFileRequest(FileConfig, FileConfigPath);
+
       Executor := TGocciaInterpreterExecutor.Create;
       try
         Engine := TGocciaEngine.Create(AFileName, Source, Executor,
-          ResolveFileCapabilities(FileConfig, FileConfigPath));
+          ResolveCapabilities(nil, Request, True, WASM_HONORED_CAPABILITIES,
+            GetCurrentDir));
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
           ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
           Engine.Compatibility := Compatibility;
           Engine.StrictTypes :=
             ResolveFlagOption(EngineOptions.StrictTypes, FileConfig);
-          Engine.FunctionConstructor.Enabled := ResolveFlagOption(
-            EngineOptions.UnsafeFunctionConstructor, FileConfig);
-          if ResolveFlagOption(EngineOptions.UnsafeShadowRealm,
-             FileConfig) then
+          { unsafe-* keys are requests: ReadFileRequest has refused the file
+            unless -P accepted them. }
+          Engine.FunctionConstructor.Enabled :=
+            gurFunctionConstructor in Request.Unsafe;
+          if gurShadowRealm in Request.Unsafe then
             EnableShadowRealm(Engine);
 
           Core := AttachRuntime(Engine);
@@ -342,19 +354,31 @@ end;
 var
   Manifest: TStringList;
   Verdict: TFileVerdict;
-  FileName, Line: string;
+  FileName, Line, ManifestPath: string;
   Index, NameIndex: Integer;
   FileCount, FailedFileCount: Int64;
   TotalTests, TotalPassed, TotalFailed, TotalSkipped: Int64;
   GC: TGarbageCollector;
 
 begin
-  if ParamCount < 1 then
+  ManifestPath := '';
+  for Index := 1 to ParamCount do
+    if (ParamStr(Index) = '-' + ACCEPT_CONFIG_PERMISSIONS_SHORT_FLAG) or
+       (ParamStr(Index) = '--' + ACCEPT_CONFIG_PERMISSIONS_FLAG) then
+      GAcceptConfigPermissions := True
+    else if ManifestPath = '' then
+      ManifestPath := ParamStr(Index)
+    else
+      ManifestPath := #0;
+  if (ManifestPath = '') or (ManifestPath = #0) then
   begin
     WriteLn(ErrOutput,
-      'Usage: GocciaWasmTestRunner <manifest-file>');
+      'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
     WriteLn(ErrOutput,
       '  manifest: one script path per line, # starts a comment');
+    WriteLn(ErrOutput,
+      '  -P, --accept-config-permissions: apply the permission requests ' +
+      'of the files'' configs (there is no trust store)');
     ExitCode := 2;
     Exit;
   end;
@@ -374,7 +398,7 @@ begin
 
   Manifest := TStringList.Create;
   try
-    Manifest.LoadFromFile(ParamStr(1));
+    Manifest.LoadFromFile(ManifestPath);
     for Index := 0 to Manifest.Count - 1 do
     begin
       Line := Trim(Manifest[Index]);

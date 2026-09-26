@@ -168,6 +168,7 @@ type
     FFetchMaxResponseBytes: Integer;
     FIsCapabilityChild: Boolean;
     FEffectiveCapabilitiesAudited: Boolean;
+    FCapabilityProvenance: string;
 
     // Core language built-in objects
     FBuiltinMath: TGocciaMath;
@@ -374,6 +375,11 @@ type
     property CapabilityAuditSink: TGocciaCapabilityAuditSink
       read FCapabilityAuditSink write FCapabilityAuditSink;
     property Capabilities: TGocciaCapabilities read FCapabilities;
+    { Where the host says the set came from, such as `cli --allow-net=a.test;
+      config /repo/goccia.json trusted sha256:...`. The reason of the
+      capabilities.effective event when set. }
+    property CapabilityProvenance: string read FCapabilityProvenance
+      write FCapabilityProvenance;
     { The directory whose files static imports with literal specifiers may
       read without a read grant: the nearest goccia.json/.json5/.toml above the
       entry, else the entry's directory. Canonical. }
@@ -1106,8 +1112,12 @@ begin
      FEffectiveCapabilitiesAudited then
     Exit;
   FEffectiveCapabilitiesAudited := True;
-  EmitCapabilityAudit(gckCapabilitiesEffective, gcdAllow,
-    FCapabilities.ToJSON, 'effective capability set at engine start');
+  if FCapabilityProvenance <> '' then
+    EmitCapabilityAudit(gckCapabilitiesEffective, gcdAllow,
+      FCapabilities.ToJSON, FCapabilityProvenance)
+  else
+    EmitCapabilityAudit(gckCapabilitiesEffective, gcdAllow,
+      FCapabilities.ToJSON, 'effective capability set at engine start');
 end;
 
 destructor TGocciaEngine.Destroy;

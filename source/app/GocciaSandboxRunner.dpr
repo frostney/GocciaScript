@@ -724,7 +724,8 @@ begin
     could only ever find a config that has nothing to do with this run.
     Root config still applies, because it is merged into the option values
     before execution starts. }
-  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName);
+  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName,
+    FileConfigVerdict('').AcceptedUnsafe);
 
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
@@ -902,8 +903,7 @@ begin
       if FHasCurrentCapabilities then
         EngineCapabilities := FCurrentCapabilities
       else
-        EngineCapabilities := ResolveEngineCapabilities(
-          EmptyConfigEntries, '');
+        EngineCapabilities := ResolveEngineCapabilities('');
 
       if EngineOptions.Mode.Matches(emBytecode) then
       begin
@@ -1361,12 +1361,23 @@ procedure TSandboxRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   EntryPath: string;
   RunResult: TGocciaSandboxRunResult;
+  ConfigPaths: TStringList;
 begin
   if APaths.Count <> 1 then
   begin
     WriteLn(ErrOutput, 'Error: expected one sandbox entry path.');
     ExitCode := 1;
     Exit;
+  end;
+
+  { Only an explicit --config reaches this runner; its permission requests
+    must be trusted before the sandbox is built. }
+  ConfigPaths := TStringList.Create;
+  try
+    ConfigPaths.Add(GoverningConfigPath(''));
+    VerifyGoverningConfigs(ConfigPaths);
+  finally
+    ConfigPaths.Free;
   end;
 
   FContext.Free;

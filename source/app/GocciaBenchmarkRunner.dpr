@@ -872,6 +872,14 @@ var
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   I, J: Integer;
 begin
+  { Source from stdin is governed by the working directory's config. }
+  Names := TStringList.Create;
+  try
+    Names.Add(STDIN_FILE_NAME);
+    VerifyConfigPermissions(Names);
+  finally
+    Names.Free;
+  end;
   Source := ReadSourceFromText(Input);
   Reporter := TBenchmarkReporter.Create;
   try
@@ -969,7 +977,7 @@ begin
           Exit;
         end;
       end;
-      Files := ExpandMultifileFiles(RawFiles);
+      Files := PrepareRunFiles(RawFiles);
     finally
       RawFiles.Free;
     end;

@@ -640,10 +640,16 @@ begin
   FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',
     'Maximum fetch response body: 1MiB or plain bytes (default: 8MiB; ' +
     'TypeError on exceed)', LIMITS_GROUP);
-  FUnsafeFunctionConstructor := TFlagOption.Create('unsafe-function-constructor',
+  FUnsafeFunctionConstructor := TFlagOption.Create(
+    UNSAFE_REQUEST_KEYS[gurFunctionConstructor],
     'Enable the Function constructor (dynamic code generation)', 'Engine');
-  FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
+  FUnsafeShadowRealm := TFlagOption.Create(UNSAFE_REQUEST_KEYS[gurShadowRealm],
     'Enable the ShadowRealm constructor (dynamic source evaluation)', 'Engine');
+  { In a config file these are permission requests: they take effect once the
+    config is trusted, through its trust verdict, and never from applying a
+    root config to the options (ADR 0122). }
+  FUnsafeFunctionConstructor.RequiresTrust := True;
+  FUnsafeShadowRealm.RequiresTrust := True;
   FDeterministic := TFlagOption.Create('deterministic',
     'Use fixed script-visible time, UTC, and seeded randomness', 'Engine');
   FWarningUnsupportedFeatures := TFlagOption.Create(

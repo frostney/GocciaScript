@@ -56,6 +56,7 @@ type
     procedure EmitPath(const APath: string);
   protected
     function HonoredSettings: TGocciaHonoredSettings; override;
+    function HonorsUnsafeRequests: Boolean; override;
     procedure Configure; override;
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
@@ -80,6 +81,13 @@ end;
 function TBundlerApp.HonoredSettings: TGocciaHonoredSettings;
 begin
   Result := [];
+end;
+
+{ Nor does it apply unsafe-* keys, so a config requesting them needs no
+  trust here; they are reported as ignored. }
+function TBundlerApp.HonorsUnsafeRequests: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TBundlerApp.Configure;
@@ -145,7 +153,7 @@ begin
     SetLength(FileConfig, 0);
   { The bundler grants nothing, so a permissions block is only validated and
     any grant it requests reported as ignored. }
-  FilePermissionRequest(FileConfig, FileConfigPath);
+  FilePermissionRequest(FileConfigPath);
   ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
   EffectiveLabelStatementsEnabled := ResolveFlagOption(
     EngineOptions.CompatibilityFlagOption(cfLabel), FileConfig);
@@ -384,7 +392,7 @@ begin
   begin
     RawFiles := FindAllFiles(APath, ScriptExtensions);
     try
-      Files := ExpandMultifileFiles(RawFiles);
+      Files := PrepareRunFiles(RawFiles);
     finally
       RawFiles.Free;
     end;
@@ -413,7 +421,7 @@ begin
       SinglePath := TStringList.Create;
       try
         SinglePath.Add(APath);
-        Files := ExpandMultifileFiles(SinglePath);
+        Files := PrepareRunFiles(SinglePath);
       finally
         SinglePath.Free;
       end;
