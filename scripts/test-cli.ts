@@ -3673,8 +3673,9 @@ console.log("Runtime diagnostic parity...");
           `SECURITY: TestRunner (${mode}) read a file named by a thrown stack: ${out}`,
         );
     }
-    // Same attack through the loader and the sandbox runner (the sandbox path
-    // is the one that would otherwise bypass the sandbox.fs.path gate).
+    // Same attack through GocciaRunner and the bare loader. Sandbox mode, the
+    // path that would otherwise bypass the sandbox.fs.path gate, is covered in
+    // test-cli-apps.ts.
     for (const bin of [RUNNER, BARE]) {
       const run = await $`${bin} ${attackSrc} 2>&1`.nothrow();
       const out = run.text();
