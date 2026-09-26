@@ -12,6 +12,9 @@ uses
   BaseUnix,
   Sockets,
   {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Windows,
+  {$ENDIF}
   Classes,
   SysUtils,
 
@@ -127,6 +130,7 @@ type
     procedure TestHostModuleCodeImportsAsTheGuestLater;
     procedure TestDeferredGraphDependenciesAreJudged;
     procedure TestFFIOpenLoadsTheJudgedLibrary;
+    procedure TestWindowsPinHoldsTheJudgedLibrary;
   public
     procedure SetupTests; override;
   end;
@@ -210,6 +214,9 @@ begin
     'reading it', TestDeferredGraphDependenciesAreJudged);
   Test('FFI.open loads the library it judged even if a directory is swapped ' +
     'before the load', TestFFIOpenLoadsTheJudgedLibrary);
+  Test('Windows: the FFI pin blocks ancestor renames and loads the judged ' +
+    'library through a re-pointed junction',
+    TestWindowsPinHoldsTheJudgedLibrary);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -1714,6 +1721,131 @@ begin
   Expect<string>(Outcome.ErrorMessage).ToBe('');
   Expect<Boolean>(Pos(Outside, Maps) > 0).ToBe(False);
   Expect<Boolean>(Pos(GSwapMovedTo + '/libfixture.so', Maps) > 0).ToBe(True);
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+var
+  GPinParent, GPinGrandparent, GPinJunction, GPinOther: string;
+  GPinParentRenamed, GPinGrandparentRenamed, GPinJunctionRepointed: Boolean;
+  GPinProbeRan: Boolean;
+
+{ Runs while FFI.open holds its Windows pin, between the check and the load:
+  tries to rename the library's parent and grandparent directories, and
+  re-points a junction that was on the path FFI.open was given. }
+procedure ProbeWindowsLibraryPin;
+{$IFDEF MSWINDOWS}
+var
+  ExitCode_: Integer;
+{$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  GPinProbeRan := True;
+  GPinParentRenamed := MoveFileExW(PWideChar(UnicodeString(GPinParent)),
+    PWideChar(UnicodeString(GPinParent + '-moved')), 0);
+  if GPinParentRenamed then
+    MoveFileExW(PWideChar(UnicodeString(GPinParent + '-moved')),
+      PWideChar(UnicodeString(GPinParent)), 0);
+  GPinGrandparentRenamed := MoveFileExW(
+    PWideChar(UnicodeString(GPinGrandparent)),
+    PWideChar(UnicodeString(GPinGrandparent + '-moved')), 0);
+  if GPinGrandparentRenamed then
+    MoveFileExW(PWideChar(UnicodeString(GPinGrandparent + '-moved')),
+      PWideChar(UnicodeString(GPinGrandparent)), 0);
+  { A junction is a directory entry of its own, not an ancestor of the
+    pinned file, so the pin does not hold it: it can be re-pointed. }
+  RemoveDirectoryW(PWideChar(UnicodeString(GPinJunction)));
+  ExitCode_ := ExecuteProcess('cmd.exe', '/c mklink /J "' + GPinJunction +
+    '" "' + GPinOther + '"');
+  GPinJunctionRepointed := (ExitCode_ = 0) and
+    DirectoryExists(GPinJunction + '\') and
+    FileExists(GPinJunction + '\libfixture.dll');
+  {$ENDIF}
+end;
+
+{ Windows: FFI.open pins the library file (no write or delete sharing) and
+  loads it by the pinned handle's final path. While the pin is held the
+  library's parent and grandparent directories cannot be renamed, and
+  re-pointing a junction that was on the path the script gave does not
+  change which library loads. }
+procedure TEngineCapabilitiesTests.TestWindowsPinHoldsTheJudgedLibrary;
+{$IFDEF MSWINDOWS}
+var
+  Base, Fixture, Good, GoodLibrary, OtherLibrary: string;
+  GoodLoaded, OtherLoaded: Boolean;
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  Fixture := ExpandFileName('fixtures\ffi\libfixture.dll');
+  if not FileExists(Fixture) then
+    Fail('FFI fixture not found: ' + Fixture +
+      ' (CI builds it with gcc before the Pascal unit tests)');
+  Base := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-winpin-' + IntToStr(GetProcessID);
+  ForceDirectories(Base);
+  { Long, final spelling, so it matches the module names the loader keeps. }
+  Base := CanonicalCapabilityPath(Base);
+  Good := Base + '\proj\libs\good';
+  GoodLibrary := Good + '\libfixture.dll';
+  OtherLibrary := Base + '\other\libfixture.dll';
+  CopyFileContents(Fixture, GoodLibrary);
+  CopyFileContents(Fixture, OtherLibrary);
+  GPinParent := Good;
+  GPinGrandparent := Base + '\proj\libs';
+  GPinJunction := Base + '\proj\link';
+  GPinOther := Base + '\other';
+  GPinProbeRan := False;
+  GPinParentRenamed := True;
+  GPinGrandparentRenamed := True;
+  GPinJunctionRepointed := False;
+  if ExecuteProcess('cmd.exe', '/c mklink /J "' + GPinJunction + '" "' +
+     Good + '"') <> 0 then
+    Fail('could not create the test junction');
+
+  Outcome := Default(TRunOutcome);
+  GoodLoaded := False;
+  OtherLoaded := False;
+  Source := TStringList.Create;
+  Source.Text := 'globalThis.lib = FFI.open("' +
+    StringReplace(GPinJunction + '\libfixture.dll', '\', '\\',
+      [rfReplaceAll]) + '"); globalThis.result = "opened";';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcFFI, Base + '\proj'));
+  GocciaFFIAfterOpenCheck := ProbeWindowsLibraryPin;
+  try
+    InstallFFIIfGranted(AttachRuntime(Engine));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Outcome);
+    end;
+    GoodLoaded := GetModuleHandleW(
+      PWideChar(UnicodeString(GoodLibrary))) <> 0;
+    OtherLoaded := GetModuleHandleW(
+      PWideChar(UnicodeString(OtherLibrary))) <> 0;
+  finally
+    GocciaFFIAfterOpenCheck := nil;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    RemoveDirectoryW(PWideChar(UnicodeString(GPinJunction)));
+    DeleteFile(GoodLibrary);
+    DeleteFile(OtherLibrary);
+  end;
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<Boolean>(GPinProbeRan).ToBe(True);
+  Expect<Boolean>(GPinParentRenamed).ToBe(False);
+  Expect<Boolean>(GPinGrandparentRenamed).ToBe(False);
+  Expect<Boolean>(GPinJunctionRepointed).ToBe(True);
+  Expect<Boolean>(GoodLoaded).ToBe(True);
+  Expect<Boolean>(OtherLoaded).ToBe(False);
   {$ELSE}
   Expect<Boolean>(True).ToBe(True);
   {$ENDIF}

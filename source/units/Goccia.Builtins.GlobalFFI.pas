@@ -206,9 +206,10 @@ end;
     (/proc/self/fd/N), so what is loaded is exactly what was judged.
   - Windows: the file is opened first without write or delete sharing, so
     neither it nor any directory on its path can be renamed or replaced
-    while the handle is held; the path of the opened file is judged
-    verbatim, the library is loaded while the handle is held, and the path
-    the loader reports for the module is judged once more.
+    while the handle is held; the opened file's final path is judged
+    verbatim, the library is loaded by that same final path while the
+    handle is held, and the path the loader reports for the module is
+    judged once more.
   - Elsewhere (macOS, BSD): no pre-load pin is available. After loading,
     the path is canonicalized again and must still be the judged one, and
     a mismatch unloads and refuses the library — but a swapped library's
@@ -322,6 +323,9 @@ begin
       Deny(Format('the ffi capability does not cover %s', [PinnedPath]),
         CHANGED_REASON);
     end;
+    { Load the pinned file by its own final path: fully resolved (no
+      junction or symlink left in it) and exactly the string just judged. }
+    PinnedLoadPath := PinnedPath;
   end;
   {$ENDIF}
   try
