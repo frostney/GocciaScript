@@ -267,6 +267,9 @@ begin
   end;
   if not Allowed then
     Deny(DenialDetail);
+  if Assigned(FCapabilityAuditEmitter) then
+    FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
+      'the ffi capability covers this library');
 
   PinnedLoadPath := LoadPath;
   {$IFDEF FPC}{$IFDEF LINUX}
@@ -309,10 +312,6 @@ begin
     Handle.ReleaseOwner;
     Deny('the library changed between the ffi check and the load');
   end;
-
-  if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
-      'the ffi capability covers this library');
 
   try
     Result := TGocciaFFILibraryValue.Create(Handle);
