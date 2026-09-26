@@ -203,7 +203,7 @@ async function homeMarkdown(): Promise<string> {
     "",
     "## Runtime surface",
     "",
-    "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaSandboxRunner adds import-only `fs` and `goccia` modules backed by a seeded virtual filesystem, sandbox shell commands, nested execution, and explicit diffs.",
+    "GocciaScript includes structured-data imports and parsers, console output, SemVer helpers, import maps, and a built-in test runner with `test`, `describe`, and `expect`. GocciaRunner's sandbox mode adds import-only `fs` and `goccia` modules backed by a virtual filesystem of copied inputs, sandbox shell commands, nested execution, and explicit diffs.",
     "",
     NODE_COMPATIBILITY_ANSWER,
     "",
@@ -258,9 +258,9 @@ async function installationMarkdown(): Promise<string> {
     "",
     "## Pre-built binaries",
     "",
-    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaScriptLoader\`, \`GocciaScriptLoaderBare\`, \`GocciaSandboxRunner\`, \`GocciaTestRunner\`, \`GocciaTest262Runner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
+    `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaRunner\` (with its sandbox mode; \`GocciaScriptLoader\` before 0.14), \`GocciaScriptLoaderBare\`, \`GocciaTestRunner\`, \`GocciaTest262Runner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
     "",
-    "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaREPL` on your `PATH`; the remaining tools are yours to copy out of that directory.",
+    "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly `GocciaRunner`, `GocciaTestRunner`, and `GocciaREPL` on your `PATH`; the remaining tools are yours to copy out of that directory.",
     "",
     "## Build from source",
     "",
@@ -272,8 +272,8 @@ async function installationMarkdown(): Promise<string> {
       [
         "git clone https://github.com/frostney/GocciaScript",
         "cd GocciaScript",
-        "./build.pas loader testrunner repl",
-        "./build/GocciaScriptLoader --help",
+        "./build.pas runner testrunner repl",
+        "./build/GocciaRunner --help",
       ].join("\n"),
       "sh",
     ),
@@ -404,17 +404,18 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
 
 function sandboxMarkdown(): string {
   const gocciaFlow = TOOL_CALL_FLOWS.goccia;
-  const runnerCommand = `./build/GocciaSandboxRunner /main.js \\
-  --seed-config=./sandbox.seed.json \\
+  const runnerCommand = `# once: review and trust the sandbox section
+./build/GocciaRunner --trust goccia.json
+
+./build/GocciaRunner main.js \\
   --mode=bytecode \\
-  --diff`;
-  const seedConfig = `{
-  "files": [
-    { "from": "./project", "to": "/" },
-    { "from": "./tools", "to": "/tools" },
-    { "path": "/main.js", "text": "import fs from \\"fs\\";\\nconsole.log(fs.readdirSync('/'));" },
-    { "path": "/data.bin", "base64": "AQID" }
-  ]
+  --diff=unified`;
+  const sandboxConfig = `{
+  "sandbox": {
+    "copy": ["project=/", "tools"],
+    "copy-rw": ["out"]
+  },
+  "max-fs-bytes": "32MiB"
 }`;
   const vfsScript = `import fs from "fs";
 import { $, runScript } from "goccia";
@@ -424,7 +425,7 @@ fs.writeFileSync("/out/summary.txt", "ready\\n");
 
 const audit = runScript("/tools/audit.js", {
   sandbox: true,
-  seed: ["/tools/audit.js", { from: "/out", to: "/input" }],
+  copy: ["/tools/audit.js", "/out=/input"],
   diff: true,
 });
 
@@ -434,32 +435,32 @@ console.log(audit.diff);`;
   return [
     frontmatter(
       "Sandbox - GocciaScript",
-      "AI-agent execution under explicit host control, with capability gates, limits, structured results, and a seeded virtual filesystem.",
+      "AI-agent execution under explicit host control, with capability gates, limits, structured results, and a virtual filesystem of copied inputs.",
     ),
     "",
     "# Sandbox",
     "",
     "GocciaScript runs AI-agent scripts under an explicit host-defined capability model. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
     "",
-    "Filesystem workflows use GocciaSandboxRunner. Host paths are copied into a virtual filesystem as seed baselines, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
+    "Filesystem workflows use GocciaRunner's sandbox mode. Host paths are copied into a virtual filesystem, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
     "",
     "## Agent flow",
     "",
     list([
       "AI agent emits GocciaScript via a tool call.",
-      "Goccia sandbox runs the script with explicit globals, seed baselines, capability gates, timeout, and memory cap.",
+      "Goccia sandbox runs the script with explicit globals, copied inputs, capability gates, timeout, and memory cap.",
       "The host receives a structured JSON result.",
     ]),
     "",
     "## Virtual filesystem runner",
     "",
-    'GocciaSandboxRunner executes an entry path inside an isolated virtual filesystem. Seed paths and JSON seed config copy files into the sandbox before execution; they are seed baselines, not live mounts. Source can import `"fs"` for Node-compatible synchronous, callback, and promise methods over the sandbox filesystem, and `"goccia"` for shell commands or nested execution.',
+    'GocciaRunner\'s sandbox mode runs the entry inside an isolated virtual filesystem. `--copy` and the `sandbox` section of `goccia.json` copy files in before execution; they are snapshots, not live mounts, and only `--copy-rw` inputs are written back after a successful run. Source can import `"fs"` for Node-compatible synchronous, callback, and promise methods over the sandbox filesystem, and `"goccia"` for shell commands or nested execution.',
     "",
     fence(runnerCommand, "bash"),
     "",
-    "Seed config:",
+    "`goccia.json`:",
     "",
-    fence(seedConfig, "json"),
+    fence(sandboxConfig, "json"),
     "",
     "Inside the sandbox:",
     "",

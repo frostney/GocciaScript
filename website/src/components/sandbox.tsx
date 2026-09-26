@@ -232,18 +232,19 @@ const DEFAULT_GLOBALS = `{
   }]
 }`;
 
-const RUNNER_COMMAND = `./build/GocciaSandboxRunner /main.js \\
-  --seed-config=./sandbox.seed.json \\
-  --mode=bytecode \\
-  --diff`;
+const RUNNER_COMMAND = `# once: review and trust the sandbox section
+./build/GocciaRunner --trust goccia.json
 
-const SEED_CONFIG = `{
-  "files": [
-    { "from": "./project", "to": "/" },
-    { "from": "./tools", "to": "/tools" },
-    { "path": "/main.js", "text": "import fs from \\"fs\\";\\nconsole.log(fs.readdirSync('/'));" },
-    { "path": "/data.bin", "base64": "AQID" }
-  ]
+./build/GocciaRunner main.js \\
+  --mode=bytecode \\
+  --diff=unified`;
+
+const SANDBOX_CONFIG = `{
+  "sandbox": {
+    "copy": ["project=/", "tools"],
+    "copy-rw": ["out"]
+  },
+  "max-fs-bytes": "32MiB"
 }`;
 
 const VFS_SCRIPT = `import fs from "fs";
@@ -254,7 +255,7 @@ fs.writeFileSync("/out/summary.txt", "ready\\n");
 
 const audit = runScript("/tools/audit.js", {
   sandbox: true,
-  seed: ["/tools/audit.js", { from: "/out", to: "/input" }],
+  copy: ["/tools/audit.js", "/out=/input"],
   diff: true,
 });
 
@@ -436,7 +437,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "GocciaScriptLoader --timeout=500 --globals=context.json",
+          text: "GocciaRunner --timeout=500 --globals=context.json",
         },
         {
           kind: "err",
@@ -460,7 +461,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "GocciaScriptLoader --timeout=500 --globals=context.json",
+          text: "GocciaRunner --timeout=500 --globals=context.json",
         },
         {
           kind: "err",
@@ -471,7 +472,7 @@ export function Sandbox() {
     }
     const banner: SbLine = {
       kind: "meta",
-      text: "GocciaScriptLoader --timeout=500 --globals=context.json",
+      text: "GocciaRunner --timeout=500 --globals=context.json",
     };
     // Set the re-entry flag *after* the synchronous validation guards
     // above have committed to actually running — so a validation
@@ -681,8 +682,8 @@ export function Sandbox() {
           </AnchorH2>
           <p>
             Provide AI-agent scripts with explicit data, modules, capabilities,
-            and limits. Filesystem workflows use GocciaSandboxRunner: host paths
-            are copied into a virtual filesystem as seed baselines, sandbox
+            and limits. Filesystem workflows use GocciaRunner&apos;s sandbox
+            mode: host paths are copied into a virtual filesystem, sandbox
             writes stay in that filesystem, and the host receives structured
             output plus explicit diffs.
           </p>
@@ -706,7 +707,7 @@ export function Sandbox() {
               </div>
               <h4>Goccia sandbox</h4>
               <p>
-                explicit globals · seed baselines · capability gates · limits
+                explicit globals · copied inputs · capability gates · limits
               </p>
             </div>
             <div className="sb-arrow">
@@ -723,7 +724,7 @@ export function Sandbox() {
           <div className="sb-caplist">
             <span className="sb-cap on">
               <span className="sb-cap-dot" />
-              seed baselines
+              copied inputs
             </span>
             <span className="sb-cap on">
               <span className="sb-cap-dot" />
@@ -744,13 +745,15 @@ export function Sandbox() {
           <div className="section-head">
             <div className="section-kicker">Virtual filesystem runner</div>
             <AnchorH2 id="virtual-filesystem">
-              Seeded files, not host mounts.
+              Copied files, not host mounts.
             </AnchorH2>
             <p>
-              GocciaSandboxRunner executes an entry path inside an isolated
-              virtual filesystem. Seed paths and JSON seed config copy files
-              into the sandbox before execution; they are seed baselines, not
-              live mounts. Source can import <code>&quot;fs&quot;</code> for
+              GocciaRunner&apos;s sandbox mode runs the entry inside an isolated
+              virtual filesystem. <code>--copy</code> and the{" "}
+              <code>sandbox</code> section of <code>goccia.json</code> copy
+              files in before execution; they are snapshots, not live mounts,
+              and only <code>--copy-rw</code> inputs are written back after a
+              successful run. Source can import <code>&quot;fs&quot;</code> for
               sandbox filesystem operations and <code>&quot;goccia&quot;</code>{" "}
               for shell commands or nested execution.
             </p>
@@ -772,11 +775,11 @@ export function Sandbox() {
             <div className="code-card">
               <div className="code-card-head">
                 <TerminalIcon size={14} />
-                <span>sandbox.seed.json</span>
+                <span>goccia.json</span>
               </div>
               <pre className="code-card-body">
                 <code>
-                  <HighlightedJson code={SEED_CONFIG} />
+                  <HighlightedJson code={SANDBOX_CONFIG} />
                 </code>
               </pre>
             </div>
