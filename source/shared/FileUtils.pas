@@ -13,13 +13,22 @@ uses
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 const
   { open(2)/openat(2) flags and *at(2) arguments FPC 3.2.2's BaseUnix does
-    not declare on every host. Linux takes FPC's own O_* values, which vary
-    by architecture; its AT_* values are the same on every architecture
-    (linux/fcntl.h). Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h,
-    FreeBSD's from sys/sys/fcntl.h. }
+    not declare on every host, or declares wrongly: on Linux it gives every
+    CPU but SPARC and MIPS the x86 O_DIRECTORY/O_NOFOLLOW values, but arm,
+    aarch64 and powerpc use their own (arch/*/include/uapi/asm/fcntl.h),
+    where $20000 is O_LARGEFILE and would make O_NOFOLLOW a no-op. Linux's
+    AT_* values are the same on every architecture (linux/fcntl.h).
+    Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h, FreeBSD's from
+    sys/sys/fcntl.h. }
   {$IF DEFINED(LINUX)}
+  {$IF DEFINED(CPUARM) OR DEFINED(CPUAARCH64) OR DEFINED(CPUPOWERPC) OR
+    DEFINED(CPUPOWERPC64)}
+  HOST_O_NOFOLLOW = $8000;
+  HOST_O_DIRECTORY = $4000;
+  {$ELSE}
   HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
   HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
+  {$IFEND}
   HOST_AT_FDCWD = -100;
   HOST_AT_SYMLINK_NOFOLLOW = $100;
   HOST_AT_REMOVEDIR = $200;
