@@ -145,7 +145,7 @@ begin
     SetLength(FileConfig, 0);
   { The bundler grants nothing, so a permissions block is only validated and
     any grant it requests reported as ignored. }
-  FilePermissionRequest(FileConfig, FileConfigPath);
+  FilePermissionRequest(FileConfig, FileConfigPath, AFileName);
   ResolveCompatibilityFlags(EngineOptions, FileConfig, EffectiveCompatibility);
   EffectiveLabelStatementsEnabled := ResolveFlagOption(
     EngineOptions.CompatibilityFlagOption(cfLabel), FileConfig);

@@ -47,6 +47,7 @@ type
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
     FRootPermissionRequest: TGocciaConfigPermissionRequest;
+    FRootConfigExplicit: Boolean;
     FWarnLock: TGocciaCriticalSection;
     FWarned: TStringList;
     procedure BuildAllOptions;
@@ -95,12 +96,20 @@ type
       permission request of the file's config (AFileConfigPath, or the root
       config when the file has none), minus every deny. }
     function ResolveEngineCapabilities(const AFileConfig: TConfigEntryArray;
-      const AFileConfigPath: string): TGocciaCapabilities;
+      const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaCapabilities;
     { The permission request that governs a file: its own config's
-      (AFileConfigPath), else the root config's. Requests this binary cannot
-      honor are reported once on stderr. }
+      (AFileConfigPath), else the root config's when RootConfigGoverns the
+      file, else none. Requests this binary cannot honor are reported once on
+      stderr. }
     function FilePermissionRequest(const AFileConfig: TConfigEntryArray;
-      const AFileConfigPath: string): TGocciaConfigPermissionRequest;
+      const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaConfigPermissionRequest;
+    { Whether the root config's permissions and unsafe-* keys apply to
+      AFileName: always for an explicit --config (and for AFileName = ''),
+      otherwise only when the file is inside the root config's directory
+      tree. A discovered config never grants to files outside its tree. }
+    function RootConfigGoverns(const AFileName: string): Boolean;
     { The set for a main-thread warm-up engine: it grants ffi when any of
       AFiles would, so the FFI prototypes are warmed before workers start. }
     function WarmUpCapabilities(const AFiles: TStrings): TGocciaCapabilities;
@@ -185,7 +194,8 @@ procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   is no host file to discover a per-file config for. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray; const AFileName: string);
+  const AFileConfig: TConfigEntryArray; const AFileName: string;
+  const ARootConfigGoverns: Boolean = True);
 
 implementation
 
@@ -708,9 +718,27 @@ end;
   Priority: CLI option > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root config values
   so that a per-file config can override a root-level config value. }
+{ An unsafe-* flag: the command line, else the file's own config, else the
+  root config only when it governs the file. }
+function ResolveUnsafeFlag(const AFlag: TFlagOption;
+  const AFileConfig: TConfigEntryArray;
+  const ARootConfigGoverns: Boolean): Boolean;
+var
+  Value: string;
+begin
+  if AFlag.FromCommandLine then
+    Exit(True);
+  if FindConfigEntry(AFileConfig, AFlag.LongName, Value) or
+     ((AFlag.ConfigName <> '') and
+      FindConfigEntry(AFileConfig, AFlag.ConfigName, Value)) then
+    Exit(Value = 'true');
+  Result := ARootConfigGoverns and AFlag.Present;
+end;
+
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray; const AFileName: string);
+  const AFileConfig: TConfigEntryArray; const AFileName: string;
+  const ARootConfigGoverns: Boolean);
 var
   Entry: TConfigEntry;
   MemoryLimit, ResponseLimit: Int64;
@@ -730,12 +758,15 @@ begin
   AEngine.StrictTypes := ResolveFlagOption(
     AEngineOptions.StrictTypes, AFileConfig);
 
-  { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
-  AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
-    AEngineOptions.UnsafeFunctionConstructor, AFileConfig);
+  { unsafe-function-constructor: CLI flag > per-file config > root config
+    (when it governs the file) > default (false) }
+  AEngine.FunctionConstructor.Enabled := ResolveUnsafeFlag(
+    AEngineOptions.UnsafeFunctionConstructor, AFileConfig,
+    ARootConfigGoverns);
 
-  { unsafe-shadowrealm: CLI flag > per-file config > root config > default (false) }
-  if ResolveFlagOption(AEngineOptions.UnsafeShadowRealm, AFileConfig) then
+  { unsafe-shadowrealm: as unsafe-function-constructor }
+  if ResolveUnsafeFlag(AEngineOptions.UnsafeShadowRealm, AFileConfig,
+     ARootConfigGoverns) then
     EnableShadowRealm(AEngine);
 
   { max-memory: CLI option > per-file config > root config > system default.
@@ -809,7 +840,7 @@ begin
         FileConfig := LoadFileConfig(FileConfigPath)
       else
         SetLength(FileConfig, 0);
-      if ResolveEngineCapabilities(FileConfig, FileConfigPath)
+      if ResolveEngineCapabilities(FileConfig, FileConfigPath, AFiles[I])
          .Grants(gcFFI) then
         Exit(Result.Allow(gcFFI));
     except
@@ -819,19 +850,35 @@ begin
     end;
 end;
 
+function TGocciaCLIApplication.RootConfigGoverns(
+  const AFileName: string): Boolean;
+var
+  FileDirectory: string;
+begin
+  if FRootConfigPath = '' then
+    Exit(False);
+  if FRootConfigExplicit or (AFileName = '') then
+    Exit(True);
+  FileDirectory := ExtractFileDir(ExpandFileName(AFileName));
+  Result := IsPathWithinScope(CanonicalCapabilityPath(FileDirectory),
+    CanonicalCapabilityPath(ExtractFileDir(FRootConfigPath)));
+end;
+
 function TGocciaCLIApplication.FilePermissionRequest(
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath: string): TGocciaConfigPermissionRequest;
+  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigPermissionRequest;
 var
   Warnings: TGocciaCapabilityScopes;
   I: Integer;
 begin
-  { One config per file: the file's nearest config, else the root config.
-    extends is the only way configs compose. }
+  { One config per file: the file's nearest config, else the root config
+    when it governs the file. extends is the only way configs compose. }
   if AFileConfigPath <> '' then
     Result := ReadConfigPermissionRequest(AFileConfig, AFileConfigPath)
+  else if RootConfigGoverns(AFileName) then
+    Result := FRootPermissionRequest
   else
-    Result := FRootPermissionRequest;
+    Result := TGocciaConfigPermissionRequest.Empty;
 
   Warnings := UnsupportedRequestWarnings(Result, HonoredCapabilities, Name);
   for I := 0 to High(Warnings) do
@@ -840,13 +887,13 @@ begin
 end;
 
 function TGocciaCLIApplication.ResolveEngineCapabilities(
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath: string): TGocciaCapabilities;
+  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
+  const AFileName: string): TGocciaCapabilities;
 var
   Request: TGocciaConfigPermissionRequest;
   CapabilityOptions: TGocciaCapabilityOptions;
 begin
-  Request := FilePermissionRequest(AFileConfig, AFileConfigPath);
+  Request := FilePermissionRequest(AFileConfig, AFileConfigPath, AFileName);
   if Assigned(FEngineOptions) then
     CapabilityOptions := FEngineOptions.Capabilities
   else
@@ -1239,7 +1286,7 @@ begin
     SetLength(FileConfig, 0);
   { The capability set is fixed when the engine is created (ADR 0122). }
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
-    ResolveEngineCapabilities(FileConfig, FileConfigPath));
+    ResolveEngineCapabilities(FileConfig, FileConfigPath, AFileName));
   try
     ConfigureCapabilityAudit(Result);
     if Assigned(FEngineOptions) then
@@ -1257,7 +1304,8 @@ begin
     end;
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName);
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName,
+        (FileConfigPath <> '') or RootConfigGoverns(AFileName));
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
@@ -1780,6 +1828,7 @@ begin
       ConfigPath := DiscoverConfigFile(ConfigStartDir,
         [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
     end;
+    FRootConfigExplicit := FConfig.Present;
     if (ConfigPath <> '') and
        ShouldApplyRootConfig(Paths, ConfigPath, FConfig.Present) then
     begin

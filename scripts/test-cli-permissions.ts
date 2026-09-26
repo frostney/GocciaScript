@@ -593,6 +593,66 @@ console.log("A per-file config usage error stops the run before any file execute
   }
 }
 
+console.log("A net deny's suggestion names the deny, not a grant...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "f.js"), 'fetch("http://example.com/");\n');
+    writeFileSync(join(tmp, "ip.js"), 'fetch("http://127.0.0.1:1/");\n');
+    const cases: [string, string[], string][] = [
+      ["f.js", ["--allow-net", "--deny-net=example.com"], "refused by the net deny example.com"],
+      ["f.js", ["--allow-net=example.com", "--deny-net=example.com"], "refused by the net deny example.com"],
+      ["f.js", ["--allow-net", "--deny-net"], "a net deny refuses every host"],
+      ["ip.js", ["--allow-net=127.0.0.1", "--deny-net=127.0.0.0/8"], "refused by the net deny 127.0.0.0/8"],
+      ["ip.js", ["--allow-net=127.0.0.1", "--deny-net=private"], "refused by the net deny private"],
+    ];
+    for (const [file, args, suggestion] of cases) {
+      const result = run(LOADER, [...args, file], { cwd: tmp });
+      expectExit(result, 1, `${args.join(" ")}`);
+      expectIncludes(result.combined, `Suggestion: ${suggestion}`, `${args.join(" ")}`);
+      expectExcludes(result.combined, "grant it with --allow-net", `${args.join(" ")}`);
+    }
+    // A config deny is named as the config entry it came from.
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"deny-net": ["example.com"]}}\n');
+    const configDeny = run(LOADER, ["--allow-net", "f.js"], { cwd: tmp });
+    expectIncludes(configDeny.combined, "Suggestion: refused by the net deny example.com", "config deny-net");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A config's permissions govern only files in its own directory tree...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a"));
+    mkdirSync(join(tmp, "c"));
+    writeFileSync(join(tmp, "outside.js"), 'export const x = "OUTSIDE";\n');
+    writeFileSync(join(tmp, "a", "goccia.json"), '{"permissions": {"allow-read": [".."]}, "unsafe-function-constructor": true}\n');
+    const probe = [
+      'try { const m = await import("../" + "outside.js"); console.log("read", m.x); } catch (e) { console.log("read", e.name); }',
+      'try { new Function("return 1")(); console.log("fn allowed"); } catch (e) { console.log("fn", e.name); }',
+      "",
+    ].join("\n");
+    writeFileSync(join(tmp, "a", "x.mjs"), probe);
+    writeFileSync(join(tmp, "c", "l.mjs"), probe);
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const result = run(LOADER, [join("a", "x.mjs"), join("c", "l.mjs"), ...args], { cwd: tmp });
+      // Each file's output precedes its own "Running script" line.
+      const [first, second] = result.stdout.split("Running script");
+      expectIncludes(first, "read OUTSIDE", "a/x.mjs uses a's grants");
+      expectIncludes(first, "fn allowed", "a/x.mjs uses a's unsafe key");
+      expectIncludes(second ?? "", "read PermissionDenied", "c/l.mjs gets no grants from a");
+      expectExcludes(second ?? "", "fn allowed", "c/l.mjs gets no unsafe keys from a");
+    }
+    // An explicit --config governs every input.
+    const explicit = run(LOADER, [`--config=${join(tmp, "a", "goccia.json")}`, join("c", "l.mjs")], { cwd: tmp });
+    expectIncludes(explicit.stdout, "read OUTSIDE", "explicit --config governs every input");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config permissions resolve against the declaring file...");
 {
   const tmp = makeTmp();
