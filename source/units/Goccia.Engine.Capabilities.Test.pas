@@ -121,6 +121,7 @@ type
     procedure TestAliasCandidatesAreJudged;
     procedure TestPackageProbesAreJudged;
     procedure TestCallDenialSitesMatchAcrossExecutors;
+    procedure TestStaticImportDenialSitesMatchAcrossExecutors;
   public
     procedure SetupTests; override;
   end;
@@ -195,6 +196,9 @@ begin
     TestPackageProbesAreJudged);
   Test('fetch() and FFI.open() denials are located alike in both executors',
     TestCallDenialSitesMatchAcrossExecutors);
+  Test('Static import and export-from denials are located at the ' +
+    'declaration in both executors',
+    TestStaticImportDenialSitesMatchAcrossExecutors);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -1486,6 +1490,49 @@ begin
   Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
   Expect<Boolean>(Interpreted.Location <> '').ToBe(True);
   Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
+end;
+
+
+{ ADR 0014: a static import or export-from denial is located at its
+  declaration in both executors, whether the entry runs as a script or a
+  module. }
+procedure TEngineCapabilitiesTests.TestStaticImportDenialSitesMatchAcrossExecutors;
+
+  procedure ExpectLocatedAlike(const ASource, AEntry, AExpected: string;
+    const ACapabilities: TGocciaCapabilities);
+  var
+    Interpreted, Bytecode: TRunOutcome;
+  begin
+    Interpreted := Run(ASource, ACapabilities, False, False, AEntry);
+    Bytecode := Run(ASource, ACapabilities, True, False, AEntry);
+    Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Interpreted.Location).ToBe(AExpected);
+    Expect<string>(Bytecode.Location).ToBe(AExpected);
+  end;
+
+const
+  OUTSIDE_IMPORT = 'const x = 1;' + sLineBreak +
+    'import { value } from "../outside/secret.js";';
+  OUTSIDE_REEXPORT = 'const x = 1;' + sLineBreak +
+    'export { value } from "../outside/secret.js";';
+  BARE_IMPORT = 'const x = 1;' + sLineBreak +
+    'import { value } from "pkg";';
+var
+  Entry: string;
+begin
+  for Entry in [ProjectPath('app.js'), ProjectPath('app.mjs')] do
+  begin
+    ExpectLocatedAlike(OUTSIDE_IMPORT, Entry,
+      ExtractFileName(Entry) + ':2:1', TGocciaCapabilities.None);
+    ExpectLocatedAlike(OUTSIDE_IMPORT, Entry,
+      ExtractFileName(Entry) + ':2:1', TGocciaCapabilities.None.Deny(gcRead));
+    ExpectLocatedAlike(BARE_IMPORT, Entry, ExtractFileName(Entry) + ':2:1',
+      TGocciaCapabilities.None.Deny(gcImport, IMPORT_NODE_MODULES_SCOPE));
+  end;
+  { export-from belongs to modules. }
+  ExpectLocatedAlike(OUTSIDE_REEXPORT, ProjectPath('app.mjs'), 'app.mjs:2:1',
+    TGocciaCapabilities.None);
 end;
 
 begin
