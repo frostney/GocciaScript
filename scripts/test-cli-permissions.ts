@@ -21,7 +21,6 @@ import {
   BUNDLER,
   RUNNER,
   REPL,
-  SANDBOXRUNNER,
   TEST262RUNNER,
   TESTRUNNER,
   WASMTESTRUNNER,
@@ -97,7 +96,7 @@ const ENGINE_BINARIES: { name: string; binary: string; args: string[] }[] = [
   { name: "GocciaBenchmarkRunner", binary: BENCHRUNNER, args: ["missing.js"] },
   { name: "GocciaBundler", binary: BUNDLER, args: ["missing.js"] },
   { name: "GocciaREPL", binary: REPL, args: [] },
-  { name: "GocciaSandboxRunner", binary: SANDBOXRUNNER, args: ["/missing.js"] },
+  { name: "GocciaRunner sandbox mode", binary: RUNNER, args: ["--sandbox", "missing.js"] },
 ];
 
 // -- Removed flags --------------------------------------------------------------
@@ -127,9 +126,9 @@ console.log("Removed flags exit 2 and name their replacement...");
     ["--fs-node-limit=10", "--fs-node-limit was removed in GocciaScript 0.14.0; use --max-fs-nodes instead"],
   ];
   for (const [flag, message] of sandboxFlags) {
-    const result = run(SANDBOXRUNNER, [flag, "/missing.js"]);
-    expectExit(result, 2, `GocciaSandboxRunner ${flag}`);
-    expectIncludes(result.stderr, `Error: ${message}`, `GocciaSandboxRunner ${flag}`);
+    const result = run(RUNNER, [flag, "--sandbox", "missing.js"]);
+    expectExit(result, 2, `GocciaRunner ${flag}`);
+    expectIncludes(result.stderr, `Error: ${message}`, `GocciaRunner ${flag}`);
   }
 
   const bare = run(BARE, ["--stack-size=100", "missing.js"]);
@@ -275,8 +274,9 @@ console.log("Unsupported capabilities and limits are rejected on the command lin
     [BUNDLER, ["--allow-read", "missing.js"], "GocciaBundler cannot grant read; it supports no capability flags. Remove --allow-read."],
     [BUNDLER, ["--timeout=5s", "missing.js"], "GocciaBundler does not support --timeout. Remove it."],
     [BUNDLER, ["--max-memory=64MiB", "missing.js"], "GocciaBundler does not support --max-memory. Remove it."],
-    [SANDBOXRUNNER, ["--allow-read", "/missing.js"], "GocciaSandboxRunner cannot grant read; it supports net. Remove --allow-read."],
-    [SANDBOXRUNNER, ["--allow-ffi", "/missing.js"], "GocciaSandboxRunner cannot grant ffi; it supports net. Remove --allow-ffi."],
+    [RUNNER, ["--sandbox", "--allow-read", "missing.js"], "--allow-read cannot be used in sandbox mode (enabled by --sandbox): the sandbox has no host filesystem; copy inputs with --copy"],
+    [RUNNER, ["--sandbox", "--allow-ffi", "missing.js"], "--allow-ffi cannot be used in sandbox mode (enabled by --sandbox): the sandbox has no host filesystem; copy inputs with --copy"],
+    [RUNNER, ["--sandbox", "--allow-import=node_modules", "missing.js"], "--allow-import cannot be used in sandbox mode (enabled by --sandbox): the sandbox has no host filesystem; copy inputs with --copy"],
     [BARE, ["--allow-net=example.com", "missing.js"], "GocciaScriptLoaderBare cannot grant net; it supports no capability flags. Remove --allow-net."],
     [TEST262RUNNER, ["--allow-read"], "GocciaTest262Runner cannot grant read; it supports no capability flags. Remove --allow-read."],
   ];
@@ -298,11 +298,11 @@ console.log("Unsupported capabilities and limits are rejected on the command lin
     clean(tmp);
   }
 
-  // Help advertises only what the binary honors.
-  const sandboxHelp = run(SANDBOXRUNNER, ["--help"]).stdout;
-  expectIncludes(sandboxHelp, "--allow-net", "SandboxRunner --help");
-  expectExcludes(sandboxHelp, "--allow-read", "SandboxRunner --help");
-  expectIncludes(sandboxHelp, "--max-fs-bytes", "SandboxRunner --help");
+  // Help advertises only what the binary honors. GocciaRunner's host mode
+  // grants every capability; its help says which ones sandbox mode keeps.
+  const runnerHelp = run(RUNNER, ["--help"]).stdout;
+  expectIncludes(runnerHelp, "--max-fs-bytes", "Runner --help");
+  expectIncludes(runnerHelp, "Only --allow-net applies; --allow-read, --allow-import and --allow-ffi are errors.", "Runner --help sandbox note");
   const bundlerHelp = run(BUNDLER, ["--help"]).stdout;
   expectExcludes(bundlerHelp, "--allow-", "Bundler --help");
   expectExcludes(bundlerHelp, "--timeout", "Bundler --help");
@@ -423,22 +423,27 @@ console.log("Config requests a binary cannot honor are warnings...");
     expectExit(bundle, 0, "Bundler with a declaring config");
     expectIncludes(bundle.stderr, `Warning: ${configPath} requests allow-read, which GocciaBundler cannot grant; ignoring it`, "Bundler warning");
 
-    // The sandbox honors net only: a config asking for read alone warns and
+    // Sandbox mode honors net only: a config asking for read alone warns and
     // needs no trust, and one asking for net needs trust.
     writeFileSync(join(tmp, "entry.js"), "1 + 1;\n");
-    const sandboxArgs = [`--config=${configPath}`, "--seed", `${join(tmp, "entry.js")}=/entry.js`, "/entry.js"];
+    const sandboxArgs = [`--config=${configPath}`, "--copy", `${join(tmp, "entry.js")}=/entry.js`, "--entry=/entry.js"];
     writeFileSync(configPath, '{"permissions": {"allow-read": ["."]}}\n');
-    const sandbox = run(SANDBOXRUNNER, sandboxArgs, { cwd: tmp });
-    expectExit(sandbox, 0, "SandboxRunner with allow-read config");
-    expectIncludes(sandbox.stderr, `Warning: ${configPath} requests allow-read, which GocciaSandboxRunner cannot grant; ignoring it`, "SandboxRunner warning");
+    const sandbox = run(RUNNER, sandboxArgs, { cwd: tmp });
+    expectExit(sandbox, 0, "Runner sandbox mode with allow-read config");
+    expectIncludes(sandbox.stderr, `Warning: ${configPath} requests allow-read, which GocciaRunner sandbox mode cannot grant; ignoring it`, "Runner sandbox mode warning");
 
     writeFileSync(configPath, '{"permissions": {"allow-read": ["."], "allow-net": ["example.com"]}}\n');
-    const untrusted = run(SANDBOXRUNNER, sandboxArgs, { cwd: tmp });
-    expectExit(untrusted, 2, "SandboxRunner with allow-net config");
-    expectIncludes(untrusted.stderr, "goccia.json (never trusted)\n    allow-net: example.com", "SandboxRunner allow-net needs trust");
-    const accepted = run(SANDBOXRUNNER, ["-P", ...sandboxArgs], { cwd: tmp });
-    expectExit(accepted, 0, "SandboxRunner -P");
-    expectExcludes(accepted.stderr, "allow-net", "SandboxRunner honors net");
+    const untrusted = run(RUNNER, sandboxArgs, { cwd: tmp });
+    expectExit(untrusted, 2, "Runner sandbox mode with allow-net config");
+    expectIncludes(untrusted.stderr, "goccia.json (never trusted)\n    allow-net: example.com", "Runner sandbox mode allow-net needs trust");
+    const accepted = run(RUNNER, ["-P", ...sandboxArgs], { cwd: tmp });
+    expectExit(accepted, 0, "Runner sandbox mode -P");
+    expectExcludes(accepted.stderr, "allow-net", "Runner sandbox mode honors net");
+
+    // The same config in host mode grants read, so nothing is warned about.
+    const host = run(RUNNER, ["-P", `--config=${configPath}`, "entry.js"], { cwd: tmp });
+    expectExit(host, 0, "Runner host mode -P");
+    expectExcludes(host.stderr, "cannot grant", "Runner host mode honors read");
   } finally {
     clean(tmp);
   }
@@ -821,7 +826,7 @@ console.log("Limit bounds and unsupported limits in config...");
       [RUNNER, ["--max-fetch-bytes=3GiB", "main.js"], "Invalid value for --max-fetch-bytes: 3GiB (value is too large)"],
       [RUNNER, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
       [BARE, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
-      [SANDBOXRUNNER, ["--max-fs-nodes=99999999999", "/main.js"], "Invalid value for --max-fs-nodes: 99999999999 (value is too large)"],
+      [RUNNER, ["--sandbox", "--max-fs-nodes=99999999999", "main.js"], "Invalid value for --max-fs-nodes: 99999999999 (value is too large)"],
     ];
     for (const [binary, args, message] of tooLarge) {
       const result = run(binary, args, { cwd: tmp });
