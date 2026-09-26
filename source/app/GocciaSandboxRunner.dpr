@@ -5,6 +5,7 @@ program GocciaSandboxRunner;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
+  Math,
   SysUtils,
 
   CLI.ConfigFile,
@@ -19,6 +20,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   Goccia.Diagnostics.SourceRegistry,
   Goccia.Engine,
   Goccia.Error,
@@ -36,7 +38,6 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.AST,
-  Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeProfiles.Loader,
   Goccia.RuntimeExtensions.Sandbox,
   Goccia.Sandbox.Context,
@@ -82,8 +83,8 @@ type
     FDiffOutput: TStringOption;
     FWriteBack: TFlagOption;
     FPrint: TFlagOption;
-    FFsQuotaBytes: TInt64Option;
-    FFsNodeLimit: TIntegerOption;
+    FFsQuotaBytes: TByteSizeOption;
+    FFsNodeLimit: TCountOption;
     FRunScriptDepth: Integer;
     FCurrentOutputLines: TStrings;
     FCurrentHostEnvironment: TGocciaHostEnvironment;
@@ -147,7 +148,7 @@ type
       const ASeen: TList): TGocciaValue;
     procedure WriteDiffIfRequested;
   protected
-    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     function UsageLine: string; override;
     function ShouldApplyRootConfig(const APaths: TStringList;
@@ -258,18 +259,25 @@ begin
   FWriteBack := AddFlag('write-back',
     'After a successful run, write files it changed back to the host paths they were seeded from');
   FPrint := AddFlag('print', 'Print the script result value');
-  FFsQuotaBytes := TInt64Option.Create('fs-quota-bytes',
-    'Maximum bytes in the sandbox filesystem (default: 16777216)');
+  FFsQuotaBytes := TByteSizeOption.Create('max-fs-bytes',
+    'Maximum bytes in the sandbox filesystem (default: 16MiB)', 'Limits');
   Add(FFsQuotaBytes);
-  FFsNodeLimit := AddInteger('fs-node-limit',
-    'Maximum files and directories in the sandbox filesystem (default: 4096)');
+  FFsNodeLimit := TCountOption.Create('max-fs-nodes',
+    'Maximum files and directories in the sandbox filesystem ' +
+    '(default: 4096)', 'Limits');
+  Add(FFsNodeLimit);
+  Add(TRemovedOption.Create('fs-quota-bytes', 'fs-quota-bytes',
+    'use --max-fs-bytes instead (units: 16MiB)',
+    'use "max-fs-bytes" instead (units: "16MiB")'));
+  Add(TRemovedOption.Create('fs-node-limit', 'fs-node-limit',
+    'use --max-fs-nodes instead', 'use "max-fs-nodes" instead'));
 end;
 
-{ The sandbox runner loads no host files and has no node_modules lookup; it
-  has always honored the net and ffi options. }
-function TSandboxRunnerApp.HonoredCapabilityOptions: TGocciaCapabilityOptions;
+{ The sandbox runner loads no host files, has no node_modules lookup, and
+  runs untrusted code; net is the only capability it grants (ADR 0122). }
+function TSandboxRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
-  Result := [gcoAllowedHosts, gcoFetchDenyPrivateRanges, gcoUnsafeFFI];
+  Result := [gcNet];
 end;
 
 function TSandboxRunnerApp.UsageLine: string;
@@ -304,15 +312,13 @@ end;
 procedure TSandboxRunnerApp.Validate;
 begin
   inherited Validate;
-  if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
-    raise TParseError.Create('--timeout must be 0 or greater.');
   if FDiffFormat.Present and (FDiffFormat.Value <> 'json') and
      (FDiffFormat.Value <> 'unified') then
     raise TParseError.Create('--diff-format must be json or unified.');
   if FFsQuotaBytes.Present and (FFsQuotaBytes.Value <= 0) then
-    raise TParseError.Create('--fs-quota-bytes must be greater than 0.');
+    raise TParseError.Create('--max-fs-bytes must be greater than 0.');
   if FFsNodeLimit.Present and (FFsNodeLimit.Value <= 0) then
-    raise TParseError.Create('--fs-node-limit must be greater than 0.');
+    raise TParseError.Create('--max-fs-nodes must be greater than 0.');
 end;
 
 function TSandboxRunnerApp.ReadHostBytes(const APath: string): TBytes;
@@ -701,7 +707,6 @@ begin
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
   Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
-  InstallFFIIfGranted(Runtime);
   if ResolveFlagOption(EngineOptions.ExperimentalAST, EmptyConfig) then
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
 
@@ -927,7 +932,7 @@ begin
         ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
 
       try
-        PushTimeoutScope(tsFile, EngineOptions.Timeout.ValueOr(0));
+        PushTimeoutScope(tsFile, EngineOptions.Timeout.Milliseconds(0));
         PushInstructionLimitScope(EngineOptions.MaxInstructions.ValueOr(0));
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
@@ -1356,7 +1361,8 @@ begin
   FContext.Free;
   FContext := TGocciaSandboxContext.Create(
     FFsQuotaBytes.ValueOr(DEFAULT_SANDBOX_BYTE_QUOTA),
-    FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA));
+    Integer(Min(FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA),
+      High(Integer))));
   FContext.RunScriptCallback := ExecuteSandboxPath;
   LoadSeeds;
   FContext.CaptureBaseline;

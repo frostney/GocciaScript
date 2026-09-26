@@ -8,7 +8,9 @@ uses
   StrUtils,
   SysUtils,
 
+  CLI.Options,
   CLI.Parser,
+  CLI.Units,
   TextSemantics,
 
   Goccia.Arguments.Collection,
@@ -123,10 +125,10 @@ begin
   WriteLn(AOut, '  --unsafe-shadowrealm          Enable the ShadowRealm constructor');
   WriteLn(AOut, '  --deterministic               Use fixed script-visible time, UTC, and seeded randomness');
   WriteLn(AOut, '  --print                       Print the script''s last value (incl. undefined)');
-  WriteLn(AOut, '  --timeout=MS                  Per-file cooperative timeout in milliseconds');
-  WriteLn(AOut, '  --max-memory=BYTES            GC heap byte limit (RangeError on exceed)');
+  WriteLn(AOut, '  --timeout=DURATION            Per-file cooperative timeout: 500ms, 5s, 2m, or plain milliseconds');
+  WriteLn(AOut, '  --max-memory=BYTES            GC heap limit: 64MiB, 1GiB, or plain bytes (RangeError on exceed)');
   WriteLn(AOut, '  --max-instructions=N          Maximum bytecode steps before aborting');
-  WriteLn(AOut, '  --stack-size=N                Maximum call stack depth (0 = no limit)');
+  WriteLn(AOut, '  --max-stack=N                 Maximum call stack depth (default: 10000; 0 = no limit)');
   WriteLn(AOut, '  --profile=opcodes|functions|all');
   WriteLn(AOut, '                                Enable bytecode VM profiling (forces bytecode mode)');
   WriteLn(AOut, '  --profile-output=PATH         Write profiler JSON to PATH');
@@ -156,37 +158,50 @@ begin
   AOptions.SourceTypeExplicit := True;
 end;
 
-procedure ParseTimeout(const AValue: string; var AOptions: TBareOptions);
+procedure RaiseInvalidValue(const AName, AValue, AError: string);
 begin
-  if not TryStrToInt(AValue, AOptions.TimeoutMs) then
-    raise Exception.Create('Invalid --timeout value: ' + AValue);
-  if AOptions.TimeoutMs < 0 then
-    raise Exception.Create('--timeout must be 0 or greater');
+  raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
+    [AName, AValue, AError]);
+end;
+
+procedure ParseTimeout(const AValue: string; var AOptions: TBareOptions);
+var
+  Milliseconds: Int64;
+  ErrorText: string;
+begin
+  if not TryParseDurationMilliseconds(AValue, Milliseconds, ErrorText) then
+    RaiseInvalidValue('timeout', AValue, ErrorText);
+  AOptions.TimeoutMs := Integer(Milliseconds);
 end;
 
 procedure ParseMaxMemory(const AValue: string; var AOptions: TBareOptions);
+var
+  ErrorText: string;
 begin
-  if not TryStrToInt64(AValue, AOptions.MaxMemoryBytes) then
-    raise Exception.Create('Invalid --max-memory value: ' + AValue);
-  if AOptions.MaxMemoryBytes < 0 then
-    raise Exception.Create('--max-memory must be 0 or greater');
+  if not TryParseByteSize(AValue, AOptions.MaxMemoryBytes, ErrorText) then
+    RaiseInvalidValue('max-memory', AValue, ErrorText);
 end;
 
 procedure ParseMaxInstructions(const AValue: string;
   var AOptions: TBareOptions);
+var
+  ErrorText: string;
 begin
-  if not TryStrToInt64(AValue, AOptions.MaxInstructions) then
-    raise Exception.Create('Invalid --max-instructions value: ' + AValue);
-  if AOptions.MaxInstructions < 0 then
-    raise Exception.Create('--max-instructions must be 0 or greater');
+  if not TryParseNonNegativeCount(AValue, AOptions.MaxInstructions,
+     ErrorText) then
+    RaiseInvalidValue('max-instructions', AValue, ErrorText);
 end;
 
-procedure ParseStackSize(const AValue: string; var AOptions: TBareOptions);
+procedure ParseMaxStack(const AValue: string; var AOptions: TBareOptions);
+var
+  Count: Int64;
+  ErrorText: string;
 begin
-  if not TryStrToInt(AValue, AOptions.StackSize) then
-    raise Exception.Create('Invalid --stack-size value: ' + AValue);
-  if AOptions.StackSize < 0 then
-    raise Exception.Create('--stack-size must be 0 or greater');
+  if not TryParseNonNegativeCount(AValue, Count, ErrorText) then
+    RaiseInvalidValue('max-stack', AValue, ErrorText);
+  if Count > High(Integer) then
+    RaiseInvalidValue('max-stack', AValue, TOO_LARGE_ERROR);
+  AOptions.StackSize := Integer(Count);
 end;
 
 procedure ParseProfileMode(const AValue: string; var AOptions: TBareOptions);
@@ -306,9 +321,15 @@ begin
     else if StartsStr('--max-instructions=', Arg) then
       ParseMaxInstructions(Copy(Arg, Length('--max-instructions=') + 1,
         MaxInt), AOptions)
-    else if StartsStr('--stack-size=', Arg) then
-      ParseStackSize(Copy(Arg, Length('--stack-size=') + 1, MaxInt),
+    else if StartsStr('--max-stack=', Arg) then
+      ParseMaxStack(Copy(Arg, Length('--max-stack=') + 1, MaxInt),
         AOptions)
+    else if (Arg = '--stack-size') or StartsStr('--stack-size=', Arg) then
+      raise TCLIUsageError.CreateFmt(
+        '--stack-size was removed in GocciaScript %s; use --max-stack instead',
+        [OPTIONS_REMOVED_IN_VERSION])
+    else if TryHandleCapabilityArgument(Arg, BARE_PROGRAM_NAME, []) then
+      { Bare engines grant nothing, so a deny changes nothing. }
     else if StartsStr('--profile=', Arg) then
       ParseProfileMode(Copy(Arg, Length('--profile=') + 1, MaxInt),
         AOptions)
@@ -488,6 +509,11 @@ begin
     else
       ExitCode := RunBare(Options);
   except
+    on E: TCLIUsageError do
+    begin
+      WriteLn(ErrOutput, 'Error: ', E.Message);
+      ExitCode := EXIT_CODE_USAGE;
+    end;
     on E: TGocciaTimeoutError do
     begin
       WriteLn(ErrOutput, 'Error: ', E.Message);

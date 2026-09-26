@@ -40,7 +40,9 @@ uses
   TextSemantics,
 
   Goccia.Arguments.Collection,
+  Goccia.Capabilities,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Executor.Interpreter,
@@ -87,11 +89,13 @@ end;
   (DiscoverFileConfig): walk up from the script's directory to the
   nearest goccia.json. The suite tree carries JSON configs only;
   "extends" chains are resolved by ParseConfigFile. }
-function DiscoverFileConfig(const AFileName: string): TConfigEntryArray;
+function DiscoverFileConfig(const AFileName: string;
+  out AConfigPath: string): TConfigEntryArray;
 var
   StartDirectory, ConfigPath: string;
 begin
   SetLength(Result, 0);
+  AConfigPath := '';
   if AFileName = '' then
     Exit;
   StartDirectory := ExtractFilePath(ExpandFileName(AFileName));
@@ -99,8 +103,36 @@ begin
     StartDirectory := GetCurrentDir;
   ConfigPath := DiscoverConfigFile(StartDirectory,
     ['goccia'], ['.json']);
+  AConfigPath := ConfigPath;
   if ConfigPath <> '' then
     Result := ParseConfigFile(ConfigPath);
+end;
+
+const
+  WASM_PROGRAM_NAME = 'GocciaWasmTestRunner';
+  WASM_HONORED_CAPABILITIES: TGocciaHonoredCapabilities = [gcRead, gcNet
+    {$IFNDEF LAKON}, gcFFI{$ENDIF}];
+
+{ The per-file config's permission request, applied as GocciaTestRunner
+  applies it (ADR 0122 layer 2); this runner takes no capability flags. A
+  request for a capability it cannot grant is reported on stderr. }
+function ResolveFileCapabilities(const AFileConfig: TConfigEntryArray;
+  const AConfigPath: string): TGocciaCapabilities;
+var
+  Request: TGocciaConfigPermissionRequest;
+  Warnings: TGocciaCapabilityScopes;
+  I: Integer;
+begin
+  if AConfigPath <> '' then
+    Request := ReadConfigPermissionRequest(AFileConfig, AConfigPath)
+  else
+    Request := TGocciaConfigPermissionRequest.Empty;
+  Warnings := UnsupportedRequestWarnings(Request, WASM_HONORED_CAPABILITIES,
+    WASM_PROGRAM_NAME);
+  for I := 0 to High(Warnings) do
+    WriteLn(ErrOutput, 'WARN ', AConfigPath, ' :: ', Warnings[I]);
+  Result := ResolveCapabilities(nil, Request, True,
+    WASM_HONORED_CAPABILITIES, GetCurrentDir);
 end;
 
 { source-type: per-file config > file-extension default (the
@@ -223,6 +255,7 @@ var
   Engine: TGocciaEngine;
   Core: TGocciaRuntimeCore;
   FileConfig: TConfigEntryArray;
+  FileConfigPath: string;
   EngineOptions: TGocciaEngineOptions;
   Compatibility: TGocciaCompatibilityFlags;
   TestResult: TGocciaObjectValue;
@@ -240,16 +273,15 @@ begin
   try
     try
       Source := CreateFileTextLines(ReadUTF8FileText(AFileName));
-      FileConfig := DiscoverFileConfig(AFileName);
+      FileConfig := DiscoverFileConfig(AFileName, FileConfigPath);
       EngineOptions := TGocciaEngineOptions.Create;
+      { Removed and command-line-only keys fail the file (ADR 0122). }
+      ValidateConfigEntries(FileConfig, EngineOptions.Options);
 
       Executor := TGocciaInterpreterExecutor.Create;
       try
-        { The set mirrors what this runner has always honored: host module
-          loading, the per-file allowed hosts, and per-file FFI. }
         Engine := TGocciaEngine.Create(AFileName, Source, Executor,
-          ResolveCapabilities(EngineOptions, FileConfig, '', '',
-            [gcoHostFileLoading, gcoAllowedHosts, gcoUnsafeFFI]));
+          ResolveFileCapabilities(FileConfig, FileConfigPath));
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
           ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);

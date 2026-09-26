@@ -11,11 +11,14 @@ uses
   StrUtils,
   SysUtils,
 
+  CLI.Options,
+  CLI.Units,
   FileUtils,
   TextSemantics,
   TimingUtils,
 
   Goccia.Arguments.Collection,
+  Goccia.CLI.Options,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Detail,
@@ -453,8 +456,8 @@ begin
   WriteLn('  --max-tests=N                Cap before sharding (0 = unlimited)');
   WriteLn('  --jobs=N                     Concurrent native workers (default: 4)');
   WriteLn('  --mode=interpreted|bytecode  Execution mode (default: bytecode)');
-  WriteLn('  --timeout-ms=N               Per-test cooperative timeout');
-  WriteLn('  --max-memory=N               Per-test GC heap ceiling');
+  WriteLn('  --timeout=DURATION           Per-test cooperative timeout: 500ms, 20s, 2m, or plain milliseconds');
+  WriteLn('  --max-memory=BYTES           Per-test GC heap ceiling: 512MiB, 1GiB, or plain bytes');
   WriteLn('  --shard-index=N              Zero-based shard index');
   WriteLn('  --shard-count=N              Total shard count');
   WriteLn('  --verbose                    Print every test result');
@@ -465,10 +468,14 @@ begin
 end;
 
 procedure TTest262App.ParseArguments;
+const
+  TEST262_PROGRAM_NAME = 'GocciaTest262Runner';
 var
   Argument: string;
   I: Integer;
   Value: string;
+  Parsed: Int64;
+  ParseError: string;
 
   function ArgumentValue(const AName: string): string;
   begin
@@ -557,16 +564,34 @@ begin
         ArgumentValue('--max-tests'))
     else if (Argument = '--timeout-ms') or
         StartsStr('--timeout-ms=', Argument) then
-      FOptions.TimeoutMs := PositiveInteger('--timeout-ms',
-        ArgumentValue('--timeout-ms'))
+      raise TCLIUsageError.CreateFmt(
+        '--timeout-ms was removed in GocciaScript %s; use --timeout instead ' +
+        '(units: 20s)', [OPTIONS_REMOVED_IN_VERSION])
+    else if (Argument = '--timeout') or
+        StartsStr('--timeout=', Argument) then
+    begin
+      Value := ArgumentValue('--timeout');
+      if not TryParseDurationMilliseconds(Value, Parsed, ParseError) then
+        raise Exception.CreateFmt('Invalid value for --timeout: %s (%s)',
+          [Value, ParseError]);
+      if Parsed <= 0 then
+        raise Exception.Create('--timeout requires a positive duration');
+      FOptions.TimeoutMs := Integer(Parsed);
+    end
     else if (Argument = '--max-memory') or
         StartsStr('--max-memory=', Argument) then
     begin
       Value := ArgumentValue('--max-memory');
-      if not TryStrToInt64(Value, FOptions.MaxMemoryBytes) or
-         (FOptions.MaxMemoryBytes <= 0) then
-        raise Exception.Create('--max-memory requires a positive integer');
+      if not TryParseByteSize(Value, FOptions.MaxMemoryBytes, ParseError) then
+        raise Exception.CreateFmt('Invalid value for --max-memory: %s (%s)',
+          [Value, ParseError]);
+      if FOptions.MaxMemoryBytes <= 0 then
+        raise Exception.Create('--max-memory requires a positive size');
     end
+    else if TryHandleCapabilityArgument(Argument, TEST262_PROGRAM_NAME,
+        []) then
+      { A deny can only narrow what the test262 profile already grants
+        (nothing); accepted for symmetry with the other binaries. }
     else if (Argument = '--shard-index') or
         StartsStr('--shard-index=', Argument) then
       FOptions.ShardIndex := NonNegativeInteger('--shard-index',
@@ -1876,7 +1901,7 @@ begin
       on E: Exception do
       begin
         WriteLn(ErrOutput, 'Error: ', E.Message);
-        ExitCode := 2;
+        ExitCode := EXIT_CODE_USAGE;
       end;
     end;
   finally

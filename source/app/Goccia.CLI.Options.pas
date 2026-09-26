@@ -9,6 +9,7 @@ uses
   CLI.Options,
 
   Goccia.Capabilities,
+  Goccia.CLI.Permissions,
   Goccia.SourcePipeline;
 
 type
@@ -20,6 +21,40 @@ type
     HelpText: string;
   end;
 
+  { The limits a binary may honor. A binary that does not honor one rejects
+    it on the command line and ignores it in config. }
+  TGocciaRuntimeSetting = (grsTimeout, grsMaxMemory, grsMaxInstructions,
+    grsMaxStack, grsMaxFetchBytes);
+  TGocciaHonoredSettings = set of TGocciaRuntimeSetting;
+
+  { The `--allow-<cap>[=scope,...]` / `--deny-<cap>[=scope,...]` grammar
+    (ADR 0122). Every option is command-line-only: config files declare
+    permissions in their `permissions` block instead. }
+  TGocciaCapabilityOptions = class
+  private
+    FAllow: array[TGocciaCapability] of TScopeListOption;
+    FDeny: array[TGocciaCapability] of TScopeListOption;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    function Options: TOptionArray;
+    function AllowOption(const ACapability: TGocciaCapability):
+      TScopeListOption;
+    function DenyOption(const ACapability: TGocciaCapability):
+      TScopeListOption;
+    { Hides the options of capabilities the binary cannot grant. They stay
+      parseable, so ValidateHonored can name the problem. }
+    procedure HideUnsupported(const AHonored: TGocciaHonoredCapabilities);
+    { Raises TCLIUsageError for an --allow-* the binary cannot grant. A
+      --deny-* is always accepted. }
+    procedure ValidateHonored(const AProgramName: string;
+      const AHonored: TGocciaHonoredCapabilities);
+    { Raises TParseError for a command-line scope the capability does not
+      accept. }
+    procedure ValidateScopes(const AWorkingDirectory: string);
+  end;
+
   TGocciaEngineOptions = class
   private
     FMode: TEnumOption<TGocciaExecutionMode>;
@@ -27,25 +62,22 @@ type
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
     FAliases: TRepeatableOption;
-    FAllowNodeModules: TOptionalStringOption;
-    FTimeout: TIntegerOption;
-    FMaxMemory: TInt64Option;
-    FMaxInstructions: TInt64Option;
-    FUnsafeFFI: TFlagOption;
+    FCapabilities: TGocciaCapabilityOptions;
+    FTimeout: TDurationOption;
+    FMaxMemory: TByteSizeOption;
+    FMaxInstructions: TCountOption;
+    FMaxStack: TCountOption;
+    FMaxFetchBytes: TByteSizeOption;
     FUnsafeFunctionConstructor: TFlagOption;
     FUnsafeShadowRealm: TFlagOption;
     FDeterministic: TFlagOption;
     FWarningUnsupportedFeatures: TFlagOption;
-    FStackSize: TIntegerOption;
     FStrictTypes: TFlagOption;
-    FAllowedHosts: TRepeatableOption;
-    FFetchDenyPrivateRanges: TFlagOption;
-    FFetchMaxResponseBytes: TIntegerOption;
-    FNoHostFilesystem: TFlagOption;
     FExperimentalAST: TFlagOption;
     FInspectDepth: TIntegerOption;
     FModule: TRepeatableOption;
     FModules: TRepeatableOption;
+    FRemoved: TOptionList;
   public
     constructor Create;
     destructor Destroy; override;
@@ -53,26 +85,24 @@ type
     function Options: TOptionArray;
     function CompatibilityFlagOption(
       const AFlag: TGocciaCompatibility): TFlagOption;
+    function SettingOption(const ASetting: TGocciaRuntimeSetting): TOptionBase;
+    procedure HideUnsupportedSettings(const AHonored: TGocciaHonoredSettings);
 
     property Mode: TEnumOption<TGocciaExecutionMode> read FMode;
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
     property Aliases: TRepeatableOption read FAliases;
-    property AllowNodeModules: TOptionalStringOption read FAllowNodeModules;
-    property Timeout: TIntegerOption read FTimeout;
-    property MaxMemory: TInt64Option read FMaxMemory;
-    property MaxInstructions: TInt64Option read FMaxInstructions;
-    property UnsafeFFI: TFlagOption read FUnsafeFFI;
+    property Capabilities: TGocciaCapabilityOptions read FCapabilities;
+    property Timeout: TDurationOption read FTimeout;
+    property MaxMemory: TByteSizeOption read FMaxMemory;
+    property MaxInstructions: TCountOption read FMaxInstructions;
+    property MaxStack: TCountOption read FMaxStack;
+    property MaxFetchBytes: TByteSizeOption read FMaxFetchBytes;
     property UnsafeFunctionConstructor: TFlagOption read FUnsafeFunctionConstructor;
     property UnsafeShadowRealm: TFlagOption read FUnsafeShadowRealm;
     property Deterministic: TFlagOption read FDeterministic;
     property WarningUnsupportedFeatures: TFlagOption read FWarningUnsupportedFeatures;
-    property StackSize: TIntegerOption read FStackSize;
     property StrictTypes: TFlagOption read FStrictTypes;
-    property AllowedHosts: TRepeatableOption read FAllowedHosts;
-    property FetchDenyPrivateRanges: TFlagOption read FFetchDenyPrivateRanges;
-    property FetchMaxResponseBytes: TIntegerOption read FFetchMaxResponseBytes;
-    property NoHostFilesystem: TFlagOption read FNoHostFilesystem;
     property ExperimentalAST: TFlagOption read FExperimentalAST;
     property InspectDepth: TIntegerOption read FInspectDepth;
     property ModuleDefinitions: TRepeatableOption read FModule;
@@ -116,46 +146,33 @@ type
     property Format: TEnumOption<TGocciaProfileFormat> read FFormat;
   end;
 
-  { The capability-bearing options a binary honors today. Layer 1 of ADR 0122
-    maps each binary's existing flags onto an engine capability set without
-    changing what each binary does with them; a binary that ignores an option
-    today leaves it out of its set. }
-  TGocciaCapabilityOption = (
-    { The binary loads modules from the host filesystem at all. }
-    gcoHostFileLoading,
-    { The binary honors --no-host-filesystem. }
-    gcoNoHostFilesystem,
-    gcoAllowedHosts,
-    gcoFetchDenyPrivateRanges,
-    gcoUnsafeFFI,
-    gcoNodeModules
-  );
-  TGocciaCapabilityOptions = set of TGocciaCapabilityOption;
 
 const
-  AllCapabilityOptions: TGocciaCapabilityOptions = [gcoHostFileLoading,
-    gcoNoHostFilesystem, gcoAllowedHosts, gcoFetchDenyPrivateRanges,
-    gcoUnsafeFFI, gcoNodeModules];
+  ALL_RUNTIME_SETTINGS: TGocciaHonoredSettings = [grsTimeout, grsMaxMemory,
+    grsMaxInstructions, grsMaxStack, grsMaxFetchBytes];
 
-{ Builds the engine capability set from today's options, with the precedence
-  every option already has: command line, then per-file config, then root
-  config.
+{ Raises TCLIUsageError for a limit given on the command line that the binary
+  does not honor. Call after parsing and before config is applied. }
+procedure ValidateHonoredSettings(const AEngineOptions: TGocciaEngineOptions;
+  const AProgramName: string; const AHonored: TGocciaHonoredSettings);
 
-  - read: every path for a binary that loads host files, unless
-    --no-host-filesystem (or its config key) is honored and in force, which
-    denies read outright. A binary that never loads host files gets none.
-  - net: each allowed host; private ranges stay reachable for those hosts
-    unless --fetch-deny-private-ranges is in force, which denies them.
-  - ffi: every library, with --unsafe-ffi.
-  - import: node_modules with --allow-node-modules, bounded by its ceiling.
+{ The engine capability set for one file (ADR 0122): command-line allows and,
+  when AConfigGrantsAccepted, the config request's allows, restricted to the
+  capabilities the binary honors; then every command-line and config deny,
+  which always win. Command-line path scopes resolve against
+  AWorkingDirectory; the request's scopes are already absolute. AOptions may
+  be nil for a binary without capability flags. }
+function ResolveCapabilities(const AOptions: TGocciaCapabilityOptions;
+  const ARequest: TGocciaConfigPermissionRequest;
+  const AConfigGrantsAccepted: Boolean;
+  const AHonored: TGocciaHonoredCapabilities;
+  const AWorkingDirectory: string): TGocciaCapabilities;
 
-  AFileConfigPath and ARootConfigPath anchor relative node_modules ceilings to
-  the config file that supplied them. Invalid scopes raise
-  EGocciaCapabilityScopeError. }
-function ResolveCapabilities(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath, ARootConfigPath: string;
-  const AHonoredOptions: TGocciaCapabilityOptions): TGocciaCapabilities;
+{ For binaries with their own argument parser: True when AArgument is an
+  --allow-<cap> or --deny-<cap> flag. An --allow-* for a capability outside
+  AHonored raises TCLIUsageError; a --deny-* is accepted. }
+function TryHandleCapabilityArgument(const AArgument, AProgramName: string;
+  const AHonored: TGocciaHonoredCapabilities): Boolean;
 
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
@@ -171,136 +188,338 @@ uses
   Classes,
   SysUtils,
 
-  Goccia.Modules.Configuration;
+  Goccia.StackLimit;
 
 const
-  ENGINE_FIXED_OPTION_COUNT = 23;
-  ALLOWED_HOSTS_CONFIG_KEY = 'allowed-hosts';
+  ENGINE_FIXED_OPTION_COUNT = 18;
+  PERMISSIONS_GROUP = 'Permissions';
+  LIMITS_GROUP = 'Limits';
+  PERMISSIONS_CONFIG_HINT =
+    '; declare it in the config''s "permissions" object instead';
+  NET_SCOPE_HINT =
+    'use host, host:port, *.domain, an IP, a CIDR range, or private';
+  IMPORT_SCOPE_HINT =
+    'use node_modules, node_modules=<dir>, or a provider such as github';
+  IMPORT_SCOPE_REQUIREMENT =
+    'node_modules[=<dir>] or a provider such as github';
 
-{ allowed-host: command line wins outright; otherwise per-file config
-  overrides root config. An empty-value config entry marks an explicit empty
-  array, and in a merged extends chain child entries come first, so it stops
-  accumulation of base values. }
-procedure CollectAllowedHosts(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray; const AHosts: TStrings);
+type
+  TGocciaCapabilityOptionText = record
+    Placeholder: string;
+    AllowHelp: string;
+    AllowUnscopedMeaning: string;
+    DenyHelp: string;
+    DenyUnscopedMeaning: string;
+    RequiresScope: Boolean;
+  end;
+
+const
+  CAPABILITY_OPTION_TEXT: array[TGocciaCapability] of
+    TGocciaCapabilityOptionText = (
+    (Placeholder: '<path>';
+     AllowHelp: 'Allow host reads beyond the project''s module graph, ' +
+       'optionally only under <path> (relative to the working directory)';
+     AllowUnscopedMeaning: 'allow reading every path';
+     DenyHelp: 'Deny host reads under <path>; with no scope, also refuse ' +
+       'imports from the project directory';
+     DenyUnscopedMeaning: 'deny every read, including project imports';
+     RequiresScope: False),
+    (Placeholder: '<host>';
+     AllowHelp: 'Allow fetch to host, host:port, *.domain, IP, or CIDR (no ' +
+       'scope: every public host); a listed IP or CIDR also reaches that ' +
+       'private address, and private reaches every private and loopback ' +
+       'address';
+     AllowUnscopedMeaning: 'allow every public host';
+     DenyHelp: 'Deny fetch to these hosts even when allowed elsewhere ' +
+       '(deny always wins)';
+     DenyUnscopedMeaning: 'deny every host';
+     RequiresScope: False),
+    (Placeholder: '<library>';
+     AllowHelp: 'Allow opening native libraries, optionally only these ' +
+       'paths (enables the FFI global)';
+     AllowUnscopedMeaning: 'allow every library';
+     DenyHelp: 'Deny opening these native libraries (deny always wins)';
+     DenyUnscopedMeaning: 'deny every library';
+     RequiresScope: False),
+    (Placeholder: '<source>';
+     AllowHelp: 'Allow module sources outside the project: ' +
+       'node_modules[=<dir>] or a provider such as github';
+     AllowUnscopedMeaning: '';
+     DenyHelp: 'Deny these module sources (deny always wins)';
+     DenyUnscopedMeaning: '';
+     RequiresScope: True)
+  );
+
+  SETTING_NAMES: array[TGocciaRuntimeSetting] of string = ('timeout',
+    'max-memory', 'max-instructions', 'max-stack', 'max-fetch-bytes');
+
+{ TGocciaCapabilityOptions }
+
+constructor TGocciaCapabilityOptions.Create;
+var
+  Capability: TGocciaCapability;
+  Text: TGocciaCapabilityOptionText;
+begin
+  inherited Create;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    Text := CAPABILITY_OPTION_TEXT[Capability];
+    FAllow[Capability] := TScopeListOption.Create(
+      PermissionKeyName(True, Capability), Text.AllowHelp, Text.Placeholder,
+      PERMISSIONS_GROUP, Text.RequiresScope, Text.AllowUnscopedMeaning,
+      IMPORT_SCOPE_REQUIREMENT);
+    FDeny[Capability] := TScopeListOption.Create(
+      PermissionKeyName(False, Capability), Text.DenyHelp, Text.Placeholder,
+      PERMISSIONS_GROUP, Text.RequiresScope, Text.DenyUnscopedMeaning,
+      IMPORT_SCOPE_REQUIREMENT);
+    FAllow[Capability].CommandLineOnly := True;
+    FAllow[Capability].ConfigHint := PERMISSIONS_CONFIG_HINT;
+    FDeny[Capability].CommandLineOnly := True;
+    FDeny[Capability].ConfigHint := PERMISSIONS_CONFIG_HINT;
+  end;
+end;
+
+destructor TGocciaCapabilityOptions.Destroy;
+var
+  Capability: TGocciaCapability;
+begin
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    FAllow[Capability].Free;
+    FDeny[Capability].Free;
+  end;
+  inherited Destroy;
+end;
+
+function TGocciaCapabilityOptions.Options: TOptionArray;
+var
+  Capability: TGocciaCapability;
+  Index: Integer;
+begin
+  SetLength(Result, 2 * (Ord(High(TGocciaCapability)) + 1));
+  Index := 0;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    Result[Index] := FAllow[Capability];
+    Inc(Index);
+  end;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    Result[Index] := FDeny[Capability];
+    Inc(Index);
+  end;
+end;
+
+function TGocciaCapabilityOptions.AllowOption(
+  const ACapability: TGocciaCapability): TScopeListOption;
+begin
+  Result := FAllow[ACapability];
+end;
+
+function TGocciaCapabilityOptions.DenyOption(
+  const ACapability: TGocciaCapability): TScopeListOption;
+begin
+  Result := FDeny[ACapability];
+end;
+
+procedure TGocciaCapabilityOptions.HideUnsupported(
+  const AHonored: TGocciaHonoredCapabilities);
+var
+  Capability: TGocciaCapability;
+begin
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    FAllow[Capability].Hidden := not (Capability in AHonored);
+    FDeny[Capability].Hidden := not (Capability in AHonored);
+  end;
+end;
+
+procedure TGocciaCapabilityOptions.ValidateHonored(const AProgramName: string;
+  const AHonored: TGocciaHonoredCapabilities);
+var
+  Capability: TGocciaCapability;
+begin
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    if FAllow[Capability].Present and not (Capability in AHonored) then
+      raise TCLIUsageError.CreateFmt(
+        '%s cannot grant %s; it supports %s. Remove --%s.',
+        [AProgramName, CapabilityName(Capability),
+         DescribeCapabilities(AHonored), FAllow[Capability].LongName]);
+end;
+
+procedure ValidateOptionScopes(const AOption: TScopeListOption;
+  const ACapability: TGocciaCapability; const AWorkingDirectory: string);
 var
   I: Integer;
-  HasFileHosts: Boolean;
+  Hint: string;
 begin
-  AHosts.Clear;
-  if AEngineOptions.AllowedHosts.FromCommandLine then
-  begin
-    AHosts.AddStrings(AEngineOptions.AllowedHosts.Values);
-    Exit;
-  end;
-  HasFileHosts := False;
-  for I := 0 to High(AFileConfig) do
-    if AFileConfig[I].Key = ALLOWED_HOSTS_CONFIG_KEY then
-    begin
-      HasFileHosts := True;
-      Break;
-    end;
-  if HasFileHosts then
-  begin
-    for I := 0 to High(AFileConfig) do
-      if AFileConfig[I].Key = ALLOWED_HOSTS_CONFIG_KEY then
+  for I := 0 to AOption.Scopes.Count - 1 do
+    try
+      TGocciaCapabilities.None.Allow(ACapability, ResolvePermissionScope(
+        ACapability, AOption.Scopes[I], AWorkingDirectory));
+    except
+      on E: EGocciaCapabilityScopeError do
       begin
-        if AFileConfig[I].Value = '' then
-          Break;
-        AHosts.Add(AFileConfig[I].Value);
+        case ACapability of
+          gcNet:
+            Hint := NET_SCOPE_HINT;
+          gcImport:
+            Hint := IMPORT_SCOPE_HINT;
+        else
+          Hint := E.Message;
+        end;
+        raise TParseError.CreateFmt('Invalid scope for --%s: "%s" (%s)',
+          [AOption.LongName, AOption.Scopes[I], Hint]);
       end;
-  end
-  else if AEngineOptions.AllowedHosts.Present then
-    AHosts.AddStrings(AEngineOptions.AllowedHosts.Values);
+    end;
 end;
 
-{ allow-node-modules: a relative ceiling is anchored to whichever source
-  supplied it — the invocation directory for the flag, the configuration
-  file's own directory for a config key. }
-function TryResolveNodeModulesScope(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath, ARootConfigPath: string; out AScope: string): Boolean;
+procedure TGocciaCapabilityOptions.ValidateScopes(
+  const AWorkingDirectory: string);
 var
-  BaseDirectory, Setting: string;
-  Option: TOptionalStringOption;
+  Capability: TGocciaCapability;
 begin
-  AScope := '';
-  Option := AEngineOptions.AllowNodeModules;
-  if Option.FromCommandLine then
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
   begin
-    Setting := Option.Value;
-    BaseDirectory := GetCurrentDir;
-  end
-  else if FindConfigEntry(AFileConfig, Option.LongName, Setting) then
-    BaseDirectory := ExtractFilePath(AFileConfigPath)
-  else
-  begin
-    if not Option.Present then
-      Exit(False);
-    Setting := Option.Value;
-    if ARootConfigPath <> '' then
-      BaseDirectory := ExtractFilePath(ARootConfigPath)
-    else
-      BaseDirectory := GetCurrentDir;
+    ValidateOptionScopes(FAllow[Capability], Capability, AWorkingDirectory);
+    ValidateOptionScopes(FDeny[Capability], Capability, AWorkingDirectory);
   end;
-  if BaseDirectory = '' then
-    BaseDirectory := GetCurrentDir;
-  Result := TryNodeModulesImportScope(Setting, BaseDirectory, AScope);
 end;
 
-function ResolveCapabilities(const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath, ARootConfigPath: string;
-  const AHonoredOptions: TGocciaCapabilityOptions): TGocciaCapabilities;
+{ ── capability resolution ─────────────────────────────────────── }
+
+function AddOptionScopes(const ACapabilities: TGocciaCapabilities;
+  const AOption: TScopeListOption; const ACapability: TGocciaCapability;
+  const AAllow: Boolean; const AWorkingDirectory: string):
+  TGocciaCapabilities;
 var
-  Hosts: TStringList;
   I: Integer;
-  NodeModulesScope: string;
+  Scope: string;
+begin
+  Result := ACapabilities;
+  if not Assigned(AOption) then
+    Exit;
+  if AOption.Unscoped then
+  begin
+    if AAllow then
+      Result := Result.Allow(ACapability)
+    else
+      Result := Result.Deny(ACapability);
+  end;
+  for I := 0 to AOption.Scopes.Count - 1 do
+  begin
+    Scope := ResolvePermissionScope(ACapability, AOption.Scopes[I],
+      AWorkingDirectory);
+    if AAllow then
+      Result := Result.Allow(ACapability, Scope)
+    else
+      Result := Result.Deny(ACapability, Scope);
+  end;
+end;
+
+function AddRequestScopes(const ACapabilities: TGocciaCapabilities;
+  const AScopes: TGocciaPermissionScopes;
+  const ACapability: TGocciaCapability; const AAllow: Boolean):
+  TGocciaCapabilities;
+var
+  I: Integer;
+begin
+  Result := ACapabilities;
+  if AScopes.Unscoped then
+  begin
+    if AAllow then
+      Result := Result.Allow(ACapability)
+    else
+      Result := Result.Deny(ACapability);
+  end;
+  for I := 0 to High(AScopes.Scopes) do
+    if AAllow then
+      Result := Result.Allow(ACapability, AScopes.Scopes[I])
+    else
+      Result := Result.Deny(ACapability, AScopes.Scopes[I]);
+end;
+
+function ResolveCapabilities(const AOptions: TGocciaCapabilityOptions;
+  const ARequest: TGocciaConfigPermissionRequest;
+  const AConfigGrantsAccepted: Boolean;
+  const AHonored: TGocciaHonoredCapabilities;
+  const AWorkingDirectory: string): TGocciaCapabilities;
+var
+  Capability: TGocciaCapability;
 begin
   Result := TGocciaCapabilities.None;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    if not (Capability in AHonored) then
+      Continue;
+    if Assigned(AOptions) then
+      Result := AddOptionScopes(Result, AOptions.AllowOption(Capability),
+        Capability, True, AWorkingDirectory);
+    if AConfigGrantsAccepted then
+      Result := AddRequestScopes(Result, ARequest.Allow[Capability],
+        Capability, True);
+  end;
+  { Denies apply whether or not the capability is honored: they can only
+    remove authority. }
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+  begin
+    if Assigned(AOptions) then
+      Result := AddOptionScopes(Result, AOptions.DenyOption(Capability),
+        Capability, False, AWorkingDirectory);
+    Result := AddRequestScopes(Result, ARequest.Deny[Capability], Capability,
+      False);
+  end;
+end;
+
+procedure ValidateHonoredSettings(const AEngineOptions: TGocciaEngineOptions;
+  const AProgramName: string; const AHonored: TGocciaHonoredSettings);
+var
+  Setting: TGocciaRuntimeSetting;
+begin
   if not Assigned(AEngineOptions) then
     Exit;
+  for Setting := Low(TGocciaRuntimeSetting) to High(TGocciaRuntimeSetting) do
+    if (not (Setting in AHonored)) and
+       AEngineOptions.SettingOption(Setting).Present then
+      raise TCLIUsageError.CreateFmt('%s does not support --%s. Remove it.',
+        [AProgramName, SETTING_NAMES[Setting]]);
+end;
 
-  { Host-filesystem module loading is on by default today, so the default is a
-    read grant covering everything; the deny-by-default flip is the next
-    layer's CLI change. }
-  if not (gcoHostFileLoading in AHonoredOptions) then
-    { No host files are loaded, so there is nothing to grant. }
-  else if (gcoNoHostFilesystem in AHonoredOptions) and
-     ResolveFlagOption(AEngineOptions.NoHostFilesystem, AFileConfig) then
-    Result := Result.Deny(gcRead)
-  else
-    Result := Result.Allow(gcRead);
-
-  if gcoAllowedHosts in AHonoredOptions then
+function TryHandleCapabilityArgument(const AArgument, AProgramName: string;
+  const AHonored: TGocciaHonoredCapabilities): Boolean;
+const
+  ALLOW_FLAG_PREFIX = '--allow-';
+  DENY_FLAG_PREFIX = '--deny-';
+var
+  Name: string;
+  Allow: Boolean;
+  Capability: TGocciaCapability;
+  EqualPos: Integer;
+begin
+  if Copy(AArgument, 1, Length(ALLOW_FLAG_PREFIX)) = ALLOW_FLAG_PREFIX then
   begin
-    Hosts := TStringList.Create;
-    try
-      CollectAllowedHosts(AEngineOptions, AFileConfig, Hosts);
-      for I := 0 to Hosts.Count - 1 do
-        Result := Result.Allow(gcNet, Hosts[I]);
-      if (gcoFetchDenyPrivateRanges in AHonoredOptions) and
-         ResolveFlagOption(AEngineOptions.FetchDenyPrivateRanges,
-           AFileConfig) then
-        Result := Result.Deny(gcNet, NET_PRIVATE_SCOPE)
-      else if Hosts.Count > 0 then
-        { Today an allowed host may resolve anywhere unless private ranges are
-          denied explicitly; `private` lifts the engine's default refusal
-          for exactly the hosts allowed above. }
-        Result := Result.Allow(gcNet, NET_PRIVATE_SCOPE);
-    finally
-      Hosts.Free;
-    end;
-  end;
-
-  if (gcoUnsafeFFI in AHonoredOptions) and
-     ResolveFlagOption(AEngineOptions.UnsafeFFI, AFileConfig) then
-    Result := Result.Allow(gcFFI);
-
-  if (gcoNodeModules in AHonoredOptions) and
-     TryResolveNodeModulesScope(AEngineOptions, AFileConfig, AFileConfigPath,
-       ARootConfigPath, NodeModulesScope) then
-    Result := Result.Allow(gcImport, NodeModulesScope);
+    Allow := True;
+    Name := Copy(AArgument, Length(ALLOW_FLAG_PREFIX) + 1, MaxInt);
+  end
+  else if Copy(AArgument, 1, Length(DENY_FLAG_PREFIX)) = DENY_FLAG_PREFIX then
+  begin
+    Allow := False;
+    Name := Copy(AArgument, Length(DENY_FLAG_PREFIX) + 1, MaxInt);
+  end
+  else
+    Exit(False);
+  EqualPos := Pos('=', Name);
+  if EqualPos > 0 then
+    Name := Copy(Name, 1, EqualPos - 1);
+  if (not TryParseCapabilityName(Name, Capability)) or
+     (Name <> CapabilityName(Capability)) then
+    Exit(False);
+  if Allow and not (Capability in AHonored) then
+    raise TCLIUsageError.CreateFmt(
+      '%s cannot grant %s; it supports %s. Remove --%s.',
+      [AProgramName, CapabilityName(Capability),
+       DescribeCapabilities(AHonored), PermissionKeyName(True, Capability)]);
+  Result := True;
 end;
 
 const
@@ -373,7 +592,37 @@ begin
   Result := False;
 end;
 
+
 { TGocciaEngineOptions }
+
+procedure AddRemovedOptions(const AList: TOptionList);
+begin
+  AList.Add(TRemovedOption.Create('allowed-host', 'allowed-hosts',
+    'use --allow-net=<host>[,<host>...] instead',
+    'use "permissions": { "allow-net": [...] } instead'));
+  AList.Add(TRemovedOption.Create('fetch-deny-private-ranges',
+    'fetch-deny-private-ranges',
+    'private ranges are denied by default; allow them with ' +
+    '--allow-net=private',
+    'private ranges are denied by default; allow them with ' +
+    '"permissions": { "allow-net": ["private"] }'));
+  AList.Add(TRemovedOption.Create('fetch-max-response-bytes',
+    'fetch-max-response-bytes',
+    'use --max-fetch-bytes instead (units: 1MiB)',
+    'use "max-fetch-bytes" instead (units: "1MiB")'));
+  AList.Add(TRemovedOption.Create('unsafe-ffi', 'unsafe-ffi',
+    'use --allow-ffi[=<library>,...] instead',
+    'use "permissions": { "allow-ffi": true } instead'));
+  AList.Add(TRemovedOption.Create('allow-node-modules', 'allow-node-modules',
+    'use --allow-import=node_modules[=<dir>] instead',
+    'use "permissions": { "allow-import": ["node_modules"] } instead'));
+  AList.Add(TRemovedOption.Create('no-host-filesystem', 'no-host-filesystem',
+    'host reads are denied by default; use --deny-read to also refuse ' +
+    'imports from the project',
+    'use "permissions": { "deny-read": true } instead'));
+  AList.Add(TRemovedOption.Create('stack-size', 'stack-size',
+    'use --max-stack instead', 'use "max-stack" instead'));
+end;
 
 constructor TGocciaEngineOptions.Create;
 var
@@ -392,17 +641,21 @@ begin
     'Path to import map JSON file', 'Engine');
   FAliases := TRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
-  FAllowNodeModules := TOptionalStringOption.Create('allow-node-modules',
-    'Resolve bare specifiers against node_modules, optionally confined to <dir>',
-    'Engine');
-  FTimeout := TIntegerOption.Create('timeout',
-    'Per-file timeout in milliseconds', 'Engine');
-  FMaxMemory := TInt64Option.Create('max-memory',
-    'GC heap byte limit (RangeError on exceed)', 'Engine');
-  FMaxInstructions := TInt64Option.Create('max-instructions',
-    'Maximum execution steps before aborting', 'Engine');
-  FUnsafeFFI := TFlagOption.Create('unsafe-ffi',
-    'Enable the FFI global (foreign function interface)', 'Runtime');
+  FCapabilities := TGocciaCapabilityOptions.Create;
+  FTimeout := TDurationOption.Create('timeout',
+    'Per-file timeout: 500ms, 5s, 2m, or plain milliseconds (0 = none)',
+    LIMITS_GROUP);
+  FMaxMemory := TByteSizeOption.Create('max-memory',
+    'GC heap limit: 64MiB, 1GiB, or plain bytes (RangeError on exceed)',
+    LIMITS_GROUP);
+  FMaxInstructions := TCountOption.Create('max-instructions',
+    'Maximum execution steps before aborting (0 = no limit)', LIMITS_GROUP);
+  FMaxStack := TCountOption.Create('max-stack',
+    Format('Maximum call stack depth (default: %d; 0 = no limit)',
+      [DEFAULT_MAX_STACK_DEPTH]), LIMITS_GROUP);
+  FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',
+    'Maximum fetch response body: 1MiB or plain bytes (default: 8MiB; ' +
+    'TypeError on exceed)', LIMITS_GROUP);
   FUnsafeFunctionConstructor := TFlagOption.Create('unsafe-function-constructor',
     'Enable the Function constructor (dynamic code generation)', 'Engine');
   FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
@@ -413,21 +666,8 @@ begin
     'warning-unsupported-features',
     'Warn and recover for unsupported/default-disabled syntax instead of failing parsing',
     'Engine');
-  FStackSize := TIntegerOption.Create('stack-size',
-    'Maximum call stack depth (0 = no limit)', 'Engine');
   FStrictTypes := TFlagOption.Create('strict-types',
     'Enforce type annotations at runtime (interpreter and bytecode)', 'Engine');
-  FAllowedHosts := TRepeatableOption.Create('allowed-host',
-    'Hostname allowed for fetch requests (repeatable)', 'Engine');
-  FAllowedHosts.ConfigName := 'allowed-hosts';
-  FFetchDenyPrivateRanges := TFlagOption.Create('fetch-deny-private-ranges',
-    'Reject fetch targets resolving to private, loopback, or link-local addresses',
-    'Runtime');
-  FFetchMaxResponseBytes := TIntegerOption.Create('fetch-max-response-bytes',
-    'Maximum fetch response body size in bytes (TypeError on exceed)',
-    'Runtime');
-  FNoHostFilesystem := TFlagOption.Create('no-host-filesystem',
-    'Disable ambient host-filesystem module loading', 'Runtime');
   FExperimentalAST := TFlagOption.Create('experimental-ast',
     'Enable the experimental goccia:ast parse module', 'Runtime');
   FInspectDepth := TIntegerOption.Create('inspect-depth',
@@ -436,6 +676,8 @@ begin
     'Virtual module definition (name=source or name={descriptor})', 'Engine');
   FModules := TRepeatableOption.Create('modules',
     'Path to a virtual modules manifest (repeatable)', 'Engine');
+  FRemoved := TOptionList.Create;
+  AddRemovedOptions(FRemoved);
 end;
 
 destructor TGocciaEngineOptions.Destroy;
@@ -448,91 +690,116 @@ begin
     FCompatibilityFlags[Flag].Free;
   FImportMap.Free;
   FAliases.Free;
-  FAllowNodeModules.Free;
+  FCapabilities.Free;
   FTimeout.Free;
   FMaxMemory.Free;
   FMaxInstructions.Free;
-  FUnsafeFFI.Free;
+  FMaxStack.Free;
+  FMaxFetchBytes.Free;
   FUnsafeFunctionConstructor.Free;
   FUnsafeShadowRealm.Free;
   FDeterministic.Free;
   FWarningUnsupportedFeatures.Free;
-  FStackSize.Free;
   FStrictTypes.Free;
-  FAllowedHosts.Free;
-  FFetchDenyPrivateRanges.Free;
-  FFetchMaxResponseBytes.Free;
-  FNoHostFilesystem.Free;
   FExperimentalAST.Free;
   FInspectDepth.Free;
   FModule.Free;
   FModules.Free;
+  FRemoved.Free;
   inherited Destroy;
 end;
 
 function TGocciaEngineOptions.Options: TOptionArray;
 var
   Flag: TGocciaCompatibility;
+  Leading, Trailing: TOptionArray;
   Index: Integer;
 begin
-  SetLength(Result, ENGINE_FIXED_OPTION_COUNT + CompatibilityFlagCount);
+  { Help groups appear in the order their first option does: Engine, then
+    Permissions, then Limits. }
+  SetLength(Leading, ENGINE_FIXED_OPTION_COUNT + CompatibilityFlagCount);
   Index := 0;
-  Result[Index] := FMode;
+  Leading[Index] := FMode;
   Inc(Index);
-  Result[Index] := FSourceType;
+  Leading[Index] := FSourceType;
   Inc(Index);
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
   begin
-    Result[Index] := FCompatibilityFlags[Flag];
+    Leading[Index] := FCompatibilityFlags[Flag];
     Inc(Index);
   end;
-  Result[Index] := FImportMap;
+  Leading[Index] := FImportMap;
   Inc(Index);
-  Result[Index] := FAliases;
+  Leading[Index] := FAliases;
   Inc(Index);
-  Result[Index] := FAllowNodeModules;
+  SetLength(Leading, Index);
+
+  SetLength(Trailing, ENGINE_FIXED_OPTION_COUNT);
+  Index := 0;
+  Trailing[Index] := FTimeout;
   Inc(Index);
-  Result[Index] := FTimeout;
+  Trailing[Index] := FMaxMemory;
   Inc(Index);
-  Result[Index] := FMaxMemory;
+  Trailing[Index] := FMaxInstructions;
   Inc(Index);
-  Result[Index] := FMaxInstructions;
+  Trailing[Index] := FMaxStack;
   Inc(Index);
-  Result[Index] := FUnsafeFFI;
+  Trailing[Index] := FMaxFetchBytes;
   Inc(Index);
-  Result[Index] := FUnsafeFunctionConstructor;
+  Trailing[Index] := FUnsafeFunctionConstructor;
   Inc(Index);
-  Result[Index] := FUnsafeShadowRealm;
+  Trailing[Index] := FUnsafeShadowRealm;
   Inc(Index);
-  Result[Index] := FDeterministic;
+  Trailing[Index] := FDeterministic;
   Inc(Index);
-  Result[Index] := FWarningUnsupportedFeatures;
+  Trailing[Index] := FWarningUnsupportedFeatures;
   Inc(Index);
-  Result[Index] := FStackSize;
+  Trailing[Index] := FStrictTypes;
   Inc(Index);
-  Result[Index] := FStrictTypes;
+  Trailing[Index] := FExperimentalAST;
   Inc(Index);
-  Result[Index] := FAllowedHosts;
+  Trailing[Index] := FInspectDepth;
   Inc(Index);
-  Result[Index] := FFetchDenyPrivateRanges;
+  Trailing[Index] := FModule;
   Inc(Index);
-  Result[Index] := FFetchMaxResponseBytes;
+  Trailing[Index] := FModules;
   Inc(Index);
-  Result[Index] := FNoHostFilesystem;
-  Inc(Index);
-  Result[Index] := FExperimentalAST;
-  Inc(Index);
-  Result[Index] := FInspectDepth;
-  Inc(Index);
-  Result[Index] := FModule;
-  Inc(Index);
-  Result[Index] := FModules;
+  SetLength(Trailing, Index);
+
+  Result := ConcatOptions([Leading, FCapabilities.Options, Trailing,
+    FRemoved.Options]);
 end;
 
 function TGocciaEngineOptions.CompatibilityFlagOption(
   const AFlag: TGocciaCompatibility): TFlagOption;
 begin
   Result := FCompatibilityFlags[AFlag];
+end;
+
+function TGocciaEngineOptions.SettingOption(
+  const ASetting: TGocciaRuntimeSetting): TOptionBase;
+begin
+  case ASetting of
+    grsTimeout:
+      Result := FTimeout;
+    grsMaxMemory:
+      Result := FMaxMemory;
+    grsMaxInstructions:
+      Result := FMaxInstructions;
+    grsMaxStack:
+      Result := FMaxStack;
+  else
+    Result := FMaxFetchBytes;
+  end;
+end;
+
+procedure TGocciaEngineOptions.HideUnsupportedSettings(
+  const AHonored: TGocciaHonoredSettings);
+var
+  Setting: TGocciaRuntimeSetting;
+begin
+  for Setting := Low(TGocciaRuntimeSetting) to High(TGocciaRuntimeSetting) do
+    SettingOption(Setting).Hidden := not (Setting in AHonored);
 end;
 
 { TGocciaCoverageOptions }

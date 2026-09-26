@@ -55,6 +55,7 @@ type
       const AJobCount: Integer);
     procedure EmitPath(const APath: string);
   protected
+    function HonoredSettings: TGocciaHonoredSettings; override;
     procedure Configure; override;
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
@@ -72,6 +73,13 @@ end;
 function TBundlerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefault;
+end;
+
+{ The bundler runs no code, so it grants no capability and applies no
+  limit; --timeout and the --max-* limits are usage errors. }
+function TBundlerApp.HonoredSettings: TGocciaHonoredSettings;
+begin
+  Result := [];
 end;
 
 procedure TBundlerApp.Configure;

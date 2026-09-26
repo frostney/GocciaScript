@@ -20,6 +20,7 @@ uses
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
@@ -147,6 +148,7 @@ type
       const AJobCount: Integer);
     procedure RunScripts(const APath: string);
   protected
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
@@ -345,14 +347,16 @@ begin
   Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
+function TScriptLoaderApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+begin
+  Result := ALL_CAPABILITIES;
+end;
+
 { TScriptLoaderApp - Validate }
 
 procedure TScriptLoaderApp.Validate;
 begin
   inherited Validate;
-
-  if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
-    raise TParseError.Create('--timeout must be 0 or greater.');
 
   // --profile-format implies --profile=functions when no explicit --profile given
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
@@ -565,7 +569,7 @@ begin
         IsJsonOutput;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
@@ -655,7 +659,7 @@ begin
           SourcePipelineResult.Free;
         end;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
@@ -701,7 +705,7 @@ begin
         Module := nil;
         ConfigureConsole(RuntimeConsole(Engine), ACapture);
         ApplyDataGlobalsToEngine(Engine);
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
