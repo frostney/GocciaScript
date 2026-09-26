@@ -214,7 +214,10 @@ embedder — names the canonical path and how to grant it: `--allow-read=<dir>`
 or `"allow-read"` in a `permissions` block for a read the capability does not
 cover (with a note that a computed `import()` is outside the module graph),
 `--allow-ffi[=<dir>]` for a library, `--allow-net=<host>` or `private` for a
-host, and the `--deny-*` or `deny-*` entry that refused a denied one.
+host. When a deny refused the request it names the deny instead: the read or
+ffi deny covering the path, or the net deny scope that matched the host
+(`refused by the net deny example.com`, `127.0.0.0/8`, or `private`), since
+no allow can override it.
 The suggestion also travels on the error object (never as a guest-visible
 property), so a denial that surfaces through a rejected `import()` or
 `fetch()` promise still reports it. Both executors locate a denial at the
@@ -314,8 +317,11 @@ config file. There is no `--allow-all` and no environment-variable form.
 
 `--allow-net=` (an empty list) and `--allow-read=a,,b` (an empty item) are
 invalid values (exit 1), as is a scope the capability does not accept. Every
-binary parses these flags the same way, including `GocciaScriptLoaderBare`
-and `GocciaTest262Runner`, which have their own argument parsers:
+binary parses these flags the same way and in the same order, including
+`GocciaScriptLoaderBare` and `GocciaTest262Runner`, which have their own
+argument parsers: a malformed flag is an invalid value (exit 1) even on a
+binary that cannot grant the capability, and a well-formed `--allow-*` the
+binary cannot grant is a usage error (exit 2):
 
 ```text
 Error: Invalid scope for --allow-net: "http://x" (use host, host:port, *.domain, an IP, a CIDR range, or private)
@@ -369,6 +375,13 @@ allow-ffi = ["../fixtures/ffi"]
   when it has none. The root config is `--config`, or the one discovered by
   walking up from the first input's directory (the working directory for
   stdin and the REPL). Configs compose only through `extends`.
+- A discovered config's `permissions` and `unsafe-*` keys govern only files
+  inside its own directory tree. In `GocciaScriptLoader a/x.js c/y.js`,
+  `a/goccia.json` is the root config, but `c/y.js` (with no config of its
+  own) gets no permissions or `unsafe-*` keys from it. Its other settings
+  apply to every input as before. An explicit `--config` governs every
+  input. `GocciaTestRunner` given several inputs applies no root config at
+  all, only each file's own.
 - An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
   `true`, `false`, or an array of strings (including `null`, an object, or a
   nested array) is a malformed block and fails the run with status 2. A
