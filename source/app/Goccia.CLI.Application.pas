@@ -268,8 +268,6 @@ procedure AppendObjectEntries(const AObject: TGocciaObjectValue;
 
   function TryScalarText(const AValue: TGocciaValue; out AText: string;
     out AKind: TConfigValueKind): Boolean;
-  var
-    Number: Double;
   begin
     Result := True;
     if AValue is TGocciaStringLiteralValue then
@@ -279,15 +277,7 @@ procedure AppendObjectEntries(const AObject: TGocciaObjectValue;
     end
     else if AValue is TGocciaNumberLiteralValue then
     begin
-      Number := TGocciaNumberLiteralValue(AValue).Value;
-      { A whole number too large for Int64 keeps its digits rather than an
-        exponent, so a unit parser can report it as too large. }
-      if (not IsNaN(Number)) and (not IsInfinite(Number)) and
-         (Frac(Number) = 0) and (Abs(Number) >= 1e15) and
-         (Abs(Number) < 1e300) then
-        AText := Format('%.0f', [Number], DefaultFormatSettings)
-      else
-        AText := TGocciaNumberLiteralValue(AValue).ToStringLiteral.Value;
+      AText := ConfigNumberText(TGocciaNumberLiteralValue(AValue).Value);
       AKind := cvkNumber;
     end
     else if AValue is TGocciaBooleanLiteralValue then
@@ -708,7 +698,7 @@ begin
   except
     on E: EOptionValueError do
       raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
-        [AEntry.Key, AEntry.SourcePath, E.Value, E.Reason]);
+        [AEntry.Key, AEntry.SourcePath, ConfigEntryText(AEntry), E.Reason]);
     on E: TParseError do
       raise TParseError.CreateFmt('%s: %s', [AEntry.SourcePath, E.Message]);
   end;

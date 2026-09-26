@@ -175,7 +175,8 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
       ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
       ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
-      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (`],
+      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (value is too large)`],
+      ['{"max-memory": 1.5}', `Invalid value for "max-memory" in ${configPath}: 1.5 (use a whole number`],
       ['{"extends": {"path": "base.json"}}', `${configPath}: "extends" must be a path`],
       ['{"extends": 1}', `${configPath}: "extends" must be a path`],
       ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
@@ -191,6 +192,30 @@ console.log("Removed and command-line-only config keys exit 2...");
     const tomlString = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(tomlString, 1, "TOML string flag");
     rmSync(join(tmp, "goccia.toml"));
+    // A number reads the same in every format: an exact whole number is
+    // accepted whatever its spelling, anything else is an invalid value.
+    rmSync(configPath);
+    for (const [name, text] of [
+      ["goccia.json", '{"max-memory": 1e8}'],
+      ["goccia.json5", "{ 'max-memory': 1e8 }"],
+      ["goccia.toml", "max-memory = 1e8\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const accepted = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(accepted, 0, `${name} whole-number exponent`);
+      rmSync(join(tmp, name));
+    }
+    for (const [name, text] of [
+      ["goccia.json5", "{ 'max-memory': 1e20 }"],
+      ["goccia.toml", "max-memory = 1e20\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const tooLarge = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(tooLarge, 1, `${name} oversized number`);
+      expectIncludes(tooLarge.combined, "(value is too large)", `${name} oversized number`);
+      rmSync(join(tmp, name));
+    }
+    writeFileSync(configPath, "{}\n");
     writeFileSync(join(tmp, "goccia.toml"), '[extends]\npath = "base.toml"\n');
     const tomlExtends = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(tomlExtends, 1, "TOML extends table");
