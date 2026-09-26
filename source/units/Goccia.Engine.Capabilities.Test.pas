@@ -61,8 +61,11 @@ type
     FOutside: string;
     FEvents: TStringList;
     FEventSources: TStringList;
+    FEventReasons: TStringList;
     FAuditedHopIndex: Integer;
     FVirtualModuleName: string;
+    FAliasPattern: string;
+    FAliasTarget: string;
     FVirtualModuleSource: string;
     function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -116,6 +119,8 @@ type
     procedure TestImportMetaResolveHonoursDenyScopes;
     procedure TestVirtualBareModuleAuditsNoNodeModules;
     procedure TestAbortAtScriptEndRecordsAbandonment;
+    procedure TestAliasCandidatesAreJudged;
+    procedure TestPackageProbesAreJudged;
   public
     procedure SetupTests; override;
   end;
@@ -190,6 +195,10 @@ begin
     'decision', TestVirtualBareModuleAuditsNoNodeModules);
   Test('A fetch aborted as the script ends records that its later hops go ' +
     'unaudited', TestAbortAtScriptEndRecordsAbandonment);
+  Test('Every path an alias or import map rewrites to is judged before ' +
+    'probing', TestAliasCandidatesAreJudged);
+  Test('File probes inside a granted package are judged too',
+    TestPackageProbesAreJudged);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -244,6 +253,10 @@ begin
   WriteFile(ProjectPath('sub/secret.json'), '{}');
   WriteFile(ProjectPath('hidden.js'), 'export const value = "hidden";');
   WriteFile(ProjectPath('shadow/index.js'), 'export const value = "shadow";');
+  WriteFile(ProjectPath('node_modules/probe/package.json'),
+    '{"name":"probe","type":"module","exports":"./main"}');
+  WriteFile(ProjectPath('node_modules/probe/main/index.js'),
+    'export const value = "directory";');
   WriteFile(IncludeTrailingPathDelimiter(FRoot) +
     'other/node_modules/pkg/secret.json', '{"secret":"other"}');
   WriteFile(IncludeTrailingPathDelimiter(FRoot) + 'linkedpkg/package.json',
@@ -254,12 +267,14 @@ begin
     'export const detail = "linked";');
   FEvents := TStringList.Create;
   FEventSources := TStringList.Create;
+  FEventReasons := TStringList.Create;
 end;
 
 procedure TEngineCapabilitiesTests.AfterAll;
 begin
   FEvents.Free;
   FEventSources.Free;
+  FEventReasons.Free;
   DeleteTree(FRoot);
   inherited AfterAll;
 end;
@@ -269,8 +284,11 @@ begin
   inherited BeforeEach;
   FEvents.Clear;
   FEventSources.Clear;
+  FEventReasons.Clear;
   FVirtualModuleName := '';
   FVirtualModuleSource := '';
+  FAliasPattern := '';
+  FAliasTarget := '';
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -278,6 +296,7 @@ procedure TEngineCapabilitiesTests.RecordEvent(
 begin
   FEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
     CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
+  FEventReasons.Add(AEvent.Reason);
   FEventSources.Add(ExtractFileName(AEvent.Source.FilePath) + ':' +
     IntToStr(AEvent.Source.Line));
 end;
@@ -348,6 +367,8 @@ begin
     AttachRuntime(Engine);
     if FVirtualModuleName <> '' then
       Engine.InjectModule(FVirtualModuleName, FVirtualModuleSource);
+    if FAliasPattern <> '' then
+      Engine.ModuleLoader.Resolver.AddAlias(FAliasPattern, FAliasTarget);
     if AShadowRealm then
       EnableShadowRealm(Engine);
     try
@@ -861,7 +882,9 @@ begin
   { capabilities.effective, the name check, net.dispatch, the abandonment
     the abort records, then the replayed address check. }
   Expect<Integer>(FAuditedHopIndex).ToBe(4);
-  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|http://localhost:1/');
+  { The abandonment names the host, like every net.fetch event. }
+  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|localhost');
+  Expect<Boolean>(Pos('abandoned: ', FEventReasons[3]) = 1).ToBe(True);
   Expect<string>(FEventSources[4]).ToBe('abort.mjs:2');
 end;
 
@@ -1403,12 +1426,13 @@ var
   Source: TStringList;
   Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
-  EventIndex: Integer;
+  EventIndex, Index: Integer;
 begin
   Source := TStringList.Create;
   Source.Text :=
     'const controller = new AbortController();' + sLineBreak +
-    'fetch("http://localhost:1/", { signal: controller.signal })' +
+    'fetch("http://localhost:1/private?token=secret",' +
+    ' { signal: controller.signal })' +
     '.catch(() => {});' + sLineBreak +
     'controller.abort();';
   Executor := TGocciaInterpreterExecutor.Create;
@@ -1424,10 +1448,73 @@ begin
     Executor.Free;
     Source.Free;
   end;
-  EventIndex := FEvents.IndexOf('net.fetch|allow|http://localhost:1/');
+  EventIndex := -1;
+  for Index := 0 to FEvents.Count - 1 do
+    if Pos('abandoned: ', FEventReasons[Index]) = 1 then
+      EventIndex := Index;
   Expect<Boolean>(EventIndex >= 0).ToBe(True);
   if EventIndex >= 0 then
+  begin
+    { The subject is the host, never the URL with its path and query. }
+    Expect<string>(FEvents[EventIndex]).ToBe('net.fetch|allow|localhost');
     Expect<string>(FEventSources[EventIndex]).ToBe('end.mjs:2');
+  end;
+end;
+
+
+{ An alias (or import-map entry) rewrites a specifier to a host path; every
+  candidate the resolver then probes is judged first, so a refused request
+  cannot tell an existing file from a missing one, and `..` in the tail
+  cannot probe past the alias target unjudged. import.meta.resolve answers
+  with the alias-applied path when refused. }
+procedure TEngineCapabilitiesTests.TestAliasCandidatesAreJudged;
+const
+  IMPORTS =
+    'globalThis.result = "pending";' + sLineBreak +
+    'Promise.all([import("@x/secret.js"), import("@x/nothere.js"),' +
+    ' import("@x/../other/node_modules/pkg/secret.json",' +
+    ' { with: { type: "json" } })]' +
+    '.map((p) => p.then(() => "loaded", (e) => e.name)))' +
+    '.then((r) => { globalThis.result = r.join("|"); });';
+  RESOLVES =
+    'globalThis.result = [import.meta.resolve("@x/secret"),' +
+    ' import.meta.resolve("@x/nothere")]' +
+    '.map((u) => u.slice(u.lastIndexOf("/outside/"))).join("|");';
+var
+  Outcome: TRunOutcome;
+begin
+  FAliasPattern := '@x/';
+  FAliasTarget := IncludeTrailingPathDelimiter(FOutside);
+  Outcome := Run(IMPORTS, TGocciaCapabilities.None);
+  Expect<string>(Outcome.Result)
+    .ToBe('PermissionDenied|PermissionDenied|PermissionDenied');
+  Outcome := Run(RESOLVES, TGocciaCapabilities.None);
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('/outside/secret|/outside/nothere');
+  { A read grant over the alias target lets the same imports through. }
+  Outcome := Run('import { value } from "@x/secret.js";' +
+    ' globalThis.result = value;',
+    TGocciaCapabilities.None.Allow(gcRead, FOutside));
+  Expect<string>(Outcome.Result).ToBe('outside');
+end;
+
+{ The package's exports target "./main" is probed as main, main.js, ...,
+  then main/index.js. A deny on main.js must refuse whether or not main.js
+  exists, as it does for a relative import. }
+procedure TEngineCapabilitiesTests.TestPackageProbesAreJudged;
+const
+  SOURCE_TEXT = 'import { value } from "probe"; globalThis.result = value;';
+var
+  Grant: TGocciaCapabilities;
+  Outcome: TRunOutcome;
+begin
+  Grant := TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE);
+  Outcome := Run(SOURCE_TEXT, Grant);
+  Expect<string>(Outcome.Result).ToBe('directory');
+  Outcome := Run(SOURCE_TEXT,
+    Grant.Deny(gcRead, ProjectPath('node_modules/probe/main.js')));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: probe');
 end;
 
 begin

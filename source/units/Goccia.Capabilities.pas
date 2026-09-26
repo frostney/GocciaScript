@@ -463,16 +463,18 @@ begin
   end;
 end;
 
-{ An IP or CIDR scope covers an address, or the IPv4 host a NAT64 or 6to4
-  address reaches: those spellings name the IPv4 host as surely as the
-  ::ffff: form TryParseIPAddress already unmaps. }
+{ An IP or CIDR scope covers an address. With AForDeny it also covers the
+  IPv4 host a NAT64 (64:ff9b::/96) or 6to4 (2002::/16) address reaches, so a
+  deny cannot be sidestepped through those spellings. An allow does not
+  extend that way: a 6to4 prefix names a relay site, not the IPv4 host, and
+  NAT64 follows the same rule so both translations behave alike. }
 function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
-  const AAddress: TNetworkAddress): Boolean;
+  const AAddress: TNetworkAddress; const AForDeny: Boolean): Boolean;
 var
   Translated: TNetworkAddress;
 begin
   Result := ScopeCoversExactAddress(ANetScope, AAddress) or
-    (TryGetTranslatedIPv4(AAddress, Translated) and
+    (AForDeny and TryGetTranslatedIPv4(AAddress, Translated) and
      ScopeCoversExactAddress(ANetScope, Translated));
 end;
 
@@ -480,7 +482,8 @@ end;
   request did not state one, which only an unported scope can match. }
 function NetScopeMatchesHost(const ANetScope: TGocciaNetScope;
   const AHost: string; const AHostIsAddress: Boolean;
-  const AHostAddress: TNetworkAddress; const APort: Integer): Boolean;
+  const AHostAddress: TNetworkAddress; const APort: Integer;
+  const AForDeny: Boolean): Boolean;
 var
   Suffix: string;
 begin
@@ -498,7 +501,7 @@ begin
       end;
     nskAddress, nskCIDR:
       Result := AHostIsAddress and
-        NetScopeCoversAddress(ANetScope, AHostAddress);
+        NetScopeCoversAddress(ANetScope, AHostAddress, AForDeny);
   else
     Result := False;
   end;
@@ -881,11 +884,12 @@ begin
           Exit(True);
       end
       else if NetScopeMatchesHost(NetScope, ARequest.Host,
-        ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port) then
+        ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port,
+        True) then
         Exit(True)
       else if ARequest.HasAddress and NetScopePortMatches(NetScope,
         ARequest.Port) and NetScopeCoversAddress(NetScope,
-        ARequest.Address) then
+        ARequest.Address, True) then
         Exit(True);
     end;
   Result := False;
@@ -915,11 +919,12 @@ begin
       else
       begin
         if (not HostMatches) and NetScopeMatchesHost(NetScope, ARequest.Host,
-           ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port) then
+           ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port,
+           False) then
           HostMatches := True;
         if ARequest.HasAddress and (not NamesAddress) and
            NetScopePortMatches(NetScope, ARequest.Port) and
-           NetScopeCoversAddress(NetScope, ARequest.Address) then
+           NetScopeCoversAddress(NetScope, ARequest.Address, False) then
           NamesAddress := True;
       end;
     end;
