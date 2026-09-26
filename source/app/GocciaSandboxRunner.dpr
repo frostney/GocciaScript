@@ -260,6 +260,7 @@ begin
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
+  FDiffOutput.WritesHostFile := True;
   FWriteBack := AddFlag('write-back',
     'After a successful run, write files it changed back to the host paths they were seeded from');
   FPrint := AddFlag('print', 'Print the script result value');
@@ -590,12 +591,42 @@ end;
 
 procedure TSandboxRunnerApp.LoadSeeds;
 var
-  I: Integer;
+  I, FirstOrigin: Integer;
+
+  { Seeds named by the config are write-back targets the config chose: with
+    --write-back they must lie inside the config's directory, like any
+    config-set output path. }
+  procedure ConfineConfigSeeds(const AOption: TOptionBase;
+    const AFirst: Integer);
+  var
+    Index: Integer;
+    Problem: string;
+  begin
+    if (not FWriteBack.Present) or AOption.FromCommandLine or
+       (RootConfigPath = '') then
+      Exit;
+    for Index := AFirst to High(FSeedOrigins) do
+    begin
+      Problem := ConfigOutputPathProblem(FSeedOrigins[Index].HostPath,
+        RootConfigPath);
+      if Problem <> '' then
+        raise TParseError.CreateFmt('%s: "%s" seeds %s for --write-back, ' +
+          'which %s; a config may only write inside its own directory ' +
+          '(pass --%s on the command line to write elsewhere)',
+          [RootConfigPath, AOption.LongName, FSeedOrigins[Index].HostPath,
+           Problem, AOption.LongName]);
+    end;
+  end;
+
 begin
+  FirstOrigin := Length(FSeedOrigins);
   for I := 0 to FSeedPaths.Values.Count - 1 do
     SeedHostPathSpec(FSeedPaths.Values[I], GetCurrentDir);
+  ConfineConfigSeeds(FSeedPaths, FirstOrigin);
+  FirstOrigin := Length(FSeedOrigins);
   for I := 0 to FSeedConfigFiles.Values.Count - 1 do
     SeedConfigFile(FSeedConfigFiles.Values[I]);
+  ConfineConfigSeeds(FSeedConfigFiles, FirstOrigin);
 end;
 
 procedure TSandboxRunnerApp.EnsureSandboxParentDirectory(

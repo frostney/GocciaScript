@@ -372,6 +372,8 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 }
 ```
 
+**Output paths in config** — A config may set the options that write host files — `log`, `audit-log`, `coverage-output`, `profile-output`, `source-map`, the test runner's, benchmark runner's, and bundler's `output` (when it names a file), and the sandbox runner's `diff-output` — only to a path inside its own directory. A relative value resolves against the directory of the config file that declares it, existing directories along the path are resolved, and a symbolic link at the name itself is refused; anything else fails with status 1, naming the key and the config. With `--write-back`, the sandbox runner's seeds named by a config are checked the same way, since write-back rewrites them. The same options on the command line write wherever they are told to.
+
 **Config trust** — A config's `allow-*` permissions and `unsafe-*` keys are requests: they take effect only once trusted, while every other key (`compat-*`, limits, import maps, aliases, and `deny-*` permissions) applies automatically. Before any file runs, the CLI checks every config that governs its inputs; an untrusted one fails the run with status 2 and a report naming each config and the command that would fix it. Trust is recorded in a per-user store outside the repository:
 
 ```bash

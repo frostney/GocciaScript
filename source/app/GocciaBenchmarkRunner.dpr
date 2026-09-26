@@ -1101,6 +1101,7 @@ begin
     'Output format (console, text, csv, json, compact-json). ' +
     '"compact-json" emits the json envelope without build, memory, stdout, stderr.');
   FOutputFile := AddString('output', 'Output file path (attaches to last --format)');
+  FOutputFile.WritesHostFile := True;
 end;
 
 procedure TBenchmarkRunnerApp.Validate;

@@ -555,6 +555,8 @@ begin
     'Per-test timeout in ms (0 disables). Marks the test TIMEOUT and continues.');
   FDescribeTimeout := AddInteger('describe-timeout',
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
+  { A value other than json or compact-json is a file path. }
+  FOutputFile.WritesHostFile := True;
   FUpdateSnapshots := AddFlag('update-snapshots',
     'Create, update, and prune snapshots');
   FUpdateSnapshots.ShortName := 'u';

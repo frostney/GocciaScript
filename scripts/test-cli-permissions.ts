@@ -1166,6 +1166,75 @@ console.log("Trust follows each file's own config...");
   }
 }
 
+console.log("Output paths set in a config stay inside the config's directory...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "logs"), { recursive: true });
+    mkdirSync(join(tmp, "elsewhere"));
+    writeFileSync(join(project, "main.js"), 'console.log("RAN");\n');
+    writeFileSync(join(project, "a.test.js"), 'test("t", () => { expect(1).toBe(1); });\n');
+    const victim = join(tmp, "victim.txt");
+    const refused: [string, string, string[]][] = [
+      ["log", JSON.stringify(victim), [LOADER, "main.js"]],
+      ["audit-log", '"../victim.txt"', [LOADER, "main.js"]],
+      ["coverage-output", JSON.stringify(victim), [LOADER, "main.js", "--coverage"]],
+      ["profile-output", JSON.stringify(victim), [LOADER, "main.js", "--profile=functions"]],
+      ["output", JSON.stringify(victim), [TESTRUNNER, "a.test.js", "--no-progress"]],
+    ];
+    for (const [key, value, [binary, ...args]] of refused) {
+      writeFileSync(join(project, "goccia.json"), `{"${key}": ${value}}\n`);
+      const result = run(binary, args, { cwd: project });
+      expectExit(result, 1, `config "${key}" outside its directory`);
+      expectIncludes(result.combined, `${join(project, "goccia.json")}: "${key}" writes to ${victim}, which is outside ${project}`, `config "${key}"`);
+      expectExcludes(result.stdout, "RAN", `config "${key}" runs nothing`);
+      if (existsSync(victim)) throw new Error(`config "${key}" wrote ${victim}`);
+    }
+
+    // A relative path is relative to the config, wherever the command runs.
+    writeFileSync(join(project, "goccia.json"), '{"log": "logs/run.log"}\n');
+    const inside = run(LOADER, [join(project, "main.js")], { cwd: join(tmp, "elsewhere") });
+    expectExit(inside, 0, "config log inside its directory");
+    if (!existsSync(join(project, "logs", "run.log"))) throw new Error("config log was not written beside the config");
+
+    // A link at the name, or a linked directory on the way, cannot carry the
+    // write out.
+    if (!isWindows) {
+      symlinkSync(victim, join(project, "link.log"));
+      writeFileSync(join(project, "goccia.json"), '{"log": "link.log"}\n');
+      expectIncludes(run(LOADER, ["main.js"], { cwd: project }).combined, "is a symbolic link", "config log through a link");
+      symlinkSync(join(tmp, "elsewhere"), join(project, "out"));
+      writeFileSync(join(project, "goccia.json"), '{"log": "out/run.log"}\n');
+      expectIncludes(run(LOADER, ["main.js"], { cwd: project }).combined, `which is outside ${project}`, "config log through a linked directory");
+      if (existsSync(join(tmp, "elsewhere", "run.log"))) throw new Error("config log escaped through a linked directory");
+    }
+
+    // The sandbox runner's diff file, and the host files its --write-back
+    // rewrites when the config names the seeds, are outputs too.
+    writeFileSync(join(tmp, "outside.txt"), "HOST\n");
+    writeFileSync(join(project, "entry.js"), "1;\n");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "diff-output": victim }) + "\n");
+    const diffOut = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "--seed", `${join(project, "entry.js")}=/entry.js`, "/entry.js"], { cwd: project });
+    expectExit(diffOut, 1, "config diff-output outside its directory");
+    expectIncludes(diffOut.combined, `"diff-output" writes to ${victim}`, "config diff-output");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      seed: [`${join(project, "entry.js")}=/entry.js`, `${join(tmp, "outside.txt")}=/outside.txt`],
+      "write-back": true,
+    }) + "\n");
+    const writeBack = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "/entry.js"], { cwd: project });
+    expectExit(writeBack, 1, "config seed outside its directory with write-back");
+    expectIncludes(writeBack.combined, `"seed" seeds ${join(tmp, "outside.txt")} for --write-back`, "config seed with write-back");
+
+    // The command line writes wherever it is told to.
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    expectExit(run(LOADER, [`--log=${victim}`, "main.js"], { cwd: project }), 0, "--log outside the config");
+    if (!existsSync(victim)) throw new Error("--log did not write its file");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Unreadable trust stores are errors, not trust...");
 {
   const tmp = makeTmp();

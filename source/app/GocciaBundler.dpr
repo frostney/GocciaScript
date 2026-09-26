@@ -97,6 +97,8 @@ begin
     'Output path (single file) or output directory (multiple files)');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
+  FOutputPath.WritesHostFile := True;
+  FSourceMap.WritesHostFile := True;
 end;
 
 { TBundlerApp - Validate }

@@ -49,6 +49,7 @@ type
     FHidden: Boolean;
     FCommandLineOnly: Boolean;
     FRequiresTrust: Boolean;
+    FWritesHostFile: Boolean;
     FConfigIgnored: Boolean;
     FAcceptsObject: Boolean;
     FConfigHint: string;
@@ -106,6 +107,10 @@ type
     { A config file may give the key an object, read by the option's owner
       (a virtual modules descriptor map). Any other option rejects one. }
     property AcceptsObject: Boolean read FAcceptsObject write FAcceptsObject;
+    { The value names a host file the program writes. A config file may only
+      set it to a path inside the config's own directory. }
+    property WritesHostFile: Boolean read FWritesHostFile
+      write FWritesHostFile;
   end;
 
   TOptionArray = array of TOptionBase;
@@ -363,6 +368,7 @@ begin
   FHidden := False;
   FCommandLineOnly := False;
   FRequiresTrust := False;
+  FWritesHostFile := False;
   FConfigIgnored := False;
   FAcceptsObject := False;
   FConfigHint := '';

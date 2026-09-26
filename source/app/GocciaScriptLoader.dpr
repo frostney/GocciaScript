@@ -291,6 +291,7 @@ begin
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FSourceMap := TStringOption(Add(TOptionalStringOption.Create('source-map',
     'Write a .map source map file (optional: explicit path)')));
+  FSourceMap.WritesHostFile := True;
   FHostEnvironmentModule := AddString('host-environment',
     'Configure script-visible time and randomness from a module with named exports');
   FGlobalFiles := AddRepeatable('globals',

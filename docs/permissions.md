@@ -394,6 +394,11 @@ allow-ffi = ["../fixtures/ffi"]
   value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
+- A config writes host files only inside its own directory: `log`,
+  `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
+  and `diff-output` resolve against the declaring file and fail with status 1
+  if they lead outside it, through a symbolic link or otherwise (see
+  [Build System](build-system.md#configuration-file-gocciajson)).
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 

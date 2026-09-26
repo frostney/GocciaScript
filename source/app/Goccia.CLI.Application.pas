@@ -147,6 +147,12 @@ type
     { ValidateFileConfigs for one input, such as STDIN_FILE_NAME or a
       session governed by the working directory's config. }
     procedure ValidateFileConfig(const AFileName: string);
+    { Each WritesHostFile option whose value came from the root config (not
+      the command line): a relative path is resolved against the directory of
+      the config file that declared it, and the result must stay inside that
+      directory, canonically. Raises TParseError naming the key and config
+      otherwise. }
+    procedure ConfineConfigOutputPaths(const AEntries: TConfigEntryArray);
     { Sends an event the application itself decides through the capability
       audit log, when one is open. Main thread only. }
     procedure EmitApplicationAudit(const AKind: TGocciaCapabilityKind;
@@ -217,6 +223,8 @@ type
     function SplitStdinMultifile(
       const AStdinSource: TStringList): TStringList;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
+    { The applied root config, or ''. }
+    property RootConfigPath: string read FRootConfigPath;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
     property LogFileOpen: Boolean read FLogFileOpen;
@@ -227,6 +235,11 @@ type
 
 { Registers the JSON5 and TOML config parsers. Idempotent. }
 procedure EnsureConfigParsersRegistered;
+
+{ Why a config at AConfigPath may not have a host file written at APath, or
+  '' when it may: the path is a symbolic link, or it resolves (through any
+  existing directories) outside the config's directory. }
+function ConfigOutputPathProblem(const APath, AConfigPath: string): string;
 
 function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
@@ -258,6 +271,7 @@ uses
 
   CLI.Parser,
   CLI.Units,
+  FileUtils,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
@@ -1185,6 +1199,66 @@ begin
       TrustStoreArgument);
   finally
     Checked.Free;
+  end;
+end;
+
+function ConfigOutputPathProblem(const APath, AConfigPath: string): string;
+var
+  Directory: string;
+begin
+  Result := '';
+  Directory := ExtractFileDir(AConfigPath);
+  { A link at the name itself would redirect the write wherever it points. }
+  if HostPathIsSymlink(APath) then
+    Exit('is a symbolic link');
+  { Existing directories along the path are resolved, so a symlinked parent
+    cannot carry the write out of the config's tree. }
+  if not IsPathWithinScope(CanonicalCapabilityPath(APath),
+     CanonicalCapabilityPath(Directory)) then
+    Result := 'is outside ' + Directory;
+end;
+
+procedure TGocciaCLIApplication.ConfineConfigOutputPaths(
+  const AEntries: TConfigEntryArray);
+const
+  OUTPUT_MODE_JSON = 'json';
+  OUTPUT_MODE_COMPACT_JSON = 'compact-json';
+var
+  I: Integer;
+  Option: TOptionBase;
+  Entry: TConfigEntry;
+  Key, Value, Path, Problem: string;
+begin
+  for I := 0 to High(FAllOptions) do
+  begin
+    Option := FAllOptions[I];
+    if (not Option.WritesHostFile) or (not Option.Present) or
+       Option.FromCommandLine or not (Option is TStringOption) then
+      Continue;
+    Value := TStringOption(Option).Value;
+    { Not a path: an output mode, or "derive it from the input". }
+    if (Value = '') or (Value = OUTPUT_MODE_JSON) or
+       (Value = OUTPUT_MODE_COMPACT_JSON) then
+      Continue;
+    Key := Option.LongName;
+    if (Option.ConfigName <> '') and
+       TryFindConfigEntry(AEntries, Option.ConfigName, Entry) then
+      Key := Option.ConfigName
+    else if not TryFindConfigEntry(AEntries, Option.LongName, Entry) then
+      Continue;
+    { Relative to the file that wrote it, like a permission scope. }
+    if IsAbsoluteFilePath(Value) then
+      Path := ExpandFileName(Value)
+    else
+      Path := ExpandFileName(IncludeTrailingPathDelimiter(
+        ExtractFileDir(Entry.SourcePath)) + Value);
+    Problem := ConfigOutputPathProblem(Path, Entry.SourcePath);
+    if Problem <> '' then
+      raise TParseError.CreateFmt('%s: "%s" writes to %s, which %s; a ' +
+        'config may only write inside its own directory (pass --%s on the ' +
+        'command line to write elsewhere)',
+        [Entry.SourcePath, Key, Path, Problem, Option.LongName]);
+    TStringOption(Option).Apply(Path);
   end;
 end;
 
@@ -2137,6 +2211,8 @@ begin
   FLog := TStringOption.Create('log', 'Write console output to a log file');
   FAuditLog := TStringOption.Create('audit-log',
     'Write capability audit events as JSON Lines');
+  FLog.WritesHostFile := True;
+  FAuditLog.WritesHostFile := True;
 
   FMultifile := TFlagOption.Create('multifile',
     'Split each input (file or stdin) on "---" lines and run each ' +
@@ -2245,6 +2321,7 @@ begin
       { unsafe-* keys are RequiresTrust and skipped here: they reach an
         engine through the governing config's trust verdict. }
       ApplyConfigEntries(RootConfigEntries, FAllOptions);
+      ConfineConfigOutputPaths(RootConfigEntries);
       { A malformed permissions block fails the run before anything else. }
       ReadConfigPermissionRequest(RootConfigEntries, ConfigPath);
     end
