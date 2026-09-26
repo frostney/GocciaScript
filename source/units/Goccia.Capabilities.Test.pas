@@ -48,6 +48,7 @@ type
     procedure TestNetMappedIPv6;
     procedure TestNetEmbeddedIPv4Ranges;
     procedure TestNetCIDRZero;
+    procedure TestDeniesPathsStartingWith;
     procedure TestToJSON;
   public
     procedure SetupTests; override;
@@ -93,6 +94,8 @@ begin
     'private', TestNetEmbeddedIPv4Ranges);
   Test('A /0 range covers every address, private ones included',
     TestNetCIDRZero);
+  Test('DeniesPathsStartingWith sees deny scopes a probe could reach',
+    TestDeniesPathsStartingWith);
   Test('ToJSON serializes every layer', TestToJSON);
 end;
 
@@ -757,6 +760,20 @@ begin
   Capabilities := Capabilities.Deny(gcNet, NET_PRIVATE_SCOPE);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('8.8.8.8', 53)).ToBe(True);
+end;
+
+procedure TCapabilitiesTests.TestDeniesPathsStartingWith;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcRead)
+    .Deny(gcRead, RootPath('data/secret.json'));
+  Expect<Boolean>(Capabilities.DeniesPathsStartingWith(gcRead,
+    RootPath('data/secret'))).ToBe(True);
+  Expect<Boolean>(Capabilities.DeniesPathsStartingWith(gcRead,
+    RootPath('data/public'))).ToBe(False);
+  Expect<Boolean>(TGocciaCapabilities.None.Deny(gcRead)
+    .DeniesPathsStartingWith(gcRead, RootPath('any'))).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestToJSON;

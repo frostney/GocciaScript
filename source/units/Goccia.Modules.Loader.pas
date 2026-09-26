@@ -92,6 +92,11 @@ type
     FCapabilities: TGocciaCapabilities;
     FProjectRoot: string;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    { The root request of a host enrollment in progress (LoadHostModule).
+      Its imports are recognized by their host-owned importer instead. }
+    FHostRequestSpecifier: string;
+    FHostRequestImporter: string;
+    FHostRequestDepth: Integer;
 
     function EnforcesHostReads: Boolean;
     procedure EnforceHostRead(const ASpecifier, APath: string;
@@ -103,6 +108,8 @@ type
     function MayProbeHostPath(const ASpecifier,
       AImportingFilePath: string): Boolean;
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
+    function IsHostRequest(const ASpecifier,
+      AImportingFilePath: string): Boolean;
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
@@ -785,6 +792,11 @@ begin
   CanonicalPath := CanonicalCapabilityPath(APath);
   if FCapabilities.DeniesPath(gcRead, CanonicalPath) then
     Deny('read is denied for this path');
+  { Before probing, a deny scope the extension or index probe could land on
+    refuses too, so whether that file exists stays hidden. }
+  if APreResolution and
+     FCapabilities.DeniesPathsStartingWith(gcRead, CanonicalPath) then
+    Deny('read is denied for a path this request could resolve to');
 
   if AIsLiteral and (FProjectRoot <> '') and
      IsPathWithinScope(CanonicalPath, FProjectRoot) then
@@ -834,7 +846,7 @@ begin
   if Assigned(FResolver) and
      (FResolver.ApplyAlias(ASpecifier, AImportingFilePath) <> ASpecifier) then
     Exit;
-  if IsHostOwnedImporter(AImportingFilePath) then
+  if IsHostRequest(ASpecifier, AImportingFilePath) then
     Exit;
   ACandidate := ExpandFileName(ACandidate);
   Result := True;
@@ -1431,9 +1443,35 @@ begin
   else
     ResolvedPath := ResolveModuleAddress(AModulePath, AImportingFilePath);
   MarkHostOwnedAddress(ResolvedPath);
-  Result := LoadModule(AModulePath, AImportingFilePath);
+  Inc(FHostRequestDepth);
+  FHostRequestSpecifier := AModulePath;
+  FHostRequestImporter := AImportingFilePath;
+  try
+    Result := LoadModule(AModulePath, AImportingFilePath);
+  finally
+    Dec(FHostRequestDepth);
+    if FHostRequestDepth = 0 then
+    begin
+      FHostRequestSpecifier := '';
+      FHostRequestImporter := '';
+    end;
+  end;
   if Assigned(Result) then
     Result.IsHostOwned := True;
+end;
+
+{ Whether a module request is made by the host rather than by guest code:
+  the root of a host enrollment, or an import whose importer is host-owned.
+  Host requests are never read-checked. Whether the *target* was ever loaded
+  by the host does not matter: a guest importing the same file is a guest
+  read. }
+function TGocciaModuleLoader.IsHostRequest(const ASpecifier,
+  AImportingFilePath: string): Boolean;
+begin
+  Result := ((FHostRequestDepth > 0) and
+    (ASpecifier = FHostRequestSpecifier) and
+    (AImportingFilePath = FHostRequestImporter)) or
+    IsHostOwnedImporter(AImportingFilePath);
 end;
 
 procedure TGocciaModuleLoader.EvaluateLinkedModule(
@@ -2083,11 +2121,11 @@ begin
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
 
-  { A computed request is judged even when the module is already loaded: it
-    is not part of the module graph however it got into the cache. }
-  if IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, False, IsHostOwned,
-      False);
+  { Judged before any cache: a module already loaded — by the host, or through
+    another request — is no reason to serve it to a request that may not read
+    it. }
+  EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
+    IsHostRequest(RequestedModulePath, ImportingFilePath), False);
 
   if TryGetCachedFailedModuleError(ResolvedPath, CacheKey, FailedValue) then
     raise TGocciaThrowValue.Create(FailedValue);
@@ -2110,10 +2148,6 @@ begin
       CheckForModuleReload(Result, CacheKey);
     Exit;
   end;
-
-  if not IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, True, IsHostOwned,
-      False);
 
   if AttributeType = 'json' then
   begin
@@ -2382,14 +2416,10 @@ begin
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
-  if IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, False, IsHostOwned,
-      False);
+  EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
+    IsHostRequest(RequestedModulePath, AImportingFilePath), False);
   if FModuleSourceValues.TryGetValue(CacheKey, SourceValue) then
     Exit(SourceValue);
-  if not IsComputedRequest then
-    EnforceHostRead(RequestedModulePath, ResolvedPath, True, IsHostOwned,
-      False);
 
   if (AttributeType <> '') or
      ((not FVirtualModules.GetContentType(ResolvedPath,
@@ -2800,7 +2830,7 @@ begin
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
 
   EnforceHostRead(RequestedModulePath, ResolvedPath, not IsComputedRequest,
-    IsHostOwned, False);
+    IsHostRequest(RequestedModulePath, AImportingFilePath), False);
 
   if FDeferredModuleNamespaces.TryGetValue(CacheKey, Result) then
     Exit;

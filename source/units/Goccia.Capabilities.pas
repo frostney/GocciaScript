@@ -86,6 +86,12 @@ type
       For read this also removes the module-graph exemption. }
     function DeniesAll(const ACapability: TGocciaCapability): Boolean;
 
+    { read/ffi: true when some layer denies outright or has a deny scope whose
+      path begins with the canonical spelling of APathPrefix — everything a
+      resolver could reach by appending an extension or `/index.<ext>`. }
+    function DeniesPathsStartingWith(const ACapability: TGocciaCapability;
+      const APathPrefix: string): Boolean;
+
     { read/ffi: true when some layer denies APath, outright or through a deny
       scope covering it. Deny wins over grants and exemptions alike. }
     function DeniesPath(const ACapability: TGocciaCapability;
@@ -778,6 +784,28 @@ var
 begin
   Path := CanonicalPathRequest(ACapability, APath);
   Result := (Path = '') or LayersDenyCanonicalPath(FLayers, ACapability, Path);
+end;
+
+function TGocciaCapabilities.DeniesPathsStartingWith(
+  const ACapability: TGocciaCapability; const APathPrefix: string): Boolean;
+var
+  I, J: Integer;
+  Prefix: string;
+  Rule: TGocciaCapabilityRule;
+begin
+  Prefix := CanonicalPathRequest(ACapability, APathPrefix);
+  if Prefix = '' then
+    Exit(True);
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[ACapability];
+    if Rule.DenyAll then
+      Exit(True);
+    for J := 0 to High(Rule.DenyScopes) do
+      if SamePathText(Copy(Rule.DenyScopes[J], 1, Length(Prefix)), Prefix) then
+        Exit(True);
+  end;
+  Result := False;
 end;
 
 function TGocciaCapabilities.AllowsPath(

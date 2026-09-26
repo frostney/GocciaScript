@@ -85,6 +85,8 @@ type
     procedure TestImportMetaResolveDoesNotProbeOutsideTheGrant;
     procedure TestAbortedFetchStillAuditsItsHops;
     procedure TestAbortedFetchAuditEndsWithItsEngine;
+    procedure TestDenyScopeHidesExistenceOfProbedFiles;
+    procedure TestHostLoadedModuleIsCheckedForTheGuest;
     function OpenLibrary(const ALibrary: string;
       const ACapabilities: TGocciaCapabilities): TRunOutcome;
     procedure TestNodeModulesDenyThrowsPermissionDenied;
@@ -130,6 +132,10 @@ begin
     TestAbortedFetchStillAuditsItsHops);
   Test('An aborted fetch''s audit is dropped when its engine discards its ' +
     'requests', TestAbortedFetchAuditEndsWithItsEngine);
+  Test('A deny scope the resolver could probe into refuses before probing',
+    TestDenyScopeHidesExistenceOfProbedFiles);
+  Test('A module the host loaded is still read-checked for the guest',
+    TestHostLoadedModuleIsCheckedForTheGuest);
   Test('A node_modules deny throws PermissionDenied',
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
@@ -749,6 +755,60 @@ begin
     KeeperExecutor.Free;
     KeeperSource.Free;
   end;
+end;
+
+{ The resolver probes `<candidate>.js` and `<candidate>/index.js`. When a
+  deny scope names one of those, whether the file exists must not decide
+  between PermissionDenied and "Module not found". }
+procedure TEngineCapabilitiesTests.TestDenyScopeHidesExistenceOfProbedFiles;
+const
+  SOURCE_TEXT =
+    'globalThis.result = "pending";' + sLineBreak +
+    'const names = ["../outside/secret", "../outside/absent"];' + sLineBreak +
+    'Promise.all(names.map((n) => import(n).then(() => "loaded",' +
+    ' (e) => e.name))).then((r) => { globalThis.result = r.join("|"); });';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead, FOutside)
+    .Deny(gcRead, OutsidePath('secret.js'))
+    .Deny(gcRead, OutsidePath('absent.js')));
+  Expect<string>(Outcome.Result).ToBe('PermissionDenied|PermissionDenied');
+end;
+
+{ A module the host enrolled itself (globals, host environment, manifests)
+  is cached under its address. A guest import of the same address is still a
+  guest read and must be judged, not served from the cache. }
+procedure TEngineCapabilitiesTests.TestHostLoadedModuleIsCheckedForTheGuest;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Outcome: TRunOutcome;
+begin
+  Outcome := Default(TRunOutcome);
+  Source := TStringList.Create;
+  Source.Text :=
+    'import { value } from "../outside/secret.js";' + sLineBreak +
+    'globalThis.result = value;';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor);
+  try
+    AttachRuntime(Engine);
+    Engine.InjectGlobalsFromModule(OutsidePath('secret.js'));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Outcome);
+    end;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
 end;
 
 procedure TEngineCapabilitiesTests.TestNodeModulesDenyThrowsPermissionDenied;
