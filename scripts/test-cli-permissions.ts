@@ -360,6 +360,15 @@ console.log("Binaries with their own parser follow the same grammar...");
         expectIncludes(result.combined, message, `${binary} ${flag}`);
       }
     }
+    // A whitespace-only item is an empty scope, never the unscoped grant it
+    // would become once trimmed.
+    for (const flag of ["--allow-net=example.com, ", "--allow-read= ", "--allow-import=node_modules, ", "--deny-net=a.test, "]) {
+      for (const [binary, args] of [[BARE, [flag, "main.js"]], [TEST262RUNNER, [flag]], [BUNDLER, [flag, "main.js"]], [LOADER, [flag, "main.js"]], [REPL, [flag]]] as const) {
+        const result = run(binary, [...args], { cwd: tmp });
+        expectExit(result, 1, `${binary} ${JSON.stringify(flag)}`);
+        expectIncludes(result.combined, `Empty scope in ${flag}`, `${binary} ${JSON.stringify(flag)}`);
+      }
+    }
     for (const [binary, args] of [[BARE, ["--allow-net=example.com", "main.js"]], [TEST262RUNNER, ["--allow-net=example.com"]], [BUNDLER, ["--allow-net=example.com", "main.js"]]] as const) {
       const result = run(binary, [...args], { cwd: tmp });
       expectExit(result, 2, `${binary} well-formed unsupported --allow-net`);

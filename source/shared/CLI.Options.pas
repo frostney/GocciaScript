@@ -668,8 +668,10 @@ begin
     if (AValue[Length(AValue)] = ',') or (AValue[1] = ',') then
       raise TParseError.CreateFmt('Empty scope in --%s=%s',
         [LongName, AValue]);
+    { A whitespace-only item is empty too: scopes are trimmed, and a blank
+      scope would mean the whole capability. }
     for I := 0 to Items.Count - 1 do
-      if Items[I] = '' then
+      if Trim(Items[I]) = '' then
         raise TParseError.CreateFmt('Empty scope in --%s=%s',
           [LongName, AValue]);
     FScopes.AddStrings(Items);
