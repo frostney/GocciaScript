@@ -1095,9 +1095,50 @@ begin
   Result := NetRequestVerdict(FLayers, Request) = nhvAllowed;
 end;
 
+{ Whether ADirectory lies inside the node_modules ceiling ACeiling, and the
+  ceiling spelled the way the ancestor walk will compare it. Both are
+  expanded spellings, and the walk compares expanded spellings, so the
+  expanded ceiling is used when the spellings agree. They can disagree while
+  naming the same place — macOS's /var is /private/var, and the working
+  directory comes back physical, and a config's relative ceiling is resolved
+  from the config's canonical directory while the importer may be spelled
+  through a link — so containment is also asked of the canonical paths. The
+  ceiling is then handed on as the importer's own ancestor that names the
+  same place, so the walk meets it whichever way either was spelled; failing
+  that (an ancestor that cannot be canonicalized), canonically. }
+function DirectoryWithinCeiling(const ADirectory, ACeiling: string;
+  out AWalkCeiling: string): Boolean;
+var
+  Ancestor, CanonicalCeiling, Parent: string;
+begin
+  AWalkCeiling := ACeiling;
+  if IsPathWithinScope(ADirectory, ACeiling) then
+    Exit(True);
+  CanonicalCeiling := CanonicalCapabilityPath(ACeiling);
+  Result := (CanonicalCeiling <> '') and IsPathWithinScope(
+    CanonicalCapabilityPath(ADirectory), CanonicalCeiling);
+  if not Result then
+    Exit;
+  AWalkCeiling := CanonicalCeiling;
+  Ancestor := ADirectory;
+  while Ancestor <> '' do
+  begin
+    if SamePathText(CanonicalCapabilityPath(Ancestor), CanonicalCeiling) then
+    begin
+      AWalkCeiling := Ancestor;
+      Exit;
+    end;
+    Parent := ExtractFileDir(Ancestor);
+    if (Parent = '') or SamePathText(Parent, Ancestor) then
+      Exit;
+    Ancestor := Parent;
+  end;
+end;
+
 function TGocciaCapabilities.NodeModulesCeiling(
   const AImportingDirectory: string; out ACeiling: string): Boolean;
 var
+  WalkCeiling: string;
   Directory, LayerCeiling: string;
   I, J: Integer;
   ImportScope: TGocciaImportScope;
@@ -1128,14 +1169,15 @@ begin
           LayerAllows := True;
           LayerUnbounded := True;
         end
-        else if IsPathWithinScope(Directory, ImportScope.Ceiling) then
+        else if DirectoryWithinCeiling(Directory, ImportScope.Ceiling,
+          WalkCeiling) then
         begin
           LayerAllows := True;
           { Within one layer the grants are a union: the highest ceiling that
             still contains the importer is the most the layer allows. }
           if (LayerCeiling = '') or
-             (Length(ImportScope.Ceiling) < Length(LayerCeiling)) then
-            LayerCeiling := ImportScope.Ceiling;
+             (Length(WalkCeiling) < Length(LayerCeiling)) then
+            LayerCeiling := WalkCeiling;
         end;
       end;
     if not LayerAllows then
@@ -1151,7 +1193,7 @@ end;
 function TGocciaCapabilities.DeniesNodeModules(
   const AImportingDirectory: string): Boolean;
 var
-  Directory: string;
+  Directory, WalkCeiling: string;
   I, J: Integer;
   ImportScope: TGocciaImportScope;
   Rule: TGocciaCapabilityRule;
@@ -1170,7 +1212,8 @@ begin
       if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
          (ImportScope.Kind = iskNodeModules) and
          ((ImportScope.Ceiling = '') or
-          IsPathWithinScope(Directory, ImportScope.Ceiling)) then
+          DirectoryWithinCeiling(Directory, ImportScope.Ceiling,
+            WalkCeiling)) then
         Exit(True);
   end;
   Result := False;

@@ -13,13 +13,22 @@ uses
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 const
   { open(2)/openat(2) flags and *at(2) arguments FPC 3.2.2's BaseUnix does
-    not declare on every host. Linux takes FPC's own O_* values, which vary
-    by architecture; its AT_* values are the same on every architecture
-    (linux/fcntl.h). Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h,
-    FreeBSD's from sys/sys/fcntl.h. }
+    not declare on every host, or declares wrongly: on Linux it gives every
+    CPU but SPARC and MIPS the x86 O_DIRECTORY/O_NOFOLLOW values, but arm,
+    aarch64 and powerpc use their own (arch/*/include/uapi/asm/fcntl.h),
+    where $20000 is O_LARGEFILE and would make O_NOFOLLOW a no-op. Linux's
+    AT_* values are the same on every architecture (linux/fcntl.h).
+    Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h, FreeBSD's from
+    sys/sys/fcntl.h. }
   {$IF DEFINED(LINUX)}
+  {$IF DEFINED(CPUARM) OR DEFINED(CPUAARCH64) OR DEFINED(CPUPOWERPC) OR
+    DEFINED(CPUPOWERPC64)}
+  HOST_O_NOFOLLOW = $8000;
+  HOST_O_DIRECTORY = $4000;
+  {$ELSE}
   HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
   HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
+  {$IFEND}
   HOST_AT_FDCWD = -100;
   HOST_AT_SYMLINK_NOFOLLOW = $100;
   HOST_AT_REMOVEDIR = $200;
@@ -83,6 +92,19 @@ function HostPathIsSymlink(const APath: string): Boolean;
   available — currently the Lakon/WASI lane, whose filesystem is the virtual
   one in SandboxVirtualFileSystem and has no symbolic links at all. }
 function CanonicalHostPath(const APath: string): string;
+
+{$IFDEF MSWINDOWS}
+{ Opens the existing file APath for reading and pins it: it is opened
+  without FILE_SHARE_WRITE or FILE_SHARE_DELETE, so while AHandle is held
+  the file cannot be written, renamed, or deleted, and no directory on its
+  path can be renamed or replaced. AFinalPath is the opened file's path as
+  GetFinalPathNameByHandleW reports it, in CanonicalHostPath's spelling.
+  False, with AHandle closed, when the file cannot be opened or its path
+  cannot be read. Release the pin with ClosePinnedHostFile. }
+function OpenPinnedHostFile(const APath: string; out AHandle: THandle;
+  out AFinalPath: string): Boolean;
+procedure ClosePinnedHostFile(const AHandle: THandle);
+{$ENDIF}
 
 { Read an entire file as strict UTF-8 source text. No BOM stripping or
   newline normalization is performed. Invalid UTF-8 raises EConvertError. }
@@ -252,6 +274,70 @@ const
   MOVEFILE_WRITE_THROUGH = $00000008;
 {$ENDIF}
 
+{$IFDEF MSWINDOWS}
+{ The path of an open file as GetFinalPathNameByHandleW reports it, with the
+  `\\?\` (or `\\?\UNC\`) prefix removed; '' when it cannot be read. }
+function FinalPathOfHandle(const AHandle: THandle): string;
+const
+  DEVICE_PATH_PREFIX = '\\?\';
+  DEVICE_UNC_PATH_PREFIX = '\\?\UNC\';
+var
+  Buffer: array of WideChar;
+  Needed: DWORD;
+  WidePath: UnicodeString;
+begin
+  Result := '';
+  Needed := GetFinalPathNameByHandleW(AHandle, nil, 0, 0);
+  if Needed = 0 then
+    Exit;
+  { The probing call reports the length *including* the terminator and the
+    filling one reports it without, so a buffer of that size always holds the
+    answer. A second call that asks for more than it fits means the file was
+    renamed between the two, and an unknown beats a truncated path. }
+  SetLength(Buffer, Needed + 1);
+  Needed := GetFinalPathNameByHandleW(AHandle, @Buffer[0], Needed, 0);
+  if (Needed = 0) or (Needed > DWORD(Length(Buffer) - 1)) then
+    Exit;
+  SetString(WidePath, PWideChar(@Buffer[0]), Integer(Needed));
+  Result := string(WidePath);
+  if Copy(Result, 1, Length(DEVICE_UNC_PATH_PREFIX)) =
+     DEVICE_UNC_PATH_PREFIX then
+    Result := '\\' + Copy(Result, Length(DEVICE_UNC_PATH_PREFIX) + 1, MaxInt)
+  else if Copy(Result, 1, Length(DEVICE_PATH_PREFIX)) = DEVICE_PATH_PREFIX then
+    Result := Copy(Result, Length(DEVICE_PATH_PREFIX) + 1, MaxInt);
+end;
+
+function OpenPinnedHostFile(const APath: string; out AHandle: THandle;
+  out AFinalPath: string): Boolean;
+var
+  WidePath: UnicodeString;
+begin
+  AFinalPath := '';
+  WidePath := UnicodeString(APath);
+  { FILE_SHARE_READ only: the platform loader may read the file while it is
+    pinned, but nobody may write, rename, or delete it, which also keeps
+    every directory on its path from being renamed. }
+  AHandle := CreateFileW(PWideChar(WidePath), GENERIC_READ, FILE_SHARE_READ,
+    nil, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  if AHandle = INVALID_HANDLE_VALUE then
+    Exit(False);
+  AFinalPath := FinalPathOfHandle(AHandle);
+  if AFinalPath = '' then
+  begin
+    CloseHandle(AHandle);
+    AHandle := INVALID_HANDLE_VALUE;
+    Exit(False);
+  end;
+  Result := True;
+end;
+
+procedure ClosePinnedHostFile(const AHandle: THandle);
+begin
+  if AHandle <> INVALID_HANDLE_VALUE then
+    CloseHandle(AHandle);
+end;
+{$ENDIF}
+
 function CanonicalHostPath(const APath: string): string;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 const
@@ -283,13 +369,8 @@ begin
 end;
 {$ELSE}
 {$IFDEF MSWINDOWS}
-const
-  DEVICE_PATH_PREFIX = '\\?\';
-  DEVICE_UNC_PATH_PREFIX = '\\?\UNC\';
 var
   Handle: THandle;
-  Buffer: array of WideChar;
-  Needed: DWORD;
 begin
   Result := '';
   if APath = '' then
@@ -304,26 +385,10 @@ begin
   if Handle = INVALID_HANDLE_VALUE then
     Exit;
   try
-    Needed := GetFinalPathNameByHandleW(Handle, nil, 0, 0);
-    if Needed = 0 then
-      Exit;
-    { The probing call reports the length *including* the terminator and the
-      filling one reports it without, so a buffer of that size always holds the
-      answer. A second call that asks for more than it fits means the file was
-      renamed between the two, and an unknown beats a truncated path. }
-    SetLength(Buffer, Needed + 1);
-    Needed := GetFinalPathNameByHandleW(Handle, @Buffer[0], Needed, 0);
-    if (Needed = 0) or (Needed > DWORD(Length(Buffer) - 1)) then
-      Exit;
-    SetString(Result, PWideChar(@Buffer[0]), Integer(Needed));
+    Result := FinalPathOfHandle(Handle);
   finally
     CloseHandle(Handle);
   end;
-  if Copy(Result, 1, Length(DEVICE_UNC_PATH_PREFIX)) =
-     DEVICE_UNC_PATH_PREFIX then
-    Result := '\\' + Copy(Result, Length(DEVICE_UNC_PATH_PREFIX) + 1, MaxInt)
-  else if Copy(Result, 1, Length(DEVICE_PATH_PREFIX)) = DEVICE_PATH_PREFIX then
-    Result := Copy(Result, Length(DEVICE_PATH_PREFIX) + 1, MaxInt);
 end;
 {$ELSE}
 begin

@@ -1005,6 +1005,26 @@ end;
 
   An input that is already a literal is returned unchanged, so no lookup
   happens for numeric targets. }
+const
+  LOCALHOST_ADDRESS = '127.0.0.1';
+
+{ `localhost`, or any name under it, in any case and with one trailing
+  dot. }
+function IsLocalhostName(const AHost: string): Boolean;
+const
+  LOCALHOST_NAME = 'localhost';
+var
+  Host: string;
+begin
+  Host := LowerCase(AHost);
+  if (Length(Host) > 1) and (Host[Length(Host)] = '.') then
+    Delete(Host, Length(Host), 1);
+  Result := (Host = LOCALHOST_NAME) or
+    ((Length(Host) > Length(LOCALHOST_NAME) + 1) and
+     (Copy(Host, Length(Host) - Length(LOCALHOST_NAME), MaxInt) =
+      '.' + LOCALHOST_NAME));
+end;
+
 function ResolveHostToAddress(const AHost: string): string;
 {$IFDEF UNIX}
 var
@@ -1024,6 +1044,11 @@ begin
     raise EHTTPError.Create('Failed to resolve host: (empty)');
   if TryParseIPv4(AHost, Octets) then
     Exit(AHost);
+  { RFC 6761 section 6.3: localhost names are loopback, answered here rather
+    than by a platform resolver that may not know them (macOS's) or may
+    forward them to DNS (every name under localhost). }
+  if IsLocalhostName(AHost) then
+    Exit(LOCALHOST_ADDRESS);
 
   {$IFDEF UNIX}
   if not ResolveHostByName(AHost, HostEntry) then
@@ -1049,9 +1074,13 @@ begin
       if not Assigned(Res) or not Assigned(Res^.ai_addr) then
         raise EHTTPError.CreateFmt('Failed to resolve host: %s', [AHost]);
       SockAddr := PSockAddrIn(Res^.ai_addr);
+      { WinSock2 declares the octets as u_char, a character type Format's
+        %d refuses; their ordinals are the octet values. }
       Result := Format('%d.%d.%d.%d', [
-        SockAddr^.sin_addr.S_un_b.s_b1, SockAddr^.sin_addr.S_un_b.s_b2,
-        SockAddr^.sin_addr.S_un_b.s_b3, SockAddr^.sin_addr.S_un_b.s_b4]);
+        Ord(SockAddr^.sin_addr.S_un_b.s_b1),
+        Ord(SockAddr^.sin_addr.S_un_b.s_b2),
+        Ord(SockAddr^.sin_addr.S_un_b.s_b3),
+        Ord(SockAddr^.sin_addr.S_un_b.s_b4)]);
     finally
       Freeaddrinfo(Res);
     end;
