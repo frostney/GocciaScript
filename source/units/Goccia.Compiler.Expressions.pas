@@ -7217,6 +7217,16 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_NEW_TARGET, ADest, 0, 0));
 end;
 
+{ Records the import() expression's own position against the import
+  instruction about to be emitted, so the VM locates what the load decides or
+  refuses where the tree-walk evaluator does. }
+procedure RecordImportCallSite(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaImportCallExpression);
+begin
+  ACtx.Template.AddCallSite(UInt32(CurrentCodePosition(ACtx)),
+    EmptyCalleeDescriptor, AExpr.Line, AExpr.Column);
+end;
+
 // ES2026 §13.3.10 ImportCall — import(specifier [, options])
 procedure CompileDynamicImport(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaImportCallExpression; const ADest: UInt16);
@@ -7234,6 +7244,7 @@ begin
       import, so no guest code runs between the mark and its consumer. }
     if not AExpr.HasLiteralSpecifier then
       EmitInstruction(ACtx, EncodeABC(OP_COMPUTED_IMPORT_SPECIFIER, 0, 0, 0));
+    RecordImportCallSite(ACtx, AExpr);
     case AExpr.Phase of
       icpEvaluation:
         EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT_OPTIONS, ADest,
@@ -7251,6 +7262,7 @@ begin
   begin
     if not AExpr.HasLiteralSpecifier then
       EmitInstruction(ACtx, EncodeABC(OP_COMPUTED_IMPORT_SPECIFIER, 0, 0, 0));
+    RecordImportCallSite(ACtx, AExpr);
     EmitInstruction(ACtx, EncodeABC(OP_DYNAMIC_IMPORT, ADest, SpecReg,
       Ord(AExpr.Phase)));
   end;

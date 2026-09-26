@@ -62,6 +62,8 @@ type
     FEvents: TStringList;
     FEventSources: TStringList;
     FAuditedHopIndex: Integer;
+    FVirtualModuleName: string;
+    FVirtualModuleSource: string;
     function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
@@ -107,6 +109,13 @@ type
     procedure TestFetchPolicyTravelsWithEachEngine;
     procedure TestSymlinkOutOfProjectNeedsRead;
     procedure TestGrantedNodeModulesArePartOfTheGraph;
+    procedure TestNodeModulesInAPathIsNoGrant;
+    procedure TestLinkedPackageIsPartOfTheGraph;
+    procedure TestDenyScopesJudgeTheResolvedPath;
+    procedure TestDenyScopeHidesExistenceInsideProject;
+    procedure TestImportMetaResolveHonoursDenyScopes;
+    procedure TestVirtualBareModuleAuditsNoNodeModules;
+    procedure TestAbortAtScriptEndRecordsAbandonment;
   public
     procedure SetupTests; override;
   end;
@@ -167,6 +176,20 @@ begin
     TestSymlinkOutOfProjectNeedsRead);
   Test('Packages reached through a granted node_modules scope need no read',
     TestGrantedNodeModulesArePartOfTheGraph);
+  Test('A path through a node_modules directory is no import grant',
+    TestNodeModulesInAPathIsNoGrant);
+  Test('A package symlinked out of the project is part of the graph',
+    TestLinkedPackageIsPartOfTheGraph);
+  Test('Deny scopes judge the path a specifier resolves to',
+    TestDenyScopesJudgeTheResolvedPath);
+  Test('A deny scope inside the project hides whether its file exists',
+    TestDenyScopeHidesExistenceInsideProject);
+  Test('import.meta.resolve does not probe into a deny scope',
+    TestImportMetaResolveHonoursDenyScopes);
+  Test('A bare specifier served by a virtual module audits no node_modules ' +
+    'decision', TestVirtualBareModuleAuditsNoNodeModules);
+  Test('A fetch aborted as the script ends records that its later hops go ' +
+    'unaudited', TestAbortAtScriptEndRecordsAbandonment);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -217,6 +240,18 @@ begin
   WriteFile(ProjectPath('node_modules/pkg/detail.js'),
     'export const detail = "package";');
   WriteFile(ProjectPath('nested/goccia.json'), '{}');
+  WriteFile(ProjectPath('sub/index.js'), 'export const value = "sub";');
+  WriteFile(ProjectPath('sub/secret.json'), '{}');
+  WriteFile(ProjectPath('hidden.js'), 'export const value = "hidden";');
+  WriteFile(ProjectPath('shadow/index.js'), 'export const value = "shadow";');
+  WriteFile(IncludeTrailingPathDelimiter(FRoot) +
+    'other/node_modules/pkg/secret.json', '{"secret":"other"}');
+  WriteFile(IncludeTrailingPathDelimiter(FRoot) + 'linkedpkg/package.json',
+    '{"name":"linked","type":"module","exports":"./index.js"}');
+  WriteFile(IncludeTrailingPathDelimiter(FRoot) + 'linkedpkg/index.js',
+    'import { detail } from "./detail.js"; export const value = detail;');
+  WriteFile(IncludeTrailingPathDelimiter(FRoot) + 'linkedpkg/detail.js',
+    'export const detail = "linked";');
   FEvents := TStringList.Create;
   FEventSources := TStringList.Create;
 end;
@@ -234,6 +269,8 @@ begin
   inherited BeforeEach;
   FEvents.Clear;
   FEventSources.Clear;
+  FVirtualModuleName := '';
+  FVirtualModuleSource := '';
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -309,6 +346,8 @@ begin
   try
     Engine.CapabilityAuditSink := RecordEvent;
     AttachRuntime(Engine);
+    if FVirtualModuleName <> '' then
+      Engine.InjectModule(FVirtualModuleName, FVirtualModuleSource);
     if AShadowRealm then
       EnableShadowRealm(Engine);
     try
@@ -778,8 +817,8 @@ begin
   while (FAuditedHopIndex < 0) and (Waited < SETTLE_DEADLINE_MS) do
   begin
     TGocciaFetchManager.Instance.PumpCompletions;
-    if (FEvents.Count > 3) and (Pos('net.fetch|', FEvents[3]) = 1) then
-      FAuditedHopIndex := 3
+    if (FEvents.Count > 4) and (Pos('net.fetch|', FEvents[4]) = 1) then
+      FAuditedHopIndex := 4
     else
     begin
       Sleep(1);
@@ -819,10 +858,11 @@ begin
     Executor.Free;
     Source.Free;
   end;
-  { capabilities.effective, the name check, net.dispatch, then the replayed
-    address check for the aborted request. }
-  Expect<Integer>(FAuditedHopIndex).ToBe(3);
-  Expect<string>(FEventSources[3]).ToBe('abort.mjs:2');
+  { capabilities.effective, the name check, net.dispatch, the abandonment
+    the abort records, then the replayed address check. }
+  Expect<Integer>(FAuditedHopIndex).ToBe(4);
+  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|http://localhost:1/');
+  Expect<string>(FEventSources[4]).ToBe('abort.mjs:2');
 end;
 
 { Execute discards the engine's requests when it returns, so a completion
@@ -1180,6 +1220,214 @@ begin
       .Deny(gcRead, ProjectPath('node_modules/pkg/detail.js')),
     False, False, ProjectPath('nested/app.mjs'));
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+end;
+
+{ A lexical node_modules segment proves nothing: the exemption belongs to
+  what bare-specifier resolution produced. A symlink named like a package, or
+  a node_modules directory in an unrelated tree, is an ordinary read. }
+procedure TEngineCapabilitiesTests.TestNodeModulesInAPathIsNoGrant;
+var
+  Grant: TGocciaCapabilities;
+  Outcome: TRunOutcome;
+{$IFDEF UNIX}
+  LinkPath: string;
+{$ENDIF}
+begin
+  Grant := TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE);
+  Outcome := Run('import s from "' + IncludeTrailingPathDelimiter(FRoot) +
+    'other/node_modules/pkg/secret.json" with { type: "json" };' +
+    ' globalThis.result = s.secret;', Grant);
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.Result).ToBe('undefined');
+  {$IFDEF UNIX}
+  LinkPath := ProjectPath('node_modules/evil');
+  DeleteFile(LinkPath);
+  if fpSymlink(PAnsiChar(AnsiString(FOutside)),
+     PAnsiChar(AnsiString(LinkPath))) <> 0 then
+    Fail('could not create the test symlink');
+  try
+    Outcome := Run('import k from "./node_modules/evil/data.bin" with ' +
+      '{ type: "text" }; globalThis.result = k;', Grant);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.Result).ToBe('undefined');
+    Outcome := Run('import { value } from "./node_modules/evil/secret.js";' +
+      ' globalThis.result = value;', Grant, True);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  finally
+    DeleteFile(LinkPath);
+  end;
+  {$ENDIF}
+end;
+
+{ Workspaces and pnpm link packages from elsewhere. Resolved through the
+  grant, the package's canonical root is part of the graph: its own literal
+  imports need no read grant while they stay inside it. }
+procedure TEngineCapabilitiesTests.TestLinkedPackageIsPartOfTheGraph;
+{$IFDEF UNIX}
+var
+  LinkPath: string;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  LinkPath := ProjectPath('node_modules/linked');
+  DeleteFile(LinkPath);
+  if fpSymlink(PAnsiChar(AnsiString(IncludeTrailingPathDelimiter(FRoot) +
+     'linkedpkg')), PAnsiChar(AnsiString(LinkPath))) <> 0 then
+    Fail('could not create the test symlink');
+  try
+    Outcome := Run('import { value } from "linked"; globalThis.result = value;',
+      TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE));
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('linked');
+    Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
+    { Without the grant the same files are an ordinary read. }
+    Outcome := Run('import { value } from "./node_modules/linked/index.js";' +
+      ' globalThis.result = value;', TGocciaCapabilities.None);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  finally
+    DeleteFile(LinkPath);
+  end;
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+{ A deny scope only refuses what a request actually reads or probes: a
+  sibling sharing the stem, a file next to the resolved one, or a file inside
+  the directory an index import resolves through is no reason to refuse. }
+procedure TEngineCapabilitiesTests.TestDenyScopesJudgeTheResolvedPath;
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run('import { value } from "./lib"; globalThis.result = value;',
+    TGocciaCapabilities.None.Deny(gcRead, ProjectPath('lib-private')));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('inside');
+  Outcome := Run('import { value } from "./lib.js"; globalThis.result = value;',
+    TGocciaCapabilities.None.Deny(gcRead, ProjectPath('lib.js.map')));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('inside');
+  Outcome := Run('import { value } from "./sub"; globalThis.result = value;',
+    TGocciaCapabilities.None.Deny(gcRead, ProjectPath('sub/secret.json')));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('sub');
+  Outcome := Run('import { value } from "../outside/secret";' +
+    ' globalThis.result = value;', TGocciaCapabilities.None
+    .Allow(gcRead, FOutside).Deny(gcRead, OutsidePath('secret-notes')));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('outside');
+end;
+
+{ The resolver tries `<stem>`, `<stem>.<ext>`, then `<stem>/index.<ext>`.
+  Reaching a denied candidate refuses on the spot, so whether the denied
+  file exists can never pick between PermissionDenied, "Module not found",
+  or a later candidate loading. }
+procedure TEngineCapabilitiesTests.TestDenyScopeHidesExistenceInsideProject;
+const
+  SOURCE_TEXT =
+    'globalThis.result = "pending";' + sLineBreak +
+    'Promise.all([import("./hidden"), import("./gone"), import("./shadow")]' +
+    '.map((p) => p.then(() => "loaded", (e) => e.name)))' +
+    '.then((r) => { globalThis.result = r.join("|"); });';
+var
+  Outcome: TRunOutcome;
+  Denies: TGocciaCapabilities;
+begin
+  Denies := TGocciaCapabilities.None.Deny(gcRead, ProjectPath('hidden.js'))
+    .Deny(gcRead, ProjectPath('gone.js'))
+    .Deny(gcRead, ProjectPath('shadow.js'));
+  Outcome := Run(SOURCE_TEXT, Denies);
+  Expect<string>(Outcome.Result)
+    .ToBe('PermissionDenied|PermissionDenied|PermissionDenied');
+  WriteFile(ProjectPath('shadow.js'), 'export const value = "file";');
+  try
+    Outcome := Run(SOURCE_TEXT, Denies, True);
+    Expect<string>(Outcome.Result)
+      .ToBe('PermissionDenied|PermissionDenied|PermissionDenied');
+  finally
+    DeleteFile(ProjectPath('shadow.js'));
+  end;
+end;
+
+{ Like an import, import.meta.resolve may not tell a guest whether a denied
+  file exists; refused, it answers lexically. }
+procedure TEngineCapabilitiesTests.TestImportMetaResolveHonoursDenyScopes;
+const
+  SOURCE_TEXT =
+    'globalThis.result = [' +
+    'import.meta.resolve("./hidden"),' +
+    'import.meta.resolve("./gone"),' +
+    'import.meta.resolve("../outside/secret"),' +
+    'import.meta.resolve("./lib")].map((u) => u.split("/").pop()).join("|");';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None
+    .Allow(gcRead, FOutside)
+    .Deny(gcRead, ProjectPath('hidden.js'))
+    .Deny(gcRead, ProjectPath('gone.js'))
+    .Deny(gcRead, OutsidePath('secret.js'))
+    .Deny(gcRead, ProjectPath('lib-private')));
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('hidden|gone|secret|lib.js');
+end;
+
+{ A bare specifier a virtual module serves never reaches node_modules, so no
+  node_modules decision belongs in the audit log. }
+procedure TEngineCapabilitiesTests.TestVirtualBareModuleAuditsNoNodeModules;
+const
+  SOURCE_TEXT = 'import { x } from "virt"; globalThis.result = x;';
+begin
+  FVirtualModuleName := 'virt';
+  FVirtualModuleSource := 'export const x = 7;';
+  Expect<string>(Run(SOURCE_TEXT, TGocciaCapabilities.None).Result).ToBe('7');
+  Expect<Integer>(EventsOfKind('import.node-modules')).ToBe(0);
+  Expect<string>(Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcImport,
+    IMPORT_NODE_MODULES_SCOPE)).Result).ToBe('7');
+  Expect<Integer>(EventsOfKind('import.node-modules')).ToBe(0);
+  { A real bare import still records its decision. }
+  FVirtualModuleName := '';
+  Run('import { value } from "pkg"; globalThis.result = value;',
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE));
+  Expect<Boolean>(EventsOfKind('import.node-modules') > 0).ToBe(True);
+end;
+
+
+{ Execute discards the engine's requests when the script ends, so an
+  aborted request's worker may report its address and redirect decisions
+  too late to audit. The abort itself records that, attributed to the
+  fetch() call, so the gap is explicit in the log. }
+procedure TEngineCapabilitiesTests.TestAbortAtScriptEndRecordsAbandonment;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  EventIndex: Integer;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'const controller = new AbortController();' + sLineBreak +
+    'fetch("http://localhost:1/", { signal: controller.signal })' +
+    '.catch(() => {});' + sLineBreak +
+    'controller.abort();';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('end.mjs'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+      .Allow(gcNet, NET_PRIVATE_SCOPE));
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+    Engine.Execute;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  EventIndex := FEvents.IndexOf('net.fetch|allow|http://localhost:1/');
+  Expect<Boolean>(EventIndex >= 0).ToBe(True);
+  if EventIndex >= 0 then
+    Expect<string>(FEventSources[EventIndex]).ToBe('end.mjs:2');
 end;
 
 begin

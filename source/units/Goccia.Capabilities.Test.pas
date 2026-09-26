@@ -48,8 +48,9 @@ type
     procedure TestNetTrailingDot;
     procedure TestNetMappedIPv6;
     procedure TestNetEmbeddedIPv4Ranges;
+    procedure TestNetEmbeddedIPv4Scopes;
+    procedure TestNetIPLiteralTrailingDot;
     procedure TestNetCIDRZero;
-    procedure TestDeniesPathsStartingWith;
     procedure TestExplainNetHostDenial;
     procedure TestToJSON;
   public
@@ -96,10 +97,12 @@ begin
   Test('IPv4-mapped IPv6 literals are judged as IPv4', TestNetMappedIPv6);
   Test('NAT64, 6to4, and IPv4-compatible forms of private addresses stay ' +
     'private', TestNetEmbeddedIPv4Ranges);
+  Test('IP and CIDR scopes match the IPv4 host a NAT64 or 6to4 address ' +
+    'embeds', TestNetEmbeddedIPv4Scopes);
+  Test('A trailing dot on an IP-literal scope names the same address',
+    TestNetIPLiteralTrailingDot);
   Test('A /0 range covers every address, private ones included',
     TestNetCIDRZero);
-  Test('DeniesPathsStartingWith sees deny scopes a probe could reach',
-    TestDeniesPathsStartingWith);
   Test('ExplainNetHostDenial names the reason a host is refused',
     TestExplainNetHostDenial);
   Test('ToJSON serializes every layer', TestToJSON);
@@ -819,6 +822,67 @@ begin
     .ToBe(True);
 end;
 
+{ A deny on an IPv4 address must cover every IPv6 spelling that reaches the
+  same host, and an allow naming it names them too. }
+procedure TCapabilitiesTests.TestNetEmbeddedIPv4Scopes;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Allow(gcNet, NET_PRIVATE_SCOPE).Deny(gcNet, '169.254.169.254');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a9fe:a9fe', 80,
+    '64:ff9b::a9fe:a9fe'))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a9fe:a9fe::1', 80,
+    '2002:a9fe:a9fe::1'))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetHost('[64:ff9b::a9fe:a9fe]', 80))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a9fe:a9fe::1]', 80))
+    .ToBe(False);
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Deny(gcNet, '198.51.100.0/24');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::c633:6407', 80,
+    '64:ff9b::c633:6407'))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:c633:6407::', 80,
+    '2002:c633:6407::'))
+    .ToBe(False);
+  { The IPv6 spelling of an address outside the range stays allowed. }
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::808:808', 80,
+    '64:ff9b::808:808'))
+    .ToBe(True);
+  { An explicit IPv4 range names the private hosts it embeds. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '10.0.0.0/8');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:1', 80,
+    '64:ff9b::a00:1'))
+    .ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a00:1::1]', 80))
+    .ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::c0a8:101', 80,
+    '64:ff9b::c0a8:101'))
+    .ToBe(False);
+end;
+
+procedure TCapabilitiesTests.TestNetIPLiteralTrailingDot;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1.');
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1.', 80)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 80,
+    '127.0.0.1')).ToBe(True);
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1.:18765');
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18765)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18766)).ToBe(False);
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Deny(gcNet, '198.51.100.7.');
+  Expect<Boolean>(Capabilities.AllowsNetHost('198.51.100.7', 80)).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 80,
+    '198.51.100.7')).ToBe(False);
+end;
+
 procedure TCapabilitiesTests.TestNetCIDRZero;
 var
   Capabilities: TGocciaCapabilities;
@@ -834,20 +898,6 @@ begin
   Capabilities := Capabilities.Deny(gcNet, NET_PRIVATE_SCOPE);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('8.8.8.8', 53)).ToBe(True);
-end;
-
-procedure TCapabilitiesTests.TestDeniesPathsStartingWith;
-var
-  Capabilities: TGocciaCapabilities;
-begin
-  Capabilities := TGocciaCapabilities.None.Allow(gcRead)
-    .Deny(gcRead, RootPath('data/secret.json'));
-  Expect<Boolean>(Capabilities.DeniesPathsStartingWith(gcRead,
-    RootPath('data/secret'))).ToBe(True);
-  Expect<Boolean>(Capabilities.DeniesPathsStartingWith(gcRead,
-    RootPath('data/public'))).ToBe(False);
-  Expect<Boolean>(TGocciaCapabilities.None.Deny(gcRead)
-    .DeniesPathsStartingWith(gcRead, RootPath('any'))).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestExplainNetHostDenial;

@@ -90,12 +90,6 @@ type
       For read this also removes the module-graph exemption. }
     function DeniesAll(const ACapability: TGocciaCapability): Boolean;
 
-    { read/ffi: true when some layer denies outright or has a deny scope whose
-      path begins with the canonical spelling of APathPrefix — everything a
-      resolver could reach by appending an extension or `/index.<ext>`. }
-    function DeniesPathsStartingWith(const ACapability: TGocciaCapability;
-      const APathPrefix: string): Boolean;
-
     { read/ffi: true when some layer denies APath, outright or through a deny
       scope covering it. Deny wins over grants and exemptions alike. }
     function DeniesPath(const ACapability: TGocciaCapability;
@@ -411,7 +405,9 @@ begin
       Exit;
   end;
 
-  if TryParseIPAddress(HostPart, ANetScope.Address) then
+  { One trailing dot is dropped for an IP literal as for a name, matching
+    NormalizeRequestHost on the request side. }
+  if TryParseIPAddress(StripTrailingDot(HostPart), ANetScope.Address) then
   begin
     ANetScope.Kind := nskAddress;
     Exit(True);
@@ -453,6 +449,33 @@ begin
   Result := StripTrailingDot(Result);
 end;
 
+function ScopeCoversExactAddress(const ANetScope: TGocciaNetScope;
+  const AAddress: TNetworkAddress): Boolean;
+begin
+  case ANetScope.Kind of
+    nskAddress:
+      Result := AddressesEqual(AAddress, ANetScope.Address);
+    nskCIDR:
+      Result := IsAddressInNetwork(AAddress, ANetScope.Address,
+        ANetScope.PrefixLength);
+  else
+    Result := False;
+  end;
+end;
+
+{ An IP or CIDR scope covers an address, or the IPv4 host a NAT64 or 6to4
+  address reaches: those spellings name the IPv4 host as surely as the
+  ::ffff: form TryParseIPAddress already unmaps. }
+function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
+  const AAddress: TNetworkAddress): Boolean;
+var
+  Translated: TNetworkAddress;
+begin
+  Result := ScopeCoversExactAddress(ANetScope, AAddress) or
+    (TryGetTranslatedIPv4(AAddress, Translated) and
+     ScopeCoversExactAddress(ANetScope, Translated));
+end;
+
 { Whether a non-private scope names this destination. APort of zero means the
   request did not state one, which only an unported scope can match. }
 function NetScopeMatchesHost(const ANetScope: TGocciaNetScope;
@@ -473,26 +496,9 @@ begin
         Result := (not AHostIsAddress) and (Length(AHost) > Length(Suffix)) and
           (Copy(AHost, Length(AHost) - Length(Suffix) + 1, MaxInt) = Suffix);
       end;
-    nskAddress:
+    nskAddress, nskCIDR:
       Result := AHostIsAddress and
-        AddressesEqual(AHostAddress, ANetScope.Address);
-    nskCIDR:
-      Result := AHostIsAddress and IsAddressInNetwork(AHostAddress,
-        ANetScope.Address, ANetScope.PrefixLength);
-  else
-    Result := False;
-  end;
-end;
-
-function NetScopeCoversAddress(const ANetScope: TGocciaNetScope;
-  const AAddress: TNetworkAddress): Boolean;
-begin
-  case ANetScope.Kind of
-    nskAddress:
-      Result := AddressesEqual(AAddress, ANetScope.Address);
-    nskCIDR:
-      Result := IsAddressInNetwork(AAddress, ANetScope.Address,
-        ANetScope.PrefixLength);
+        NetScopeCoversAddress(ANetScope, AHostAddress);
   else
     Result := False;
   end;
@@ -805,28 +811,6 @@ var
 begin
   Path := CanonicalPathRequest(ACapability, APath);
   Result := (Path = '') or LayersDenyCanonicalPath(FLayers, ACapability, Path);
-end;
-
-function TGocciaCapabilities.DeniesPathsStartingWith(
-  const ACapability: TGocciaCapability; const APathPrefix: string): Boolean;
-var
-  I, J: Integer;
-  Prefix: string;
-  Rule: TGocciaCapabilityRule;
-begin
-  Prefix := CanonicalPathRequest(ACapability, APathPrefix);
-  if Prefix = '' then
-    Exit(True);
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[ACapability];
-    if Rule.DenyAll then
-      Exit(True);
-    for J := 0 to High(Rule.DenyScopes) do
-      if SamePathText(Copy(Rule.DenyScopes[J], 1, Length(Prefix)), Prefix) then
-        Exit(True);
-  end;
-  Result := False;
 end;
 
 function TGocciaCapabilities.AllowsPath(
