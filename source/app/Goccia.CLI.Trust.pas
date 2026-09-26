@@ -431,12 +431,23 @@ end;
 { ── Store reader ──────────────────────────────────────────────── }
 
 type
+  TStoreValueKind = (svkObject, svkArray, svkString, svkInteger, svkFloat,
+    svkBoolean, svkNull);
+  TStoreEntryField = (sefHash, sefBlock, sefTrustedAt, sefTrustedBy);
+  TStoreEntryFields = set of TStoreEntryField;
+
   { Reads a trust store without building JSON values. Each entry's `block`
     is re-serialized compactly, which reproduces the normalized block that
-    was written. Unknown keys are skipped, so a newer store still parses far
-    enough to report its version. }
+    was written. The shape is checked strictly, and the first problem kept in
+    Error; the version is read regardless, so a newer store is reported as
+    newer rather than as malformed. }
   TTrustStoreReader = class(TAbstractJSONParser)
   private
+    FError: string;
+    FSawRoot: Boolean;
+    FHasVersion: Boolean;
+    FHasTrusted: Boolean;
+    FEntryFields: TStoreEntryFields;
     FDepth: Integer;
     FTopKey: string;
     FField: string;
@@ -453,6 +464,8 @@ type
     procedure BlockOpen(const AContainer: Char; const AText: string);
     procedure BlockClose(const AText: string);
     function InEntry: Boolean;
+    procedure Fail(const AProblem: string);
+    procedure CheckValue(const AKind: TStoreValueKind);
   protected
     procedure OnNull; override;
     procedure OnBoolean(const AValue: Boolean); override;
@@ -467,11 +480,82 @@ type
   public
     procedure Read(const AText: string);
     property Version: Int64 read FVersion;
+    property HasVersion: Boolean read FHasVersion;
+    { The first shape problem, or ''. }
+    property Error: string read FError;
   end;
+
+const
+  SHA256_HEX_LENGTH = 64;
+  ENTRY_FIELD_KEYS: array[TStoreEntryField] of string = (SHA256_KEY,
+    BLOCK_KEY, TRUSTED_AT_KEY, TRUSTED_BY_KEY);
+
+function IsSHA256Hex(const AText: string): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AText) <> SHA256_HEX_LENGTH then
+    Exit(False);
+  for I := 1 to Length(AText) do
+    if not (AText[I] in ['0'..'9', 'a'..'f']) then
+      Exit(False);
+  Result := True;
+end;
 
 function TTrustStoreReader.InEntry: Boolean;
 begin
   Result := (FTopKey = TRUSTED_KEY) and (FDepth = 3);
+end;
+
+procedure TTrustStoreReader.Fail(const AProblem: string);
+begin
+  if FError = '' then
+    FError := AProblem;
+end;
+
+{ Called for each value outside a block, before a container's depth is
+  entered: FDepth is the depth of the object that holds the value. }
+procedure TTrustStoreReader.CheckValue(const AKind: TStoreValueKind);
+var
+  Field: TStoreEntryField;
+begin
+  case FDepth of
+    0:
+      if AKind = svkObject then
+        FSawRoot := True
+      else
+        Fail('the top level is not an object');
+    1:
+      if FTopKey = VERSION_KEY then
+      begin
+        FHasVersion := AKind = svkInteger;
+        if not FHasVersion then
+          Fail('"version" is not an integer');
+      end
+      else if FTopKey = TRUSTED_KEY then
+      begin
+        FHasTrusted := AKind = svkObject;
+        if not FHasTrusted then
+          Fail('"trusted" is not an object');
+      end;
+    2:
+      if (FTopKey = TRUSTED_KEY) and (AKind <> svkObject) then
+        Fail(Format('the entry for %s is not an object',
+          [FEntry.ConfigPath]));
+    3:
+      if FTopKey = TRUSTED_KEY then
+        for Field := Low(TStoreEntryField) to High(TStoreEntryField) do
+          if FField = ENTRY_FIELD_KEYS[Field] then
+          begin
+            Include(FEntryFields, Field);
+            if (Field = sefBlock) and (AKind <> svkObject) then
+              Fail(Format('"%s" of %s is not an object',
+                [FField, FEntry.ConfigPath]))
+            else if (Field <> sefBlock) and (AKind <> svkString) then
+              Fail(Format('"%s" of %s is not a string',
+                [FField, FEntry.ConfigPath]));
+          end;
+  end;
 end;
 
 procedure TTrustStoreReader.BlockValuePrefix;
@@ -507,13 +591,18 @@ begin
   begin
     BlockValuePrefix;
     FBlock.Append('null');
-  end;
+  end
+  else
+    CheckValue(svkNull);
 end;
 
 procedure TTrustStoreReader.OnBoolean(const AValue: Boolean);
 begin
   if not FInBlock then
+  begin
+    CheckValue(svkBoolean);
     Exit;
+  end;
   BlockValuePrefix;
   if AValue then
     FBlock.Append('true')
@@ -528,14 +617,23 @@ begin
     BlockValuePrefix;
     FBlock.Append(QuoteJSONString(AValue));
   end
-  else if InEntry then
+  else
   begin
-    if FField = SHA256_KEY then
-      FEntry.Hash := AValue
-    else if FField = TRUSTED_AT_KEY then
-      FEntry.TrustedAt := AValue
-    else if FField = TRUSTED_BY_KEY then
-      FEntry.TrustedBy := AValue;
+    CheckValue(svkString);
+    if InEntry then
+    begin
+      if FField = SHA256_KEY then
+      begin
+        FEntry.Hash := AValue;
+        if not IsSHA256Hex(AValue) then
+          Fail(Format('"%s" of %s is not a SHA-256',
+            [SHA256_KEY, FEntry.ConfigPath]));
+      end
+      else if FField = TRUSTED_AT_KEY then
+        FEntry.TrustedAt := AValue
+      else if FField = TRUSTED_BY_KEY then
+        FEntry.TrustedBy := AValue;
+    end;
   end;
 end;
 
@@ -546,8 +644,12 @@ begin
     BlockValuePrefix;
     FBlock.Append(IntToStr(AValue));
   end
-  else if (FDepth = 1) and (FTopKey = VERSION_KEY) then
-    FVersion := AValue;
+  else
+  begin
+    CheckValue(svkInteger);
+    if (FDepth = 1) and (FTopKey = VERSION_KEY) then
+      FVersion := AValue;
+  end;
 end;
 
 procedure TTrustStoreReader.OnFloat(const AValue: Double);
@@ -557,13 +659,14 @@ begin
     BlockValuePrefix;
     FBlock.Append(FloatToStr(AValue, CreateInvariantFormatSettings));
   end
-  else if (FDepth = 1) and (FTopKey = VERSION_KEY) then
-    { A fractional version is no version this reader knows. }
-    FVersion := High(Int64);
+  else
+    CheckValue(svkFloat);
 end;
 
 procedure TTrustStoreReader.OnBeginObject;
 begin
+  if not FInBlock then
+    CheckValue(svkObject);
   Inc(FDepth);
   if FInBlock then
     BlockOpen('o', '{')
@@ -583,6 +686,7 @@ begin
     FEntry.TrustedAt := '';
     FEntry.TrustedBy := '';
     FField := '';
+    FEntryFields := [];
   end;
 end;
 
@@ -600,14 +704,26 @@ begin
     FBlock.Append(QuoteJSONString(AKey) + ':');
   end
   else if FDepth = 1 then
-    FTopKey := AKey
+  begin
+    FTopKey := AKey;
+    if (AKey <> VERSION_KEY) and (AKey <> TRUSTED_KEY) then
+      Fail(Format('unknown key "%s"', [AKey]));
+  end
   else if (FDepth = 2) and (FTopKey = TRUSTED_KEY) then
     FEntry.ConfigPath := AKey
   else if InEntry then
+  begin
     FField := AKey;
+    if (AKey <> SHA256_KEY) and (AKey <> BLOCK_KEY) and
+       (AKey <> TRUSTED_AT_KEY) and (AKey <> TRUSTED_BY_KEY) then
+      Fail(Format('unknown key "%s" in the entry for %s',
+        [AKey, FEntry.ConfigPath]));
+  end;
 end;
 
 procedure TTrustStoreReader.OnEndObject;
+var
+  Field: TStoreEntryField;
 begin
   if FInBlock then
   begin
@@ -620,6 +736,10 @@ begin
   end
   else if InEntry and (FEntry.ConfigPath <> '') then
   begin
+    for Field := Low(TStoreEntryField) to High(TStoreEntryField) do
+      if not (Field in FEntryFields) then
+        Fail(Format('%s has no "%s"', [FEntry.ConfigPath,
+          ENTRY_FIELD_KEYS[Field]]));
     SetLength(FEntries, Length(FEntries) + 1);
     FEntries[High(FEntries)] := FEntry;
   end;
@@ -628,6 +748,8 @@ end;
 
 procedure TTrustStoreReader.OnBeginArray;
 begin
+  if not FInBlock then
+    CheckValue(svkArray);
   Inc(FDepth);
   if FInBlock then
     BlockOpen('a', '[');
@@ -646,7 +768,18 @@ begin
   FVersion := 0;
   FInBlock := False;
   FEntries := nil;
+  FError := '';
+  FSawRoot := False;
+  FHasVersion := False;
+  FHasTrusted := False;
   DoParse(AText);
+  if FSawRoot then
+  begin
+    if not FHasVersion then
+      Fail('no "version"')
+    else if not FHasTrusted then
+      Fail('no "trusted"');
+  end;
 end;
 
 { ── TGocciaTrustStore ─────────────────────────────────────────── }
@@ -779,13 +912,19 @@ begin
         raise EGocciaTrustStoreError.CreateFmt(
           'trust store %s is not valid JSON; fix or delete it', [FPath]);
     end;
-    if Reader.Version > TRUST_STORE_VERSION then
+    { A newer store may have any shape, so its version is reported first. }
+    if Reader.HasVersion and (Reader.Version > TRUST_STORE_VERSION) then
       raise EGocciaTrustStoreError.CreateFmt(
         'trust store %s was written by a newer GocciaScript (version %d); ' +
         'upgrade GocciaScript or remove the file', [FPath, Reader.Version]);
-    if Reader.Version < TRUST_STORE_VERSION then
+    if (Reader.Error = '') and (Reader.Version < TRUST_STORE_VERSION) then
       raise EGocciaTrustStoreError.CreateFmt(
-        'trust store %s has no valid "version"; fix or delete it', [FPath]);
+        'trust store %s is not a valid trust store (unknown "version" %d); ' +
+        'fix or delete it', [FPath, Reader.Version]);
+    if Reader.Error <> '' then
+      raise EGocciaTrustStoreError.CreateFmt(
+        'trust store %s is not a valid trust store (%s); fix or delete it',
+        [FPath, Reader.Error]);
     for I := 0 to High(Reader.FEntries) do
       ApplyPut(Reader.FEntries[I]);
   finally

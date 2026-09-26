@@ -33,6 +33,7 @@ type
     procedure TestSymlinkedConfigFileHasItsOwnKey;
     procedure TestSymlinkedDirectoryHashesAtItsTarget;
     procedure TestNewerAndCorruptStoresRefused;
+    procedure TestMalformedStoresRefused;
     procedure TestLockContention;
     function SaveWithLock(const AName, ALockContent: string): string;
     procedure TestTimestampIgnoresLocale;
@@ -104,6 +105,7 @@ begin
     TestSymlinkedDirectoryHashesAtItsTarget);
   Test('Newer and corrupt stores are refused',
     TestNewerAndCorruptStoresRefused);
+  Test('Stores of the wrong shape are refused', TestMalformedStoresRefused);
   Test('A held lock fails with a message naming the lock file',
     TestLockContention);
   Test('Timestamps ignore the locale''s separators',
@@ -434,8 +436,56 @@ begin
   Expect<string>(StoreError(Corrupt)).ToBe('trust store ' + Corrupt +
     ' is not valid JSON; fix or delete it');
   Unversioned := WriteFile('refused/unversioned.json', '{"trusted": {}}');
-  Expect<Boolean>(Pos('has no valid "version"', StoreError(Unversioned)) > 0)
-    .ToBe(True);
+  Expect<string>(StoreError(Unversioned)).ToBe('trust store ' + Unversioned +
+    ' is not a valid trust store (no "version"); fix or delete it');
+end;
+
+procedure TTrustTests.TestMalformedStoresRefused;
+const
+  VALID_HASH = '"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"';
+  VALID_ENTRY = '{"sha256": ' + VALID_HASH + ', "block": {"version": 1}, ' +
+    '"trustedAt": "2026-09-20T10:12:03Z", "trustedBy": "GocciaTestRunner"}';
+
+  function Detail(const AName, AText: string): string;
+  var
+    Path, Message: string;
+  begin
+    Path := WriteFile('malformed/' + AName + '.json', AText);
+    Message := StoreError(Path);
+    Result := Copy(Message, Pos('(', Message) + 1, MaxInt);
+    Result := Copy(Result, 1, Pos('); fix or delete it', Result) - 1);
+    if Pos('is not a valid trust store', Message) = 0 then
+      Result := 'accepted: ' + Message;
+  end;
+
+begin
+  Expect<string>(Detail('array', '[]')).ToBe('the top level is not an object');
+  Expect<string>(Detail('no-trusted', '{"version": 1}')).ToBe('no "trusted"');
+  Expect<string>(Detail('trusted-array', '{"version": 1, "trusted": []}'))
+    .ToBe('"trusted" is not an object');
+  Expect<string>(Detail('version-string', '{"version": "1", "trusted": {}}'))
+    .ToBe('"version" is not an integer');
+  Expect<string>(Detail('unknown-key',
+    '{"version": 1, "trusted": {}, "extra": true}'))
+    .ToBe('unknown key "extra"');
+  Expect<string>(Detail('hash-number',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": 5, ' +
+    '"block": {"version": 1}, "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('"sha256" of /a/goccia.json is not a string');
+  Expect<string>(Detail('hash-short',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": "abc", ' +
+    '"block": {"version": 1}, "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('"sha256" of /a/goccia.json is not a SHA-256');
+  Expect<string>(Detail('missing-block',
+    '{"version": 1, "trusted": {"/a/goccia.json": {"sha256": ' + VALID_HASH +
+    ', "trustedAt": "t", "trustedBy": "b"}}}'))
+    .ToBe('/a/goccia.json has no "block"');
+  Expect<string>(Detail('entry-array',
+    '{"version": 1, "trusted": {"/a/goccia.json": []}}'))
+    .ToBe('the entry for /a/goccia.json is not an object');
+  Expect<string>(Detail('valid',
+    '{"version": 1, "trusted": {"/a/goccia.json": ' + VALID_ENTRY + '}}'))
+    .ToBe('accepted: ');
 end;
 
 procedure TTrustTests.TestLockContention;
@@ -584,10 +634,10 @@ begin
   StorePath := FRoot + PathDelim + 'merge' + PathDelim + 'trust.json';
   A := Default(TGocciaTrustEntry);
   A.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'a.json';
-  A.Hash := 'a';
+  A.Hash := StringOfChar('a', 64);
   B := A;
   B.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'b.json';
-  B.Hash := 'b';
+  B.Hash := StringOfChar('b', 64);
   First := TGocciaTrustStore.Load(StorePath);
   Second := TGocciaTrustStore.Load(StorePath);
   try
