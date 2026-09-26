@@ -43,6 +43,10 @@ import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-c
 import { verifyAllocationProfiles } from "./test-cli-profiling";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
+// The runner reports canonical host paths. On Windows the temp directory's
+// own spelling can be the 8.3 short form (RUNNER~1), so sandbox-mode tests
+// build their expected paths from the long, native form.
+const makeNativeTmp = (): string => realpathSync.native(makeTmp());
 
 /**
  * A sandbox layout written to the host, for GocciaRunner's sandbox mode to
@@ -5883,7 +5887,7 @@ await section("Runner sandbox mode: a thrown stack cannot read a host file into 
   // is load-bearing: reading such a path would bypass the sandbox.fs.path
   // capability gate and hand guest code the contents of any host file through
   // the reported ErrorMessage/ErrorOutput.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const secretPath = join(tmp, "HOST_SECRET.txt");
     const secretMarker = "SANDBOX_HOST_SECRET_LEAKED";
@@ -5924,7 +5928,7 @@ await section("Runner sandbox mode: a nested isolated child cannot read the pare
   // the guest `.stack`) and each engine has its own source scope, the child gets
   // no frame and the parent module's source never crosses the boundary — even
   // though the child's own filesystem correctly cannot open that path either.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     // Appears ONLY as /parent_secret.js's source content; never in the child's
     // own code or the forged stack string, so any occurrence in output is a leak.
@@ -5992,7 +5996,7 @@ await section("Runner sandbox mode: a legitimate error in the child's own module
   // Feature-survival counterpart to the disclosure test: a genuine throw inside
   // a module the child itself loaded must still produce that module's code frame
   // in both modes (the fix must not blanket-disable frames).
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6040,7 +6044,7 @@ await section("Runner sandbox mode: a nested child's genuine module source is wi
   // active one. The parent must see the fault's location but never the child's
   // source line. A sibling test above proves the SAME child, run at top level,
   // does render its frame — so this is enforcement, not a blanket disable.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const childMarker = "NESTED_CHILD_MODULE_SOURCE_XZ";
     const tree = writeSandboxTree(tmp, [
@@ -6089,7 +6093,7 @@ await section("Runner sandbox mode: a nested child's genuine module source is wi
 });
 
 await section("Runner sandbox mode: fs callback APIs and promises defer filesystem work...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6141,7 +6145,7 @@ await section("Runner sandbox mode: fs callback APIs and promises defer filesyst
 });
 
 await section("Runner sandbox mode: fs callback overloads use Node-shaped results...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6257,7 +6261,7 @@ await section("Runner sandbox mode: fs callback overloads use Node-shaped result
 });
 
 await section("Runner sandbox mode: deterministic nested engines use stable distinct streams...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6300,7 +6304,7 @@ await section("Runner sandbox mode: deterministic nested engines use stable dist
 });
 
 await section("Runner sandbox mode: a runScript child's stderr carries no host-side suggestion...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     // The child's uncaught PermissionDenied becomes the parent guest's
     // `stderr` string. Its suggestion names the CLI option that would grant
@@ -6333,7 +6337,7 @@ await section("Runner sandbox mode: a runScript child's stderr carries no host-s
 });
 
 await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const diff = join(tmp, "diff.json");
     const tree = writeSandboxTree(tmp, [
@@ -6420,7 +6424,7 @@ await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs..
 });
 
 await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata in every execution mode...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6497,7 +6501,7 @@ await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metada
 });
 
 await section("Runner sandbox mode: JSON diffs always carry metadata, unified diffs never do...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const diff = join(tmp, "diff.json");
     const unifiedDiff = join(tmp, "diff.diff");
@@ -6552,7 +6556,7 @@ await section("Runner sandbox mode: JSON diffs always carry metadata, unified di
 });
 
 await section("Runner sandbox mode: fs errors are Node-shaped in every execution mode...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6607,7 +6611,7 @@ await section("Runner sandbox mode: fs errors are Node-shaped in every execution
 });
 
 await section("Runner sandbox mode: aliases and import maps resolve sandbox module paths...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const importMap = join(tmp, "import-map.json");
     writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/", "#rel/": "./lib/" } }));
@@ -6660,7 +6664,7 @@ await section("Runner sandbox mode: aliases and import maps resolve sandbox modu
 });
 
 await section("Runner sandbox mode: Windows-style sandbox paths normalize to virtual paths...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -6711,7 +6715,7 @@ await section("Runner sandbox mode: Windows-style sandbox paths normalize to vir
 });
 
 await section("Runner sandbox mode: the sandbox section rejects non-string entries...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     for (const [label, sandbox, needle] of [
@@ -6740,7 +6744,7 @@ await section("Runner sandbox mode: the sandbox section rejects non-string entri
 });
 
 await section("Runner sandbox mode: unified diff includes deleted copied files...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const diff = join(tmp, "diff.diff");
     const tree = writeSandboxTree(tmp, [
@@ -6769,7 +6773,7 @@ await section("Runner sandbox mode: unified diff includes deleted copied files..
 });
 
 await section("Runner sandbox mode: a sandbox write does not reach the host without --copy-rw...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6801,7 +6805,7 @@ await section("Runner sandbox mode: a sandbox write does not reach the host with
 });
 
 await section("Runner sandbox mode: --copy-rw writes back only read-write inputs, reporting on stderr...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(join(tree, "nested"), { recursive: true });
@@ -6865,7 +6869,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
 });
 
 await section("Runner sandbox mode: --copy-rw keeps nothing from a run that failed...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6896,7 +6900,7 @@ await section("Runner sandbox mode: --copy-rw keeps nothing from a run that fail
 });
 
 await section("Runner sandbox mode: --copy-rw refuses a symlink at its temporary name...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       // A file copy does not scan its directory, so a link planted beside the
@@ -6936,7 +6940,7 @@ await section("Runner sandbox mode: --copy-rw refuses a symlink at its temporary
 });
 
 await section("Runner sandbox mode: --copy-rw replaces a leftover temporary...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6964,7 +6968,7 @@ await section("Runner sandbox mode: --copy-rw replaces a leftover temporary...",
 });
 
 await section("Runner sandbox mode: bytecode uses the same sandbox runtime modules...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const diff = join(tmp, "diff.json");
     const tree = writeSandboxTree(tmp, [
@@ -7015,7 +7019,7 @@ await section("Runner sandbox mode: bytecode uses the same sandbox runtime modul
 });
 
 await section("Runner sandbox mode: nested sandbox execution copies from the parent VFS without leaking writes...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -7108,7 +7112,7 @@ await section("Runner sandbox mode: nested sandbox execution copies from the par
 });
 
 await section("Runner sandbox mode: sandbox section paths are relative to the config file...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const project = join(tmp, "project");
     mkdirSync(join(project, "data"), { recursive: true });
@@ -7172,7 +7176,7 @@ await section("Runner sandbox mode: sandbox section paths are relative to the co
 });
 
 await section("Runner sandbox mode: --audit-log reports root escapes without changing clamped access...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -7218,7 +7222,7 @@ await section("Runner sandbox mode: --audit-log reports root escapes without cha
 });
 
 await section("Runner sandbox mode: a copied directory rejects a nested host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const seedDir = join(tmp, "seedDir");
@@ -7249,7 +7253,7 @@ await section("Runner sandbox mode: a copied directory rejects a nested host sym
 });
 
 await section("Runner sandbox mode: --copy rejects a host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       writeFileSync(join(tmp, "outside.txt"), "outside-secret");
@@ -7279,7 +7283,7 @@ await section("Runner sandbox mode: --copy rejects a host symlink (no leak)...",
 });
 
 await section("Runner sandbox mode: a sandbox-section directory rejects a nested host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const seedDir = join(tmp, "seedDir");
@@ -7311,7 +7315,7 @@ await section("Runner sandbox mode: a sandbox-section directory rejects a nested
 });
 
 await section("Runner sandbox mode: trailing slash on a symlinked-directory copy is still rejected (no leak)...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const outsideDir = join(tmp, "outsideDir");
@@ -7344,7 +7348,7 @@ await section("Runner sandbox mode: trailing slash on a symlinked-directory copy
 });
 
 await section("Runner sandbox mode: a Windows directory junction copy is rejected (no leak)...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     // Windows-only: file symlinks need elevation on CI runners, but a directory
     // junction is a reparse point that needs none, so it exercises the Windows
@@ -7421,7 +7425,7 @@ const expectSandboxUsageError = (label: string, run: SandboxRun, needle: string)
 };
 
 await section("Runner: host mode provides neither fs nor goccia...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     for (const specifier of ["fs", "goccia"]) {
       const file = join(tmp, `${specifier}.mjs`);
@@ -7439,7 +7443,7 @@ await section("Runner: host mode provides neither fs nor goccia...", async () =>
 });
 
 await section("Runner sandbox mode: --copy lands inputs at /<basename> or the named path...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     mkdirSync(join(tmp, "dir", "sub"), { recursive: true });
     writeFileSync(join(tmp, "dir", "a.txt"), "a");
@@ -7479,7 +7483,7 @@ await section("Runner sandbox mode: --copy lands inputs at /<basename> or the na
 });
 
 await section("Runner sandbox mode: --sandbox copies only the entry...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
     writeFileSync(join(tmp, "beside.txt"), "not copied");
@@ -7497,7 +7501,7 @@ await section("Runner sandbox mode: --sandbox copies only the entry...", async (
 });
 
 await section("Runner sandbox mode: an entry inside a copied input runs from there...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     mkdirSync(join(tmp, "src"), { recursive: true });
     writeFileSync(join(tmp, "src", "main.js"), SANDBOX_WALK_SCRIPT);
@@ -7528,7 +7532,7 @@ await section("Runner sandbox mode: an entry inside a copied input runs from the
 });
 
 await section("Runner sandbox mode: --entry names a copied file and needs no stdin...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, { "/main.js": 'console.log("from-entry");' });
     // Closed stdin (Bun's null device), piped stdin, and no stdin option at
@@ -7560,7 +7564,7 @@ await section("Runner sandbox mode: --entry names a copied file and needs no std
 });
 
 await section("Runner sandbox mode: rejects inputs and options it cannot run...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     writeFileSync(join(tmp, "other.js"), "2;");
@@ -7613,7 +7617,7 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
   if (process.platform === "win32") return;
   // Named on the command line, and by a trusted config's sandbox section.
   for (const [mode, fromConfig] of [["interpreted", false], ["bytecode", false], ["interpreted", true], ["bytecode", true]] as const) {
-    const tmp = realpathSync(makeTmp());
+    const tmp = makeNativeTmp();
     try {
       mkdirSync(join(tmp, "out"));
       mkdirSync(join(tmp, "dd"));
@@ -7662,7 +7666,7 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
 });
 
 await section("Runner sandbox mode: a config's modules, globals, and host-environment are not applied...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "secret.txt"), "HOST-SECRET");
     writeFileSync(join(tmp, "manifest.json"), JSON.stringify({ leak: { content: "export default 'FROM-MANIFEST';" } }));
@@ -7697,7 +7701,7 @@ await section("Runner sandbox mode: a config's modules, globals, and host-enviro
 });
 
 await section("Runner sandbox mode: invalid values report on stderr, before any option is parsed...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     for (const args of [
@@ -7717,7 +7721,7 @@ await section("Runner sandbox mode: invalid values report on stderr, before any 
 });
 
 await section("Runner sandbox mode: a config-enabled sandbox rejects host-mode options with the sandbox error...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: {} }));
@@ -7734,7 +7738,7 @@ await section("Runner sandbox mode: a config-enabled sandbox rejects host-mode o
 });
 
 await section("Runner sandbox mode: copy targets and entries are absolute, distinct, and inside the sandbox...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     mkdirSync(join(tmp, "b"));
@@ -7756,7 +7760,7 @@ await section("Runner sandbox mode: copy targets and entries are absolute, disti
 });
 
 await section("Runner sandbox mode: a positional entry wins over the section's entry, with a note...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "console.log('positional');");
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { entry: "/other.js" } }));
@@ -7770,7 +7774,7 @@ await section("Runner sandbox mode: a positional entry wins over the section's e
 });
 
 await section("Runner sandbox mode: runScript and the goccia builtin refuse options they do not take...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, {
       "child.js": "console.log('child');",
@@ -7797,7 +7801,7 @@ await section("Runner sandbox mode: runScript and the goccia builtin refuse opti
 });
 
 await section("Runner: an invalid config max-fs-* is ignored in host mode and rejected in sandbox mode...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "console.log('ran');");
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ "max-fs-bytes": "lots", "max-fs-nodes": -3 }));
@@ -7814,7 +7818,7 @@ await section("Runner: an invalid config max-fs-* is ignored in host mode and re
 });
 
 await section("Runner sandbox mode: the entry's own config's sandbox section is reported as unread...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     mkdirSync(join(tmp, "proj"));
     mkdirSync(join(tmp, "other"));
@@ -7831,7 +7835,7 @@ await section("Runner sandbox mode: the entry's own config's sandbox section is 
 });
 
 await section("Runner sandbox mode: a config-enabled sandbox reports value errors on stderr...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     for (const [config, args] of [
@@ -7850,7 +7854,7 @@ await section("Runner sandbox mode: a config-enabled sandbox reports value error
 });
 
 await section("Runner sandbox mode: a command-line --diff-file is written as the user named it...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     const devNull = runSandboxCli(["main.js", "--sandbox", "--diff=json", "--diff-file=/dev/null"], { cwd: tmp });
@@ -7875,7 +7879,7 @@ await section("Runner sandbox mode: a command-line --diff-file is written as the
 });
 
 await section("Runner sandbox mode: two config inputs with one target are refused...", async () => {
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     mkdirSync(join(tmp, "b"));
@@ -7891,7 +7895,7 @@ await section("Runner sandbox mode: two config inputs with one target are refuse
 });
 
 await section("Runner sandbox mode: --print prints the last value like host mode...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "value.js"), "1 + 1;");
     writeFileSync(join(tmp, "empty.js"), "const x = 5;");
@@ -7909,7 +7913,7 @@ await section("Runner sandbox mode: --print prints the last value like host mode
 });
 
 await section("Runner sandbox mode: --diff prints JSON with metadata, or unified...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "write.js"), [
       'import fs from "fs";',
@@ -7949,7 +7953,7 @@ await section("Runner sandbox mode: --diff prints JSON with metadata, or unified
       const run = runSandboxCli([...base, `--diff-file=${file}`, ...extra], { cwd: tmp });
       if (run.exitCode !== 0 || run.stdout !== "guest\n")
         throw new Error(`Sandbox mode --diff-file=${file} ${extra.join(" ")} should leave only the guest output on stdout, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
-      const text = readFileSync(join(tmp, file), "utf-8");
+      const text = normalizeLineEndings(readFileSync(join(tmp, file), "utf-8"));
       if (format === "json") {
         const diff = JSON.parse(text);
         if (!Array.isArray(diff.changes) || !Array.isArray(diff.metadataChanges))
@@ -7997,7 +8001,7 @@ await section("Runner sandbox mode: --diff prints JSON with metadata, or unified
 await section("Runner sandbox mode: only net is granted; host capabilities are refused...", async () => {
   // Canonical, so the paths the binary reports from its working
   // directory match the ones built here (macOS links /var).
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), 'console.log("ran");');
     for (const [flags, reason] of [
@@ -8037,7 +8041,7 @@ await section("Runner sandbox mode: only net is granted; host capabilities are r
 });
 
 await section("Runner sandbox mode: removed sandbox-runner flags name their replacements...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     for (const [flag, replacement] of [
@@ -8065,7 +8069,7 @@ await section("Runner sandbox mode: removed sandbox-runner flags name their repl
 });
 
 await section("Runner sandbox mode: runScript and the goccia builtin reject the pre-0.14 option names...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, {
       "/main.js": [
@@ -8117,7 +8121,7 @@ await section("Runner sandbox mode: runScript and the goccia builtin reject the 
 });
 
 await section("Runner sandbox mode: --max-fs-bytes and --max-fs-nodes take units and apply...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "fill.js"), [
       'import fs from "fs";',
@@ -8160,7 +8164,7 @@ await section("Runner sandbox mode: --max-fs-bytes and --max-fs-nodes take units
 });
 
 await section("Runner sandbox mode: a discovered config's limits apply...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "fill.js"), [
       'import fs from "fs";',
@@ -8193,7 +8197,7 @@ await section("Runner sandbox mode: a discovered config's limits apply...", asyn
 await section("Runner sandbox mode: a trusted sandbox section switches it on...", async () => {
   // Canonical, so the paths the binary reports from its working
   // directory match the ones built here (macOS links /var).
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     const project = join(tmp, "project");
     mkdirSync(join(project, "src"), { recursive: true });
@@ -8274,7 +8278,7 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
 });
 
 await section("Runner sandbox mode: the section's entry and diff keys, from the root config only...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const project = join(tmp, "project");
     mkdirSync(join(project, "src"), { recursive: true });
@@ -8309,7 +8313,7 @@ await section("Runner sandbox mode: the section's entry and diff keys, from the 
 });
 
 await section("Runner sandbox mode: the sandbox section in TOML...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     mkdirSync(join(tmp, "src"), { recursive: true });
     writeFileSync(join(tmp, "src", "data.txt"), "toml-input");
@@ -8333,7 +8337,7 @@ await section("Runner sandbox mode: the sandbox section in TOML...", async () =>
 await section("Runner sandbox mode: sandbox section keys are validated...", async () => {
   // Canonical, so the paths the binary reports from its working
   // directory match the ones built here (macOS links /var).
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     mkdirSync(join(tmp, "project"), { recursive: true });
@@ -8394,7 +8398,7 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
 await section("Runner sandbox mode: binaries that ignore the sandbox section warn about it...", async () => {
   // Canonical, so the paths the binary reports from its working
   // directory match the ones built here (macOS links /var).
-  const tmp = realpathSync(makeTmp());
+  const tmp = makeNativeTmp();
   try {
     const configPath = join(tmp, "goccia.json");
     writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["missing-dir"] } }));
@@ -9128,7 +9132,7 @@ await section("Loader: virtual definitions validate eagerly but JavaScript parse
 });
 
 await section("Runner sandbox mode: virtual modules share the CLI surface and cannot shadow host modules...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [{
       path: "/main.js",
@@ -9243,7 +9247,7 @@ await section("Runner sandbox mode: virtual modules share the CLI surface and ca
 // ============================================================================
 
 {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   const stdinBenchEnv = {
     ...process.env,
     GOCCIA_BENCH_CALIBRATION_MS: "50",
@@ -9663,7 +9667,7 @@ await section("Bare Loader: goccia:test is absent along with the rest of the run
 });
 
 await section("Runner sandbox mode: goccia:test is importable and injects no globals...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -10052,7 +10056,7 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
 // refusal rather than a broken gate that rejects everything.
 
 await section("Runner sandbox mode: --max-memory bounds the sandboxed program...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, [
       {
@@ -10089,7 +10093,7 @@ await section("Runner sandbox mode: --max-memory bounds the sandboxed program...
 });
 
 await section("Runner sandbox mode: --allow-net and --deny-net reach the sandboxed fetch...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     // Port 1 on loopback needs no server: a refused request never dispatches,
     // an allowed one fails at connect.
@@ -10179,7 +10183,7 @@ const runNestedFetchSandbox = async (
   mode: "interpreted" | "bytecode",
   extraArgs: string[],
 ): Promise<{ exitCode: number | null; stdout: string; combined: string; timedOut: boolean }> => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, files);
     const proc = Bun.spawn(
@@ -10239,7 +10243,7 @@ await section("Runner sandbox mode: a nested runScript child inherits its set si
   // it reports no capabilities.effective of its own. The worker's address
   // check for the child's request is pumped by the parent, but belongs to the
   // child's fetch() call.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const main = [
       "import { runScript } from 'goccia';",
@@ -10515,7 +10519,7 @@ const runSandboxKinds = (
 };
 
 await section("Runner sandbox mode: guest-reachable failures never classify as host faults...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const tree = writeSandboxTree(tmp, {
       "/main.js": [
@@ -10563,7 +10567,7 @@ await section("Runner sandbox mode: guest-reachable failures never classify as h
 });
 
 await section("Runner sandbox mode: every host-set ceiling reports itself as one...", async () => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const memoryTree = writeSandboxTree(tmp, {
       "/main.js": [
