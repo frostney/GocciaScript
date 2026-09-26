@@ -7334,6 +7334,723 @@ await section("Runner sandbox mode: a Windows directory junction copy is rejecte
   }
 });
 
+// ── GocciaRunner sandbox mode: the CLI surface (ADR 0122) ──────────────
+//
+// Sandbox mode is part of GocciaRunner: --sandbox, --copy, --copy-rw, or a
+// trusted `sandbox` section switches it on. These pin the surface itself —
+// where inputs land, which entry runs, what is refused and why, and which
+// stream each report goes to.
+
+/** A walk of the sandbox filesystem, printed as one line of sorted paths. */
+const SANDBOX_WALK_SCRIPT = [
+  'import fs from "fs";',
+  "const walk = (dir) => fs.readdirSync(dir).flatMap((name) => {",
+  '  const path = (dir === "/" ? "" : dir) + "/" + name;',
+  '  return fs.statSync(path).isDirectory() ? [path + "/", ...walk(path)] : [path];',
+  "});",
+  'console.log(walk("/").sort().join(" "));',
+].join("\n");
+
+type SandboxRun = { exitCode: number | null; stdout: string; stderr: string };
+
+const runSandboxCli = (
+  args: string[],
+  options: { cwd?: string; stdin?: string } = {},
+): SandboxRun => {
+  const proc = Bun.spawnSync([resolve(RUNNER), ...args], {
+    cwd: options.cwd,
+    stdin: options.stdin === undefined ? undefined : new TextEncoder().encode(options.stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: proc.exitCode,
+    stdout: normalizeLineEndings(proc.stdout.toString()),
+    stderr: normalizeLineEndings(proc.stderr.toString()),
+  };
+};
+
+const expectSandboxUsageError = (label: string, run: SandboxRun, needle: string): void => {
+  if (run.exitCode !== 2 || !run.stderr.includes(`Error: ${needle}`))
+    throw new Error(`${label} should exit 2 with ${JSON.stringify(needle)} on stderr, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+};
+
+await section("Runner: host mode provides neither fs nor goccia...", async () => {
+  const tmp = makeTmp();
+  try {
+    for (const specifier of ["fs", "goccia"]) {
+      const file = join(tmp, `${specifier}.mjs`);
+      writeFileSync(file, `import * as m from "${specifier}";\nconsole.log(typeof m);\n`);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const run = runSandboxCli([file, `--mode=${mode}`]);
+        const output = run.stdout + run.stderr;
+        if (run.exitCode === 0 || !output.includes(`Cannot resolve bare module specifier "${specifier}"`))
+          throw new Error(`Host mode (${mode}) should not resolve "${specifier}", got (exit ${run.exitCode}):\n${output}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --copy lands inputs at /<basename> or the named path...", async () => {
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "dir", "sub"), { recursive: true });
+    writeFileSync(join(tmp, "dir", "a.txt"), "a");
+    writeFileSync(join(tmp, "dir", "sub", "b.txt"), "b");
+    writeFileSync(join(tmp, "file.txt"), "f");
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+    for (const [label, copies, expected] of [
+      ["default targets", ["--copy", "dir", "--copy", "file.txt"],
+        "/dir/ /dir/a.txt /dir/sub/ /dir/sub/b.txt /file.txt /walk.js"],
+      ["explicit targets", ["--copy", "dir=/x", "--copy", "file.txt=/y/z.txt"],
+        "/walk.js /x/ /x/a.txt /x/sub/ /x/sub/b.txt /y/ /y/z.txt"],
+      ["a directory merged into the root", ["--copy", "dir=/"],
+        "/a.txt /sub/ /sub/b.txt /walk.js"],
+      ["a file into a trailing-slash target", ["--copy", "file.txt=/t/"],
+        "/t/ /t/file.txt /walk.js"],
+      ["a file into an existing directory", ["--copy", "dir", "--copy", "file.txt=/dir"],
+        "/dir/ /dir/a.txt /dir/file.txt /dir/sub/ /dir/sub/b.txt /walk.js"],
+      ["--copy-rw targets", ["--copy-rw", "dir"],
+        "/dir/ /dir/a.txt /dir/sub/ /dir/sub/b.txt /walk.js"],
+    ] as const) {
+      const run = runSandboxCli(["walk.js", ...copies, "--source-type=module"], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== expected)
+        throw new Error(`Sandbox mode ${label} should lay out ${JSON.stringify(expected)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    // A host path with no name needs an explicit sandbox path.
+    expectSandboxUsageError(
+      "Sandbox mode --copy of a filesystem root",
+      runSandboxCli(["walk.js", "--copy", "/"], { cwd: tmp }),
+      "--copy /: the host path has no name to use as its sandbox path; give one with /=<sandbox>",
+    );
+    const missing = runSandboxCli(["walk.js", "--copy", "nope"], { cwd: tmp });
+    if (missing.exitCode === 0 || !(missing.stdout + missing.stderr).includes("--copy nope: copy path does not exist"))
+      throw new Error(`Sandbox mode should refuse a missing --copy path, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --sandbox copies only the entry...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+    writeFileSync(join(tmp, "beside.txt"), "not copied");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = runSandboxCli([join(tmp, "walk.js"), "--sandbox", "--source-type=module", `--mode=${mode}`]);
+      if (run.exitCode !== 0 || run.stdout.trim() !== "/walk.js")
+        throw new Error(`Sandbox mode (${mode}) with --sandbox should hold only /walk.js, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      // A clean stdout: no timing banner in sandbox mode.
+      if (run.stdout.includes("Running script") || run.stdout.includes("Lex:"))
+        throw new Error(`Sandbox mode (${mode}) should print no timing banner, got:\n${run.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: an entry inside a copied input runs from there...", async () => {
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src", "main.js"), SANDBOX_WALK_SCRIPT);
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+
+    // Not copied again: the entry is /src/main.js, and / holds only /src.
+    const inside = runSandboxCli(["src/main.js", "--copy", "src", "--source-type=module"], { cwd: tmp });
+    if (inside.exitCode !== 0 || inside.stdout !== "/src/ /src/main.js\n")
+      throw new Error(`Sandbox mode should run an entry from the input that holds it, got (exit ${inside.exitCode}):\n${inside.stdout}${inside.stderr}`);
+
+    // Mapped through an explicit target too.
+    const mapped = runSandboxCli(["src/main.js", "--copy", "src=/app", "--source-type=module"], { cwd: tmp });
+    if (mapped.exitCode !== 0 || mapped.stdout !== "/app/ /app/main.js\n")
+      throw new Error(`Sandbox mode should map an entry through its input's target, got (exit ${mapped.exitCode}):\n${mapped.stdout}${mapped.stderr}`);
+
+    // An entry outside every input lands at /<basename>; if an input
+    // already fills that path, it is a usage error that suggests --entry.
+    writeFileSync(join(tmp, "src", "walk.js"), "console.log('the input copy');");
+    const collision = runSandboxCli(["walk.js", "--copy", "src=/", "--source-type=module"], { cwd: tmp });
+    expectSandboxUsageError(
+      "Sandbox mode entry collision",
+      collision,
+      "the entry walk.js would be copied to /walk.js, which a copied input already fills; name the entry with --entry=/walk.js",
+    );
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --entry names a copied file and needs no stdin...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, { "/main.js": 'console.log("from-entry");' });
+    // Closed stdin (Bun's null device), piped stdin, and no stdin option at
+    // all: --entry is the program, so stdin is never read.
+    const closed = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js"]);
+    if (closed.exitCode !== 0 || closed.stdout.trim() !== "from-entry")
+      throw new Error(`Sandbox mode --entry with closed stdin should run the entry, got (exit ${closed.exitCode}):\n${closed.stdout}${closed.stderr}`);
+    const piped = runSandboxCli(["--copy", `${tree}=/`, "--entry", "/main.js"], { stdin: 'console.log("from-stdin");' });
+    if (piped.exitCode !== 0 || piped.stdout.trim() !== "from-entry")
+      throw new Error(`Sandbox mode --entry should ignore piped stdin, got (exit ${piped.exitCode}):\n${piped.stdout}${piped.stderr}`);
+
+    writeFileSync(join(tmp, "host.js"), "1;");
+    expectSandboxUsageError(
+      "Sandbox mode --entry with a positional",
+      runSandboxCli(["host.js", "--copy", `${tree}=/`, "--entry=/main.js"], { cwd: tmp }),
+      "--entry names the sandbox entry, so a host file cannot be given too; drop host.js or --entry",
+    );
+    expectSandboxUsageError(
+      "--entry without sandbox mode",
+      runSandboxCli(["--entry=/main.js"], { cwd: tmp }),
+      "--entry only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]",
+    );
+    const missing = runSandboxCli(["--sandbox", "--entry=/absent.js"]);
+    if (missing.exitCode !== 1 || !missing.stderr.includes("sandbox entry file not found: /absent.js"))
+      throw new Error(`Sandbox mode --entry naming nothing should fail, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: rejects inputs and options it cannot run...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    writeFileSync(join(tmp, "other.js"), "2;");
+    writeFileSync(join(tmp, "main.gbc"), "not bytecode");
+    mkdirSync(join(tmp, "dir"), { recursive: true });
+    const cases: [string, string[], string, string?][] = [
+      ["stdin as -", ["-", "--sandbox"],
+        "sandbox mode does not read stdin; pass a host file, or --entry <sandbox-path> for a copied one", "1;"],
+      ["no entry", ["--sandbox"],
+        "sandbox mode needs an entry: pass a host file, or --entry <sandbox-path> for a copied one (sandbox mode does not read stdin)"],
+      ["no entry with piped stdin", ["--copy", "dir"],
+        "sandbox mode needs an entry", "console.log(1);"],
+      ["a directory", ["dir", "--sandbox"],
+        "sandbox mode runs one entry file, not a directory: dir (copy it with --copy dir and name the entry with --entry)"],
+      ["several positionals", ["main.js", "other.js", "--sandbox"], "sandbox mode runs one entry file; got 2 inputs"],
+      ["a .gbc entry", ["main.gbc", "--sandbox"], "sandbox mode runs source files, not bytecode: main.gbc"],
+    ];
+    for (const option of [
+      "--output=json", "--multifile", "--coverage", "--coverage-format=lcov", "--coverage-output=c.json",
+      "--profile=functions", "--source-map",
+      "--host-environment=env.js", "--global=a=1", "--globals=g.json",
+    ]) {
+      const name = option.split("=")[0];
+      cases.push([option, ["main.js", "--sandbox", option], `${name} cannot be used in sandbox mode (enabled by --sandbox)`]);
+    }
+    for (const [label, args, needle, stdin] of cases)
+      expectSandboxUsageError(`Sandbox mode ${label}`, runSandboxCli(args, { cwd: tmp, stdin }), needle);
+
+    // --jobs is accepted and does nothing.
+    const jobs = runSandboxCli(["main.js", "--sandbox", "--jobs=4", "--print"], { cwd: tmp });
+    if (jobs.exitCode !== 0 || jobs.stdout.trim() !== "1")
+      throw new Error(`Sandbox mode should accept --jobs, got (exit ${jobs.exitCode}):\n${jobs.stdout}${jobs.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --print prints the last value like host mode...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "value.js"), "1 + 1;");
+    writeFileSync(join(tmp, "empty.js"), "const x = 5;");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const value = runSandboxCli(["value.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
+      if (value.exitCode !== 0 || value.stdout !== "2\n")
+        throw new Error(`Sandbox mode (${mode}) --print should print 2, got (exit ${value.exitCode}):\n${value.stdout}${value.stderr}`);
+      const undef = runSandboxCli(["empty.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
+      if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
+        throw new Error(`Sandbox mode (${mode}) --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --diff prints JSON with metadata, or unified...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "write.js"), [
+      'import fs from "fs";',
+      'fs.writeFileSync("/new.txt", "n");',
+      'console.log("guest");',
+    ].join("\n"));
+    const base = ["write.js", "--sandbox", "--source-type=module"];
+
+    const json = runSandboxCli([...base, "--diff"], { cwd: tmp });
+    if (json.exitCode !== 0 || !json.stdout.startsWith("guest\n"))
+      throw new Error(`Sandbox mode --diff should exit 0 after the guest output, got (exit ${json.exitCode}):\n${json.stdout}${json.stderr}`);
+    const parsed = JSON.parse(json.stdout.slice("guest\n".length));
+    if (!parsed.changes.some((c: any) => c.kind === "create" && c.path === "/new.txt") ||
+        !Array.isArray(parsed.metadataChanges))
+      throw new Error(`Sandbox mode --diff should print a JSON diff with metadataChanges, got:\n${json.stdout}`);
+    const explicitJson = runSandboxCli([...base, "--diff=json"], { cwd: tmp });
+    if (explicitJson.exitCode !== 0 ||
+        !Array.isArray(JSON.parse(explicitJson.stdout.slice("guest\n".length)).metadataChanges))
+      throw new Error(`Sandbox mode --diff=json should print a JSON diff, got (exit ${explicitJson.exitCode}):\n${explicitJson.stdout}${explicitJson.stderr}`);
+
+    const unified = runSandboxCli([...base, "--diff=unified"], { cwd: tmp });
+    if (unified.exitCode !== 0 ||
+        !unified.stdout.startsWith("guest\n--- /new.txt\n+++ /new.txt\n") ||
+        !containsLine(unified.stdout, "+n") ||
+        unified.stdout.includes("metadata"))
+      throw new Error(`Sandbox mode --diff=unified should print a content-only unified diff, got (exit ${unified.exitCode}):\n${unified.stdout}${unified.stderr}`);
+
+    // A diff file replaces printing; its format comes from .json or .diff
+    // unless --diff=<format> names one.
+    for (const [file, extra, format] of [
+      ["out.json", [], "json"],
+      ["out.diff", [], "unified"],
+      ["explicit.json", ["--diff=unified"], "unified"],
+      ["explicit.patch", ["--diff=json"], "json"],
+      ["explicit.txt", ["--diff=unified"], "unified"],
+    ] as const) {
+      const run = runSandboxCli([...base, `--diff-file=${file}`, ...extra], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout !== "guest\n")
+        throw new Error(`Sandbox mode --diff-file=${file} ${extra.join(" ")} should leave only the guest output on stdout, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      const text = readFileSync(join(tmp, file), "utf-8");
+      if (format === "json") {
+        const diff = JSON.parse(text);
+        if (!Array.isArray(diff.changes) || !Array.isArray(diff.metadataChanges))
+          throw new Error(`Sandbox mode --diff-file=${file} should hold a JSON diff with metadata, got:\n${text}`);
+      } else if (!text.startsWith("--- /new.txt\n") || text.includes("metadata")) {
+        throw new Error(`Sandbox mode --diff-file=${file} should hold a unified diff, got:\n${text}`);
+      }
+    }
+
+    // Any other extension needs an explicit format. R1: .patch does not
+    // infer, since a unified sandbox diff is not a patch.
+    for (const file of ["out.patch", "out.txt"]) {
+      const run = runSandboxCli([...base, `--diff-file=${file}`], { cwd: tmp });
+      const output = run.stdout + run.stderr;
+      if (run.exitCode !== 1 ||
+          !output.includes(`Cannot tell the diff format from "${file}": name the file .json or .diff, or pass --diff=json or --diff=unified`))
+        throw new Error(`Sandbox mode --diff-file=${file} should fail naming the formats, got (exit ${run.exitCode}):\n${output}`);
+      if (existsSync(join(tmp, file)))
+        throw new Error(`Sandbox mode --diff-file=${file} should write nothing when the format is unknown`);
+    }
+
+    for (const [flag, needle] of [
+      ["--diff=xml", "Invalid value for --diff: xml (use --diff=json or --diff=unified)"],
+      ["--diff=", "--diff= needs a format: use --diff=json or --diff=unified, or --diff alone for json"],
+    ]) {
+      const run = runSandboxCli([...base, flag], { cwd: tmp });
+      if (run.exitCode === 0 || !(run.stdout + run.stderr).includes(needle))
+        throw new Error(`Sandbox mode ${flag} should fail with ${JSON.stringify(needle)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+
+    writeFileSync(join(tmp, "host.js"), "1;");
+    for (const flag of ["--diff", "--diff=unified", "--diff-file=host.json"]) {
+      const name = flag.startsWith("--diff-file") ? "--diff-file" : "--diff";
+      expectSandboxUsageError(
+        `${flag} without sandbox mode`,
+        runSandboxCli(["host.js", flag], { cwd: tmp }),
+        `${name} only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: only net is granted; host capabilities are refused...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'console.log("ran");');
+    for (const [flags, reason] of [
+      [["--sandbox", "--allow-read"], "--sandbox"],
+      [["--sandbox", "--allow-read=."], "--sandbox"],
+      [["--copy", "main.js=/copy.js", "--allow-import=node_modules"], "--copy"],
+      [["--copy-rw", "main.js=/copy.js", "--allow-ffi"], "--copy-rw"],
+    ] as const) {
+      const flag = flags[flags.length - 1].split("=")[0];
+      expectSandboxUsageError(
+        `Sandbox mode ${flags.join(" ")}`,
+        runSandboxCli(["main.js", ...flags], { cwd: tmp }),
+        `${flag} cannot be used in sandbox mode (enabled by ${reason}): the sandbox has no host filesystem; copy inputs with --copy`,
+      );
+    }
+    for (const flag of ["--allow-net", "--allow-net=127.0.0.1,private", "--deny-read", "--deny-read=.", "--deny-import=github", "--deny-ffi", "--deny-net=private"]) {
+      const run = runSandboxCli(["main.js", "--sandbox", flag], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== "ran")
+        throw new Error(`Sandbox mode should accept ${flag}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+
+    // The same capabilities from a config warn instead, and only net needs
+    // trust.
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ permissions: { "allow-read": true, "allow-ffi": true } }));
+    const warned = runSandboxCli(["main.js", "--sandbox"], { cwd: tmp });
+    if (warned.exitCode !== 0 || warned.stdout.trim() !== "ran")
+      throw new Error(`Sandbox mode with an allow-read config should run, got (exit ${warned.exitCode}):\n${warned.stdout}${warned.stderr}`);
+    for (const capability of ["allow-read", "allow-ffi"]) {
+      const warning = `Warning: ${configPath} requests ${capability}, which GocciaRunner sandbox mode cannot grant; ignoring it`;
+      if (!warned.stderr.includes(warning))
+        throw new Error(`Sandbox mode should warn ${JSON.stringify(warning)}, got:\n${warned.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: removed sandbox-runner flags name their replacements...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const [flag, replacement] of [
+      ["--seed=dir", "--seed was removed in GocciaScript 0.14.0; use --copy <host>[=<sandbox>] (default sandbox path is /<basename>)"],
+      ["--seed-config=seed.json", '--seed-config was removed in GocciaScript 0.14.0; declare inputs in the "sandbox" section of goccia.json or pass --copy'],
+      ["--write-back", "--write-back was removed in GocciaScript 0.14.0; copy the inputs that may be written with --copy-rw"],
+      ["--diff-format=unified", "--diff-format was removed in GocciaScript 0.14.0; use --diff=json|unified"],
+      ["--diff-output=diff.json", "--diff-output was removed in GocciaScript 0.14.0; use --diff-file=<path>"],
+      ["--diff-metadata", "--diff-metadata was removed in GocciaScript 0.14.0; JSON diffs always include timestamp metadata; remove the flag"],
+      ["--fs-quota-bytes=1024", "--fs-quota-bytes was removed in GocciaScript 0.14.0; use --max-fs-bytes instead (units: 16MiB)"],
+      ["--fs-node-limit=10", "--fs-node-limit was removed in GocciaScript 0.14.0; use --max-fs-nodes instead"],
+    ]) {
+      // In sandbox mode and out of it alike.
+      for (const mode of [["--sandbox"], []]) {
+        expectSandboxUsageError(
+          `${flag} ${mode.join(" ")}`,
+          runSandboxCli(["main.js", ...mode, flag], { cwd: tmp }),
+          replacement,
+        );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: runScript and the goccia builtin reject the pre-0.14 option names...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, {
+      "/main.js": [
+        'import { $, runScript } from "goccia";',
+        "for (const options of [",
+        '  { seed: ["/child.js"] },',
+        '  { seeds: ["/child.js"] },',
+        '  { diffFormat: "unified" },',
+        "  { diffMetadata: true },",
+        "]) {",
+        "  try { runScript(\"/child.js\", options); console.log(\"accepted\"); }",
+        '  catch (error) { console.log(error.name + ": " + error.message); }',
+        "}",
+        "for (const command of [",
+        '  "goccia --seed /child.js /child.js",',
+        '  "goccia --diff-format=unified /child.js",',
+        '  "goccia --diff-metadata /child.js",',
+        '  "goccia --diff=xml /child.js",',
+        "]) {",
+        "  try { await $(command).quiet().run(); console.log(\"accepted\"); }",
+        '  catch (error) { console.log(error.name + ": " + error.message); }',
+        "}",
+      ].join("\n"),
+      "/child.js": 'console.log("child");',
+    });
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`]);
+      if (run.exitCode !== 0)
+        throw new Error(`Sandbox mode (${mode}) removed-option probe should exit 0, got ${run.exitCode}:\n${run.stdout}${run.stderr}`);
+      for (const expected of [
+        'TypeError: runScript option "seed" was removed; use "copy"',
+        'TypeError: runScript option "seeds" was removed; use "copy"',
+        'TypeError: runScript option "diffFormat" was removed; use diff: "json" or diff: "unified"',
+        'TypeError: runScript option "diffMetadata" was removed; JSON diffs always include timestamp metadata; use diff: true',
+        "TypeError: Shell command failed with exit code 2: goccia: --seed was removed; use --copy <from>[=<to>]",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff-format was removed; use --diff=json or --diff=unified",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff-metadata was removed; JSON diffs always include timestamp metadata (use --diff)",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff must be json or unified",
+      ]) {
+        if (!run.stdout.includes(expected))
+          throw new Error(`Sandbox mode (${mode}) should report ${JSON.stringify(expected)}, got:\n${run.stdout}`);
+      }
+      if (run.stdout.includes("accepted"))
+        throw new Error(`Sandbox mode (${mode}) runScript accepted a removed option:\n${run.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --max-fs-bytes and --max-fs-nodes take units and apply...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "fill.js"), [
+      'import fs from "fs";',
+      'let bytes = "ok";',
+      'try { fs.writeFileSync("/big.txt", "x".repeat(4096)); } catch (error) { bytes = error.code; }',
+      'let nodes = "ok";',
+      'try { for (const i of [1, 2, 3, 4, 5, 6]) fs.writeFileSync("/n" + i + ".txt", ""); } catch (error) { nodes = error.code; }',
+      'console.log("bytes:" + bytes + " nodes:" + nodes);',
+    ].join("\n"));
+    const base = ["fill.js", "--sandbox", "--source-type=module"];
+    for (const [flags, expected] of [
+      [[], "bytes:ok nodes:ok"],
+      [["--max-fs-bytes=2KiB"], "bytes:ENOSPC nodes:ok"],
+      [["--max-fs-bytes=1MiB"], "bytes:ok nodes:ok"],
+      [["--max-fs-bytes=2048"], "bytes:ENOSPC nodes:ok"],
+      [["--max-fs-nodes=5"], "bytes:ok nodes:ENOSPC"],
+    ] as const) {
+      const run = runSandboxCli([...base, ...flags], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== expected)
+        throw new Error(`Sandbox mode ${flags.join(" ") || "(defaults)"} should print ${expected}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    for (const [flag, needle] of [
+      ["--max-fs-bytes=abc", "Invalid value for --max-fs-bytes: abc"],
+      ["--max-fs-nodes=0", "--max-fs-nodes must be greater than 0."],
+    ]) {
+      const run = runSandboxCli([...base, flag], { cwd: tmp });
+      if (run.exitCode === 0 || !(run.stdout + run.stderr).includes(needle))
+        throw new Error(`Sandbox mode ${flag} should fail with ${JSON.stringify(needle)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    for (const flag of ["--max-fs-bytes=1MiB", "--max-fs-nodes=10"]) {
+      expectSandboxUsageError(
+        `${flag} without sandbox mode`,
+        runSandboxCli(["fill.js", flag], { cwd: tmp }),
+        `${flag.split("=")[0]} only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a discovered config's limits apply...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "fill.js"), [
+      'import fs from "fs";',
+      'let bytes = "ok";',
+      'try { fs.writeFileSync("/big.txt", "x".repeat(4096)); } catch (error) { bytes = error.code; }',
+      'console.log("bytes:" + bytes);',
+    ].join("\n"));
+    // Keys the sandbox does not use (output) are ignored rather than
+    // breaking the clean stdout.
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ "max-fs-bytes": "2KiB", output: "json" }));
+    const limited = runSandboxCli(["fill.js", "--sandbox", "--source-type=module"], { cwd: tmp });
+    if (limited.exitCode !== 0 || limited.stdout !== "bytes:ENOSPC\n")
+      throw new Error(`Sandbox mode should apply the discovered config's max-fs-bytes, got (exit ${limited.exitCode}):\n${limited.stdout}${limited.stderr}`);
+    if (limited.stderr.includes("ignoring discovered configuration"))
+      throw new Error(`Sandbox mode should not skip the discovered config, got:\n${limited.stderr}`);
+    // The command line still wins.
+    const overridden = runSandboxCli(["fill.js", "--sandbox", "--source-type=module", "--max-fs-bytes=1MiB"], { cwd: tmp });
+    if (overridden.exitCode !== 0 || overridden.stdout !== "bytes:ok\n")
+      throw new Error(`Sandbox mode --max-fs-bytes should override the config, got (exit ${overridden.exitCode}):\n${overridden.stdout}${overridden.stderr}`);
+    // A config's max-fs-* are ignored in host mode, so one config serves both.
+    writeFileSync(join(tmp, "host.js"), 'console.log("host");');
+    const host = runSandboxCli(["host.js"], { cwd: tmp });
+    if (host.exitCode !== 0 || !host.stdout.includes("host"))
+      throw new Error(`Host mode should run with a max-fs-bytes config, got (exit ${host.exitCode}):\n${host.stdout}${host.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a trusted sandbox section switches it on...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "src"), { recursive: true });
+    mkdirSync(join(project, "out"), { recursive: true });
+    writeFileSync(join(project, "src", "input.txt"), "input");
+    writeFileSync(join(project, "out", "result.txt"), "before");
+    writeFileSync(join(project, "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/src/input.txt", "utf8"));',
+      'fs.writeFileSync("/out/result.txt", "after");',
+    ].join("\n"));
+    const configPath = join(project, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["src"], "copy-rw": ["out"] } }));
+    const store = join(tmp, "trust.json");
+    const result = () => readFileSync(join(project, "out", "result.txt"), "utf-8");
+
+    // Untrusted: nothing runs, and the error names both ways forward.
+    const untrusted = runSandboxCli(["main.js", "--source-type=module", `--trust-store=${store}`], { cwd: project });
+    if (untrusted.exitCode !== 2 ||
+        !untrusted.stderr.includes("goccia.json (never trusted)") ||
+        !untrusted.stderr.includes(`sandbox.copy: ${join(project, "src")}`) ||
+        !untrusted.stderr.includes(`sandbox.copy-rw: ${join(project, "out")}`) ||
+        !untrusted.stderr.includes("--trust goccia.json") ||
+        !untrusted.stderr.includes("-P main.js"))
+      throw new Error(`An untrusted sandbox section should stop the run naming --trust and -P, got (exit ${untrusted.exitCode}):\n${untrusted.stdout}${untrusted.stderr}`);
+    if (result() !== "before")
+      throw new Error("An untrusted sandbox section must not write back");
+
+    // A command-line --copy of the same target replaces the config's
+    // copy-rw: a read-only dry run.
+    const dryRun = runSandboxCli(["main.js", "--source-type=module", "-P", "--copy", "out"], { cwd: project });
+    if (dryRun.exitCode !== 0 || dryRun.stdout.trim() !== "input" || result() !== "before")
+      throw new Error(`--copy out should downgrade the config's copy-rw, got (exit ${dryRun.exitCode}, result ${result()}):\n${dryRun.stdout}${dryRun.stderr}`);
+    if (dryRun.stderr.includes("write-back:"))
+      throw new Error(`A dry run has no read-write input, so no write-back report, got:\n${dryRun.stderr}`);
+
+    // -P accepts the section for one run.
+    const accepted = runSandboxCli(["main.js", "--source-type=module", "-P"], { cwd: project });
+    if (accepted.exitCode !== 0 || accepted.stdout.trim() !== "input" || result() !== "after")
+      throw new Error(`-P should run the config sandbox and write back, got (exit ${accepted.exitCode}, result ${result()}):\n${accepted.stdout}${accepted.stderr}`);
+    if (!accepted.stderr.includes(`write-back: ${join(project, "out", "result.txt")}`))
+      throw new Error(`The config sandbox should report its write-back on stderr, got:\n${accepted.stderr}`);
+
+    // --trust stores it; later runs need no flag.
+    writeFileSync(join(project, "out", "result.txt"), "before");
+    const trust = runSandboxCli(["--trust", "goccia.json", "--yes", `--trust-store=${store}`], { cwd: project });
+    if (trust.exitCode !== 0)
+      throw new Error(`--trust should store the sandbox section, got (exit ${trust.exitCode}):\n${trust.stdout}${trust.stderr}`);
+    const trusted = runSandboxCli(["main.js", "--source-type=module", `--trust-store=${store}`], { cwd: project });
+    if (trusted.exitCode !== 0 || trusted.stdout.trim() !== "input" || result() !== "after")
+      throw new Error(`A trusted sandbox section should run, got (exit ${trusted.exitCode}, result ${result()}):\n${trusted.stdout}${trusted.stderr}`);
+
+    // --ignore-config-permissions ignores the section: host mode, where
+    // "fs" does not resolve.
+    const ignored = runSandboxCli(["main.js", "--source-type=module", "--ignore-config-permissions"], { cwd: project });
+    if (ignored.exitCode === 0 || !(ignored.stdout + ignored.stderr).includes('Cannot resolve bare module specifier "fs"'))
+      throw new Error(`--ignore-config-permissions should ignore the sandbox section, got (exit ${ignored.exitCode}):\n${ignored.stdout}${ignored.stderr}`);
+
+    // With --entry, the config is discovered from the working directory.
+    const entryRun = runSandboxCli(["--copy", "main.js=/app/main.js", "--entry=/app/main.js", "--source-type=module", "-P"], { cwd: project });
+    if (entryRun.exitCode !== 0 || entryRun.stdout.trim() !== "input")
+      throw new Error(`--entry should run with the working directory's sandbox section, got (exit ${entryRun.exitCode}):\n${entryRun.stdout}${entryRun.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: the sandbox section in TOML...", async () => {
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src", "data.txt"), "toml-input");
+    writeFileSync(join(tmp, "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/data/data.txt", "utf8"));',
+      'fs.writeFileSync("/made.txt", "made");',
+    ].join("\n"));
+    writeFileSync(join(tmp, "goccia.toml"), '[sandbox]\ncopy = ["src=/data"]\ndiff = "unified"\n');
+    const run = runSandboxCli(["main.js", "--source-type=module", "-P"], { cwd: tmp });
+    if (run.exitCode !== 0 || !run.stdout.startsWith("toml-input\n"))
+      throw new Error(`A TOML sandbox section should run, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    // "diff" from the section prints a unified diff after the guest output.
+    if (!run.stdout.startsWith("toml-input\n--- /made.txt\n+++ /made.txt\n"))
+      throw new Error(`A TOML sandbox section's diff = "unified" should print a unified diff, got:\n${run.stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: sandbox section keys are validated...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "project"), { recursive: true });
+    mkdirSync(join(tmp, "elsewhere"), { recursive: true });
+    writeFileSync(join(tmp, "project", "main.js"), "1;");
+    const configPath = join(tmp, "goccia.json");
+    for (const [label, sandbox, needle] of [
+      ["the removed files key", { files: [{ path: "/a.txt", text: "a" }] },
+        `${configPath}: "sandbox.files" was removed in GocciaScript 0.14.0; list host inputs as "copy" or "copy-rw" strings (<host>[=<sandbox>]) instead`],
+      ["an unknown key", { seeds: ["src"] },
+        `${configPath}: unknown sandbox key "seeds" (valid: copy, copy-rw, entry, diff, diff-file)`],
+      ["an invalid diff", { diff: "xml" },
+        `${configPath}: "sandbox.diff" must be true, false, "json", or "unified"`],
+    ] as const) {
+      writeFileSync(configPath, JSON.stringify({ sandbox }));
+      // A malformed section fails before trust is considered.
+      for (const extra of [[], ["-P"]]) {
+        expectSandboxUsageError(
+          `Sandbox section with ${label} ${extra.join(" ")}`,
+          runSandboxCli(["main.js", ...extra], { cwd: tmp }),
+          needle,
+        );
+      }
+    }
+    rmSync(configPath);
+
+    // Decision B: what a config may write stays inside its own directory.
+    const projectConfig = join(tmp, "project", "goccia.json");
+    for (const [label, sandbox, needle] of [
+      ["copy-rw", { "copy-rw": ["../elsewhere"] },
+        `${projectConfig}: "sandbox.copy-rw" entry "../elsewhere" is outside the config's directory; a config may only write inside its own directory tree (pass it on the command line to write elsewhere)`],
+      ["diff-file", { "diff-file": "../elsewhere/diff.json" },
+        `${projectConfig}: "sandbox.diff-file" entry "../elsewhere/diff.json" is outside the config's directory`],
+    ] as const) {
+      writeFileSync(projectConfig, JSON.stringify({ sandbox }));
+      expectSandboxUsageError(
+        `A config ${label} outside its directory`,
+        runSandboxCli(["main.js", "-P"], { cwd: join(tmp, "project") }),
+        needle,
+      );
+    }
+    // A read-only copy may come from anywhere.
+    writeFileSync(join(tmp, "elsewhere", "shared.txt"), "shared");
+    writeFileSync(join(tmp, "project", "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/elsewhere/shared.txt", "utf8"));',
+    ].join("\n"));
+    writeFileSync(projectConfig, JSON.stringify({ sandbox: { copy: ["../elsewhere"] } }));
+    const readOnly = runSandboxCli(["main.js", "-P", "--source-type=module"], { cwd: join(tmp, "project") });
+    if (readOnly.exitCode !== 0 || readOnly.stdout.trim() !== "shared")
+      throw new Error(`A config copy from outside its directory should be allowed, got (exit ${readOnly.exitCode}):\n${readOnly.stdout}${readOnly.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: binaries that ignore the sandbox section warn about it...", async () => {
+  const tmp = makeTmp();
+  try {
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["missing-dir"] } }));
+    writeFileSync(join(tmp, "a.test.js"), 'test("t", () => { expect(1).toBe(1); });\n');
+    const proc = Bun.spawnSync([resolve(TESTRUNNER), "a.test.js", "--no-progress"], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    // No trust is needed for a section the binary does not use (R5).
+    if (proc.exitCode !== 0 || !output.includes("Test Results Passed: 1"))
+      throw new Error(`GocciaTestRunner should run past an unused sandbox section, got (exit ${proc.exitCode}):\n${output}`);
+    const warning = `Warning: ${configPath} declares a "sandbox" section, which GocciaTestRunner does not use; ignoring it`;
+    if (!proc.stderr.toString().includes(warning))
+      throw new Error(`GocciaTestRunner should warn ${JSON.stringify(warning)}, got:\n${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: --help lists the sandbox options and explains sandbox mode...", async () => {
+  const proc = Bun.spawnSync([RUNNER, "--help"], { stdout: "pipe", stderr: "pipe" });
+  const help = normalizeLineEndings(proc.stdout.toString());
+  if (proc.exitCode !== 0)
+    throw new Error(`GocciaRunner --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  for (const needle of [
+    "Usage: GocciaRunner [file|directory|-] [options]",
+    "       GocciaRunner <file> [--copy <host>[=<sandbox>]]... [options]",
+    "Sandbox Options:",
+    "--sandbox ",
+    "--copy <host>[=<sandbox>] ",
+    "--copy-rw <host>[=<sandbox>] ",
+    "--entry <sandbox-path> ",
+    "--diff[=json|unified] ",
+    "--diff-file <path> ",
+    "--max-fs-bytes=",
+    "--max-fs-nodes=",
+    "Sandbox mode:",
+    'Enabled by --sandbox, --copy, --copy-rw, or a trusted "sandbox" section in goccia.json.',
+    "Only --allow-net applies; --allow-read, --allow-import and --allow-ffi are errors.",
+    "Nothing reaches the host unless an input was copied with --copy-rw and the run succeeded.",
+  ]) {
+    if (!help.includes(needle))
+      throw new Error(`GocciaRunner --help is missing ${JSON.stringify(needle)}:\n${help}`);
+  }
+  // The removed options are not advertised.
+  for (const removed of ["--seed", "--write-back", "--diff-format", "--diff-output", "--diff-metadata", "--fs-quota-bytes", "--fs-node-limit"]) {
+    if (help.includes(removed))
+      throw new Error(`GocciaRunner --help should not list the removed ${removed}:\n${help}`);
+  }
+});
+
 // ============================================================================
 // --allow-net option
 // ============================================================================
