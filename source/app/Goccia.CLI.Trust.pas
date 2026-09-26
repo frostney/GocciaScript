@@ -33,8 +33,9 @@ type
   TGocciaTrustTarget = record
     { The scope as the normalized block holds it: absolute and lexical. }
     Scope: string;
-    { The scope with symbolic links resolved, or TRUST_TARGET_ABSENT when
-      nothing existed there. }
+    { Where the scope resolved when trusted (CanonicalCapabilityPath): the
+      scope with links resolved, or, when it did not exist, its deepest
+      existing ancestor resolved plus the rest. }
     Target: string;
   end;
   TGocciaTrustTargets = array of TGocciaTrustTarget;
@@ -211,8 +212,6 @@ const
   CONFIG_FILE_EXTENSIONS: array[0..2] of string = (EXT_TOML, EXT_JSON5,
     EXT_JSON);
   TRUST_STORE_VERSION = 1;
-  { A recorded target for a scope whose path did not exist when trusted. }
-  TRUST_TARGET_ABSENT = 'absent';
   IGNORE_CONFIG_PERMISSIONS_FLAG = 'ignore-config-permissions';
   TRUST_STORE_FLAG = 'trust-store';
   {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
@@ -235,11 +234,12 @@ function TrustKeyForDirectory(const APath: string): string;
   directory of node_modules=<dir>) with where it resolves now. }
 function PathScopeTargets(
   const ARequest: TGocciaConfigPermissionRequest): TGocciaTrustTargets;
-{ One line per recorded scope that has been re-pointed since it was trusted,
-  `target of <scope>: <old> -> <new>`: a scope that existed now resolves to a
-  different canonical path, or a scope that was absent now exists and resolves
-  outside its own lexical path. A scope that no longer exists is not a change:
-  it grants nothing. }
+{ One line per recorded scope that now resolves somewhere else than when it
+  was trusted, `target of <scope>: <old> -> <new>`. A scope resolves to itself
+  when it exists, else to its deepest existing ancestor with links resolved
+  plus the rest of the path, so re-pointing the scope or any existing parent
+  of it is a change, while the scope appearing in place (a build output) or
+  disappearing is not. }
 function DescribeTargetChanges(
   const ARecorded: TGocciaTrustTargets): TGocciaCapabilityScopes;
 
@@ -468,25 +468,14 @@ begin
     for I := 0 to Scopes.Count - 1 do
     begin
       Result[I].Scope := Scopes[I];
-      Result[I].Target := CanonicalHostPath(Scopes[I]);
-      if Result[I].Target = '' then
-        Result[I].Target := TRUST_TARGET_ABSENT;
+      { Where the scope resolves: itself when it exists, else its deepest
+        existing ancestor, resolved, plus the rest. Re-pointing any existing
+        part of the path changes it; the scope appearing in place does not. }
+      Result[I].Target := CanonicalCapabilityPath(Scopes[I]);
     end;
   finally
     Scopes.Free;
   end;
-end;
-
-{ AResolved is AScope's own lexical place, or under it. The comparison is
-  against the scope with its directory resolved, so a symlinked ancestor
-  such as a checkout reached through a link is not an escape. }
-function ResolvesWithinScope(const AResolved, AScope: string): Boolean;
-var
-  Place: string;
-begin
-  Place := TrustKeyForPath(AScope);
-  Result := SameFileName(AResolved, Place) or
-    PathStartsWith(AResolved, IncludeTrailingPathDelimiter(Place));
 end;
 
 { Report lines for re-pointed scopes, marked `~` like the `+`/`-` lines of a
@@ -507,20 +496,14 @@ function DescribeTargetChanges(
 var
   I: Integer;
   Current: string;
-  Changed: Boolean;
 begin
   Result := nil;
   for I := 0 to High(ARecorded) do
   begin
-    Current := CanonicalHostPath(ARecorded[I].Scope);
-    if Current = '' then
-      Continue;
-    if ARecorded[I].Target = TRUST_TARGET_ABSENT then
-      { Something appearing in place, a build output say, is expected. }
-      Changed := not ResolvesWithinScope(Current, ARecorded[I].Scope)
-    else
-      Changed := not SameFileName(Current, ARecorded[I].Target);
-    if Changed then
+    Current := CanonicalCapabilityPath(ARecorded[I].Scope);
+    { Any other recorded value, such as an older store's "absent", fails
+      closed: the config needs trusting again. }
+    if not SameFileName(Current, ARecorded[I].Target) then
     begin
       SetLength(Result, Length(Result) + 1);
       Result[High(Result)] := Format('target of %s: %s -> %s',

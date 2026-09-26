@@ -572,7 +572,9 @@ The block is lexical, so replacing a trusted path with a symbolic link would
 keep its hash while pointing the grant somewhere else. Each entry therefore
 also records, outside the hash, where every path scope (`read` and `ffi`
 paths, allow and deny, and the directory of `node_modules=<dir>`) resolved
-when it was trusted, or that nothing existed there. A scope that now resolves
+when it was trusted: the scope with links resolved, or, when it did not exist,
+its deepest existing ancestor resolved plus the rest of the path. A scope that
+now resolves
 to a different place makes the config changed since trusted, and the report
 and `--list-trusted` show it:
 
@@ -582,9 +584,11 @@ and `--list-trusted` show it:
   ~ target of /home/u/project/data: /home/u/project/data -> /etc
 ```
 
-A scope that did not exist when trusted may appear later without a change, as
-a build output does, unless it resolves outside its own path. A scope that no
-longer exists is not a change: it grants nothing.
+So re-pointing any existing part of a scope's path is a change, even for a
+scope that never existed: `allow-read: ./cfg/ssh` with no `cfg/` changes when
+`cfg` appears as a link to `/etc`. The scope itself appearing in place, as a
+build output does, resolves where it was recorded and is not a change, and
+neither is a scope that disappears.
 
 ### The store
 

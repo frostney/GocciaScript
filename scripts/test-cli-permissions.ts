@@ -1226,6 +1226,21 @@ console.log("Trust follows each file's own config...");
       expectIncludes(run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "  ~ target of ", "--list-trusted shows the re-pointed scope");
       run(LOADER, ["--trust-store=trust.json", "--trust", "retarget", "--yes"], { cwd: tmp });
       expectIncludes(run(LOADER, ["--trust-store=trust.json", join("retarget", "main.mjs")], { cwd: tmp }).stdout, "READ SECRET", "re-trusted scope");
+
+      // A scope that did not exist when trusted is re-pointed through its
+      // parent: allow-read ./cfg/ssh with no cfg/, then cfg -> elsewhere.
+      mkdirSync(join(tmp, "dd"));
+      mkdirSync(join(tmp, "etc", "ssh"), { recursive: true });
+      writeFileSync(join(tmp, "etc", "ssh", "ssh_config"), "HOST-SSH\n");
+      writeFileSync(join(tmp, "dd", "goccia.json"), '{"permissions": {"allow-read": ["./cfg/ssh"]}}\n');
+      writeFileSync(join(tmp, "dd", "main.mjs"),
+        'const p = "./cfg/ssh/" + "ssh_config"; const m = await import(p, { with: { type: "text" } }); console.log("READ", m.default.trim());\n');
+      run(LOADER, ["--trust-store=trust.json", "--trust", "dd", "--yes"], { cwd: tmp });
+      symlinkSync(join(tmp, "etc"), join(tmp, "dd", "cfg"));
+      const viaParent = run(LOADER, ["--trust-store=trust.json", join("dd", "main.mjs")], { cwd: tmp });
+      expectExit(viaParent, 2, "absent scope re-pointed through its parent");
+      expectExcludes(viaParent.stdout, "HOST-SSH", "absent scope re-pointed through its parent");
+      expectIncludes(viaParent.stderr, "(changed since trusted", "absent scope re-pointed through its parent");
     }
 
     // 21. Trusting through a symlink covers the real path.

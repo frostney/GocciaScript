@@ -33,6 +33,7 @@ type
     procedure TestSymlinkedConfigFileHasItsOwnKey;
     procedure TestSymlinkedDirectoryHashesAtItsTarget;
     procedure TestRetargetedScopesNeedTrust;
+    procedure TestAbsentScopeParentRepointed;
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestMalformedStoresRefused;
     procedure TestLockContention;
@@ -106,6 +107,8 @@ begin
     TestSymlinkedDirectoryHashesAtItsTarget);
   Test('A re-pointed path scope needs trusting again',
     TestRetargetedScopesNeedTrust);
+  Test('Re-pointing an absent scope''s parent needs trusting again',
+    TestAbsentScopeParentRepointed);
   Test('Newer and corrupt stores are refused',
     TestNewerAndCorruptStoresRefused);
   Test('Stores of the wrong shape are refused', TestMalformedStoresRefused);
@@ -469,7 +472,9 @@ begin
   try
     Expect<Boolean>(Reloaded.TryFind(ConfigPath, Found)).ToBe(True);
     Expect<Integer>(Length(Found.Targets)).ToBe(2);
-    Expect<string>(Found.Targets[0].Target).ToBe(TRUST_TARGET_ABSENT);
+    { A scope that does not exist records where it would be. }
+    Expect<string>(Found.Targets[0].Target).ToBe(Base + PathDelim +
+      'project' + PathDelim + 'build');
     Expect<string>(Found.Targets[1].Target).ToBe(Base + PathDelim +
       'project' + PathDelim + 'data');
   finally
@@ -505,7 +510,78 @@ begin
   Verdict := VerifyNow;
   Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
   Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Base +
-    PathDelim + 'project' + PathDelim + 'build: absent -> ' + Elsewhere);
+    PathDelim + 'project' + PathDelim + 'build: ' + Base + PathDelim +
+    'project' + PathDelim + 'build -> ' + Elsewhere);
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestAbsentScopeParentRepointed;
+{$IFDEF UNIX}
+var
+  Base, ConfigPath, StorePath, Elsewhere: string;
+
+  function StateNow: TGocciaConfigTrustState;
+  var
+    Gate: TGocciaConfigTrustGate;
+  begin
+    Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+      ALL_CAPABILITIES, True, LoadConfig);
+    try
+      Result := Gate.Verify(ConfigPath).State;
+    finally
+      Gate.Free;
+    end;
+  end;
+
+  procedure TrustNow;
+  var
+    Store: TGocciaTrustStore;
+  begin
+    DeleteFile(StorePath);
+    Store := TGocciaTrustStore.Load(StorePath);
+    try
+      Store.Put(EntryFor(ConfigPath));
+      Store.Save;
+    finally
+      Store.Free;
+    end;
+  end;
+
+begin
+  { allow-read ./cfg/ssh with no cfg/: re-pointing the parent re-points the
+    scope, though the scope itself never existed. }
+  Base := FRoot + PathDelim + 'absent-parent';
+  ConfigPath := WriteFile('absent-parent/dd/goccia.json',
+    '{"permissions": {"allow-read": ["./cfg/ssh"]}}');
+  Elsewhere := Base + PathDelim + 'etc';
+  ForceDirectories(Elsewhere + PathDelim + 'ssh');
+  StorePath := Base + PathDelim + 'trust.json';
+  TrustNow;
+  Expect<Boolean>(StateNow = ctsTrusted).ToBe(True);
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'dd' + PathDelim + 'cfg'))))
+    .ToBe(0);
+  Expect<Boolean>(StateNow = ctsChanged).ToBe(True);
+
+  { cfg/ a real directory when trusted, swapped for the link later. }
+  DeleteFile(Base + PathDelim + 'dd' + PathDelim + 'cfg');
+  ForceDirectories(Base + PathDelim + 'dd' + PathDelim + 'cfg');
+  TrustNow;
+  Expect<Boolean>(StateNow = ctsTrusted).ToBe(True);
+  { The scope appearing in place, as a build would make it, is no change. }
+  ForceDirectories(Base + PathDelim + 'dd' + PathDelim + 'cfg' + PathDelim +
+    'ssh');
+  Expect<Boolean>(StateNow = ctsTrusted).ToBe(True);
+  RemoveDir(Base + PathDelim + 'dd' + PathDelim + 'cfg' + PathDelim + 'ssh');
+  RemoveDir(Base + PathDelim + 'dd' + PathDelim + 'cfg');
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Base + PathDelim + 'dd' + PathDelim + 'cfg'))))
+    .ToBe(0);
+  Expect<Boolean>(StateNow = ctsChanged).ToBe(True);
 end;
 {$ELSE}
 begin
