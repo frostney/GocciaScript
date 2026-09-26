@@ -3,26 +3,26 @@
 // statement, and a blank line after a run of variable declarations.
 //
 // A lint rule as a GocciaScript program. `goccia:ast` supplies the statement
-// structure and the comments; GocciaSandboxRunner supplies the files, over a
-// virtual filesystem seeded from explicit host paths. Output is one
+// structure and the comments; GocciaRunner's sandbox mode supplies the files,
+// over a virtual filesystem copied from explicit host paths. Output is one
 // `path:line  rule` per finding, then a count.
 //
 // It also fixes what it finds, by writing the corrected file back into the
 // sandbox filesystem — which is its own copy and reaches nothing. Whether any
 // of that becomes a change to a real file is the host's decision and the
-// host's command line: `--write-back` keeps the result, and without it the
-// sandbox filesystem is discarded when the run ends. There is no flag here to
-// ask for, and nothing this program can do to make one appear.
+// host's command line: copying the sources with `--copy-rw` instead of `--copy`
+// keeps the result, and otherwise the sandbox filesystem is discarded when the
+// run ends. There is no flag here to ask for, and nothing this program can do
+// to make one appear.
 //
 // Run:
-//   ./build.pas sandboxrunner
-//   ./build/GocciaSandboxRunner /blank-lines.mjs --experimental-ast \
-//     --seed examples/_experimental/blank-lines.mjs=/blank-lines.mjs \
-//     --seed <your-source-dir>=/src
+//   ./build.pas runner
+//   ./build/GocciaRunner examples/_experimental/blank-lines.mjs \
+//     --experimental-ast --copy <your-source-dir>=/src
 //
-// Add --write-back to that to keep the fixes. Add the --compat-* flags the
-// checked sources need: `parse` accepts the language the host is configured
-// for, not a second one of its own.
+// Use --copy-rw in place of --copy to keep the fixes. Add the --compat-* flags
+// the checked sources need: `parse` accepts the language the host is
+// configured for, not a second one of its own.
 //
 // Written in the default profile — no `while`, no C-style `for` — so the only
 // flags a run needs are the ones the checked sources need.

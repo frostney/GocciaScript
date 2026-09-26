@@ -1,4 +1,4 @@
-// Run: ./build/GocciaScriptLoader examples/_experimental/csv.js
+// Run: ./build/GocciaRunner examples/_experimental/csv.js
 import { parse, stringify } from "goccia:csv";
 
 const source = `speaker,talk
