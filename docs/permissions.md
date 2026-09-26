@@ -610,7 +610,8 @@ change nothing. A config that requests `read`, `import`, or `ffi` gets a
 warning instead:
 
 ```text
-Error: the sandbox has no host filesystem; copy inputs with --copy
+Error: --allow-read cannot be used in sandbox mode (enabled by --copy): the sandbox has no host filesystem; copy inputs with --copy
+Warning: /repo/goccia.json requests allow-read, which GocciaRunner sandbox mode cannot grant; ignoring it
 ```
 
 Nested `runScript` children inherit the running engine's set, as described in
