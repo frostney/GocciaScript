@@ -10,7 +10,7 @@
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
-- **Sandbox modules** — `GocciaSandboxRunner` installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
+- **Sandbox modules** — `GocciaRunner`'s sandbox mode installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -21,11 +21,11 @@ GocciaScript provides a set of built-in global objects that mirror JavaScript's 
 
 Core language built-ins (Math, Object, Array, Number, JSON, Symbol, Set, Map, WeakSet, WeakMap, Promise, Temporal, Intl, ArrayBuffer, SharedArrayBuffer, Atomics, Proxy, Reflect, etc.) are always registered unconditionally by the engine.
 
-Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. It additionally registers the `goccia:test` module namespace without injecting any testing global, so the testing API is importable from every host that applies the profile. CLI hosts such as `GocciaScriptLoader` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile with the module-only testing install suppressed and installs `TGocciaTestingLibraryRuntimeExtension` with global injection enabled instead, which is why it is the only binary with global `describe`/`test`/`expect`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. See [Test Framework API](testing-api.md#availability-per-binary) for the per-binary table. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper. The dedicated `GocciaTest262Runner` owns private conformance host capabilities.
+Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Headers, Response, AbortController/AbortSignal, EventTarget/Event) are registered by the loader runtime profile and runtime extension classes under `source/units/Goccia.RuntimeExtensions.*.pas`. The same runtime profile also installs named-export-only Goccia modules for non-standard data-format APIs and SemVer: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. It additionally registers the `goccia:test` module namespace without injecting any testing global, so the testing API is importable from every host that applies the profile. CLI hosts such as `GocciaRunner` and `GocciaREPL` call `ApplyLoaderRuntimeProfile`; `GocciaTestRunner` applies the loader runtime profile with the module-only testing install suppressed and installs `TGocciaTestingLibraryRuntimeExtension` with global injection enabled instead, which is why it is the only binary with global `describe`/`test`/`expect`; `GocciaBenchmarkRunner` applies the loader runtime profile plus `TGocciaBenchmarkRuntimeExtension`. See [Test Framework API](testing-api.md#availability-per-binary) for the per-binary table. `GocciaScriptLoaderBare` does not attach a runtime and exposes only a CLI-local `print(...args)` helper. The dedicated `GocciaTest262Runner` owns private conformance host capabilities.
 
 Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtension`, which registers the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. The loader runtime profile does not install it: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
 
-`GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
+In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
 FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block. See [Permissions](permissions.md).
 
@@ -681,7 +681,7 @@ See [Binary Data Built-ins](built-ins-binary-data.md) for the complete ArrayBuff
 
 ### Sandbox Modules (`Goccia.RuntimeExtensions.Sandbox.pas`)
 
-Only available in `GocciaSandboxRunner`. The sandbox runner installs capabilities as import-only modules; it does not create global `fs`, `$`, or `runScript` bindings.
+Only available in `GocciaRunner`'s [sandbox mode](permissions.md#sandbox-mode); host mode has neither module. Sandbox mode installs capabilities as import-only modules; it does not create global `fs`, `$`, or `runScript` bindings.
 
 ```javascript
 import fs from "fs";
@@ -709,7 +709,7 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | `fs.exists(path, callback)` | Deprecated Node-shaped boolean-only callback form; it never passes an error argument |
 | `fs.promises` | Promise-returning versions of the same operations except `exists` |
 
-`readFileSync` returns a `Uint8Array` by default so binary seed entries can round-trip without text coercion.
+`readFileSync` returns a `Uint8Array` by default so binary copied files can round-trip without text coercion.
 
 Callback methods require a callable trailing callback and return `undefined`.
 Filesystem work and callback delivery are deferred through the engine's
@@ -750,7 +750,7 @@ promise methods reject with the same shape. See
 [Sandbox filesystem errors](errors.md#sandbox-filesystem-errors) for the full
 mapping and message format.
 
-The `"goccia"` module exposes sandbox runner orchestration helpers.
+The `"goccia"` module exposes sandbox orchestration helpers.
 
 | Export | Description |
 |--------|-------------|
@@ -769,7 +769,7 @@ console.log(await $`echo ${name}`.text());
 | `failureKind` | Meaning |
 |---------------|---------|
 | `"none"` | The run completed. `ok` is `true` and `error` is `null` |
-| `"script-error"` | The child failed: it threw, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a seed source |
+| `"script-error"` | The child failed: it threw, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a `copy` source |
 | `"resource-limit"` | A host-set ceiling refused the run: `--max-memory`, `--max-instructions`, the sandbox filesystem quota, or the `runScript` nesting depth |
 | `"timeout"` | The `--timeout` deadline elapsed |
 | `"host-error"` | The runner itself could not carry the run out. Nothing the child does produces this |
@@ -789,35 +789,34 @@ const child = runScript("/child.js");
 const viaShell = await $`goccia /child.js`.text();
 ```
 
-Pass `{ sandbox: true }` to run the child in a fresh virtual filesystem. Seed entries are sourced from the current sandbox VFS, not from the host:
+Pass `{ sandbox: true }` to run the child in a fresh virtual filesystem. `copy` entries are sourced from the current sandbox VFS, not from the host — the nested analogue of the runner's `--copy`:
 
 ```javascript
 const child = runScript("/child.js", {
   sandbox: true,
-  seed: [
+  copy: [
     "/child.js",
+    "/fixtures=/data",
     { from: "/lib", to: "/lib" },
     { path: "/input.txt", text: "inline text" },
     { path: "/data.bin", base64: "AQID" },
   ],
-  diff: true,
-  diffMetadata: true,
-  diffFormat: "json",
+  diff: "json",
 });
 
 console.log(child.stdout);
 console.log(child.diff);
 ```
 
-`seed` accepts one entry or an array. A string entry copies that parent-VFS path to the same child path. `{ from, to }` copies a parent file or directory into a child target path. When a file seed target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files. `diffMetadata: true` implies an isolated diff and adds timestamp changes as a separate metadata dimension; ordinary diffs remain content/namespace-only.
+`copy` accepts one entry or an array. A string entry `from[=to]` copies a parent-VFS path into the child, at the same path when `=to` is omitted; `{ from, to }` is the object form. When a file's target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files. `diff` is `true` (JSON), `"json"`, or `"unified"`; a JSON diff always carries timestamp changes as a separate metadata dimension, and a unified diff never does. The pre-0.14 option names `seed`, `seeds`, `diffFormat`, and `diffMetadata` throw a `TypeError` naming the replacement.
 
 The sandbox shell exposes the same child mode:
 
 ```javascript
-const out = await $`goccia --sandbox --seed /child.js --seed /lib=/lib --diff /child.js`.text();
+const out = await $`goccia --sandbox --copy /child.js --copy /lib=/lib --diff /child.js`.text();
 ```
 
-Shell `goccia` supports `--sandbox`, repeatable `--seed <from[=to]>` / `--seed=<from[=to]>`, `--diff`, `--diff-metadata`, and `--diff-format json|unified`. `--diff-metadata` implies a diff. Child diffs are appended to command stdout only when a diff is requested.
+Shell `goccia` takes `goccia [--sandbox] [--copy <from[=to]>]... [--diff[=json|unified]] <entry>`. Child diffs are appended to command stdout only when a diff is requested. `--seed`, `--diff-format`, and `--diff-metadata` fail with a message naming the replacement.
 
 ### AST — experimental (`Goccia.Builtins.AST.pas`)
 

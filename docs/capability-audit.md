@@ -138,9 +138,8 @@ do not swallow storage or transport failures.
 All `TGocciaCLIApplication`-based hosts accept:
 
 ```bash
-./build/GocciaScriptLoader app.js --audit-log=capabilities.jsonl
-./build/GocciaSandboxRunner /main.js \
-  --seed-config=sandbox.json \
+./build/GocciaRunner app.js --audit-log=capabilities.jsonl
+./build/GocciaRunner main.js --copy data \
   --audit-log=capabilities.jsonl
 ```
 

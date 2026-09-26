@@ -36,15 +36,14 @@ Delphi 12 contributors build the Win32 and Win64 native application matrix from 
 The build script supports two modes via `--dev` (default) and `--prod` flags:
 
 ```bash
-./build.pas loader              # Dev build (default)
+./build.pas runner              # Dev build (default)
 ./build.pas loaderbare          # Dev build of Bare Script Loader
 ./build.pas test262runner       # Dev build of native Test262 runner
-./build.pas sandboxrunner       # Dev build of Sandbox Runner
-./build.pas --dev loader        # Explicit dev build
-./build.pas --prod loader       # Production build
+./build.pas --dev runner        # Explicit dev build
+./build.pas --prod runner       # Production build
 ./build.pas --prod              # Production build of all components
 ./build.pas --clean --prod      # Clean, then production build of all components
-./build.pas --prod loader repl  # Production build of specific components
+./build.pas --prod runner repl  # Production build of specific components
 ```
 
 ### Build Everything
@@ -54,8 +53,8 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, loader, loaderbare, sandboxrunner,
-testrunner, test262runner, the TOML compliance runner, benchmarkrunner, bundler,
+Builds all components in order: tests, runner, loaderbare, testrunner,
+test262runner, the TOML compliance runner, benchmarkrunner, bundler,
 and repl. The default full build does not clean first; pass `--clean` explicitly
 when you need to remove stale build artifacts.
 
@@ -63,9 +62,8 @@ when you need to remove stale build artifacts.
 
 ```bash
 ./build.pas repl             # Interactive REPL
-./build.pas loader           # Script Loader
+./build.pas runner           # Runner (host mode and sandbox mode)
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
-./build.pas sandboxrunner    # Sandbox Runner with virtual filesystem
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
 ./build.pas test262runner    # Native Test262 conformance runner
 ./build.pas tomlcompliancerunner # Native TOML compliance runner
@@ -77,15 +75,19 @@ when you need to remove stale build artifacts.
 Multiple components can be specified:
 
 ```bash
-./build.pas loader repl
+./build.pas runner repl
 ```
 
 ### Clean Builds
 
 ```bash
 ./build.pas --clean              # Clean, then build all components
-./build.pas --clean loader       # Clean then build loader
+./build.pas --clean runner       # Clean then build the runner
 ```
+
+`./build.pas loader` and `./build.pas sandboxrunner` fail with a message naming
+the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
+`GocciaSandboxRunner` into its [sandbox mode](#gocciarunner-sandbox-mode).
 
 Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
 
@@ -98,12 +100,12 @@ then diagnose the reported source line only if the same target still fails.
 ### Compile and Run
 
 ```bash
-./build.pas loader && ./build/GocciaScriptLoader ./example.js
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader
+./build.pas runner && ./build/GocciaRunner ./example.js
+printf "const x = 2 + 2; x;" | ./build/GocciaRunner
 printf 'import { bench, group } from "goccia:microbench"; group("stdin", () => { bench("sum", () => 1 + 1); });\n' | ./build/GocciaBenchmarkRunner --source-type=module
 ```
 
-Both loaders are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the loader's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
+`GocciaRunner` and `GocciaScriptLoaderBare` are silent about the script's last evaluated value unless you pass `--print`. For local dev that's fine; for CI scripts and shell pipelines that previously parsed `Result: <value>` from the runner's stdout, pass `--print` and parse the bare value on the line after the timing banner — or switch to `--output=json` and read the `result` field, which is always populated regardless of `--print`.
 
 Leading Unix shebang lines such as `#!/usr/bin/env goccia` are treated as comments by the lexer, so executable scripts can be run directly without preprocessing.
 
@@ -128,11 +130,11 @@ Run a pinned Test262 checkout with the dedicated native runner:
 See [Test262 Harness Contract](test262.md) for shard, profile, host, and report
 semantics.
 
-Coverage and profiling output are available from the loader:
+Coverage and profiling output are available from the runner:
 
 ```bash
-./build/GocciaScriptLoader example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov
-./build/GocciaScriptLoader example.js --profile=all --profile-output=profile.json
+./build/GocciaRunner example.js --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+./build/GocciaRunner example.js --profile=all --profile-output=profile.json
 ```
 
 ### Compile and Test
@@ -161,17 +163,17 @@ All execution tools support `--mode=bytecode` to compile and run via the Goccia 
 
 ```bash
 # Execute via bytecode VM
-./build/GocciaScriptLoader example.js --mode=bytecode
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --mode=bytecode --print
+./build/GocciaRunner example.js --mode=bytecode
+printf "const x = 2 + 2; x;" | ./build/GocciaRunner --mode=bytecode --print
 
 # Load and execute a pre-compiled .gbc file
-./build/GocciaScriptLoader output.gbc
+./build/GocciaRunner output.gbc
 
 # Emit structured JSON for programmatic consumers
-printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=json
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaRunner --output=json
 # Emit a smaller JSON envelope without build, memory, stdout, or stderr.
 # Console output remains in the normalized `output` array; errors stay in `error`.
-printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact-json
+printf "console.log('hi'); 2 + 2;" | ./build/GocciaRunner --output=compact-json
 
 # `compact-json` is recognised by every runner that emits JSON.
 # - GocciaTestRunner: pass it as the value of --output. `--output=json` and
@@ -185,35 +187,35 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaScriptLoader --output=compact
 ./build/GocciaBenchmarkRunner benchmarks --format=compact-json --output=out.json
 
 # Inject globals from the CLI
-printf "x + y;" | ./build/GocciaScriptLoader --global x=10 --global y=20 --print
-printf "name;" | ./build/GocciaScriptLoader --globals=context.json --output=json
-printf "name;" | ./build/GocciaScriptLoader --globals=context.json5 --output=json
-printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
+printf "x + y;" | ./build/GocciaRunner --global x=10 --global y=20 --print
+printf "name;" | ./build/GocciaRunner --globals=context.json --output=json
+printf "name;" | ./build/GocciaRunner --globals=context.json5 --output=json
+printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 # `--global name=value` parses the value as JSON and keeps it as a string when that fails; `--globals=file` accepts JSON, JSON5, TOML, or YAML by file extension. GocciaTestRunner accepts both — that is how a suite gets `process` (docs/testing-api.md).
 # Injected globals can override earlier injected values, but not built-in globals like console
 
 # Load an explicit import map
-./build/GocciaScriptLoader app.js --import-map=imports.json
+./build/GocciaRunner app.js --import-map=imports.json
 
 # Add one-off import-map-style aliases from the CLI (relative targets use the invocation directory)
-./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
+./build/GocciaRunner app.js --alias @/=./src/ --alias config=./config/default.js
 
 # Grant capabilities beyond the project's own imports (all denied by default;
 # see docs/permissions.md for scopes, config blocks, and what each binary honors)
-./build/GocciaScriptLoader app.js --allow-read=../shared --allow-net=api.example.com
-./build/GocciaScriptLoader app.js --allow-ffi=./libs/libcalc.so
+./build/GocciaRunner app.js --allow-read=../shared --allow-net=api.example.com
+./build/GocciaRunner app.js --allow-ffi=./libs/libcalc.so
 
 # Resolve bare specifiers against node_modules (see docs/module-resolution.md).
 # The plain scope walks up from each importing file; =<dir> caps the walk at that directory.
-./build/GocciaScriptLoader app.js --allow-import=node_modules
-./build/GocciaScriptLoader app.js --allow-import=node_modules=./project
+./build/GocciaRunner app.js --allow-import=node_modules
+./build/GocciaRunner app.js --allow-import=node_modules=./project
 
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json
 
-# REPL supports the same engine options as the script loader:
+# REPL supports the same engine options as the runner:
 ./build/GocciaREPL --log=repl.log           # Console log capture
 ./build/GocciaREPL --max-stack=5000          # Custom call stack depth limit
 ./build/GocciaREPL --max-memory=10MiB        # GC heap limit
@@ -221,35 +223,35 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 
 # When --import-map is omitted, the CLI walks up from the entry file's directory
 # and uses the first goccia.json (or .json5 / .toml) it finds.
-printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
+printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaRunner
 
 # Abort long-running scripts (durations: 500ms, 5s, 2m, or plain milliseconds)
-printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100ms
+printf "const f = () => f(); f();" | ./build/GocciaRunner --timeout=100ms
 
 # Abort after a fixed number of bytecode instructions
-printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructions=1000000 --mode=bytecode
+printf "const f = () => f(); f();" | ./build/GocciaRunner --max-instructions=1000000 --mode=bytecode
 
 # Set call stack depth limit (default 2200; 0 = unlimited)
-./build/GocciaScriptLoader example.js --max-stack=5000
-./build/GocciaScriptLoader example.js --max-stack=0
+./build/GocciaRunner example.js --max-stack=5000
+./build/GocciaRunner example.js --max-stack=0
 
 # Write .map source map alongside execution
-./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode
+./build/GocciaRunner example.jsx --source-map --mode=bytecode
 
 # Run tests via bytecode VM
 ./build/GocciaTestRunner tests --mode=bytecode
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
-./build/GocciaScriptLoader example.js --jobs=4
+./build/GocciaRunner example.js --jobs=4
 ./build/GocciaTestRunner tests --jobs=4
 ./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
 # Split a single input file (or stdin) on `---` separator lines and dispatch
 # each section as an independent file across the worker pool
-./build/GocciaScriptLoader scenarios.js --multifile
+./build/GocciaRunner scenarios.js --multifile
 ./build/GocciaTestRunner suites.js --multifile --jobs=4
 ./build/GocciaBundler scenarios.js --multifile --output=dist/
-printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaScriptLoader --multifile
+printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaRunner --multifile
 
 # Run benchmarks via bytecode VM
 ./build/GocciaBenchmarkRunner benchmarks --mode=bytecode
@@ -270,7 +272,7 @@ When `--multifile` is set, each input — whether a file or stdin — is scanned
 
 **Per-runner behaviour.**
 
-- `GocciaScriptLoader` runs each section in a fresh engine; results appear separately in human-readable output and as separate `files[]` entries in `--output=json`.
+- `GocciaRunner` runs each section in a fresh engine; results appear separately in human-readable output and as separate `files[]` entries in `--output=json`.
 - `GocciaTestRunner` runs each section as a separate test file; the aggregate counts (`totalFiles`, `totalTests`, etc.) include every section.
 - `GocciaBundler` emits one `.gbc` per section. `--output=<file>` is rejected with `--multifile` because the input may expand to multiple outputs; pass a directory instead.
 - `GocciaBenchmarkRunner` produces one file entry per section in the report.
@@ -302,11 +304,11 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 ```bash
 # File form (use this exact file)
-./build/GocciaScriptLoader example.js --config=./configs/strict.toml
+./build/GocciaRunner example.js --config=./configs/strict.toml
 ./build/GocciaTestRunner tests --config=./configs/ci.json
 
 # Directory form (find goccia.{toml,json5,json} inside, no walk-up)
-./build/GocciaScriptLoader example.js --config=./configs/
+./build/GocciaRunner example.js --config=./configs/
 ```
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
@@ -398,7 +400,7 @@ inspect-depth = 5
 allow-ffi = true
 ```
 
-**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
+**CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaRunner`, in both modes, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
 
 **Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, you must register their parsers first — the same way `TGocciaCLIApplication.Execute` does via `EnsureConfigParsersRegistered`. See `Goccia.CLI.Application.pas` for the registration pattern using `RegisterConfigParser`.
 
@@ -430,7 +432,7 @@ if ConfigPath <> '' then
 
 ### GocciaBundler (Bundler)
 
-GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaScriptLoader (file, multiple files, directory, stdin):
+GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode without executing them. It accepts the same input modes as GocciaRunner (file, multiple files, directory, stdin):
 
 ```bash
 # Compile a single file (output: example.gbc alongside the source)
@@ -466,91 +468,78 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
-### GocciaSandboxRunner (Virtual Filesystem Sandbox)
+### GocciaRunner sandbox mode
 
-GocciaSandboxRunner executes a sandbox entry path after populating an isolated virtual filesystem. Seed paths establish a seed baseline: the runner copies data into the sandbox before execution, captures that filesystem as the baseline, and never treats the host path as a live mount.
-
-```bash
-./build.pas sandboxrunner
-
-# Import a host directory into the sandbox root and run /main.js.
-./build/GocciaSandboxRunner /main.js --seed=./sandbox-root=/
-
-# Seed from JSON, execute as a module, and write a diff to the host.
-./build/GocciaSandboxRunner /main.js --seed-config=seed.json --source-type=module --diff-output=changes.json
-
-# Use the same sandbox runtime modules through the bytecode executor.
-./build/GocciaSandboxRunner /main.js --seed-config=seed.json --mode=bytecode
-
-```
-
-`--seed=<host>[=<sandbox>]` resolves the host path relative to the invocation current working directory. When the sandbox target is omitted, directories import their contents to `/` and files import as `/<filename>`.
-
-Host seed imports reject symlinks. A symlink in a `--seed` path or anywhere inside a `--seed-config` `from` directory aborts the run with exit code 1 and `Seed path is a symlink (not supported): <path>`, so seeding never dereferences host data from outside the seed root into the sandbox.
-
-`--seed-config=<file.json>` resolves each `from` path relative to the seed config file. The JSON shape is:
-
-```json
-{
-  "files": [
-    { "from": "./project", "to": "/" },
-    { "path": "/main.js", "text": "import fs from \"fs\";\nconsole.log(fs.readdirSync('/'));" },
-    { "path": "/data.bin", "base64": "AQID" }
-  ]
-}
-```
-
-The sandbox runtime installs import-only modules, not globals:
-
-```javascript
-import fs from "fs";
-import { $, runScript } from "goccia";
-
-fs.writeFileSync("/hello.txt", "hello");
-console.log(await $`cat /hello.txt`.text());
-runScript("/child.js");
-```
-
-Nested scripts share the current sandbox filesystem unless child isolation is requested:
-
-```javascript
-const child = runScript("/child.js", {
-  sandbox: true,
-  seed: ["/child.js", { from: "/fixtures", to: "/fixtures" }],
-  diffMetadata: true
-});
-
-const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /child.js`.text();
-```
-
-Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
-
-Limits apply to sandboxed execution exactly as they do to the other binaries — `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack`, and `--max-fetch-bytes` all bound the sandboxed program, and `--max-fs-bytes` / `--max-fs-nodes` bound its virtual filesystem. The only capability the sandbox runner grants is `net` (`--allow-net`, `--deny-net`); see [Permissions](permissions.md#what-each-binary-honors):
+In sandbox mode `GocciaRunner` runs one entry inside an isolated in-memory
+virtual filesystem instead of against the host. `--sandbox`, any `--copy` or
+`--copy-rw` input, or a trusted `sandbox` section in the root config turns it
+on. The guest sees only that filesystem and may import `"fs"` and `"goccia"`
+([Sandbox Modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)).
+[Permissions — Sandbox mode](permissions.md#sandbox-mode) specifies what it may
+reach, how inputs are copied in and written back, and the config section.
 
 ```bash
-# Refuse allocations past 64 MiB; fetch reaches only api.example.com, and a
-# host that resolves into private space is refused by default.
-./build/GocciaSandboxRunner /main.js --seed-config=seed.json \
-  --max-memory=64MiB --allow-net=api.example.com
+./build.pas runner
+
+# Empty filesystem; the entry is copied to /main.js.
+./build/GocciaRunner main.js --sandbox
+
+# Copy inputs read-only to /task.txt and /fixtures, then print a JSON diff.
+./build/GocciaRunner main.js --copy task.txt --copy fixtures --diff
+
+# An entry inside a copied directory runs there: /src/main.js.
+./build/GocciaRunner src/main.js --copy src
+
+# Run a path that exists only in the sandbox.
+./build/GocciaRunner --copy tree=/ --entry=/main.js
+
+# Keep the changes a successful run makes under /src.
+./build/GocciaRunner fix.mjs --copy-rw src --diff=unified
+
+# Bound the run and its filesystem; fetch reaches only api.example.com.
+./build/GocciaRunner main.js --sandbox --max-memory=64MiB \
+  --max-fs-bytes=4MiB --allow-net=api.example.com
 ```
 
-Config-file values reach the sandbox runner **only** through an explicit `--config`. It is the one binary that does not auto-discover a `goccia.json`, because the entry path names a file in the virtual filesystem: walking up from it leaves the sandbox namespace and climbs the host filesystem instead, from wherever the spelling happens to start — the host root for `/main.js`, the current directory for `main.js`. Config picked up by accident of spelling is a poor default for the binary that runs untrusted code, so the operator has to name the file.
+| Option | Effect |
+|---|---|
+| `--sandbox` | Run in sandbox mode with an empty virtual filesystem; the entry file is copied to `/<name>` |
+| `--copy <host>[=<sandbox>]` | Copy a host file or directory into the sandbox read-only (default `/<basename>`); enables sandbox mode. Repeatable |
+| `--copy-rw <host>[=<sandbox>]` | Copy like `--copy`, then write changed files back to the host after a successful run |
+| `--entry <sandbox-path>` | Run a path inside the sandbox instead of a host file |
+| `--diff[=json\|unified]` | Print sandbox filesystem changes after the run (default: `json`) |
+| `--diff-file <path>` | Write the diff to a host file instead of printing it; the format comes from `.json` or `.diff` unless `--diff=<format>` names it |
+| `--max-fs-bytes <size>` | Maximum bytes in the sandbox filesystem (default: `16MiB`) |
+| `--max-fs-nodes <count>` | Maximum files and directories in the sandbox filesystem (default: 4096) |
 
-The cost is that limits an operator sets in a discovered `goccia.json` apply to every other binary and not to this one, and the omission is in the permissive direction. When a config file is discoverable and skipped for that reason, the runner says so on stderr:
+The engine options and limits apply as in host mode: `--mode`, `--source-type`,
+`--timeout`, `--max-memory`, `--max-instructions`, `--max-stack`, and
+`--max-fetch-bytes` all bound the sandboxed program, and configuration is
+discovered as for any other run. Options that only make sense against the host
+are usage errors (exit 2) in sandbox mode: standard input or `-`, a directory,
+more than one positional input, a `.gbc` entry, `--multifile`, `--output`,
+`--coverage*`, `--profile*`, `--source-map`, `--host-environment`, and
+`--global` / `--globals`. `--entry`, `--diff`, `--diff-file`, and `--max-fs-*`
+on the command line without sandbox mode are usage errors that name `--sandbox`
+and `--copy`; `max-fs-bytes` and `max-fs-nodes` in a config file are ordinary
+limits that host mode ignores.
 
-```text
-Warning: ignoring discovered configuration /path/to/goccia.json. GocciaSandboxRunner applies configuration files only when named with --config.
-```
+Standard output carries only what the guest prints — `--print` prints the last
+value, `undefined` included, as in host mode — followed by a printed diff.
+There is no timing banner. The `write-back:` report goes to standard error.
 
-Pass `--config=<file>` to apply it, and note that `--config` is the only way to bound a sandboxed run from a file rather than from flags.
+Diff output is explicit. JSON is the default format; it always includes a
+separate `metadataChanges` array whose per-path `changes` object contains only
+changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields, so
+timestamp-only changes never appear as content modifications. The unified
+format never includes metadata. `--diff-file=<path>` writes the diff to a host
+file instead of printing it, choosing JSON for `.json` and unified for `.diff`.
+An explicit `--diff=<format>` wins over the extension, and any other extension
+(`.patch` included) without one is an error.
 
-Diff output is explicit. `--diff` prints the diff after execution, `--diff-output=<host-path>` writes it to a host file, and `--diff-format=json|unified` selects the format. JSON is the default. Metadata is omitted unless `--diff-metadata` is present. In JSON it appears as a separate `metadataChanges` array whose per-path `changes` object contains only changed `atimeMs`, `mtimeMs`, `ctimeMs`, and `birthtimeMs` fields; timestamp-only changes never appear as content modifications.
-
-Keeping what a run produced is explicit too. `--write-back` writes the files a run changed to the host paths they were seeded from, once, after the run is over. The guest never writes to the host; it writes into its own filesystem, and this is the host deciding afterwards to materialize the result — so a program that reports and a program that fixes are the same program, and the word that makes the difference is on the host's command line. Only paths a `--seed` supplied are eligible: a file with no seeded origin is reported and skipped, a deletion is never applied, and a host target that is a symlink is skipped. Each file is written to an exclusively created temporary beside it and then replaces it in one rename, so a symlink at the temporary name is refused rather than followed and a failed write leaves the original as it was. A run that failed writes nothing. See [ADR 0119](adr/0119-host-applied-sandbox-write-back.md).
-
-```bash
-./build/GocciaSandboxRunner /fix.mjs --seed fix.mjs=/fix.mjs --seed src=/src --write-back
-```
+The `sandbox` config section, the removed `GocciaSandboxRunner` flags, and the
+rules for copy targets, entries, and write-back are in
+[Permissions — Sandbox mode](permissions.md#sandbox-mode).
 
 ## Build Output
 
@@ -559,10 +548,9 @@ All compiled binaries go to the `build/` directory:
 | Binary | Source | Description |
 |--------|--------|-------------|
 | `build/GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop |
-| `build/GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Execute `.js` files or stdin input, with optional JSON output |
+| `build/GocciaRunner` | `source/app/GocciaRunner.dpr` | Execute `.js` files or stdin input, with optional JSON output; in sandbox mode, run one entry inside a virtual filesystem |
 | `build/GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Execute file or stdin source with the core engine and CLI-local `print`; no loader runtime profile or conformance-only host hooks |
 | `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native workers |
-| `build/GocciaSandboxRunner` | `source/app/GocciaSandboxRunner.dpr` | Execute sandbox entry paths inside a seeded virtual filesystem |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaTOMLComplianceRunner` | `source/app/compliance/GocciaTOMLComplianceRunner.dpr` | Native pinned `toml-test` runner |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
@@ -652,7 +640,7 @@ GocciaScript/
 ├── source/
 │   ├── app/              # CLI applications
 │   │   ├── GocciaREPL.dpr              # REPL program source
-│   │   ├── GocciaScriptLoader.dpr      # Script loader program source
+│   │   ├── GocciaRunner.dpr            # Runner program source (host and sandbox mode)
 │   │   ├── GocciaScriptLoaderBare.dpr  # Core-engine-only script loader
 │   │   ├── GocciaTest262Runner.dpr      # Native Test262 conformance runner
 │   │   ├── GocciaTestRunner.dpr        # Test runner program source
@@ -751,7 +739,7 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
-**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including Sandbox Runner seed baselines. Windows runs additionally assert that the loader binary does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including the runner's sandbox mode. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
@@ -777,7 +765,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaSandboxRunner` coverage for seed config imports, inline text/base64 files, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 
@@ -869,7 +857,7 @@ If you need to bypass the build script:
 
 ```bash
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaREPL.dpr
-fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaScriptLoader.dpr
+fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaRunner.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaTestRunner.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBenchmarkRunner.dpr
 fpc @config.cfg -vw-n-h-i-l-d-u-t-p-c-x- source/app/GocciaBundler.dpr

@@ -28,15 +28,15 @@ sudo apt-get install fpc
 choco install freepascal
 ```
 
-Clone the repository and build the script loader:
+Clone the repository and build the runner:
 
 ```bash
 git clone https://github.com/frostney/GocciaScript.git
 cd GocciaScript
-./build.pas loader
+./build.pas runner
 ```
 
-This produces `build/GocciaScriptLoader`, the command you'll use to run every script in this tutorial.
+This produces `build/GocciaRunner`, the command you'll use to run every script in this tutorial.
 
 ## Hello, World
 
@@ -50,7 +50,7 @@ console.log(message);
 Run it:
 
 ```bash
-./build/GocciaScriptLoader hello.js
+./build/GocciaRunner hello.js
 ```
 
 You should see:
@@ -232,7 +232,7 @@ console.log(multiply(4, 5));  // 20
 Run the entry point:
 
 ```bash
-./build/GocciaScriptLoader app.js
+./build/GocciaRunner app.js
 ```
 
 You can also rename imports with `as`:

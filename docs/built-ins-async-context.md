@@ -106,8 +106,8 @@ predicted.
 ## Availability
 
 `node:async_hooks` is installed by the loader runtime profile, so it resolves in
-`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaREPL`,
-`GocciaBenchmarkRunner`, and `GocciaSandboxRunner` (which applies that profile
-before installing its own sandbox extension) without a flag. It grants no capability — no I/O, no
+`GocciaRunner` (whose sandbox mode applies that profile before installing its
+own sandbox extension), `GocciaTestRunner`, `GocciaREPL`, and
+`GocciaBenchmarkRunner` without a flag. It grants no capability — no I/O, no
 clock, no ambient authority — so nothing about it is gated. `GocciaScriptLoaderBare`
 attaches no runtime and therefore does not resolve it.

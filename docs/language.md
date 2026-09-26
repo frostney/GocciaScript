@@ -711,7 +711,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `eval()`
 
-**Implemented; not installed by normal hosts.** `GocciaScriptLoader`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
+**Implemented; not installed by normal hosts.** `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
 
 `eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaTest262Runner` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
 
@@ -735,7 +735,7 @@ GocciaScript requires explicit semicolons by default, preventing this class of b
 
 ```bash
 # Enable ASI via CLI, or use a subtree goccia.json for tests
-./build/GocciaScriptLoader example.js --compat-asi
+./build/GocciaRunner example.js --compat-asi
 ./build/GocciaTestRunner tests/language/asi
 ./build/GocciaREPL --compat-asi
 ```
