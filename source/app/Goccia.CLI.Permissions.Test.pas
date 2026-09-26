@@ -40,6 +40,16 @@ type
     procedure TestCommandLineScopesResolveAgainstWorkingDirectory;
     procedure TestTryHandleCapabilityArgument;
     procedure TestDescribeCapabilities;
+    procedure TestUnsafeKeysAreRequests;
+    procedure TestHashIgnoresKeyAndScopeOrder;
+    procedure TestNormalizationDeduplicates;
+    procedure TestUnscopedCollapsesToTrue;
+    procedure TestRelativeAndAbsoluteScopesHashAlike;
+    procedure TestHashSameAcrossFormats;
+    procedure TestExtendsBaseScopesResolveAgainstBase;
+    procedure TestDenyOnlyBlockRequestsNothing;
+    procedure TestGoldenHash;
+    procedure TestDescribeRequestAndChange;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -75,6 +85,24 @@ begin
     TestTryHandleCapabilityArgument);
   Test('DescribeCapabilities lists capabilities in prose',
     TestDescribeCapabilities);
+  Test('unsafe-* keys are requests; the nearest file wins',
+    TestUnsafeKeysAreRequests);
+  Test('The hash does not depend on key or scope order',
+    TestHashIgnoresKeyAndScopeOrder);
+  Test('Normalization removes duplicate scopes',
+    TestNormalizationDeduplicates);
+  Test('A capability with an unscoped entry collapses to true',
+    TestUnscopedCollapsesToTrue);
+  Test('./x and its absolute path hash alike',
+    TestRelativeAndAbsoluteScopesHashAlike);
+  Test('JSON, JSON5, and TOML blocks hash alike', TestHashSameAcrossFormats);
+  Test('A base config''s scopes resolve against the base through extends',
+    TestExtendsBaseScopesResolveAgainstBase);
+  Test('A deny-only block requests no grants and still hashes',
+    TestDenyOnlyBlockRequestsNothing);
+  Test('Golden block and hash', TestGoldenHash);
+  Test('Descriptions and changes since a trusted block',
+    TestDescribeRequestAndChange);
 end;
 
 procedure TPermissionsTests.BeforeAll;
@@ -470,6 +498,183 @@ begin
   Expect<string>(DescribeCapabilities([gcRead, gcNet])).ToBe('read and net');
   Expect<string>(DescribeCapabilities(ALL_CAPABILITIES))
     .ToBe('read, net, ffi, and import');
+end;
+
+procedure TPermissionsTests.TestUnsafeKeysAreRequests;
+var
+  Base, Child: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Base := WriteConfig('unsafe/goccia.json',
+    '{"unsafe-function-constructor": true, "unsafe-shadowrealm": true}');
+  Request := ReadRequest(Base);
+  Expect<Boolean>(Request.Unsafe = [gurFunctionConstructor, gurShadowRealm])
+    .ToBe(True);
+  Expect<Boolean>(Request.RequestsGrants).ToBe(True);
+  { A binary that runs no code does not honor them. }
+  Expect<Boolean>(Request.RequestsHonoredGrants(ALL_CAPABILITIES, False))
+    .ToBe(False);
+  Expect<Integer>(Length(UnsupportedRequestWarnings(Request, [], 'Bundler',
+    False))).ToBe(2);
+
+  Child := WriteConfig('unsafe/child/goccia.json',
+    '{"extends": "../goccia.json", "unsafe-shadowrealm": false}');
+  Request := ReadRequest(Child);
+  Expect<Boolean>(Request.Unsafe = [gurFunctionConstructor]).ToBe(True);
+
+  Child := WriteConfig('unsafe/bad/goccia.json',
+    '{"unsafe-shadowrealm": "yes"}');
+  Expect<Boolean>(Pos('"unsafe-shadowrealm" must be true or false',
+    RequestError(Child)) > 0).ToBe(True);
+end;
+
+procedure TPermissionsTests.TestHashIgnoresKeyAndScopeOrder;
+var
+  First, Second: string;
+begin
+  First := WriteConfig('order-a/goccia.json', '{"permissions": {' +
+    '"allow-net": ["b.test", "a.test"], "deny-net": ["10.0.0.0/8"]}, ' +
+    '"unsafe-shadowrealm": true}');
+  Second := WriteConfig('order-b/goccia.json', '{"unsafe-shadowrealm": ' +
+    'true, "permissions": {"deny-net": ["10.0.0.0/8"], ' +
+    '"allow-net": ["a.test", "b.test"]}}');
+  Expect<string>(PermissionBlockHash(ReadRequest(First)))
+    .ToBe(PermissionBlockHash(ReadRequest(Second)));
+  Expect<string>(NormalizedPermissionBlock(ReadRequest(First))).ToBe(
+    '{"permissions":{"allow-net":["a.test","b.test"],' +
+    '"deny-net":["10.0.0.0/8"]},"unsafe":{"unsafe-shadowrealm":true},' +
+    '"version":1}');
+end;
+
+procedure TPermissionsTests.TestNormalizationDeduplicates;
+var
+  Path: string;
+begin
+  Path := WriteConfig('dedupe/goccia.json', '{"permissions": {' +
+    '"allow-net": ["A.test", "a.test", " a.test "], ' +
+    '"allow-read": ["./x", "x", "./x/"]}}');
+  Expect<string>(NormalizedPermissionBlock(ReadRequest(Path))).ToBe(
+    '{"permissions":{"allow-net":["a.test"],"allow-read":["' +
+    FRoot + PathDelim + 'dedupe' + PathDelim + 'x"]},"version":1}');
+end;
+
+procedure TPermissionsTests.TestUnscopedCollapsesToTrue;
+var
+  Path: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('collapse/goccia.json',
+    '{"permissions": {"allow-ffi": true, "deny-read": [], ' +
+    '"deny-net": false}}');
+  Request := ReadRequest(Path);
+  Request.Allow[gcFFI].Scopes := ['/lib/a.so'];
+  Expect<string>(NormalizedPermissionBlock(Request)).ToBe(
+    '{"permissions":{"allow-ffi":true},"version":1}');
+end;
+
+procedure TPermissionsTests.TestRelativeAndAbsoluteScopesHashAlike;
+var
+  Relative, Absolute: string;
+begin
+  Relative := WriteConfig('same/goccia.json',
+    '{"permissions": {"allow-read": ["./x"]}}');
+  Absolute := WriteConfig('same/other/goccia.json',
+    '{"permissions": {"allow-read": ["' +
+    StringReplace(FRoot + PathDelim + 'same' + PathDelim + 'x', '\', '\\',
+      [rfReplaceAll]) + '"]}}');
+  Expect<string>(PermissionBlockHash(ReadRequest(Relative)))
+    .ToBe(PermissionBlockHash(ReadRequest(Absolute)));
+end;
+
+procedure TPermissionsTests.TestHashSameAcrossFormats;
+var
+  JSONPath, JSON5Path, TOMLPath: string;
+begin
+  JSONPath := WriteConfig('formats/json/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"], "allow-read": ["../data"]},' +
+    ' "unsafe-function-constructor": true}');
+  JSON5Path := WriteConfig('formats/json5/goccia.json5',
+    '{permissions: {"allow-read": ["../data"], "allow-net": ["a.test"],},' +
+    ' "unsafe-function-constructor": true}');
+  TOMLPath := WriteConfig('formats/toml/goccia.toml',
+    'unsafe-function-constructor = true' + LineEnding +
+    '[permissions]' + LineEnding +
+    'allow-net = ["a.test"]' + LineEnding +
+    'allow-read = ["../data"]' + LineEnding);
+  Expect<string>(PermissionBlockHash(ReadRequest(JSON5Path)))
+    .ToBe(PermissionBlockHash(ReadRequest(JSONPath)));
+  Expect<string>(PermissionBlockHash(ReadRequest(TOMLPath)))
+    .ToBe(PermissionBlockHash(ReadRequest(JSONPath)));
+end;
+
+procedure TPermissionsTests.TestExtendsBaseScopesResolveAgainstBase;
+var
+  Child, Flat: string;
+begin
+  WriteConfig('extends-hash/goccia.json',
+    '{"permissions": {"allow-read": ["./fixtures"]}}');
+  Child := WriteConfig('extends-hash/child/goccia.json',
+    '{"extends": "../goccia.json", "permissions": {"allow-net": ["a.test"]}}');
+  Flat := WriteConfig('extends-hash/flat/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"], ' +
+    '"allow-read": ["../fixtures"]}}');
+  Expect<string>(PermissionBlockHash(ReadRequest(Child)))
+    .ToBe(PermissionBlockHash(ReadRequest(Flat)));
+end;
+
+procedure TPermissionsTests.TestDenyOnlyBlockRequestsNothing;
+var
+  Path: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('deny-only-hash/goccia.json',
+    '{"permissions": {"deny-net": true, "deny-read": ["./secret"]}}');
+  Request := ReadRequest(Path);
+  Expect<Boolean>(Request.RequestsGrants).ToBe(False);
+  Expect<Boolean>(Request.RequestsHonoredGrants(ALL_CAPABILITIES)).ToBe(False);
+  Expect<Boolean>(Pos('"deny-net":true', NormalizedPermissionBlock(Request))
+    > 0).ToBe(True);
+end;
+
+procedure TPermissionsTests.TestGoldenHash;
+var
+  Path: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('golden/goccia.json', '{"unsafe-function-constructor":' +
+    ' true, "permissions": {"deny-net": ["10.0.0.0/8"], ' +
+    '"allow-net": ["example.com", "127.0.0.1"]}}');
+  Request := ReadRequest(Path);
+  Expect<string>(NormalizedPermissionBlock(Request)).ToBe(
+    '{"permissions":{"allow-net":["127.0.0.1","example.com"],' +
+    '"deny-net":["10.0.0.0/8"]},"unsafe":{"unsafe-function-constructor":' +
+    'true},"version":1}');
+  Expect<string>(PermissionBlockHash(Request)).ToBe(
+    '4ba5043ddf965d0c60e5b1f80f8942c8abb3d5fe38dfd0eff92854c0839f29a2');
+end;
+
+procedure TPermissionsTests.TestDescribeRequestAndChange;
+var
+  Path, Previous: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('describe/goccia.json', '{"permissions": {' +
+    '"allow-net": ["b.test", "a.test"], "allow-ffi": true}, ' +
+    '"unsafe-shadowrealm": true}');
+  Request := ReadRequest(Path);
+  Expect<string>(DescribePermissionRequest(Request, '    ')).ToBe(
+    '    allow-ffi: any library' + sLineBreak +
+    '    allow-net: a.test, b.test' + sLineBreak +
+    '    unsafe-shadowrealm: true' + sLineBreak);
+
+  Previous := '{"permissions":{"allow-ffi":true,"allow-net":["a.test"]},' +
+    '"version":1}';
+  Expect<string>(DescribePermissionChange(Previous, Request, '    ')).ToBe(
+    '  - allow-net: a.test' + sLineBreak +
+    '    allow-ffi: any library' + sLineBreak +
+    '  + allow-net: a.test, b.test' + sLineBreak +
+    '  + unsafe-shadowrealm: true' + sLineBreak);
+  Expect<Integer>(Length(PermissionBlockLines('not json'))).ToBe(0);
 end;
 
 begin

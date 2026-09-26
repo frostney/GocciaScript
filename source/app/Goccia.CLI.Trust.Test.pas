@@ -1,0 +1,709 @@
+program Goccia.CLI.Trust.Test;
+
+{$I Goccia.inc}
+
+uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  Classes,
+  SysUtils,
+
+  CLI.ConfigFile,
+  FileUtils,
+  TestingPascalLibrary,
+
+  Goccia.Capabilities,
+  Goccia.CLI.Application,
+  Goccia.CLI.Permissions,
+  Goccia.CLI.Trust;
+
+type
+  TTrustTests = class(TTestSuite)
+  private
+    FRoot: string;
+    FLoadCount: Integer;
+    function WriteFile(const ARelativePath, AText: string): string;
+    function LoadConfig(const APath: string): TConfigEntryArray;
+    function EntryFor(const AConfigPath: string): TGocciaTrustEntry;
+    function StoreError(const APath: string): string;
+    procedure TestRoundTripLeavesNoTemporaryFile;
+    procedure TestKeysCaseSensitivity;
+    procedure TestSymlinkedConfigKeysToTarget;
+    procedure TestNewerAndCorruptStoresRefused;
+    procedure TestLockContention;
+    procedure TestSaveMergesConcurrentChanges;
+    procedure TestRemoveAtOrUnderRespectsBoundaries;
+    procedure TestDefaultPathPerPlatform;
+    procedure TestGateStatesPerMode;
+    procedure TestGateMemoizesAcrossThreads;
+    procedure TestUntrustedReport;
+    procedure TestFindTrustableConfigs;
+    procedure TestAuditReasons;
+  protected
+    procedure BeforeAll; override;
+    procedure AfterAll; override;
+  public
+    procedure SetupTests; override;
+  end;
+
+  TVerifyThread = class(TThread)
+  private
+    FGate: TGocciaConfigTrustGate;
+    FPath: string;
+    FStates: array of TGocciaConfigTrustState;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AGate: TGocciaConfigTrustGate;
+      const APath: string);
+  end;
+
+var
+  GEnvironment: TStringList;
+
+function FakeEnvironment(const AName: string): string;
+begin
+  Result := GEnvironment.Values[AName];
+end;
+
+constructor TVerifyThread.Create(const AGate: TGocciaConfigTrustGate;
+  const APath: string);
+begin
+  FGate := AGate;
+  FPath := APath;
+  inherited Create(False);
+end;
+
+procedure TVerifyThread.Execute;
+var
+  I: Integer;
+begin
+  SetLength(FStates, 50);
+  for I := 0 to High(FStates) do
+    FStates[I] := FGate.Verify(FPath).State;
+end;
+
+procedure TTrustTests.SetupTests;
+begin
+  Test('Save and Load round-trip without leaving a temporary file',
+    TestRoundTripLeavesNoTemporaryFile);
+  Test('Keys compare case-sensitively unless the platform folds case',
+    TestKeysCaseSensitivity);
+  Test('A config reached through a symlink keys to its target',
+    TestSymlinkedConfigKeysToTarget);
+  Test('Newer and corrupt stores are refused',
+    TestNewerAndCorruptStoresRefused);
+  Test('A held lock fails with a message naming the lock file',
+    TestLockContention);
+  Test('Save applies its changes to the store as it is on disk',
+    TestSaveMergesConcurrentChanges);
+  Test('RemoveAtOrUnder stops at directory boundaries',
+    TestRemoveAtOrUnderRespectsBoundaries);
+  Test('DefaultPath per platform', TestDefaultPathPerPlatform);
+  Test('Gate states per mode', TestGateStatesPerMode);
+  Test('Gate verdicts are decided once across threads',
+    TestGateMemoizesAcrossThreads);
+  Test('The untrusted report', TestUntrustedReport);
+  Test('--trust scanning picks each directory''s effective config',
+    TestFindTrustableConfigs);
+  Test('config.permissions audit decisions and reasons', TestAuditReasons);
+end;
+
+procedure TTrustTests.BeforeAll;
+begin
+  inherited BeforeAll;
+  Randomize;
+  FRoot := ExcludeTrailingPathDelimiter(ExpandFileName(
+    IncludeTrailingPathDelimiter(GetTempDir(False)) + 'goccia-trust-' +
+    IntToStr(GetProcessID) + '-' + IntToStr(Random(MaxInt))));
+  ForceDirectories(FRoot);
+  { Canonical, so keys built from it match the store's. }
+  if CanonicalHostPath(FRoot) <> '' then
+    FRoot := CanonicalHostPath(FRoot);
+  EnsureConfigParsersRegistered;
+end;
+
+procedure DeleteDirectoryTree(const APath: string);
+var
+  SearchRec: TSearchRec;
+  EntryPath: string;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile or
+    faSymLink, SearchRec) = 0 then
+  begin
+    repeat
+      if (SearchRec.Name = '.') or (SearchRec.Name = '..') then
+        Continue;
+      EntryPath := IncludeTrailingPathDelimiter(APath) + SearchRec.Name;
+      if HostPathIsSymlink(EntryPath) then
+        DeleteFile(EntryPath)
+      else if (SearchRec.Attr and faDirectory) = faDirectory then
+        DeleteDirectoryTree(EntryPath)
+      else
+        DeleteFile(EntryPath);
+    until FindNext(SearchRec) <> 0;
+    FindClose(SearchRec);
+  end;
+  RemoveDir(APath);
+end;
+
+procedure TTrustTests.AfterAll;
+begin
+  DeleteDirectoryTree(FRoot);
+  inherited AfterAll;
+end;
+
+function TTrustTests.WriteFile(const ARelativePath, AText: string): string;
+begin
+  Result := FRoot + PathDelim + ARelativePath;
+  ForceDirectories(ExtractFileDir(Result));
+  WriteUTF8FileText(Result, AText);
+end;
+
+function TTrustTests.LoadConfig(const APath: string): TConfigEntryArray;
+begin
+  InterlockedIncrement(FLoadCount);
+  Result := ParseConfigFile(APath);
+end;
+
+function TTrustTests.EntryFor(const AConfigPath: string): TGocciaTrustEntry;
+var
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Request := ReadConfigPermissionRequest(ParseConfigFile(AConfigPath),
+    AConfigPath);
+  Result.ConfigPath := AConfigPath;
+  Result.Hash := PermissionBlockHash(Request);
+  Result.BlockJSON := NormalizedPermissionBlock(Request);
+  Result.TrustedAt := '2026-09-20T10:12:03Z';
+  Result.TrustedBy := 'GocciaTestRunner 0.14.0';
+end;
+
+function TTrustTests.StoreError(const APath: string): string;
+var
+  Store: TGocciaTrustStore;
+begin
+  Result := '';
+  try
+    Store := TGocciaTrustStore.Load(APath);
+    Store.Free;
+  except
+    on E: EGocciaTrustStoreError do
+      Result := E.Message;
+  end;
+end;
+
+procedure TTrustTests.TestRoundTripLeavesNoTemporaryFile;
+var
+  StorePath, ConfigPath: string;
+  Store: TGocciaTrustStore;
+  Entry, Found: TGocciaTrustEntry;
+  SearchRec: TSearchRec;
+  Names: string;
+  {$IFDEF UNIX}
+  Info: Stat;
+  {$ENDIF}
+begin
+  StorePath := FRoot + PathDelim + 'roundtrip' + PathDelim + 'store' +
+    PathDelim + 'trust.json';
+  ConfigPath := WriteFile('roundtrip/project/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"], "allow-read": ["./data"]},' +
+    ' "unsafe-shadowrealm": true}');
+  Entry := EntryFor(ConfigPath);
+
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Expect<Integer>(Store.Count).ToBe(0);
+    Store.Put(Entry);
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+
+  Names := '';
+  if FindFirst(ExtractFilePath(StorePath) + '*', faAnyFile, SearchRec) = 0 then
+  begin
+    repeat
+      if (SearchRec.Name <> '.') and (SearchRec.Name <> '..') then
+        Names := Names + SearchRec.Name + ';';
+    until FindNext(SearchRec) <> 0;
+    FindClose(SearchRec);
+  end;
+  Expect<string>(Names).ToBe('trust.json;');
+  {$IFDEF UNIX}
+  Expect<Integer>(FpStat(StorePath, Info)).ToBe(0);
+  Expect<Integer>(Info.st_mode and &777).ToBe(&600);
+  Expect<Integer>(FpStat(ExtractFileDir(StorePath), Info)).ToBe(0);
+  Expect<Integer>(Info.st_mode and &777).ToBe(&700);
+  {$ENDIF}
+
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Expect<Integer>(Store.Count).ToBe(1);
+    Expect<Boolean>(Store.TryFind(ConfigPath, Found)).ToBe(True);
+    Expect<string>(Found.Hash).ToBe(Entry.Hash);
+    Expect<string>(Found.BlockJSON).ToBe(Entry.BlockJSON);
+    Expect<string>(Found.TrustedAt).ToBe(Entry.TrustedAt);
+    Expect<string>(Found.TrustedBy).ToBe(Entry.TrustedBy);
+  finally
+    Store.Free;
+  end;
+end;
+
+procedure TTrustTests.TestKeysCaseSensitivity;
+var
+  Sensitive, Insensitive: TGocciaTrustStore;
+  Entry, Found: TGocciaTrustEntry;
+  Lower: string;
+begin
+  { Paths that do not exist key to their expanded spelling. }
+  Entry := Default(TGocciaTrustEntry);
+  Entry.ConfigPath := FRoot + PathDelim + 'Case' + PathDelim + 'goccia.json';
+  Entry.Hash := 'abc';
+  Lower := FRoot + PathDelim + 'case' + PathDelim + 'goccia.json';
+
+  Sensitive := TGocciaTrustStore.Create(FRoot + PathDelim + 's.json', False);
+  Insensitive := TGocciaTrustStore.Create(FRoot + PathDelim + 'i.json', True);
+  try
+    Sensitive.Put(Entry);
+    Insensitive.Put(Entry);
+    Expect<Boolean>(Sensitive.TryFind(Entry.ConfigPath, Found)).ToBe(True);
+    Expect<Boolean>(Sensitive.TryFind(Lower, Found)).ToBe(False);
+    Expect<Boolean>(Insensitive.TryFind(Lower, Found)).ToBe(True);
+  finally
+    Sensitive.Free;
+    Insensitive.Free;
+  end;
+  Expect<Boolean>(TRUST_KEYS_CASE_INSENSITIVE).ToBe(
+    {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}True{$ELSE}False{$IFEND});
+end;
+
+procedure TTrustTests.TestSymlinkedConfigKeysToTarget;
+{$IFDEF UNIX}
+var
+  Target, Link: string;
+  Store: TGocciaTrustStore;
+  Entry, Found: TGocciaTrustEntry;
+begin
+  Target := WriteFile('symlink/real/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"]}}');
+  Link := FRoot + PathDelim + 'symlink' + PathDelim + 'linked';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(FRoot + PathDelim + 'symlink' +
+    PathDelim + 'real')), PAnsiChar(AnsiString(Link)))).ToBe(0);
+  Entry := EntryFor(Link + PathDelim + 'goccia.json');
+  Store := TGocciaTrustStore.Create(FRoot + PathDelim + 'sym.json', False);
+  try
+    Store.Put(Entry);
+    Expect<Boolean>(Store.TryFind(Target, Found)).ToBe(True);
+    Expect<string>(Found.ConfigPath).ToBe(Target);
+    Expect<string>(TrustKeyForPath(Link + PathDelim + 'goccia.json'))
+      .ToBe(Target);
+  finally
+    Store.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestNewerAndCorruptStoresRefused;
+var
+  Newer, Corrupt, Unversioned: string;
+begin
+  Newer := WriteFile('refused/newer.json',
+    '{"version": 2, "trusted": {}, "future": [1, 2]}');
+  Expect<string>(StoreError(Newer)).ToBe('trust store ' + Newer +
+    ' was written by a newer GocciaScript (version 2); upgrade ' +
+    'GocciaScript or remove the file');
+  Corrupt := WriteFile('refused/corrupt.json', '{"version": 1, "trusted": ');
+  Expect<string>(StoreError(Corrupt)).ToBe('trust store ' + Corrupt +
+    ' is not valid JSON; fix or delete it');
+  Unversioned := WriteFile('refused/unversioned.json', '{"trusted": {}}');
+  Expect<Boolean>(Pos('has no valid "version"', StoreError(Unversioned)) > 0)
+    .ToBe(True);
+end;
+
+procedure TTrustTests.TestLockContention;
+var
+  StorePath, Message: string;
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+begin
+  StorePath := WriteFile('locked/trust.json', '{"version": 1, "trusted": {}}');
+  WriteFile('locked/trust.json.lock', '');
+  Entry := Default(TGocciaTrustEntry);
+  Entry.ConfigPath := FRoot + PathDelim + 'locked' + PathDelim + 'goccia.json';
+  Entry.Hash := 'abc';
+  Message := '';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(Entry);
+    try
+      Store.Save;
+    except
+      on E: EGocciaTrustStoreError do
+        Message := E.Message;
+    end;
+  finally
+    Store.Free;
+  end;
+  Expect<string>(Message).ToBe('trust store ' + StorePath + ' is locked by ' +
+    'another process (' + StorePath + '.lock exists); retry, or delete ' +
+    StorePath + '.lock if no GocciaScript process is updating the store');
+  { The store is untouched and the other writer's lock is left alone. }
+  Expect<string>(ReadUTF8FileText(StorePath))
+    .ToBe('{"version": 1, "trusted": {}}');
+  Expect<Boolean>(FileExists(StorePath + '.lock')).ToBe(True);
+end;
+
+procedure TTrustTests.TestSaveMergesConcurrentChanges;
+var
+  StorePath: string;
+  First, Second, Check: TGocciaTrustStore;
+  A, B: TGocciaTrustEntry;
+begin
+  StorePath := FRoot + PathDelim + 'merge' + PathDelim + 'trust.json';
+  A := Default(TGocciaTrustEntry);
+  A.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'a.json';
+  A.Hash := 'a';
+  B := A;
+  B.ConfigPath := FRoot + PathDelim + 'merge' + PathDelim + 'b.json';
+  B.Hash := 'b';
+  First := TGocciaTrustStore.Load(StorePath);
+  Second := TGocciaTrustStore.Load(StorePath);
+  try
+    First.Put(A);
+    Second.Put(B);
+    First.Save;
+    Second.Save;
+  finally
+    First.Free;
+    Second.Free;
+  end;
+  Check := TGocciaTrustStore.Load(StorePath);
+  try
+    Expect<Integer>(Check.Count).ToBe(2);
+  finally
+    Check.Free;
+  end;
+end;
+
+procedure TTrustTests.TestRemoveAtOrUnderRespectsBoundaries;
+var
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+  Removed: TStringList;
+  Base: string;
+
+  procedure PutAt(const ARelative: string);
+  begin
+    Entry.ConfigPath := Base + PathDelim + ARelative;
+    Store.Put(Entry);
+  end;
+
+begin
+  Base := FRoot + PathDelim + 'remove';
+  Entry := Default(TGocciaTrustEntry);
+  Entry.Hash := 'abc';
+  Store := TGocciaTrustStore.Create(FRoot + PathDelim + 'remove.json', False);
+  Removed := TStringList.Create;
+  try
+    PutAt('a' + PathDelim + 'b' + PathDelim + 'goccia.json');
+    PutAt('a' + PathDelim + 'bc' + PathDelim + 'goccia.json');
+    PutAt('a' + PathDelim + 'goccia.json');
+    Expect<Integer>(Store.RemoveAtOrUnder(Base + PathDelim + 'a' + PathDelim +
+      'b', Removed)).ToBe(1);
+    Expect<string>(Removed[0]).ToBe(Base + PathDelim + 'a' + PathDelim + 'b' +
+      PathDelim + 'goccia.json');
+    Expect<Integer>(Store.RemoveAtOrUnder(Base + PathDelim + 'a' + PathDelim +
+      'goccia.json', nil)).ToBe(1);
+    Expect<Integer>(Store.RemoveAtOrUnder(Base + PathDelim + 'a' + PathDelim +
+      'b', nil)).ToBe(0);
+    Expect<Integer>(Store.RemoveAtOrUnder(Base, nil)).ToBe(1);
+    Expect<Integer>(Store.Count).ToBe(0);
+  finally
+    Removed.Free;
+    Store.Free;
+  end;
+end;
+
+procedure TTrustTests.TestDefaultPathPerPlatform;
+begin
+  GEnvironment.Clear;
+  GEnvironment.Values['HOME'] := '/home/u';
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspUnix, @FakeEnvironment))
+    .ToBe('/home/u/.config/goccia/trust.json');
+  GEnvironment.Values['XDG_CONFIG_HOME'] := '/xdg/';
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspUnix, @FakeEnvironment))
+    .ToBe('/xdg/goccia/trust.json');
+  GEnvironment.Values['XDG_CONFIG_HOME'] := 'relative';
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspUnix, @FakeEnvironment))
+    .ToBe('/home/u/.config/goccia/trust.json');
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspDarwin,
+    @FakeEnvironment)).ToBe(
+    '/home/u/Library/Application Support/Goccia/trust.json');
+  GEnvironment.Values['APPDATA'] := 'C:\Users\u\AppData\Roaming\';
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspWindows,
+    @FakeEnvironment)).ToBe('C:\Users\u\AppData\Roaming\Goccia\trust.json');
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspNone,
+    @FakeEnvironment)).ToBe('');
+
+  GEnvironment.Clear;
+  Expect<string>(TGocciaTrustStore.DefaultPathFor(gtspUnix, @FakeEnvironment))
+    .ToBe('');
+  Expect<string>(TGocciaTrustStore.DefaultPathProblem(gtspUnix,
+    @FakeEnvironment)).ToBe('HOME is not set');
+  Expect<string>(TGocciaTrustStore.DefaultPathProblem(gtspWindows,
+    @FakeEnvironment)).ToBe('APPDATA is not set');
+  Expect<string>(TGocciaTrustStore.DefaultPathProblem(gtspNone,
+    @FakeEnvironment)).ToBe('this build has no per-user trust store');
+end;
+
+procedure TTrustTests.TestGateStatesPerMode;
+var
+  ConfigPath, DenyOnly, StorePath: string;
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+
+  function StateIn(const AMode: TGocciaConfigTrustMode;
+    const AHonored: TGocciaHonoredCapabilities;
+    const APath: string): TGocciaConfigTrustState;
+  var
+    Gate: TGocciaConfigTrustGate;
+  begin
+    Gate := TGocciaConfigTrustGate.Create(StorePath, '', AMode, AHonored,
+      True, LoadConfig);
+    try
+      Result := Gate.Verify(APath).State;
+    finally
+      Gate.Free;
+    end;
+  end;
+
+begin
+  ConfigPath := WriteFile('gate/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"], "deny-read": true}}');
+  DenyOnly := WriteFile('gate/deny/goccia.json',
+    '{"permissions": {"deny-net": true}}');
+  StorePath := FRoot + PathDelim + 'gate' + PathDelim + 'trust.json';
+
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, ConfigPath) =
+    ctsNotTrusted).ToBe(True);
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, DenyOnly) =
+    ctsNoRequest).ToBe(True);
+  Expect<Boolean>(StateIn(ctmStore, [gcRead], ConfigPath) =
+    ctsNotHonored).ToBe(True);
+  Expect<Boolean>(StateIn(ctmAcceptForRun, ALL_CAPABILITIES, ConfigPath) =
+    ctsAcceptedForRun).ToBe(True);
+  Expect<Boolean>(StateIn(ctmIgnoreConfig, ALL_CAPABILITIES, ConfigPath) =
+    ctsIgnored).ToBe(True);
+  { -P never reads the store: a corrupt one does not matter. }
+  WriteFile('gate/trust.json', 'not json');
+  Expect<Boolean>(StateIn(ctmAcceptForRun, ALL_CAPABILITIES, ConfigPath) =
+    ctsAcceptedForRun).ToBe(True);
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, ConfigPath) =
+    ctsNotTrusted).ToBe(True);
+  DeleteFile(StorePath);
+
+  Entry := EntryFor(ConfigPath);
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(Entry);
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, ConfigPath) =
+    ctsTrusted).ToBe(True);
+
+  WriteFile('gate/goccia.json',
+    '{"permissions": {"allow-net": ["a.test", "b.test"], "deny-read": true}}');
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, ConfigPath) =
+    ctsChanged).ToBe(True);
+
+  { The same block at another path is not trusted. }
+  Expect<Boolean>(StateIn(ctmStore, ALL_CAPABILITIES, WriteFile(
+    'gate/copy/goccia.json', '{"permissions": {"allow-net": ["a.test"], ' +
+    '"deny-read": true}}')) = ctsNotTrusted).ToBe(True);
+end;
+
+procedure TTrustTests.TestGateMemoizesAcrossThreads;
+var
+  Gate: TGocciaConfigTrustGate;
+  First, Second: TVerifyThread;
+  ConfigPath: string;
+  I: Integer;
+begin
+  ConfigPath := WriteFile('threads/goccia.json',
+    '{"permissions": {"allow-net": ["a.test"]}}');
+  FLoadCount := 0;
+  Gate := TGocciaConfigTrustGate.Create('', '', ctmAcceptForRun,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    First := TVerifyThread.Create(Gate, ConfigPath);
+    Second := TVerifyThread.Create(Gate, ConfigPath);
+    First.WaitFor;
+    Second.WaitFor;
+    for I := 0 to High(First.FStates) do
+    begin
+      Expect<Boolean>(First.FStates[I] = ctsAcceptedForRun).ToBe(True);
+      Expect<Boolean>(Second.FStates[I] = ctsAcceptedForRun).ToBe(True);
+    end;
+    First.Free;
+    Second.Free;
+    Expect<Integer>(FLoadCount).ToBe(1);
+  finally
+    Gate.Free;
+  end;
+end;
+
+procedure TTrustTests.TestUntrustedReport;
+var
+  Fetch, FFI: TGocciaConfigTrustVerdict;
+  Report: string;
+  Many: array of TGocciaConfigTrustVerdict;
+  I: Integer;
+begin
+  Fetch := Default(TGocciaConfigTrustVerdict);
+  Fetch.ConfigPath := FRoot + PathDelim + 'report' + PathDelim + 'fetch' +
+    PathDelim + 'goccia.json';
+  Fetch.State := ctsNotTrusted;
+  Fetch.Request.Allow[gcNet].Declared := True;
+  Fetch.Request.Allow[gcNet].Scopes := ['127.0.0.1', 'example.com'];
+
+  FFI := Default(TGocciaConfigTrustVerdict);
+  FFI.ConfigPath := FRoot + PathDelim + 'report' + PathDelim + 'ffi' +
+    PathDelim + 'goccia.json';
+  FFI.State := ctsChanged;
+  FFI.Previous.TrustedAt := '2026-09-20T10:12:03Z';
+  FFI.Previous.BlockJSON :=
+    '{"permissions":{"allow-ffi":["/lib/ffi"]},"version":1}';
+  FFI.Request.Allow[gcFFI].Declared := True;
+  FFI.Request.Allow[gcFFI].Scopes := ['/lib/ffi'];
+  FFI.Request.Allow[gcRead].Declared := True;
+  FFI.Request.Allow[gcRead].Scopes := ['/lib/modules'];
+
+  Report := FormatUntrustedReport([Fetch, FFI], 'GocciaTestRunner',
+    '/home/u/.config/goccia/trust.json', '', '', ['report', '--mode=bytecode'],
+    FRoot);
+  Expect<string>(Report).ToBe(
+    '2 config files request permissions that have not been trusted:' +
+    sLineBreak + sLineBreak +
+    '  report' + PathDelim + 'fetch' + PathDelim + 'goccia.json ' +
+    '(never trusted)' + sLineBreak +
+    '    allow-net: 127.0.0.1, example.com' + sLineBreak + sLineBreak +
+    '  report' + PathDelim + 'ffi' + PathDelim + 'goccia.json ' +
+    '(changed since trusted 2026-09-20T10:12:03Z)' + sLineBreak +
+    '    allow-ffi: /lib/ffi' + sLineBreak +
+    '  + allow-read: /lib/modules' + sLineBreak + sLineBreak +
+    'Nothing was run. To trust these requests (stored in ' +
+    '/home/u/.config/goccia/trust.json):' + sLineBreak +
+    '  GocciaTestRunner --trust report' + PathDelim + 'fetch' + PathDelim +
+    'goccia.json --trust report' + PathDelim + 'ffi' + PathDelim +
+    'goccia.json' + sLineBreak +
+    'To accept them for this run only:' + sLineBreak +
+    '  GocciaTestRunner -P report --mode=bytecode' + sLineBreak +
+    'To run with command-line grants only:' + sLineBreak +
+    '  GocciaTestRunner --ignore-config-permissions report --mode=bytecode');
+
+  { More than three configs are trusted through their common directory. }
+  SetLength(Many, 4);
+  for I := 0 to High(Many) do
+  begin
+    Many[I] := Fetch;
+    Many[I].ConfigPath := FRoot + PathDelim + 'report' + PathDelim +
+      IntToStr(I) + PathDelim + 'goccia.json';
+  end;
+  Report := FormatUntrustedReport(Many, 'GocciaTestRunner', '', 'HOME is ' +
+    'not set', '', ['report'], FRoot);
+  Expect<Boolean>(Pos('4 config files request', Report) = 1).ToBe(True);
+  Expect<Boolean>(Pos('The per-user trust store cannot be located (HOME is ' +
+    'not set); to trust these requests, name a store:' + sLineBreak +
+    '  GocciaTestRunner --trust-store=<path> --trust report' + PathDelim,
+    Report) > 0).ToBe(True);
+
+  { An unreadable store is named, and --trust-store is echoed. }
+  Report := FormatUntrustedReport([Fetch], 'GocciaTestRunner', '/s.json',
+    'trust store /s.json is not valid JSON; fix or delete it', '/s.json',
+    ['a b'], FRoot);
+  Expect<Boolean>(Pos('1 config file requests', Report) = 1).ToBe(True);
+  Expect<Boolean>(Pos('Nothing was run. trust store /s.json is not valid ' +
+    'JSON; fix or delete it. Then, to trust these requests:' + sLineBreak +
+    '  GocciaTestRunner --trust-store=/s.json --trust', Report) > 0)
+    .ToBe(True);
+  {$IFNDEF MSWINDOWS}
+  Expect<Boolean>(Pos('GocciaTestRunner -P ''a b''', Report) > 0).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TTrustTests.TestFindTrustableConfigs;
+var
+  Configs: TStringList;
+  Base: string;
+begin
+  Base := FRoot + PathDelim + 'scan';
+  WriteFile('scan/goccia.json', '{}');
+  WriteFile('scan/goccia.toml', '');
+  WriteFile('scan/a/goccia.json5', '{}');
+  WriteFile('scan/a/goccia.json', '{}');
+  WriteFile('scan/b/other.json', '{}');
+  WriteFile('scan/node_modules/p/goccia.json', '{}');
+  WriteFile('scan/.git/goccia.json', '{}');
+  Configs := TStringList.Create;
+  try
+    FindTrustableConfigs(Base, Configs);
+    Expect<Integer>(Configs.Count).ToBe(2);
+    Expect<string>(Configs[0]).ToBe(Base + PathDelim + 'goccia.toml');
+    Expect<string>(Configs[1]).ToBe(Base + PathDelim + 'a' + PathDelim +
+      'goccia.json5');
+    Configs.Clear;
+    FindTrustableConfigs(Base + PathDelim + 'b' + PathDelim + 'other.json',
+      Configs);
+    Expect<Integer>(Configs.Count).ToBe(1);
+  finally
+    Configs.Free;
+  end;
+end;
+
+procedure TTrustTests.TestAuditReasons;
+var
+  Verdict: TGocciaConfigTrustVerdict;
+begin
+  Verdict := Default(TGocciaConfigTrustVerdict);
+  Verdict.Hash := 'abc';
+  Verdict.State := ctsTrusted;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'P')).ToBe(
+    'trusted sha256:abc');
+  Expect<Boolean>(ConfigTrustAuditAllows(Verdict)).ToBe(True);
+  Verdict.State := ctsAcceptedForRun;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'P')).ToBe(
+    'accepted for this run (-P)');
+  Verdict.State := ctsNotHonored;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'GocciaBundler')).ToBe(
+    'not needed: GocciaBundler honors none of these requests');
+  Expect<Boolean>(ConfigTrustAuditAllows(Verdict)).ToBe(True);
+  Verdict.State := ctsNotTrusted;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'P')).ToBe('not trusted');
+  Expect<Boolean>(ConfigTrustAuditAllows(Verdict)).ToBe(False);
+  Verdict.State := ctsChanged;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'P')).ToBe(
+    'changed since trusted');
+  Verdict.State := ctsIgnored;
+  Expect<string>(ConfigTrustAuditReason(Verdict, 'P')).ToBe(
+    'ignored (--ignore-config-permissions)');
+  Expect<Boolean>(ConfigTrustAuditAllows(Verdict)).ToBe(False);
+  Expect<Boolean>(Verdict.GrantsAccepted).ToBe(False);
+end;
+
+begin
+  GEnvironment := TStringList.Create;
+  try
+    TestRunnerProgram.AddSuite(TTrustTests.Create('CLI Trust'));
+    TestRunnerProgram.Run;
+  finally
+    GEnvironment.Free;
+  end;
+  ExitCode := TestResultToExitCode;
+end.
