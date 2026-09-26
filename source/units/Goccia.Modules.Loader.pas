@@ -98,6 +98,10 @@ type
       const AIsLiteral, AIsHostOwned, APreResolution: Boolean);
     procedure PreCheckHostRead(const ASpecifier, AImportingFilePath: string;
       const AIsLiteral: Boolean);
+    function TryHostCandidate(const ASpecifier, AImportingFilePath: string;
+      out ACandidate: string): Boolean;
+    function MayProbeHostPath(const ASpecifier,
+      AImportingFilePath: string): Boolean;
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
 
     procedure CopyModuleContents(const ASourceModule,
@@ -801,21 +805,26 @@ begin
       'a read grant covers the path');
 end;
 
-procedure TGocciaModuleLoader.PreCheckHostRead(const ASpecifier,
-  AImportingFilePath: string; const AIsLiteral: Boolean);
+{ The lexical host candidate for a relative or absolute specifier that the
+  resolver would probe the host for; False for anything else (virtual
+  modules, aliases, bare specifiers, host-owned importers). }
+function TGocciaModuleLoader.TryHostCandidate(const ASpecifier,
+  AImportingFilePath: string; out ACandidate: string): Boolean;
 var
-  BaseDirectory, Candidate, VirtualAddress: string;
+  BaseDirectory, VirtualAddress: string;
 begin
+  ACandidate := '';
+  Result := False;
   if not EnforcesHostReads then
     Exit;
   if IsAbsoluteHostPath(ASpecifier) then
-    Candidate := ASpecifier
+    ACandidate := ASpecifier
   else if StartsStr('./', ASpecifier) or StartsStr('../', ASpecifier) then
   begin
     BaseDirectory := ExtractFilePath(AImportingFilePath);
     if BaseDirectory = '' then
       BaseDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
-    Candidate := BaseDirectory + ASpecifier;
+    ACandidate := BaseDirectory + ASpecifier;
   end
   else
     Exit;
@@ -827,8 +836,37 @@ begin
     Exit;
   if IsHostOwnedImporter(AImportingFilePath) then
     Exit;
-  EnforceHostRead(ASpecifier, ExpandFileName(Candidate), AIsLiteral, False,
-    True);
+  ACandidate := ExpandFileName(ACandidate);
+  Result := True;
+end;
+
+procedure TGocciaModuleLoader.PreCheckHostRead(const ASpecifier,
+  AImportingFilePath: string; const AIsLiteral: Boolean);
+var
+  Candidate: string;
+begin
+  if TryHostCandidate(ASpecifier, AImportingFilePath, Candidate) then
+    EnforceHostRead(ASpecifier, Candidate, AIsLiteral, False, True);
+end;
+
+{ The non-throwing form of PreCheckHostRead for callers that only learn
+  whether a file exists (import.meta.resolve): True when probing the host for
+  the specifier reveals nothing the engine may not read. Inside the project
+  the module-graph exemption already exposes existence to a literal import. }
+function TGocciaModuleLoader.MayProbeHostPath(const ASpecifier,
+  AImportingFilePath: string): Boolean;
+var
+  Candidate: string;
+begin
+  if not TryHostCandidate(ASpecifier, AImportingFilePath, Candidate) then
+    Exit(True);
+  Candidate := CanonicalCapabilityPath(Candidate);
+  if FCapabilities.DeniesPath(gcRead, Candidate) then
+    Exit(False);
+  if (FProjectRoot <> '') and IsPathWithinScope(Candidate, FProjectRoot) then
+    Exit(True);
+  Result := FCapabilities.AllowsPath(gcRead, Candidate) or
+    FCapabilities.AllowsPath(gcRead, ExtractFileDir(Candidate));
 end;
 
 function TGocciaModuleLoader.ResolveModuleRequestWithAttribute(
@@ -1044,12 +1082,15 @@ begin
       Exit(VirtualCandidate);
   end;
 
-  try
-    ResolvedAddress := ResolveModuleAddress(AModulePath, AImportingFilePath);
-    Exit(FilePathToUrl(ResolvedAddress));
-  except
-    on E: Exception do;
-  end;
+  { Resolution probes the host for extensions and index files; outside what
+    the engine may read, answer lexically so existence stays hidden. }
+  if MayProbeHostPath(AModulePath, AImportingFilePath) then
+    try
+      ResolvedAddress := ResolveModuleAddress(AModulePath, AImportingFilePath);
+      Exit(FilePathToUrl(ResolvedAddress));
+    except
+      on E: Exception do;
+    end;
 
   if (AModulePath <> '') and
      ((AModulePath[1] = '/') or (AModulePath[1] = '\') or

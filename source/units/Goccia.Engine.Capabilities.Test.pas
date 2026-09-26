@@ -75,6 +75,7 @@ type
     procedure TestFFIRefusesWithoutGrant;
     procedure TestFFIOpenChecksLibraryScopes;
     procedure TestFFIBareNamesNeedAnUnscopedGrant;
+    procedure TestImportMetaResolveDoesNotProbeOutsideTheGrant;
     function OpenLibrary(const ALibrary: string;
       const ACapabilities: TGocciaCapabilities): TRunOutcome;
     procedure TestNodeModulesDenyThrowsPermissionDenied;
@@ -114,6 +115,8 @@ begin
     TestFFIOpenChecksLibraryScopes);
   Test('A bare library name needs an unscoped ffi grant and no deny scope',
     TestFFIBareNamesNeedAnUnscopedGrant);
+  Test('import.meta.resolve does not probe the host outside the read grant',
+    TestImportMetaResolveDoesNotProbeOutsideTheGrant);
   Test('A node_modules deny throws PermissionDenied',
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
@@ -586,6 +589,28 @@ begin
     TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
   Expect<string>(Outcome.ErrorName).ToBe('TypeError');
   Expect<Boolean>(Pos(GetCurrentDir, Outcome.ErrorMessage) > 0).ToBe(False);
+end;
+
+{ Resolution probes the host for extensions and index files, so resolving an
+  existing file differs from resolving a missing one. Outside what the
+  engine may read, import.meta.resolve must answer without probing, so the
+  two are indistinguishable. Inside the project it still probes. }
+procedure TEngineCapabilitiesTests.TestImportMetaResolveDoesNotProbeOutsideTheGrant;
+const
+  SOURCE_TEXT =
+    'globalThis.result = [' +
+    'import.meta.resolve("../outside/secret"),' +
+    'import.meta.resolve("../outside/missing"),' +
+    'import.meta.resolve("./lib")].map((u) => u.split("/").pop()).join("|");';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None);
+  Expect<string>(Outcome.ErrorMessage).ToBe('');
+  Expect<string>(Outcome.Result).ToBe('secret|missing|lib.js');
+  Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead,
+    FOutside));
+  Expect<string>(Outcome.Result).ToBe('secret.js|missing|lib.js');
 end;
 
 procedure TEngineCapabilitiesTests.TestNodeModulesDenyThrowsPermissionDenied;
