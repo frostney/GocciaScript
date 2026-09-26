@@ -1067,6 +1067,22 @@ console.log("Trust follows each file's own config...");
     expectExit(bundled, 0, "Bundler with unsafe config");
     expectIncludes(bundled.stderr, "requests unsafe-function-constructor, which GocciaBundler cannot grant; ignoring it", "Bundler warns");
 
+    // The bundler checks every file argument's config before emitting any:
+    // no partial output, and an audit event for a single file too.
+    mkdirSync(join(tmp, "bundle", "good"), { recursive: true });
+    mkdirSync(join(tmp, "bundle", "bad"), { recursive: true });
+    writeFileSync(join(tmp, "bundle", "good", "a.js"), "1;\n");
+    writeFileSync(join(tmp, "bundle", "bad", "b.js"), "2;\n");
+    writeFileSync(join(tmp, "bundle", "bad", "goccia.json"), '{"permissions": {"deny-nett": true}}\n');
+    mkdirSync(join(tmp, "bundle", "out"));
+    const partial = run(BUNDLER, [join("bundle", "good", "a.js"), join("bundle", "bad", "b.js"), `--output=${join("bundle", "out")}`], { cwd: tmp });
+    expectExit(partial, 2, "Bundler with a malformed config among its files");
+    if (existsSync(join(tmp, "bundle", "out", "a.gbc"))) throw new Error("The bundler emitted a.gbc before refusing b's config");
+    const bundleAudit = run(BUNDLER, [join("unsafe", "main.js"), "--output=single.gbc", "--audit-log=bundle.jsonl"], { cwd: tmp });
+    expectExit(bundleAudit, 0, "Bundler audit for a single file");
+    const bundleEvents = readFileSync(join(tmp, "bundle.jsonl"), "utf8");
+    expectIncludes(bundleEvents, '"kind":"config.permissions"', "Bundler audits a single file's config");
+
     // 17. The REPL refuses before its prompt.
     const repl = run(REPL, ["--trust-store=trust.json"], { cwd: join(tmp, "unsafe"), stdin: "1 + 1\n" });
     expectExit(repl, 2, "REPL with an untrusted config");
