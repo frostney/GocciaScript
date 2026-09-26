@@ -48,6 +48,11 @@ type
       implementation reuses LoadContent; providers backed by exact byte storage
       should override it to avoid the UTF-8/source-line round trip. }
     function LoadContentBytes(const APath: string): TBytes; virtual;
+
+    { True when this provider reads the host filesystem, which makes every
+      module it loads subject to the engine's read capability. Providers over
+      memory, archives, or a sandbox filesystem leave it False. }
+    function ReadsHostFileSystem: Boolean; virtual;
   end;
 
   TGocciaUnavailableModuleContentProvider = class(TGocciaModuleContentProvider)
@@ -65,6 +70,7 @@ type
     function LoadContentBytes(const APath: string): TBytes; override;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; override;
+    function ReadsHostFileSystem: Boolean; override;
   end;
 
 implementation
@@ -140,6 +146,11 @@ begin
   finally
     Content.Free;
   end;
+end;
+
+function TGocciaModuleContentProvider.ReadsHostFileSystem: Boolean;
+begin
+  Result := False;
 end;
 
 { TGocciaUnavailableModuleContentProvider }
@@ -233,6 +244,11 @@ function TGocciaFileSystemModuleContentProvider.LoadContentBytes(
   const APath: string): TBytes;
 begin
   Result := ReadFileBytes(APath);
+end;
+
+function TGocciaFileSystemModuleContentProvider.ReadsHostFileSystem: Boolean;
+begin
+  Result := True;
 end;
 
 function TGocciaFileSystemModuleContentProvider.TryGetLastModified(

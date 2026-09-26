@@ -13,6 +13,8 @@ const
   PROP_MESSAGE      = 'message';
   PROP_CAUSE        = 'cause';
   PROP_CODE         = 'code';
+  PROP_CAPABILITY   = 'capability';
+  PROP_SCOPE        = 'scope';
   PROP_ERRNO        = 'errno';
   PROP_SYSCALL      = 'syscall';
   PROP_DEST         = 'dest';

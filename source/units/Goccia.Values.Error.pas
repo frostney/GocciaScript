@@ -18,12 +18,18 @@ type
   private
     FValue: TGocciaValue;
     FSuggestion: string;
+    FSuggestionIsHostOnly: Boolean;
   public
     constructor Create(const AValue: TGocciaValue); overload;
     constructor Create(const AValue: TGocciaValue;
-      const ASuggestion: string); overload;
+      const ASuggestion: string;
+      const ASuggestionIsHostOnly: Boolean = False); overload;
     property Value: TGocciaValue read FValue;
     property Suggestion: string read FSuggestion;
+    { True when Suggestion is host-side advice (a PermissionDenied's grant,
+      option, or canonical path). Output handed back to guest code must
+      never carry such a suggestion. }
+    property SuggestionIsHostOnly: Boolean read FSuggestionIsHostOnly;
   end;
 
 implementation
@@ -35,14 +41,16 @@ begin
   inherited Create('');
   FValue := AValue;
   FSuggestion := '';
+  FSuggestionIsHostOnly := False;
 end;
 
 constructor TGocciaThrowValue.Create(const AValue: TGocciaValue;
-  const ASuggestion: string);
+  const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
 begin
   inherited Create('');
   FValue := AValue;
   FSuggestion := ASuggestion;
+  FSuggestionIsHostOnly := ASuggestionIsHostOnly;
 end;
 
 end.

@@ -127,38 +127,6 @@ end;
 { allowed-hosts: per-file config > empty (fetch blocked) — the
   ApplyFileConfigToEngine rule without the CLI arm. The empty-value
   sentinel of a merged extends chain stops accumulation. }
-procedure ApplyAllowedHosts(const AEngine: TGocciaEngine;
-  const AFileConfig: TConfigEntryArray);
-var
-  Hosts: TStringList;
-  Index: Integer;
-  HasHosts: Boolean;
-begin
-  HasHosts := False;
-  for Index := 0 to High(AFileConfig) do
-    if AFileConfig[Index].Key = 'allowed-hosts' then
-    begin
-      HasHosts := True;
-      Break;
-    end;
-  if not HasHosts then
-    Exit;
-
-  Hosts := TStringList.Create;
-  try
-    for Index := 0 to High(AFileConfig) do
-      if AFileConfig[Index].Key = 'allowed-hosts' then
-      begin
-        if AFileConfig[Index].Value = '' then
-          Break;
-        Hosts.Add(AFileConfig[Index].Value);
-      end;
-    AEngine.SetAllowedFetchHosts(Hosts);
-  finally
-    Hosts.Free;
-  end;
-end;
-
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -277,7 +245,11 @@ begin
 
       Executor := TGocciaInterpreterExecutor.Create;
       try
-        Engine := TGocciaEngine.Create(AFileName, Source, Executor);
+        { The set mirrors what this runner has always honored: host module
+          loading, the per-file allowed hosts, and per-file FFI. }
+        Engine := TGocciaEngine.Create(AFileName, Source, Executor,
+          ResolveCapabilities(EngineOptions, FileConfig, '', '',
+            [gcoHostFileLoading, gcoAllowedHosts, gcoUnsafeFFI]));
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
           ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
@@ -292,10 +264,8 @@ begin
 
           Core := AttachRuntime(Engine);
           ApplyTestRunnerRuntimeProfile(Core);
-          ApplyAllowedHosts(Engine, FileConfig);
           {$IFNDEF LAKON}
-          if ResolveFlagOption(EngineOptions.UnsafeFFI, FileConfig) then
-            Core.Install(TGocciaFFIRuntimeExtension.Create);
+          InstallFFIIfGranted(Core);
           {$ENDIF}
           DisableRuntimeConsole(Engine);
           Engine.SuppressWarnings := True;

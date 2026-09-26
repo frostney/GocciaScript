@@ -7,6 +7,7 @@ interface
 uses
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
   Goccia.ObjectModel,
@@ -16,6 +17,7 @@ uses
 type
   TGocciaGlobalFFI = class(TGocciaBuiltin)
   private
+    FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -29,8 +31,11 @@ type
     function FFINullptrGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFISuffixGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
   public
+    { FFI.open checks every library path against ACapabilities' ffi scopes
+      (ADR 0122). }
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
+      const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
   end;
 
@@ -65,11 +70,13 @@ const
 constructor TGocciaGlobalFFI.Create(const AName: string;
   const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback;
+  const ACapabilities: TGocciaCapabilities;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
 var
   Members: TGocciaMemberCollection;
 begin
   inherited Create(AName, AScope, AThrowError);
+  FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
 
   Members := TGocciaMemberCollection.Create;
@@ -170,21 +177,54 @@ begin
   Result := Metadata;
 end;
 
+{ True when APath names a library without any directory part. }
+function IsBareLibraryName(const APath: string): Boolean;
+begin
+  Result := (Pos('/', APath) = 0) {$IFDEF MSWINDOWS} and (Pos('\', APath) = 0) and
+    (Pos(':', APath) = 0){$ENDIF};
+end;
+
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
-  LibPath: string;
+  LibPath, LoadPath, DenialDetail: string;
+  Allowed: Boolean;
   Handle: TGocciaFFILibraryHandle;
 begin
   if AArgs.Length < 1 then
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
+  { A name with no directory part is found by the platform loader's search
+    path, which no path scope describes, so only an unscoped grant with no
+    deny scope covers it. Anything else is judged, and then loaded, at its
+    canonical path, so the file checked is the file opened. }
+  if IsBareLibraryName(LibPath) then
+  begin
+    LoadPath := LibPath;
+    Allowed := FCapabilities.AllowsUnscoped(gcFFI);
+    DenialDetail := 'a library name searched for by the platform loader ' +
+      'needs an unscoped ffi grant';
+  end
+  else
+  begin
+    LoadPath := CanonicalCapabilityPath(LibPath);
+    Allowed := FCapabilities.AllowsPath(gcFFI, LoadPath);
+    DenialDetail := Format('the ffi capability does not cover %s',
+      [LoadPath]);
+  end;
+  if not Allowed then
+  begin
+    if Assigned(FCapabilityAuditEmitter) then
+      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath,
+        'the ffi capability does not cover this library');
+    ThrowPermissionDenied(CapabilityName(gcFFI), LibPath, DenialDetail);
+  end;
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
-      'FFI capability is enabled');
+      'the ffi capability covers this library');
 
   try
-    Handle := TGocciaFFILibraryHandle.Create(LibPath);
+    Handle := TGocciaFFILibraryHandle.Create(LibPath, LoadPath);
   except
     on E: Exception do
       ThrowTypeError(E.Message, SSuggestFFILibraryOpen);

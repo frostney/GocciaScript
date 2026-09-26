@@ -9,6 +9,7 @@ uses
   FileUtils,
   TestingPascalLibrary,
 
+  Goccia.Capabilities,
   Goccia.Constants.PropertyNames,
   Goccia.Engine,
   Goccia.Error,
@@ -557,8 +558,10 @@ begin
     ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>', nil,
       ContentProvider);
+    { The module lives outside the project, so the engine declares the read
+      grant that covers it. }
     Engine := TGocciaEngine.Create('<runtime-test>', Source, ModuleLoader,
-      Executor);
+      Executor, TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
     try
       Engine.ModuleLoader.LoadModule(BadPath, '<runtime-test>');
     except
@@ -645,8 +648,10 @@ begin
     ContentProvider := TGocciaFileSystemModuleContentProvider.Create;
     ModuleLoader := TGocciaModuleLoader.Create('<runtime-test>.mjs', nil,
       ContentProvider);
+    { A computed dynamic import of a file outside the project needs a read
+      grant covering it. }
     Engine := TGocciaEngine.Create('<runtime-test>.mjs', Source, ModuleLoader,
-      Executor);
+      Executor, TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
 
     Engine.RegisterGlobal('__BAD_PATH',
       TGocciaStringLiteralValue.Create(BadPath));

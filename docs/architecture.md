@@ -37,7 +37,7 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 
 | Layer | Units | Responsibility |
 |-------|-------|----------------|
-| Engine | `Goccia.Engine`, `Goccia.HostEnvironment` | Core language built-ins, language configuration, host-controlled script time/randomness, source text execution, executor dispatch |
+| Engine | `Goccia.Engine`, `Goccia.HostEnvironment`, `Goccia.Capabilities` | Core language built-ins, language configuration, the engine's immutable capability set, host-controlled script time/randomness, source text execution, executor dispatch |
 | Runtime | `Goccia.Runtime`, `Goccia.RuntimeExtensions.*`, `Goccia.RuntimeProfiles.*` | Runtime integration layer, runtime extensions such as console/fetch/data modules/SemVer/testing/benchmarks/FFI, loader/test/benchmark profiles, and file-backed helpers |
 | Executor abstraction | `Goccia.Executor` | Abstract `TGocciaExecutor` base class |
 | Interpreter executor | `Goccia.Executor.Interpreter` (`TGocciaInterpreterExecutor`) | Tree-walk execution via `TGocciaInterpreter` |
@@ -53,6 +53,8 @@ Source -> Preprocessors (optional, e.g. JSX) -> Lexer -> Parser -> Compiler -> G
 | GC | `Goccia.GarbageCollector` | Mark-and-sweep garbage collection |
 
 For **tree-walk execution**, see [Interpreter](interpreter.md); for **bytecode execution**, see [Bytecode VM](bytecode-vm.md). For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **recurring implementation patterns** and Define vs Assign implementation details, see [Core patterns](core-patterns.md).
+
+The engine also owns what source may reach outside the process: a `TGocciaCapabilities` value fixed at construction (`None` when the host passes none). The runtime, module loader, resolver, fetch, and FFI all consult that one set, and nested contexts only narrow it; see [Permissions](permissions.md).
 
 Source type belongs to the `SourceType` property on `TGocciaEngine`, because script source and module source change language execution (`this`, import metadata, and top-level scope lifetime). File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided. `TGocciaRuntimeCore` may be attached to an engine, but it does not decide the entry file's source type. File-backed convenience APIs and the default filesystem module content provider live in `Goccia.Runtime`; runtime globals and import-only runtime modules are added by installing concrete `TGocciaRuntimeExtension` classes or by applying a profile such as `ApplyLoaderRuntimeProfile`. Engine APIs accept source text or caller-provided `TStringList` instances. CLI hosts may still read their entry file or stdin before constructing the engine, as `GocciaScriptLoaderBare` does, but that file read is outside the engine API and does not attach runtime globals or runtime modules.
 

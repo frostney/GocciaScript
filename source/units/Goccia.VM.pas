@@ -162,6 +162,10 @@ type
     FGlobalThisValue: TGocciaValue;
     FRealm: TGocciaRealm;
     FLoadModule: TLoadModuleCallback;
+    { Set by OP_COMPUTED_IMPORT_SPECIFIER and consumed by the dynamic-import
+      opcode that immediately follows it. A stale mark can only make a later
+      import stricter. }
+    FComputedDynamicImportPending: Boolean;
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
@@ -464,7 +468,8 @@ type
       ASavedHandlerCount: Integer;
       var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
-      const ASuggestion: string = '');
+      const ASuggestion: string = '';
+      const ASuggestionIsHostOnly: Boolean = False);
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
@@ -2630,12 +2635,15 @@ type
     FPromise: TGocciaPromiseValue;
     FPath: string;
     FReferrer: string;
+    FSiteLine: Integer;
+    FSiteColumn: Integer;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
     constructor Create(const AVM: TGocciaVM; const APromise: TGocciaPromiseValue;
-      const APath, AReferrer: string);
+      const APath, AReferrer: string; const ASiteLine: Integer = 0;
+      const ASiteColumn: Integer = 0);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -4981,13 +4989,16 @@ end;
 { TGocciaVMDynamicImportStartValue }
 
 constructor TGocciaVMDynamicImportStartValue.Create(const AVM: TGocciaVM;
-  const APromise: TGocciaPromiseValue; const APath, AReferrer: string);
+  const APromise: TGocciaPromiseValue; const APath, AReferrer: string;
+  const ASiteLine, ASiteColumn: Integer);
 begin
   inherited Create;
   FVM := AVM;
   FPromise := APromise;
   FPath := APath;
   FReferrer := AReferrer;
+  FSiteLine := ASiteLine;
+  FSiteColumn := ASiteColumn;
 end;
 
 function TGocciaVMDynamicImportStartValue.GetFunctionLength: Integer;
@@ -5003,13 +5014,20 @@ end;
 function TGocciaVMDynamicImportStartValue.Call(
   const AArguments: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  PreviousCallSite: TGocciaCallSite;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not Assigned(FVM) or not Assigned(FPromise) then
     Exit;
 
+  EnterGocciaCallSite(FReferrer, FSiteLine, FSiteColumn, PreviousCallSite);
   try
-    FVM.ResolveDynamicImportPromise(FPromise, FPath, FReferrer);
+    try
+      FVM.ResolveDynamicImportPromise(FPromise, FPath, FReferrer);
+    finally
+      LeaveGocciaCallSite(PreviousCallSite);
+    end;
   except
     on E: EGocciaBytecodeThrow do
       FPromise.Reject(E.ThrownValue);
@@ -14181,7 +14199,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   ASavedHandlerCount: Integer;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
-  const ASuggestion: string);
+  const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -14212,7 +14230,8 @@ begin
     // travels with the throw so a host runner can render the same
     // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion);
+      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
+        ASuggestionIsHostOnly);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -14336,6 +14355,7 @@ var
   PrevCovLine, CovLine: UInt32;
   ProfileEntryTimestamp: Int64;
   DynImportPromise: TGocciaPromiseValue;
+  DynImportComputed: Boolean;
   DynImportTask: TGocciaMicrotask;
   AwaitPromise: TGocciaPromiseValue;
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
@@ -14370,19 +14390,6 @@ var
       Exit;
     ALine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
     AColumn := Template.DebugInfo.GetColumnForPC(InstructionStartIP);
-  end;
-
-  procedure EnterCurrentInstructionCallSite(
-    out APrevious: TGocciaCallSite);
-  var
-    SourcePath: string;
-  begin
-    CurrentInstructionDebugLocation(DebugLine, DebugColumn);
-    if Assigned(Template) and Assigned(Template.DebugInfo) then
-      SourcePath := Template.DebugInfo.SourceFile
-    else
-      SourcePath := '';
-    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
   end;
 
   { Stamps the executing frame with this instruction's source position so the
@@ -14420,6 +14427,40 @@ var
       Result.Column := 0;
       Result.Recorded := False;
     end;
+  end;
+
+  { The position of the call or import() expression this instruction
+    compiles: the recorded expression position, which is what the tree-walk
+    evaluator uses, or the instruction's own when none was recorded
+    (binary-loaded bytecode). }
+  procedure CurrentCallExpressionLocation(out ALine, AColumn: Integer);
+  var
+    ImportSite: TGocciaCallSiteEntry;
+  begin
+    ImportSite := CurrentCallSite;
+    if ImportSite.Recorded then
+    begin
+      ALine := ImportSite.Line;
+      AColumn := ImportSite.Column;
+    end
+    else
+      CurrentInstructionDebugLocation(ALine, AColumn);
+  end;
+
+  { Makes this call instruction the current call site, at the same position
+    the tree-walk evaluator records for the call expression (ADR 0014), so a
+    native callee's audit events and PermissionDenied locate identically. }
+  procedure EnterCurrentInstructionCallSite(
+    out APrevious: TGocciaCallSite);
+  var
+    SourcePath: string;
+  begin
+    CurrentCallExpressionLocation(DebugLine, DebugColumn);
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      SourcePath := Template.DebugInfo.SourceFile
+    else
+      SourcePath := '';
+    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
   end;
 
   { Stamps the frame with the call expression's own position when the compiler
@@ -14771,12 +14812,14 @@ LInnerLoopsDone:
           HandleExceptionUnwind(E.ThrownValue,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
+            E.SuggestionIsHostOnly);
         on E: TGocciaThrowValue do
           HandleExceptionUnwind(E.Value,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
+            E.SuggestionIsHostOnly);
         on E: TGocciaTypeError do
           HandleExceptionUnwind(
             CreateErrorObject(TYPE_ERROR_NAME, E.Message),

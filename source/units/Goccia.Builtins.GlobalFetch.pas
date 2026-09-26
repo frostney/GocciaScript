@@ -8,12 +8,9 @@ unit Goccia.Builtins.GlobalFetch;
 interface
 
 uses
-  Classes,
-
-  HTTPTypes,
-
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Error.ThrowErrorCallback,
   Goccia.Realm,
@@ -21,36 +18,40 @@ uses
   Goccia.Values.Primitives;
 
 type
+  { Returns the dispatching engine's current response-body ceiling, read at
+    request time because it is an engine setting a host may change after the
+    runtime is attached. }
+  TGocciaFetchMaxResponseBytesProvider = function: Integer of object;
+
   { One engine's fetch global. Everything that decides what this engine's
-    requests may reach — the host allowlist and the network policy — lives
-    here, per engine, and travels with each request it starts. }
+    requests may reach — its capability set and response ceiling — lives here,
+    per engine, and travels with each request it starts. }
   TGocciaGlobalFetch = class(TGocciaBuiltin)
   private
-    FAllowedHosts: TStringList;
+    FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FSourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
     FRealm: TGocciaRealm;
-    FRequestPolicy: THTTPRequestPolicy;
     FAcquiredFetchManager: Boolean;
     function FetchCallback(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure ValidateHost(const AURLStr: string);
   public
-    { ARealm is the owning engine's realm: this engine's requests are tagged
-      with it, and it is where their results are created. }
+    { ACapabilities is the owning engine's set, fixed for its lifetime; every
+      request is checked against its net rules (ADR 0122). ARealm is the
+      owning engine's realm: this engine's requests are tagged with it, and it
+      is where their results are created. }
     constructor Create(const AName: string; const AScope: TGocciaScope;
       const AThrowError: TGocciaThrowErrorCallback;
+      const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+      const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+      const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
       const ARealm: TGocciaRealm);
     destructor Destroy; override;
 
-    procedure SetAllowedHosts(const AHosts: TStrings);
-
-    property AllowedHosts: TStringList read FAllowedHosts;
-    { Resolved-address restrictions and response-body ceiling for this
-      engine's requests. Host configuration: script space cannot reach it.
-      Defaults to DefaultHTTPPolicy. }
-    property RequestPolicy: THTTPRequestPolicy
-      read FRequestPolicy write FRequestPolicy;
+    property Capabilities: TGocciaCapabilities read FCapabilities;
     property Realm: TGocciaRealm read FRealm;
   end;
 
@@ -59,11 +60,15 @@ implementation
 uses
   SysUtils,
 
+  HTTPTypes,
+  NetworkAddress,
+
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -85,16 +90,19 @@ const
 constructor TGocciaGlobalFetch.Create(const AName: string;
   const AScope: TGocciaScope;
   const AThrowError: TGocciaThrowErrorCallback;
+  const ACapabilities: TGocciaCapabilities;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+  const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+  const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
   const ARealm: TGocciaRealm);
 begin
   inherited Create(AName, AScope, AThrowError);
 
+  FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
+  FSourcedAuditEmitter := ASourcedAuditEmitter;
+  FMaxResponseBytesProvider := AMaxResponseBytesProvider;
   FRealm := ARealm;
-  FRequestPolicy := DefaultHTTPPolicy;
-  FAllowedHosts := TStringList.Create;
-  FAllowedHosts.CaseSensitive := False;
   TGocciaFetchManager.AcquireInstance;
   FAcquiredFetchManager := True;
 
@@ -112,25 +120,42 @@ begin
     DiscardFetchCompletions(FRealm);
     TGocciaFetchManager.ReleaseInstance;
   end;
-  FAllowedHosts.Free;
   inherited Destroy;
 end;
 
-procedure TGocciaGlobalFetch.SetAllowedHosts(const AHosts: TStrings);
-var
-  I: Integer;
+{ The net scope a guest sees in a denial: the host, plus the port when the URL
+  names a non-default one. }
+function NetDenialScope(const AParsed: THTTPParsedURL): string;
 begin
-  FAllowedHosts.Clear;
-  for I := 0 to AHosts.Count - 1 do
-    FAllowedHosts.Add(LowerCase(AHosts[I]));
+  if Pos(':', AParsed.Host) > 0 then
+    Result := '[' + AParsed.Host + ']'
+  else
+    Result := AParsed.Host;
+  if not (((AParsed.Scheme = 'http') and (AParsed.Port = 80)) or
+          ((AParsed.Scheme = 'https') and (AParsed.Port = 443))) then
+    Result := Result + ':' + IntToStr(AParsed.Port);
+end;
+
+{ The host-side hint for a refused destination: a private address literal is
+  refused by the private-range rule rather than by a missing host grant. }
+function NetDenialSuggestion(const AHost: string): string;
+var
+  Address: TNetworkAddress;
+begin
+  if TryParseIPAddress(AHost, Address) and IsPrivateIPAddress(Address) then
+    Result := SSuggestFetchPrivateDestination
+  else
+    Result := SSuggestFetchAllowedHosts;
 end;
 
 procedure TGocciaGlobalFetch.ValidateHost(const AURLStr: string);
 var
   Host: string;
+  Parsed: THTTPParsedURL;
 begin
   try
-    Host := HTTPURLHost(AURLStr);
+    Parsed := ParseHTTPURL(AURLStr, False);
+    Host := Parsed.Host;
   except
     on E: EHTTPError do
     begin
@@ -141,31 +166,27 @@ begin
           Host := INVALID_FETCH_AUDIT_SUBJECT;
       end;
       if Assigned(FCapabilityAuditEmitter) then
-        FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
+        FCapabilityAuditEmitter(gckNetFetch, gcdDeny, Host,
           'fetch URL is invalid');
       ThrowTypeError('Invalid fetch URL: ' + E.Message);
     end;
   end;
-  if FAllowedHosts.Count = 0 then
-  begin
-    if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
-        'no fetch hosts are allowed');
-    ThrowTypeError(SErrorFetchNoAllowedHosts, SSuggestFetchAllowedHosts);
-  end;
 
-  if FAllowedHosts.IndexOf(Host) < 0 then
+  { The name is checked here, before any lookup, so a refused request has no
+    observable side effect. Where the name resolves to is checked again by the
+    request itself, on every redirect hop. }
+  if not FCapabilities.AllowsNetHost(Parsed.Host, Parsed.Port) then
   begin
     if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFetchHost, gcdDeny, Host,
-        'host is not in the allowed hosts list');
-    ThrowTypeError(Format(SErrorFetchHostNotAllowed, [Host]),
-      SSuggestFetchAllowedHosts);
+      FCapabilityAuditEmitter(gckNetFetch, gcdDeny, Host,
+        FCapabilities.ExplainNetHostDenial(Parsed.Host, Parsed.Port));
+    ThrowPermissionDenied(CapabilityName(gcNet), NetDenialScope(Parsed),
+      NetDenialSuggestion(Parsed.Host));
   end;
 
   if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckFetchHost, gcdAllow, Host,
-      'host is in the allowed hosts list');
+    FCapabilityAuditEmitter(gckNetFetch, gcdAllow, Host,
+      'the net capability allows this host');
 end;
 
 function TGocciaGlobalFetch.FetchCallback(
@@ -177,10 +198,12 @@ var
   RequestHeaders: THTTPHeaders;
   Promise: TGocciaPromiseValue;
   Signal: TGocciaAbortSignalValue;
-  Manager: TGocciaFetchManager;
   Obj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I: Integer;
+  Policy: TGocciaFetchPolicy;
+  Manager: TGocciaFetchManager;
+  CallSite: TGocciaCallSite;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -261,14 +284,29 @@ begin
   // Perform the request
   Promise := TGocciaPromiseValue.Create;
   if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckFetchDispatch, gcdAllow, URLStr,
+    FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
       'fetch dispatch is allowed');
+  Policy.Capabilities := FCapabilities;
+  Policy.AuditEmitter := FSourcedAuditEmitter;
+  { The worker's decisions are delivered later, from whatever code is
+    running then; attribute them to this fetch() call. }
+  Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
+  if CurrentGocciaCallSite(CallSite) then
+  begin
+    Policy.AuditSource.FilePath := CallSite.FilePath;
+    Policy.AuditSource.Line := CallSite.Line;
+    Policy.AuditSource.Column := CallSite.Column;
+  end;
+  if Assigned(FMaxResponseBytesProvider) then
+    Policy.MaxResponseBytes := FMaxResponseBytesProvider()
+  else
+    Policy.MaxResponseBytes := 0;
   try
     Manager := TGocciaFetchManager.Instance;
     if not Assigned(Manager) then
       raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
-    Manager.StartFetch(URLStr, Method, RequestHeaders, FAllowedHosts,
-      FRequestPolicy, FRealm, Promise, Signal);
+    Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
+      Promise, Signal);
   except
     on E: TGocciaTimeoutError do
       raise;

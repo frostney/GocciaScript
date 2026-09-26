@@ -31,7 +31,10 @@ type
   protected
     function GetIsClosed: Boolean; override;
   public
-    constructor Create(const APath: string);
+    constructor Create(const APath: string); overload;
+    { Loads ALoadPath — the path a capability check approved — while
+      reporting APath, the spelling the script used, in Path and in errors. }
+    constructor Create(const APath, ALoadPath: string); overload;
     destructor Destroy; override;
 
     procedure RetainDependent; override;
@@ -53,10 +56,15 @@ uses
 
 constructor TGocciaFFILibraryGuard.Create(const APath: string);
 begin
+  Create(APath, APath);
+end;
+
+constructor TGocciaFFILibraryGuard.Create(const APath, ALoadPath: string);
+begin
   inherited Create;
   FPath := APath;
   FOwnerAttached := True;
-  FHandle := LoadLibrary(APath);
+  FHandle := LoadLibrary(ALoadPath);
   if FHandle = NilHandle then
     raise Exception.Create('Failed to load library: ' + APath);
 end;
