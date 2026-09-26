@@ -180,7 +180,11 @@ for: the specifier as written, the host (plus a non-default port), or the
 library path as passed to `FFI.open`. It never contains an expanded host path
 ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)). The host-side
 report — the CLI's `Suggestion:` line, or `TGocciaThrowValue.Suggestion` for an
-embedder — may name the canonical path and the option that would grant it.
+embedder — names the canonical path and how to grant it: `--allow-read=<dir>`
+or `"allow-read"` in a `permissions` block for a read the capability does not
+cover (with a note that a computed `import()` is outside the module graph),
+`--allow-ffi[=<dir>]` for a library, `--allow-net=<host>` or `private` for a
+host, and the `--deny-*` or `deny-*` entry that refused a denied one.
 
 ## Audit events
 
@@ -272,7 +276,9 @@ config file. There is no `--allow-all` and no environment-variable form.
 | `--deny-import` | not accepted: a scope is required | as for `--allow-import` |
 
 `--allow-net=` (an empty list) and `--allow-read=a,,b` (an empty item) are
-errors, as is a scope the capability does not accept:
+invalid values (exit 1), as is a scope the capability does not accept. Every
+binary parses these flags the same way, including `GocciaScriptLoaderBare`
+and `GocciaTest262Runner`, which have their own argument parsers:
 
 ```text
 Error: Invalid scope for --allow-net: "http://x" (use host, host:port, *.domain, an IP, a CIDR range, or private)
@@ -323,11 +329,14 @@ allow-ffi = ["../fixtures/ffi"]
 - With `extends`, a child's key replaces its base's key; keys the child does
   not name are inherited.
 - One config governs each file: its nearest `goccia.*`, or the root config
-  (`--config`, or the one discovered from the working directory) when it has
-  none. Configs compose only through `extends`.
+  when it has none. The root config is `--config`, or the one discovered by
+  walking up from the first input's directory (the working directory for
+  stdin and the REPL). Configs compose only through `extends`.
 - An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
   `true`, `false`, or an array of strings (including `null`, an object, or a
-  nested array) fails the run with status 2.
+  nested array) is a malformed block and fails the run with status 2. A
+  scope the capability does not accept, or an empty scope, is an invalid
+  value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
 - Every config governing a run's inputs is loaded and checked before any file
@@ -374,6 +383,12 @@ Limits are settings, not capabilities. Each takes a unit:
 | `--max-stack` | a count | no limit |
 | `--max-fetch-bytes` | a size (default `8MiB`) | the default |
 | `--max-fs-bytes`, `--max-fs-nodes` (sandbox) | a size (default `16MiB`) / a count (default 4096) | rejected |
+
+Limits and flags in config files must have the right shape: a boolean flag
+such as `"compat-var"` takes exactly `true` or `false` (not `"true"` or
+`null`), and a limit takes a single value, not an array. Errors use the
+config spelling, such as `Invalid value for "max-memory" in
+/repo/goccia.json: 64MB ("MB" is ambiguous; ...)`, and exit 1.
 
 Sizes accept `KiB`, `MiB`, and `GiB` (binary, case-insensitive, with or
 without the `B`). `K`, `KB`, `M`, `MB`, `G`, and `GB` are rejected as
