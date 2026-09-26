@@ -825,7 +825,9 @@ begin
   if Assigned(FResolver) and
      (FResolver.ApplyAlias(ASpecifier, AImportingFilePath) <> ASpecifier) then
     Exit;
-  if IsHostOwnedImporter(AImportingFilePath) then
+  { A module the host itself asked for (LoadHostModule marks its address
+    before loading), or one it imports, is host-owned and never checked. }
+  if IsHostOwnedLoad(ExpandFileName(Candidate), AImportingFilePath) then
     Exit;
   EnforceHostRead(ASpecifier, ExpandFileName(Candidate), AIsLiteral, False,
     True);
