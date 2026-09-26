@@ -257,8 +257,11 @@ begin
   { `..` in a request cannot climb out of the scope. }
   Expect<Boolean>(Capabilities.AllowsPath(gcRead,
     RootPath('a/b/../bc/x'))).ToBe(False);
-  { The filesystem root covers everything. }
-  Capabilities := TGocciaCapabilities.None.Allow(gcRead, PathDelim);
+  { The filesystem root covers everything on it. On Windows a bare `\` is
+    the root of the *current* drive, which need not be the drive RootPath
+    names, so the root is spelled with RootPath's own drive. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcRead,
+    ExtractFileDrive(RootPath('z')) + PathDelim);
   Expect<Boolean>(Capabilities.AllowsPath(gcRead, RootPath('z'))).ToBe(True);
 end;
 
