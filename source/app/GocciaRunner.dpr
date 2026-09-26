@@ -127,7 +127,8 @@ type
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
-    function HostOnlyCommandLineOptions: TGocciaCapabilityScopes;
+    function HostOnlyCommandLineOptions(
+      const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
     procedure ConfigureSandboxEngine(const AEngine: TGocciaEngine;
       const AContext: TGocciaSandboxContext; const AEntryPath: string;
       const AParentEngine: TGocciaEngine;
@@ -439,12 +440,15 @@ end;
 
 { The host-mode options given on the command line. The same keys from a
   config are ignored in sandbox mode, so one project config serves both
-  modes. }
-function TRunnerApp.HostOnlyCommandLineOptions: TGocciaCapabilityScopes;
+  modes. ABeforeConfig: no config has been applied yet, so Present means the
+  command line. }
+function TRunnerApp.HostOnlyCommandLineOptions(
+  const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
 
   procedure Check(const AOption: TOptionBase);
   begin
-    if Assigned(AOption) and AOption.FromCommandLine then
+    if Assigned(AOption) and (AOption.FromCommandLine or
+       (ABeforeConfig and AOption.Present)) then
     begin
       SetLength(Result, Length(Result) + 1);
       Result[High(Result)] := '--' + AOption.LongName;
@@ -475,6 +479,10 @@ begin
   if SandboxOptions.CommandLineActivation = '' then
     Exit;
   RejectHostCapabilityFlags(HostCapabilityAllowFlags,
+    SandboxOptions.CommandLineActivation);
+  { Before Validate, whose host-mode checks (--profile-output needs
+    --profile, ...) would otherwise report the wrong problem. }
+  RejectHostModeOptions(HostOnlyCommandLineOptions(True),
     SandboxOptions.CommandLineActivation);
   FSandboxActive := True;
 end;
@@ -1623,7 +1631,7 @@ begin
   end;
   SandboxCommandLine.Paths := APaths;
   SandboxCommandLine.DeniedAllowFlags := HostCapabilityAllowFlags;
-  SandboxCommandLine.HostOnlyOptions := HostOnlyCommandLineOptions;
+  SandboxCommandLine.HostOnlyOptions := HostOnlyCommandLineOptions(False);
   SandboxCommandLine.WorkingDirectory := GetCurrentDir;
   SandboxRequest := ResolveSandboxMode(SandboxOptions, Verdict.Request.Sandbox,
     Verdict.GrantsAccepted, SandboxCommandLine);
@@ -1784,7 +1792,12 @@ end;
 
 procedure TRunnerApp.HandleError(const AException: Exception);
 begin
-  if IsJsonOutput then
+  { In sandbox mode stdout carries only the guest's output and the diff; the
+    guest's own failures are reported by RunSandbox, so what reaches here is
+    the host's (a copy that failed, an invalid value) and goes to stderr. }
+  if FSandboxActive then
+    WriteLn(ErrOutput, 'Error: ', AException.Message)
+  else if IsJsonOutput then
     WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),
       Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats, 1, 1,
       IsCompactJsonOutput))

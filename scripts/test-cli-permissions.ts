@@ -1370,21 +1370,19 @@ console.log("Output paths set in a config stay inside the config's directory..."
       if (existsSync(join(tmp, "elsewhere", "run.log"))) throw new Error("config log escaped through a linked directory");
     }
 
-    // The sandbox runner's diff file, and the host files its --write-back
-    // rewrites when the config names the seeds, are outputs too.
+    // The runner's sandbox section writes a diff file and, for its copy-rw
+    // inputs, the host files write-back rewrites: outputs too.
     writeFileSync(join(tmp, "outside.txt"), "HOST\n");
-    writeFileSync(join(project, "entry.js"), "1;\n");
-    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "diff-output": victim }) + "\n");
-    const diffOut = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "--seed", `${join(project, "entry.js")}=/entry.js`, "/entry.js"], { cwd: project });
-    expectExit(diffOut, 1, "config diff-output outside its directory");
-    expectIncludes(diffOut.combined, `"diff-output" writes to ${victim}`, "config diff-output");
-    writeFileSync(join(project, "goccia.json"), JSON.stringify({
-      seed: [`${join(project, "entry.js")}=/entry.js`, `${join(tmp, "outside.txt")}=/outside.txt`],
-      "write-back": true,
-    }) + "\n");
-    const writeBack = run(SANDBOXRUNNER, [`--config=${join(project, "goccia.json")}`, "/entry.js"], { cwd: project });
-    expectExit(writeBack, 1, "config seed outside its directory with write-back");
-    expectIncludes(writeBack.combined, `"seed" seeds ${join(tmp, "outside.txt")} for --write-back`, "config seed with write-back");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ sandbox: { "diff-file": victim } }) + "\n");
+    const diffOut = run(RUNNER, ["-P", "main.js"], { cwd: project });
+    expectExit(diffOut, 1, "config sandbox diff-file outside its directory");
+    expectIncludes(diffOut.combined, `"sandbox.diff-file" writes to ${victim}, which is outside ${project}`, "config sandbox diff-file");
+    expectExcludes(diffOut.stdout, "RAN", "config sandbox diff-file runs nothing");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["../outside.txt"] } }) + "\n");
+    const writeBack = run(RUNNER, ["-P", "main.js"], { cwd: project });
+    expectExit(writeBack, 1, "config sandbox copy-rw outside its directory");
+    expectIncludes(writeBack.combined, `"sandbox.copy-rw" writes to ${join(tmp, "outside.txt")}, which is outside ${project}`, "config sandbox copy-rw");
+    if (readFileSync(join(tmp, "outside.txt"), "utf8") !== "HOST\n") throw new Error("config copy-rw outside its directory was written");
 
     // The command line writes wherever it is told to.
     writeFileSync(join(project, "goccia.json"), "{}\n");

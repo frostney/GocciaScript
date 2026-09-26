@@ -127,9 +127,9 @@ type
       requesting them from a binary that does not is warned about instead of
       needing trust. Default: True. }
     function HonorsUnsafeRequests: Boolean; virtual;
-    { Whether this binary reads a config's `sandbox` section (GocciaRunner).
-      Where it does, the section needs trust; elsewhere it is warned about.
-      Default: False. }
+    { Whether this binary reads the root config's `sandbox` section
+      (GocciaRunner). Where it does, that section needs trust; a section it
+      does not read is warned about. Default: False. }
     function HonorsSandboxSection: Boolean; virtual;
     { Who cannot grant a config's unsupported request, in its warning.
       Default: the program name. }
@@ -726,7 +726,7 @@ end;
 procedure TGocciaCLIApplication.CreateTrustGate;
 var
   Mode: TGocciaConfigTrustMode;
-  StorePath, Problem: string;
+  StorePath, Problem, SandboxConfigPath: string;
 begin
   StorePath := '';
   Problem := '';
@@ -739,9 +739,13 @@ begin
     Mode := ctmStore;
     StorePath := ResolveTrustStorePath(Problem);
   end;
+  if HonorsSandboxSection then
+    SandboxConfigPath := FRootConfigPath
+  else
+    SandboxConfigPath := '';
   FTrustGate := TGocciaConfigTrustGate.Create(StorePath, Problem, Mode,
     HonoredCapabilities, HonorsUnsafeRequests, LoadFileConfig,
-    HonorsSandboxSection);
+    SandboxConfigPath);
 end;
 
 procedure TGocciaCLIApplication.BuildAllOptions;
@@ -1190,8 +1194,11 @@ begin
     CreateTrustGate;
   Result := FTrustGate.Verify(ConfigPath);
 
+  { Only the root config's sandbox section is read. }
   Warnings := UnsupportedRequestWarnings(Result.Request, HonoredCapabilities,
-    CapabilityPolicyName, HonorsUnsafeRequests, HonorsSandboxSection);
+    CapabilityPolicyName, HonorsUnsafeRequests, HonorsSandboxSection and
+    (FRootConfigPath <> '') and
+    (Result.ConfigPath = TrustKeyForPath(FRootConfigPath)));
   for I := 0 to High(Warnings) do
     WarnOnce(Result.ConfigPath + #0 + Warnings[I],
       'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);

@@ -151,10 +151,9 @@ type
   { GocciaRunner's sandbox mode (ADR 0122). --copy, --copy-rw, --entry,
     --diff, and --diff-file are command-line-only: a config file declares the
     same inputs in its "sandbox" section, which needs trust. --sandbox is
-    RequiresTrust and AcceptsObject only so that the "sandbox" section, which
-    shares its name, is left to the trusted reader instead of being applied
-    or rejected as a flag. --max-fs-bytes and --max-fs-nodes are ordinary
-    limits. }
+    ConfigIgnored so that the "sandbox" key, which shares its name, is left
+    to that section's reader (Goccia.CLI.Permissions) instead of being read
+    as a flag. --max-fs-bytes and --max-fs-nodes are ordinary limits. }
   TGocciaSandboxOptions = class
   private
     FSandbox: TFlagOption;
@@ -1024,8 +1023,7 @@ begin
   FSandbox := TFlagOption.Create('sandbox',
     'Run in sandbox mode with an empty virtual filesystem; the entry file ' +
     'is copied to /<name>', SANDBOX_GROUP);
-  FSandbox.AcceptsObject := True;
-  FSandbox.RequiresTrust := True;
+  FSandbox.ConfigIgnored := True;
   FCopy := CreateRepeatable('copy', '<host>[=<sandbox>]',
     'Copy a host file or directory into the sandbox read-only (default ' +
     '/<basename>); enables sandbox mode');

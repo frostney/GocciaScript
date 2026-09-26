@@ -7535,7 +7535,7 @@ await section("Runner sandbox mode: rejects inputs and options it cannot run..."
     ];
     for (const option of [
       "--output=json", "--multifile", "--coverage", "--coverage-format=lcov", "--coverage-output=c.json",
-      "--profile=functions", "--source-map",
+      "--profile=functions", "--profile-output=p.json", "--profile-format=flamegraph", "--source-map",
       "--host-environment=env.js", "--global=a=1", "--globals=g.json",
     ]) {
       const name = option.split("=")[0];
@@ -7543,6 +7543,17 @@ await section("Runner sandbox mode: rejects inputs and options it cannot run..."
     }
     for (const [label, args, needle, stdin] of cases)
       expectSandboxUsageError(`Sandbox mode ${label}`, runSandboxCli(args, { cwd: tmp, stdin }), needle);
+
+    // A host-side failure (here a missing input) reports on stderr, keeping
+    // stdout for the guest's output and the diff.
+    const missing = runSandboxCli(["main.js", "--copy", "nope"], { cwd: tmp });
+    if (missing.exitCode !== 1 || missing.stdout !== "" ||
+        !missing.stderr.includes("Error: --copy nope: copy path does not exist: "))
+      throw new Error(`A missing --copy input should fail on stderr, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+    const badDiffFile = runSandboxCli(["main.js", "--sandbox", "--diff-file=o.txt"], { cwd: tmp });
+    if (badDiffFile.exitCode !== 1 || badDiffFile.stdout !== "" ||
+        !badDiffFile.stderr.includes('Error: Cannot tell the diff format from "o.txt"'))
+      throw new Error(`An unknown --diff-file extension should fail on stderr, got (exit ${badDiffFile.exitCode}):\n${badDiffFile.stdout}${badDiffFile.stderr}`);
 
     // --jobs is accepted and does nothing.
     const jobs = runSandboxCli(["main.js", "--sandbox", "--jobs=4", "--print"], { cwd: tmp });
@@ -7915,6 +7926,18 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
     if (ignored.exitCode === 0 || !(ignored.stdout + ignored.stderr).includes('Cannot resolve bare module specifier "fs"'))
       throw new Error(`--ignore-config-permissions should ignore the sandbox section, got (exit ${ignored.exitCode}):\n${ignored.stdout}${ignored.stderr}`);
 
+    // --config=<other> is the way out of a config sandbox (R3): the entry's
+    // own config is then not the root config, so its section is ignored
+    // with a warning and needs no trust.
+    const otherDir = join(tmp, "other");
+    mkdirSync(otherDir);
+    writeFileSync(join(otherDir, "goccia.json"), "{}");
+    const other = runSandboxCli(["main.js", "--source-type=module", `--config=${otherDir}`,
+      `--trust-store=${join(tmp, "empty-trust.json")}`], { cwd: project });
+    if (other.exitCode === 0 || !(other.stdout + other.stderr).includes('Cannot resolve bare module specifier "fs"') ||
+        !other.stderr.includes(`Warning: ${configPath} declares a "sandbox" section, which GocciaRunner does not use; ignoring it`))
+      throw new Error(`--config=<other> should leave the entry's sandbox section unused, got (exit ${other.exitCode}):\n${other.stdout}${other.stderr}`);
+
     // With --entry, the config is discovered from the working directory.
     const entryRun = runSandboxCli(["--copy", "main.js=/app/main.js", "--entry=/app/main.js", "--source-type=module", "-P"], { cwd: project });
     if (entryRun.exitCode !== 0 || entryRun.stdout.trim() !== "input")
@@ -7998,6 +8021,8 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
         `${configPath}: unknown sandbox key "seeds" (valid: copy, copy-rw, entry, diff, diff-file)`],
       ["an invalid diff", { diff: "xml" },
         `${configPath}: "sandbox.diff" must be true, false, "json", or "unified"`],
+      ["a string for the section", "on",
+        `${configPath}: "sandbox" must be an object with copy, copy-rw, entry, diff, diff-file keys`],
     ] as const) {
       writeFileSync(configPath, JSON.stringify({ sandbox }));
       // A malformed section fails before trust is considered.
@@ -8011,20 +8036,19 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
     }
     rmSync(configPath);
 
-    // Decision B: what a config may write stays inside its own directory.
+    // Decision B: what a config may write stays inside its own directory
+    // (status 1, like every config output path).
     const projectConfig = join(tmp, "project", "goccia.json");
     for (const [label, sandbox, needle] of [
       ["copy-rw", { "copy-rw": ["../elsewhere"] },
-        `${projectConfig}: "sandbox.copy-rw" entry "../elsewhere" is outside the config's directory; a config may only write inside its own directory tree (pass it on the command line to write elsewhere)`],
+        `${projectConfig}: "sandbox.copy-rw" writes to ${join(tmp, "elsewhere")}, which is outside ${join(tmp, "project")}; a config may only write inside its own directory (pass --copy-rw on the command line to write elsewhere)`],
       ["diff-file", { "diff-file": "../elsewhere/diff.json" },
-        `${projectConfig}: "sandbox.diff-file" entry "../elsewhere/diff.json" is outside the config's directory`],
+        `${projectConfig}: "sandbox.diff-file" writes to ${join(tmp, "elsewhere", "diff.json")}, which is outside ${join(tmp, "project")}`],
     ] as const) {
       writeFileSync(projectConfig, JSON.stringify({ sandbox }));
-      expectSandboxUsageError(
-        `A config ${label} outside its directory`,
-        runSandboxCli(["main.js", "-P"], { cwd: join(tmp, "project") }),
-        needle,
-      );
+      const refused = runSandboxCli(["main.js", "-P"], { cwd: join(tmp, "project") });
+      if (refused.exitCode !== 1 || !refused.stderr.includes(`Error: ${needle}`) || refused.stdout !== "")
+        throw new Error(`A config ${label} outside its directory should exit 1 with ${JSON.stringify(needle)} on stderr, got (exit ${refused.exitCode}):\n${refused.stdout}${refused.stderr}`);
     }
     // A read-only copy may come from anywhere.
     writeFileSync(join(tmp, "elsewhere", "shared.txt"), "shared");

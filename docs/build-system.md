@@ -513,8 +513,8 @@ reach, how inputs are copied in and written back, and the config section.
 | `--entry <sandbox-path>` | Run a path inside the sandbox instead of a host file |
 | `--diff[=json\|unified]` | Print sandbox filesystem changes after the run (default: `json`) |
 | `--diff-file <path>` | Write the diff to a host file instead of printing it; the format comes from `.json` or `.diff` unless `--diff=<format>` names it |
-| `--max-fs-bytes <size>` | Maximum bytes in the sandbox filesystem (default: `16MiB`) |
-| `--max-fs-nodes <count>` | Maximum files and directories in the sandbox filesystem (default: 4096) |
+| `--max-fs-bytes=<bytes>` | Maximum bytes in the sandbox filesystem (default: `16MiB`) |
+| `--max-fs-nodes=<N>` | Maximum files and directories in the sandbox filesystem (default: 4096) |
 
 The engine options and limits apply as in host mode: `--mode`, `--source-type`,
 `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack`, and

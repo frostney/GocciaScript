@@ -173,7 +173,7 @@ type
     FMode: TGocciaConfigTrustMode;
     FHonored: TGocciaHonoredCapabilities;
     FHonorsUnsafe: Boolean;
-    FHonorsSandbox: Boolean;
+    FSandboxConfigKey: string;
     FLoadConfig: TGocciaConfigLoader;
     FStorePath: string;
     FStoreProblem: string;
@@ -185,14 +185,15 @@ type
     function Decide(const AConfigPath: string): TGocciaConfigTrustVerdict;
   public
     { AStorePath is '' when there is no store; AStoreProblem then says why.
-      ALoadConfig parses and validates one config file. AHonorsSandbox: the
-      binary reads a config's sandbox section (GocciaRunner), so the section
-      needs trust there. }
+      ALoadConfig parses and validates one config file. ASandboxConfigPath is
+      the config whose sandbox section the binary reads (GocciaRunner's root
+      config), so that section needs trust; '' when the binary reads none. A
+      sandbox section anywhere else asks for nothing. }
     constructor Create(const AStorePath, AStoreProblem: string;
       const AMode: TGocciaConfigTrustMode;
       const AHonored: TGocciaHonoredCapabilities;
       const AHonorsUnsafe: Boolean; const ALoadConfig: TGocciaConfigLoader;
-      const AHonorsSandbox: Boolean = False);
+      const ASandboxConfigPath: string = '');
     destructor Destroy; override;
     { The verdict for the config at AConfigPath; '' has no request. Raises
       what ALoadConfig raises, without remembering it. }
@@ -1563,7 +1564,7 @@ end;
 constructor TGocciaConfigTrustGate.Create(const AStorePath,
   AStoreProblem: string; const AMode: TGocciaConfigTrustMode;
   const AHonored: TGocciaHonoredCapabilities; const AHonorsUnsafe: Boolean;
-  const ALoadConfig: TGocciaConfigLoader; const AHonorsSandbox: Boolean);
+  const ALoadConfig: TGocciaConfigLoader; const ASandboxConfigPath: string);
 begin
   inherited Create;
   CriticalSectionInit(FLock);
@@ -1572,7 +1573,10 @@ begin
   FMode := AMode;
   FHonored := AHonored;
   FHonorsUnsafe := AHonorsUnsafe;
-  FHonorsSandbox := AHonorsSandbox;
+  if ASandboxConfigPath <> '' then
+    FSandboxConfigKey := TrustKeyForPath(ASandboxConfigPath)
+  else
+    FSandboxConfigKey := '';
   FLoadConfig := ALoadConfig;
   FPaths := TStringList.Create;
   FPaths.Sorted := True;
@@ -1623,7 +1627,7 @@ begin
   end;
   Result.Hash := PermissionBlockHash(Result.Request);
   if not Result.Request.RequestsHonoredGrants(FHonored, FHonorsUnsafe,
-     FHonorsSandbox) then
+     (FSandboxConfigKey <> '') and (Location = FSandboxConfigKey)) then
   begin
     Result.State := ctsNotHonored;
     Exit;

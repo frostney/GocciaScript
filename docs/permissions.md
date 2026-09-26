@@ -753,7 +753,8 @@ copy-rw = ["out"]
 - An empty section, `"sandbox": {}`, turns sandbox mode on with no inputs.
 - Only the root config's section is read: `--config`, or the one discovered
   from the entry file (from the working directory when `--entry` names the
-  entry).
+  entry). A section in any other config is ignored with a warning and needs
+  no trust.
 - `max-fs-bytes` and `max-fs-nodes` are ordinary limits at the top level of any
   config, not part of the section.
 
@@ -774,7 +775,9 @@ command line may name any path.
 inputs add to the section's. When a command-line input has the same sandbox
 target as a config input, the command-line one replaces it, so `--copy out`
 over a config's `"copy-rw": ["out"]` is a read-only dry run. There is no flag
-that turns a config's sandbox off; run with `--config=<other>` to leave it.
+that turns a config's sandbox off; run with `--config=<other>` to leave it, or
+with `--ignore-config-permissions`, which ignores the section along with the
+config's other requests.
 
 ## Limits and units
 

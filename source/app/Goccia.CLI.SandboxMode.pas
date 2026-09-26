@@ -119,6 +119,11 @@ function ResolveSandboxMode(const AOptions: TGocciaSandboxOptions;
 procedure RejectHostCapabilityFlags(const AFlags: array of string;
   const AReason: string);
 
+{ Raises TCLIUsageError naming the first of AOptions (`--output`, ...),
+  which only apply in host mode; sandbox mode was switched on by AReason. }
+procedure RejectHostModeOptions(const AOptions: array of string;
+  const AReason: string);
+
 { The help note that follows the options list. }
 function SandboxModeHelpNote: string;
 
@@ -471,10 +476,7 @@ begin
   end;
 
   RejectHostCapabilityFlags(ACommandLine.DeniedAllowFlags, Result.Reason);
-  if Length(ACommandLine.HostOnlyOptions) > 0 then
-    raise TCLIUsageError.CreateFmt(
-      '%s cannot be used in sandbox mode (enabled by %s)',
-      [ACommandLine.HostOnlyOptions[0], Result.Reason]);
+  RejectHostModeOptions(ACommandLine.HostOnlyOptions, Result.Reason);
 
   { The entry. }
   if AOptions.Entry.FromCommandLine then
@@ -550,6 +552,15 @@ begin
     raise TCLIUsageError.CreateFmt(
       '%s cannot be used in sandbox mode (enabled by %s): %s',
       [AFlags[0], AReason, NO_HOST_FILESYSTEM_HINT]);
+end;
+
+procedure RejectHostModeOptions(const AOptions: array of string;
+  const AReason: string);
+begin
+  if Length(AOptions) > 0 then
+    raise TCLIUsageError.CreateFmt(
+      '%s cannot be used in sandbox mode (enabled by %s)',
+      [AOptions[0], AReason]);
 end;
 
 function SandboxModeHelpNote: string;
