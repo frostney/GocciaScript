@@ -36,7 +36,7 @@ tar xzf "${WORK}/${ASSET}" -C "$WORK"
 
 # The release tarball is built by the `release` job in `.github/workflows/ci.yml`
 # with a single top-level directory matching the archive base name — the
-# binaries land at `<root>/GocciaScriptLoader`, not `<root>/build/...`.
+# binaries land at `<root>/GocciaRunner`, not `<root>/build/...`.
 # (See `.github/scripts/stage-build-artifacts.sh`, which copies binaries
 # directly into the staging dir before `tar -czf` archives it.)
 ROOT="${WORK}/gocciascript-${VERSION}-linux-${GOCCIA_ARCH}"
@@ -51,7 +51,12 @@ ROOT="${WORK}/gocciascript-${VERSION}-linux-${GOCCIA_ARCH}"
 PKG="${WORK}/pkg"
 mkdir -p "${PKG}/DEBIAN" "${PKG}/usr/bin"
 
-cp "${ROOT}/GocciaScriptLoader" "${PKG}/usr/bin/"
+# Releases before 0.14 ship GocciaScriptLoader instead of GocciaRunner.
+if [ -f "${ROOT}/GocciaRunner" ]; then
+  cp "${ROOT}/GocciaRunner" "${PKG}/usr/bin/"
+else
+  cp "${ROOT}/GocciaScriptLoader" "${PKG}/usr/bin/"
+fi
 cp "${ROOT}/GocciaTestRunner" "${PKG}/usr/bin/"
 cp "${ROOT}/GocciaREPL" "${PKG}/usr/bin/"
 chmod 755 "${PKG}/usr/bin/Goccia"*
