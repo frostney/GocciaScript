@@ -34,10 +34,14 @@ type
     FAuditLog: TStringOption;
     FMultifile: TFlagOption;
     FConfig: TStringOption;
-    FLogFileHandle: TextFile;
+    { The --log file, written through a buffer so a chatty script does not
+      cost a write per line; flushed when full and when the log closes. }
+    FLogStream: TStream;
+    FLogBuffer: TBytes;
+    FLogBuffered: Integer;
     FLogLock: TGocciaCriticalSection;
     FLogFileOpen: Boolean;
-    FAuditLogStream: TFileStream;
+    FAuditLogStream: TStream;
     FAuditLogLock: TGocciaCriticalSection;
     FAuditLogOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
@@ -290,6 +294,7 @@ uses
   CLI.Parser,
   CLI.Units,
   FileUtils,
+  HostOutputFiles,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
@@ -1274,6 +1279,11 @@ begin
         'config may only write inside its own directory (pass --%s on the ' +
         'command line to write elsewhere)',
         [Entry.SourcePath, Key, Path, Problem, Option.LongName]);
+    { The check above is the state now; the write may come at the end of the
+      run. Pin the route so the write cannot be carried elsewhere by a
+      directory swapped for a link in between (HostOutputFiles). }
+    RegisterConfinedHostOutput(Path, CanonicalCapabilityPath(Path),
+      CanonicalCapabilityPath(ExtractFileDir(Entry.SourcePath)));
     TStringOption(Option).Apply(Path);
   end;
 end;
@@ -2060,24 +2070,47 @@ begin
   end;
 end;
 
+const
+  LOG_BUFFER_BYTES = 64 * 1024;
+
 procedure TGocciaCLIApplication.HandleConsoleLog(const AMethod, ALine: string);
+var
+  Line: TBytes;
 begin
+  Line := EncodeUTF8WithReplacement('[' + AMethod + '] ' + ALine +
+    LineEnding);
   CriticalSectionEnter(FLogLock);
   try
-    WriteLn(FLogFileHandle, '[' + AMethod + '] ' + ALine);
+    if FLogBuffered + Length(Line) > Length(FLogBuffer) then
+    begin
+      if FLogBuffered > 0 then
+        FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
+      FLogBuffered := 0;
+    end;
+    if Length(Line) > Length(FLogBuffer) then
+      FLogStream.WriteBuffer(Line[0], Length(Line))
+    else if Length(Line) > 0 then
+    begin
+      Move(Line[0], FLogBuffer[FLogBuffered], Length(Line));
+      Inc(FLogBuffered, Length(Line));
+    end;
   finally
     CriticalSectionLeave(FLogLock);
   end;
 end;
 
+{ Opened through CreateHostOutputStream, so a log a config names is created
+  where the config was allowed to put it even if a directory on the way was
+  swapped after the config was read. }
 procedure TGocciaCLIApplication.OpenLogFile;
 begin
   if FLogFileOpen then
     Exit;
   CriticalSectionInit(FLogLock);
   try
-    AssignFile(FLogFileHandle, FLog.Value);
-    Rewrite(FLogFileHandle);
+    FLogStream := CreateHostOutputStream(FLog.Value);
+    SetLength(FLogBuffer, LOG_BUFFER_BYTES);
+    FLogBuffered := 0;
     FLogFileOpen := True;
   except
     CriticalSectionDone(FLogLock);
@@ -2090,8 +2123,12 @@ begin
   if not FLogFileOpen then
     Exit;
   try
-    CloseFile(FLogFileHandle);
+    if FLogBuffered > 0 then
+      FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
   finally
+    FreeAndNil(FLogStream);
+    FLogBuffer := nil;
+    FLogBuffered := 0;
     FLogFileOpen := False;
     CriticalSectionDone(FLogLock);
   end;
@@ -2118,7 +2155,7 @@ begin
     Exit;
   CriticalSectionInit(FAuditLogLock);
   try
-    FAuditLogStream := TFileStream.Create(FAuditLog.Value, fmCreate);
+    FAuditLogStream := CreateHostOutputStream(FAuditLog.Value);
     FAuditLogOpen := True;
   except
     FAuditLogStream.Free;

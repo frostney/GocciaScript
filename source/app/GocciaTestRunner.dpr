@@ -66,7 +66,8 @@ uses
 
   Goccia.TestRunner.SnapshotHost,
 
-  FileUtils;
+  FileUtils,
+  HostOutputFiles;
 
 const
   { Default per-file execution timeout in milliseconds. Applied when the
@@ -2132,7 +2133,7 @@ begin
         WriteLn(Lines[I]);
     end
     else
-      Lines.SaveToFile(AFileName);
+      SaveStringsToHostFile(Lines, AFileName);
   finally
     Lines.Free;
   end;

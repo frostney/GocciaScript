@@ -13,7 +13,7 @@
  * store explicitly with --trust-store.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -1582,6 +1582,50 @@ console.log("Output paths set in a config stay inside the config's directory..."
     writeFileSync(join(project, "goccia.json"), "{}\n");
     expectExit(run(LOADER, [`--log=${victim}`, "main.js"], { cwd: project }), 0, "--log outside the config");
     if (!existsSync(victim)) throw new Error("--log did not write its file");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A config output's directory swapped for a link mid-run is refused...");
+if (!isWindows) {
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    const outside = join(tmp, "outside");
+    mkdirSync(join(project, "out"), { recursive: true });
+    mkdirSync(outside);
+    // The script busy-waits while the test re-points out/ at a directory
+    // outside the project; the write comes when the run ends.
+    const spin = "const end = Date.now() + 3000; while (Date.now() < end) {}";
+    writeFileSync(join(project, "main.js"), `${spin}\nconsole.log("RAN");\n`);
+    writeFileSync(join(project, "a.test.js"), `test("t", () => { ${spin} });\n`);
+    const cases: [string, string, string[]][] = [
+      ["coverage-output", "cov.lcov", [LOADER, "main.js", "--coverage-format=lcov"]],
+      ["output", "results.json", [TESTRUNNER, "a.test.js", "--no-progress"]],
+    ];
+    for (const [key, file, [binary, ...args]] of cases) {
+      writeFileSync(join(project, "goccia.json"), JSON.stringify({ "compat-while-loops": true, [key]: `out/${file}` }) + "\n");
+
+      // Undisturbed, the output lands in out/.
+      rmSync(join(project, "out"), { recursive: true, force: true });
+      mkdirSync(join(project, "out"));
+      expectExit(await runAsync(binary, args, project), 0, `config "${key}" undisturbed`);
+      if (!existsSync(join(project, "out", file))) throw new Error(`config "${key}" was not written to out/`);
+
+      rmSync(join(project, "out"), { recursive: true, force: true });
+      mkdirSync(join(project, "out"));
+      const running = runAsync(binary, args, project);
+      await Bun.sleep(800);
+      renameSync(join(project, "out"), join(project, "out.real"));
+      symlinkSync(outside, join(project, "out"));
+      const swapped = await running;
+      expectExit(swapped, 1, `config "${key}" with out/ swapped mid-run`);
+      expectIncludes(swapped.combined, `Refusing to write ${join(project, "out", file)}`, `config "${key}" with out/ swapped mid-run`);
+      if (existsSync(join(outside, file))) throw new Error(`config "${key}" followed the swapped directory to ${outside}`);
+      rmSync(join(project, "out"));
+      rmSync(join(project, "out.real"), { recursive: true, force: true });
+    }
   } finally {
     clean(tmp);
   }

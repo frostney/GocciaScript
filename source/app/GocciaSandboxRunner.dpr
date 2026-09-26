@@ -11,6 +11,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   FileUtils,
+  HostOutputFiles,
   TextSemantics,
 
   Goccia.Application,
@@ -1367,7 +1368,6 @@ end;
 procedure TSandboxRunnerApp.WriteDiffIfRequested;
 var
   DiffText: string;
-  OutFile: TextFile;
 begin
   if not FDiff.Present and not FDiffMetadata.Present and
      not FDiffOutput.Present then
@@ -1378,15 +1378,7 @@ begin
     DiffText := FContext.DiffJson(FDiffMetadata.Present);
 
   if FDiffOutput.Present then
-  begin
-    AssignFile(OutFile, FDiffOutput.Value);
-    Rewrite(OutFile);
-    try
-      Write(OutFile, DiffText);
-    finally
-      CloseFile(OutFile);
-    end;
-  end
+    WriteHostOutputText(FDiffOutput.Value, DiffText)
   else
     Write(DiffText);
 end;

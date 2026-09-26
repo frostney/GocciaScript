@@ -425,7 +425,11 @@ allow-ffi = ["../fixtures/ffi"]
   `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
   and `diff-output` resolve against the declaring file and fail with status 1
   if they lead outside it, through a symbolic link or otherwise (see
-  [Build System](build-system.md#configuration-file-gocciajson)).
+  [Build System](build-system.md#configuration-file-gocciajson)). The check
+  holds until the write: the file is opened from the config's directory, held
+  to the identity it had when the config was read, one directory at a time
+  without following links, so a directory swapped for a link while the script
+  runs refuses the write instead of redirecting it.
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 

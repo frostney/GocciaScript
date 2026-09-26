@@ -57,6 +57,7 @@ implementation
 uses
   SysUtils,
 
+  HostOutputFiles,
   NumberBits,
 
   Goccia.Bytecode,
@@ -900,10 +901,10 @@ end;
 procedure SaveModuleToFile(const AModule: TGocciaBytecodeModule;
   const AFileName: string);
 var
-  Stream: TFileStream;
+  Stream: TStream;
   Writer: TGocciaBytecodeWriter;
 begin
-  Stream := TFileStream.Create(AFileName, fmCreate);
+  Stream := CreateHostOutputStream(AFileName);
   try
     Writer := TGocciaBytecodeWriter.Create(Stream);
     try
