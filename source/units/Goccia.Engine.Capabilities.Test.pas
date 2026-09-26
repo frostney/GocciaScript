@@ -22,6 +22,7 @@ uses
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
@@ -64,6 +65,7 @@ type
     procedure TestProviderFollowsReadCapability;
     procedure TestStaticImportInsideProjectIsExempt;
     procedure TestStaticImportOutsideProjectIsDenied;
+    procedure TestHostLoadedModuleOutsideProjectIsExempt;
     procedure TestReadGrantCoversOutsidePath;
     procedure TestMissingOutsideFileIsDeniedBeforeProbing;
     procedure TestComputedDynamicImportNeedsRead;
@@ -89,6 +91,8 @@ begin
     TestStaticImportInsideProjectIsExempt);
   Test('A static import outside the project is denied without a host path',
     TestStaticImportOutsideProjectIsDenied);
+  Test('A module the host loads itself is exempt outside the project',
+    TestHostLoadedModuleOutsideProjectIsExempt);
   Test('A read grant covers a path outside the project',
     TestReadGrantCoversOutsidePath);
   Test('A missing file outside the project is denied before probing',
@@ -336,6 +340,36 @@ begin
   Expect<Integer>(EventsOfKind('read.file')).ToBe(1);
   Expect<Boolean>(Pos('read.file|deny|', FEvents[FEvents.Count - 1]) = 1)
     .ToBe(True);
+end;
+
+procedure TEngineCapabilitiesTests.TestHostLoadedModuleOutsideProjectIsExempt;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Module: TGocciaModule;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+      TGocciaCapabilities.None);
+    try
+      Engine.CapabilityAuditSink := RecordEvent;
+      AttachRuntime(Engine);
+      { --globals, --modules, and host environment providers load this way. }
+      Module := Engine.ModuleLoader.LoadHostModule(OutsidePath('secret.js'),
+        ProjectPath('app.mjs'));
+      Expect<Boolean>(Assigned(Module)).ToBe(True);
+      Expect<Boolean>(Module.IsHostOwned).ToBe(True);
+      Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
+    finally
+      Engine.Free;
+    end;
+  finally
+    Executor.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TEngineCapabilitiesTests.TestReadGrantCoversOutsidePath;
