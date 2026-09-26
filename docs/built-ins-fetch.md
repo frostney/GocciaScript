@@ -49,7 +49,7 @@ options:
 
 | Option | Config key | Effect |
 |--------|-----------|--------|
-| `--allowed-host=<host>` | `allowed-hosts` | Allows that host; hosts that resolve into private ranges stay reachable |
+| `--allowed-host=<host>` | `allowed-hosts` | Allows that host, or any [net scope](permissions.md#net-scopes-and-private-ranges); hosts that resolve into private ranges stay reachable |
 | `--fetch-deny-private-ranges` | `fetch-deny-private-ranges` | Denies private, loopback, link-local, CGNAT, and IPv6 ULA destinations |
 | `--fetch-max-response-bytes=<n>` | `fetch-max-response-bytes` | Response-body ceiling (default 8388608, 8 MiB); a setting, not a capability |
 

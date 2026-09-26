@@ -76,17 +76,25 @@ unscoped and no layer has an `ffi` deny scope.
 | `private` | lifts the private-range refusal; matches no destination by itself |
 
 Host scopes are matched against the URL's host before any name lookup, so a
-refused request never becomes an observable side effect. An IP or CIDR scope
-matches only a URL that names an address; host names are never resolved to
-match one.
+refused request never becomes an observable side effect. One trailing dot is
+ignored on both sides, so `tracker.example.com.` is the host
+`tracker.example.com`. An IP or CIDR scope matches only a URL that names an
+address; host names are never resolved to match one. An IPv4-mapped IPv6
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
 is covered by an explicit IP or CIDR allow. An unscoped allow does not name
-them. This is checked twice: against an address literal in the URL, and against
-the address a host name resolved to — so `api.example.com` whose DNS answers
-with `169.254.169.254` is refused unless `private` is allowed. Both checks run
-again on every redirect hop.
+them, but an explicit range does, however broad: `0.0.0.0/0` covers loopback,
+RFC 1918, and the `169.254.169.254` metadata address too. A `private` **deny**
+wins over every allow, explicit addresses and ranges included. IPv6 forms that
+embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
+6to4 `2002::/16` — are private when the host they embed is.
+
+This is checked twice: against an address literal in the URL, and against the
+address a host name resolved to — so `api.example.com` whose DNS answers with
+`169.254.169.254` is refused unless `private` is allowed. Both checks run again
+on every redirect hop.
 
 ### `import` scopes
 
@@ -101,12 +109,18 @@ message; one it explicitly denies throws `PermissionDenied`.
 Provider hosts (`github`) are modeled so a set can carry them, but provider
 resolution is not implemented yet.
 
+Files the import capability grants are part of the module graph (see below):
+once a package is reached through a granted `node_modules` scope, its files
+need no `read` grant, wherever that `node_modules` directory is. Provider
+packages will follow the same rule.
+
 ## The module-graph exemption
 
 Code needs to import its own files. Reads of the host filesystem made by a
 **static import with a literal specifier** — including `json`, `text`, and
 `bytes` imports, and `import()` whose specifier is a string literal — of a file
-inside the **project** need no `read` grant. The project is the directory of the
+inside the **project**, or inside a `node_modules` directory the `import`
+capability grants, need no `read` grant. The project is the directory of the
 nearest `goccia.json`, `goccia.json5`, or `goccia.toml` above the entry file,
 or the entry file's own directory when there is none (the `ProjectRoot` property of `TGocciaEngine`).
 
@@ -129,10 +143,14 @@ denial.
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
 Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
-and their imports) are host-owned and never checked. Before the resolver probes
-the host for a relative or absolute specifier the request is checked against
-its lexical candidate, so a request the set refuses cannot learn whether the
-file exists.
+and their imports) are host requests and never checked; a guest importing the
+same file later is checked like any other guest read, cached or not. Before the
+resolver probes the host for a relative or absolute specifier the request is
+checked against its lexical candidate — and refused when a deny scope names a
+file the extension or index probe could reach — so a request the set refuses
+cannot learn whether the file exists. For the same reason
+`import.meta.resolve` answers with the unprobed URL for a path the engine may
+not read.
 
 ## PermissionDenied
 
@@ -164,7 +182,11 @@ Every decision that consults a capability emits a
 `read.file`, `net.fetch`, `net.dispatch`, `ffi.open`, and `import.node-modules`
 (`import.provider` is reserved). Exempt module-graph loads emit nothing. Each
 root engine also emits one `capabilities.effective` event carrying
-`TGocciaCapabilities.ToJSON`.
+`TGocciaCapabilities.ToJSON`; nested contexts that inherit their parent's set —
+ShadowRealm children and sandbox `runScript` children — report through the
+same sink without repeating it. A fetch's address and redirect decisions are
+attributed to the `fetch()` call that started it, even when they are delivered
+later or after the request was aborted.
 
 ## Nested contexts
 
@@ -204,7 +226,8 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaCapabilities.None` / `.Unrestricted` | Grants nothing / everything including `private` (tests, fully trusted hosts) |
 | `.Allow(cap, scope)` / `.Deny(cap, scope)` | Return a copy with the scope added to the innermost layer |
 | `.Narrow(child)` | Return a copy with the child's layers appended |
-| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath` | Queries |
+| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesPathsStartingWith`, `.DeniesNodeModules`, `.AllowsProvider` | Queries |
+| `.ExplainNetHostDenial` | The host-side reason a net host is refused, for audit |
 | `.ToJSON` | The layers, as `capabilities.effective` reports them |
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |
 | `Engine.ProjectRoot` | The exemption's project directory; override before executing |
@@ -226,7 +249,7 @@ honors exactly the flags it honors today:
 |---|---|
 | host-filesystem module loading (the default) | `read` allowed everywhere |
 | `--no-host-filesystem` | `read` denied outright |
-| `--allowed-host=<host>` / `"allowed-hosts"` | `net` allowed for each host, plus `private` |
+| `--allowed-host=<host>` / `"allowed-hosts"` | `net` allowed for each value, plus `private`; any net scope is accepted (ports, `*.domain`, IPs, CIDR ranges) |
 | `--fetch-deny-private-ranges` | `net` `private` denied |
 | `--unsafe-ffi` | `ffi` allowed everywhere |
 | `--allow-node-modules[=<dir>]` | `import` `node_modules[=<dir>]` |
