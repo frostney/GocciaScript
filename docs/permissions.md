@@ -494,7 +494,12 @@ code, so a config with grants only warns there.
 
 `--trust`, `--untrust`, and `--list-trusted` run on their own: combining two
 of them, or one with input files, `-P`, or `--ignore-config-permissions`, is a
-usage error, as is `-P` with `--ignore-config-permissions`. All of these
+usage error, as is `-P` with `--ignore-config-permissions`. So is an empty
+`--trust` or `--untrust` path (`--untrust=` would otherwise mean the working
+directory), `-P` given a value (`-P=1`), and `--trust-store` without `=`: the
+store path attaches only as `--trust-store=<path>`, so it never takes an
+input file as its value. A `--trust` path that does not exist fails with
+status 1. All of these
 options are command-line-only; in a config file they fail with status 2. There
 is no environment variable for the store: one set ambiently, by a repository's
 tooling for example, could point at a store the repository pre-trusted.
@@ -572,15 +577,23 @@ lock records its writer's process ID and start time; a lock whose process is
 gone, or that is older than 60 seconds, was left by a writer that crashed, and
 is removed with a warning.
 
-A missing store is empty. A store that is not JSON, or that a newer
-GocciaScript wrote, is an error for `--trust`, `--untrust`, and
-`--list-trusted`, which never overwrite it; at run time its configs are
-treated as untrusted and the report names the problem:
+A missing store is empty. A store that is not JSON, that has the wrong shape
+(anything but the schema above: a missing or non-integer `version`, a
+`trusted` that is not an object, an entry missing a field or with a field of
+the wrong type or an unknown key, a `sha256` that is not 64 lower-case hex
+digits), or that a newer GocciaScript wrote, is an error with status 1 for
+`--trust`, `--untrust`, and `--list-trusted`, which never overwrite it; at run
+time its configs are treated as untrusted and the report names the problem:
 
 ```text
 Error: trust store /home/u/.config/goccia/trust.json is not valid JSON; fix or delete it
+Error: trust store /home/u/.config/goccia/trust.json is not a valid trust store (no "trusted"); fix or delete it
 Error: trust store /home/u/.config/goccia/trust.json was written by a newer GocciaScript (version 2); upgrade GocciaScript or remove the file
 ```
+
+A store that cannot be located (`cannot locate the per-user trust store (HOME
+is not set); pass --trust-store=<path>`), a held lock, or a failed write is
+also an error with status 1.
 
 ### `GocciaWasmTestRunner`
 
