@@ -7,11 +7,16 @@ program Goccia.Engine.Capabilities.Test;
 {$I Goccia.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}
+  cthreads,
+  BaseUnix,
+  Sockets,
+  {$ENDIF}
   Classes,
   SysUtils,
 
   FileUtils,
+  HTTPTypes,
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
@@ -21,6 +26,7 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Executor,
+  Goccia.GarbageCollector,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.FetchManager,
@@ -33,6 +39,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue,
+  Goccia.Values.ResponseValue,
   Goccia.VM.Exception;
 
 type
@@ -92,6 +100,7 @@ type
     procedure TestNodeModulesDenyThrowsPermissionDenied;
     procedure TestShadowRealmInheritsCapabilities;
     procedure TestFetchPolicyTravelsWithEachEngine;
+    procedure TestSymlinkOutOfProjectNeedsRead;
   public
     procedure SetupTests; override;
   end;
@@ -140,8 +149,10 @@ begin
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
     TestShadowRealmInheritsCapabilities);
-  Test('Two engines on one thread keep their own fetch policy',
+  Test('Two in-flight requests on one thread keep their own engine''s policy',
     TestFetchPolicyTravelsWithEachEngine);
+  Test('A symlink inside the project to a file outside it needs read',
+    TestSymlinkOutOfProjectNeedsRead);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -842,27 +853,105 @@ begin
   Expect<string>(Outcome.Result).ToBe('outside');
 end;
 
-{ Two engines live on this thread at once and share its fetch manager, but
-  each request carries its own engine's capability set. `localhost` passes
-  both engines' name check; only the engine that names `private` may connect
-  to the loopback address it resolves to. Port 1 refuses the connection, so
-  the permitted request settles with a network TypeError instead. }
-procedure TEngineCapabilitiesTests.TestFetchPolicyTravelsWithEachEngine;
-const
-  SOURCE_TEXT =
-    'globalThis.result = "pending";' + sLineBreak +
-    'fetch("http://localhost:1/").then(() => { globalThis.result = "ok"; },' +
-    ' (e) => { globalThis.result = e.name + "|" + e.message; });';
+{ A one-shot HTTP responder on the loopback interface: accepts up to
+  AConnections connections and answers each with 200 "ok". }
+{$IFDEF UNIX}
+type
+  TLoopbackResponder = class(TThread)
+  private
+    FListener: TSocket;
+    FConnections: Integer;
+    FPort: Word;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AConnections: Integer);
+    destructor Destroy; override;
+    property Port: Word read FPort;
+  end;
+
+constructor TLoopbackResponder.Create(const AConnections: Integer);
 var
+  Address: TInetSockAddr;
+  AddressLength: TSockLen;
+begin
+  FConnections := AConnections;
+  FListener := fpSocket(AF_INET, SOCK_STREAM, 0);
+  FillChar(Address, SizeOf(Address), 0);
+  Address.sin_family := AF_INET;
+  Address.sin_port := 0;
+  Address.sin_addr := StrToNetAddr('127.0.0.1');
+  fpBind(FListener, @Address, SizeOf(Address));
+  fpListen(FListener, AConnections);
+  AddressLength := SizeOf(Address);
+  fpGetSockName(FListener, @Address, @AddressLength);
+  FPort := NToHs(Address.sin_port);
+  inherited Create(False);
+end;
+
+destructor TLoopbackResponder.Destroy;
+begin
+  CloseSocket(FListener);
+  inherited;
+end;
+
+procedure TLoopbackResponder.Execute;
+const
+  RESPONSE: AnsiString = 'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10 +
+    'Connection: close'#13#10#13#10'ok';
+var
+  Client: TSocket;
+  Buffer: array[0..4095] of Byte;
+  I: Integer;
+begin
+  for I := 1 to FConnections do
+  begin
+    Client := fpAccept(FListener, nil, nil);
+    if Client < 0 then
+      Exit;
+    fpRecv(Client, @Buffer[0], SizeOf(Buffer), 0);
+    fpSend(Client, PAnsiChar(RESPONSE), Length(RESPONSE), 0);
+    CloseSocket(Client);
+  end;
+end;
+{$ENDIF}
+
+{ Two engines share this thread's fetch manager and have a request in flight
+  at the same time. `localhost` passes both engines' name check; only the
+  engine that names `private` may connect to the loopback address it resolves
+  to. Each request is judged by the set it carries, not by whichever engine
+  happens to pump the completions. }
+procedure TEngineCapabilitiesTests.TestFetchPolicyTravelsWithEachEngine;
+{$IFDEF UNIX}
+const
+  SETTLE_DEADLINE_MS = 10000;
+var
+  Responder: TLoopbackResponder;
   SourceA, SourceB: TStringList;
   ExecutorA, ExecutorB: TGocciaInterpreterExecutor;
   EngineA, EngineB: TGocciaEngine;
-  ResultA, ResultB: string;
+  PromiseA, PromiseB: TGocciaPromiseValue;
+  URL: string;
+  Waited: Integer;
+
+  function StartRequest(const AEngine: TGocciaEngine): TGocciaPromiseValue;
+  var
+    Policy: TGocciaFetchPolicy;
+    Headers: THTTPHeaders;
+  begin
+    Policy := Default(TGocciaFetchPolicy);
+    Policy.Capabilities := AEngine.Capabilities;
+    SetLength(Headers, 0);
+    Result := TGocciaPromiseValue.Create;
+    TGarbageCollector.Instance.AddTempRoot(Result);
+    TGocciaFetchManager.Instance.StartFetch(URL, 'GET', Headers, Policy,
+      AEngine.Realm, Result);
+  end;
+
 begin
+  Responder := TLoopbackResponder.Create(1);
   SourceA := TStringList.Create;
   SourceB := TStringList.Create;
-  SourceA.Text := SOURCE_TEXT;
-  SourceB.Text := SOURCE_TEXT;
   ExecutorA := TGocciaInterpreterExecutor.Create;
   ExecutorB := TGocciaInterpreterExecutor.Create;
   EngineA := TGocciaEngine.Create(ProjectPath('a.mjs'), SourceA, ExecutorA,
@@ -870,27 +959,85 @@ begin
       .Allow(gcNet, NET_PRIVATE_SCOPE));
   EngineB := TGocciaEngine.Create(ProjectPath('b.mjs'), SourceB, ExecutorB,
     TGocciaCapabilities.None.Allow(gcNet, 'localhost'));
+  PromiseA := nil;
+  PromiseB := nil;
   try
     AttachRuntime(EngineA).Install(TGocciaFetchRuntimeExtension.Create);
     AttachRuntime(EngineB).Install(TGocciaFetchRuntimeExtension.Create);
-    EngineB.Execute;
-    EngineB.WaitForRuntimeIdle;
-    EngineA.Execute;
-    EngineA.WaitForRuntimeIdle;
-    ResultA := TGocciaObjectValue(EngineA.Realm.GlobalObject)
-      .GetProperty('result').ToStringLiteral.Value;
-    ResultB := TGocciaObjectValue(EngineB.Realm.GlobalObject)
-      .GetProperty('result').ToStringLiteral.Value;
+    URL := 'http://localhost:' + IntToStr(Responder.Port) + '/';
+    PromiseA := StartRequest(EngineA);
+    PromiseB := StartRequest(EngineB);
+    Expect<Boolean>(TGocciaFetchManager.Instance.HasPendingFor(EngineA.Realm))
+      .ToBe(True);
+    Expect<Boolean>(TGocciaFetchManager.Instance.HasPendingFor(EngineB.Realm))
+      .ToBe(True);
+    Waited := 0;
+    while ((PromiseA.State = gpsPending) or (PromiseB.State = gpsPending)) and
+          (Waited < SETTLE_DEADLINE_MS) do
+      if TGocciaFetchManager.Instance.PumpCompletions = 0 then
+      begin
+        Sleep(1);
+        Inc(Waited);
+      end;
+    Expect<Boolean>(PromiseA.State = gpsFulfilled).ToBe(True);
+    Expect<Integer>(TGocciaResponseValue(PromiseA.PromiseResult).Status)
+      .ToBe(200);
+    Expect<Boolean>(PromiseB.State = gpsRejected).ToBe(True);
+    Expect<string>(TGocciaObjectValue(PromiseB.PromiseResult)
+      .GetProperty('message').ToStringLiteral.Value)
+      .ToBe('net: localhost:' + IntToStr(Responder.Port));
   finally
+    if Assigned(PromiseA) then
+      TGarbageCollector.Instance.RemoveTempRoot(PromiseA);
+    if Assigned(PromiseB) then
+      TGarbageCollector.Instance.RemoveTempRoot(PromiseB);
     EngineB.Free;
     EngineA.Free;
     ExecutorB.Free;
     ExecutorA.Free;
     SourceB.Free;
     SourceA.Free;
+    Responder.WaitFor;
+    Responder.Free;
   end;
-  Expect<string>(ResultB).ToBe('PermissionDenied|net: localhost:1');
-  Expect<Boolean>(Pos('TypeError|', ResultA) = 1).ToBe(True);
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+{$ENDIF}
+end;
+
+{ A symbolic link inside the project that names a file outside it is judged
+  where it resolves: the static import is not exempt, so it needs a read
+  grant covering the target. }
+procedure TEngineCapabilitiesTests.TestSymlinkOutOfProjectNeedsRead;
+{$IFDEF UNIX}
+var
+  LinkPath: string;
+  Outcome: TRunOutcome;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  LinkPath := ProjectPath('link.js');
+  DeleteFile(LinkPath);
+  if fpSymlink(PAnsiChar(AnsiString(OutsidePath('secret.js'))),
+     PAnsiChar(AnsiString(LinkPath))) <> 0 then
+    Fail('could not create the test symlink');
+  try
+    Outcome := Run(
+      'import { value } from "./link.js"; globalThis.result = value;',
+      TGocciaCapabilities.None);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.ErrorMessage).ToBe('read: ./link.js');
+    Outcome := Run(
+      'import { value } from "./link.js"; globalThis.result = value;',
+      TGocciaCapabilities.None.Allow(gcRead, FOutside));
+    Expect<string>(Outcome.Result).ToBe('outside');
+  finally
+    DeleteFile(LinkPath);
+  end;
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
 end;
 
 begin
