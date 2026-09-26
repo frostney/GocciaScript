@@ -16,7 +16,7 @@ import {
 } from "fs";
 import { join, resolve } from "path";
 import {
-  LOADER,
+  RUNNER,
   REPL,
   TESTRUNNER,
   BUNDLER,
@@ -86,11 +86,11 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
     writeFileSync(join(tmp, "test-runner.js"), testCase.testRunnerSource);
     writeFileSync(join(tmp, "bench.js"), testCase.benchSource);
 
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(loaderOut, testCase.loaderExpectedLine))
       throw new Error(`Loader interp ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderOut}`);
 
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    const loaderBc = await $`${RUNNER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderBc, testCase.loaderExpectedLine))
       throw new Error(`Loader bytecode ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderBc}`);
 
@@ -147,7 +147,7 @@ console.log("goccia.json loading...");
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 2 + 2\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "4")) throw new Error(`goccia.json should produce 4 on its own line, got: ${out}`);
   } finally {
@@ -182,7 +182,7 @@ console.log("deterministic config applies before runtime globals attach...");
     const expected = "0.8833108082136426|0|0|0|0";
     for (const mode of ["interpreted", "bytecode"] as const) {
       const loader = runCwd(
-        LOADER,
+        RUNNER,
         ["--print", join(tmp, "test.js"), `--mode=${mode}`],
         tmp,
       );
@@ -234,7 +234,7 @@ console.log("host environment config loads a provider module before runtime glob
     const expected = "123|0.125|UTC|123|0";
     for (const mode of ["interpreted", "bytecode"] as const) {
       const loader = runCwd(
-        LOADER,
+        RUNNER,
         ["--print", join(tmp, "test.js"), `--mode=${mode}`],
         tmp,
       );
@@ -257,7 +257,7 @@ console.log("goccia.toml loading...");
     writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.toml should enable bytecode, got: ${out}`);
     if (!containsLine(out, "10")) throw new Error(`goccia.toml should produce 10 on its own line, got: ${out}`);
   } finally {
@@ -274,7 +274,7 @@ console.log("goccia.json5 loading...");
     writeFileSync(join(tmp, "goccia.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 10\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`goccia.json5 should enable bytecode, got: ${out}`);
   } finally {
     clean(tmp);
@@ -292,7 +292,7 @@ console.log("Priority: TOML > JSON5 > JSON...");
     writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
     writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`TOML should win over JSON5 and JSON, got: ${out}`);
   } finally {
     clean(tmp);
@@ -309,7 +309,7 @@ console.log("Discovery from entry file directory...");
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "src", "test.js"), "const x = 7\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "src", "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "src", "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Config in parent should be discovered, got: ${out}`);
     if (!containsLine(out, "7")) throw new Error(`Should produce 7 on its own line, got: ${out}`);
   } finally {
@@ -329,7 +329,7 @@ console.log("Config timeout...");
       "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n",
     );
 
-    const res = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.nothrow();
+    const res = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Timeout config should cause non-zero exit");
     if (!res.text().includes("timed out")) throw new Error(`Should mention "timed out", got: ${res.text()}`);
   } finally {
@@ -349,7 +349,7 @@ console.log("Config max-stack...");
       "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
     );
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("50")) throw new Error(`max-stack config should limit to 50, got: ${out}`);
   } finally {
     clean(tmp);
@@ -365,7 +365,7 @@ console.log("Config without imports field...");
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 42\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(out, "42")) throw new Error(`Config without imports should work, got: ${out}`);
   } finally {
     clean(tmp);
@@ -386,7 +386,7 @@ console.log("Config with imports...");
     );
     writeFileSync(join(tmp, "test.js"), 'import { value } from "utils"\nvalue\n');
 
-    const out = runCwd(LOADER, ["--print", "test.js"], tmp);
+    const out = runCwd(RUNNER, ["--print", "test.js"], tmp);
     if (!containsLine(out.combined, "99")) throw new Error(`Imports should resolve, got: ${out.combined}`);
   } finally {
     clean(tmp);
@@ -403,7 +403,7 @@ console.log("Config extends...");
     writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "mode": "bytecode"}\n');
     writeFileSync(join(tmp, "test.js"), "const x = 5\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Extends should enable bytecode, got: ${out}`);
     if (!containsLine(out, "5")) throw new Error(`Extends should inherit ASI, got: ${out}`);
   } finally {
@@ -425,7 +425,7 @@ console.log("Config extends from subdirectory...");
     );
     writeFileSync(join(tmp, "tests", "asi", "test.js"), "const x = 99\nx\n");
 
-    const out = await $`${LOADER} --print ${join(tmp, "tests", "asi", "test.js")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "tests", "asi", "test.js")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`Subdirectory extends should enable bytecode, got: ${out}`);
     if (!containsLine(out, "99")) throw new Error(`Subdirectory extends should inherit ASI, got: ${out}`);
   } finally {
@@ -537,20 +537,20 @@ console.log("Per-file ASI config across all apps...");
     writeFileSync(join(strictDir, "bad.js"), "const z = 1\nz\n");
 
     // Loader (interpreted)
-    const loaderInterp = await $`${LOADER} --print ${join(asiDir, "test.js")} 2>&1`.text();
+    const loaderInterp = await $`${RUNNER} --print ${join(asiDir, "test.js")} 2>&1`.text();
     if (!containsLine(loaderInterp, "42")) throw new Error(`Loader interp ASI should produce 42 on its own line, got: ${loaderInterp}`);
 
-    const strictOk = await $`${LOADER} --print ${join(strictDir, "test.js")} 2>&1`.text();
+    const strictOk = await $`${RUNNER} --print ${join(strictDir, "test.js")} 2>&1`.text();
     if (!containsLine(strictOk, "99")) throw new Error(`Strict subdir should produce 99 on its own line, got: ${strictOk}`);
 
-    const strictBad = await $`${LOADER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
+    const strictBad = await $`${RUNNER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
     if (!strictBad.text().includes("SyntaxError")) throw new Error("Strict subdir should reject missing semicolons");
 
     // Loader (bytecode)
-    const loaderBc = await $`${LOADER} --print ${join(asiDir, "test.js")} --mode=bytecode 2>&1`.text();
+    const loaderBc = await $`${RUNNER} --print ${join(asiDir, "test.js")} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderBc, "42")) throw new Error(`Loader bytecode ASI should produce 42 on its own line, got: ${loaderBc}`);
 
-    const strictBcBad = await $`${LOADER} ${join(strictDir, "bad.js")} --mode=bytecode 2>&1`.nothrow();
+    const strictBcBad = await $`${RUNNER} ${join(strictDir, "bad.js")} --mode=bytecode 2>&1`.nothrow();
     if (!strictBcBad.text().includes("SyntaxError")) throw new Error("Strict bytecode should reject");
 
     // TestRunner (interpreted)
@@ -630,13 +630,13 @@ console.log("Per-file allow-ffi config across runtime apps...");
       ]),
     );
 
-    const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
+    const loaderNoConfig = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
     if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without allow-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
 
-    const loaderOut = await $`${LOADER} -P --print ${join(tmp, "test.js")} 2>&1`.text();
+    const loaderOut = await $`${RUNNER} -P --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(loaderOut, "object")) throw new Error(`Loader allow-ffi config should expose FFI, got: ${loaderOut}`);
 
-    const loaderBc = await $`${LOADER} -P --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    const loaderBc = await $`${RUNNER} -P --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode allow-ffi config should expose FFI, got: ${loaderBc}`);
 
     const trInterp = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
@@ -656,7 +656,7 @@ console.log("Per-file allow-ffi config across runtime apps...");
       join(parallelLoaderDir, "b.js"),
       'if (typeof FFI !== "object") throw new Error("FFI missing");\n',
     );
-    runCwd(LOADER, ["-P", "a.js", "b.js", "--jobs=2", "--output=compact-json"], parallelLoaderDir);
+    runCwd(RUNNER, ["-P", "a.js", "b.js", "--jobs=2", "--output=compact-json"], parallelLoaderDir);
 
     const parallelTestDir = join(tmp, "test-parallel");
     mkdirSync(parallelTestDir);
@@ -878,7 +878,7 @@ console.log("compat-traditional-for-loop OFF errors by default...");
       join(tmp, "no-flag.js"),
       "for (let i = 0; i < 3; i++) { console.log('should not run'); }\n",
     );
-    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultRes = await $`${RUNNER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
     const defaultOutput = defaultRes.text();
     if (defaultRes.exitCode === 0) {
       throw new Error(`Loader without flag should fail for traditional for-loop`);
@@ -887,7 +887,7 @@ console.log("compat-traditional-for-loop OFF errors by default...");
         !defaultOutput.includes("Traditional 'for(;;)' loops are not supported")) {
       throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
     }
-    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningRes = await $`${RUNNER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
     const warningOutput = warningRes.text();
     if (warningRes.exitCode !== 0) {
       throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
@@ -913,7 +913,7 @@ console.log("compat-while-loops OFF errors by default...");
       join(tmp, "no-flag.js"),
       "let x = 0;\nwhile (x < 3) { console.log('should not run'); x++; }\n",
     );
-    const defaultRes = await $`${LOADER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
+    const defaultRes = await $`${RUNNER} ${join(tmp, "no-flag.js")} 2>&1`.nothrow();
     const defaultOutput = defaultRes.text();
     if (defaultRes.exitCode === 0) {
       throw new Error(`Loader without flag should fail for while loop`);
@@ -922,7 +922,7 @@ console.log("compat-while-loops OFF errors by default...");
         !defaultOutput.includes("'while' loops are not supported by default")) {
       throw new Error(`Loader without flag should emit SyntaxError, got: ${defaultOutput}`);
     }
-    const warningRes = await $`${LOADER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
+    const warningRes = await $`${RUNNER} ${join(tmp, "no-flag.js")} --warning-unsupported-features 2>&1`.nothrow();
     const warningOutput = warningRes.text();
     if (warningRes.exitCode !== 0) {
       throw new Error(`Loader with warning flag should recover, got: ${warningOutput}`);
@@ -1058,24 +1058,24 @@ console.log("CLI options override file config...");
     writeFileSync(join(noConfigDir, "test.js"), "const x = 1\nx\n");
 
     // File config ASI works
-    const configOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const configOut = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(configOut, "1")) throw new Error(`File config ASI should work, got: ${configOut}`);
 
     // Without config should fail
-    const noConfigRes = await $`${LOADER} ${join(noConfigDir, "test.js")} 2>&1`.nothrow();
+    const noConfigRes = await $`${RUNNER} ${join(noConfigDir, "test.js")} 2>&1`.nothrow();
     if (!noConfigRes.text().includes("SyntaxError")) throw new Error("No config should reject");
 
     // CLI --compat-asi overrides no-config
-    const cliAsi = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --compat-asi 2>&1`.text();
+    const cliAsi = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi 2>&1`.text();
     if (!containsLine(cliAsi, "1")) throw new Error(`CLI --compat-asi should override, got: ${cliAsi}`);
 
     // CLI --compat-asi bytecode
-    const cliAsiBc = await $`${LOADER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=bytecode 2>&1`.text();
+    const cliAsiBc = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=bytecode 2>&1`.text();
     if (!containsLine(cliAsiBc, "1")) throw new Error(`CLI --compat-asi bytecode should override, got: ${cliAsiBc}`);
 
     // CLI --mode=interpreted overrides config mode
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
-    const overrideMode = await $`${LOADER} ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
+    const overrideMode = await $`${RUNNER} ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
     if (!overrideMode.includes("(interpreted)")) throw new Error(`CLI --mode=interpreted should override config, got: ${overrideMode}`);
 
     // Bundler CLI --compat-asi overrides no-config
@@ -1096,7 +1096,7 @@ console.log("Config allow-net blocks unlisted host...");
     writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
     writeFileSync(join(tmp, "test.js"), 'fetch("http://blocked.test");\n');
 
-    const res = runCwd(LOADER, ["-P", "test.js"], tmp, { expectFail: true });
+    const res = runCwd(RUNNER, ["-P", "test.js"], tmp, { expectFail: true });
     if (!res.combined.includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.combined}`);
   } finally {
     clean(tmp);
@@ -1115,7 +1115,7 @@ console.log("Config allow-net allows listed host...");
       'const p = fetch("http://0.0.0.0:1/"); p.catch(() => {}); typeof p.then;\n',
     );
 
-    const out = runCwd(LOADER, ["-P", "--print", "test.js"], tmp);
+    const out = runCwd(RUNNER, ["-P", "--print", "test.js"], tmp);
     if (!out.combined.includes("function")) throw new Error(`Allowed host should return promise, got: ${out.combined}`);
   } finally {
     clean(tmp);
@@ -1135,7 +1135,7 @@ console.log("Config allow-net per-file overrides root...");
     writeFileSync(join(subDir, "test.js"), 'fetch("http://example.com");\n');
 
     // example.com is NOT in the subdirectory config, so it should be blocked
-    const res = runCwd(LOADER, ["-P", join(subDir, "test.js")], tmp, { expectFail: true });
+    const res = runCwd(RUNNER, ["-P", join(subDir, "test.js")], tmp, { expectFail: true });
     if (!res.combined.includes("example.com")) throw new Error(`Per-file config should override root, got: ${res.combined}`);
   } finally {
     clean(tmp);
@@ -1165,13 +1165,13 @@ console.log("CLI --allow-net adds to and --deny-net subtracts from config permis
     );
 
     // A CLI allow adds to the config's grants rather than replacing them.
-    const added = runCwd(LOADER, ["-P", "test.js", "--allow-net=cli.invalid"], tmp);
+    const added = runCwd(RUNNER, ["-P", "test.js", "--allow-net=cli.invalid"], tmp);
     for (const line of ["config.invalid allowed", "cli.invalid allowed", "other.invalid PermissionDenied"])
       if (!containsLine(added.stdout, line))
         throw new Error(`CLI allow should add to the config's grants (${line}), got: ${added.combined}`);
 
     // A CLI deny subtracts from the config's grants.
-    const subtracted = runCwd(LOADER, ["-P", "test.js", "--allow-net=cli.invalid", "--deny-net=config.invalid"], tmp);
+    const subtracted = runCwd(RUNNER, ["-P", "test.js", "--allow-net=cli.invalid", "--deny-net=config.invalid"], tmp);
     for (const line of ["config.invalid PermissionDenied", "cli.invalid allowed", "other.invalid PermissionDenied"])
       if (!containsLine(subtracted.stdout, line))
         throw new Error(`CLI deny should subtract a config-granted host (${line}), got: ${subtracted.combined}`);
@@ -1190,7 +1190,7 @@ console.log("Config allow-net false cancels a parent's grant via extends...");
     writeFileSync(join(tmp, "goccia.json"), '{"extends": "base.json", "permissions": {"allow-net": false}}\n');
     writeFileSync(join(tmp, "test.js"), 'fetch("http://example.com");\n');
 
-    const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
+    const res = runCwd(RUNNER, ["test.js"], tmp, { expectFail: true });
     if (!res.combined.includes("PermissionDenied: net: example.com"))
       throw new Error(`allow-net false should block fetch, got: ${res.combined}`);
   } finally {
@@ -1237,7 +1237,7 @@ console.log("--config=<file> loads .json explicitly...");
     // Config lives in a sibling directory; auto-discovery would never find it.
     writeFileSync(join(cfgDir, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "11")) throw new Error(`--config=.json should enable ASI (11 on its own line), got: ${out}`);
   } finally {
@@ -1254,7 +1254,7 @@ console.log("--config=<file> loads .toml explicitly...");
     writeFileSync(join(tmp, "test.js"), "const x = 21\nx\n");
     writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.toml should enable bytecode, got: ${out}`);
     if (!containsLine(out, "21")) throw new Error(`--config=.toml should enable ASI (21 on its own line), got: ${out}`);
   } finally {
@@ -1271,7 +1271,7 @@ console.log("--config=<file> loads .json5 explicitly...");
     writeFileSync(join(tmp, "test.js"), "const x = 31\nx\n");
     writeFileSync(join(cfgDir, "custom.json5"), '{"compat-asi": true, mode: "bytecode"}\n');
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.json5")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=.json5 should enable bytecode, got: ${out}`);
     if (!containsLine(out, "31")) throw new Error(`--config=.json5 should enable ASI (31 on its own line), got: ${out}`);
   } finally {
@@ -1288,7 +1288,7 @@ console.log("--config=<file> with relative path resolves against cwd...");
     writeFileSync(join(tmp, "custom.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
     // Relative path; cwd is tmp.
-    const out = runCwd(LOADER, ["--print", "test.js", "--config=./custom.json"], tmp);
+    const out = runCwd(RUNNER, ["--print", "test.js", "--config=./custom.json"], tmp);
     if (!out.combined.includes("(bytecode)")) throw new Error(`Relative --config should resolve, got: ${out.combined}`);
     if (!containsLine(out.combined, "41")) throw new Error(`Relative --config should enable ASI, got: ${out.combined}`);
   } finally {
@@ -1310,7 +1310,7 @@ console.log("--config=<dir> finds goccia.json...");
     writeFileSync(join(tmp, "test.js"), "const x = 51\nx\n");
     writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": true, "mode": "bytecode"}\n');
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> with goccia.json should enable bytecode, got: ${out}`);
     if (!containsLine(out, "51")) throw new Error(`--config=<dir> should enable ASI, got: ${out}`);
   } finally {
@@ -1330,7 +1330,7 @@ console.log("--config=<dir> respects priority TOML > JSON5 > JSON...");
     writeFileSync(join(cfgDir, "goccia.json5"), '{"compat-asi": true, mode: "interpreted"}\n');
     writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
   } finally {
     clean(tmp);
@@ -1347,7 +1347,7 @@ console.log("--config=<dir> with trailing slash works...");
     writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
     // Some shells/users will pass the directory with a trailing slash.
-    const out = await $`${LOADER} ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
+    const out = await $`${RUNNER} ${join(tmp, "test.js")} --config=${cfgDir + "/"} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config=<dir>/ should still find config, got: ${out}`);
   } finally {
     clean(tmp);
@@ -1367,7 +1367,7 @@ console.log("--config=<dir> does not walk upward...");
     mkdirSync(empty);
     writeFileSync(join(tmp, "test.js"), "const x = 81\nx\n");
 
-    const res = await $`${LOADER} ${join(tmp, "test.js")} --config=${empty} 2>&1`.nothrow();
+    const res = await $`${RUNNER} ${join(tmp, "test.js")} --config=${empty} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("--config=<empty-dir> should not silently walk up to parent");
     if (!res.text().includes("No goccia.")) throw new Error(`Error should mention missing goccia.* file, got: ${res.text()}`);
   } finally {
@@ -1383,7 +1383,7 @@ console.log("--config=<missing path> is a hard error...");
   try {
     writeFileSync(join(tmp, "test.js"), "const x = 91;\nx;\n");
 
-    const res = await $`${LOADER} ${join(tmp, "test.js")} --config=${join(tmp, "does-not-exist.json")} 2>&1`.nothrow();
+    const res = await $`${RUNNER} ${join(tmp, "test.js")} --config=${join(tmp, "does-not-exist.json")} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("--config pointing to nonexistent path should fail");
     if (!res.text().includes("not found")) throw new Error(`Error should mention "not found", got: ${res.text()}`);
   } finally {
@@ -1408,7 +1408,7 @@ console.log("--config skips auto-discovery of nearby goccia.*...");
     // Explicit config selects bytecode.
     writeFileSync(join(cfgDir, "good.toml"), 'compat-asi = true\nmode = "bytecode"\n');
 
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "good.toml")} 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`--config should skip nearby goccia.json, got: ${out}`);
     if (!containsLine(out, "101")) throw new Error(`--config should still apply ASI, got: ${out}`);
   } finally {
@@ -1429,7 +1429,7 @@ console.log("CLI options override values from --config...");
     writeFileSync(join(cfgDir, "custom.toml"), 'compat-asi = true\nmode = "interpreted"\n');
 
     // ...but a direct --mode=bytecode on the CLI must win.
-    const out = await $`${LOADER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
+    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${join(cfgDir, "custom.toml")} --mode=bytecode 2>&1`.text();
     if (!out.includes("(bytecode)")) throw new Error(`CLI --mode should override --config value, got: ${out}`);
     if (!containsLine(out, "111")) throw new Error(`ASI from --config should still apply, got: ${out}`);
   } finally {
@@ -1548,7 +1548,7 @@ console.log("Virtual modules in goccia.json...");
     );
     for (const mode of ["interpreted", "bytecode"] as const) {
       const out = runCwd(
-        LOADER,
+        RUNNER,
         [join(tmp, "entry.js"), "--print", `--mode=${mode}`],
         tmp,
       );
@@ -1580,7 +1580,7 @@ console.log("--modules manifests (JSON, JSON5, TOML, YAML, JavaScript, TypeScrip
       const path = join(tmp, name);
       writeFileSync(path, content);
       const out = runCwd(
-        LOADER,
+        RUNNER,
         [join(tmp, "entry.mjs"), "--print", "--modules", path],
         tmp,
       );
@@ -1627,7 +1627,7 @@ console.log("Executable manifests keep --deny-read in force...");
     for (const mode of ["interpreted", "bytecode"] as const) {
       for (const { name, dir, args } of cases) {
         const blocked = runCwd(
-          LOADER,
+          RUNNER,
           [join(dir, "host.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
           tmp,
           { expectFail: true },
@@ -1640,7 +1640,7 @@ console.log("Executable manifests keep --deny-read in force...");
           throw new Error(`${name} host import should be refused by the read capability (${mode}): ${blocked.combined}`);
 
         const resolved = runCwd(
-          LOADER,
+          RUNNER,
           [join(dir, "virtual.mjs"), "--print", "--deny-read", `--mode=${mode}`, ...args],
           tmp,
         );
@@ -1663,7 +1663,7 @@ console.log("Executable manifests keep --deny-read in force...");
     );
     for (const mode of ["interpreted", "bytecode"] as const) {
       const trampoline = runCwd(
-        LOADER,
+        RUNNER,
         [
           join(projDir, "trampoline.mjs"),
           "--deny-read",
@@ -1680,7 +1680,7 @@ console.log("Executable manifests keep --deny-read in force...");
         throw new Error(`A manifest's global function import should be refused by the read capability (${mode}): ${trampoline.combined}`);
       // Without the deny the manifest is evaluated in place, as host code.
       const inPlace = runCwd(
-        LOADER,
+        RUNNER,
         [
           join(projDir, "trampoline.mjs"),
           `--mode=${mode}`,
@@ -1737,7 +1737,7 @@ console.log("Executable manifests cannot replace an already loaded module record
     );
     writeFileSync(entry, 'import value from "./modules.mjs"; value;\n');
     const out = runCwd(
-      LOADER,
+      RUNNER,
       [entry, "--print", "--modules", manifest],
       tmp,
       { expectFail: true },
@@ -1765,7 +1765,7 @@ console.log("Executable manifests inherit effective engine configuration...");
     );
     writeFileSync(entry, 'import value from "host:configured"; value;\n');
     const out = runCwd(
-      LOADER,
+      RUNNER,
       [entry, "--print", "--modules", manifest],
       tmp,
     );
@@ -1815,7 +1815,7 @@ console.log("Virtual module config precedence and inherited manifest origins..."
     );
 
     const perFile = runCwd(
-      LOADER,
+      RUNNER,
       [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json")],
       tmp,
     );
@@ -1823,7 +1823,7 @@ console.log("Virtual module config precedence and inherited manifest origins..."
       throw new Error(`Per-file virtual module config should override root and retain inherited origins: ${perFile.combined}`);
 
     const cli = runCwd(
-      LOADER,
+      RUNNER,
       [
         join(appDir, "entry.mjs"),
         "--print",
@@ -1860,7 +1860,7 @@ console.log("Virtual modules win filesystem collisions with a warning...");
       'import value from "virtual-dep"; value;\n',
     );
     const out = runCwd(
-      LOADER,
+      RUNNER,
       [join(tmp, "entry.mjs"), "--print"],
       tmp,
     );

@@ -83,7 +83,7 @@ Options:
   --manifest=<path>          Use this validation manifest.
   --package-dir=<path>       Use an already extracted npm package directory.
   --tarball-cache=<path>     Use or populate a verified npm tarball cache.
-  --goccia=<path>            Use this GocciaScriptLoader binary.
+  --goccia=<path>            Use this GocciaRunner binary.
   --output=<path>            Write the normalized JSON report to this path.
   --timeout-seconds=<n>      Set the per-probe timeout (default: 30).
   --print-cache-key          Print the integrity-derived workflow cache key.
@@ -101,7 +101,7 @@ function optionValue(argv: string[], index: number, name: string): [string, numb
 export function parseArgs(argv: string[]): Options | null {
   const options: Options = {
     manifest: DEFAULT_MANIFEST,
-    goccia: "build/GocciaScriptLoader",
+    goccia: "build/GocciaRunner",
     timeoutSeconds: 30,
     printCacheKey: false,
   };

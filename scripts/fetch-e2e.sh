@@ -4,11 +4,11 @@
 # Spins up a local HTTP server, makes real requests, validates responses.
 #
 # Usage: bash scripts/fetch-e2e.sh
-# Requires: ./build/GocciaScriptLoader, python3
+# Requires: ./build/GocciaRunner, python3
 
 set -euo pipefail
 
-LOADER="./build/GocciaScriptLoader"
+RUNNER="./build/GocciaRunner"
 PASS=0
 FAIL=0
 TMPFILE="/tmp/goccia-fetch-e2e-$$.js"
@@ -42,7 +42,7 @@ ALLOW_HOST="--allow-net=127.0.0.1"
 
 run_js() {
   echo "$1" > "$TMPFILE"
-  "$LOADER" "$ALLOW_HOST" "$TMPFILE" --compat-asi 2>&1
+  "$RUNNER" "$ALLOW_HOST" "$TMPFILE" --compat-asi 2>&1
 }
 
 # Same as run_js, but with extra loader flags before the script path, so the
@@ -57,7 +57,7 @@ run_js_with() {
   echo "$2" > "$TMPFILE"
   # $extra and $grant are deliberate flag lists, so word splitting is wanted.
   # shellcheck disable=SC2086
-  "$LOADER" $grant $extra "$TMPFILE" --compat-asi 2>&1
+  "$RUNNER" $grant $extra "$TMPFILE" --compat-asi 2>&1
 }
 
 check_with() {

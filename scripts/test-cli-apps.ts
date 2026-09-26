@@ -26,7 +26,7 @@ import {
 import { join, resolve } from "path";
 import { fileURLToPath } from "url";
 import {
-  LOADER,
+  RUNNER,
   BARE,
   SANDBOXRUNNER,
   REPL,
@@ -159,7 +159,7 @@ async function runLoaderJsonAsync(
   const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
   const proc = Bun.spawn(
     [
-      LOADER,
+      RUNNER,
       ...(hasOutputFlag ? [] : ["--output=json"]),
       ...(extraArgs ?? []),
     ],
@@ -357,7 +357,7 @@ await section("Loader: JSON multi-file structure...", async () => {
     writeFileSync(first, "console.log('first out'); 11;\n");
     writeFileSync(second, "console.error('second err'); 22;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--output=json", "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -401,7 +401,7 @@ await section("Loader: JSON source-load failure stays per-file...", async () => 
     writeFileSync(valid, "2 + 2;\n");
     if (process.platform !== "win32") {
       chmodSync(unreadable, 0o000);
-      const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=1", unreadable, valid], {
+      const proc = Bun.spawnSync([RUNNER, "--output=json", "--jobs=1", unreadable, valid], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -475,7 +475,7 @@ await section("Loader: compact-json multi-file omits build, memory, stdout, stde
     writeFileSync(first, "11;\n");
     writeFileSync(second, "22;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--output=compact-json", "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--output=compact-json", "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -515,7 +515,7 @@ await section("Loader: parallel human-readable output preserves console output..
     writeFileSync(first, "console.log('parallel first out'); 1;\n");
     writeFileSync(second, "console.log('parallel second out'); 2;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -531,7 +531,7 @@ await section("Loader: parallel human-readable output preserves console output..
 // -- --print --------------------------------------------------------------------
 
 await section("Loader: silent (no result line) by default...", async () => {
-  const proc = Bun.spawnSync([LOADER], {
+  const proc = Bun.spawnSync([RUNNER], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -547,7 +547,7 @@ await section("Loader: silent (no result line) by default...", async () => {
 });
 
 await section("Loader: --print emits bare value (no 'Result:' prefix)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--print"], {
+  const proc = Bun.spawnSync([RUNNER, "--print"], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -561,7 +561,7 @@ await section("Loader: --print emits bare value (no 'Result:' prefix)...", async
 });
 
 await section("Loader: --print emits 'undefined' when result is undefined...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--print"], {
+  const proc = Bun.spawnSync([RUNNER, "--print"], {
     stdin: new TextEncoder().encode("undefined;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -578,7 +578,7 @@ await section("Loader: --print honored from goccia.json...", async () => {
     writeFileSync(join(tmp, "goccia.json"), '{"print": true}\n');
     const file = join(tmp, "test.js");
     writeFileSync(file, "1 + 1;\n");
-    const proc = Bun.spawnSync([LOADER, file], {
+    const proc = Bun.spawnSync([RUNNER, file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -2175,7 +2175,7 @@ await section("Bare Loader: Promise.then drain (bytecode)...", async () => {
 // -- Promise.then microtask drain (Loader) --------------------------------------
 
 await section("Loader: Promise.then drain (interpreted)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--mode=interpreted"], {
+  const proc = Bun.spawnSync([RUNNER, "--mode=interpreted"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
@@ -2186,7 +2186,7 @@ await section("Loader: Promise.then drain (interpreted)...", async () => {
 });
 
 await section("Loader: Promise.then drain (bytecode)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--mode=bytecode"], {
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
@@ -2203,7 +2203,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       const audit = join(tmp, `capabilities-${mode}.jsonl`);
       const proc = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           `--mode=${mode}`,
           "--allow-ffi",
           "--unsafe-shadowrealm",
@@ -2252,7 +2252,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       const allowAudit = join(tmp, `function-allow-${mode}.jsonl`);
       const allow = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           `--mode=${mode}`,
           "--unsafe-function-constructor",
           `--audit-log=${allowAudit}`,
@@ -2280,7 +2280,7 @@ await section("Loader: --audit-log records capability decisions with source loca
 await section("Loader: --audit-log fails closed when the output cannot be opened...", async () => {
   const tmp = makeTmp();
   try {
-    const proc = Bun.spawnSync([LOADER, `--audit-log=${tmp}`], {
+    const proc = Bun.spawnSync([RUNNER, `--audit-log=${tmp}`], {
       stdin: new TextEncoder().encode("1;\n"),
       stdout: "pipe",
       stderr: "pipe",
@@ -2298,7 +2298,7 @@ await section("Loader: --log and --audit-log reject the same output path...", as
     const shared = join(tmp, "combined.log");
     const alias = `${tmp}/./combined.log`;
     const proc = Bun.spawnSync(
-      [LOADER, `--log=${shared}`, `--audit-log=${alias}`],
+      [RUNNER, `--log=${shared}`, `--audit-log=${alias}`],
       {
         stdin: new TextEncoder().encode('console.log("hello");\n'),
         stdout: "pipe",
@@ -2406,7 +2406,7 @@ await section("Loader: --host-environment errors withhold provider source...", a
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           guestPath,
           `--host-environment=${providerPath}`,
           `--mode=${mode}`,
@@ -2453,7 +2453,7 @@ await section("Loader: ShadowRealm.importValue inherits the host module aliases.
     // not cover it; the aliased file needs its own read grant.
     const proc = Bun.spawnSync(
       [
-        LOADER,
+        RUNNER,
         entry,
         "--unsafe-shadowrealm",
         "--alias",
@@ -2475,7 +2475,7 @@ await section("Loader: ShadowRealm.importValue inherits the host module aliases.
 await section("Loader: relative aliases use the invocation or config directory...", async () => {
   const tmp = makeTmp();
   try {
-    const loader = resolve(LOADER);
+    const loader = resolve(RUNNER);
     const project = join(tmp, "project");
     mkdirSync(join(project, "api-tests"), { recursive: true });
     mkdirSync(join(project, "src"), { recursive: true });
@@ -2631,7 +2631,7 @@ await section("Loader: bare specifiers stay sealed without --allow-import=node_m
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
-    const proc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
+    const proc = Bun.spawnSync([resolve(RUNNER), "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -2652,7 +2652,7 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
     const project = writeNodeModulesProject(tmp);
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
+        [resolve(RUNNER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2664,7 +2664,7 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
     // The config-file spelling has to reach the resolver too, since a project
     // that needs the capability wants it recorded, not retyped.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules"] } }));
-    const configProc = Bun.spawnSync([resolve(LOADER), "-P", "app.js", "--source-type=module"], {
+    const configProc = Bun.spawnSync([resolve(RUNNER), "-P", "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -2688,7 +2688,7 @@ await section("Loader: --allow-import=node_modules=<dir> caps the ancestor walk.
     mkdirSync(inner, { recursive: true });
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "src/app.js", "--source-type=module", `--allow-import=node_modules=${inner}`],
+      [resolve(RUNNER), "src/app.js", "--source-type=module", `--allow-import=node_modules=${inner}`],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2714,7 +2714,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     // for <foreign>/node_modules and find nothing.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(project, "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(project, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2729,7 +2729,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(inner, "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(inner, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
@@ -2747,7 +2747,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     const audit = join(tmp, "node-modules-audit.jsonl");
     const proc = Bun.spawnSync(
       [
-        resolve(LOADER),
+        resolve(RUNNER),
         "app.js",
         "--source-type=module",
         "--allow-import=node_modules=.",
@@ -2773,7 +2773,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     const unboundedAudit = join(tmp, "unbounded-audit.jsonl");
     const unbounded = Bun.spawnSync(
       [
-        resolve(LOADER),
+        resolve(RUNNER),
         "app.js",
         "--source-type=module",
         "--allow-import=node_modules",
@@ -2792,7 +2792,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     // audited as a deny.
     const sealedAudit = join(tmp, "sealed-audit.jsonl");
     const sealed = Bun.spawnSync(
-      [resolve(LOADER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
+      [resolve(RUNNER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     if (sealed.exitCode === 0) throw new Error("A bare specifier must fail without the grant");
@@ -2820,7 +2820,7 @@ await section("Loader: package resolution cannot escape the package directory...
     ]) {
       writeFileSync(join(project, "escape.js"), `import ${JSON.stringify(specifier)};\n`);
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "escape.js", "--source-type=module", "--allow-import=node_modules"],
+        [resolve(RUNNER), "escape.js", "--source-type=module", "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2840,7 +2840,7 @@ await section("Loader: a CommonJS package is refused by name, not parsed...", as
     const project = writeNodeModulesProject(tmp);
     writeFileSync(join(project, "cjs.js"), 'import "pkg-commonjs";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "cjs.js", "--source-type=module", "--allow-import=node_modules"],
+      [resolve(RUNNER), "cjs.js", "--source-type=module", "--allow-import=node_modules"],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2932,7 +2932,7 @@ await section("Loader: --globals from JS module...", async () => {
 });
 
 await section("Loader: --global cannot override built-in...", async () => {
-  const res = await $`echo '1;' | ${LOADER} --global console=1 2>&1`.nothrow();
+  const res = await $`echo '1;' | ${RUNNER} --global console=1 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Overriding built-in should fail");
   if (!res.text().includes("Cannot override built-in global")) throw new Error("Should mention 'Cannot override built-in global'");
 });
@@ -2940,7 +2940,7 @@ await section("Loader: --global cannot override built-in...", async () => {
 // -- Coverage -------------------------------------------------------------------
 
 await section("Loader: coverage summary...", async () => {
-  const out = await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage 2>&1`.text();
+  const out = await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage 2>&1`.text();
   if (!out.includes("Coverage Summary:")) throw new Error(`Expected "Coverage Summary:", got: ${out}`);
 });
 
@@ -2954,7 +2954,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
   try {
     console.log("Loader: coverage LCOV...");
     const lcovPath = join(tmp, "coverage.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-format=lcov --coverage-output=${lcovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-format=lcov --coverage-output=${lcovPath}`.quiet();
     if (!existsSync(lcovPath)) throw new Error("LCOV file should exist");
     const lcov = readFileSync(lcovPath, "utf-8");
     if (!lcov.includes("SF:")) throw new Error('LCOV should contain "SF:"');
@@ -2962,7 +2962,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 
     console.log("Loader: coverage JSON...");
     const jsonCovPath = join(tmp, "coverage.json");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-format=json --coverage-output=${jsonCovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-format=json --coverage-output=${jsonCovPath}`.quiet();
     if (!existsSync(jsonCovPath)) throw new Error("JSON coverage file should exist");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
@@ -2981,7 +2981,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
       const functionLcov = readFileSync(functionLcovPath, "utf-8");
       if (!functionLcov.includes("FN:1,called")) throw new Error(`${modeName} LCOV should define called`);
       if (!functionLcov.includes("FN:2,neverCalled")) throw new Error(`${modeName} LCOV should define neverCalled`);
@@ -2998,7 +2998,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
     const functionJsonPath = join(tmp, "function-coverage.json");
-    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
     const functionFile = coverageEntryFor(functionJsonPath, functionSourcePath);
     if (!functionFile) throw new Error("JSON coverage should contain the source file");
     const functionIdsByName = Object.fromEntries(
@@ -3049,7 +3049,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
       const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
       for (const name of [
         "generatorFunction",
@@ -3080,7 +3080,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
       const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
       for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
         if (!declarationLcov.includes(`FNDA:0,${name}`)) {
@@ -3108,7 +3108,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ].join("\n"),
     );
     const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
     const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
     const escapedFunctionRecords = escapedFunctionNameLcov.split(/\r?\n/);
     if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
@@ -3138,13 +3138,13 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 
     console.log("Loader: coverage order-independent flags...");
     const orderPath = join(tmp, "order.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();
     if (!existsSync(orderPath)) throw new Error("Order-independent LCOV should exist");
     if (!readFileSync(orderPath, "utf-8").includes("SF:")) throw new Error("Order-independent LCOV should contain SF:");
 
     console.log("Loader: coverage bytecode...");
     const bcLcovPath = join(tmp, "bc-coverage.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
     if (!existsSync(bcLcovPath)) throw new Error("Bytecode LCOV should exist");
     if (!readFileSync(bcLcovPath, "utf-8").includes("DA:")) throw new Error("Bytecode LCOV should contain DA:");
 
@@ -3184,7 +3184,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ["bytecode", ["--mode=bytecode"]],
     ] as [string, string[]][]) {
       const implyJsonPath = join(implyDir, `coverage-${label}.json`);
-      await $`${LOADER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
       const report = readCoverageByBasename(implyJsonPath);
       implyReports[label] = report;
       const helper = report["helper.js"];
@@ -3345,7 +3345,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ].join("\n"),
     );
     const declLineLcovPath = join(tmp, "declaration-line.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
     const declLineRecords = readFileSync(declLineLcovPath, "utf-8").split(/\r?\n/);
     for (const expected of ["FN:1,oneLine", "FN:2,multi", "FNDA:1,oneLine", "FNDA:1,multi"]) {
       if (!declLineRecords.includes(expected)) {
@@ -3459,7 +3459,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       for (const jobs of ["1", "2", "4"]) {
         const outPath = join(loaderJobsDir, `coverage-${label}-${jobs}.json`);
         const args = [
-          resolve(LOADER),
+          resolve(RUNNER),
           ...loaderEntries,
           `--jobs=${jobs}`,
           ...(label === "implied" ? [] : ["--coverage"]),
@@ -3558,13 +3558,13 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     );
 
     const jsxLcovPath = join(tmp, "jsx-coverage.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
     const jsxLcov = readFileSync(jsxLcovPath, "utf-8");
     if (!jsxLcov.includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
     if (!jsxLcov.includes("FN:2,Greet")) throw new Error("JSX LCOV should map Greet to original line 2");
 
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
-    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
     if (!readFileSync(jsxJsonPath, "utf-8").includes('"line":3')) throw new Error('JSX JSON should have "line":3');
   } finally {
     clean(tmp);
@@ -4962,21 +4962,21 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     console.log("Loader: source map bytecode...");
     const jsxPath = join(tmp, "test.jsx");
     writeFileSync(jsxPath, jsxSource);
-    await $`${LOADER} --source-map --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map --mode=bytecode ${jsxPath}`.quiet();
     const mapPath = jsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(mapPath)) throw new Error("Source map should exist");
     assertValidSourceMap(mapPath);
 
     console.log("Loader: source map custom path...");
     const customMapPath = join(tmp, "custom.map");
-    await $`${LOADER} --source-map=${customMapPath} --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map=${customMapPath} --mode=bytecode ${jsxPath}`.quiet();
     if (!existsSync(customMapPath)) throw new Error("Custom source map should exist");
     assertValidSourceMap(customMapPath);
 
     console.log("Loader: source map interpreted...");
     const interpJsxPath = join(tmp, "interp.jsx");
     writeFileSync(interpJsxPath, jsxSource);
-    await $`${LOADER} --source-map ${interpJsxPath}`.quiet();
+    await $`${RUNNER} --source-map ${interpJsxPath}`.quiet();
     const interpMapPath = interpJsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(interpMapPath)) throw new Error("Interpreted source map should exist");
     assertValidSourceMap(interpMapPath);
@@ -4984,12 +4984,12 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     console.log("Loader: no --source-map -> no .map...");
     const noMapJsxPath = join(tmp, "nomap.jsx");
     writeFileSync(noMapJsxPath, jsxSource);
-    await $`${LOADER} ${noMapJsxPath}`.quiet();
+    await $`${RUNNER} ${noMapJsxPath}`.quiet();
     const noMapPath = noMapJsxPath.replace(/\.jsx$/, ".jsx.map");
     if (existsSync(noMapPath)) throw new Error("No .map file should exist without --source-map");
 
     console.log("Loader: stdin --source-map rejection...");
-    const stdinRes = await $`echo 'const x = 1;' | ${LOADER} --source-map 2>&1`.nothrow();
+    const stdinRes = await $`echo 'const x = 1;' | ${RUNNER} --source-map 2>&1`.nothrow();
     const stdinOut = stdinRes.text().toLowerCase();
     if (!stdinOut.includes("error") && !stdinOut.includes("cannot") && !stdinOut.includes("require")) {
       throw new Error(`Stdin --source-map should produce an error, got: ${stdinRes.text()}`);
@@ -5015,7 +5015,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     if (!singleOut.includes("Compiled to")) throw new Error('Output should contain "Compiled to"');
 
     // Roundtrip
-    const roundtripOut = await $`${LOADER} --print ${singleGbc} 2>&1`.text();
+    const roundtripOut = await $`${RUNNER} --print ${singleGbc} 2>&1`.text();
     if (!containsLine(roundtripOut, "4")) throw new Error(`Roundtrip should print 4 on its own line, got: ${roundtripOut}`);
 
     console.log("Bundler: custom --output path...");
@@ -5037,7 +5037,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
       ].join("\n"),
     );
     await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
-    const argumentsRoundtrip = await $`${LOADER} --print ${argumentsOut} 2>&1`.text();
+    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} 2>&1`.text();
     if (!containsLine(argumentsRoundtrip, "2"))
       throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
 
@@ -5054,7 +5054,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     );
     await $`${BUNDLER} ${nanSrc} --output=${nanOut}`.quiet();
     if (!existsSync(nanOut)) throw new Error("Repeated NaN constants should compile to .gbc");
-    const nanRoundtrip = await $`${LOADER} ${nanOut} 2>&1`.text();
+    const nanRoundtrip = await $`${RUNNER} ${nanOut} 2>&1`.text();
     if (!nanRoundtrip.includes("NaN = NaN") || !nanRoundtrip.includes("NaN2 = NaN"))
       throw new Error(`Repeated NaN roundtrip should print both lines, got: ${nanRoundtrip}`);
 
@@ -5062,7 +5062,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     const stdinOut = join(tmp, "stdin.gbc");
     await $`echo 'const z = 5 + 5; z;' | ${BUNDLER} --output=${stdinOut}`.quiet();
     if (!existsSync(stdinOut)) throw new Error("Stdin --output .gbc should exist");
-    const stdinRoundtrip = await $`${LOADER} --print ${stdinOut} 2>&1`.text();
+    const stdinRoundtrip = await $`${RUNNER} --print ${stdinOut} 2>&1`.text();
     if (!containsLine(stdinRoundtrip, "10")) throw new Error(`Stdin roundtrip should print 10 on its own line, got: ${stdinRoundtrip}`);
 
     console.log("Bundler: stdin without --output should fail...");
@@ -7321,7 +7321,7 @@ await section("Loader: --allow-net blocks unlisted host...", async () => {
   const tmp = makeTmp();
   try {
     const audit = join(tmp, "blocked-fetch-audit.jsonl");
-    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allow-net=example.com --audit-log=${audit} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${RUNNER} --allow-net=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
     const { events } = readCapabilityEvents(audit);
@@ -7346,7 +7346,7 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
     ];
     for (const [url, reason] of cases) {
       const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
-      await $`echo ${`fetch("${url}");`} | ${LOADER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      await $`echo ${`fetch("${url}");`} | ${RUNNER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
       const { events } = readCapabilityEvents(audit);
       if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
         throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
@@ -7357,7 +7357,7 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
 });
 
 await section("Loader: no --allow-net blocks all fetch...", async () => {
-  const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
+  const res = await $`echo 'fetch("http://example.com");' | ${RUNNER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allow-net should fail");
   // The denial names the capability and the host; the host-side suggestion
   // names the option that grants it.
@@ -7385,7 +7385,7 @@ await section("Loader: read denials report one suggestion and location in both m
       const outputs: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--deny-read"],
+          [resolve(RUNNER), join(proj, file), `--mode=${mode}`, "--deny-read"],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
@@ -7425,7 +7425,7 @@ await section("Loader: a static-import denial is located alike in both modes..."
       const locations: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), file, `--mode=${mode}`, "--no-host-filesystem"],
+          [resolve(RUNNER), file, `--mode=${mode}`, "--no-host-filesystem"],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
@@ -7449,7 +7449,7 @@ await section("Loader: a fetch() denial is located alike in both modes...", asyn
     writeFileSync(file, 'const x = 1;\n  globalThis.result = fetch("http://example.com/");\n');
     const locations: string[] = [];
     for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([resolve(LOADER), file, `--mode=${mode}`], {
+      const proc = Bun.spawnSync([resolve(RUNNER), file, `--mode=${mode}`], {
         stdout: "pipe",
         stderr: "pipe",
         cwd: tmp,
@@ -7472,7 +7472,7 @@ await section("Loader: --allow-net multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
   // The comma list and the repeated flag are two spellings of the same grant.
   for (const args of [["--allow-net=example.com,other.com"], ["--allow-net=example.com", "--allow-net=other.com"]]) {
-    const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} ${args} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://blocked.test");' | ${RUNNER} ${args} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error(`Fetch to unlisted host should fail with ${args.join(" ")}`);
     if (!res.text().includes("PermissionDenied: net: blocked.test"))
       throw new Error(`Error should be a net PermissionDenied naming the blocked host, got: ${res.text()}`);
@@ -7572,7 +7572,7 @@ await section("Loader: --multifile splits a single file into N section results..
       "---\n" +
       'console.log("section C:", 3 + 3);\n',
     );
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7613,7 +7613,7 @@ await section("Loader: --multifile with no separator runs file as a single secti
   try {
     const file = join(tmp, "no-sep.js");
     writeFileSync(file, "console.log('only section');\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7632,7 +7632,7 @@ await section("Loader: --multifile drops leading/trailing separators...", async 
   try {
     const file = join(tmp, "edge.js");
     writeFileSync(file, "---\nconsole.log('a');\n---\nconsole.log('b');\n---\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7649,7 +7649,7 @@ await section("Loader: --multifile dispatches sections in parallel with --jobs..
   try {
     const file = join(tmp, "parallel.js");
     writeFileSync(file, "1;\n---\n2;\n---\n3;\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--jobs=3", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--jobs=3", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7668,7 +7668,7 @@ await section("Loader: --source-map with --multifile is rejected...", async () =
     const file = join(tmp, "sm.js");
     const sm = join(tmp, "sm.map");
     writeFileSync(file, "1;\n---\n2;\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", `--source-map=${sm}`, file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", `--source-map=${sm}`, file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7725,7 +7725,7 @@ await section("Bundler: --multifile compiles each section as a separate .gbc..."
     if (!existsSync(part1)) throw new Error(`Bundler --multifile should emit ${part1}`);
     if (!existsSync(part2)) throw new Error(`Bundler --multifile should emit ${part2}`);
     // Each .gbc should run independently in the script loader.
-    const r1 = Bun.spawnSync([LOADER, part1], { stdout: "pipe" });
+    const r1 = Bun.spawnSync([RUNNER, part1], { stdout: "pipe" });
     if (r1.exitCode !== 0 || !r1.stdout.toString().includes("1"))
       throw new Error(`Bundler --multifile part1 .gbc should run successfully`);
   } finally {
@@ -7792,7 +7792,7 @@ await section("Loader: goccia.json multifile=true works without --multifile flag
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ multifile: true }));
     const file = join(tmp, "config-driven.js");
     writeFileSync(file, "1;\n---\n2;\n");
-    const proc = Bun.spawnSync([LOADER, "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7817,7 +7817,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
   ].join("\n");
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       `--mode=${mode}`,
@@ -7854,7 +7854,7 @@ await section("Loader: dynamic import and ShadowRealm use configured virtual mod
   ].join("\n");
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--unsafe-shadowrealm",
@@ -7878,7 +7878,7 @@ await section("Loader: dynamic import and ShadowRealm use configured virtual mod
 await section("Loader: hierarchical virtual module addresses preserve canonical URLs...", async () => {
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--print",
@@ -7907,7 +7907,7 @@ await section("Loader: virtual import.meta.resolve uses aliases for bare specifi
     writeFileSync(dependency, "export default 1;\n");
     const proc = Bun.spawnSync(
       [
-        LOADER,
+        RUNNER,
         "-",
         "--source-type=module",
         "--print",
@@ -7946,7 +7946,7 @@ await section("Loader: virtual import.meta.resolve uses aliases for bare specifi
 await section("Loader: attributed virtual modules reinterpret their stored content...", async () => {
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--print",
@@ -7969,14 +7969,14 @@ await section("Loader: attributed virtual modules reinterpret their stored conte
 
 await section("Loader: virtual definitions validate eagerly but JavaScript parses lazily...", async () => {
   const unused = Bun.spawnSync(
-    [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
+    [RUNNER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   if (unused.exitCode !== 0)
     throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
 
   const invalidBytes = Bun.spawnSync(
-    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+    [RUNNER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
@@ -7984,7 +7984,7 @@ await section("Loader: virtual definitions validate eagerly but JavaScript parse
     throw new Error(`Invalid virtual bytes should fail configuration: ${invalidBytesOutput}`);
 
   const runtimeCollision = Bun.spawnSync(
-    [LOADER, "-", "--module", "goccia:csv=export default 1;"],
+    [RUNNER, "-", "--module", "goccia:csv=export default 1;"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const collisionOutput = runtimeCollision.stdout.toString() + runtimeCollision.stderr.toString();
@@ -8139,7 +8139,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
   const stdinApps = [
     {
       name: "GocciaScriptLoader",
-      bin: LOADER,
+      bin: RUNNER,
       args: [] as string[],
       source: `console.log("${STDIN_MARKER}");\n`,
       env: undefined as Record<string, string> | undefined,
@@ -8206,7 +8206,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
           throw new Error(
             `${name} ${run}: no bundle written from stdin source: ${proc.stdout.toString()}${proc.stderr.toString()}`,
           );
-        const roundtrip = Bun.spawnSync([LOADER, bundlerOut], {
+        const roundtrip = Bun.spawnSync([RUNNER, bundlerOut], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 120_000,
@@ -8281,7 +8281,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
 
 console.log("Stdin policy: --help documents the stdin rule and escape hatch...");
 for (const app of [
-  { name: "GocciaScriptLoader", bin: LOADER },
+  { name: "GocciaScriptLoader", bin: RUNNER },
   { name: "GocciaScriptLoaderBare", bin: BARE },
   { name: "GocciaTestRunner", bin: TESTRUNNER },
   { name: "GocciaBenchmarkRunner", bin: BENCHRUNNER },
@@ -8427,7 +8427,7 @@ await section("Loader: goccia:test is importable and injects no globals...", asy
       ["interpreted", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
-      const proc = Bun.spawnSync([LOADER, file, ...extraArgs], {
+      const proc = Bun.spawnSync([RUNNER, file, ...extraArgs], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -8462,7 +8462,7 @@ await section("Loader: a failing imported suite is only fatal if the script says
         "",
       ].join("\n"),
     );
-    const lenient = Bun.spawnSync([LOADER, reporting], { stdout: "pipe", stderr: "pipe" });
+    const lenient = Bun.spawnSync([RUNNER, reporting], { stdout: "pipe", stderr: "pipe" });
     const lenientOut = lenient.stdout.toString() + lenient.stderr.toString();
     if (lenient.exitCode !== 0)
       throw new Error(`A failing imported suite should not fail the loader by itself, got ${lenient.exitCode}:\n${lenientOut}`);
@@ -8480,7 +8480,7 @@ await section("Loader: a failing imported suite is only fatal if the script says
         "",
       ].join("\n"),
     );
-    const failing = Bun.spawnSync([LOADER, strict], { stdout: "pipe", stderr: "pipe" });
+    const failing = Bun.spawnSync([RUNNER, strict], { stdout: "pipe", stderr: "pipe" });
     const failingOut = failing.stdout.toString() + failing.stderr.toString();
     if (failing.exitCode === 0)
       throw new Error(`Throwing on a failed suite should fail the loader:\n${failingOut}`);
@@ -8498,7 +8498,7 @@ await section("Loader: the bare vitest specifier stays unresolvable...", async (
   try {
     const file = join(tmp, "vitest-import.js");
     writeFileSync(file, 'import { vi } from "vitest";\n');
-    const proc = Bun.spawnSync([LOADER, file], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync([RUNNER, file], { stdout: "pipe", stderr: "pipe" });
     const out = proc.stdout.toString() + proc.stderr.toString();
     if (proc.exitCode === 0)
       throw new Error(`Loader should not resolve the bare vitest specifier:\n${out}`);

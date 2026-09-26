@@ -20,7 +20,7 @@ import {
 } from "fs";
 import { join } from "path";
 import {
-  LOADER,
+  RUNNER,
   BARE,
   REPL,
   TESTRUNNER,
@@ -35,13 +35,13 @@ import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 console.log("Stdin smoke (interpreted)...");
 {
-  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
+  const out = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print`.text();
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
 console.log("Stdin smoke (bytecode)...");
 {
-  const out = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
+  const out = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode=bytecode`.text();
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
@@ -107,7 +107,7 @@ console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunn
     const f = join(tmp, "x.js");
     writeFileSync(f, "1;\n");
 
-    for (const [bin, label] of [[LOADER, "Loader"], [TESTRUNNER, "TestRunner"], [BENCHRUNNER, "BenchmarkRunner"]] as const) {
+    for (const [bin, label] of [[RUNNER, "Loader"], [TESTRUNNER, "TestRunner"], [BENCHRUNNER, "BenchmarkRunner"]] as const) {
       const proc = await $`${bin} - ${f} 2>&1`.nothrow();
       if (proc.exitCode === 0) throw new Error(`${label} should reject "-" mixed with file paths`);
       if (!proc.text().includes("stdin is supported only as the sole input"))
@@ -121,7 +121,7 @@ console.log("Stdin mixed-with-paths rejection (Loader, TestRunner, BenchmarkRunn
 // -- --help (all 6 apps) -------------------------------------------------------
 
 console.log("--help (all 6 apps)...");
-for (const bin of [LOADER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
+for (const bin of [RUNNER, BARE, REPL, TESTRUNNER, BUNDLER, BENCHRUNNER]) {
   const help = await $`${bin} --help 2>&1`.text();
   if (!help.includes("--")) throw new Error(`${bin} --help missing options`);
   if (!help.includes("--warning-unsupported-features"))
@@ -227,7 +227,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
 console.log("--deterministic keeps timeout clock live...");
 {
   const proc = Bun.spawnSync(
-    [LOADER, "--deterministic", "--compat-while-loops", "--timeout=20"],
+    [RUNNER, "--deterministic", "--compat-while-loops", "--timeout=20"],
     {
       stdin: new TextEncoder().encode("while (true) {}\n"),
       stdout: "pipe",
@@ -266,16 +266,16 @@ console.log("--compat-asi (Loader + Bundler)...");
     writeFileSync(src, "const x = 42\nx\n");
 
     // Loader without --compat-asi should fail
-    const noAsi = await $`${LOADER} ${src} 2>&1`.nothrow();
+    const noAsi = await $`${RUNNER} ${src} 2>&1`.nothrow();
     if (noAsi.exitCode === 0) throw new Error("Loader should reject without --compat-asi");
     if (!noAsi.text().includes("SyntaxError")) throw new Error("Expected SyntaxError without --compat-asi");
 
-    const oldAsi = await $`${LOADER} ${src} --asi 2>&1`.nothrow();
+    const oldAsi = await $`${RUNNER} ${src} --asi 2>&1`.nothrow();
     if (oldAsi.exitCode === 0) throw new Error("Loader should reject removed --asi alias");
     if (!oldAsi.text().includes("Unknown option: --asi")) throw new Error(`Expected unknown --asi, got: ${oldAsi.text()}`);
 
     // Loader with --compat-asi should succeed
-    const withAsi = await $`${LOADER} --print ${src} --compat-asi 2>&1`.text();
+    const withAsi = await $`${RUNNER} --print ${src} --compat-asi 2>&1`.text();
     if (!containsLine(withAsi, "42")) throw new Error(`Expected 42 with --compat-asi, got: ${withAsi}`);
 
     // Bundler without --compat-asi should fail
@@ -304,7 +304,7 @@ console.log("--compat-var (Loader + Bundler + TestRunner)...");
     writeFileSync(src, "var x = 10;\nx;\n");
 
     // Loader with --compat-var
-    const loaderOut = await $`${LOADER} --print ${src} --compat-var 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${src} --compat-var 2>&1`.text();
     if (!containsLine(loaderOut, "10")) throw new Error(`Loader --compat-var expected 10, got: ${loaderOut}`);
 
     // Bundler with --compat-var
@@ -339,7 +339,7 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
   try {
     const fnSrc = join(tmp, "use-fn.js");
     writeFileSync(fnSrc, "function f() { return 7; }\nf();\n");
-    const loaderOut = await $`${LOADER} --print ${fnSrc} --compat-function 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${fnSrc} --compat-function 2>&1`.text();
     if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-function expected 7, got: ${loaderOut}`);
 
     // Bare loader argv path — covered here so the full test262 suite isn't the
@@ -511,12 +511,12 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
     const whileOut = await $`${BARE} --print ${whileSrc} --compat-while-loops 2>&1`.text();
     if (whileOut.trim() !== "15") throw new Error(`Bare --compat-while-loops expected 15, got: ${whileOut}`);
 
-    const whileBcOut = await $`${LOADER} --print ${whileSrc} --mode=bytecode --compat-while-loops 2>&1`.text();
+    const whileBcOut = await $`${RUNNER} --print ${whileSrc} --mode=bytecode --compat-while-loops 2>&1`.text();
     if (!containsLine(whileBcOut, "15")) throw new Error(`Loader bytecode --compat-while-loops expected 15, got: ${whileBcOut}`);
 
     const looseSrc = join(tmp, "use-loose.js");
     writeFileSync(looseSrc, '"1" == 1;\n');
-    const loaderLoose = await $`${LOADER} --print ${looseSrc} --compat-loose-equality 2>&1`.text();
+    const loaderLoose = await $`${RUNNER} --print ${looseSrc} --compat-loose-equality 2>&1`.text();
     if (!containsLine(loaderLoose, "true")) throw new Error(`Loader --compat-loose-equality expected true, got: ${loaderLoose}`);
 
     const looseTest = join(tmp, "use-loose-test.js");
@@ -555,10 +555,10 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       ].join("\n") + "\n",
     );
 
-    const loaderOut = await $`${LOADER} --print ${src} --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${src} --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-non-strict-mode expected 7, got: ${loaderOut}`);
 
-    const loaderBcOut = await $`${LOADER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
+    const loaderBcOut = await $`${RUNNER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!containsLine(loaderBcOut, "7")) throw new Error(`Loader bytecode --compat-non-strict-mode expected 7, got: ${loaderBcOut}`);
 
     const outPath = join(tmp, "use-nonstrict.gbc");
@@ -578,7 +578,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const deleteOutPath = join(tmp, "delete-nonstrict.gbc");
     await $`${BUNDLER} ${deleteSrc} --output=${deleteOutPath} --compat-non-strict-mode`.quiet();
-    const bundledDeleteOut = await $`${LOADER} --print ${deleteOutPath} 2>&1`.text();
+    const bundledDeleteOut = await $`${RUNNER} --print ${deleteOutPath} 2>&1`.text();
     if (!containsLine(bundledDeleteOut, "12")) throw new Error(`Bundled non-strict delete expected 12, got: ${bundledDeleteOut}`);
 
     const assignmentSrc = join(tmp, "assignment-nonstrict.js");
@@ -604,20 +604,20 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     );
     const assignmentOutPath = join(tmp, "assignment-nonstrict.gbc");
     await $`${BUNDLER} ${assignmentSrc} --output=${assignmentOutPath} --compat-non-strict-mode`.quiet();
-    const bundledAssignmentOut = await $`${LOADER} --print ${assignmentOutPath} 2>&1`.text();
+    const bundledAssignmentOut = await $`${RUNNER} --print ${assignmentOutPath} 2>&1`.text();
     if (!containsLine(bundledAssignmentOut, "9")) throw new Error(`Bundled non-strict assignment expected 9, got: ${bundledAssignmentOut}`);
 
     const moduleWithSrc = join(tmp, "module-with.js");
     writeFileSync(moduleWithSrc, "with ({ x: 1 }) { x; }\n");
-    const moduleWithInterp = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode 2>&1`.nothrow();
+    const moduleWithInterp = await $`${RUNNER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode 2>&1`.nothrow();
     const moduleWithInterpOutput = moduleWithInterp.text();
     if (moduleWithInterp.exitCode === 0 || !moduleWithInterpOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should fail as strict code in interpreter mode, got: ${moduleWithInterpOutput}`);
-    const moduleWithBytecode = await $`${LOADER} ${moduleWithSrc} --source-type=module --mode=bytecode --compat-non-strict-mode 2>&1`.nothrow();
+    const moduleWithBytecode = await $`${RUNNER} ${moduleWithSrc} --source-type=module --mode=bytecode --compat-non-strict-mode 2>&1`.nothrow();
     const moduleWithBytecodeOutput = moduleWithBytecode.text();
     if (moduleWithBytecode.exitCode === 0 || !moduleWithBytecodeOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should fail as strict code in bytecode mode, got: ${moduleWithBytecodeOutput}`);
-    const moduleWithWarning = await $`${LOADER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode --warning-unsupported-features 2>&1`.nothrow();
+    const moduleWithWarning = await $`${RUNNER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode --warning-unsupported-features 2>&1`.nothrow();
     const moduleWithWarningOutput = moduleWithWarning.text();
     if (moduleWithWarning.exitCode === 0 || !moduleWithWarningOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should remain strict even in warning mode, got: ${moduleWithWarningOutput}`);
@@ -686,15 +686,15 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
 
 console.log("--mode=bytecode...");
 {
-  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print`.text();
+  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print`.text();
   if (!containsLine(interpOut, "4")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
   if (!interpOut.includes("(interpreted)")) throw new Error(`Expected (interpreted) in output`);
 
-  const bcOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode=bytecode`.text();
+  const bcOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode=bytecode`.text();
   if (!containsLine(bcOut, "4")) throw new Error(`Bytecode expected 4 on its own line, got: ${bcOut}`);
   if (!bcOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in output`);
 
-  const bcSplitOut = await $`echo 'const x = 2 + 2; x;' | ${LOADER} --print - --mode bytecode`.text();
+  const bcSplitOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode bytecode`.text();
   if (!containsLine(bcSplitOut, "4")) throw new Error(`Bytecode split option expected 4 on its own line, got: ${bcSplitOut}`);
   if (!bcSplitOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in split option output`);
 }
@@ -708,18 +708,18 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
     const moduleEntry = join(tmp, "entry.mjs");
     writeFileSync(moduleEntry, "this === undefined;\n");
 
-    const loaderMjs = await $`${LOADER} --print ${moduleEntry} 2>&1`.text();
+    const loaderMjs = await $`${RUNNER} --print ${moduleEntry} 2>&1`.text();
     if (!containsLine(loaderMjs, "true")) throw new Error(`Loader .mjs should infer module source, got: ${loaderMjs}`);
 
-    const loaderMjsBytecode = await $`${LOADER} --print ${moduleEntry} --mode=bytecode 2>&1`.text();
+    const loaderMjsBytecode = await $`${RUNNER} --print ${moduleEntry} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderMjsBytecode, "true"))
       throw new Error(`Loader .mjs bytecode should infer module source, got: ${loaderMjsBytecode}`);
 
-    const loaderScriptOverride = await $`${LOADER} --print ${moduleEntry} --source-type=script 2>&1`.text();
+    const loaderScriptOverride = await $`${RUNNER} --print ${moduleEntry} --source-type=script 2>&1`.text();
     if (!containsLine(loaderScriptOverride, "false"))
       throw new Error(`Loader --source-type=script should override .mjs inference, got: ${loaderScriptOverride}`);
 
-    const loaderScriptOverrideBytecode = await $`${LOADER} --print ${moduleEntry} --mode=bytecode --source-type=script 2>&1`.text();
+    const loaderScriptOverrideBytecode = await $`${RUNNER} --print ${moduleEntry} --mode=bytecode --source-type=script 2>&1`.text();
     if (!containsLine(loaderScriptOverrideBytecode, "false"))
       throw new Error(`Loader bytecode --source-type=script should override .mjs inference, got: ${loaderScriptOverrideBytecode}`);
 
@@ -855,7 +855,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
     const main = join(tmp, "main.js");
     writeFileSync(main, 'import("./dep.js").then(() => console.log("LOADED")).catch((e) => console.log("CAUGHT: " + e));\n');
     const proc = Bun.spawnSync(
-      [LOADER, main, "--output=json", "--timeout=100", ...modeArgs],
+      [RUNNER, main, "--output=json", "--timeout=100", ...modeArgs],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
     );
     const json = JSON.parse(proc.stdout.toString());
@@ -935,7 +935,7 @@ console.log("--max-memory (override)...");
 
 console.log("--max-memory (OOM triggers RangeError)...");
 {
-  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${LOADER} --max-memory=200000 --compat-asi 2>&1`.nothrow();
+  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${RUNNER} --max-memory=200000 --compat-asi 2>&1`.nothrow();
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
@@ -963,7 +963,7 @@ console.log("--max-memory (own-key enumeration survives a mid-loop collection)..
   // The window in which a collection lands mid-enumeration moves with the
   // build's object sizes, so sweep limits rather than pinning one value.
   for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608]) {
-    const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, "--compat-asi"], {
+    const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, "--compat-asi"], {
       stdin: new TextEncoder().encode(src),
       stdout: "pipe",
       stderr: "pipe",
@@ -1074,7 +1074,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
   writeFileSync(srcPath, src);
   try {
     for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
-      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, srcPath], {
+      const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, srcPath], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 120_000,
@@ -1093,7 +1093,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     // With headroom the builders must complete and produce the exact total —
     // an all-RangeError sweep would otherwise verify nothing.
     {
-      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", srcPath], {
+      const proc = Bun.spawnSync([RUNNER, "--max-memory=134217728", srcPath], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 120_000,
@@ -1137,7 +1137,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     const wave2Path = join(tmp, "sweep-wave2.mjs");
     writeFileSync(wave2Path, wave2Src);
     for (const maxMemory of [1_048_576, 1_572_864, 2_097_152, 3_145_728, 8_388_608, 67_108_864]) {
-      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, wave2Path], {
+      const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, wave2Path], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 120_000,
@@ -1155,7 +1155,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     // As above, one guaranteed-success run so an all-refusals sweep cannot pass
     // vacuously.
     {
-      const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", wave2Path], {
+      const proc = Bun.spawnSync([RUNNER, "--max-memory=134217728", wave2Path], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 120_000,
@@ -1198,7 +1198,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     const parkedPath = join(tmp, "sweep-parked.mjs");
     writeFileSync(parkedPath, parkedSrc);
     for (const maxMemory of [2_097_152, 3_145_728, 4_194_304]) {
-      const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, parkedPath], {
+      const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, parkedPath], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 180_000,
@@ -1485,7 +1485,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       const tightPath = join(tmp, `parser-parked-${probe.name}.mjs`);
       writeFileSync(tightPath, buildSrc(parkingPreamble(100_000)));
       for (const maxMemory of [6_291_456, 8_388_608]) {
-        const proc = Bun.spawnSync([LOADER, `--max-memory=${maxMemory}`, tightPath], {
+        const proc = Bun.spawnSync([RUNNER, `--max-memory=${maxMemory}`, tightPath], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 180_000,
@@ -1517,7 +1517,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         const windowCeiling = probe.windowCeiling ?? 6_291_456;
         const windowPath = join(tmp, `parser-window-${probe.name}.mjs`);
         writeFileSync(windowPath, buildSrc(parkingPreamble(probe.windowSlack ?? 600_000)));
-        const proc = Bun.spawnSync([LOADER, `--max-memory=${windowCeiling}`, windowPath], {
+        const proc = Bun.spawnSync([RUNNER, `--max-memory=${windowCeiling}`, windowPath], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 180_000,
@@ -1538,7 +1538,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       {
         const headroomPath = join(tmp, `parser-headroom-${probe.name}.mjs`);
         writeFileSync(headroomPath, buildSrc([]));
-        const proc = Bun.spawnSync([LOADER, "--max-memory=134217728", headroomPath], {
+        const proc = Bun.spawnSync([RUNNER, "--max-memory=134217728", headroomPath], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 180_000,
@@ -1680,7 +1680,7 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         ].join("\n");
         const srcPath = join(ceilingTmp, `parse-ceiling-${label.replace(".", "-")}-${modeLabel}.mjs`);
         writeFileSync(srcPath, src);
-        const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+        const proc = Bun.spawnSync([RUNNER, "--max-memory=4194304", ...modeArgs, srcPath], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 180_000,
@@ -1852,7 +1852,7 @@ const runGateCase = (
   ceiling: number = GATE_CEILING,
 ): GateRun => {
   writeFileSync(srcPath, src);
-  const proc = Bun.spawnSync([LOADER, `--max-memory=${ceiling}`, ...modeArgs, srcPath], {
+  const proc = Bun.spawnSync([RUNNER, `--max-memory=${ceiling}`, ...modeArgs, srcPath], {
     stdout: "pipe",
     stderr: "pipe",
     timeout: 180_000,
@@ -2233,7 +2233,7 @@ const measureCallCharge = (
     "",
   ].join("\n");
   writeFileSync(srcPath, src);
-  const proc = Bun.spawnSync([LOADER, `--max-memory=${CHARGE_MEASURE_CEILING}`, ...modeArgs, srcPath], {
+  const proc = Bun.spawnSync([RUNNER, `--max-memory=${CHARGE_MEASURE_CEILING}`, ...modeArgs, srcPath], {
     stdout: "pipe",
     stderr: "pipe",
     timeout: 180_000,
@@ -2660,7 +2660,7 @@ const ASSIGNMENT_FAULT_SLACK = 147_000;
       ].join("\n");
       const srcPath = join(assignGateTmp, `assign-gate-${modeLabel}.mjs`);
       writeFileSync(srcPath, src);
-      const proc = Bun.spawnSync([LOADER, "--max-memory=4194304", ...modeArgs, srcPath], {
+      const proc = Bun.spawnSync([RUNNER, "--max-memory=4194304", ...modeArgs, srcPath], {
         stdout: "pipe",
         stderr: "pipe",
         timeout: 180_000,
@@ -2830,7 +2830,7 @@ console.log("--max-memory (a charged reservation collects before it refuses)..."
     // gives back. Before the fix this refused; it must now succeed.
     const bandPath = join(reserveTmp, "reserve-band.mjs");
     writeFileSync(bandPath, parkedReservationSource(9_000_000));
-    const bandProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, bandPath], {
+    const bandProc = Bun.spawnSync([RUNNER, `--max-memory=${RESERVE_CEILING}`, bandPath], {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 180_000,
@@ -2854,7 +2854,7 @@ console.log("--max-memory (a charged reservation collects before it refuses)..."
     // collect-then-retry path has to end in the refusal it always did.
     const floorPath = join(reserveTmp, "reserve-floor.mjs");
     writeFileSync(floorPath, parkedReservationSource(24_000_000));
-    const floorProc = Bun.spawnSync([LOADER, `--max-memory=${RESERVE_CEILING}`, floorPath], {
+    const floorProc = Bun.spawnSync([RUNNER, `--max-memory=${RESERVE_CEILING}`, floorPath], {
       stdout: "pipe",
       stderr: "pipe",
       timeout: 180_000,
@@ -2904,7 +2904,7 @@ console.log("goccia:yaml (deep flow nesting reports a named, non-empty error)...
     ].join("\n");
     const srcPath = join(depthTmp, "parse-depth.mjs");
     writeFileSync(srcPath, src);
-    const proc = Bun.spawnSync([LOADER, srcPath], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
+    const proc = Bun.spawnSync([RUNNER, srcPath], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
     const out = proc.stdout.toString() + proc.stderr.toString();
     if (proc.exitCode !== 0) throw new Error(`Parse depth run should exit 0, got ${proc.exitCode}: ${out}`);
     if (!/^yaml RangeError :: .+$/m.test(out))
@@ -3011,7 +3011,7 @@ console.log("--max-memory (bytecode loop pressure reclaims)...");
 
 console.log("--max-memory (maxBytes readonly)...");
 {
-  const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${LOADER} --compat-asi 2>&1`.nothrow();
+  const res = await $`echo 'Goccia.gc.maxBytes = 999' | ${RUNNER} --compat-asi 2>&1`.nothrow();
   if (res.exitCode !== 1) throw new Error(`Read-only exit code should be 1, got ${res.exitCode}`);
   if (!res.text().includes("TypeError")) throw new Error(`Read-only should mention TypeError`);
 }
@@ -3027,14 +3027,14 @@ console.log("--max-stack (default overflow)...");
 
 console.log("--max-stack (custom limit)...");
 {
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${LOADER} --max-stack=100`.text();
+  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100`.text();
   if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
 }
 
 console.log("--max-stack (bytecode trampoline)...");
 {
   const src = "let n = 0; const f = () => { n++; if (n < 20000) f(); }; f(); console.log(n);";
-  const out = await $`echo ${src} | ${LOADER} --mode=bytecode --max-stack=0`.text();
+  const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=0`.text();
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
@@ -3675,7 +3675,7 @@ console.log("Runtime diagnostic parity...");
     }
     // Same attack through the loader and the sandbox runner (the sandbox path
     // is the one that would otherwise bypass the sandbox.fs.path gate).
-    for (const bin of [LOADER, BARE]) {
+    for (const bin of [RUNNER, BARE]) {
       const run = await $`${bin} ${attackSrc} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(secretMarker))
@@ -3738,7 +3738,7 @@ console.log("Runtime diagnostic parity...");
       ].join("\n"),
     );
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${preloadAttack} --globals ${preloadSrc} ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${preloadAttack} --globals ${preloadSrc} ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(preloadMarker))
         throw new Error(
@@ -3800,7 +3800,7 @@ console.log("Runtime diagnostic parity...");
     const hostThrowerMain = join(tmp, "host-thrower-main.js");
     writeFileSync(hostThrowerMain, ["boom();", ""].join("\n"));
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${hostThrowerMain} --globals ${hostThrower} --compat-asi ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${hostThrowerMain} --globals ${hostThrower} --compat-asi ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(hostBodyMarker))
         throw new Error(
@@ -3819,7 +3819,7 @@ console.log("Runtime diagnostic parity...");
     const heldMain = join(tmp, "held-main.js");
     writeFileSync(heldMain, ["const e = makeHeld();", "throw e;", ""].join("\n"));
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${heldMain} --globals ${heldHost} --compat-asi ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${heldMain} --globals ${heldHost} --compat-asi ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(heldMarker))
         throw new Error(
@@ -3853,7 +3853,7 @@ console.log("Runtime diagnostic parity...");
     const deferredMain = join(tmp, "deferred-main.js");
     writeFileSync(deferredMain, ["await loadDeferredHostModule();", ""].join("\n"));
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${deferredMain} --globals ${deferredGlobals} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${deferredMain} --globals ${deferredGlobals} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (run.exitCode === 0 || !out.includes("deferred-host-secret.js:2:"))
         throw new Error(
@@ -3889,7 +3889,7 @@ console.log("Runtime diagnostic parity...");
       ].join("\n"),
     );
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${join(memDir, "main.js")} --max-memory=262144 --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${join(memDir, "main.js")} --max-memory=262144 --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes("Object reference is Nil") || out.includes("Range check"))
         throw new Error(
@@ -3918,7 +3918,7 @@ console.log("Runtime diagnostic parity...");
       `virtual:secret=// ${vmMarker}\n` +
       "export const boom = () => { const z = null; return z.x; };";
     for (const mode of ["", "--mode=bytecode"]) {
-      const run = await $`${LOADER} ${vmMain} --module ${vmDef} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+      const run = await $`${RUNNER} ${vmMain} --module ${vmDef} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(vmMarker))
         throw new Error(
@@ -3997,7 +3997,7 @@ console.log("Runtime diagnostic parity...");
         [`import { boom } from "${relativeAlias}";`, "boom();", ""].join("\n"),
       );
       for (const mode of ["", "--mode=bytecode"]) {
-        const run = await $`${LOADER} ${aliasMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const run = await $`${RUNNER} ${aliasMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
         const out = run.text();
         if (out.includes(aliasMarker))
           throw new Error(
@@ -4015,7 +4015,7 @@ console.log("Runtime diagnostic parity...");
         ].join("\n"),
       );
       for (const mode of ["", "--mode=bytecode"]) {
-        const run = await $`${LOADER} ${transitiveMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
+        const run = await $`${RUNNER} ${transitiveMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
         const out = run.text();
         if (run.exitCode === 0 || !out.includes("alias-child.js:2:"))
           throw new Error(
@@ -4094,7 +4094,7 @@ console.log("Timers (containment and uncaught attribution)...");
         "",
       ].join("\n"),
     );
-    const loaderOut = (await $`${LOADER} ${probe} 2>&1`.nothrow()).text();
+    const loaderOut = (await $`${RUNNER} ${probe} 2>&1`.nothrow()).text();
     for (const absent of [
       "setTimeout=undefined",
       "setInterval=undefined",
@@ -4102,7 +4102,7 @@ console.log("Timers (containment and uncaught attribution)...");
     ]) {
       if (!loaderOut.includes(absent))
         throw new Error(
-          `GocciaScriptLoader must not expose the timer globals (${absent}), got: ${loaderOut}`,
+          `GocciaRunner must not expose the timer globals (${absent}), got: ${loaderOut}`,
         );
     }
 
@@ -4116,11 +4116,11 @@ console.log("Timers (containment and uncaught attribution)...");
       ].join("\n"),
     );
     const moduleOut = (
-      await $`${LOADER} ${moduleProbe} --source-type=module 2>&1`.nothrow()
+      await $`${RUNNER} ${moduleProbe} --source-type=module 2>&1`.nothrow()
     ).text();
     if (moduleOut.includes("object"))
       throw new Error(
-        `GocciaScriptLoader must not resolve goccia:timers, got: ${moduleOut}`,
+        `GocciaRunner must not resolve goccia:timers, got: ${moduleOut}`,
       );
   } finally {
     clean(tmp);
@@ -4178,6 +4178,6 @@ const stableExamples = [...new Bun.Glob("**/*.js").scanSync({ cwd: "examples" })
   .filter((path) => !path.split("/").some((segment) => segment.startsWith("_")))
   .sort()
   .map((path) => join("examples", path));
-await $`${LOADER} ${stableExamples}`.quiet();
+await $`${RUNNER} ${stableExamples}`.quiet();
 
 console.log("\nAll test-cli.ts tests passed.");

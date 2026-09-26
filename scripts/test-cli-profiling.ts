@@ -4,7 +4,7 @@
  */
 import { readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
-import { BENCHRUNNER, LOADER } from "./test-cli/binaries";
+import { BENCHRUNNER, RUNNER } from "./test-cli/binaries";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
 type FunctionProfile = { name: string; calls: number; allocations: number };
@@ -47,7 +47,7 @@ export function verifyAllocationProfiles(): void {
           ] : ["workload();"]),
         ].join("\n"));
         const proc = Bun.spawnSync([
-          resolve(host === "benchmark" ? BENCHRUNNER : LOADER), source,
+          resolve(host === "benchmark" ? BENCHRUNNER : RUNNER), source,
           "--profile=all", `--profile-output=${output}`,
           ...(host === "benchmark"
             ? ["--profile-deterministic", "--no-progress", "--format=compact-json"]

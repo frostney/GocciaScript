@@ -5,7 +5,7 @@
 
 const ext = process.platform === "win32" ? ".exe" : "";
 
-export const LOADER = `./build/GocciaScriptLoader${ext}`;
+export const RUNNER = `./build/GocciaRunner${ext}`;
 export const BARE = `./build/GocciaScriptLoaderBare${ext}`;
 export const SANDBOXRUNNER = `./build/GocciaSandboxRunner${ext}`;
 export const REPL = `./build/GocciaREPL${ext}`;

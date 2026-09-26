@@ -1,4 +1,4 @@
-program GocciaScriptLoader;
+program GocciaRunner;
 
 {$I Goccia.inc}
 
@@ -101,7 +101,7 @@ type
   TScriptLoaderJSONFileResultArray = array[0..MaxInt div SizeOf(TScriptLoaderJSONFileResult) - 1] of TScriptLoaderJSONFileResult;
   PScriptLoaderJSONFileResultArray = ^TScriptLoaderJSONFileResultArray;
 
-  TScriptLoaderApp = class(TGocciaCLIApplication)
+  TRunnerApp = class(TGocciaCLIApplication)
   private
     FOutputPath: TStringOption;
     FSilent: TFlagOption;
@@ -241,7 +241,7 @@ begin
   Result := FStderrLines.Text;
 end;
 
-{ TScriptLoaderApp - Configure }
+{ TRunnerApp - Configure }
 
 function RuntimeConsole(const AEngine: TGocciaEngine): TGocciaConsole;
 var
@@ -259,7 +259,7 @@ begin
   Result := nil;
 end;
 
-procedure TScriptLoaderApp.InitializeRuntime(const AEngine: TGocciaEngine);
+procedure TRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeCore;
 begin
@@ -268,17 +268,17 @@ begin
   InstallFFIIfGranted(Runtime);
 end;
 
-function TScriptLoaderApp.UsageLine: string;
+function TRunnerApp.UsageLine: string;
 begin
   Result := '[file|directory|-] [options]';
 end;
 
-function TScriptLoaderApp.StdinUsage: TGocciaStdinUsage;
+function TRunnerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefaultWithREPL;
 end;
 
-procedure TScriptLoaderApp.Configure;
+procedure TRunnerApp.Configure;
 begin
   AddEngineOptions;
   AddCoverageOptions;
@@ -299,7 +299,7 @@ begin
     'Inject a single global; value is parsed as JSON or kept as a string');
 end;
 
-procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
+procedure TRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -336,25 +336,25 @@ begin
     ConsoleExtension.BuiltinConsole.LogCallback := HandleConsoleLog;
 end;
 
-function TScriptLoaderApp.IsJsonOutput: Boolean;
+function TRunnerApp.IsJsonOutput: Boolean;
 begin
   Result := FOutputPath.Present and
     ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
 end;
 
-function TScriptLoaderApp.IsCompactJsonOutput: Boolean;
+function TRunnerApp.IsCompactJsonOutput: Boolean;
 begin
   Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
-function TScriptLoaderApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+function TRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
   Result := ALL_CAPABILITIES;
 end;
 
-{ TScriptLoaderApp - Validate }
+{ TRunnerApp - Validate }
 
-procedure TScriptLoaderApp.Validate;
+procedure TRunnerApp.Validate;
 begin
   inherited Validate;
 
@@ -388,9 +388,9 @@ begin
       '--profile-format=flamegraph requires --profile-output=<path>.');
 end;
 
-{ TScriptLoaderApp - Core logic }
+{ TRunnerApp - Core logic }
 
-procedure TScriptLoaderApp.WriteSourceMapIfEnabled(
+procedure TRunnerApp.WriteSourceMapIfEnabled(
   const ASourceMap: TGocciaSourceMap; const AFileName: string);
 var
   MapOutputPath: string;
@@ -404,7 +404,7 @@ begin
     not IsJsonOutput);
 end;
 
-procedure TScriptLoaderApp.ConfigureConsole(const AConsole: TGocciaConsole;
+procedure TRunnerApp.ConfigureConsole(const AConsole: TGocciaConsole;
   const ACapture: TScriptLoaderConsoleCapture);
 begin
   if not Assigned(AConsole) then
@@ -518,7 +518,7 @@ begin
     FilesJSON, '', ACompact);
 end;
 
-procedure TScriptLoaderApp.ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure TRunnerApp.ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
   Pair: TScriptLoaderGlobalPair;
@@ -543,7 +543,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
+procedure TRunnerApp.ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
 begin
@@ -552,7 +552,7 @@ begin
       AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
-function TScriptLoaderApp.ExecuteInterpreted(const ASource: TStringList;
+function TRunnerApp.ExecuteInterpreted(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   Engine: TGocciaEngine;
@@ -601,14 +601,14 @@ begin
   Result.Timing.TotalTimeNanoseconds := ScriptResult.TotalTimeNanoseconds;
 end;
 
-function TScriptLoaderApp.RunBytecodeModule(const AEngine: TGocciaEngine;
+function TRunnerApp.RunBytecodeModule(const AEngine: TGocciaEngine;
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 begin
   Result := AEngine.RunModuleForSourceType(AModule, AFileName);
 end;
 
-function TScriptLoaderApp.ExecuteBytecodeFromSource(const ASource: TStringList;
+function TRunnerApp.ExecuteBytecodeFromSource(const ASource: TStringList;
   const AFileName: string; const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   SourcePipelineResult: TGocciaCLISourcePipelineResult;
@@ -682,7 +682,7 @@ begin
   end;
 end;
 
-function TScriptLoaderApp.ExecuteBytecodeFromFile(const AFileName: string;
+function TRunnerApp.ExecuteBytecodeFromFile(const AFileName: string;
   const ACapture: TScriptLoaderConsoleCapture): TScriptExecutionReport;
 var
   Module: TGocciaCompiledModule;
@@ -732,7 +732,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.PrintHumanReadableResult(const AFileName: string;
+procedure TRunnerApp.PrintHumanReadableResult(const AFileName: string;
   const AReport: TScriptExecutionReport; const AExtension: string);
 var
   LoadTimeNanoseconds: Int64;
@@ -778,7 +778,7 @@ begin
   WriteLn(AReport.ResultValue.ToStringLiteral.Value);
 end;
 
-procedure TScriptLoaderApp.RunSource(const ASource: TStringList;
+procedure TRunnerApp.RunSource(const ASource: TStringList;
   const AFileName: string);
 var
   Extension: string;
@@ -855,7 +855,7 @@ begin
   end;
 end;
 
-function TScriptLoaderApp.RunSourceForJSON(const ASource: TStringList;
+function TRunnerApp.RunSourceForJSON(const ASource: TStringList;
   const AFileName: string;
   const AMeasureMemory: Boolean): TScriptLoaderJSONFileResult;
 var
@@ -948,7 +948,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.RunScriptFromFile(const AFileName: string);
+procedure TRunnerApp.RunScriptFromFile(const AFileName: string);
 var
   Source: TStringList;
 begin
@@ -966,7 +966,7 @@ begin
   end;
 end;
 
-function TScriptLoaderApp.RunScriptFromFileForJSON(const AFileName: string;
+function TRunnerApp.RunScriptFromFileForJSON(const AFileName: string;
   const AMeasureMemory: Boolean): TScriptLoaderJSONFileResult;
 var
   Source: TStringList;
@@ -1010,7 +1010,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.RunJSONFiles(const AFiles: TStringList);
+procedure TRunnerApp.RunJSONFiles(const AFiles: TStringList);
 var
   Results: array of TScriptLoaderJSONFileResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -1087,7 +1087,7 @@ begin
     IsCompactJsonOutput));
 end;
 
-procedure TScriptLoaderApp.RunScriptFromStdin;
+procedure TRunnerApp.RunScriptFromStdin;
 var
   Source, SectionSource, Names: TStringList;
   I: Integer;
@@ -1125,7 +1125,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.ScriptWorkerProc(const AFileName: string;
+procedure TRunnerApp.ScriptWorkerProc(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
   out AErrorMessage: string; AData: Pointer);
 var
@@ -1175,7 +1175,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.RunScriptsParallel(const AFiles: TStringList;
+procedure TRunnerApp.RunScriptsParallel(const AFiles: TStringList;
   const AJobCount: Integer);
 var
   Pool: TGocciaThreadPool;
@@ -1225,7 +1225,7 @@ begin
   end;
 end;
 
-procedure TScriptLoaderApp.RunScripts(const APath: string);
+procedure TRunnerApp.RunScripts(const APath: string);
 var
   Files, RawFiles, SinglePath: TStringList;
   I: Integer;
@@ -1298,9 +1298,9 @@ begin
     raise Exception.Create('Path not found: ' + APath);
 end;
 
-{ TScriptLoaderApp - ExecuteWithPaths }
+{ TRunnerApp - ExecuteWithPaths }
 
-procedure TScriptLoaderApp.ExecuteWithPaths(const APaths: TStringList);
+procedure TRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I, SectionIndex: Integer;
   Files, RawFiles, StdinNames: TStringList;
@@ -1456,9 +1456,9 @@ begin
   end;
 end;
 
-{ TScriptLoaderApp - HandleError }
+{ TRunnerApp - HandleError }
 
-procedure TScriptLoaderApp.HandleError(const AException: Exception);
+procedure TRunnerApp.HandleError(const AException: Exception);
 begin
   if IsJsonOutput then
     WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),
@@ -1468,9 +1468,9 @@ begin
     inherited HandleError(AException);
 end;
 
-{ TScriptLoaderApp - AfterExecute }
+{ TRunnerApp - AfterExecute }
 
-procedure TScriptLoaderApp.AfterExecute;
+procedure TRunnerApp.AfterExecute;
 var
   ProfileOpcodes, ProfileFunctions: Boolean;
   ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
@@ -1539,7 +1539,7 @@ end;
 var
   RunResult: Integer;
 begin
-  RunResult := TGocciaApplication.RunApplication(TScriptLoaderApp, 'GocciaScriptLoader');
+  RunResult := TGocciaApplication.RunApplication(TRunnerApp, 'GocciaRunner');
   if RunResult <> 0 then
     ExitCode := RunResult;
 end.
