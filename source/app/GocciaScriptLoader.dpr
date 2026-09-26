@@ -304,25 +304,38 @@ procedure TScriptLoaderApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
   const AFileConfig: TConfigEntryArray);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
+  HostEnvironmentEntry: TConfigEntry;
+  HostEnvironmentEntries: TConfigEntryArray;
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
   Runtime := AttachRuntime(AEngine);
 
+  { The command line names a host module; a config names a guest one. }
+  HostEnvironmentModulePath := '';
+  HostEnvironmentEntry := Default(TConfigEntry);
   if FHostEnvironmentModule.FromCommandLine then
     HostEnvironmentModulePath := FHostEnvironmentModule.Value
-  else if not FindConfigEntry(AFileConfig, 'host-environment',
-    HostEnvironmentModulePath) then
-    HostEnvironmentModulePath := FHostEnvironmentModule.ValueOr('');
+  else if not TryFindConfigEntry(AFileConfig, 'host-environment',
+    HostEnvironmentEntry) then
+  begin
+    HostEnvironmentEntries := ConfigNamedEntries(FHostEnvironmentModule);
+    if Length(HostEnvironmentEntries) > 0 then
+      HostEnvironmentEntry := HostEnvironmentEntries[0];
+  end;
 
-  if HostEnvironmentModulePath <> '' then
+  if (HostEnvironmentModulePath <> '') or
+     (HostEnvironmentEntry.Value <> '') then
   begin
     if Assigned(EngineOptions) and
        ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) then
       raise TParseError.Create(
         '--host-environment cannot be combined with --deterministic.');
-    ConfigureHostEnvironmentFromModule(AEngine,
-      HostEnvironmentModulePath);
+    if HostEnvironmentModulePath <> '' then
+      ConfigureHostEnvironmentFromModule(AEngine, HostEnvironmentModulePath)
+    else
+      ConfigureConfiguredHostEnvironment(AEngine, HostEnvironmentEntry.Value,
+        HostEnvironmentEntry.SourcePath);
   end;
 
   ApplyLoaderRuntimeProfile(Runtime);
@@ -519,23 +532,33 @@ begin
     FilesJSON, '', ACompact);
 end;
 
+{ Globals files the command line names are the user's own, read as host
+  files; those a config names are read under the script's capability set
+  (InjectConfiguredGlobals). }
 procedure TScriptLoaderApp.ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
+  Entries: TConfigEntryArray;
   Pair: TScriptLoaderGlobalPair;
 begin
-  for I := 0 to FGlobalFiles.Values.Count - 1 do
-    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
-    begin
-      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
-      else
-        AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
-    end;
+  Entries := ConfigNamedEntries(FGlobalFiles);
+  for I := 0 to High(Entries) do
+    if IsStructuredGlobalsFile(Entries[I].Value) then
+      InjectConfiguredGlobals(AEngine, Entries[I].Value,
+        Entries[I].SourcePath);
+  if FGlobalFiles.FromCommandLine then
+    for I := 0 to FGlobalFiles.Values.Count - 1 do
+      if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+      begin
+        if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+        else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+        else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
+        else
+          AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
+      end;
 
   for I := 0 to FInlineGlobals.Values.Count - 1 do
   begin
@@ -547,10 +570,17 @@ end;
 procedure TScriptLoaderApp.ApplyModuleGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
+  Entries: TConfigEntryArray;
 begin
-  for I := 0 to FGlobalFiles.Values.Count - 1 do
-    if not IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
-      AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
+  Entries := ConfigNamedEntries(FGlobalFiles);
+  for I := 0 to High(Entries) do
+    if not IsStructuredGlobalsFile(Entries[I].Value) then
+      InjectConfiguredGlobals(AEngine, Entries[I].Value,
+        Entries[I].SourcePath);
+  if FGlobalFiles.FromCommandLine then
+    for I := 0 to FGlobalFiles.Values.Count - 1 do
+      if not IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+        AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 end;
 
 function TScriptLoaderApp.ExecuteInterpreted(const ASource: TStringList;

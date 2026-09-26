@@ -48,6 +48,7 @@ type
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
     FRootConfigExplicit: Boolean;
+    FRootConfigEntries: TConfigEntryArray;
     FWarnLock: TGocciaCriticalSection;
     FWarned: TStringList;
     FTrust: TRepeatableOption;
@@ -225,6 +226,11 @@ type
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     { The applied root config, or ''. }
     property RootConfigPath: string read FRootConfigPath;
+    { The root config's entries for AOption when the root config set it
+      (not the command line), each with the file that declared it: the
+      inputs a config names, which are read under the script's capability
+      set rather than as the user's own. Empty otherwise. }
+    function ConfigNamedEntries(const AOption: TOptionBase): TConfigEntryArray;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
     property LogFileOpen: Boolean read FLogFileOpen;
@@ -1270,6 +1276,46 @@ begin
         [Entry.SourcePath, Key, Path, Problem, Option.LongName]);
     TStringOption(Option).Apply(Path);
   end;
+end;
+
+function TGocciaCLIApplication.ConfigNamedEntries(
+  const AOption: TOptionBase): TConfigEntryArray;
+
+  { The root config entry that supplied AValue, so it carries the file that
+    declared it (a base config under `extends` keeps its own). }
+  procedure AddEntryFor(const AValue: string);
+  var
+    I: Integer;
+  begin
+    for I := 0 to High(FRootConfigEntries) do
+      if ((FRootConfigEntries[I].Key = AOption.LongName) or
+          ((AOption.ConfigName <> '') and
+           (FRootConfigEntries[I].Key = AOption.ConfigName))) and
+         (FRootConfigEntries[I].Value = AValue) then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := FRootConfigEntries[I];
+        Exit;
+      end;
+  end;
+
+var
+  I: Integer;
+begin
+  Result := nil;
+  if (not AOption.Present) or AOption.FromCommandLine then
+    Exit;
+  { Walk the values the option holds, not the raw entries, so precedence
+    across `extends` (an empty array resetting a base's list) is the one
+    ApplyConfigEntries already settled. }
+  if AOption is TRepeatableOption then
+  begin
+    for I := 0 to TRepeatableOption(AOption).Values.Count - 1 do
+      AddEntryFor(TRepeatableOption(AOption).Values[I]);
+  end
+  else if (AOption is TStringOption) and
+          (TStringOption(AOption).Value <> '') then
+    AddEntryFor(TStringOption(AOption).Value);
 end;
 
 procedure TGocciaCLIApplication.EmitApplicationAudit(
@@ -2546,6 +2592,7 @@ begin
     begin
       FRootConfigPath := ConfigPath;
       RootConfigEntries := ParseConfigFile(ConfigPath);
+      FRootConfigEntries := RootConfigEntries;
       { unsafe-* keys are RequiresTrust and skipped here: they reach an
         engine through the governing config's trust verdict. }
       ApplyConfigEntries(RootConfigEntries, FAllOptions);

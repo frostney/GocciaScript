@@ -1372,6 +1372,103 @@ console.log("Module manifests a config names run under the script's capabilities
   }
 }
 
+console.log("Globals and host-environment modules a config names are guest reads...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "sub"), { recursive: true });
+    mkdirSync(join(tmp, "outside"));
+    const secret = join(tmp, "outside", "secret.txt");
+    writeFileSync(secret, "OUTSIDE-SECRET\n");
+    const readGrant = `--allow-read=${join(tmp, "outside")}`;
+    const showGlobal = 'console.log("GLOBAL", typeof stolen === "string" ? stolen.trim() : "none");\n';
+    writeFileSync(join(project, "main.js"), showGlobal);
+
+    // A globals module's imports are guest reads, even while it loads.
+    writeFileSync(join(project, "gl.js"), [
+      `import s from ${JSON.stringify(secret)} with { type: "text" };`,
+      "export const stolen = s;",
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "goccia.json"), '{"globals": ["./gl.js"]}\n');
+    for (const mode of ["interpreted", "bytecode"]) {
+      const refused = run(LOADER, ["main.js", `--mode=${mode}`], { cwd: project });
+      expectExit(refused, 1, `config globals module importing outside the project (${mode})`);
+      expectIncludes(refused.combined, `PermissionDenied: read: ${secret}`, `config globals module importing outside the project (${mode})`);
+      expectExcludes(refused.combined, "OUTSIDE-SECRET", `config globals module importing outside the project (${mode})`);
+    }
+    expectIncludes(run(LOADER, ["main.js", readGrant], { cwd: project }).stdout, "GLOBAL OUTSIDE-SECRET", "config globals module with a read grant");
+    const suite = join(project, "leak.test.js");
+    writeFileSync(suite, 'test("leak", () => { expect(typeof stolen).toBe("undefined"); });\n');
+    const suiteRefused = run(TESTRUNNER, ["leak.test.js", "--no-progress"], { cwd: project });
+    expectExit(suiteRefused, 1, "test runner config globals module importing outside the project");
+    expectIncludes(suiteRefused.combined, `PermissionDenied: read: ${secret}`, "test runner config globals module importing outside the project");
+    rmSync(suite);
+
+    // Code does not cross: a globals module a config names exports data.
+    writeFileSync(join(project, "gl.js"), "export const stolen = () => 1;\n");
+    const code = run(LOADER, ["main.js"], { cwd: project });
+    expectExit(code, 1, "config globals module exporting a function");
+    expectIncludes(code.combined, 'export "stolen" is a function', "config globals module exporting a function");
+
+    // A globals data file outside the project needs a read grant.
+    writeFileSync(join(tmp, "outside", "hosts.yml"), "stolen: OUTSIDE-YAML\n");
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ globals: [join(tmp, "outside", "hosts.yml")] }) + "\n");
+    const dataRefused = run(LOADER, ["main.js"], { cwd: project });
+    expectExit(dataRefused, 1, "config globals data file outside the project");
+    expectIncludes(dataRefused.combined, `PermissionDenied: read: ${join(tmp, "outside", "hosts.yml")}`, "config globals data file outside the project");
+    expectExcludes(dataRefused.combined, "OUTSIDE-YAML", "config globals data file outside the project");
+    expectIncludes(run(LOADER, ["main.js", readGrant], { cwd: project }).stdout, "GLOBAL OUTSIDE-YAML", "config globals data file with a read grant");
+
+    // Inside the project both kinds work as before, resolved from the config.
+    writeFileSync(join(project, "data.json"), '{"answer": 42}\n');
+    writeFileSync(join(project, "mod.js"), 'export const fromModule = "ok";\n');
+    writeFileSync(join(project, "goccia.json"), '{"globals": ["./data.json", "./mod.js"]}\n');
+    writeFileSync(join(project, "both.js"), 'console.log("OK", answer, fromModule);\n');
+    expectIncludes(run(LOADER, ["both.js"], { cwd: project }).stdout, "OK 42 ok", "config globals inside the project");
+
+    // On the command line they are the user's own choice.
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    writeFileSync(join(project, "gl.js"), [
+      `import s from ${JSON.stringify(secret)} with { type: "text" };`,
+      "export const stolen = s;",
+      "",
+    ].join("\n"));
+    expectIncludes(run(LOADER, ["main.js", "--globals=./gl.js"], { cwd: project }).stdout, "GLOBAL OUTSIDE-SECRET", "--globals module outside the project");
+
+    // A host-environment module a config names loads as a guest module.
+    writeFileSync(join(project, "sub", "env.js"), [
+      `import s from ${JSON.stringify(secret)} with { type: "text" };`,
+      "globalThis.stolen = s;",
+      "export const epochNanoseconds = () => 0n;",
+      "export const monotonicNanoseconds = () => 0n;",
+      'export const timeZoneIdentifier = () => "UTC";',
+      "export const random = () => 0.5;",
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "sub", "main.js"), showGlobal + 'console.log("RANDOM", Math.random());\n');
+    writeFileSync(join(project, "sub", "goccia.json"), '{"host-environment": "./env.js"}\n');
+    const envRefused = run(LOADER, [join("sub", "main.js")], { cwd: project });
+    expectExit(envRefused, 1, "per-file config host-environment importing outside the project");
+    expectIncludes(envRefused.combined, `PermissionDenied: read: ${secret}`, "per-file config host-environment importing outside the project");
+    expectExcludes(envRefused.combined, "OUTSIDE-SECRET", "per-file config host-environment importing outside the project");
+    rmSync(join(project, "sub", "goccia.json"));
+    writeFileSync(join(project, "goccia.json"), '{"host-environment": "./sub/env.js"}\n');
+    const rootEnvRefused = run(LOADER, [join("sub", "main.js")], { cwd: project });
+    expectExit(rootEnvRefused, 1, "root config host-environment importing outside the project");
+    expectIncludes(rootEnvRefused.combined, `PermissionDenied: read: ${secret}`, "root config host-environment importing outside the project");
+    const envGranted = run(LOADER, [join("sub", "main.js"), readGrant], { cwd: project });
+    expectIncludes(envGranted.stdout, "GLOBAL OUTSIDE-SECRET", "config host-environment with a read grant");
+    expectIncludes(envGranted.stdout, "RANDOM 0.5", "config host-environment with a read grant");
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    expectIncludes(run(LOADER, [join("sub", "main.js"), `--host-environment=${join(project, "sub", "env.js")}`], { cwd: project }).stdout,
+      "GLOBAL OUTSIDE-SECRET", "--host-environment outside the project");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Output paths set in a config stay inside the config's directory...");
 {
   const tmp = makeTmp();
