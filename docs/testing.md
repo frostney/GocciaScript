@@ -16,7 +16,7 @@
 GocciaScript uses three testing layers in priority order:
 
 1. **JavaScript end-to-end tests (primary)** -- `.js` tests in `tests/` that exercise the full pipeline through the same public surface that users call. CI runs the full suite in both **interpreter mode** and **bytecode mode**. Every new feature or bug fix should include tests at this layer.
-2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope, in both modes), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading. The matchers these scripts share live in `scripts/test-cli/assertions.ts` and are themselves unit-tested by `scripts/test-cli-assertions.ts`, which spawns no binaries — a defect in a shared matcher silently weakens every harness that uses it, so its contract is locked by its own test.
+2. **CLI behavior tests (CI integration)** -- Standalone bun scripts under `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-lexer.ts`, `test-cli-parser.ts`, `test-cli-config.ts`, `test-cli-apps.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`) that the PR and main workflows run via `bun run` in the `cli` job. They invoke `GocciaRunner`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` as subprocesses and assert on exit codes, output structure, and error envelopes — above all **parser/lexer rejection** that a JS test cannot express (malformed source must fail with a `SyntaxError`, caret, suggestion, and JSON `error` envelope, in both modes), plus JSON output structure, coverage CLI, source maps, numeric separator rejection, timeout handling, global injection, and config loading. The matchers these scripts share live in `scripts/test-cli/assertions.ts` and are themselves unit-tested by `scripts/test-cli-assertions.ts`, which spawns no binaries — a defect in a shared matcher silently weakens every harness that uses it, so its contract is locked by its own test.
 3. **Pascal unit tests (tertiary)** -- Native `*.Test.pas` coverage for low-level runtime and value system internals that are not reachable through a stable public API.
 
 When choosing where to add coverage, prefer the most public entry point — and match the **kind** of check to the layer that can actually express it:
@@ -24,7 +24,7 @@ When choosing where to add coverage, prefer the most public entry point — and 
 | What you are verifying | Where it goes | Why there |
 |---|---|---|
 | Valid code runs and produces the correct result — semantics, conformance, edge cases | JavaScript tests under `tests/` (run by `GocciaTestRunner` in both interpreter and bytecode mode) | Exercises the full lexer → parser → interpreter/VM pipeline through the public surface |
-| Malformed source is **rejected** — a `SyntaxError`/early error, and its message, caret, suggestion, exit code, and JSON `error` envelope | `scripts/test-cli-parser.ts` (parser) or `scripts/test-cli-lexer.ts` (lexer), run by the CI `cli` job | A JS test **cannot** assert rejection: with no `eval`/`Function`, a parse or lex error simply fails to load the whole test file. These scripts run `GocciaScriptLoader` as a subprocess and assert on its exit code and error output, in both modes |
+| Malformed source is **rejected** — a `SyntaxError`/early error, and its message, caret, suggestion, exit code, and JSON `error` envelope | `scripts/test-cli-parser.ts` (parser) or `scripts/test-cli-lexer.ts` (lexer), run by the CI `cli` job | A JS test **cannot** assert rejection: with no `eval`/`Function`, a parse or lex error simply fails to load the whole test file. These scripts run `GocciaRunner` as a subprocess and assert on its exit code and error output, in both modes |
 | CLI tool contract — output formats (`--output=json`, `--format`), `--coverage`, `--source-map`, `--timeout`, global injection, config loading, `--allow-*`/`--deny-*` permissions and `--max-*` limits | the matching `scripts/test-cli-*.ts` (`test-cli.ts`, `test-cli-apps.ts`, `test-cli-config.ts`, `test-cli-permissions.ts`, `test-cli-embedded-resources.ts`), run by the CI `cli` job | Command-level behaviour over the real binaries |
 | Low-level runtime/value internals not reachable from JavaScript | Pascal `*.Test.pas` | Internal-only behaviour |
 
@@ -608,11 +608,11 @@ The CLI behaviour tests are standalone bun scripts under `scripts/test-cli-*.ts`
 | GocciaTestRunner JSON output | `--output=<file>` writes valid JSON with `mode`, `totalFiles` fields to a file; `--output=json` emits the same envelope to stdout and suppresses the human-readable summary; `--output=compact-json` emits the same stdout envelope without `build`, `memory`, `stdout`, or `stderr` |
 | GocciaTestRunner coverage | `--coverage` prints summary; `--coverage-format=lcov` and `--coverage-format=json` write valid output files; branch coverage includes `BRDA`/`BRF` entries |
 | GocciaTestRunner snapshots | External and inline creation, comparison and update in both execution modes; exact Vitest formatting; local/CI obsolete behavior; update aliases; stdin restrictions |
-| GocciaScriptLoader JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
-| GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as the loader and test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
-| GocciaScriptLoader error display | Syntax errors show source context, caret, and suggestions |
-| GocciaScriptLoader coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
-| GocciaScriptLoader source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
+| GocciaRunner JSON output | `--output=json` envelope includes aggregate `ok`, `output`, `stdout`, `stderr`, `build`, `timing`, `memory`, `workers`, and per-input `files[]` entries with `fileName` and `result`; `--output=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` (the normalized `output` array and structured `error` are preserved) |
+| GocciaBenchmarkRunner JSON output | `--format=json` writes the same JSON envelope as `GocciaRunner` and the test runner; `--format=compact-json` emits the same envelope without `build`, `memory`, `stdout`, or `stderr` at the top level or per-file |
+| GocciaRunner error display | Syntax errors show source context, caret, and suggestions |
+| GocciaRunner coverage | `--coverage` summary, lcov/json file output, bytecode mode coverage, JSX source map translation for branch positions |
+| GocciaRunner source maps | `--source-map` writes valid source map JSON; rejects stdin without explicit path |
 | Numeric separator rejection | Trailing, leading, consecutive separators and invalid positions produce errors |
 | Timeout handling | `--timeout` produces `TimeoutError` in JSON output |
 | Permissions and limits | `test-cli-permissions.ts`: the `--allow-*`/`--deny-*` grammar, deny-by-default, config `permissions` blocks, what each binary honors, `--max-*` units, and the removed flags and keys exiting `2` with their replacement |
@@ -746,7 +746,7 @@ build → test             → artifacts
 
 **`benchmark`** (needs build, all platforms) — Downloads pre-built binaries, runs all benchmarks.
 
-**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), `test-cli-permissions.ts` (capability flags, config `permissions` blocks, limits, and removed options), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). The x86-64 Linux leg also runs the pinned es-toolkit compatibility probes and uploads their classified JSON report. Windows runs additionally assert that the loader binary does not link against OpenSSL DLLs.
+**`cli`** (needs build, all platforms) — Downloads pre-built binaries and runs CLI behavior smoke tests via Bun: `test-cli.ts` (options across all apps), `test-cli-lexer.ts` (numeric-separator rejection), `test-cli-parser.ts` (error display), `test-cli-config.ts` (config-file loading and per-file inheritance), `test-cli-permissions.ts` (capability flags, config `permissions` blocks, limits, and removed options), and `test-cli-apps.ts` (app-specific features, including `GocciaScriptLoaderBare` stdin/file checks, CLI-local `print`, and runtime-global absence). The x86-64 Linux leg also runs the pinned es-toolkit compatibility probes and uploads their classified JSON report. Windows runs additionally assert that `GocciaRunner` does not link against OpenSSL DLLs.
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
@@ -810,7 +810,7 @@ cross-shard merge, profile aggregation, and comment rendering.
 
 ## Coverage
 
-The GocciaTestRunner and GocciaScriptLoader support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime.
+The GocciaTestRunner and GocciaRunner support JavaScript source-level coverage reporting via the `--coverage` flag. Coverage tracks which lines, branches, and functions of JavaScript source code are executed at runtime.
 
 ### Coverage implies `--mode=bytecode`
 
@@ -828,8 +828,8 @@ Enabling coverage — via `--coverage`, `--coverage-format`, or `--coverage-outp
 # JSON output (Istanbul-compatible)
 ./build/GocciaTestRunner tests --coverage --coverage-format=json --coverage-output=coverage.json
 
-# GocciaScriptLoader also supports coverage
-./build/GocciaScriptLoader example.js --coverage
+# GocciaRunner also supports coverage
+./build/GocciaRunner example.js --coverage
 ```
 
 ### What is Tracked

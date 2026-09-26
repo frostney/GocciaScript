@@ -10,8 +10,10 @@
 #   GOCCIA_REPO  — GitHub owner/repo (default: frostney/GocciaScript)
 #
 # The release ships a single archive per OS / arch; we extract it
-# under a temp dir, then move the three executables (GocciaScriptLoader,
-# GocciaTestRunner, GocciaREPL) into INSTALL_DIR.
+# under a temp dir, then move the three executables (GocciaRunner,
+# GocciaTestRunner, GocciaREPL) into INSTALL_DIR. Releases before 0.14 ship
+# GocciaScriptLoader instead of GocciaRunner; a pinned GOCCIA_VERSION installs
+# whichever runner its archive carries.
 
 set -e
 
@@ -85,27 +87,38 @@ fi
 # legacy build/ and flat layouts as fallbacks.
 #
 # A candidate qualifies only when it holds all three executables. Matching on
-# the loader alone would commit to the first directory that happens to have
+# the runner alone would commit to the first directory that happens to have
 # it and then hard-fail on the missing sibling, even when a later candidate
-# is complete.
+# is complete. The runner is GocciaRunner from 0.14 on and GocciaScriptLoader
+# before that; prefer the new name.
 SRC_DIR=""
+RUNNER_BIN=""
 PARTIAL_DIR=""
 PARTIAL_MISSING=""
 for candidate in "gocciascript-${VERSION}-${OS}-${ARCH}" gocciascript-*/ build .; do
   candidate="${candidate%/}"
   [ -d "$candidate" ] || continue
+  runner=""
+  for name in GocciaRunner GocciaScriptLoader; do
+    if [ -f "${candidate}/${name}" ]; then
+      runner="$name"
+      break
+    fi
+  done
   missing=""
-  for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
+  [ -n "$runner" ] || missing=" GocciaRunner"
+  for bin in GocciaTestRunner GocciaREPL; do
     [ -f "${candidate}/${bin}" ] || missing="${missing} ${bin}"
   done
   if [ -z "$missing" ]; then
     SRC_DIR="$candidate"
+    RUNNER_BIN="$runner"
     break
   fi
-  # Keep the first loader-bearing candidate for diagnostics: it is the one
+  # Keep the first runner-bearing candidate for diagnostics: it is the one
   # that looked like a GocciaScript layout, so its missing files are what
   # the user needs to hear about if nothing else qualifies.
-  if [ -z "$PARTIAL_DIR" ] && [ -f "${candidate}/GocciaScriptLoader" ]; then
+  if [ -z "$PARTIAL_DIR" ] && [ -n "$runner" ]; then
     PARTIAL_DIR="$candidate"
     PARTIAL_MISSING="${missing# }"
   fi
@@ -116,16 +129,27 @@ if [ -z "$SRC_DIR" ]; then
   # download or a layout change, so fail rather than report a partial
   # install as success.
   [ -z "$PARTIAL_DIR" ] || err "incomplete archive ${ASSET}: ${PARTIAL_DIR} is missing ${PARTIAL_MISSING}"
-  err "could not find GocciaScriptLoader, GocciaTestRunner and GocciaREPL in $ASSET"
+  err "could not find GocciaRunner, GocciaTestRunner and GocciaREPL in $ASSET"
 fi
 
-for bin in GocciaScriptLoader GocciaTestRunner GocciaREPL; do
+for bin in "$RUNNER_BIN" GocciaTestRunner GocciaREPL; do
   src="${SRC_DIR}/${bin}"
   chmod +x "$src"
   $SUDO mv "$src" "${INSTALL_DIR}/${bin}"
 done
 
 printf '\nGocciaScript %s installed to %s\n' "$VERSION" "$INSTALL_DIR"
+
+# 0.14 renamed GocciaScriptLoader to GocciaRunner and merged
+# GocciaSandboxRunner into it. Leave older binaries in place (something may
+# still call them), but say that they are no longer updated.
+if [ "$RUNNER_BIN" = "GocciaRunner" ]; then
+  for stale in GocciaScriptLoader GocciaSandboxRunner; do
+    if [ -e "${INSTALL_DIR}/${stale}" ]; then
+      printf 'Note: %s/%s is from an older release and was not updated; use GocciaRunner instead and remove it when nothing depends on it.\n' "$INSTALL_DIR" "$stale"
+    fi
+  done
+fi
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
   *) printf 'Add %s to your PATH if it is not already there.\n' "$INSTALL_DIR" ;;

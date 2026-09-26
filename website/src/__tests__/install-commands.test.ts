@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   HOMEBREW_INSTALL_COMMAND,
   QUICK_INSTALL_COMMANDS,
+  runnerBinaryForRelease,
 } from "@/lib/install-commands";
 
 describe("install commands", () => {
@@ -24,5 +25,14 @@ describe("install commands", () => {
     expect(HOMEBREW_INSTALL_COMMAND).toBe(
       "brew install frostney/tap/gocciascript",
     );
+  });
+
+  test("names the runner each release archive carries", () => {
+    expect(runnerBinaryForRelease("v0.13.2")).toBe("GocciaScriptLoader");
+    expect(runnerBinaryForRelease("0.7.0")).toBe("GocciaScriptLoader");
+    expect(runnerBinaryForRelease("v0.14.0")).toBe("GocciaRunner");
+    expect(runnerBinaryForRelease("v1.0.0")).toBe("GocciaRunner");
+    expect(runnerBinaryForRelease("nightly")).toBe("GocciaRunner");
+    expect(runnerBinaryForRelease("v0.0.0")).toBe("GocciaRunner");
   });
 });

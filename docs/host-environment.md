@@ -6,7 +6,7 @@
 
 - Every engine owns a `TGocciaHostEnvironment` that supplies JavaScript-visible wall time, monotonic time, default time zone, and randomness.
 - Pascal embedders inject implementations of `IGocciaHostClock` and `IGocciaHostRandom` before attaching runtime extensions or executing source.
-- `GocciaScriptLoader --host-environment=<module>` accepts the same providers as callable named JavaScript exports.
+- `GocciaRunner --host-environment=<module>` accepts the same providers as callable named JavaScript exports.
 - Child engines share the clock and receive derived random stream identifiers, so realms remain reproducible without replaying the parent stream.
 - A **clock override** layers a mocked epoch and/or monotonic time over the configured providers, which is how fake timers reach `Date`, `Temporal.Now`, and `performance` at once.
 - Timeouts, profiling, benchmarks, and other infrastructure continue to use the real clocks in `TimingUtils`.
@@ -25,7 +25,7 @@ export const random = (streamId) => streamId === 0n ? 0.25 : 0.75;
 Then run a script with the provider:
 
 ```bash
-./build/GocciaScriptLoader app.js \
+./build/GocciaRunner app.js \
   --host-environment=./examples/custom-host-environment.js
 ```
 

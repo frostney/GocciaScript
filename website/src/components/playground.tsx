@@ -587,7 +587,7 @@ export function Playground({
     ]
       .filter(Boolean)
       .join(" ");
-    const banner = `GocciaScriptLoader --mode=${
+    const banner = `GocciaRunner --mode=${
       backend === "bytecode" ? "bytecode" : "interpreted"
     }${flagText ? ` ${flagText}` : ""} ${version}`;
     const runnerBanner =

@@ -1,7 +1,6 @@
-// Run: ./build/GocciaSandboxRunner /sandbox-nested.js \
-//   --seed=examples/_experimental/sandbox-nested.js=/ \
-//   --seed=examples/_experimental/sandbox-child.js=/ --source-type=module \
-//   --diff --diff-format=unified
+// Run: ./build/GocciaRunner examples/_experimental/sandbox-nested.js \
+//   --copy examples/_experimental/sandbox-child.js --source-type=module \
+//   --diff=unified
 import fs from "fs";
 import { runScript } from "goccia";
 
@@ -9,9 +8,8 @@ fs.writeFileSync("/message.txt", "hello from the parent");
 
 const child = runScript("/sandbox-child.js", {
   sandbox: true,
-  seed: ["/sandbox-child.js", "/message.txt"],
-  diff: true,
-  diffFormat: "unified",
+  copy: ["/sandbox-child.js", "/message.txt"],
+  diff: "unified",
 });
 
 console.log(child.stdout.trim());

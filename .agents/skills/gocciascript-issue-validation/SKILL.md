@@ -29,7 +29,7 @@ Record the spec, edition, clause id, section number, and snapshot SHA when the M
 When an issue references test262 files, patterns, or categories:
 
 1. Read `docs/test262.md` before running the reproduction.
-2. Use `scripts/run_test262_suite.ts` with `GocciaScriptLoaderBare`; do not run stock test262 files directly through `GocciaScriptLoader`, `GocciaTestRunner`, or hand-built wrappers.
+2. Use `scripts/run_test262_suite.ts` with `GocciaScriptLoaderBare`; do not run stock test262 files directly through `GocciaRunner`, `GocciaTestRunner`, or hand-built wrappers.
 3. Use the pinned test262 SHA from `.github/workflows/pr.yml` or `.github/workflows/ci.yml` unless the issue explicitly targets another SHA.
 4. Build the bare loader from a clean artifact state first:
 

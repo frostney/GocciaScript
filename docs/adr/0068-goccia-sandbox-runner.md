@@ -71,3 +71,15 @@ returns. This is a sandbox scheduling approximation, not an implementation of
 Node's libuv filesystem phase ordering.
 
 Nested execution shares filesystem state by design. This makes `runScript` and shell `goccia` useful for orchestrating sandboxed workflows, while still avoiding any host mount semantics.
+
+**Superseded in part by [ADR 0122](0122-unified-capability-model.md):**
+GocciaScript 0.14.0 merged `GocciaSandboxRunner` into `GocciaRunner` (the
+renamed `GocciaScriptLoader`) as its sandbox mode, so the separate host this
+ADR describes is gone while its seed-baseline and diff semantics remain. Host
+inputs are copied with `--copy <host>[=<sandbox>]`, whose default target is
+`/<basename>` for directories too; `--seed-config` became the `sandbox` section
+of `goccia.json`, without inline text or base64 entries; `--diff-format` and
+`--diff-output` became `--diff=json|unified` and `--diff-file`; JSON diffs
+always include timestamp metadata; and config is discovered as for every other
+run instead of only through `--config`. The nested `runScript` options `seed`,
+`diffFormat`, and `diffMetadata` became `copy` and `diff`.

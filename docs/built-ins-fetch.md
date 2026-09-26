@@ -54,7 +54,7 @@ the grammar and [Limits and units](permissions.md#limits-and-units) for the
 accepted sizes:
 
 ```bash
-./build/GocciaScriptLoader example.js \
+./build/GocciaRunner example.js \
   --allow-net=api.example.com,127.0.0.1:8080 \
   --max-fetch-bytes=1MiB
 ```

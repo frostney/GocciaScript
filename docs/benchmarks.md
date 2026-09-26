@@ -66,7 +66,7 @@ Use `--output=<file>` to write results to a file instead of stdout.
 
 ## Profiling Benchmark Runs
 
-`GocciaBenchmarkRunner` accepts the same VM profiling options as `GocciaScriptLoader`:
+`GocciaBenchmarkRunner` accepts the same VM profiling options as `GocciaRunner`:
 `--profile=opcodes|functions|all`, `--profile-output=<path>`, and
 `--profile-format=flamegraph`. Profiling forces bytecode mode and serial execution
 because profiler state is per thread.
@@ -592,7 +592,7 @@ module. The generated entry times one direct call to the module's exported
 `fn()`; process repetitions provide the raw samples, so Benchmark.js and its
 Lodash-based measurement machinery are not part of the measured bundle.
 
-Each bundle runs with `GocciaScriptLoader` in bytecode mode and the broad
+Each bundle runs with `GocciaRunner` in bytecode mode and the broad
 ECMAScript compatibility flag set used for legacy tooling bundles. Every
 workload has a five-minute process ceiling. A workload-specific override can be
 pinned in the manifest only when a future corpus change has a documented reason

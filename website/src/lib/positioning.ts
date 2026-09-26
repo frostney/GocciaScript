@@ -19,7 +19,7 @@ export const TYPE_ANNOTATIONS_ANSWER =
 export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 
 export const NODE_COMPATIBILITY_ANSWER =
-  "GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm package resolution, process, Buffer, or the general node: module set. GocciaSandboxRunner does provide a Node-compatible fs API over its virtual filesystem, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the sandbox and does not expose the ambient host filesystem.";
+  "GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm package resolution, process, Buffer, or the general node: module set. GocciaRunner's sandbox mode does provide a Node-compatible fs API over its virtual filesystem, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the sandbox and does not expose the ambient host filesystem.";
 
 export const VITEST_COMPATIBILITY_QUESTION =
   "Can I run my Vitest tests on GocciaScript?";

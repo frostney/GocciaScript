@@ -35,7 +35,7 @@ durable surface merely to increase the probe count.
 ## Running the lane
 
 ```bash
-./build.pas loader
+./build.pas runner
 bun run scripts/run_es_toolkit_validation.ts \
   --output=tmp/es-toolkit-validation.json
 ```

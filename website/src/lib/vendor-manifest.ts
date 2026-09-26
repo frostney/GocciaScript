@@ -13,11 +13,12 @@ export type VendorFeatureSet = {
  *  are paths *relative to* the `vendor/` directory — joining with
  *  `process.cwd()/vendor` yields the absolute path the API spawns.
  *
- *  Pre-0.7.0 archives ship `ScriptLoader` / `TestRunner`; 0.7.0+ ship
- *  `GocciaScriptLoader` / `GocciaTestRunner` (rename in #333). The build
- *  script preserves whichever name was in the archive, so the per-version
- *  paths captured here are the source of truth — no naming heuristics in
- *  the API. */
+ *  Pre-0.7.0 archives ship `ScriptLoader` / `TestRunner`; 0.7.0-0.13 ship
+ *  `GocciaScriptLoader` / `GocciaTestRunner` (rename in #333); 0.14+ ship
+ *  `GocciaRunner` in place of `GocciaScriptLoader`. The `loader` field keeps
+ *  its name across all three. The build script probes the archive and
+ *  preserves whichever name it found, so the per-version paths captured here
+ *  are the source of truth — no naming heuristics in the API. */
 export type VendorEntry = {
   tag: string;
   isPrerelease?: boolean;

@@ -128,3 +128,11 @@ longer act on it.
   edit at all
 - [ADR 0103](0103-layered-untrusted-execution-boundaries.md) — what the
   sandbox boundary is and is not
+
+**Superseded in part by [ADR 0122](0122-unified-capability-model.md):** the
+`--write-back` flag was replaced in GocciaScript 0.14.0 by per-input
+`--copy-rw <host>[=<sandbox>]` on `GocciaRunner`'s sandbox mode, so only inputs
+copied that way are written and other changes are reported as skipped. The
+`write-back:` report goes to standard error, keeping standard output for the
+guest. The rest of this decision — successful runs only, no deletions, symlink
+targets skipped, one atomic rename per file — is unchanged.

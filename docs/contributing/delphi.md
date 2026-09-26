@@ -12,7 +12,7 @@
 ## Project Group
 
 Open `source/app/GocciaScript.Delphi.groupproj` in Delphi 12. The group owns the
-REPL, both script loaders, Sandbox Runner, Test Runner, Benchmark Runner, and
+REPL, the Runner, the Bare Script Loader, Test Runner, Benchmark Runner, and
 Bundler. Shared search paths, compiler definitions, and output directories live
 in `source/app/GocciaScript.Delphi.props`; machine-specific IDE state does not
 belong in the repository.

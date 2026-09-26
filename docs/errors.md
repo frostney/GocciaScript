@@ -155,7 +155,7 @@ Every error object has the following properties:
 
 ### Sandbox filesystem errors
 
-The Sandbox Runner's `fs` module converts virtual filesystem failures into
+The sandbox-mode `fs` module converts virtual filesystem failures into
 real JavaScript `Error` objects. Synchronous methods throw the error and
 `fs.promises` methods reject with the same shape. Callback methods pass the
 same error as their only callback argument, except `fs.exists`, which converts
@@ -255,7 +255,7 @@ a bare specifier reports `Cannot resolve bare module specifier "lodash". Imports
 must start with "./" or "../"`, and a runtime configured without a resolver
 reports `No module resolver configured and cannot resolve "./missing.js"`.
 
-**Sandbox modules are exempt.** The Sandbox Runner resolves against a virtual
+**Sandbox modules are exempt.** Sandbox mode resolves against a virtual
 filesystem the guest already owns and can enumerate, so its resolution failures
 keep the `(resolved to "...")` and `(alias resolved to "...")` detail — those
 paths are guest namespace, not host namespace.

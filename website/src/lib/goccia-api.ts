@@ -262,8 +262,8 @@ async function probeBinaryFeatures(
 //   2. `vendor/<entry.binaries.*>` for the requested release tag — populated
 //      at `prebuild` time by `scripts/fetch-binaries.ts` and described in
 //      `vendor/manifest.json`. Per-version paths preserve archive-side
-//      filenames so pre-0.7.0's `ScriptLoader`/`TestRunner` and post-0.7.0's
-//      `GocciaScriptLoader`/`GocciaTestRunner` both resolve cleanly.
+//      filenames so pre-0.7.0's `ScriptLoader`/`TestRunner`, 0.7.0-0.13's
+//      `GocciaScriptLoader`, and 0.14+'s `GocciaRunner` all resolve cleanly.
 //   3. dev-only fallback to `../build/<binary>` — the locally compiled engine
 //      `./build.pas` produced. Disabled in production so an unknown version
 //      can't silently fall through to the wrong binary on Vercel.
@@ -316,7 +316,7 @@ function resolveBinaryPath(
 
   if (process.env.NODE_ENV !== "production") {
     const localName =
-      config.kind === "execute" ? "GocciaScriptLoader" : "GocciaTestRunner";
+      config.kind === "execute" ? "GocciaRunner" : "GocciaTestRunner";
     const localPath = path.join(
       /* turbopackIgnore: true */ process.cwd(),
       "..",

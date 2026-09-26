@@ -21,7 +21,10 @@ import {
   isPreStable,
   type ReleaseInfo,
 } from "@/lib/github";
-import { HOMEBREW_INSTALL_COMMAND } from "@/lib/install-commands";
+import {
+  HOMEBREW_INSTALL_COMMAND,
+  runnerBinaryForRelease,
+} from "@/lib/install-commands";
 
 /** Once GocciaScript ships through JavaScript package managers, flip this
  *  to `true` to reveal the npx-style and global package-manager sections. */
@@ -86,6 +89,7 @@ function unixPrebuiltBlock(
   const label = ARCH_LABELS[os][active];
   const c = commented ? "# " : "";
   const note = commented ? "uncomment to use instead" : "auto-detected";
+  const runner = runnerBinaryForRelease(tag);
   const unpack =
     os === "linux" ? `tar xzf "${archive}"` : `unzip -q "${archive}"`;
   // Download, unpack, enter, mark executable and install are ONE failure-gated
@@ -101,8 +105,8 @@ function unixPrebuiltBlock(
     `curl -fsSL -O "${url}"`,
     unpack,
     `cd "${dir}"`,
-    "chmod +x GocciaScriptLoader GocciaTestRunner GocciaREPL",
-    "sudo mv GocciaScriptLoader GocciaTestRunner GocciaREPL /usr/local/bin/",
+    `chmod +x ${runner} GocciaTestRunner GocciaREPL`,
+    `sudo mv ${runner} GocciaTestRunner GocciaREPL /usr/local/bin/`,
   ];
   return [
     `# ${label} — ${note}`,
@@ -131,6 +135,7 @@ function windowsPrebuiltBlock(
   const url = archiveUrl("windows", active, tag);
   const archive = archiveFilename("windows", active, stripV(tag));
   const dir = archiveDirname("windows", active, stripV(tag));
+  const runner = runnerBinaryForRelease(tag);
   const label = ARCH_LABELS.windows[active];
   const c = commented ? "# " : "";
   const note = commented ? "uncomment to use instead" : "auto-detected";
@@ -139,7 +144,7 @@ function windowsPrebuiltBlock(
     `${c}Invoke-WebRequest -Uri "${url}" -OutFile "${archive}"`,
     `${c}Expand-Archive -Path "${archive}" -DestinationPath . -Force`,
     `${c}$bin = "$env:USERPROFILE\\bin"; New-Item -ItemType Directory -Force -Path $bin | Out-Null`,
-    `${c}Move-Item -Force ${dir}\\GocciaScriptLoader.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$bin\\"`,
+    `${c}Move-Item -Force ${dir}\\${runner}.exe, ${dir}\\GocciaTestRunner.exe, ${dir}\\GocciaREPL.exe "$bin\\"`,
     `${c}$userPath = [Environment]::GetEnvironmentVariable("Path", "User")`,
     `${c}if (($userPath -split ';') -notcontains $bin) { [Environment]::SetEnvironmentVariable("Path", (($userPath, $bin | Where-Object { $_ }) -join ';'), "User") }`,
     `${c}if (($env:Path -split ';') -notcontains $bin) { $env:Path = "$env:Path;$bin" }`,
@@ -180,11 +185,11 @@ function buildPrebuiltCommands(arch: ArchKey, tag: string) {
  *  (`.exe`). FreePascal must already be installed. */
 const SOURCE_COMMANDS = {
   macos:
-    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas loader testrunner repl\n./build/GocciaScriptLoader --help",
+    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas runner testrunner repl\n./build/GocciaRunner --help",
   linux:
-    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas loader testrunner repl\n./build/GocciaScriptLoader --help",
+    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas runner testrunner repl\n./build/GocciaRunner --help",
   windows:
-    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas loader testrunner repl\n.\\build\\GocciaScriptLoader.exe --help",
+    "git clone https://github.com/frostney/GocciaScript\ncd GocciaScript\n./build.pas runner testrunner repl\n.\\build\\GocciaRunner.exe --help",
 } as const;
 
 export function Install({
@@ -375,17 +380,17 @@ export function Install({
           )}
 
           {/* Pre-built binaries — OS-tabbed; the archive holds the whole
-              toolchain, the commands put loader + testrunner + REPL on PATH. */}
+              toolchain, the commands put runner + testrunner + REPL on PATH. */}
           <section id="binaries" className="install-method">
             <AnchorH2 id="binaries">Pre-built binaries</AnchorH2>
             <p>
               Download the archive for your OS / arch from the GitHub release.
-              It carries the whole toolchain — <code>GocciaScriptLoader</code>{" "}
-              (the runtime), <code>GocciaScriptLoaderBare</code>,{" "}
-              <code>GocciaSandboxRunner</code>, <code>GocciaTestRunner</code>,{" "}
-              <code>GocciaTest262Runner</code>, <code>GocciaBundler</code>,{" "}
-              <code>GocciaBenchmarkRunner</code>, <code>GocciaREPL</code>,{" "}
-              <code>GocciaFuzzHarness</code>, and{" "}
+              It carries the whole toolchain — <code>GocciaRunner</code> (the
+              runtime, with a sandbox mode; <code>GocciaScriptLoader</code>{" "}
+              before 0.14), <code>GocciaScriptLoaderBare</code>,{" "}
+              <code>GocciaTestRunner</code>, <code>GocciaTest262Runner</code>,{" "}
+              <code>GocciaBundler</code>, <code>GocciaBenchmarkRunner</code>,{" "}
+              <code>GocciaREPL</code>, <code>GocciaFuzzHarness</code>, and{" "}
               <code>GocciaWasmTestRunner</code> — plus the <code>tests/</code>,{" "}
               <code>benchmarks/</code>, and <code>examples/</code> directories,
               all inside one versioned folder named after the archive. The

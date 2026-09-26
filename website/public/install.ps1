@@ -11,8 +11,10 @@
 #                              (default: frostney/GocciaScript)
 #
 # The release ships a zip per arch; we expand it under a temp dir and
-# move GocciaScriptLoader.exe, GocciaTestRunner.exe, GocciaREPL.exe
-# into the install dir, then add the dir to the user's PATH.
+# move GocciaRunner.exe, GocciaTestRunner.exe, GocciaREPL.exe
+# into the install dir, then add the dir to the user's PATH. Releases
+# before 0.14 ship GocciaScriptLoader.exe instead of GocciaRunner.exe; a
+# pinned GOCCIA_VERSION installs whichever runner its archive carries.
 
 $ErrorActionPreference = "Stop"
 
@@ -75,13 +77,21 @@ try {
   $Candidates += (Join-Path $TempDir "build"), $TempDir
 
   # A candidate qualifies only when it holds all three executables. Matching
-  # on the loader alone would commit to the first directory that happens to
+  # on the runner alone would commit to the first directory that happens to
   # have it and then hard-fail on the missing sibling, even when a later
-  # candidate is complete.
-  $Exes = @("GocciaScriptLoader", "GocciaTestRunner", "GocciaREPL")
+  # candidate is complete. The runner is GocciaRunner from 0.14 on and
+  # GocciaScriptLoader before that; prefer the new name.
+  $RunnerIn = {
+    param($Dir)
+    @("GocciaRunner", "GocciaScriptLoader") |
+      Where-Object { Test-Path -LiteralPath (Join-Path $Dir "$_.exe") -PathType Leaf } |
+      Select-Object -First 1
+  }
   $MissingIn = {
     param($Dir)
-    $Exes | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir "$_.exe") -PathType Leaf) }
+    if (-not (& $RunnerIn $Dir)) { "GocciaRunner" }
+    @("GocciaTestRunner", "GocciaREPL") |
+      Where-Object { -not (Test-Path -LiteralPath (Join-Path $Dir "$_.exe") -PathType Leaf) }
   }
 
   $SrcDir = $Candidates |
@@ -90,18 +100,19 @@ try {
   if (-not $SrcDir) {
     # Every release archive carries all three; a missing one means a broken
     # download or a layout change, so fail rather than report a partial
-    # install as success. Name what the loader-bearing candidate lacked.
+    # install as success. Name what the runner-bearing candidate lacked.
     $Partial = $Candidates |
-      Where-Object { Test-Path -LiteralPath (Join-Path $_ "GocciaScriptLoader.exe") -PathType Leaf } |
+      Where-Object { & $RunnerIn $_ } |
       Select-Object -First 1
     if ($Partial) {
       $Missing = (& $MissingIn $Partial | ForEach-Object { "$_.exe" }) -join ", "
       throw "install.ps1: incomplete archive ${Asset}: $Partial is missing $Missing"
     }
-    throw "install.ps1: could not find GocciaScriptLoader.exe, GocciaTestRunner.exe and GocciaREPL.exe in $Asset"
+    throw "install.ps1: could not find GocciaRunner.exe, GocciaTestRunner.exe and GocciaREPL.exe in $Asset"
   }
 
-  foreach ($exe in $Exes) {
+  $RunnerExe = & $RunnerIn $SrcDir
+  foreach ($exe in @($RunnerExe, "GocciaTestRunner", "GocciaREPL")) {
     Move-Item -Force (Join-Path $SrcDir "$exe.exe") (Join-Path $InstallDir "$exe.exe")
   }
 
@@ -116,6 +127,18 @@ try {
 
   Write-Host ""
   Write-Host "GocciaScript $Version installed to $InstallDir"
+
+  # 0.14 renamed GocciaScriptLoader to GocciaRunner and merged
+  # GocciaSandboxRunner into it. Leave older binaries in place (something
+  # may still call them), but say that they are no longer updated.
+  if ($RunnerExe -eq "GocciaRunner") {
+    foreach ($stale in @("GocciaScriptLoader", "GocciaSandboxRunner")) {
+      $StalePath = Join-Path $InstallDir "$stale.exe"
+      if (Test-Path -LiteralPath $StalePath -PathType Leaf) {
+        Write-Host "Note: $StalePath is from an older release and was not updated; use GocciaRunner.exe instead and remove it when nothing depends on it."
+      }
+    }
+  }
 } finally {
   Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
 }

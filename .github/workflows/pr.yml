@@ -70,8 +70,11 @@ jobs:
       - name: Install FPC
         run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
 
-      - name: Build benchmark runner and loader (main base)
-        run: ./build.pas --prod benchmarkrunner loader
+      - name: Build benchmark runner and GocciaRunner (main base)
+        # The PR base may predate the GocciaScriptLoader -> GocciaRunner rename.
+        # Remove this fallback after 0.14.0.
+        run: |
+          if [ -f source/app/GocciaRunner.dpr ]; then ./build.pas --prod benchmarkrunner runner; else ./build.pas --prod benchmarkrunner loader && mv build/GocciaScriptLoader build/GocciaRunner; fi
 
       - name: Upload main build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -80,7 +83,7 @@ jobs:
           retention-days: 1
           path: |
             build/GocciaBenchmarkRunner
-            build/GocciaScriptLoader
+            build/GocciaRunner
 
   docs:
     runs-on: ubuntu-latest
@@ -462,8 +465,8 @@ jobs:
         run: |
           node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
-            --goccia-baseline build-main/GocciaScriptLoader \
-            --goccia-candidate build/GocciaScriptLoader \
+            --goccia-baseline build-main/GocciaRunner \
+            --goccia-candidate build/GocciaRunner \
             --output awfy-report.json
 
       - name: Upload AWFY report
@@ -572,8 +575,8 @@ jobs:
           node scripts/jetstream-ci-report.js \
             --jetstream-dir jetstream-suite \
             --benchmark "$WORKLOAD" \
-            --goccia-baseline build-main/GocciaScriptLoader \
-            --goccia-candidate build/GocciaScriptLoader \
+            --goccia-baseline build-main/GocciaRunner \
+            --goccia-candidate build/GocciaRunner \
             --goccia-baseline-commit "${{ github.event.pull_request.base.sha }}" \
             --goccia-candidate-commit "${{ github.sha }}" \
             --output "jetstream-report-$WORKLOAD.json"
@@ -876,7 +879,7 @@ jobs:
         run: chmod +x build/*
 
       - name: Measure empty-script boot wall-clock
-        run: bun run scripts/measure-boot-timing.ts build/GocciaScriptLoader boot-timing.json
+        run: bun run scripts/measure-boot-timing.ts build/GocciaRunner boot-timing.json
 
       - name: Upload boot timing
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1397,7 +1400,7 @@ jobs:
               section += '|--------|------------|----------|\n';
               section += row('Boot (median)', fmtMs(boot.interpreted?.medianMs), fmtMs(boot.bytecode?.medianMs));
               section += row('Boot (min)', fmtMs(boot.interpreted?.minMs), fmtMs(boot.bytecode?.minMs));
-              section += `\n_Empty-script (\`0;\`) end-to-end process wall-clock for \`GocciaScriptLoader\`, min and median over ${boot.runs ?? '?'} runs after ${boot.warmup ?? '?'} warmups. Includes a fixed process / dynamic-loader floor that does not shrink, so it understates the engine-boot speedup; treat as practical boot time, not pure engine work._\n`;
+              section += `\n_Empty-script (\`0;\`) end-to-end process wall-clock for \`GocciaRunner\`, min and median over ${boot.runs ?? '?'} runs after ${boot.warmup ?? '?'} warmups. Includes a fixed process / dynamic-loader floor that does not shrink, so it understates the engine-boot speedup; treat as practical boot time, not pure engine work._\n`;
               body += details('Boot', section);
             }
 
