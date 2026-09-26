@@ -7305,6 +7305,48 @@ await section("Loader: no --allowed-host blocks all fetch...", async () => {
     throw new Error(`Suggestion should name --allowed-host, got: ${res.text()}`);
 });
 
+await section("Loader: read denials report one suggestion and location in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const proj = join(tmp, "proj");
+    mkdirSync(proj, { recursive: true });
+    const outside = join(tmp, "outside.js");
+    writeFileSync(outside, 'export const secret = "HOST-FILE-READ";\n');
+    writeFileSync(join(proj, "static.mjs"),
+      'import { secret } from "../outside.js";\nconsole.log(secret);\n');
+    writeFileSync(join(proj, "dynamic.mjs"),
+      'const name = "../outside" + ".js";\nconst m = await import(name);\nconsole.log(m.secret);\n');
+    const suggestion = `Suggestion: the read capability does not cover ${realpathSync(outside)}`;
+    for (const file of ["static.mjs", "dynamic.mjs"]) {
+      const outputs: string[] = [];
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--no-host-filesystem"],
+          { stdout: "pipe", stderr: "pipe", cwd: tmp },
+        );
+        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
+          .split("\n")
+          .filter((line) => !line.includes("Running script") && !line.includes("Lex:"))
+          .join("\n");
+        if (proc.exitCode === 0 || text.includes("HOST-FILE-READ"))
+          throw new Error(`${file} (${mode}) should be refused: ${text}`);
+        // The guest-visible message names only the specifier; the host-side
+        // suggestion names the canonical path.
+        if (!text.includes("PermissionDenied: read: ../outside.js") || !text.includes(suggestion))
+          throw new Error(`${file} (${mode}) should report the denial with its suggestion: ${text}`);
+        outputs.push(text);
+      }
+      if (outputs[0] !== outputs[1])
+        throw new Error(`${file} read denial differs between modes:\n${outputs[0]}\n---\n${outputs[1]}`);
+      // A dynamic import is located at its import() call.
+      if (file === "dynamic.mjs" && !outputs[0].includes(`${join(proj, file)}:2:`))
+        throw new Error(`The dynamic import denial should point at its import() call: ${outputs[0]}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --allowed-host multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
   const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --allowed-host=other.com 2>&1`.nothrow();

@@ -189,7 +189,12 @@ for: the specifier as written, the host (plus a non-default port), or the
 library path as passed to `FFI.open`. It never contains an expanded host path
 ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)). The host-side
 report — the CLI's `Suggestion:` line, or `TGocciaThrowValue.Suggestion` for an
-embedder — may name the canonical path and the option that would grant it.
+embedder — may name the canonical path and the option that would grant it. The
+suggestion also travels on the error object (never as a guest-visible property),
+so a denial that surfaces through a rejected `import()` or `fetch()` promise
+still reports it. Both executors locate a denial at the guest request that
+caused it: the `import` or `export … from` declaration, the `import()`
+expression, or the `fetch()`/`FFI.open()` call.
 
 ## Audit events
 

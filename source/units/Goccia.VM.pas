@@ -2634,12 +2634,15 @@ type
     FPromise: TGocciaPromiseValue;
     FPath: string;
     FReferrer: string;
+    FSiteLine: Integer;
+    FSiteColumn: Integer;
   protected
     function GetFunctionLength: Integer; override;
     function GetFunctionName: string; override;
   public
     constructor Create(const AVM: TGocciaVM; const APromise: TGocciaPromiseValue;
-      const APath, AReferrer: string);
+      const APath, AReferrer: string; const ASiteLine: Integer = 0;
+      const ASiteColumn: Integer = 0);
     function Call(const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue; override;
     procedure MarkReferences; override;
@@ -4985,13 +4988,16 @@ end;
 { TGocciaVMDynamicImportStartValue }
 
 constructor TGocciaVMDynamicImportStartValue.Create(const AVM: TGocciaVM;
-  const APromise: TGocciaPromiseValue; const APath, AReferrer: string);
+  const APromise: TGocciaPromiseValue; const APath, AReferrer: string;
+  const ASiteLine, ASiteColumn: Integer);
 begin
   inherited Create;
   FVM := AVM;
   FPromise := APromise;
   FPath := APath;
   FReferrer := AReferrer;
+  FSiteLine := ASiteLine;
+  FSiteColumn := ASiteColumn;
 end;
 
 function TGocciaVMDynamicImportStartValue.GetFunctionLength: Integer;
@@ -5007,13 +5013,20 @@ end;
 function TGocciaVMDynamicImportStartValue.Call(
   const AArguments: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+var
+  PreviousCallSite: TGocciaCallSite;
 begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   if not Assigned(FVM) or not Assigned(FPromise) then
     Exit;
 
+  EnterGocciaCallSite(FReferrer, FSiteLine, FSiteColumn, PreviousCallSite);
   try
-    FVM.ResolveDynamicImportPromise(FPromise, FPath, FReferrer);
+    try
+      FVM.ResolveDynamicImportPromise(FPromise, FPath, FReferrer);
+    finally
+      LeaveGocciaCallSite(PreviousCallSite);
+    end;
   except
     on E: EGocciaBytecodeThrow do
       FPromise.Reject(E.ThrownValue);
@@ -14425,6 +14438,23 @@ var
       Result.Column := 0;
       Result.Recorded := False;
     end;
+  end;
+
+  { The position of the import() this instruction compiles: the recorded
+    expression position, which is what the tree-walk evaluator uses, or the
+    instruction's own when none was recorded (binary-loaded bytecode). }
+  procedure CurrentImportCallLocation(out ALine, AColumn: Integer);
+  var
+    ImportSite: TGocciaCallSiteEntry;
+  begin
+    ImportSite := CurrentCallSite;
+    if ImportSite.Recorded then
+    begin
+      ALine := ImportSite.Line;
+      AColumn := ImportSite.Column;
+    end
+    else
+      CurrentInstructionDebugLocation(ALine, AColumn);
   end;
 
   { Stamps the frame with the call expression's own position when the compiler

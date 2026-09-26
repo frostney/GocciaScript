@@ -916,6 +916,7 @@ uses
   Goccia.Evaluator,
   Goccia.Evaluator.Assignment,
   Goccia.Evaluator.PatternMatching,
+  Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
   Goccia.InstructionLimit,
@@ -2621,6 +2622,7 @@ var
   Module: TGocciaModule;
   Promise: TGocciaPromiseValue;
   GC: TGarbageCollector;
+  PreviousCallSite: TGocciaCallSite;
 begin
   Promise := TGocciaPromiseValue.Create;
   GC := TGarbageCollector.Instance;
@@ -2648,33 +2650,41 @@ begin
       if not HasLiteralSpecifier then
         ModuleRequest := MarkComputedImportSpecifier(ModuleRequest);
 
-      case FPhase of
-        icpSource:
-          begin
-            SourceLoader := AContext.LoadModuleSource;
-            if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
-              SourceLoader := AContext.Scope.LoadModuleSource;
-            if not Assigned(SourceLoader) then
-              raise Exception.Create('Module source loader is not available.');
-            Promise.Resolve(SourceLoader(ModuleRequest,
-              AContext.CurrentFilePath));
-          end;
-        icpDefer:
-          begin
-            DeferredLoader := AContext.LoadDeferredModule;
-            if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
-              DeferredLoader := AContext.Scope.LoadDeferredModule;
-            if not Assigned(DeferredLoader) then
-              raise Exception.Create('Deferred module loader is not available.');
-            Promise.Resolve(DeferredLoader(ModuleRequest,
-              AContext.CurrentFilePath));
-          end;
-      else
-        // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
-        Module := AContext.LoadModule(ModuleRequest,
-          AContext.CurrentFilePath);
-        // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
-        Promise.Resolve(Module.GetNamespaceObject);
+      { The import() is the call site of whatever its load decides or refuses
+        (audit events, PermissionDenied), in both executors. }
+      EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
+        PreviousCallSite);
+      try
+        case FPhase of
+          icpSource:
+            begin
+              SourceLoader := AContext.LoadModuleSource;
+              if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
+                SourceLoader := AContext.Scope.LoadModuleSource;
+              if not Assigned(SourceLoader) then
+                raise Exception.Create('Module source loader is not available.');
+              Promise.Resolve(SourceLoader(ModuleRequest,
+                AContext.CurrentFilePath));
+            end;
+          icpDefer:
+            begin
+              DeferredLoader := AContext.LoadDeferredModule;
+              if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
+                DeferredLoader := AContext.Scope.LoadDeferredModule;
+              if not Assigned(DeferredLoader) then
+                raise Exception.Create('Deferred module loader is not available.');
+              Promise.Resolve(DeferredLoader(ModuleRequest,
+                AContext.CurrentFilePath));
+            end;
+        else
+          // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
+          Module := AContext.LoadModule(ModuleRequest,
+            AContext.CurrentFilePath);
+          // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
+          Promise.Resolve(Module.GetNamespaceObject);
+        end;
+      finally
+        LeaveGocciaCallSite(PreviousCallSite);
       end;
     except
       { A module whose top-level compiled code throws surfaces here as

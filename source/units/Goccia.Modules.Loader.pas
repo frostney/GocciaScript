@@ -306,6 +306,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.Execution.CallSite,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.ImportMeta,
@@ -1942,59 +1943,71 @@ var
     ImportPair: TStringStringMap.TKeyValuePair;
     J: Integer;
     NamespaceObject: TGocciaValue;
+    PreviousCallSite: TGocciaCallSite;
     RequestedModule: TGocciaModule;
   begin
     for J := 0 to ProgramNode.Body.Count - 1 do
     begin
       Stmt := ProgramNode.Body[J];
-      if Stmt is TGocciaImportDeclaration then
-      begin
-        ImportDecl := TGocciaImportDeclaration(Stmt);
-        case ImportDecl.Phase of
-          icpEvaluation:
-          begin
-            RequestedModule := LoadModule(EncodeImportSpecifierAttribute(
-              ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
-            if Assigned(RequestedModule) then
+      if not ((Stmt is TGocciaImportDeclaration) or
+         (Stmt is TGocciaReExportDeclaration)) then
+        Continue;
+      { The declaration is the call site of what loading it decides or
+        refuses, as OP_IMPORT makes it in the VM. }
+      EnterGocciaCallSite(ResolvedPath, Stmt.Line, Stmt.Column,
+        PreviousCallSite);
+      try
+        if Stmt is TGocciaImportDeclaration then
+        begin
+          ImportDecl := TGocciaImportDeclaration(Stmt);
+          case ImportDecl.Phase of
+            icpEvaluation:
             begin
-              if (RequestedModule <> Module) and
-                 FLoadingModules.ContainsKey(RequestedModule.Path) then
-                Module.AsyncCycleRoot := RequestedModule;
-              RequestedModules.Add(RequestedModule);
-              for ImportPair in ImportDecl.Imports do
-                ModuleScope.CreateImportBinding(ImportPair.Key,
-                  RequestedModule, ImportPair.Value);
-              if ImportDecl.NamespaceName <> '' then
+              RequestedModule := LoadModule(EncodeImportSpecifierAttribute(
+                ImportDecl.ModulePath, ImportDecl.AttributeType), ResolvedPath);
+              if Assigned(RequestedModule) then
               begin
-                NamespaceObject := RequestedModule.GetNamespaceObject;
-                if ModuleScope.ContainsOwnLexicalBinding(
-                   ImportDecl.NamespaceName) then
-                  ModuleScope.ForceUpdateBinding(ImportDecl.NamespaceName,
-                    NamespaceObject)
-                else
-                  ModuleScope.DefineLexicalBinding(ImportDecl.NamespaceName,
-                    NamespaceObject, dtConst);
+                if (RequestedModule <> Module) and
+                   FLoadingModules.ContainsKey(RequestedModule.Path) then
+                  Module.AsyncCycleRoot := RequestedModule;
+                RequestedModules.Add(RequestedModule);
+                for ImportPair in ImportDecl.Imports do
+                  ModuleScope.CreateImportBinding(ImportPair.Key,
+                    RequestedModule, ImportPair.Value);
+                if ImportDecl.NamespaceName <> '' then
+                begin
+                  NamespaceObject := RequestedModule.GetNamespaceObject;
+                  if ModuleScope.ContainsOwnLexicalBinding(
+                     ImportDecl.NamespaceName) then
+                    ModuleScope.ForceUpdateBinding(ImportDecl.NamespaceName,
+                      NamespaceObject)
+                  else
+                    ModuleScope.DefineLexicalBinding(ImportDecl.NamespaceName,
+                      NamespaceObject, dtConst);
+                end;
               end;
             end;
+            icpDefer:
+              LoadDeferredModuleNamespaceValueForEvaluation(
+                EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+                ImportDecl.AttributeType), ResolvedPath, RequestedModules);
           end;
-          icpDefer:
-            LoadDeferredModuleNamespaceValueForEvaluation(
-              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
-              ImportDecl.AttributeType), ResolvedPath, RequestedModules);
-        end;
-      end
-      else if Stmt is TGocciaReExportDeclaration then
-      begin
-        RequestedModule := LoadModule(
-          EncodeReExportModuleRequest(TGocciaReExportDeclaration(Stmt)),
-          ResolvedPath);
-        if Assigned(RequestedModule) then
+        end
+        else if Stmt is TGocciaReExportDeclaration then
         begin
-          if (RequestedModule <> Module) and
-             FLoadingModules.ContainsKey(RequestedModule.Path) then
-            Module.AsyncCycleRoot := RequestedModule;
-          RequestedModules.Add(RequestedModule);
+          RequestedModule := LoadModule(
+            EncodeReExportModuleRequest(TGocciaReExportDeclaration(Stmt)),
+            ResolvedPath);
+          if Assigned(RequestedModule) then
+          begin
+            if (RequestedModule <> Module) and
+               FLoadingModules.ContainsKey(RequestedModule.Path) then
+              Module.AsyncCycleRoot := RequestedModule;
+            RequestedModules.Add(RequestedModule);
+          end;
         end;
+      finally
+        LeaveGocciaCallSite(PreviousCallSite);
       end;
     end;
   end;
