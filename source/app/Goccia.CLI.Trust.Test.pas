@@ -4,7 +4,7 @@ program Goccia.CLI.Trust.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  {$IFDEF UNIX}BaseUnix, Unix,{$ENDIF}
   Classes,
   DateUtils,
   SysUtils,
@@ -40,6 +40,7 @@ type
     function SaveWithLock(const AName, ALockContent: string): string;
     procedure TestTimestampIgnoresLocale;
     procedure TestStaleLocksAreReplaced;
+    procedure TestConcurrentWritersLoseNothing;
     procedure TestPrivateDirectoryIsTightened;
     procedure TestSaveMergesConcurrentChanges;
     procedure TestRemoveAtOrUnderRespectsBoundaries;
@@ -68,8 +69,50 @@ type
       const APath: string);
   end;
 
+  { One writer: loads the store, trusts one config, saves. }
+  TSaveThread = class(TThread)
+  private
+    FStorePath: string;
+    FConfigPath: string;
+    FError: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AStorePath, AConfigPath: string);
+    property Error: string read FError;
+  end;
+
 var
   GEnvironment: TStringList;
+
+constructor TSaveThread.Create(const AStorePath, AConfigPath: string);
+begin
+  FStorePath := AStorePath;
+  FConfigPath := AConfigPath;
+  inherited Create(False);
+end;
+
+procedure TSaveThread.Execute;
+var
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+begin
+  try
+    Entry := Default(TGocciaTrustEntry);
+    Entry.ConfigPath := FConfigPath;
+    Entry.Hash := StringOfChar('d', 64);
+    Store := TGocciaTrustStore.Load(FStorePath);
+    try
+      Store.Put(Entry);
+      Store.Save;
+    finally
+      Store.Free;
+    end;
+  except
+    on E: Exception do
+      FError := E.Message;
+  end;
+end;
 
 function FakeEnvironment(const AName: string): string;
 begin
@@ -116,7 +159,8 @@ begin
     TestLockContention);
   Test('Timestamps ignore the locale''s separators',
     TestTimestampIgnoresLocale);
-  Test('A stale lock is replaced; a live one is not', TestStaleLocksAreReplaced);
+  Test('A lock file left behind does not block', TestStaleLocksAreReplaced);
+  Test('Concurrent writers lose no entry', TestConcurrentWritersLoseNothing);
   Test('The default store''s directory is made private',
     TestPrivateDirectoryIsTightened);
   Test('Save applies its changes to the store as it is on disk',
@@ -256,7 +300,10 @@ begin
     until FindNext(SearchRec) <> 0;
     FindClose(SearchRec);
   end;
-  Expect<string>(Names).ToBe('trust.json;');
+  { The store and its lock file, which stays for the next writer; no
+    temporary. }
+  Expect<Boolean>(Pos('trust.json;', Names) > 0).ToBe(True);
+  Expect<Boolean>(Pos('.tmp', Names) = 0).ToBe(True);
   {$IFDEF UNIX}
   Expect<Integer>(FpStat(StorePath, Info)).ToBe(0);
   Expect<Integer>(Info.st_mode and &777).ToBe(&600);
@@ -655,16 +702,21 @@ begin
 end;
 
 procedure TTrustTests.TestLockContention;
+{$IFDEF UNIX}
 var
   StorePath, Message: string;
   Store: TGocciaTrustStore;
   Entry: TGocciaTrustEntry;
+  Held: cint;
 begin
   StorePath := WriteFile('locked/trust.json', '{"version": 1, "trusted": {}}');
-  WriteFile('locked/trust.json.lock', '');
+  { Another writer holding the OS lock on the lock file. }
+  Held := FpOpen(StorePath + '.lock', O_RDWR or O_CREAT, &600);
+  Expect<Boolean>(Held >= 0).ToBe(True);
+  Expect<Integer>(fpFlock(Held, LOCK_EX)).ToBe(0);
   Entry := Default(TGocciaTrustEntry);
   Entry.ConfigPath := FRoot + PathDelim + 'locked' + PathDelim + 'goccia.json';
-  Entry.Hash := 'abc';
+  Entry.Hash := StringOfChar('c', 64);
   Message := '';
   Store := TGocciaTrustStore.Load(StorePath);
   try
@@ -675,17 +727,26 @@ begin
       on E: EGocciaTrustStoreError do
         Message := E.Message;
     end;
+    Expect<string>(Message).ToBe('trust store ' + StorePath + ' is locked ' +
+      'by another GocciaScript process (' + StorePath + '.lock); retry when ' +
+      'it finishes');
+    Expect<string>(ReadUTF8FileText(StorePath))
+      .ToBe('{"version": 1, "trusted": {}}');
+    { Once released, the same store saves. }
+    fpFlock(Held, LOCK_UN);
+    FpClose(Held);
+    Store.Save;
   finally
     Store.Free;
   end;
-  Expect<string>(Message).ToBe('trust store ' + StorePath + ' is locked by ' +
-    'another process (' + StorePath + '.lock exists); retry, or delete ' +
-    StorePath + '.lock if no GocciaScript process is updating the store');
-  { The store is untouched and the other writer's lock is left alone. }
-  Expect<string>(ReadUTF8FileText(StorePath))
-    .ToBe('{"version": 1, "trusted": {}}');
-  Expect<Boolean>(FileExists(StorePath + '.lock')).ToBe(True);
+  Expect<Boolean>(Pos(Entry.ConfigPath, ReadUTF8FileText(StorePath)) > 0)
+    .ToBe(True);
 end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
 
 function TTrustTests.SaveWithLock(const AName, ALockContent: string): string;
 var
@@ -741,20 +802,46 @@ begin
 end;
 
 procedure TTrustTests.TestStaleLocksAreReplaced;
-const
-  VANISHED_PROCESS = '999999999';
 begin
-  { A crashed writer's lock: its process is gone. }
-  Expect<string>(SaveWithLock('gone', VANISHED_PROCESS + ' ' +
+  { The lock is the OS lock on the file, not the file: a lock file a crashed
+    writer left behind, whatever it holds, never blocks the next writer. }
+  Expect<string>(SaveWithLock('gone', '999999999 ' + UnixSecondsAgo(0)))
+    .ToBe('saved');
+  Expect<string>(SaveWithLock('live', IntToStr(GetProcessID) + ' ' +
     UnixSecondsAgo(0))).ToBe('saved');
-  Expect<Boolean>(FileExists(FRoot + PathDelim + 'stale-gone' + PathDelim +
-    'trust.json.lock')).ToBe(False);
-  { A live process, but held for far longer than any write takes. }
-  Expect<string>(SaveWithLock('old', IntToStr(GetProcessID) + ' ' +
-    UnixSecondsAgo(3600))).ToBe('saved');
-  { A live, recent owner still excludes the writer. }
-  Expect<Boolean>(Pos('is locked by another process', SaveWithLock('live',
-    IntToStr(GetProcessID) + ' ' + UnixSecondsAgo(0))) > 0).ToBe(True);
+  Expect<string>(SaveWithLock('empty', '')).ToBe('saved');
+end;
+
+procedure TTrustTests.TestConcurrentWritersLoseNothing;
+const
+  WRITER_COUNT = 8;
+  ROUND_COUNT = 5;
+var
+  StorePath: string;
+  Writers: array[0..WRITER_COUNT - 1] of TSaveThread;
+  Round, I: Integer;
+  Check: TGocciaTrustStore;
+begin
+  StorePath := FRoot + PathDelim + 'concurrent' + PathDelim + 'trust.json';
+  for Round := 0 to ROUND_COUNT - 1 do
+  begin
+    for I := 0 to WRITER_COUNT - 1 do
+      Writers[I] := TSaveThread.Create(StorePath, FRoot + PathDelim +
+        'concurrent' + PathDelim + IntToStr(Round) + '-' + IntToStr(I) +
+        PathDelim + 'goccia.json');
+    for I := 0 to WRITER_COUNT - 1 do
+    begin
+      Writers[I].WaitFor;
+      Expect<string>(Writers[I].Error).ToBe('');
+      Writers[I].Free;
+    end;
+    Check := TGocciaTrustStore.Load(StorePath);
+    try
+      Expect<Integer>(Check.Count).ToBe((Round + 1) * WRITER_COUNT);
+    finally
+      Check.Free;
+    end;
+  end;
 end;
 
 procedure TTrustTests.TestPrivateDirectoryIsTightened;

@@ -948,6 +948,19 @@ function expectEmptyDirectory(path: string, label: string): void {
   if (!isWindows && entries !== "") throw new Error(`${label}: expected ${path} to stay empty, got: ${entries}`);
 }
 
+// Holds an exclusive flock on APath in a helper process, the way a writer
+// holds the store's lock, until the returned process is killed.
+async function holdStoreLock(path: string) {
+  const holder = Bun.spawn(["python3", "-c",
+    "import fcntl, sys, time\nf = open(sys.argv[1], 'a')\nfcntl.flock(f, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)\n", path],
+    { stdout: "pipe", stderr: "inherit" });
+  const reader = holder.stdout.getReader();
+  const { value } = await reader.read();
+  if (!new TextDecoder().decode(value).includes("held")) throw new Error("lock holder did not start");
+  reader.releaseLock();
+  return holder;
+}
+
 function readJSON(path: string): any {
   return JSON.parse(readFileSync(path, "utf8"));
 }
@@ -1050,12 +1063,22 @@ console.log("An untrusted config refuses the run with a report naming the fix...
     }
     expectIncludes(run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "project", "empty --untrust removed nothing");
 
-    // --untrust reports a removal only once the store is saved.
-    writeFileSync(join(tmp, "trust.json.lock"), "");
-    const locked = run(LOADER, ["--trust-store=trust.json", "--untrust", "project"], { cwd: tmp });
-    expectExit(locked, 1, "--untrust with a held lock");
-    expectExcludes(locked.stdout, "Removed trust", "--untrust with a held lock");
-    rmSync(join(tmp, "trust.json.lock"));
+    // --untrust reports a removal only once the store is saved: another
+    // writer holds the store's OS lock, so the save fails.
+    if (!isWindows) {
+      const holder = await holdStoreLock(join(tmp, "trust.json.lock"));
+      try {
+        const locked = run(LOADER, ["--trust-store=trust.json", "--untrust", "project"], { cwd: tmp });
+        expectExit(locked, 1, "--untrust with a held lock");
+        expectIncludes(locked.combined, "is locked by another GocciaScript process", "--untrust with a held lock");
+        expectExcludes(locked.stdout, "Removed trust", "--untrust with a held lock");
+      } finally {
+        holder.kill();
+        await holder.exited;
+      }
+      // A lock file left behind, with no holder, does not block.
+      expectIncludes(run(LOADER, ["--trust-store=trust.json", "--untrust", "project"], { cwd: tmp }).stdout, "Removed trust", "--untrust after the holder exits");
+    }
   } finally {
     clean(tmp);
   }
@@ -1469,6 +1492,24 @@ console.log("Runs read a store another --trust is rewriting...");
     const store = readJSON(join(tmp, "trust.json"));
     if (Object.keys(store.trusted).length !== 12)
       throw new Error(`concurrent --trust lost entries: ${Object.keys(store.trusted).length}`);
+
+    // Many writers at once, round after round: the OS lock serializes them,
+    // so every entry each one adds survives.
+    const WRITERS = 24;
+    const ROUNDS = 6;
+    for (let round = 0; round < ROUNDS; round++) {
+      for (let i = 0; i < WRITERS; i++) {
+        const dir = join(tmp, "stress", `r${round}w${i}`);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "goccia.json"), `{"permissions": {"allow-net": ["r${round}w${i}.test"]}}\n`);
+      }
+      const results = await Promise.all(Array.from({ length: WRITERS }, (_, i) =>
+        runAsync(LOADER, ["--trust-store=stress.json", "--trust", join("stress", `r${round}w${i}`), "--yes"], tmp)));
+      for (const result of results) expectExit(result, 0, `stress round ${round}`);
+      const count = Object.keys(readJSON(join(tmp, "stress.json")).trusted).length;
+      if (count !== (round + 1) * WRITERS)
+        throw new Error(`concurrent writers lost entries in round ${round}: ${count} of ${(round + 1) * WRITERS}`);
+    }
   } finally {
     clean(tmp);
   }

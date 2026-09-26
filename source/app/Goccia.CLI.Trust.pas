@@ -307,7 +307,7 @@ procedure RunListTrustedCommand(const AStorePath: string;
 implementation
 
 uses
-  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}BaseUnix,{$IFEND}
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}BaseUnix, Unix,{$IFEND}
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   DateUtils,
 
@@ -333,9 +333,6 @@ const
   TEMPORARY_SUFFIX = '.tmp';
   LOCK_TIMEOUT_MILLISECONDS = 2000;
   LOCK_RETRY_MILLISECONDS = 50;
-  { A lock older than this, or whose process is gone, was left by a writer
-    that crashed: writers hold it for milliseconds. }
-  LOCK_STALE_SECONDS = 60;
   { Initial capacities: a normalized block, a whole store, a report. They
     only size the first allocation; the buffers grow as needed. }
   BLOCK_BUFFER_CAPACITY = 128;
@@ -1277,161 +1274,107 @@ begin
 end;
 {$IFEND}
 
-{ Creates ALockPath exclusively. False when it already exists. }
-function TryCreateLockFile(const ALockPath: string): Boolean;
+
+{ ── The writers' lock ─────────────────────────────────────────── }
+
+type
+  { An OS-level exclusive lock on the store's lock file (flock on POSIX,
+    LockFileEx on Windows). The system releases it when its holder exits,
+    crashed or not, so a lock can never outlive its writer and nothing has to
+    guess whether a lock is stale. The lock file itself stays in place. }
+  TStoreLock = record
+    {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+    Handle: cint;
+    {$ELSEIF DEFINED(MSWINDOWS)}
+    Handle: THandle;
+    {$IFEND}
+    Held: Boolean;
+  end;
+
+{ Tries once to take the lock on ALockPath without waiting. False when
+  another writer holds it. }
+function TryAcquireStoreLock(const ALockPath: string;
+  out ALock: TStoreLock): Boolean;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   PathBytes: TBytes;
   ErrorOffset: Integer;
-  Handle: cint;
 begin
+  ALock := Default(TStoreLock);
+  { A link planted at the lock's name would make the open touch its target. }
+  if HostPathIsSymlink(ALockPath) then
+    raise EGocciaTrustStoreError.CreateFmt('%s is a symbolic link',
+      [ALockPath]);
   if not TryEncodeUTF8NullTerminated(ALockPath, PathBytes, ErrorOffset) then
     raise EGocciaTrustStoreError.CreateFmt(
       'cannot encode the lock file path %s', [ALockPath]);
-  Handle := fpOpen(PAnsiChar(@PathBytes[0]), O_WRONLY or O_CREAT or O_EXCL,
+  ALock.Handle := fpOpen(PAnsiChar(@PathBytes[0]), O_RDWR or O_CREAT,
     STORE_FILE_MODE);
-  if Handle < 0 then
-  begin
-    if fpgeterrno = ESysEEXIST then
-      Exit(False);
-    raise EGocciaTrustStoreError.CreateFmt('cannot create %s: %s',
+  if ALock.Handle < 0 then
+    raise EGocciaTrustStoreError.CreateFmt('cannot open %s: %s',
       [ALockPath, SysErrorMessage(fpgeterrno)]);
+  if fpFlock(ALock.Handle, LOCK_EX or LOCK_NB) <> 0 then
+  begin
+    fpClose(ALock.Handle);
+    Exit(False);
   end;
-  fpClose(Handle);
+  ALock.Held := True;
   Result := True;
 end;
 {$ELSEIF DEFINED(MSWINDOWS)}
 var
-  Handle: THandle;
+  Overlapped: TOverlapped;
 begin
-  Handle := CreateFileW(PWideChar(UnicodeString(ALockPath)), GENERIC_WRITE, 0,
-    nil, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
-  if Handle = INVALID_HANDLE_VALUE then
-  begin
-    if (GetLastError = ERROR_FILE_EXISTS) or
-       (GetLastError = ERROR_ALREADY_EXISTS) then
-      Exit(False);
-    raise EGocciaTrustStoreError.CreateFmt('cannot create %s: %s',
+  ALock := Default(TStoreLock);
+  ALock.Handle := CreateFileW(PWideChar(UnicodeString(ALockPath)),
+    GENERIC_READ or GENERIC_WRITE, FILE_SHARE_READ or FILE_SHARE_WRITE, nil,
+    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+  if ALock.Handle = INVALID_HANDLE_VALUE then
+    raise EGocciaTrustStoreError.CreateFmt('cannot open %s: %s',
       [ALockPath, SysErrorMessage(GetLastError)]);
+  FillChar(Overlapped, SizeOf(Overlapped), 0);
+  if not LockFileEx(ALock.Handle, LOCKFILE_EXCLUSIVE_LOCK or
+     LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, Overlapped) then
+  begin
+    CloseHandle(ALock.Handle);
+    Exit(False);
   end;
-  CloseHandle(Handle);
+  ALock.Held := True;
   Result := True;
 end;
 {$ELSE}
 begin
+  ALock := Default(TStoreLock);
   raise EGocciaTrustStoreError.Create('this build cannot write a trust store');
 end;
 {$IFEND}
 
-function UnixNow: Int64;
+procedure ReleaseStoreLock(var ALock: TStoreLock);
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 begin
-  Result := DateTimeToUnix(LocalTimeToUniversal(Now));
-end;
-
-{ `<pid> <unix seconds>`: who holds the lock and since when, so a lock a
-  crashed writer left behind can be recognized. }
-procedure RecordLockOwner(const ALockPath: string);
-var
-  Stream: TFileStream;
-  Owner: TBytes;
-begin
-  Owner := EncodeUTF8WithReplacement(IntToStr(GetProcessID) + ' ' +
-    IntToStr(UnixNow) + sLineBreak);
-  try
-    Stream := TFileStream.Create(ALockPath, fmOpenWrite or fmShareDenyNone);
-    try
-      Stream.WriteBuffer(Owner[0], Length(Owner));
-    finally
-      Stream.Free;
-    end;
-  except
-    { The lock still excludes other writers; only staleness detection is
-      weaker without an owner. }
-    on E: EStreamError do;
-  end;
-end;
-
-function ProcessIsGone(const AProcessID: Int64): Boolean;
-begin
-  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-  Result := (AProcessID > 0) and (AProcessID <= High(TPid)) and
-    (fpKill(TPid(AProcessID), 0) <> 0) and (fpgeterrno = ESysESRCH);
-  {$ELSE}
-  { Without a portable liveness probe the age alone decides. }
-  Result := False;
-  {$IFEND}
-end;
-
-{ Whether the lock at ALockPath was left by a writer that no longer holds
-  it: its process is gone, or it is older than LOCK_STALE_SECONDS. AOwner is
-  the lock's content that was judged; AReason says why it is stale. }
-function LockIsStale(const ALockPath: string; out AOwner,
-  AReason: string): Boolean;
-var
-  Owner: string;
-  Separator: Integer;
-  ProcessID, Since: Int64;
-  Modified: TDateTime;
-begin
-  Result := False;
-  AReason := '';
-  try
-    AOwner := ReadUTF8FileText(ALockPath);
-  except
-    { Gone, or unreadable: let the next attempt decide. }
-    on E: Exception do
-      Exit(False);
-  end;
-  Owner := Trim(AOwner);
-  Separator := Pos(' ', Owner);
-  if (Separator > 1) and
-     TryStrToInt64(Copy(Owner, 1, Separator - 1), ProcessID) and
-     TryStrToInt64(Copy(Owner, Separator + 1, MaxInt), Since) then
-  begin
-    if ProcessIsGone(ProcessID) then
-    begin
-      AReason := Format('process %d that held it is gone', [ProcessID]);
-      Exit(True);
-    end;
-    if UnixNow - Since > LOCK_STALE_SECONDS then
-    begin
-      AReason := Format('held for more than %d seconds',
-        [LOCK_STALE_SECONDS]);
-      Exit(True);
-    end;
-    Exit(False);
-  end;
-  { No owner recorded: judge by the file's age. }
-  if FileAge(ALockPath, Modified) and
-     (SecondsBetween(Now, Modified) > LOCK_STALE_SECONDS) then
-  begin
-    AReason := Format('no owner recorded and older than %d seconds',
-      [LOCK_STALE_SECONDS]);
-    Result := True;
-  end;
-end;
-
-{ Removes a stale lock, unless another writer replaced it meanwhile. }
-function RemoveStaleLock(const ALockPath: string): Boolean;
-var
-  Owner, Reason, Current: string;
-begin
-  Result := False;
-  if not LockIsStale(ALockPath, Owner, Reason) then
+  if not ALock.Held then
     Exit;
-  try
-    Current := ReadUTF8FileText(ALockPath);
-  except
-    on E: Exception do
-      Exit;
-  end;
-  if (Current = Owner) and DeleteFile(ALockPath) then
-  begin
-    WriteLn(ErrOutput, Format('Warning: removed stale trust store lock %s ' +
-      '(%s)', [ALockPath, Reason]));
-    Result := True;
-  end;
+  fpFlock(ALock.Handle, LOCK_UN);
+  fpClose(ALock.Handle);
+  ALock.Held := False;
 end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+var
+  Overlapped: TOverlapped;
+begin
+  if not ALock.Held then
+    Exit;
+  FillChar(Overlapped, SizeOf(Overlapped), 0);
+  UnlockFileEx(ALock.Handle, 0, 1, 0, Overlapped);
+  CloseHandle(ALock.Handle);
+  ALock.Held := False;
+end;
+{$ELSE}
+begin
+  ALock.Held := False;
+end;
+{$IFEND}
+
 
 procedure TGocciaTrustStore.WriteFile;
 var
@@ -1448,6 +1391,7 @@ end;
 procedure TGocciaTrustStore.Save;
 var
   LockPath, Directory: string;
+  Lock: TStoreLock;
   Waited: Integer;
   I: Integer;
 begin
@@ -1459,19 +1403,15 @@ begin
   {$IFEND}
   LockPath := FPath + LOCK_SUFFIX;
   Waited := 0;
-  while not TryCreateLockFile(LockPath) do
+  while not TryAcquireStoreLock(LockPath, Lock) do
   begin
-    if RemoveStaleLock(LockPath) then
-      Continue;
     if Waited >= LOCK_TIMEOUT_MILLISECONDS then
       raise EGocciaTrustStoreError.CreateFmt(
-        'trust store %s is locked by another process (%s exists); retry, or ' +
-        'delete %s if no GocciaScript process is updating the store',
-        [FPath, LockPath, LockPath]);
+        'trust store %s is locked by another GocciaScript process (%s); ' +
+        'retry when it finishes', [FPath, LockPath]);
     Sleep(LOCK_RETRY_MILLISECONDS);
     Inc(Waited, LOCK_RETRY_MILLISECONDS);
   end;
-  RecordLockOwner(LockPath);
   try
     { Another writer may have changed the file since it was read: apply
       this store's changes to the file as it is now. }
@@ -1484,7 +1424,7 @@ begin
     WriteFile;
     FChanges := nil;
   finally
-    DeleteFile(LockPath);
+    ReleaseStoreLock(Lock);
   end;
 end;
 
