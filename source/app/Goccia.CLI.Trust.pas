@@ -342,9 +342,10 @@ const
   REPORT_DETAIL_INDENT = '    ';
   MAX_LISTED_TRUST_TARGETS = 3;
   EXCLUDED_SCAN_DIRECTORIES: array[0..1] of string = ('node_modules', '.git');
+  { POSIX mode bits; ReplaceHostFile ignores them where the host has none. }
+  STORE_FILE_MODE = &600;
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
   STORE_DIRECTORY_MODE = &700;
-  STORE_FILE_MODE = &600;
   {$IFEND}
 
 { ── Paths ─────────────────────────────────────────────────────── }
@@ -1001,7 +1002,7 @@ end;
 
 function EnvironmentValue(const AName: string): string;
 begin
-  Result := GetEnvironmentVariable(AName);
+  Result := SysUtils.GetEnvironmentVariable(AName);
 end;
 
 class function TGocciaTrustStore.DefaultPath(
