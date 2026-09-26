@@ -557,6 +557,7 @@ begin
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
   { A value other than json or compact-json is a file path. }
   FOutputFile.WritesHostFile := True;
+  FOutputFile.AcceptsOutputModes := True;
   FUpdateSnapshots := AddFlag('update-snapshots',
     'Create, update, and prune snapshots');
   FUpdateSnapshots.ShortName := 'u';

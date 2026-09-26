@@ -1385,6 +1385,15 @@ console.log("Output paths set in a config stay inside the config's directory..."
       if (existsSync(victim)) throw new Error(`config "${key}" wrote ${victim}`);
     }
 
+    // "json" is an output mode only for the test runner's --output; for any
+    // other option it is a file name, relative to the config like any other.
+    writeFileSync(join(project, "goccia.json"), '{"log": "json"}\n');
+    expectExit(run(LOADER, [join(project, "main.js")], { cwd: join(tmp, "elsewhere") }), 0, 'config log "json"');
+    if (existsSync(join(tmp, "elsewhere", "json"))) throw new Error('config log "json" was written in the working directory');
+    if (!existsSync(join(project, "json"))) throw new Error('config log "json" was not written beside the config');
+    writeFileSync(join(project, "goccia.json"), '{"output": "json"}\n');
+    expectIncludes(run(TESTRUNNER, ["a.test.js", "--no-progress"], { cwd: project }).stdout, '"totalTests"', 'config test runner output "json"');
+
     // A relative path is relative to the config, wherever the command runs.
     writeFileSync(join(project, "goccia.json"), '{"log": "logs/run.log"}\n');
     const inside = run(LOADER, [join(project, "main.js")], { cwd: join(tmp, "elsewhere") });

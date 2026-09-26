@@ -1230,9 +1230,10 @@ begin
        Option.FromCommandLine or not (Option is TStringOption) then
       Continue;
     Value := TStringOption(Option).Value;
-    { Not a path: an output mode, or "derive it from the input". }
-    if (Value = '') or (Value = OUTPUT_MODE_JSON) or
-       (Value = OUTPUT_MODE_COMPACT_JSON) then
+    { Not a path: "derive it from the input", or an output mode where the
+      option has them (the test runner's --output). }
+    if (Value = '') or (Option.AcceptsOutputModes and
+       ((Value = OUTPUT_MODE_JSON) or (Value = OUTPUT_MODE_COMPACT_JSON))) then
       Continue;
     Key := Option.LongName;
     if (Option.ConfigName <> '') and
