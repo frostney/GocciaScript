@@ -14,7 +14,7 @@ type
     skip it, and a consumer that must not ignore it (a permissions block) can
     reject it. }
   TConfigValueKind = (cvkString, cvkNumber, cvkBoolean, cvkEmptyArray,
-    cvkUnsupported);
+    cvkUnsupported, cvkObject);
 
   { A single key-value pair extracted from a configuration file. }
   TConfigEntry = record
@@ -39,7 +39,11 @@ type
     Nested objects are flattened one level: an "allow-net" array inside a
     "permissions" object produces `permissions.allow-net` entries.
     null values, deeper objects, and non-scalar array elements produce
-    cvkUnsupported entries. }
+    cvkUnsupported entries. Each flattened object is also recorded as one
+    cvkObject entry under its own key, before its children, so a key whose
+    value must not be an object can be rejected even when the object is
+    empty. Lookups and option application skip both kinds except where an
+    option accepts an object (TOptionBase.AcceptsObject). }
   TConfigParseFunc = function(const AContent: string): TConfigEntryArray;
 
 { Register a parser for a file extension.
@@ -216,7 +220,7 @@ type
 
 function TConfigJSONParser.CurrentKey: string;
 begin
-  if FInNestedObject then
+  if FInNestedObject and (FChildKey <> '') then
     Result := FTopKey + NESTED_KEY_SEPARATOR + FChildKey
   else
     Result := FTopKey;
@@ -328,6 +332,7 @@ begin
   begin
     FInNestedObject := True;
     FChildKey := '';
+    AddEntry('', cvkObject, False);
   end;
 end;
 
@@ -409,6 +414,13 @@ end;
 
 { ── Apply entries to options ───────────────────────────────── }
 
+{ True for an entry that carries a value: not an unrepresentable value and
+  not the marker of an object. }
+function IsValueEntry(const AEntry: TConfigEntry): Boolean;
+begin
+  Result := not (AEntry.Kind in [cvkUnsupported, cvkObject]);
+end;
+
 function FindOptionByName(const AOptions: TOptionArray;
   const AName: string): TOptionBase;
 var
@@ -428,7 +440,7 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if (AEntries[I].Kind <> cvkUnsupported) and
+    if IsValueEntry(AEntries[I]) and
        (((AOption.ConfigName <> '') and
         (AEntries[I].Key = AOption.ConfigName)) or
        (AEntries[I].Key = AOption.LongName)) then
@@ -451,6 +463,8 @@ function DescribeFlagValue(const AEntry: TConfigEntry): string;
 begin
   if AEntry.InArray then
     Result := 'an array'
+  else if AEntry.Kind = cvkObject then
+    Result := 'an object'
   else if AEntry.Kind = cvkUnsupported then
     Result := 'null'
   else if AEntry.Kind = cvkString then
@@ -487,6 +501,8 @@ begin
     raise TCLIUsageError.CreateFmt(
       '%s: "%s" can only be given on the command line%s',
       [ConfigEntryLocation(AEntry), AEntry.Key, AOption.ConfigHint]);
+  if (AEntry.Kind = cvkObject) and AOption.AcceptsObject then
+    Exit(not AOption.RequiresTrust);
   if AOption is TFlagOption then
   begin
     if (AEntry.Kind <> cvkBoolean) or AEntry.InArray then
@@ -495,12 +511,12 @@ begin
   end
   else if AOption is TRepeatableOption then
   begin
-    if AEntry.Kind = cvkUnsupported then
+    if AEntry.Kind in [cvkUnsupported, cvkObject] then
       raise TParseError.CreateFmt(
         '%s: "%s" must be a value or an array of values',
         [ConfigEntryLocation(AEntry), AEntry.Key]);
   end
-  else if AEntry.Kind = cvkUnsupported then
+  else if AEntry.Kind in [cvkUnsupported, cvkObject] then
     raise TParseError.CreateFmt(
       '%s: "%s" must be a single value, not null or an object',
       [ConfigEntryLocation(AEntry), AEntry.Key])
@@ -522,7 +538,8 @@ begin
     Option := FindOptionByName(AOptions, AEntries[I].Key);
     if (Option = nil) or not CheckConfigEntry(AEntries[I], Option) then
       Continue;
-    if (Option is TFlagOption) or (AEntries[I].Kind = cvkEmptyArray) then
+    if (Option is TFlagOption) or
+       (AEntries[I].Kind in [cvkEmptyArray, cvkObject]) then
       Continue;
     try
       Option.CheckValue(AEntries[I].Value);
@@ -547,6 +564,9 @@ begin
     if Option = nil then
       Continue;
     if not CheckConfigEntry(AEntries[I], Option) then
+      Continue;
+    { An accepted object (a modules descriptor map) is read by its owner. }
+    if AEntries[I].Kind = cvkObject then
       Continue;
 
     { Skip options already set by a higher-priority source (CLI or
@@ -633,7 +653,7 @@ begin
   ExtendsIndex := -1;
   for I := 0 to High(OwnEntries) do
     if (OwnEntries[I].Key = EXTENDS_KEY) and
-       (OwnEntries[I].Kind <> cvkUnsupported) then
+       IsValueEntry(OwnEntries[I]) then
     begin
       ExtendsIndex := I;
       Break;
@@ -745,7 +765,7 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if (AEntries[I].Key = AKey) and (AEntries[I].Kind <> cvkUnsupported) then
+    if (AEntries[I].Key = AKey) and IsValueEntry(AEntries[I]) then
     begin
       AValue := AEntries[I].Value;
       Exit(True);
@@ -759,7 +779,7 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if (AEntries[I].Key = AKey) and (AEntries[I].Kind <> cvkUnsupported) then
+    if (AEntries[I].Key = AKey) and IsValueEntry(AEntries[I]) then
     begin
       AEntry := AEntries[I];
       Exit(True);

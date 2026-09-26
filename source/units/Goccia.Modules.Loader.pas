@@ -41,6 +41,16 @@ type
     out AModule: TGocciaModule): Boolean of object;
   TGocciaGlobalModuleProvider = function: TGocciaModule of object;
 
+  { Why a host read was refused. It picks both the audit reason and the
+    host-side suggestion, so rewording either cannot change the other. }
+  TGocciaReadDenial = (
+    { A read deny covers the path. }
+    rdDenied,
+    { A literal import outside the project that no read grant covers. }
+    rdOutsideProject,
+    { A computed import() specifier, which the module graph never covers. }
+    rdComputedImport);
+
   TGocciaModuleLoader = class
   private
     FPreprocessors: TGocciaPreprocessors;
@@ -113,8 +123,9 @@ type
 
     function EnforcesHostReads: Boolean;
     function HostReadVerdict(const ACanonicalPath, AImportingFilePath: string;
-      const AIsLiteral: Boolean; out AReason: string): Boolean;
-    procedure DenyHostRead(const ASpecifier, ACanonicalPath, AReason: string);
+      const AIsLiteral: Boolean; out ADenial: TGocciaReadDenial): Boolean;
+    procedure DenyHostRead(const ASpecifier, ACanonicalPath: string;
+      const ADenial: TGocciaReadDenial);
     procedure HostProbeGuard(const ACandidatePath: string);
     function QuietNodeModulesGrant(const ASpecifier,
       AImportingDirectory: string; out ACeiling: string): Boolean;
@@ -799,14 +810,11 @@ end;
   a read grant. }
 function TGocciaModuleLoader.HostReadVerdict(const ACanonicalPath,
   AImportingFilePath: string; const AIsLiteral: Boolean;
-  out AReason: string): Boolean;
+  out ADenial: TGocciaReadDenial): Boolean;
 begin
-  AReason := '';
+  ADenial := rdDenied;
   if FCapabilities.DeniesPath(gcRead, ACanonicalPath) then
-  begin
-    AReason := 'read is denied for this path';
     Exit(False);
-  end;
   if AIsLiteral and (FProjectRoot <> '') and
      IsPathWithinScope(ACanonicalPath, FProjectRoot) then
     Exit(True);
@@ -815,36 +823,50 @@ begin
   if FCapabilities.AllowsPath(gcRead, ACanonicalPath) then
     Exit(True);
   if AIsLiteral then
-    AReason := 'the path is outside the project and no read grant covers it'
+    ADenial := rdOutsideProject
   else
-    AReason := 'a computed import specifier needs a read grant';
+    ADenial := rdComputedImport;
   Result := False;
 end;
 
-{ The host-side suggestion for a read denial: the deny that covers the
-  path, or the grant that would allow it. }
-function ReadDenialSuggestion(const ACanonicalPath, AReason: string): string;
+function ReadDenialAuditReason(const ADenial: TGocciaReadDenial): string;
 begin
-  if StartsStr('read is denied', AReason) then
-    Result := Format(SSuggestReadDenied, [ACanonicalPath])
-  else if Pos('computed import', AReason) > 0 then
-    Result := Format(SSuggestReadComputed, [ACanonicalPath,
-      ExtractFileDir(ACanonicalPath)])
+  case ADenial of
+    rdDenied:
+      Result := 'read is denied for this path';
+    rdOutsideProject:
+      Result := 'the path is outside the project and no read grant covers it';
   else
-    Result := Format(SSuggestReadNotGranted, [ACanonicalPath,
-      ExtractFileDir(ACanonicalPath)]);
+    Result := 'a computed import specifier needs a read grant';
+  end;
 end;
 
-procedure TGocciaModuleLoader.DenyHostRead(const ASpecifier, ACanonicalPath,
-  AReason: string);
+function ReadDenialSuggestion(const ACanonicalPath: string;
+  const ADenial: TGocciaReadDenial): string;
+begin
+  case ADenial of
+    rdDenied:
+      Result := Format(SSuggestReadDenied, [ACanonicalPath]);
+    rdOutsideProject:
+      Result := Format(SSuggestReadNotGranted, [ACanonicalPath,
+        ExtractFileDir(ACanonicalPath)]);
+  else
+    Result := Format(SSuggestReadComputed, [ACanonicalPath,
+      ExtractFileDir(ACanonicalPath)]);
+  end;
+end;
+
+procedure TGocciaModuleLoader.DenyHostRead(const ASpecifier,
+  ACanonicalPath: string; const ADenial: TGocciaReadDenial);
 begin
   if Assigned(FCapabilityAuditEmitter) then
-    FCapabilityAuditEmitter(gckReadFile, gcdDeny, ACanonicalPath, AReason);
+    FCapabilityAuditEmitter(gckReadFile, gcdDeny, ACanonicalPath,
+      ReadDenialAuditReason(ADenial));
   { The guest sees the specifier it wrote; the expanded host path and the
     grant that would allow it travel only in the host-side suggestion
     (ADR 0108). }
   ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
-    ReadDenialSuggestion(ACanonicalPath, AReason));
+    ReadDenialSuggestion(ACanonicalPath, ADenial));
 end;
 
 { Called by the resolver before it looks at each candidate path of the
@@ -854,7 +876,8 @@ end;
   which later candidate loads can depend on whether that file exists. }
 procedure TGocciaModuleLoader.HostProbeGuard(const ACandidatePath: string);
 var
-  CanonicalPath, Reason: string;
+  CanonicalPath: string;
+  Denial: TGocciaReadDenial;
 begin
   if not FProbeActive then
     Exit;
@@ -866,11 +889,11 @@ begin
        CanonicalCapabilityPath(FResolver.ProbePackageDirectory)) and
      not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
     Exit;
-  if HostReadVerdict(CanonicalPath, FProbeImporter, FProbeLiteral, Reason) then
+  if HostReadVerdict(CanonicalPath, FProbeImporter, FProbeLiteral, Denial) then
     Exit;
   if FProbeQuiet then
     raise EGocciaHostProbeRefused.Create(FProbeSpecifier);
-  DenyHostRead(FProbeSpecifier, CanonicalPath, Reason);
+  DenyHostRead(FProbeSpecifier, CanonicalPath, Denial);
 end;
 
 { The engine's node_modules grant without its audit event or its
@@ -951,7 +974,8 @@ procedure TGocciaModuleLoader.EnforceHostRead(const ASpecifier, APath,
   AImportingFilePath, APackageRoot: string;
   const AIsLiteral, AIsHostOwned: Boolean);
 var
-  CanonicalPath, CanonicalRoot, Reason: string;
+  CanonicalPath, CanonicalRoot: string;
+  Denial: TGocciaReadDenial;
 begin
   if AIsHostOwned or (APath = '') or (not EnforcesHostReads) then
     Exit;
@@ -971,8 +995,8 @@ begin
   end;
 
   if not HostReadVerdict(CanonicalPath, AImportingFilePath, AIsLiteral,
-     Reason) then
-    DenyHostRead(ASpecifier, CanonicalPath, Reason);
+     Denial) then
+    DenyHostRead(ASpecifier, CanonicalPath, Denial);
   if Assigned(FCapabilityAuditEmitter) and
      not (AIsLiteral and (((FProjectRoot <> '') and
      IsPathWithinScope(CanonicalPath, FProjectRoot)) or

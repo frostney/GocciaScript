@@ -1115,7 +1115,9 @@ begin
   begin
     if I > 0 then
       Result := Result + ';';
-    if AEntries[I].Kind = cvkUnsupported then
+    if AEntries[I].Kind = cvkObject then
+      Result := Result + AEntries[I].Key + '={}'
+    else if AEntries[I].Kind = cvkUnsupported then
       Result := Result + AEntries[I].Key + '=?'
     else
       Result := Result + AEntries[I].Key + '=' + AEntries[I].Value;
@@ -1133,10 +1135,13 @@ begin
     '["a.test", "b.test"], "allow-ffi": true, "deny-read": [], ' +
     '"deep": {"x": 1}}, "list": [{"y": 2}, "z"], "after": 1}');
   Entries := ParseConfigFile(Path);
-  Expect<string>(EntryText(Entries)).ToBe('timeout=5s;' +
+  Expect<string>(EntryText(Entries)).ToBe('timeout=5s;permissions={};' +
     'permissions.allow-net=a.test;permissions.allow-net=b.test;' +
     'permissions.allow-ffi=true;permissions.deny-read=;' +
     'permissions.deep=?;list=?;list=z;after=1');
+  WriteTextFile(Path, '{"max-memory": {"a": 1}, "timeout": {}}');
+  Expect<string>(EntryText(ParseConfigFile(Path))).ToBe('max-memory={};' +
+    'max-memory.a=1;timeout={}');
 end;
 
 procedure TConfigFileTests.TestJSONUnrepresentableValuesMarked;
@@ -1152,8 +1157,8 @@ begin
   WriteTextFile(Path, '{"a": null, "b": {"c": null, "d": [["x"], "y"], ' +
     '"e": {"f": 1}}, "mode": "bytecode", "g": [null]}');
   Entries := ParseConfigFile(Path);
-  Expect<string>(EntryText(Entries)).ToBe('a=?;b.c=?;b.d=?;b.d=y;b.e=?;' +
-    'mode=bytecode;g=?');
+  Expect<string>(EntryText(Entries)).ToBe('a=?;b={};b.c=?;b.d=?;b.d=y;' +
+    'b.e=?;mode=bytecode;g=?');
   { A number too large for Int64 keeps its digits, so a unit parser can say
     it is too large rather than misreading an exponent. }
   WriteTextFile(Path, '{"max-memory": 100000000000000000000}');
@@ -1207,11 +1212,13 @@ begin
   WriteTextFile(ChildPath, '{"extends": "../base/goccia.json", ' +
     '"mode": "bytecode"}');
   Entries := ParseConfigFile(ChildPath);
-  Expect<Integer>(Length(Entries)).ToBe(2);
+  Expect<Integer>(Length(Entries)).ToBe(3);
   Expect<string>(Entries[0].Key).ToBe('mode');
   Expect<string>(Entries[0].SourcePath).ToBe(ExpandFileName(ChildPath));
-  Expect<string>(Entries[1].Key).ToBe('permissions.allow-read');
+  Expect<string>(Entries[1].Key).ToBe('permissions');
   Expect<string>(Entries[1].SourcePath).ToBe(ExpandFileName(BasePath));
+  Expect<string>(Entries[2].Key).ToBe('permissions.allow-read');
+  Expect<string>(Entries[2].SourcePath).ToBe(ExpandFileName(BasePath));
 end;
 
 { ── Validation ─────────────────────────────────────────────── }
@@ -1410,6 +1417,10 @@ begin
       Options, True)).ToBe('TParseError: Invalid value for "max-memory" in ' +
       '/project/goccia.json: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, ' +
       'or a plain byte count)');
+    { An object for a scalar option is rejected, not flattened away. }
+    Expect<string>(ConfigErrorMessage(SingleEntry('max-memory', '',
+      cvkObject), Options, True)).ToBe('TParseError: /project/goccia.json: ' +
+      '"max-memory" must be a single value, not null or an object');
     { A scalar option takes one value, not an array. }
     Expect<string>(ConfigErrorMessage(SingleEntry('max-memory', '1', cvkNumber,
       True), Options, True)).ToBe('TParseError: /project/goccia.json: ' +

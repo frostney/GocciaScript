@@ -345,6 +345,9 @@ console.log("Binaries with their own parser follow the same grammar...");
     const wasmFlag = run(WASMTESTRUNNER, ["--allow-read"], { cwd: tmp });
     expectExit(wasmFlag, 2, "WasmTestRunner --allow-read");
     expectIncludes(wasmFlag.stderr, "Unknown option: --allow-read", "WasmTestRunner --allow-read");
+    expectIncludes(wasmHelp.stdout, "-P", "WasmTestRunner --help lists -P");
+    const wasmNoManifest = run(WASMTESTRUNNER, ["-P"], { cwd: tmp });
+    expectExit(wasmNoManifest, 2, "WasmTestRunner -P without a manifest");
     const wasmMissing = run(WASMTESTRUNNER, [join(tmp, "missing.txt")], { cwd: tmp });
     expectExit(wasmMissing, 2, "WasmTestRunner missing manifest");
     expectIncludes(wasmMissing.stderr, "manifest not found", "WasmTestRunner missing manifest");
@@ -355,6 +358,12 @@ console.log("Binaries with their own parser follow the same grammar...");
     writeFileSync(join(tmp, "wasm", "t.js"), 'test("t", () => {});\n');
     writeFileSync(join(tmp, "manifest.txt"), join(tmp, "wasm", "t.js") + "\n");
     const wasmWarn = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")], { cwd: tmp });
+    // -P accepts config requests (none here needs it), and extra
+    // positional arguments are ignored with a warning, as before.
+    const wasmTolerant = run(WASMTESTRUNNER, ["-P", join(tmp, "manifest.txt"), "extra-argument"], { cwd: tmp });
+    expectExit(wasmTolerant, 0, "WasmTestRunner -P with an extra argument");
+    expectIncludes(wasmTolerant.stdout, "SUMMARY files=1", "WasmTestRunner -P runs the manifest");
+    expectIncludes(wasmTolerant.stderr, "Warning: ignoring extra argument: extra-argument", "WasmTestRunner extra argument");
     const configPath = join(tmp, "wasm", "goccia.json");
     expectIncludes(wasmWarn.stderr, `WARN ${configPath} :: requests allow-import, which GocciaWasmTestRunner cannot grant; ignoring it`, "WasmTestRunner warning");
     expectExcludes(wasmWarn.stderr, `:: Warning: ${configPath}`, "WasmTestRunner warning names the config once");
@@ -651,6 +660,52 @@ console.log("Limits take units on the command line and in config...");
     const repl = run(REPL, ["--timeout=100ms"], { stdin: spin + "1 + 1\n" });
     expectIncludes(repl.combined, "timed out", "REPL --timeout");
     expectIncludes(repl.combined, "2", "REPL continues after a timeout");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Object values for flags and limits are rejected, not ignored...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'console.log("RAN");\n');
+    const configPath = join(tmp, "goccia.json");
+    const cases: [string, string, string][] = [
+      ["goccia.json", '{"max-memory": {"a": 1}}', '"max-memory" must be a single value, not null or an object'],
+      ["goccia.json", '{"timeout": {}}', '"timeout" must be a single value, not null or an object'],
+      ["goccia.json", '{"compat-asi": {"x": 1}}', '"compat-asi" must be true or false, got an object'],
+      ["goccia.json5", '{ "max-memory": { a: 1 } }', '"max-memory" must be a single value, not null or an object'],
+      ["goccia.toml", '[max-memory]\na = 1\n', '"max-memory" must be a single value, not null or an object'],
+    ];
+    for (const [name, config, message] of cases) {
+      for (const other of ["goccia.json", "goccia.json5", "goccia.toml"]) rmSync(join(tmp, other), { force: true });
+      writeFileSync(join(tmp, name), config);
+      const result = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(result, 1, `${name} ${config}`);
+      expectIncludes(result.combined, message, `${name} ${config}`);
+      expectExcludes(result.stdout, "RAN", `${name} ${config}`);
+    }
+    for (const other of ["goccia.json5", "goccia.toml"]) rmSync(join(tmp, other), { force: true });
+
+    // A per-file config, and a base reached through extends, are checked too.
+    writeFileSync(configPath, "{}\n");
+    mkdirSync(join(tmp, "sub"));
+    writeFileSync(join(tmp, "sub", "main.js"), 'console.log("RAN");\n');
+    writeFileSync(join(tmp, "base.json"), '{"max-stack": {"n": 1}}\n');
+    writeFileSync(join(tmp, "sub", "goccia.json"), '{"extends": "../base.json"}\n');
+    const inherited = run(LOADER, [join("sub", "main.js")], { cwd: tmp });
+    expectExit(inherited, 1, "extends base with an object limit");
+    expectIncludes(inherited.combined, `${join(tmp, "base.json")}: "max-stack" must be a single value, not null or an object`, "extends base");
+    const tests = run(TESTRUNNER, [join("sub", "main.js"), "--no-progress"], { cwd: tmp });
+    expectExit(tests, 1, "TestRunner per-file object limit");
+
+    // Nested sections that take objects keep working.
+    writeFileSync(join(tmp, "sub", "goccia.json"), '{"modules": {"virtual:x": {"content": "export default 1;"}}, "permissions": {}}\n');
+    writeFileSync(join(tmp, "sub", "main.js"), 'import x from "virtual:x";\nconsole.log("RAN", x);\n');
+    const nested = run(LOADER, [join("sub", "main.js"), "--source-type=module"], { cwd: tmp });
+    expectExit(nested, 0, "modules and permissions objects");
+    expectIncludes(nested.stdout, "RAN 1", "modules and permissions objects");
   } finally {
     clean(tmp);
   }

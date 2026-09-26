@@ -401,8 +401,11 @@ begin
             AddEntry(Key, '', cvkUnsupported, True);
     end
     else if (Value is TGocciaObjectValue) and not ANested then
+    begin
+      AddEntry(Key, '', cvkObject, False);
       AppendObjectEntries(TGocciaObjectValue(Value), Key + '.', True,
-        AEntries, ACount)
+        AEntries, ACount);
+    end
     else
       { null, deeper objects, and anything else without a flat form. }
       AddEntry(Key, '', cvkUnsupported, False);

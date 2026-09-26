@@ -87,6 +87,7 @@ type
     procedure TestStaticImportInsideProjectIsExempt;
     procedure TestStaticImportOutsideProjectIsDenied;
     procedure TestDenialSuggestionsNameTheGrant;
+    function ComputedImportSuggestion(const ASpecifier: string): string;
     procedure TestHostLoadedModuleOutsideProjectIsExempt;
     procedure TestReadGrantCoversOutsidePath;
     procedure TestMissingOutsideFileIsDeniedBeforeProbing;
@@ -462,9 +463,40 @@ begin
     .ToBe(True);
 end;
 
+function TEngineCapabilitiesTests.ComputedImportSuggestion(
+  const ASpecifier: string): string;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Caught: TGocciaValue;
+begin
+  Result := '';
+  Source := TStringList.Create;
+  Source.Text := 'const name = "' + ASpecifier + '";' + sLineBreak +
+    'import(name).catch((e) => { globalThis.caught = e; });';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    TGocciaCapabilities.None);
+  try
+    AttachRuntime(Engine);
+    Engine.Execute;
+    Engine.WaitForRuntimeIdle;
+    Caught := TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('caught');
+    if Caught is TGocciaErrorObjectValue then
+      Result := TGocciaErrorObjectValue(Caught).ErrorHostSuggestion;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
 procedure TEngineCapabilitiesTests.TestDenialSuggestionsNameTheGrant;
 var
   Outcome: TRunOutcome;
+  Suggestion: string;
 begin
   Outcome := Run(
     'import { value } from "../outside/secret.js"; globalThis.result = value;',
@@ -473,10 +505,22 @@ begin
     Outcome.Suggestion) > 0).ToBe(True);
   Expect<Boolean>(Pos('"allow-read"', Outcome.Suggestion) > 0).ToBe(True);
 
+  Expect<Boolean>(Pos('computed', Outcome.Suggestion) > 0).ToBe(False);
+
   Outcome := Run(
     'import { value } from "../outside/secret.js"; globalThis.result = value;',
     TGocciaCapabilities.None.Allow(gcRead).Deny(gcRead, FOutside));
-  Expect<Boolean>(Pos('--deny-read', Outcome.Suggestion) > 0).ToBe(True);
+  Expect<Boolean>(Pos('a read deny (--deny-read', Outcome.Suggestion) = 1)
+    .ToBe(True);
+
+  { A computed import() names why the module graph does not cover it. The
+    rejection reaches the guest, so the suggestion is read from the error
+    object it carries. }
+  Suggestion := ComputedImportSuggestion('../outside/secret.js');
+  Expect<Boolean>(Pos('a computed import() specifier is not part of the ' +
+    'module graph', Suggestion) = 1).ToBe(True);
+  Expect<Boolean>(Pos('--allow-read=' + CanonicalCapabilityPath(FOutside),
+    Suggestion) > 0).ToBe(True);
 
   Outcome := OpenLibrary('../outside/lib.so',
     TGocciaCapabilities.None.Allow(gcFFI, FProject));

@@ -567,7 +567,8 @@ Error: trust store /home/u/.config/goccia/trust.json was written by a newer Gocc
 The Wasm test runner has no store: it takes `GocciaWasmTestRunner [-P]
 <manifest>`. Without `-P`, each file whose config requests a grant fails with
 `FILEERROR <file> :: <config> requests permissions; pass -P to accept them
-(GocciaWasmTestRunner has no trust store)`.
+(GocciaWasmTestRunner has no trust store)`. Extra arguments after the
+manifest are ignored with a warning, for the external harness.
 
 ## Limits and units
 

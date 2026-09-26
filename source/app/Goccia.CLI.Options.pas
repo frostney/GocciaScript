@@ -706,6 +706,7 @@ begin
     'Virtual module definition (name=source or name={descriptor})', 'Engine');
   FModules := TRepeatableOption.Create('modules',
     'Path to a virtual modules manifest (repeatable)', 'Engine');
+  FModules.AcceptsObject := True;
   FRemoved := TOptionList.Create;
   AddRemovedOptions(FRemoved);
 end;

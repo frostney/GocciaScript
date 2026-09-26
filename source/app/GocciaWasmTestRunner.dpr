@@ -351,7 +351,19 @@ begin
   end;
 end;
 
+procedure PrintUsage(var AOut: Text);
+begin
+  WriteLn(AOut, 'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
+  WriteLn(AOut, '  manifest: one script path per line, # starts a comment');
+  WriteLn(AOut, '  -P, --accept-config-permissions: apply the permission ' +
+    'requests of the files'' configs (there is no trust store)');
+  WriteLn(AOut, '  Extra arguments after the manifest are ignored with a ' +
+    'warning.');
+end;
+
 var
+  Argument: string;
+  ArgumentIndex: Integer;
   Manifest: TStringList;
   Verdict: TFileVerdict;
   FileName, Line, ManifestPath: string;
@@ -360,45 +372,37 @@ var
   TotalTests, TotalPassed, TotalFailed, TotalSkipped: Int64;
   GC: TGarbageCollector;
 
-  procedure WriteUsage(var AOutput: Text);
-  begin
-    WriteLn(AOutput, 'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
-    WriteLn(AOutput,
-      '  manifest: one script path per line, # starts a comment');
-    WriteLn(AOutput,
-      '  -P, --accept-config-permissions: apply the permission requests ' +
-      'of the files'' configs (there is no trust store)');
-  end;
-
 begin
-  if (ParamCount = 1) and ((ParamStr(1) = '--help') or
-     (ParamStr(1) = '-h')) then
-  begin
-    WriteUsage(Output);
-    Exit;
-  end;
+  { Arguments: [-P] [--help] <manifest>. The external LAKON harness drives
+    this runner, so the parse stays tolerant: extra positional arguments are
+    ignored with a warning, as they always were. Only an unknown option or a
+    missing manifest is an unusable invocation (exit 2). }
   ManifestPath := '';
-  for Index := 1 to ParamCount do
-    if (ParamStr(Index) = '-' + ACCEPT_CONFIG_PERMISSIONS_SHORT_FLAG) or
-       (ParamStr(Index) = '--' + ACCEPT_CONFIG_PERMISSIONS_FLAG) then
-      GAcceptConfigPermissions := True
-    else if Copy(ParamStr(Index), 1, 1) = '-' then
+  for ArgumentIndex := 1 to ParamCount do
+  begin
+    Argument := ParamStr(ArgumentIndex);
+    if (Argument = '--help') or (Argument = '-h') then
     begin
-      WriteLn(ErrOutput, 'Error: Unknown option: ', ParamStr(Index));
+      PrintUsage(Output);
+      Exit;
+    end
+    else if (Argument = '-' + ACCEPT_CONFIG_PERMISSIONS_SHORT_FLAG) or
+       (Argument = '--' + ACCEPT_CONFIG_PERMISSIONS_FLAG) then
+      GAcceptConfigPermissions := True
+    else if Copy(Argument, 1, 1) = '-' then
+    begin
+      WriteLn(ErrOutput, 'Error: Unknown option: ', Argument);
       ExitCode := 2;
       Exit;
     end
     else if ManifestPath = '' then
-      ManifestPath := ParamStr(Index)
+      ManifestPath := Argument
     else
-    begin
-      WriteUsage(ErrOutput);
-      ExitCode := 2;
-      Exit;
-    end;
+      WriteLn(ErrOutput, 'Warning: ignoring extra argument: ', Argument);
+  end;
   if ManifestPath = '' then
   begin
-    WriteUsage(ErrOutput);
+    PrintUsage(ErrOutput);
     ExitCode := 2;
     Exit;
   end;

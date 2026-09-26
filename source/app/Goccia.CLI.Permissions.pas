@@ -359,7 +359,7 @@ begin
       Continue;
     end;
 
-    if Entry.Key = PERMISSIONS_CONFIG_KEY then
+    if (Entry.Key = PERMISSIONS_CONFIG_KEY) and (Entry.Kind <> cvkObject) then
       raise EGocciaConfigPermissionError.CreateFmt(
         '%s: "%s" must be an object of allow-* and deny-* keys',
         [Location, PERMISSIONS_CONFIG_KEY]);
