@@ -35,11 +35,10 @@ BASE="http://127.0.0.1:${PORT}"
 echo "=== fetch CLI end-to-end tests (server on port $PORT) ==="
 echo ""
 
-# fetch() refuses to run at all unless an allowlist is configured, so every
-# invocation here has to name the test server's host. Without it the whole
-# script fails with "fetch requires allowed hosts to be configured" long
-# before reaching any assertion.
-ALLOW_HOST="--allowed-host=127.0.0.1"
+# The net capability is denied by default, so every invocation names the test
+# server's address. An explicit IP scope also reaches that private address
+# (ADR 0122), so no `private` grant is needed for 127.0.0.1 itself.
+ALLOW_HOST="--allow-net=127.0.0.1"
 
 run_js() {
   echo "$1" > "$TMPFILE"
@@ -47,13 +46,18 @@ run_js() {
 }
 
 # Same as run_js, but with extra loader flags before the script path, so the
-# policy flags can be exercised against the same live server.
+# policy flags can be exercised against the same live server. Extra flags that
+# grant net themselves replace the default grant.
 run_js_with() {
   local extra="$1"
+  local grant="$ALLOW_HOST"
+  case "$extra" in
+    *--allow-net*) grant="" ;;
+  esac
   echo "$2" > "$TMPFILE"
-  # $extra is a deliberate flag list, so word splitting is wanted here.
+  # $extra and $grant are deliberate flag lists, so word splitting is wanted.
   # shellcheck disable=SC2086
-  "$LOADER" "$ALLOW_HOST" $extra "$TMPFILE" --compat-asi 2>&1
+  "$LOADER" $grant $extra "$TMPFILE" --compat-asi 2>&1
 }
 
 check_with() {
@@ -199,41 +203,68 @@ check "POST is rejected" 1 \
   "fetch('${BASE}/', { method: 'POST' })" \
   "TypeError"
 
-# --- Private-range policy (WP-2) ---
+# --- Private ranges (ADR 0122) ---
 #
-# The test server listens on loopback, so it is itself a private target. That
-# makes it the honest fixture for this policy: with the flag off the request
-# must still work (no behavior change for existing hosts), and with it on the
-# very same request must be refused.
+# The test server listens on loopback, so it is itself a private target. An
+# explicit IP allow reaches it; a host name that resolves to it needs
+# `private`; and a `private` deny refuses it whatever allows it.
 
-check_with "loopback reachable without the deny flag" "" 0 "
+LOCAL_BASE="http://localhost:${PORT}"
+
+check_with "an explicit IP allow reaches loopback" "" 0 "
 const r = await fetch('${BASE}/text')
 console.log(r.status)
 " "200"
 
-check_with "loopback refused with --fetch-deny-private-ranges" \
-  "--fetch-deny-private-ranges" 1 "
+check_with "loopback refused with --deny-net=private" \
+  "--deny-net=private" 1 "
 await fetch('${BASE}/text')
-" "TypeError"
+" "PermissionDenied"
 
-# Exits 0: the script catches the rejection, so the assertion is on the
-# message, which must name the address the host actually resolved to.
-check_with "private-range rejection names the resolved address" \
-  "--fetch-deny-private-ranges" 0 "
+check_with "a deny names the refused host" \
+  "--deny-net=private" 0 "
 try {
   await fetch('${BASE}/text')
 } catch (e) {
   console.log(e.message)
 }
-" "127.0.0.1"
+" "net: 127.0.0.1"
+
+check_with "a host name resolving privately is refused without private" \
+  "--allow-net=localhost" 0 "
+try {
+  await fetch('${LOCAL_BASE}/text')
+  console.log('reached')
+} catch (e) {
+  console.log(e.name + ' ' + e.message)
+}
+" "PermissionDenied net: localhost:${PORT}"
+
+check_with "private lets an allowed host name resolve privately" \
+  "--allow-net=localhost,private" 0 "
+const r = await fetch('${LOCAL_BASE}/text')
+console.log(r.status)
+" "200"
+
+check_with "private alone reaches a private destination" \
+  "--allow-net=private" 0 "
+const r = await fetch('${LOCAL_BASE}/text')
+console.log(r.status)
+" "200"
+
+check_with "private does not reach a public destination" \
+  "--allow-net=private" 1 "
+await fetch('http://93.184.216.34/')
+" "PermissionDenied"
 
 # A redirect hop must be resolved and validated exactly like the first
 # request; validating only the initial target would leave the hole open.
 #
 # The initial request goes to loopback (allowed), so it is NOT rejected up
 # front — the 302 then points at a private, off-allowlist address. Only per-hop
-# revalidation can catch that, and the rejection must name the redirect target
-# (10.255.255.1), not the initial host, proving the hop itself was checked. A
+# revalidation can catch that, and the PermissionDenied must name the redirect
+# target (10.255.255.1:1), not the initial host, proving the hop itself was
+# checked. A
 # regression that validates only the first request would instead attempt to
 # connect to the redirect target and fail with a different, connect-level error.
 #
@@ -250,18 +281,18 @@ try {
 } catch (e) {
   console.log(e.message)
 }
-" "not allowed: 10.255.255.1"
+" "net: 10.255.255.1:1"
 
 # --- Response body cap (WP-2) ---
 
 check_with "response under the cap succeeds" \
-  "--fetch-max-response-bytes=1048576" 0 "
+  "--max-fetch-bytes=1MiB" 0 "
 const r = await fetch('${BASE}/text')
 console.log((await r.text()).trim())
 " "hello world"
 
 check_with "response over the cap is refused" \
-  "--fetch-max-response-bytes=4" 1 "
+  "--max-fetch-bytes=4" 1 "
 await fetch('${BASE}/text')
 " "TypeError"
 
