@@ -358,11 +358,13 @@ uses
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
-  Goccia.Values.FunctionBase,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue,
   Goccia.YAML;
 
 const
@@ -697,6 +699,14 @@ begin
       'cannot be combined; run each on its own');
   if FYes.Present and not FTrust.Present then
     raise TCLIUsageError.Create('--yes only confirms --trust');
+  { The store is one file; a directory would otherwise surface later as a
+    read error on a run, or a failed write after --trust has asked. }
+  if FTrustStore.Present and (FTrustStore.Value <> '') and
+     DirectoryExists(ExpandFileName(FTrustStore.Value)) then
+    raise Exception.CreateFmt('--%s=%s is a directory; pass the path of the ' +
+      'trust store file (for example %s)', [TRUST_STORE_FLAG,
+      FTrustStore.Value, IncludeTrailingPathDelimiter(FTrustStore.Value) +
+      'trust.json']);
   if TrustModeCount = 0 then
     Exit;
   if FTrust.Present then
@@ -1729,6 +1739,73 @@ begin
       ExtractFileDir(AConfigPath)) + AWritten);
 end;
 
+{ Why AValue, reached at APath inside a globals module's exports, is not data,
+  or '' when it and everything under it is: data is what JSON carries as is
+  (null, booleans, finite numbers, strings, arrays, and plain objects), so
+  nothing is dropped, rewritten, or run on the way into the script. AVisiting
+  holds the objects being walked, so a cycle is reported, not followed. AAt
+  receives the path of the value that is not data. }
+function NonDataReason(const AValue: TGocciaValue; const APath: string;
+  const AVisiting: TList<TGocciaObjectValue>; out AAt: string): string;
+var
+  Key: string;
+  I, Count: Integer;
+begin
+  AAt := APath;
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaHoleValue) then
+    Exit('undefined');
+  if (AValue is TGocciaNullLiteralValue) or
+     (AValue is TGocciaBooleanLiteralValue) or
+     (AValue is TGocciaStringLiteralValue) then
+    Exit('');
+  if AValue is TGocciaNumberLiteralValue then
+  begin
+    if TGocciaNumberLiteralValue(AValue).IsNaN or
+       TGocciaNumberLiteralValue(AValue).IsInfinity or
+       TGocciaNumberLiteralValue(AValue).IsNegativeInfinity then
+      Exit('a number JSON cannot hold');
+    Exit('');
+  end;
+  if AValue.IsCallable then
+    Exit('a function');
+  if AValue is TGocciaSymbolValue then
+    Exit('a symbol');
+  if AValue is TGocciaBigIntValue then
+    Exit('a BigInt');
+  if not (AValue is TGocciaObjectValue) or
+     ((AValue.ClassType <> TGocciaObjectValue) and
+      (AValue.ClassType <> TGocciaArrayValue)) then
+    Exit('an object that is not a plain object or array');
+  if AVisiting.IndexOf(TGocciaObjectValue(AValue)) >= 0 then
+    Exit('a circular reference');
+  AVisiting.Add(TGocciaObjectValue(AValue));
+  try
+    if AValue is TGocciaArrayValue then
+    begin
+      Count := TGocciaArrayValue(AValue).GetLength;
+      for I := 0 to Count - 1 do
+      begin
+        Result := NonDataReason(TGocciaArrayValue(AValue).GetProperty(
+          IntToStr(I)), APath + '[' + IntToStr(I) + ']', AVisiting, AAt);
+        if Result <> '' then
+          Exit;
+      end;
+    end
+    else
+      for Key in TGocciaObjectValue(AValue).GetEnumerablePropertyNames do
+      begin
+        Result := NonDataReason(TGocciaObjectValue(AValue).GetProperty(Key),
+          APath + '.' + Key, AVisiting, AAt);
+        if Result <> '' then
+          Exit;
+      end;
+    Result := '';
+  finally
+    AVisiting.Remove(TGocciaObjectValue(AValue));
+  end;
+end;
+
 type
   { What crosses back from an isolated module: its default export, or all of
     its named exports as one object. }
@@ -1750,7 +1827,8 @@ var
   Module: TGocciaModule;
   ExportValue, ExportedValue: TGocciaValue;
   NamedExports: TGocciaObjectValue;
-  ExportName: string;
+  ExportName, Reason, ReasonPath: string;
+  Visiting: TList<TGocciaObjectValue>;
   Stringifier: TGocciaJSONStringifier;
 begin
   Source := TStringList.Create;
@@ -1781,17 +1859,25 @@ begin
         NamedExports := TGocciaObjectValue.Create;
         if TGarbageCollector.Instance <> nil then
           TGarbageCollector.Instance.AddTempRoot(NamedExports);
-        for ExportName in Module.GetExportNames do
-          if Module.TryGetExportValue(ExportName, ExportedValue) then
-          begin
-            { Only data crosses into the script's engine. }
-            if ExportedValue is TGocciaFunctionBase then
-              raise EArgumentException.CreateFmt(
-                '%s: export "%s" is a function; a globals module a config ' +
-                'names may only export data (pass it with --globals on the ' +
-                'command line to inject code)', [APath, ExportName]);
-            NamedExports.SetProperty(ExportName, ExportedValue);
-          end;
+        Visiting := TList<TGocciaObjectValue>.Create;
+        try
+          for ExportName in Module.GetExportNames do
+            if Module.TryGetExportValue(ExportName, ExportedValue) then
+            begin
+              { Only data crosses into the script's engine, and all of it:
+                JSON would drop a nested function or rewrite NaN silently. }
+              Reason := NonDataReason(ExportedValue, ExportName, Visiting,
+                ReasonPath);
+              if Reason <> '' then
+                raise EArgumentException.CreateFmt(
+                  '%s: export "%s" is %s; a config''s globals module may ' +
+                  'export data only (pass it with --globals on the command ' +
+                  'line to inject code)', [APath, ReasonPath, Reason]);
+              NamedExports.SetProperty(ExportName, ExportedValue);
+            end;
+        finally
+          Visiting.Free;
+        end;
         ExportValue := NamedExports;
       end;
       if TGarbageCollector.Instance <> nil then

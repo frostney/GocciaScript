@@ -28,6 +28,7 @@ type
     procedure TestConfinedPathWrites;
     procedure TestConfinedPathReplacesContent;
     procedure TestFileInsideConfinedDirectory;
+    procedure TestMissingDirectoryIsNamed;
     procedure TestSwappedDirectoryIsRefused;
     procedure TestSymlinkLeafIsRefused;
     procedure TestReplacedRootIsRefused;
@@ -48,6 +49,8 @@ begin
     TestConfinedPathReplacesContent);
   Test('A file directly inside a confined directory output is written',
     TestFileInsideConfinedDirectory);
+  Test('An output under a missing directory says the directory is missing',
+    TestMissingDirectoryIsNamed);
   { Symbolic and hard links need an API this build only has on UNIX. }
   {$IFDEF UNIX}
   Test('A directory swapped for a link after the check is refused',
@@ -194,6 +197,25 @@ begin
     CanonicalHostPath(FProject));
   WriteText(IncludeTrailingPathDelimiter(Directory) + 'main.gbc', 'bytes');
   Expect<string>(ReadText(Directory + PathDelim + 'main.gbc')).ToBe('bytes');
+end;
+
+procedure THostOutputFilesTests.TestMissingDirectoryIsNamed;
+var
+  Path, Message: string;
+begin
+  Path := FProject + PathDelim + 'missing' + PathDelim + 'report.json';
+  { The containment check canonicalizes the deepest existing ancestor. }
+  RegisterConfinedHostOutput(Path, CanonicalHostPath(FProject) + PathDelim +
+    'missing' + PathDelim + 'report.json', CanonicalHostPath(FProject));
+  Message := '';
+  try
+    WriteText(Path, 'x');
+  except
+    on E: EHostOutputRefused do
+      Message := E.Message;
+  end;
+  Expect<Boolean>(Pos('missing does not exist', Message) > 0).ToBe(True);
+  Expect<Boolean>(Pos('symbolic link', Message) > 0).ToBe(False);
 end;
 
 procedure THostOutputFilesTests.TestSwappedDirectoryIsRefused;

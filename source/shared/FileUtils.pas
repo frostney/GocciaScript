@@ -10,6 +10,36 @@ uses
   Classes,
   SysUtils;
 
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  { open(2)/openat(2) flags and *at(2) arguments FPC 3.2.2's BaseUnix does
+    not declare on every host. Linux takes FPC's own O_* values, which vary
+    by architecture; its AT_* values are the same on every architecture
+    (linux/fcntl.h). Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h,
+    FreeBSD's from sys/sys/fcntl.h. }
+  {$IF DEFINED(LINUX)}
+  HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
+  HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $100;
+  HOST_AT_REMOVEDIR = $200;
+  {$ELSEIF DEFINED(DARWIN)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $100000;
+  HOST_AT_FDCWD = -2;
+  HOST_AT_SYMLINK_NOFOLLOW = $20;
+  HOST_AT_REMOVEDIR = $80;
+  {$ELSEIF DEFINED(FREEBSD)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $20000;
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $200;
+  HOST_AT_REMOVEDIR = $800;
+  {$ELSE}
+    {$ERROR Declare the open(2) and *at(2) constants for this host in FileUtils}
+  {$IFEND}
+{$IFEND}
+
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
@@ -742,7 +772,7 @@ begin
     if not Encode(ARoot, NameBytes) then
       Exit;
     Directory := fpOpen(PAnsiChar(@NameBytes[0]),
-      O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
     if Directory < 0 then
     begin
       AError := ARoot + ' is no longer the copied directory (' +
@@ -762,13 +792,13 @@ begin
       if not Encode(Parts[I], NameBytes) then
         Exit;
       Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
-        O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
       if (Next < 0) and (fpgetCerrno = ESysENOENT) then
       begin
         HostMkdirAt(Directory, PAnsiChar(@NameBytes[0]),
           BENEATH_DIRECTORY_MODE);
         Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
-          O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+          O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
       end;
       if Next < 0 then
       begin
@@ -784,7 +814,7 @@ begin
        not Encode(Leaf + ATemporarySuffix, TemporaryBytes) then
       Exit;
     Handle := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
-      O_RDONLY or O_NOFOLLOW or O_NONBLOCK);
+      O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
     if Handle >= 0 then
     begin
       if (fpFStat(Handle, Info) = 0) and not fpS_ISREG(Info.st_mode) then
@@ -804,7 +834,7 @@ begin
     { A link at the temporary's name is refused; a leftover file from an
       interrupted write is removed. }
     Handle := HostOpenAt(Directory, PAnsiChar(@TemporaryBytes[0]),
-      O_RDONLY or O_NOFOLLOW or O_NONBLOCK);
+      O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
     if Handle >= 0 then
     begin
       fpClose(Handle);
@@ -817,7 +847,7 @@ begin
       Exit;
     end;
     Handle := HostOpenAt(Directory, PAnsiChar(@TemporaryBytes[0]),
-      O_WRONLY or O_CREAT or O_EXCL or O_NOFOLLOW,
+      O_WRONLY or O_CREAT or O_EXCL or HOST_O_NOFOLLOW,
       cint(BENEATH_FILE_MODE));
     if Handle < 0 then
     begin
@@ -940,7 +970,7 @@ begin
       Exit;
     end;
     Directory := fpOpen(PAnsiChar(@NameBytes[0]),
-      O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
     if (Directory < 0) or (fpFStat(Directory, Info) <> 0) or
        (ARootIdentity.Known and
         ((QWord(Info.st_dev) <> ARootIdentity.Device) or
@@ -958,7 +988,7 @@ begin
         Exit;
       end;
       Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
-        O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
       if Next < 0 then
       begin
         AError := Parts[I] + ' is a symbolic link or not a directory';

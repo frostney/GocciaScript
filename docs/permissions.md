@@ -419,11 +419,17 @@ allow-ffi = ["../fixtures/ffi"]
 - A file a config names as an input — a module manifest (`"modules"`), a
   globals file or module (`"globals"`), or a host-environment module
   (`"host-environment"`) — is read under the capability set of the script
-  the config governs, with the config's own directory as the project: inside
-  that directory it is covered as the module graph is, elsewhere it needs a
-  read grant. A JavaScript or TypeScript manifest or globals module runs in an
-  engine of its own and only data crosses back; a host-environment module is a
-  guest module of the script's engine, never host-owned (see
+  the config governs, with the directory of the config that names it as the
+  project: inside that directory it is covered as the module graph is,
+  elsewhere it needs a read grant. A file named in an `extends` base is judged
+  against the base's own directory, not the child's, since the base is the
+  config that names it. A JavaScript or TypeScript manifest or globals module
+  runs in an engine of its own and only data crosses back. For a globals
+  module, data means values JSON carries as they are — null, booleans, finite
+  numbers, strings, arrays, and plain objects, at any depth — and any other
+  export (a function, symbol, BigInt, `undefined`, `NaN`, a `Map`, a cycle)
+  fails the run, naming where it sits (`nested.fn`). A host-environment
+  module is a guest module of the script's engine, never host-owned (see
   [Virtual Modules](virtual-modules.md)). The same options on the command line
   stay host requests.
 - A config writes host files only inside its own directory: `log`,
@@ -560,8 +566,9 @@ need no trust; in a config they are requests like any allow.
 
 ### What a trust covers
 
-Each entry records the config's canonical path and the SHA-256 of its
-**normalized block**: the effective permission request after `extends`
+Each entry is keyed by the config's canonical directory plus its own file
+name, which is not resolved (so a `goccia.json` that is itself a symbolic link
+has a trust of its own), and records the SHA-256 of its **normalized block**: the effective permission request after `extends`
 resolution, as canonical JSON.
 
 ```json
@@ -661,8 +668,9 @@ Error: trust store /home/u/.config/goccia/trust.json was written by a newer Gocc
 ```
 
 A store that cannot be located (`cannot locate the per-user trust store (HOME
-is not set); pass --trust-store=<path>`), a held lock, or a failed write is
-also an error with status 1.
+is not set); pass --trust-store=<path>`), a `--trust-store` path that is a
+directory (refused before anything runs or is asked), a held lock, or a
+failed write is also an error with status 1.
 
 ### `GocciaWasmTestRunner`
 

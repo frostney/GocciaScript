@@ -1451,11 +1451,28 @@ console.log("Globals and host-environment modules a config names are guest reads
     expectIncludes(suiteRefused.combined, `PermissionDenied: read: ${secret}`, "test runner config globals module importing outside the project");
     rmSync(suite);
 
-    // Code does not cross: a globals module a config names exports data.
-    writeFileSync(join(project, "gl.js"), "export const stolen = () => 1;\n");
-    const code = run(RUNNER, ["main.js"], { cwd: project });
-    expectExit(code, 1, "config globals module exporting a function");
-    expectIncludes(code.combined, 'export "stolen" is a function', "config globals module exporting a function");
+    // Code does not cross: a globals module a config names exports data,
+    // meaning values JSON carries as they are, at any depth. Anything else
+    // fails the same way, naming where it sits.
+    const notData: [string, string, string][] = [
+      ["export const stolen = () => 1;", "stolen", "a function"],
+      ["export const nested = { fn: () => 1 };", "nested.fn", "a function"],
+      ["export const big = 1n;", "big", "a BigInt"],
+      ['export const nested = { list: [1, Symbol("s")] };', "nested.list[1]", "a symbol"],
+      ["export const nested = { n: NaN };", "nested.n", "a number JSON cannot hold"],
+      ["export const nested = { u: undefined };", "nested.u", "undefined"],
+      ["export const nested = new Map();", "nested", "an object that is not a plain object or array"],
+      ["const o = {}; o.self = o; export const nested = o;", "nested.self", "a circular reference"],
+    ];
+    for (const [source, at, what] of notData) {
+      writeFileSync(join(project, "gl.js"), source + "\n");
+      const code = run(RUNNER, ["main.js"], { cwd: project });
+      expectExit(code, 1, `config globals module: ${source}`);
+      expectIncludes(code.combined, `export "${at}" is ${what}; a config's globals module may export data only`, `config globals module: ${source}`);
+    }
+    writeFileSync(join(project, "gl.js"), 'export const stolen = { list: [1, "x", null, true, { deep: 2.5 }] };\n');
+    writeFileSync(join(project, "data.js"), "console.log(\"DATA\", JSON.stringify(stolen));\n");
+    expectIncludes(run(RUNNER, ["data.js"], { cwd: project }).stdout, 'DATA {"list":[1,"x",null,true,{"deep":2.5}]}', "config globals module exporting nested data");
 
     // A globals data file outside the project needs a read grant.
     writeFileSync(join(tmp, "outside", "hosts.yml"), "stolen: OUTSIDE-YAML\n");
@@ -1472,6 +1489,16 @@ console.log("Globals and host-environment modules a config names are guest reads
     writeFileSync(join(project, "goccia.json"), '{"globals": ["./data.json", "./mod.js"]}\n');
     writeFileSync(join(project, "both.js"), 'console.log("OK", answer, fromModule);\n');
     expectIncludes(run(RUNNER, ["both.js"], { cwd: project }).stdout, "OK 42 ok", "config globals inside the project");
+
+    // A file an `extends` base names is judged against the base's own
+    // directory: the base is the config that names it.
+    mkdirSync(join(tmp, "base"));
+    mkdirSync(join(tmp, "child"));
+    writeFileSync(join(tmp, "base", "goccia.json"), '{"globals": ["./base-data.json"]}\n');
+    writeFileSync(join(tmp, "base", "base-data.json"), '{"fromBase": "BASE"}\n');
+    writeFileSync(join(tmp, "child", "goccia.json"), '{"extends": "../base/goccia.json"}\n');
+    writeFileSync(join(tmp, "child", "main.js"), 'console.log("EXTENDS", fromBase);\n');
+    expectIncludes(run(RUNNER, ["main.js"], { cwd: join(tmp, "child") }).stdout, "EXTENDS BASE", "config globals named by an extends base");
 
     // On the command line they are the user's own choice.
     writeFileSync(join(project, "goccia.json"), "{}\n");
@@ -1554,6 +1581,13 @@ console.log("Output paths set in a config stay inside the config's directory..."
     const inside = run(RUNNER, [join(project, "main.js")], { cwd: join(tmp, "elsewhere") });
     expectExit(inside, 0, "config log inside its directory");
     if (!existsSync(join(project, "logs", "run.log"))) throw new Error("config log was not written beside the config");
+
+    // A directory that does not exist is named as missing.
+    writeFileSync(join(project, "goccia.json"), '{"coverage-output": "missing/cov.lcov", "coverage-format": "lcov"}\n');
+    const missingDirectory = run(RUNNER, ["main.js"], { cwd: project });
+    expectExit(missingDirectory, 1, "config output under a missing directory");
+    expectIncludes(missingDirectory.combined, `the directory ${join(realpathSync(project), "missing")} does not exist`, "config output under a missing directory");
+    expectExcludes(missingDirectory.combined, "symbolic link", "config output under a missing directory");
 
     // A link at the name, or a linked directory on the way, cannot carry the
     // write out.
@@ -1652,6 +1686,14 @@ console.log("Unreadable trust stores are errors, not trust...");
     expectExit(corruptRun, 2, "run with a corrupt store");
     expectIncludes(corruptRun.stderr, "Nothing was run. Trust store ", "run with a corrupt store");
     expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then trust these requests:", "run with a corrupt store");
+
+    // A directory is not a store: refused up front, before a run or a prompt.
+    mkdirSync(join(tmp, "storedir"));
+    for (const args of [["--trust-store=storedir", join("project", "main.js")], ["--trust-store=storedir", "--trust", "project", "--yes"]]) {
+      const directoryStore = run(RUNNER, args, { cwd: tmp });
+      expectExit(directoryStore, 1, `directory store: ${args.join(" ")}`);
+      expectIncludes(directoryStore.combined, "--trust-store=storedir is a directory", `directory store: ${args.join(" ")}`);
+    }
 
     writeFileSync(join(tmp, "newer.json"), '{"version": 2, "trusted": {}}\n');
     const newer = run(RUNNER, ["--trust-store=newer.json", "--list-trusted"], { cwd: tmp });
