@@ -468,7 +468,8 @@ type
       ASavedHandlerCount: Integer;
       var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
-      const ASuggestion: string = '');
+      const ASuggestion: string = '';
+      const ASuggestionIsHostOnly: Boolean = False);
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
@@ -14198,7 +14199,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   ASavedHandlerCount: Integer;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
-  const ASuggestion: string);
+  const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -14229,7 +14230,8 @@ begin
     // travels with the throw so a host runner can render the same
     // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion);
+      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
+        ASuggestionIsHostOnly);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -14810,12 +14812,14 @@ LInnerLoopsDone:
           HandleExceptionUnwind(E.ThrownValue,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
+            E.SuggestionIsHostOnly);
         on E: TGocciaThrowValue do
           HandleExceptionUnwind(E.Value,
             InitialFrameStackCount, InitialClosedNumericFrameCount,
             SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
+            E.SuggestionIsHostOnly);
         on E: TGocciaTypeError do
           HandleExceptionUnwind(
             CreateErrorObject(TYPE_ERROR_NAME, E.Message),

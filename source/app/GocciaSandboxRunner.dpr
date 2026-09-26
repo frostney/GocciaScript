@@ -999,7 +999,7 @@ begin
       on E: TGocciaThrowValue do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-          False, ExpectedPrincipal, E.Suggestion, True);
+          False, ExpectedPrincipal, E.Suggestion, True, E.SuggestionIsHostOnly);
         Result.FailureKind := sfkScriptError;
       end;
       { The same guest throw, as the bytecode VM delivers it.  Without this
@@ -1009,7 +1009,8 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
-          Source, False, ExpectedPrincipal, E.Suggestion, True);
+          Source, False, ExpectedPrincipal, E.Suggestion, True,
+          E.SuggestionIsHostOnly);
         Result.FailureKind := sfkScriptError;
       end;
       { Whatever is left is a native error the engine does not model.

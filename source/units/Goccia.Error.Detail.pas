@@ -23,12 +23,14 @@ uses
 
   AGuestBound marks output that is handed back to guest code (a sandbox
   runScript child's stderr, a benchmark result's error). It then carries no
-  host-side suggestion: neither the one recorded on the error nor an
+  host-side suggestion: not one the throw marked ASuggestionIsHostOnly,
+  whatever value was thrown, nor the one recorded on the error or an
   ASuggestion equal to it. }
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
-  const ASuggestion: string = ''; const AGuestBound: Boolean = False): string;
+  const ASuggestion: string = ''; const AGuestBound: Boolean = False;
+  const ASuggestionIsHostOnly: Boolean = False): string;
 
 { Returns the thrown value's `name` when it is a string data property on the
   object or its prototype chain, and 'Error' otherwise. Like FormatThrowDetail,
@@ -99,7 +101,8 @@ end;
 function FormatThrowDetail(const AThrown: TGocciaValue;
   const AFileName: string; const ASourceLines: TStringList;
   const AUseColor: Boolean; const AExpectedPrincipal: Int64;
-  const ASuggestion: string; const AGuestBound: Boolean): string;
+  const ASuggestion: string; const AGuestBound: Boolean;
+  const ASuggestionIsHostOnly: Boolean): string;
 var
   ErrorObject: TGocciaErrorObjectValue;
   ErrorName, ErrorMessage: string;
@@ -112,6 +115,8 @@ begin
     shown even when the error reached the host through a rejected promise
     rather than the exception that first carried it. }
   Suggestion := ASuggestion;
+  if AGuestBound and ASuggestionIsHostOnly then
+    Suggestion := '';
   if AThrown is TGocciaErrorObjectValue then
   begin
     HostSuggestion := TGocciaErrorObjectValue(AThrown).ErrorHostSuggestion;
