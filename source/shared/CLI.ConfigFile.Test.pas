@@ -1159,6 +1159,25 @@ begin
   Entries := ParseConfigFile(Path);
   Expect<string>(EntryText(Entries)).ToBe('a=?;b={};b.c=?;b.d=?;b.d=y;' +
     'b.e=?;mode=bytecode;g=?');
+  { extends must name a path; any other value is an error, not ignored. }
+  WriteTextFile(Path, '{"extends": {"path": "base.json"}}');
+  Found := '';
+  try
+    ParseConfigFile(Path);
+  except
+    on E: TParseError do
+      Found := E.Message;
+  end;
+  Expect<string>(Found).ToBe(Path + ': "extends" must be a path');
+  WriteTextFile(Path, '{"extends": ["base.json"]}');
+  Found := '';
+  try
+    ParseConfigFile(Path);
+  except
+    on E: TParseError do
+      Found := E.Message;
+  end;
+  Expect<string>(Found).ToBe(Path + ': "extends" must be a path');
   { A number too large for Int64 keeps its digits, so a unit parser can say
     it is too large rather than misreading an exponent. }
   WriteTextFile(Path, '{"max-memory": 100000000000000000000}');

@@ -313,14 +313,15 @@ var
 begin
   if FSkipDepth > 0 then
     Exit;
-  FormatSettings := CreateInvariantFormatSettings;
-  { A whole number too large for Int64 keeps its digits rather than an
-    exponent, so a unit parser can report it as too large. }
-  if (Frac(AValue) = 0) and (Abs(AValue) >= 1e15) and
-     (Abs(AValue) < 1e300) then
-    AddScalar(Format('%.0f', [AValue], FormatSettings), cvkNumber)
+  { A number keeps its spelling, so an error echoes the value as written
+    and a unit parser reports an oversized whole number as too large. }
+  if LastNumberText <> '' then
+    AddScalar(LastNumberText, cvkNumber)
   else
+  begin
+    FormatSettings := CreateInvariantFormatSettings;
     AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
+  end;
 end;
 
 procedure TConfigJSONParser.OnBeginObject;
@@ -652,9 +653,11 @@ begin
   { Look for an "extends" entry. }
   ExtendsIndex := -1;
   for I := 0 to High(OwnEntries) do
-    if (OwnEntries[I].Key = EXTENDS_KEY) and
-       IsValueEntry(OwnEntries[I]) then
+    if OwnEntries[I].Key = EXTENDS_KEY then
     begin
+      if (OwnEntries[I].Kind <> cvkString) or OwnEntries[I].InArray then
+        raise TParseError.CreateFmt('%s: "%s" must be a path',
+          [APath, EXTENDS_KEY]);
       ExtendsIndex := I;
       Break;
     end;

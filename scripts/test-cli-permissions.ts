@@ -175,6 +175,9 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
       ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
       ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
+      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (`],
+      ['{"extends": {"path": "base.json"}}', `${configPath}: "extends" must be a path`],
+      ['{"extends": 1}', `${configPath}: "extends" must be a path`],
       ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
       ['{"permissions": {"allow-net": [""]}}', `${configPath}: "permissions.allow-net" has an empty scope`],
     ];
@@ -188,6 +191,16 @@ console.log("Removed and command-line-only config keys exit 2...");
     const tomlString = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(tomlString, 1, "TOML string flag");
     rmSync(join(tmp, "goccia.toml"));
+    writeFileSync(join(tmp, "goccia.toml"), '[extends]\npath = "base.toml"\n');
+    const tomlExtends = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(tomlExtends, 1, "TOML extends table");
+    expectIncludes(tomlExtends.combined, '"extends" must be a path', "TOML extends table");
+    rmSync(join(tmp, "goccia.toml"));
+    writeFileSync(join(tmp, "goccia.json5"), "{ extends: 1 }\n");
+    const json5Extends = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(json5Extends, 1, "JSON5 extends number");
+    expectIncludes(json5Extends.combined, '"extends" must be a path', "JSON5 extends number");
+    rmSync(join(tmp, "goccia.json5"));
 
     // An unknown permission is a usage error naming the valid keys.
     writeFileSync(configPath, '{"permissions": {"deny-nett": true}}\n');
