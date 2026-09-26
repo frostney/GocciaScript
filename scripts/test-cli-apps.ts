@@ -7425,7 +7425,7 @@ await section("Loader: a static-import denial is located alike in both modes..."
       const locations: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), file, `--mode=${mode}`, "--no-host-filesystem"],
+          [resolve(LOADER), file, `--mode=${mode}`],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
