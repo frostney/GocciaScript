@@ -873,13 +873,7 @@ var
   I, J: Integer;
 begin
   { Source from stdin is governed by the working directory's config. }
-  Names := TStringList.Create;
-  try
-    Names.Add(STDIN_FILE_NAME);
-    VerifyConfigPermissions(Names);
-  finally
-    Names.Free;
-  end;
+  ValidateFileConfig(STDIN_FILE_NAME);
   Source := ReadSourceFromText(Input);
   Reporter := TBenchmarkReporter.Create;
   try
@@ -977,7 +971,7 @@ begin
           Exit;
         end;
       end;
-      Files := PrepareRunFiles(RawFiles);
+      Files := ExpandMultifileFiles(RawFiles);
     finally
       RawFiles.Free;
     end;

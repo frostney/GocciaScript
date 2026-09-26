@@ -773,9 +773,7 @@ begin
     if UseStdin then
     begin
       { Source from stdin is governed by the working directory's config. }
-      Files.Add(STDIN_FILE_NAME);
-      VerifyConfigPermissions(Files);
-      Files.Clear;
+      ValidateFileConfig(STDIN_FILE_NAME);
       StdinSource := ReadSourceFromText(Input);
       if MultifileEnabled then
       begin
@@ -814,11 +812,11 @@ begin
           end;
         end;
         // Build the expanded list before freeing the old Files: if
-        // PrepareRunFiles raises, Files still owns its (empty)
+        // ExpandMultifileFiles raises, Files still owns its (empty)
         // TStringList and the outer finally won't double-free. It refuses
-        // the run, before any file starts, when a config's permission
-        // requests are not trusted.
-        TempFiles := PrepareRunFiles(RawFiles);
+        // the run, before any file starts, when a config is malformed or
+        // its permission requests are not trusted.
+        TempFiles := ExpandMultifileFiles(RawFiles);
         Files.Free;
         Files := TempFiles;
       finally

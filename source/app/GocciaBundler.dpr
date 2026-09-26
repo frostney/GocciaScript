@@ -392,7 +392,7 @@ begin
   begin
     RawFiles := FindAllFiles(APath, ScriptExtensions);
     try
-      Files := PrepareRunFiles(RawFiles);
+      Files := ExpandMultifileFiles(RawFiles);
     finally
       RawFiles.Free;
     end;
@@ -421,7 +421,7 @@ begin
       SinglePath := TStringList.Create;
       try
         SinglePath.Add(APath);
-        Files := PrepareRunFiles(SinglePath);
+        Files := ExpandMultifileFiles(SinglePath);
       finally
         SinglePath.Free;
       end;

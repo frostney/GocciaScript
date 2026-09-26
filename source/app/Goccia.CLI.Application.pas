@@ -131,16 +131,15 @@ type
     { The config whose permissions govern AFileName: its nearest config, or
       the root config when it has none. '' when there is neither. }
     function GoverningConfigPath(const AFileName: string): string;
-    { Checks, before anything runs, that the permission requests of every
-      config governing AFiles are trusted or accepted, and raises
-      EGocciaConfigTrustError with one report naming every config that is
-      not. Emits one config.permissions audit event per declaring config. }
-    procedure VerifyConfigPermissions(const AFiles: TStrings);
-    { As VerifyConfigPermissions, for config paths rather than files. }
+    { The trust half of ValidateFileConfigs, for config paths rather than
+      files: loads and validates each config, emits one config.permissions
+      audit event per config that requests a grant, and raises
+      EGocciaConfigTrustError with one report naming every config whose
+      requests are neither trusted nor accepted for the run. }
     procedure VerifyGoverningConfigs(const AConfigPaths: TStrings);
-    { VerifyConfigPermissions over ARawFiles, then ExpandMultifileFiles.
-      Returns a new list the caller owns. }
-    function PrepareRunFiles(const ARawFiles: TStringList): TStringList;
+    { ValidateFileConfigs for one input, such as STDIN_FILE_NAME or a
+      session governed by the working directory's config. }
+    procedure ValidateFileConfig(const AFileName: string);
     { Sends an event the application itself decides through the capability
       audit log, when one is open. Main thread only. }
     procedure EmitApplicationAudit(const AKind: TGocciaCapabilityKind;
@@ -161,9 +160,12 @@ type
       keys and malformed flag values. }
     function LoadFileConfig(const APath: string): TConfigEntryArray;
     { Loads and validates, on the calling thread, the config and permissions
-      block of every distinct config governing AFiles, so a config error stops
-      the run before any file executes (a usage error exits 2 through
-      Goccia.Application.Run) instead of failing one file among many. }
+      block of every distinct config governing AFiles (each file's nearest
+      config, else the root config), so a config error stops the run before
+      any file executes (a usage error exits 2 through Goccia.Application.Run)
+      instead of failing one file among many. In the same pass, checks that
+      each config's permission requests are trusted or accepted for the run
+      (VerifyGoverningConfigs). ExpandMultifileFiles calls it. }
     procedure ValidateFileConfigs(const AFiles: TStrings);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
@@ -789,23 +791,31 @@ end;
 
 procedure TGocciaCLIApplication.ValidateFileConfigs(const AFiles: TStrings);
 var
-  Seen: TStringList;
-  I, Index: Integer;
-  ConfigPath: string;
+  ConfigPaths: TStringList;
+  I: Integer;
 begin
-  Seen := TStringList.Create;
+  ConfigPaths := TStringList.Create;
   try
-    Seen.Sorted := True;
+    ConfigPaths.Sorted := True;
+    ConfigPaths.Duplicates := dupIgnore;
     for I := 0 to AFiles.Count - 1 do
-    begin
-      ConfigPath := DiscoverFileConfigPath(AFiles[I]);
-      if (ConfigPath = '') or Seen.Find(ConfigPath, Index) then
-        Continue;
-      Seen.Add(ConfigPath);
-      FilePermissionRequest(ConfigPath);
-    end;
+      ConfigPaths.Add(GoverningConfigPath(AFiles[I]));
+    VerifyGoverningConfigs(ConfigPaths);
   finally
-    Seen.Free;
+    ConfigPaths.Free;
+  end;
+end;
+
+procedure TGocciaCLIApplication.ValidateFileConfig(const AFileName: string);
+var
+  Files: TStringList;
+begin
+  Files := TStringList.Create;
+  try
+    Files.Add(AFileName);
+    ValidateFileConfigs(Files);
+  finally
+    Files.Free;
   end;
 end;
 
@@ -1131,30 +1141,6 @@ begin
   finally
     Checked.Free;
   end;
-end;
-
-procedure TGocciaCLIApplication.VerifyConfigPermissions(const AFiles: TStrings);
-var
-  ConfigPaths: TStringList;
-  I: Integer;
-begin
-  ConfigPaths := TStringList.Create;
-  try
-    ConfigPaths.Sorted := True;
-    ConfigPaths.Duplicates := dupIgnore;
-    for I := 0 to AFiles.Count - 1 do
-      ConfigPaths.Add(GoverningConfigPath(AFiles[I]));
-    VerifyGoverningConfigs(ConfigPaths);
-  finally
-    ConfigPaths.Free;
-  end;
-end;
-
-function TGocciaCLIApplication.PrepareRunFiles(
-  const ARawFiles: TStringList): TStringList;
-begin
-  VerifyConfigPermissions(ARawFiles);
-  Result := ExpandMultifileFiles(ARawFiles);
 end;
 
 procedure TGocciaCLIApplication.EmitApplicationAudit(
@@ -2213,8 +2199,8 @@ begin
       FRootConfigPath := '';
 
     { Every config's permission requests are checked against the trust store
-      (or -P / --ignore-config-permissions) before any file runs:
-      PrepareRunFiles and VerifyConfigPermissions. }
+      (or -P / --ignore-config-permissions) before any file runs, in the
+      ValidateFileConfigs pass. }
     CreateTrustGate;
 
     Validate;

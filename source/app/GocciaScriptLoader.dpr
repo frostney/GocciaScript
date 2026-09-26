@@ -147,7 +147,6 @@ type
     procedure RunScriptsParallel(const AFiles: TStringList;
       const AJobCount: Integer);
     procedure RunScripts(const APath: string);
-    procedure VerifyInputConfigPermissions(const APaths: TStringList);
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
@@ -1241,7 +1240,7 @@ begin
   begin
     RawFiles := FindAllFiles(APath, ScriptExtensions);
     try
-      Files := PrepareRunFiles(RawFiles);
+      Files := ExpandMultifileFiles(RawFiles);
     finally
       RawFiles.Free;
     end;
@@ -1270,7 +1269,7 @@ begin
       SinglePath := TStringList.Create;
       try
         SinglePath.Add(APath);
-        Files := PrepareRunFiles(SinglePath);
+        Files := ExpandMultifileFiles(SinglePath);
       finally
         SinglePath.Free;
       end;
@@ -1297,40 +1296,6 @@ begin
   end
   else
     raise Exception.Create('Path not found: ' + APath);
-end;
-
-{ Checks the permission requests of every config governing any input before
-  the first one runs: inputs run one after another, so checking each as it
-  starts would let an earlier input run before a later one is refused. }
-procedure TScriptLoaderApp.VerifyInputConfigPermissions(
-  const APaths: TStringList);
-var
-  Files, Found: TStringList;
-  I: Integer;
-begin
-  Files := TStringList.Create;
-  try
-    if APaths.Count = 0 then
-      Files.Add(STDIN_FILE_NAME);
-    for I := 0 to APaths.Count - 1 do
-      if IsStdinPath(APaths[I]) then
-        Files.Add(STDIN_FILE_NAME)
-      else if DirectoryExists(APaths[I]) then
-      begin
-        Found := FindAllFiles(APaths[I], ScriptExtensions);
-        try
-          Files.AddStrings(Found);
-        finally
-          Found.Free;
-        end;
-      end
-      else if FileExists(APaths[I]) then
-        Files.Add(APaths[I]);
-      { A missing path is reported by the run itself. }
-    VerifyConfigPermissions(Files);
-  finally
-    Files.Free;
-  end;
 end;
 
 { TScriptLoaderApp - ExecuteWithPaths }
@@ -1367,7 +1332,10 @@ begin
       '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
 
-  VerifyInputConfigPermissions(APaths);
+  { File inputs are checked in the ValidateFileConfigs pass; source from
+    stdin is governed by the working directory's config. }
+  if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
+    ValidateFileConfig(STDIN_FILE_NAME);
 
   if IsJsonOutput then
   begin
@@ -1432,7 +1400,7 @@ begin
         else
           raise Exception.Create('Path not found: ' + APaths[I]);
       end;
-      Files := PrepareRunFiles(RawFiles);
+      Files := ExpandMultifileFiles(RawFiles);
       try
         RunJSONFiles(Files);
       finally
@@ -1471,8 +1439,9 @@ begin
             Files.Free;
           end;
         end
-        else
+        else if FileExists(APaths[I]) then
           RawFiles.Add(APaths[I]);
+      { A missing path is reported by RunScripts itself. }
       ValidateFileConfigs(RawFiles);
     finally
       RawFiles.Free;
