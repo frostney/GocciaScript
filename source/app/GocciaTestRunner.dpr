@@ -66,7 +66,8 @@ uses
 
   Goccia.TestRunner.SnapshotHost,
 
-  FileUtils;
+  FileUtils,
+  HostOutputFiles;
 
 const
   { Default per-file execution timeout in milliseconds. Applied when the
@@ -557,6 +558,7 @@ begin
     'Per-describe timeout in ms (0 disables). Aborts the suite and continues.');
   { A value other than json or compact-json is a file path. }
   FOutputFile.WritesHostFile := True;
+  FOutputFile.AcceptsOutputModes := True;
   FUpdateSnapshots := AddFlag('update-snapshots',
     'Create, update, and prune snapshots');
   FUpdateSnapshots.ShortName := 'u';
@@ -584,26 +586,34 @@ begin
 end;
 
 { Globals are injected before the runtime extensions attach, so a module that
-  reads one at import time sees it no matter where it sits in the import order. }
+  reads one at import time sees it no matter where it sits in the import order.
+  Globals files the command line names are the user's own, read as host
+  files; those a config names are read under the suite's capability set
+  (InjectConfiguredGlobals). }
 procedure TTestRunnerApp.ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
 var
   I: Integer;
+  Entries: TConfigEntryArray;
   Pair: TScriptLoaderGlobalPair;
 begin
-  for I := 0 to FGlobalFiles.Values.Count - 1 do
-    if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
-    begin
-      if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
-      else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
-        AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
+  Entries := ConfigNamedEntries(FGlobalFiles);
+  for I := 0 to High(Entries) do
+    InjectConfiguredGlobals(AEngine, Entries[I].Value, Entries[I].SourcePath);
+  if FGlobalFiles.FromCommandLine then
+    for I := 0 to FGlobalFiles.Values.Count - 1 do
+      if IsStructuredGlobalsFile(FGlobalFiles.Values[I]) then
+      begin
+        if IsYAMLGlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromYAML(ReadFileText(FGlobalFiles.Values[I]))
+        else if IsJSON5GlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromJSON5(ReadFileText(FGlobalFiles.Values[I]))
+        else if IsTOMLGlobalsFile(FGlobalFiles.Values[I]) then
+          AEngine.InjectGlobalsFromTOML(ReadFileText(FGlobalFiles.Values[I]))
+        else
+          AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
+      end
       else
-        AEngine.InjectGlobalsFromJSON(ReadFileText(FGlobalFiles.Values[I]));
-    end
-    else
-      AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
+        AEngine.InjectGlobalsFromModule(FGlobalFiles.Values[I]);
 
   for I := 0 to FInlineGlobals.Values.Count - 1 do
   begin
@@ -2123,7 +2133,7 @@ begin
         WriteLn(Lines[I]);
     end
     else
-      Lines.SaveToFile(AFileName);
+      SaveStringsToHostFile(Lines, AFileName);
   finally
     Lines.Free;
   end;

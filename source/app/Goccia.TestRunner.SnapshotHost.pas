@@ -21,7 +21,7 @@ type
     FInlineSnapshotGeneration: UInt64;
     FInlineEdits: TList<TGocciaInlineSnapshotEdit>;
 
-    procedure WriteUTF8Text(const APath: string; const AContent: string);
+    procedure RequireRealSnapshotPath;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -52,6 +52,7 @@ uses
   Math,
   SysUtils,
 
+  FileUtils,
   TextEncoding,
   TextSemantics,
 
@@ -830,8 +831,14 @@ begin
     FBackingSourcePath := ASourcePath
   else
     FBackingSourcePath := MultifileOriginalPath(ASourcePath);
-  FSnapshotPath := IncludeTrailingPathDelimiter(ExtractFileDir(ASourcePath)) +
-    '__snapshots__' + PathDelim + ExtractFileName(ASourcePath) + '.snap';
+  { A bare file name sits in the working directory, not at the root. }
+  if ExtractFileDir(ASourcePath) = '' then
+    FSnapshotPath := '__snapshots__' + PathDelim +
+      ExtractFileName(ASourcePath) + '.snap'
+  else
+    FSnapshotPath := IncludeTrailingPathDelimiter(
+      ExtractFileDir(ASourcePath)) + '__snapshots__' + PathDelim +
+      ExtractFileName(ASourcePath) + '.snap';
   CriticalSectionEnter(InlineSnapshotWriteLock);
   try
     FInlineSnapshotGeneration := PendingInlineGeneration;
@@ -855,6 +862,7 @@ end;
 function TGocciaTestRunnerSnapshotHost.ReadSnapshotFile(
   out AContent: string): Boolean;
 begin
+  RequireRealSnapshotPath;
   Result := FileExists(FSnapshotPath);
   if Result then
     AContent := ReadUTF8FileText(FSnapshotPath)
@@ -862,20 +870,46 @@ begin
     AContent := '';
 end;
 
-procedure TGocciaTestRunnerSnapshotHost.WriteUTF8Text(const APath: string;
-  const AContent: string);
+{ A snapshot file sits in the repository, so a clone can commit it, or its
+  __snapshots__ directory, as a symbolic link. Following one would carry the
+  runner's read, write, or delete to wherever it points, outside the
+  project; the runner refuses instead. }
+procedure TGocciaTestRunnerSnapshotHost.RequireRealSnapshotPath;
+var
+  Directory: string;
 begin
-  WriteUTF8TextFile(APath, AContent);
+  Directory := ExtractFileDir(FSnapshotPath);
+  if HostPathIsSymlink(Directory) then
+    raise Exception.CreateFmt('Refusing to use snapshot directory %s: it is ' +
+      'a symbolic link', [Directory]);
+  if HostPathIsSymlink(FSnapshotPath) then
+    raise Exception.CreateFmt('Refusing to use snapshot file %s: it is a ' +
+      'symbolic link', [FSnapshotPath]);
 end;
 
 procedure TGocciaTestRunnerSnapshotHost.WriteSnapshotFile(
   const AContent: string);
+var
+  Directory, Error: string;
 begin
-  WriteUTF8Text(FSnapshotPath, string(AContent));
+  RequireRealSnapshotPath;
+  Directory := ExtractFileDir(FSnapshotPath);
+  if not DirectoryExists(Directory) and not ForceDirectories(Directory) then
+    raise Exception.Create('Cannot create snapshot directory: ' + Directory);
+  RequireRealSnapshotPath;
+  { Written beside the file and renamed over it, so a link at the name is
+    replaced rather than followed, and the file is never left half-written.
+    The temporary is per thread: parallel workers share the process. }
+  if not ReplaceHostFile(FSnapshotPath, FSnapshotPath + '.' +
+       IntToStr(GetProcessID) + '.' + IntToStr(PtrUInt(GetThreadID)) + '.tmp',
+       EncodeUTF8WithReplacement(string(AContent)), Error) then
+    raise Exception.CreateFmt('Cannot write snapshot file %s: %s',
+      [FSnapshotPath, Error]);
 end;
 
 procedure TGocciaTestRunnerSnapshotHost.DeleteSnapshotFile;
 begin
+  RequireRealSnapshotPath;
   if FileExists(FSnapshotPath) and not SysUtils.DeleteFile(FSnapshotPath) then
     raise Exception.Create('Cannot delete snapshot file: ' + FSnapshotPath);
 end;

@@ -1870,11 +1870,11 @@ console.log("Virtual module config precedence and inherited manifest origins..."
       'import choice from "host:choice"; import inherited from "host:inherited"; choice + inherited;\n',
     );
 
-    // base/ is outside the entry's project (app/), so the manifest its config
-    // names needs a read grant, like any other read outside the project.
+    // base/goccia.json names modules.json beside itself: judged against the
+    // config that names it, it needs no grant though it is outside app/.
     const perFile = runCwd(
       RUNNER,
-      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json"), `--allow-read=${baseDir}`],
+      [join(appDir, "entry.mjs"), "--print", "--config", join(tmp, "root.json")],
       tmp,
     );
     if (!containsLine(perFile.stdout, "12"))
@@ -1884,7 +1884,6 @@ console.log("Virtual module config precedence and inherited manifest origins..."
       RUNNER,
       [
         join(appDir, "entry.mjs"),
-        `--allow-read=${baseDir}`,
         "--print",
         "--config",
         join(tmp, "root.json"),

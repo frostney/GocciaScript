@@ -94,6 +94,7 @@ uses
   Math,
   SysUtils,
 
+  HostOutputFiles,
   NumericText,
   TextEncoding,
   TimingUtils,
@@ -907,7 +908,7 @@ end;
 
 procedure TBenchmarkReporter.WriteToFile(const AFileName: string);
 begin
-  FOutput.SaveToFile(AFileName);
+  SaveStringsToHostFile(FOutput, AFileName);
 end;
 
 procedure TBenchmarkReporter.WriteToStdOut;

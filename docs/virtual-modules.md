@@ -77,8 +77,10 @@ Who named the manifest decides how much it may do:
   paths, of any format) is the repository's choice, so it runs under the
   capability set of the script the config governs
   ([ADR 0122](adr/0122-unified-capability-model.md)). Reading it is a guest
-  read: a manifest inside the project is part of the module graph, anything
-  else needs a read grant, and a read deny refuses it with `PermissionDenied`
+  read, judged with the directory of the config that names it as the project:
+  a manifest inside that directory is covered as the module graph is, so a
+  root config's manifest also serves a subfolder with a config of its own;
+  anything else needs a read grant; and a read deny refuses it with `PermissionDenied`
   and a `read.file` audit event. A JavaScript or TypeScript manifest is
   evaluated in an engine of its own with that capability set, so its imports
   are judged like the script's even while it loads, and whatever it leaves on

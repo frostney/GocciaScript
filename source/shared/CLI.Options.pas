@@ -50,6 +50,7 @@ type
     FCommandLineOnly: Boolean;
     FRequiresTrust: Boolean;
     FWritesHostFile: Boolean;
+    FAcceptsOutputModes: Boolean;
     FConfigIgnored: Boolean;
     FAcceptsObject: Boolean;
     FConfigHint: string;
@@ -111,6 +112,10 @@ type
       set it to a path inside the config's own directory. }
     property WritesHostFile: Boolean read FWritesHostFile
       write FWritesHostFile;
+    { With WritesHostFile: the values json and compact-json name an output
+      mode, not a file. }
+    property AcceptsOutputModes: Boolean read FAcceptsOutputModes
+      write FAcceptsOutputModes;
   end;
 
   TOptionArray = array of TOptionBase;
@@ -369,6 +374,7 @@ begin
   FCommandLineOnly := False;
   FRequiresTrust := False;
   FWritesHostFile := False;
+  FAcceptsOutputModes := False;
   FConfigIgnored := False;
   FAcceptsObject := False;
   FConfigHint := '';

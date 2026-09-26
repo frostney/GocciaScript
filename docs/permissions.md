@@ -416,18 +416,27 @@ allow-ffi = ["../fixtures/ffi"]
   value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
-- A module manifest a config names (`"modules"`) is read and evaluated under
-  the capability set of the script the config governs: inside the project it
-  is part of the module graph, elsewhere it needs a read grant, and a
-  JavaScript or TypeScript manifest runs in an engine of its own (see
-  [Virtual Modules](virtual-modules.md)). `--modules` on the command line
-  stays a host request.
+- A file a config names as an input — a module manifest (`"modules"`), a
+  globals file or module (`"globals"`), or a host-environment module
+  (`"host-environment"`) — is read under the capability set of the script
+  the config governs, with the config's own directory as the project: inside
+  that directory it is covered as the module graph is, elsewhere it needs a
+  read grant. A JavaScript or TypeScript manifest or globals module runs in an
+  engine of its own and only data crosses back; a host-environment module is a
+  guest module of the script's engine, never host-owned (see
+  [Virtual Modules](virtual-modules.md)). The same options on the command line
+  stay host requests.
 - A config writes host files only inside its own directory: `log`,
   `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
   and the `sandbox` section's `copy-rw` inputs and `diff-file` resolve against
   the declaring file and fail with status 1 if they lead outside it, through a
   symbolic link or otherwise (see
-  [Build System](build-system.md#configuration-file-gocciajson)).
+  [Build System](build-system.md#configuration-file-gocciajson)). The check
+  holds until the write: the file is opened from the config's directory, held
+  to the identity it had when the config was read, one directory at a time
+  without following links, so a directory swapped for a link while the script
+  runs refuses the write instead of redirecting it (for the sandbox's inputs
+  and diff file, see [Write-back](#write-back)).
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 
@@ -579,7 +588,9 @@ The block is lexical, so replacing a trusted path with a symbolic link would
 keep its hash while pointing the grant somewhere else. Each entry therefore
 also records, outside the hash, where every path scope (`read` and `ffi`
 paths, allow and deny, and the directory of `node_modules=<dir>`) resolved
-when it was trusted, or that nothing existed there. A scope that now resolves
+when it was trusted: the scope with links resolved, or, when it did not exist,
+its deepest existing ancestor resolved plus the rest of the path. A scope that
+now resolves
 to a different place makes the config changed since trusted, and the report
 and `--list-trusted` show it:
 
@@ -589,9 +600,11 @@ and `--list-trusted` show it:
   ~ target of /home/u/project/data: /home/u/project/data -> /etc
 ```
 
-A scope that did not exist when trusted may appear later without a change, as
-a build output does, unless it resolves outside its own path. A scope that no
-longer exists is not a change: it grants nothing.
+So re-pointing any existing part of a scope's path is a change, even for a
+scope that never existed: `allow-read: ./cfg/ssh` with no `cfg/` changes when
+`cfg` appears as a link to `/etc`. The scope itself appearing in place, as a
+build output does, resolves where it was recorded and is not a change, and
+neither is a scope that disappears.
 
 ### The store
 
@@ -623,13 +636,14 @@ and only when its hash matches. The directory is created private to the user
 (`0700`), and the per-user default directory is made private again if it is
 not; a `--trust-store` directory is left as it is. The file is written `0600`
 from creation, before it replaces the store. A run reads the store once and
-never locks it. A writer takes an exclusive `trust.json.lock` (retrying for 2
-seconds, then failing with an error that names the lock file), applies its
-changes to the store as it is on disk at that moment, and replaces the file in
-one rename, so concurrent readers and writers always see a whole store. The
-lock records its writer's process ID and start time; a lock whose process is
-gone, or that is older than 60 seconds, was left by a writer that crashed, and
-is removed with a warning.
+never locks it. A writer takes an exclusive operating-system lock on
+`trust.json.lock` (`flock` on Linux and macOS, `LockFileEx` on Windows),
+retrying for 2 seconds and then failing with an error that names the lock
+file. It applies its changes to the store as it is on disk at that moment and
+replaces the file in one rename, so concurrent readers and writers always see
+a whole store and no writer's change is lost. The system releases the lock
+when its writer exits, even by crashing, so a `trust.json.lock` left on disk
+never blocks the next writer.
 
 A missing store is empty. A store that is not JSON, that has the wrong shape
 (anything but the schema above: a missing or non-integer `version`, a
@@ -724,7 +738,9 @@ Sandbox mode sees only the virtual filesystem. A root config's `modules`,
 `module`, `globals`, `global`, and `host-environment`, which read host files,
 are not applied: each gets one warning, such as
 `Warning: <config> sets "modules", which GocciaRunner sandbox mode does not
-apply; ignoring it`. The command line's `--module` and `--modules` still apply.
+apply; ignoring it`. The command line's `--module` and `--modules` still
+apply: a module or manifest named there is the user's explicit choice, not the
+repository's.
 
 ### Write-back
 

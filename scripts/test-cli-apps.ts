@@ -7572,7 +7572,8 @@ await section("Runner sandbox mode: rejects inputs and options it cannot run..."
 
 await section("Runner sandbox mode: write-back and the diff file refuse a directory swapped for a link during the run...", async () => {
   if (process.platform === "win32") return;
-  for (const mode of ["interpreted", "bytecode"]) {
+  // Named on the command line, and by a trusted config's sandbox section.
+  for (const [mode, fromConfig] of [["interpreted", false], ["bytecode", false], ["interpreted", true], ["bytecode", true]] as const) {
     const tmp = realpathSync(makeTmp());
     try {
       mkdirSync(join(tmp, "out"));
@@ -7585,9 +7586,11 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
         'fs.writeFileSync("/out/a.txt", "PWNED");',
         'fs.writeFileSync("/out/b.txt", "PWNED2");',
       ].join("\n"));
+      if (fromConfig)
+        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"], "diff-file": "dd/diff.json" } }));
       const proc = Bun.spawn(
         [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module", `--mode=${mode}`,
-          "--copy-rw", "out", "--diff-file=dd/diff.json"],
+          ...(fromConfig ? ["-P"] : ["--copy-rw", "out", "--diff-file=dd/diff.json"])],
         { cwd: tmp, stdout: "pipe", stderr: "pipe" },
       );
       // While the guest runs: the copied directory and the diff file's

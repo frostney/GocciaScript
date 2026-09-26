@@ -34,10 +34,14 @@ type
     FAuditLog: TStringOption;
     FMultifile: TFlagOption;
     FConfig: TStringOption;
-    FLogFileHandle: TextFile;
+    { The --log file, written through a buffer so a chatty script does not
+      cost a write per line; flushed when full and when the log closes. }
+    FLogStream: TStream;
+    FLogBuffer: TBytes;
+    FLogBuffered: Integer;
     FLogLock: TGocciaCriticalSection;
     FLogFileOpen: Boolean;
-    FAuditLogStream: TFileStream;
+    FAuditLogStream: TStream;
     FAuditLogLock: TGocciaCriticalSection;
     FAuditLogOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
@@ -49,6 +53,7 @@ type
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
     FRootConfigExplicit: Boolean;
+    FRootConfigEntries: TConfigEntryArray;
     FWarnLock: TGocciaCriticalSection;
     FWarned: TStringList;
     FTrust: TRepeatableOption;
@@ -257,6 +262,11 @@ type
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
     { The applied root config, or ''. }
     property RootConfigPath: string read FRootConfigPath;
+    { The root config's entries for AOption when the root config set it
+      (not the command line), each with the file that declared it: the
+      inputs a config names, which are read under the script's capability
+      set rather than as the user's own. Empty otherwise. }
+    function ConfigNamedEntries(const AOption: TOptionBase): TConfigEntryArray;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
     property SandboxOptions: TGocciaSandboxOptions read FSandboxOptions;
@@ -269,6 +279,18 @@ type
 
 { Registers the JSON5 and TOML config parsers. Idempotent. }
 procedure EnsureConfigParsersRegistered;
+
+{ Injects the globals of a file or module a config at AConfigPath names
+  (AWritten, relative to the config): read under AEngine's capability set
+  with the config's directory as the project; a data file is parsed, and a
+  module runs in an engine of its own whose named exports cross as data. }
+procedure InjectConfiguredGlobals(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+{ Configures AEngine's clock and random source from a host-environment module
+  a config at AConfigPath names: read under AEngine's capability set, loaded
+  as a guest module of AEngine, never host-owned. }
+procedure ConfigureConfiguredHostEnvironment(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
 
 { Why a config at AConfigPath may not have a host file written at APath, or
   '' when it may: the path is a symbolic link, or it resolves (through any
@@ -306,6 +328,7 @@ uses
   CLI.Parser,
   CLI.Units,
   FileUtils,
+  HostOutputFiles,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
@@ -316,6 +339,7 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment.JavaScript,
   Goccia.JSON,
   Goccia.JSON.Utils,
   Goccia.JSON5,
@@ -327,6 +351,7 @@ uses
   Goccia.Profiler,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
   Goccia.TextFiles,
@@ -335,6 +360,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
+  Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.YAML;
@@ -1324,9 +1350,10 @@ begin
        Option.FromCommandLine or not (Option is TStringOption) then
       Continue;
     Value := TStringOption(Option).Value;
-    { Not a path: an output mode, or "derive it from the input". }
-    if (Value = '') or (Value = OUTPUT_MODE_JSON) or
-       (Value = OUTPUT_MODE_COMPACT_JSON) then
+    { Not a path: "derive it from the input", or an output mode where the
+      option has them (the test runner's --output). }
+    if (Value = '') or (Option.AcceptsOutputModes and
+       ((Value = OUTPUT_MODE_JSON) or (Value = OUTPUT_MODE_COMPACT_JSON))) then
       Continue;
     Key := Option.LongName;
     if (Option.ConfigName <> '') and
@@ -1346,8 +1373,53 @@ begin
         'config may only write inside its own directory (pass --%s on the ' +
         'command line to write elsewhere)',
         [Entry.SourcePath, Key, Path, Problem, Option.LongName]);
+    { The check above is the state now; the write may come at the end of the
+      run. Pin the route so the write cannot be carried elsewhere by a
+      directory swapped for a link in between (HostOutputFiles). }
+    RegisterConfinedHostOutput(Path, CanonicalCapabilityPath(Path),
+      CanonicalCapabilityPath(ExtractFileDir(Entry.SourcePath)));
     TStringOption(Option).Apply(Path);
   end;
+end;
+
+function TGocciaCLIApplication.ConfigNamedEntries(
+  const AOption: TOptionBase): TConfigEntryArray;
+
+  { The root config entry that supplied AValue, so it carries the file that
+    declared it (a base config under `extends` keeps its own). }
+  procedure AddEntryFor(const AValue: string);
+  var
+    I: Integer;
+  begin
+    for I := 0 to High(FRootConfigEntries) do
+      if ((FRootConfigEntries[I].Key = AOption.LongName) or
+          ((AOption.ConfigName <> '') and
+           (FRootConfigEntries[I].Key = AOption.ConfigName))) and
+         (FRootConfigEntries[I].Value = AValue) then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := FRootConfigEntries[I];
+        Exit;
+      end;
+  end;
+
+var
+  I: Integer;
+begin
+  Result := nil;
+  if (not AOption.Present) or AOption.FromCommandLine then
+    Exit;
+  { Walk the values the option holds, not the raw entries, so precedence
+    across `extends` (an empty array resetting a base's list) is the one
+    ApplyConfigEntries already settled. }
+  if AOption is TRepeatableOption then
+  begin
+    for I := 0 to TRepeatableOption(AOption).Values.Count - 1 do
+      AddEntryFor(TRepeatableOption(AOption).Values[I]);
+  end
+  else if (AOption is TStringOption) and
+          (TStringOption(AOption).Value <> '') then
+    AddEntryFor(TStringOption(AOption).Value);
 end;
 
 procedure TGocciaCLIApplication.EmitApplicationAudit(
@@ -1608,20 +1680,24 @@ end;
 procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
   const ADefinition, ABaseAddress: string); forward;
 
-{ A manifest a config file names is the repository's choice, not the user's,
-  so it is read under the capability set of the script the config governs
-  (ADR 0122): a file inside the project is part of the module graph, anything
-  else needs a read grant, and a read deny refuses it. ASpecifier is the path
-  as the config wrote it, which is all the refusal names. }
-procedure CheckConfiguredManifestRead(const AEngine: TGocciaEngine;
-  const APath, ASpecifier: string);
+{ ── Inputs a config file names ──────────────────────────────── }
+
+{ A module manifest, a globals file or module, or a host-environment module a
+  config file names is the repository's choice, not the user's, so it is read
+  under the capability set of the script the config governs (ADR 0122). The
+  config's own directory plays the project's part: a file inside it is
+  covered as the module graph is, anything else needs a read grant, and a read
+  deny refuses it. ASpecifier is the path as the config wrote it, which is all
+  the refusal names. }
+procedure CheckConfigInputRead(const AEngine: TGocciaEngine;
+  const APath, ASpecifier, AConfigPath: string);
 var
   CanonicalPath: string;
-  InProject: Boolean;
+  InConfigDirectory: Boolean;
 begin
   CanonicalPath := CanonicalCapabilityPath(APath);
-  InProject := (AEngine.ProjectRoot <> '') and
-    IsPathWithinScope(CanonicalPath, AEngine.ProjectRoot);
+  InConfigDirectory := IsPathWithinScope(CanonicalPath,
+    CanonicalCapabilityPath(ExtractFileDir(AConfigPath)));
   if AEngine.Capabilities.DeniesPath(gcRead, CanonicalPath) then
   begin
     AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
@@ -1629,12 +1705,13 @@ begin
     ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
       Format(SSuggestReadDenied, [CanonicalPath]));
   end;
-  if InProject then
+  if InConfigDirectory then
     Exit;
   if not AEngine.Capabilities.AllowsPath(gcRead, CanonicalPath) then
   begin
     AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
-      'the path is outside the project and no read grant covers it');
+      'the path is outside the config''s directory and no read grant ' +
+      'covers it');
     ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
       Format(SSuggestReadNotGranted, [CanonicalPath,
         ExtractFileDir(CanonicalPath)]));
@@ -1643,21 +1720,38 @@ begin
     'a read grant covers the path');
 end;
 
-{ A JavaScript or TypeScript manifest a config file names runs in an engine
-  of its own, with the capability set and project of the script it governs:
-  its imports are guest reads, judged like the script's, and whatever it
-  leaves on its global object stays there. Only its default export, as data,
-  reaches the script's engine. }
-procedure InjectModulesFromIsolatedManifest(const AEngine: TGocciaEngine;
-  const APath: string);
+function ConfigInputPath(const AWritten, AConfigPath: string): string;
+begin
+  if IsAbsoluteFilePath(AWritten) then
+    Result := ExpandFileName(AWritten)
+  else
+    Result := ExpandFileName(IncludeTrailingPathDelimiter(
+      ExtractFileDir(AConfigPath)) + AWritten);
+end;
+
+type
+  { What crosses back from an isolated module: its default export, or all of
+    its named exports as one object. }
+  TIsolatedModuleResult = (imrDefaultExport, imrNamedExports);
+
+{ Evaluates the JavaScript or TypeScript module at APath in an engine of its
+  own with AEngine's capability set, the config's directory as its project,
+  and AEngine's language settings: its imports are guest reads, judged like
+  the script's, and whatever it leaves on its global object stays in that
+  engine. Returns the requested exports as JSON, so only data reaches the
+  script. AModulePath receives the module's canonical path. }
+function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
+  const APath, AConfigPath: string; const AResult: TIsolatedModuleResult;
+  out AModulePath: string): string;
 var
   Isolated: TGocciaEngine;
   Executor: TGocciaInterpreterExecutor;
   Source: TStringList;
   Module: TGocciaModule;
-  DefaultValue: TGocciaValue;
+  ExportValue, ExportedValue: TGocciaValue;
+  NamedExports: TGocciaObjectValue;
+  ExportName: string;
   Stringifier: TGocciaJSONStringifier;
-  ManifestJSON, ModulePath: string;
 begin
   Source := TStringList.Create;
   Executor := TGocciaInterpreterExecutor.Create;
@@ -1665,7 +1759,7 @@ begin
     Isolated := TGocciaEngine.Create(APath, Source, Executor,
       AEngine.Capabilities);
     try
-      Isolated.ProjectRoot := AEngine.ProjectRoot;
+      Isolated.ProjectRoot := ExtractFileDir(AConfigPath);
       Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
       Isolated.Preprocessors := AEngine.Preprocessors;
       Isolated.Compatibility := AEngine.Compatibility;
@@ -1675,22 +1769,47 @@ begin
       { The filesystem content provider, with every read it makes checked. }
       AttachRuntime(Isolated);
       Module := Isolated.ModuleLoader.LoadModule(APath, APath);
-      if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
-        raise EArgumentException.Create(
-          'Virtual modules manifest module must have a default export.');
-      ModulePath := Module.Path;
+      AModulePath := Module.Path;
+      if AResult = imrDefaultExport then
+      begin
+        if not Module.TryGetExportValue(KEYWORD_DEFAULT, ExportValue) then
+          raise EArgumentException.Create(
+            'Virtual modules manifest module must have a default export.');
+      end
+      else
+      begin
+        NamedExports := TGocciaObjectValue.Create;
+        if TGarbageCollector.Instance <> nil then
+          TGarbageCollector.Instance.AddTempRoot(NamedExports);
+        for ExportName in Module.GetExportNames do
+          if Module.TryGetExportValue(ExportName, ExportedValue) then
+          begin
+            { Only data crosses into the script's engine. }
+            if ExportedValue is TGocciaFunctionBase then
+              raise EArgumentException.CreateFmt(
+                '%s: export "%s" is a function; a globals module a config ' +
+                'names may only export data (pass it with --globals on the ' +
+                'command line to inject code)', [APath, ExportName]);
+            NamedExports.SetProperty(ExportName, ExportedValue);
+          end;
+        ExportValue := NamedExports;
+      end;
       if TGarbageCollector.Instance <> nil then
-        TGarbageCollector.Instance.AddTempRoot(DefaultValue);
+        TGarbageCollector.Instance.AddTempRoot(ExportValue);
       try
         Stringifier := TGocciaJSONStringifier.Create;
         try
-          ManifestJSON := Stringifier.Stringify(DefaultValue);
+          Result := Stringifier.Stringify(ExportValue);
         finally
           Stringifier.Free;
         end;
       finally
         if TGarbageCollector.Instance <> nil then
-          TGarbageCollector.Instance.RemoveTempRoot(DefaultValue);
+        begin
+          TGarbageCollector.Instance.RemoveTempRoot(ExportValue);
+          if AResult = imrNamedExports then
+            TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+        end;
       end;
     finally
       Isolated.Free;
@@ -1699,21 +1818,79 @@ begin
     Executor.Free;
     Source.Free;
   end;
-  AEngine.InjectModulesFromJSON(ManifestJSON, ModulePath);
+end;
+
+function IsScriptModuleFile(const APath: string): Boolean;
+var
+  Extension: string;
+begin
+  Extension := LowerCase(ExtractFileExt(APath));
+  Result := (Extension = EXT_JS) or (Extension = EXT_MJS) or
+    (Extension = EXT_TS);
 end;
 
 { A manifest path from a config file's "modules" key. }
 procedure InjectConfiguredManifest(const AEngine: TGocciaEngine;
-  const APath, ASpecifier: string);
+  const APath, ASpecifier, AConfigPath: string);
 var
-  Extension: string;
+  ModulePath: string;
+  ManifestJSON: string;
 begin
-  CheckConfiguredManifestRead(AEngine, APath, ASpecifier);
-  Extension := LowerCase(ExtractFileExt(APath));
-  if (Extension = '.js') or (Extension = '.mjs') or (Extension = '.ts') then
-    InjectModulesFromIsolatedManifest(AEngine, APath)
+  CheckConfigInputRead(AEngine, APath, ASpecifier, AConfigPath);
+  if IsScriptModuleFile(APath) then
+  begin
+    ManifestJSON := EvaluateIsolatedConfigModule(AEngine, APath, AConfigPath,
+      imrDefaultExport, ModulePath);
+    AEngine.InjectModulesFromJSON(ManifestJSON, ModulePath);
+  end
   else
     InjectModulesFromManifestFile(AEngine, APath);
+end;
+
+procedure InjectConfiguredGlobals(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+var
+  Path, ModulePath: string;
+begin
+  Path := ConfigInputPath(AWritten, AConfigPath);
+  CheckConfigInputRead(AEngine, Path, AWritten, AConfigPath);
+  if IsStructuredGlobalsFile(Path) then
+  begin
+    if IsYAMLGlobalsFile(Path) then
+      AEngine.InjectGlobalsFromYAML(ReadFileText(Path))
+    else if IsJSON5GlobalsFile(Path) then
+      AEngine.InjectGlobalsFromJSON5(ReadFileText(Path))
+    else if IsTOMLGlobalsFile(Path) then
+      AEngine.InjectGlobalsFromTOML(ReadFileText(Path))
+    else
+      AEngine.InjectGlobalsFromJSON(ReadFileText(Path));
+  end
+  else
+    AEngine.InjectGlobalsFromJSON(EvaluateIsolatedConfigModule(AEngine, Path,
+      AConfigPath, imrNamedExports, ModulePath));
+end;
+
+procedure ConfigureConfiguredHostEnvironment(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+var
+  Path, ScriptProjectRoot: string;
+  Module: TGocciaModule;
+begin
+  Path := ConfigInputPath(AWritten, AConfigPath);
+  CheckConfigInputRead(AEngine, Path, AWritten, AConfigPath);
+  { The providers are functions the engine calls for as long as it runs, so
+    they cannot cross from another engine as data. The module is a guest
+    module of the script's own engine instead: never host-owned, so its
+    imports, now and later, are guest reads under the script's capability
+    set, with the config's directory as its project while it loads. }
+  ScriptProjectRoot := AEngine.ProjectRoot;
+  AEngine.ProjectRoot := ExtractFileDir(AConfigPath);
+  try
+    Module := AEngine.ModuleLoader.LoadModule(Path, AEngine.SourcePath);
+  finally
+    AEngine.ProjectRoot := ScriptProjectRoot;
+  end;
+  ConfigureHostEnvironmentFromLoadedModule(AEngine, Module);
 end;
 
 procedure InjectModulesFromConfigFile(const AEngine: TGocciaEngine;
@@ -1793,7 +1970,7 @@ begin
         if not IsAbsoluteFilePath(ItemPath) then
           ItemPath := ExpandFileName(
             IncludeTrailingPathDelimiter(ExtractFilePath(APath)) + ItemPath);
-        InjectConfiguredManifest(AEngine, ItemPath, Written);
+        InjectConfiguredManifest(AEngine, ItemPath, Written, APath);
       end
       else if ModulesValue is TGocciaArrayValue then
       begin
@@ -1810,7 +1987,7 @@ begin
             ItemPath := ExpandFileName(
               IncludeTrailingPathDelimiter(ExtractFilePath(APath)) +
               ItemPath);
-          InjectConfiguredManifest(AEngine, ItemPath, Written);
+          InjectConfiguredManifest(AEngine, ItemPath, Written, APath);
         end;
       end
       else if ModulesValue is TGocciaObjectValue then
@@ -1993,24 +2170,47 @@ begin
   end;
 end;
 
+const
+  LOG_BUFFER_BYTES = 64 * 1024;
+
 procedure TGocciaCLIApplication.HandleConsoleLog(const AMethod, ALine: string);
+var
+  Line: TBytes;
 begin
+  Line := EncodeUTF8WithReplacement('[' + AMethod + '] ' + ALine +
+    LineEnding);
   CriticalSectionEnter(FLogLock);
   try
-    WriteLn(FLogFileHandle, '[' + AMethod + '] ' + ALine);
+    if FLogBuffered + Length(Line) > Length(FLogBuffer) then
+    begin
+      if FLogBuffered > 0 then
+        FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
+      FLogBuffered := 0;
+    end;
+    if Length(Line) > Length(FLogBuffer) then
+      FLogStream.WriteBuffer(Line[0], Length(Line))
+    else if Length(Line) > 0 then
+    begin
+      Move(Line[0], FLogBuffer[FLogBuffered], Length(Line));
+      Inc(FLogBuffered, Length(Line));
+    end;
   finally
     CriticalSectionLeave(FLogLock);
   end;
 end;
 
+{ Opened through CreateHostOutputStream, so a log a config names is created
+  where the config was allowed to put it even if a directory on the way was
+  swapped after the config was read. }
 procedure TGocciaCLIApplication.OpenLogFile;
 begin
   if FLogFileOpen then
     Exit;
   CriticalSectionInit(FLogLock);
   try
-    AssignFile(FLogFileHandle, FLog.Value);
-    Rewrite(FLogFileHandle);
+    FLogStream := CreateHostOutputStream(FLog.Value);
+    SetLength(FLogBuffer, LOG_BUFFER_BYTES);
+    FLogBuffered := 0;
     FLogFileOpen := True;
   except
     CriticalSectionDone(FLogLock);
@@ -2023,8 +2223,12 @@ begin
   if not FLogFileOpen then
     Exit;
   try
-    CloseFile(FLogFileHandle);
+    if FLogBuffered > 0 then
+      FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
   finally
+    FreeAndNil(FLogStream);
+    FLogBuffer := nil;
+    FLogBuffered := 0;
     FLogFileOpen := False;
     CriticalSectionDone(FLogLock);
   end;
@@ -2051,7 +2255,7 @@ begin
     Exit;
   CriticalSectionInit(FAuditLogLock);
   try
-    FAuditLogStream := TFileStream.Create(FAuditLog.Value, fmCreate);
+    FAuditLogStream := CreateHostOutputStream(FAuditLog.Value);
     FAuditLogOpen := True;
   except
     FAuditLogStream.Free;
@@ -2544,6 +2748,7 @@ begin
     begin
       FRootConfigPath := ConfigPath;
       RootConfigEntries := ParseConfigFile(ConfigPath);
+      FRootConfigEntries := RootConfigEntries;
       { unsafe-* keys are RequiresTrust and skipped here: they reach an
         engine through the governing config's trust verdict. }
       ApplyConfigEntries(RootConfigEntries, FAllOptions);
