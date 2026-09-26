@@ -1434,10 +1434,31 @@ end;
 
 { `tests/` for a directory, `tests/a/goccia.json` for a file. }
 function DescribeTarget(const ATarget, AWorkingDirectory: string): string;
+var
+  Expanded: string;
 begin
-  Result := DisplayPath(ExpandFileName(ATarget), AWorkingDirectory);
+  Expanded := ExcludeTrailingPathDelimiter(ExpandFileName(ATarget));
+  { The working directory itself is shown as ./, like any path under it. }
+  if (AWorkingDirectory <> '') and
+     SameFileName(Expanded, ExcludeTrailingPathDelimiter(AWorkingDirectory))
+  then
+    Result := '.'
+  else
+    Result := DisplayPath(Expanded, AWorkingDirectory);
   if DirectoryExists(ATarget) then
     Result := IncludeTrailingPathDelimiter(Result);
+end;
+
+{ An empty --trust or --untrust path names nothing, and would otherwise
+  expand to the working directory. }
+procedure RequireTargetPaths(const AOptionName: string;
+  const ATargets: TStrings);
+var
+  I: Integer;
+begin
+  for I := 0 to ATargets.Count - 1 do
+    if Trim(ATargets[I]) = '' then
+      raise TCLIUsageError.CreateFmt('%s needs a path', [AOptionName]);
 end;
 
 function DescribeTargets(const ATargets: TStrings;
@@ -1467,6 +1488,7 @@ var
   I, Declaring, Unchanged: Integer;
 begin
   WorkingDirectory := GetCurrentDir;
+  RequireTargetPaths('--trust', ATargets);
   Targets := DescribeTargets(ATargets, WorkingDirectory);
   for I := 0 to ATargets.Count - 1 do
     if not FileExists(ATargets[I]) and not DirectoryExists(ATargets[I]) then
@@ -1599,30 +1621,37 @@ end;
 procedure RunUntrustCommand(const AStorePath: string; const ATargets: TStrings);
 var
   Store: TGocciaTrustStore;
+  Report: TStringList;
   I, Removed: Integer;
   Changed: Boolean;
   WorkingDirectory: string;
 begin
+  RequireTargetPaths('--untrust', ATargets);
   WorkingDirectory := GetCurrentDir;
   Store := TGocciaTrustStore.Load(AStorePath);
+  Report := TStringList.Create;
   try
     Changed := False;
     for I := 0 to ATargets.Count - 1 do
     begin
       Removed := Store.RemoveAtOrUnder(ATargets[I], nil);
       if Removed = 0 then
-        WriteLn('No trusted config at or under ',
+        Report.Add('No trusted config at or under ' +
           DescribeTarget(ATargets[I], WorkingDirectory))
       else
       begin
         Changed := True;
-        WriteLn('Removed trust for ', CountedConfigs(Removed), ' under ',
+        Report.Add('Removed trust for ' + CountedConfigs(Removed) + ' under ' +
           DescribeTarget(ATargets[I], WorkingDirectory));
       end;
     end;
+    { Report only what the saved store holds. }
     if Changed then
       Store.Save;
+    for I := 0 to Report.Count - 1 do
+      WriteLn(Report[I]);
   finally
+    Report.Free;
     Store.Free;
   end;
 end;

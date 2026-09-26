@@ -946,6 +946,22 @@ console.log("An untrusted config refuses the run with a report naming the fix...
     expectIncludes(removed.stdout, "Removed trust for 1 config file under copy", "--untrust");
     const after = run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp });
     expectExcludes(after.stdout, "(missing)", "--untrust removed the entry");
+
+    // An empty path names nothing: it is a usage error, not "everything under
+    // the working directory".
+    for (const args of [["--untrust="], ["--untrust", ""], ["--trust", ""], ["--trust="]]) {
+      const empty = run(LOADER, ["--trust-store=trust.json", ...args], { cwd: tmp });
+      expectExit(empty, 2, `${args.join(" ")} (empty path)`);
+      expectIncludes(empty.stderr, `Error: ${args[0].replace("=", "")} needs a path`, `${args.join(" ")} (empty path)`);
+    }
+    expectIncludes(run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp }).stdout, "project", "empty --untrust removed nothing");
+
+    // --untrust reports a removal only once the store is saved.
+    writeFileSync(join(tmp, "trust.json.lock"), "");
+    const locked = run(LOADER, ["--trust-store=trust.json", "--untrust", "project"], { cwd: tmp });
+    expectExit(locked, 1, "--untrust with a held lock");
+    expectExcludes(locked.stdout, "Removed trust", "--untrust with a held lock");
+    rmSync(join(tmp, "trust.json.lock"));
   } finally {
     clean(tmp);
   }
