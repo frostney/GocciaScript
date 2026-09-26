@@ -23,6 +23,7 @@ uses
   Classes,
   SysUtils,
 
+  FileUtils,
   SandboxVirtualFileSystem;
 
 type
@@ -37,6 +38,13 @@ type
     IsDirectory: Boolean;
     { Copied with --copy-rw: changed files under it may be written back. }
     ReadWrite: Boolean;
+    { The directory write-back writes under — the input itself, or a file
+      input's directory — canonical, and which directory it was, both as of
+      the copy. A write goes through this recorded directory, never through
+      the input's path looked up again, so a directory swapped for a link
+      during the run cannot redirect it. }
+    WriteRoot: string;
+    WriteRootIdentity: THostDirectoryIdentity;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
 
@@ -55,8 +63,25 @@ type
     SandboxPath: string;
     HostPath: string;
     Action: TSandboxWriteBackAction;
+    { The origin's index, and the path under its WriteRoot. }
+    OriginIndex: Integer;
+    RelativePath: string;
   end;
   TSandboxWriteBackPlan = array of TSandboxWriteBackItem;
+
+  { A host file written after the run, such as the diff file, pinned before
+    it: its nearest existing directory, canonical and as the directory it
+    was. The write goes through that directory and refuses one moved or
+    swapped for a link during the run, and a link at the file itself. }
+  TSandboxHostOutputFile = record
+    Path: string;
+    RootPath: string;
+    Root: string;
+    RootIdentity: THostDirectoryIdentity;
+    RelativePath: string;
+    class function Pin(const APath: string): TSandboxHostOutputFile; static;
+    function Write(const ABytes: TBytes; out AError: string): Boolean;
+  end;
 
   TSandboxHostInputs = class
   private
@@ -68,6 +93,7 @@ type
     procedure CopyDirectoryContents(const AHostDirectory,
       ASandboxDirectory: string);
     function BestOrigin(const ASandboxPath: string): Integer;
+    function OriginRootUnchanged(const AOrigin: TSandboxHostOrigin): Boolean;
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem);
 
@@ -103,8 +129,10 @@ type
       const ABaseline: TSandboxVirtualFileSystem): TSandboxWriteBackPlan;
 
     { Carries out APlan's writes, each an atomic replacement, and appends one
-      report line per file and a summary to AReport. Returns False when a
-      write failed. }
+      report line per file and a summary to AReport. Before writing anything
+      it checks that every read-write input it writes under is still the
+      directory that was copied; when one is not, nothing is written. Returns
+      False when a write failed or was refused. }
     function ApplyWriteBack(const APlan: TSandboxWriteBackPlan;
       const AReport: TStrings): Boolean;
 
@@ -112,16 +140,14 @@ type
   end;
 
 const
+  OUTPUT_TEMPORARY_SUFFIX = '.goccia-output';
   WRITE_BACK_REPORT_PREFIX = 'write-back: ';
+  WRITE_BACK_TEMPORARY_SUFFIX = '.goccia-write-back';
 
 implementation
 
-uses
-  FileUtils;
-
 const
   SANDBOX_SEPARATOR = '/';
-  WRITE_BACK_TEMPORARY_SUFFIX = '.goccia-write-back';
 
 function EnsureSandboxAbsolute(const APath: string): string;
 var
@@ -213,6 +239,36 @@ begin
      CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
 end;
 
+{ TSandboxHostOutputFile }
+
+class function TSandboxHostOutputFile.Pin(
+  const APath: string): TSandboxHostOutputFile;
+begin
+  Result := Default(TSandboxHostOutputFile);
+  Result.Path := ExcludeTrailingPathDelimiter(ExpandHostFileName(APath));
+  Result.RootPath := ExcludeTrailingPathDelimiter(ExtractFileDir(Result.Path));
+  while (Result.RootPath <> '') and not HostDirectoryExists(Result.RootPath) and
+     (ExtractFileDir(Result.RootPath) <> Result.RootPath) do
+    Result.RootPath := ExcludeTrailingPathDelimiter(ExtractFileDir(
+      Result.RootPath));
+  Result.Root := CanonicalOrExpanded(Result.RootPath);
+  TryHostDirectoryIdentity(Result.Root, Result.RootIdentity);
+  Result.RelativePath := Copy(Result.Path,
+    Length(IncludeTrailingPathDelimiter(Result.RootPath)) + 1, MaxInt);
+end;
+
+function TSandboxHostOutputFile.Write(const ABytes: TBytes;
+  out AError: string): Boolean;
+begin
+  if CanonicalOrExpanded(RootPath) <> Root then
+  begin
+    AError := RootPath + ' was replaced during the run';
+    Exit(False);
+  end;
+  Result := ReplaceHostFileBeneath(Root, RootIdentity, RelativePath,
+    OUTPUT_TEMPORARY_SUFFIX, ABytes, AError);
+end;
+
 { TSandboxHostInputs }
 
 constructor TSandboxHostInputs.Create(const AFs: TSandboxVirtualFileSystem);
@@ -220,6 +276,16 @@ begin
   inherited Create;
   FFs := AFs;
   FOrigins := nil;
+end;
+
+{ The directory write-back writes an origin's files under, as a path: the
+  input itself, or a file input's directory. }
+function OriginRootPath(const AOrigin: TSandboxHostOrigin): string;
+begin
+  if AOrigin.IsDirectory then
+    Result := AOrigin.HostPath
+  else
+    Result := ExcludeTrailingPathDelimiter(ExtractFileDir(AOrigin.HostPath));
 end;
 
 procedure TSandboxHostInputs.RecordOrigin(const AHostPath,
@@ -233,6 +299,26 @@ begin
   FOrigins[Index].HostPath := ExcludeTrailingPathDelimiter(AHostPath);
   FOrigins[Index].IsDirectory := AIsDirectory;
   FOrigins[Index].ReadWrite := AReadWrite;
+  FOrigins[Index].WriteRoot := CanonicalOrExpanded(OriginRootPath(
+    FOrigins[Index]));
+  TryHostDirectoryIdentity(FOrigins[Index].WriteRoot,
+    FOrigins[Index].WriteRootIdentity);
+end;
+
+{ The input's directory still resolves to the one recorded at the copy, and
+  is still that directory. }
+function TSandboxHostInputs.OriginRootUnchanged(
+  const AOrigin: TSandboxHostOrigin): Boolean;
+var
+  Identity: THostDirectoryIdentity;
+begin
+  if CanonicalOrExpanded(OriginRootPath(AOrigin)) <> AOrigin.WriteRoot then
+    Exit(False);
+  if not TryHostDirectoryIdentity(AOrigin.WriteRoot, Identity) then
+    Exit(False);
+  Result := (not AOrigin.WriteRootIdentity.Known) or
+    ((Identity.Device = AOrigin.WriteRootIdentity.Device) and
+     (Identity.Inode = AOrigin.WriteRootIdentity.Inode));
 end;
 
 procedure TSandboxHostInputs.CopyFile(const AHostPath, ASandboxPath: string);
@@ -431,17 +517,17 @@ begin
   Result := False;
 end;
 
-{ True when writing AHostPath stays inside AOriginRoot once symbolic links
-  are resolved: the target itself is not a link, and its nearest existing
-  ancestor resolves inside the root. A link planted after the copy, at the
-  file or at a directory on its way, would otherwise redirect the write. }
-function WriteStaysInside(const AHostPath, AOriginRoot: string): Boolean;
+{ True when writing AHostPath stays inside the recorded root once symbolic
+  links are resolved: the target itself is not a link, and its nearest
+  existing ancestor resolves inside the root. The write repeats the check
+  component by component (ReplaceHostFileBeneath); this one only lets the
+  plan report such a file instead of failing on it. }
+function WriteStaysInside(const AHostPath, AWriteRoot: string): Boolean;
 var
-  Ancestor, CanonicalRoot, CanonicalAncestor: string;
+  Ancestor, CanonicalAncestor: string;
 begin
   if HostPathIsSymlink(ExcludeTrailingPathDelimiter(AHostPath)) then
     Exit(False);
-  CanonicalRoot := CanonicalOrExpanded(AOriginRoot);
   Ancestor := ExcludeTrailingPathDelimiter(ExtractFileDir(AHostPath));
   while (Ancestor <> '') and not HostDirectoryExists(Ancestor) do
   begin
@@ -455,7 +541,7 @@ begin
       in HostPathForSandboxPath already holds. }
     Exit(True);
   Result := HostPathIsWithin(ExcludeTrailingPathDelimiter(CanonicalAncestor),
-    CanonicalRoot) or HostPathIsWithin(CanonicalRoot,
+    AWriteRoot) or HostPathIsWithin(AWriteRoot,
     ExcludeTrailingPathDelimiter(CanonicalAncestor));
 end;
 
@@ -464,7 +550,7 @@ function TSandboxHostInputs.PlanWriteBack(
 var
   Paths: TStringList;
   Origin: TSandboxHostOrigin;
-  HostPath, OriginRoot: string;
+  HostPath: string;
   I, Count: Integer;
 
   procedure Collect(const ADirectory: string);
@@ -497,18 +583,20 @@ begin
 
       Result[Count].SandboxPath := Paths[I];
       Result[Count].HostPath := '';
+      Result[Count].OriginIndex := -1;
+      Result[Count].RelativePath := '';
       if not HostPathForSandboxPath(Paths[I], Origin, HostPath) then
         Result[Count].Action := swaSkipNoOrigin
       else
       begin
         Result[Count].HostPath := HostPath;
-        if Origin.IsDirectory then
-          OriginRoot := Origin.HostPath
-        else
-          OriginRoot := ExtractFileDir(Origin.HostPath);
+        Result[Count].OriginIndex := BestOrigin(Paths[I]);
+        Result[Count].RelativePath := Copy(HostPath,
+          Length(IncludeTrailingPathDelimiter(OriginRootPath(Origin))) + 1,
+          MaxInt);
         if not Origin.ReadWrite then
           Result[Count].Action := swaSkipReadOnly
-        else if not WriteStaysInside(HostPath, OriginRoot) then
+        else if not WriteStaysInside(HostPath, Origin.WriteRoot) then
           Result[Count].Action := swaSkipOutside
         else
           Result[Count].Action := swaWrite;
@@ -526,7 +614,8 @@ function TSandboxHostInputs.ApplyWriteBack(const APlan: TSandboxWriteBackPlan;
 var
   I, Written, Skipped: Integer;
   ErrorMessage: string;
-  Ok: Boolean;
+  Ok, Replaced: Boolean;
+  Origin: TSandboxHostOrigin;
 begin
   Result := True;
   Written := 0;
@@ -553,14 +642,42 @@ begin
       end;
     end;
 
+  { Every input written under must still be the directory that was copied.
+    One that is not has been moved or swapped for a link while the run was
+    going on, and a half-applied write-back is worse than none, so nothing
+    is written. }
+  Replaced := False;
+  for I := 0 to High(APlan) do
+    if (APlan[I].Action in [swaWrite, swaSkipOutside]) and
+       (APlan[I].OriginIndex >= 0) and
+       FOrigins[APlan[I].OriginIndex].ReadWrite and
+       not OriginRootUnchanged(FOrigins[APlan[I].OriginIndex]) then
+    begin
+      Origin := FOrigins[APlan[I].OriginIndex];
+      if AReport.IndexOf(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+         ' was replaced during the run; nothing written') < 0 then
+        AReport.Add(WRITE_BACK_REPORT_PREFIX + OriginRootPath(Origin) +
+          ' was replaced during the run; nothing written');
+      Replaced := True;
+    end;
+  if Replaced then
+  begin
+    for I := 0 to High(APlan) do
+      if APlan[I].Action = swaWrite then
+        Inc(Skipped);
+    AReport.Add(Format('%s%d file(s) written, %d skipped',
+      [WRITE_BACK_REPORT_PREFIX, 0, Skipped]));
+    Exit(False);
+  end;
+
   for I := 0 to High(APlan) do
   begin
     if APlan[I].Action <> swaWrite then
       Continue;
+    Origin := FOrigins[APlan[I].OriginIndex];
     try
-      ForceDirectories(ExtractFilePath(APlan[I].HostPath));
-      Ok := ReplaceHostFile(APlan[I].HostPath,
-        APlan[I].HostPath + WRITE_BACK_TEMPORARY_SUFFIX,
+      Ok := ReplaceHostFileBeneath(Origin.WriteRoot, Origin.WriteRootIdentity,
+        APlan[I].RelativePath, WRITE_BACK_TEMPORARY_SUFFIX,
         FFs.SnapshotReadAllBytes(APlan[I].SandboxPath), ErrorMessage);
     except
       on E: Exception do

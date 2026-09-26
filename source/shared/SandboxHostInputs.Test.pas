@@ -32,6 +32,11 @@ type
     procedure TestWriteBackNewFilesInsideReadWriteDirectory;
     procedure TestWriteBackNeverDeletes;
     procedure TestWriteBackSkipsSymlinkedTarget;
+    procedure TestWriteBackRefusesReplacedRoot;
+    procedure TestWriteBackRefusesDirectorySwappedAfterPlan;
+    procedure TestWriteBackRefusesFileInputDirectoryReplaced;
+    procedure TestOutputFileRefusesReplacedDirectory;
+    procedure TestOutputFileRefusesLeafSymlink;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -58,6 +63,16 @@ begin
   Test('Write-back never deletes a host file', TestWriteBackNeverDeletes);
   Test('Write-back skips a target that became a symlink',
     TestWriteBackSkipsSymlinkedTarget);
+  Test('Write-back writes nothing when an input was swapped for a link',
+    TestWriteBackRefusesReplacedRoot);
+  Test('Write-back does not follow a directory swapped after planning',
+    TestWriteBackRefusesDirectorySwappedAfterPlan);
+  Test('Write-back refuses a file input whose directory was replaced',
+    TestWriteBackRefusesFileInputDirectoryReplaced);
+  Test('An output file refuses a directory replaced after pinning',
+    TestOutputFileRefusesReplacedDirectory);
+  Test('An output file refuses a link at its own name',
+    TestOutputFileRefusesLeafSymlink);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -343,6 +358,161 @@ begin
     Report.Free;
     Baseline.Free;
   end;
+  {$ENDIF}
+end;
+
+
+procedure TSandboxHostInputsTests.TestWriteBackRefusesReplacedRoot;
+{$IFDEF UNIX}
+var
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  WriteHostFile('out/a.txt', 'orig');
+  ForceDirectories(HostPath('target'));
+  FInputs.CopyIn(HostPath('out'), '/out', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/a.txt', 'PWNED');
+    FFs.WriteAllText('/out/b.txt', 'PWNED2');
+    { The copied directory is moved away and a link to elsewhere takes its
+      name while the run goes on. }
+    Expect<Boolean>(RenameFile(HostPath('out'), HostPath('out.real')))
+      .ToBe(True);
+    Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('target'))),
+      PAnsiChar(AnsiString(HostPath('out'))))).ToBe(0);
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('target/a.txt'))).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('target/b.txt'))).ToBe(False);
+    Expect<string>(ReadHostText('out.real/a.txt')).ToBe('orig');
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('out') +
+      ' was replaced during the run; nothing written') >= 0).ToBe(True);
+    Expect<string>(Report[Report.Count - 1]).ToBe(
+      'write-back: 0 file(s) written, 2 skipped');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestWriteBackRefusesDirectorySwappedAfterPlan;
+{$IFDEF UNIX}
+var
+  Baseline: TSandboxVirtualFileSystem;
+  Plan: TSandboxWriteBackPlan;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  WriteHostFile('out/sub/s.txt', 'orig');
+  ForceDirectories(HostPath('elsewhere'));
+  FInputs.CopyIn(HostPath('out'), '/out', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/sub/s.txt', 'OVERWRITE');
+    FFs.MakeDirectory('/out/fresh', True);
+    FFs.WriteAllText('/out/fresh/new.txt', 'NEW');
+    Plan := FInputs.PlanWriteBack(Baseline);
+    Expect<Boolean>(Plan[0].Action = swaWrite).ToBe(True);
+    Expect<Boolean>(Plan[1].Action = swaWrite).ToBe(True);
+    { Between the plan and the write: a directory on the way becomes a
+      link, and a directory the write would create appears as one. }
+    DeleteFile(HostPath('out/sub/s.txt'));
+    RemoveDir(HostPath('out/sub'));
+    Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('elsewhere'))),
+      PAnsiChar(AnsiString(HostPath('out/sub'))))).ToBe(0);
+    Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('elsewhere'))),
+      PAnsiChar(AnsiString(HostPath('out/fresh'))))).ToBe(0);
+    Expect<Boolean>(FInputs.ApplyWriteBack(Plan, Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('elsewhere/s.txt'))).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('elsewhere/new.txt'))).ToBe(False);
+    Expect<string>(Report[Report.Count - 1]).ToBe(
+      'write-back: 0 file(s) written, 2 skipped');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestWriteBackRefusesFileInputDirectoryReplaced;
+{$IFDEF UNIX}
+var
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  WriteHostFile('dir/f.txt', 'orig');
+  WriteHostFile('target/f.txt', 'secret');
+  FInputs.CopyIn(HostPath('dir/f.txt'), '/f.txt', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/f.txt', 'OVERWRITE');
+    Expect<Boolean>(RenameFile(HostPath('dir'), HostPath('dir.real')))
+      .ToBe(True);
+    Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('target'))),
+      PAnsiChar(AnsiString(HostPath('dir'))))).ToBe(0);
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<string>(ReadHostText('target/f.txt')).ToBe('secret');
+    Expect<string>(ReadHostText('dir.real/f.txt')).ToBe('orig');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestOutputFileRefusesReplacedDirectory;
+var
+  Output: TSandboxHostOutputFile;
+  Bytes: TBytes;
+  Problem: string;
+begin
+  ForceDirectories(HostPath('dd'));
+  ForceDirectories(HostPath('victim'));
+  Bytes := TEncoding.UTF8.GetBytes('{}');
+  Output := TSandboxHostOutputFile.Pin(HostPath('dd/nested/diff.json'));
+  Expect<Boolean>(Output.Write(Bytes, Problem)).ToBe(True);
+  Expect<string>(ReadHostText('dd/nested/diff.json')).ToBe('{}');
+  {$IFDEF UNIX}
+  Output := TSandboxHostOutputFile.Pin(HostPath('dd/diff.json'));
+  Expect<Boolean>(RenameFile(HostPath('dd'), HostPath('dd.real')))
+    .ToBe(True);
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('victim'))),
+    PAnsiChar(AnsiString(HostPath('dd'))))).ToBe(0);
+  Expect<Boolean>(Output.Write(Bytes, Problem)).ToBe(False);
+  Expect<string>(Problem).ToBe(HostPath('dd') + ' was replaced during the run');
+  Expect<Boolean>(FileExists(HostPath('victim/diff.json'))).ToBe(False);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestOutputFileRefusesLeafSymlink;
+{$IFDEF UNIX}
+var
+  Output: TSandboxHostOutputFile;
+  Problem: string;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  WriteHostFile('victim.txt', 'keep');
+  ForceDirectories(HostPath('dd'));
+  Output := TSandboxHostOutputFile.Pin(HostPath('dd/diff.json'));
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('victim.txt'))),
+    PAnsiChar(AnsiString(HostPath('dd/diff.json'))))).ToBe(0);
+  Expect<Boolean>(Output.Write(TEncoding.UTF8.GetBytes('{}'), Problem))
+    .ToBe(False);
+  Expect<string>(Problem).ToBe(
+    'the target is a symbolic link or cannot be opened');
+  Expect<string>(ReadHostText('victim.txt')).ToBe('keep');
   {$ENDIF}
 end;
 
