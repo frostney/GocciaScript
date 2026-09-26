@@ -38,7 +38,7 @@ type
     sdShowUsage);
 
   { How a command relates to stdin.  Commands that never default to
-    stdin (GocciaREPL, GocciaSandboxRunner) stay on suNone and are
+    stdin (GocciaREPL) stay on suNone and are
     unaffected by the no-argument rule. }
   TGocciaStdinUsage = (
     suNone,

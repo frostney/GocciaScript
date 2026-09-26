@@ -131,8 +131,8 @@ uses
 
   Goccia.Capabilities,
   Goccia.FileExtensions,
-  Goccia.ScriptLoader.Input,
-  Goccia.Sandbox.Context;
+  Goccia.Sandbox.Context,
+  Goccia.ScriptLoader.Input;
 
 const
   SANDBOX_ROOT = '/';

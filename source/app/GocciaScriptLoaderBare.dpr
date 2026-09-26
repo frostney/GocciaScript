@@ -43,7 +43,7 @@ uses
 const
   BARE_PRINT_GLOBAL_NAME = 'print';
   BARE_PROGRAM_NAME = 'GocciaScriptLoaderBare';
-  { Bare defaults its input to stdin like GocciaScriptLoader, so it takes
+  { Bare defaults its input to stdin like GocciaRunner, so it takes
     the same no-argument rule; GocciaREPL is the right pointer for anyone
     who typed the command expecting an interactive prompt. }
   BARE_STDIN_USAGE = suStdinDefaultWithREPL;

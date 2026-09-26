@@ -138,7 +138,7 @@ begin
     StdinUsageNote('GocciaTestRunner', suStdinDefault), 'GocciaREPL'))
     .ToBe(False);
   Expect<Boolean>(ContainsStr(
-    StdinUsageNote('GocciaScriptLoader', suStdinDefaultWithREPL),
+    StdinUsageNote('GocciaRunner', suStdinDefaultWithREPL),
     'GocciaREPL')).ToBe(True);
 end;
 
@@ -151,10 +151,10 @@ procedure TCLIStdinTests.TestNoInputMessageNamesTheThreeOuts;
 var
   Message: string;
 begin
-  Message := NoInputAtTerminalMessage('GocciaScriptLoader',
+  Message := NoInputAtTerminalMessage('GocciaRunner',
     suStdinDefaultWithREPL);
   Expect<Boolean>(ContainsStr(Message, 'Error:')).ToBe(True);
-  Expect<Boolean>(ContainsStr(Message, 'GocciaScriptLoader < app.js'))
+  Expect<Boolean>(ContainsStr(Message, 'GocciaRunner < app.js'))
     .ToBe(True);
   Expect<Boolean>(ContainsStr(Message, '"-"')).ToBe(True);
   Expect<Boolean>(ContainsStr(Message, 'GocciaREPL')).ToBe(True);

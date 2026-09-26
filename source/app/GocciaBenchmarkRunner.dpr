@@ -1281,7 +1281,7 @@ begin
   begin
     { Reject mixing "-" with file paths so stdin cannot silently be
       interleaved with on-disk files. Matches the rule enforced by
-      GocciaScriptLoader and GocciaTestRunner. }
+      GocciaRunner and GocciaTestRunner. }
     for I := 0 to APaths.Count - 1 do
       if IsStdinPath(APaths[I]) then
       begin
