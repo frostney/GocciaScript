@@ -2790,7 +2790,7 @@ await section("Loader: a relative config ceiling holds when the project is reach
     mkdirSync(foreign, { recursive: true });
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(link, "project", "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(link, "project", "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2801,7 +2801,7 @@ await section("Loader: a relative config ceiling holds when the project is reach
     writeFileSync(join(project, "src", "app.js"), 'import "pkg-exports";\n');
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(link, "project", "src", "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(link, "project", "src", "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
