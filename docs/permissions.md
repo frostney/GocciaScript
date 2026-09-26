@@ -326,9 +326,12 @@ allow-ffi = ["../fixtures/ffi"]
   (`--config`, or the one discovered from the working directory) when it has
   none. Configs compose only through `extends`.
 - An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
-  `true`, `false`, or an array of strings fails the run with status 2.
+  `true`, `false`, or an array of strings (including `null`, an object, or a
+  nested array) fails the run with status 2.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
+- Every config governing a run's inputs is loaded and checked before any file
+  runs, so a config error never leaves some files run and others not.
 
 A command-line allow adds to a config's grants, and every deny, from either
 source, subtracts. In this release a config's `permissions` block applies
@@ -346,7 +349,8 @@ Warning: /repo/goccia.json requests allow-read, which GocciaBundler cannot grant
 ```
 
 A `--deny-*` flag is always accepted. Limits follow the same rule on the
-command line; a limit a binary does not apply is ignored in config.
+command line; a limit a binary does not apply is ignored in config, without
+being validated.
 
 | Binary | Capabilities | Limits | Config |
 |---|---|---|---|
