@@ -412,7 +412,11 @@ carries on.
 `toMatchSnapshot()` writes external snapshots to
 `__snapshots__/<test-file>.snap`. `toMatchInlineSnapshot()` inserts or updates
 the snapshot in the test source. Both use Vitest-compatible formatting and are
-available in interpreter and bytecode modes.
+available in interpreter and bytecode modes. The runner refuses a `.snap` file
+or a `__snapshots__` directory that is a symbolic link rather than read, write,
+or delete through it, so a link committed to a repository cannot redirect a
+snapshot update outside the project; a snapshot file is replaced by writing
+beside it and renaming.
 
 ```javascript
 test("user", () => {

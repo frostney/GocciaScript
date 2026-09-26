@@ -1372,6 +1372,46 @@ console.log("Module manifests a config names run under the script's capabilities
   }
 }
 
+console.log("Snapshot files committed as symbolic links are refused...");
+{
+  const tmp = makeTmp();
+  try {
+    const repo = join(tmp, "repo");
+    mkdirSync(join(repo, "__snapshots__"), { recursive: true });
+    mkdirSync(join(tmp, "outside"));
+    const victim = join(tmp, "outside", "victim.txt");
+    writeFileSync(victim, "VICTIM\n");
+    writeFileSync(join(repo, "a.test.js"), 'test("s", () => { expect({ a: 1 }).toMatchSnapshot(); });\n');
+
+    // The .snap file itself links outside the project.
+    symlinkSync(victim, join(repo, "__snapshots__", "a.test.js.snap"));
+    const leaf = run(TESTRUNNER, ["a.test.js", "-u", "--no-progress"], { cwd: repo });
+    expectExit(leaf, 1, "symlinked snapshot file");
+    expectIncludes(leaf.combined, "Refusing to use snapshot file", "symlinked snapshot file");
+    if (readFileSync(victim, "utf8") !== "VICTIM\n")
+      throw new Error("symlinked snapshot file: the link's target was overwritten");
+
+    // The __snapshots__ directory links outside the project.
+    rmSync(join(repo, "__snapshots__"), { recursive: true });
+    symlinkSync(join(tmp, "outside"), join(repo, "__snapshots__"));
+    const directory = run(TESTRUNNER, ["./a.test.js", "-u", "--no-progress"], { cwd: repo });
+    expectExit(directory, 1, "symlinked snapshot directory");
+    expectIncludes(directory.combined, "Refusing to use snapshot directory", "symlinked snapshot directory");
+    if (existsSync(join(tmp, "outside", "a.test.js.snap")))
+      throw new Error("symlinked snapshot directory: a snapshot was written through the link");
+
+    // A real directory works, for a bare file name too (it sits in the
+    // working directory, not at the filesystem root).
+    rmSync(join(repo, "__snapshots__"));
+    const real = run(TESTRUNNER, ["a.test.js", "-u", "--no-progress"], { cwd: repo });
+    expectExit(real, 0, "snapshot beside a bare file name");
+    if (!existsSync(join(repo, "__snapshots__", "a.test.js.snap")))
+      throw new Error(`snapshot beside a bare file name was not written:\n${real.combined}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Globals and host-environment modules a config names are guest reads...");
 {
   const tmp = makeTmp();
