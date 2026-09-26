@@ -25,6 +25,18 @@ type
     a config file. Applications exit with status 2 for it. }
   TCLIUsageError = class(TParseError);
 
+  { An option value its parser rejected, with the parts a config-file
+    message restates in config spelling. }
+  EOptionValueError = class(TParseError)
+  private
+    FValue: string;
+    FReason: string;
+  public
+    constructor CreateValue(const AOptionName, AValue, AReason: string);
+    property Value: string read FValue;
+    property Reason: string read FReason;
+  end;
+
   TOptionBase = class
   private
     FLongName: string;
@@ -37,6 +49,7 @@ type
     FHidden: Boolean;
     FCommandLineOnly: Boolean;
     FRequiresTrust: Boolean;
+    FConfigIgnored: Boolean;
     FConfigHint: string;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
@@ -47,6 +60,10 @@ type
       Apply. }
     procedure ApplyExplicit(const AValue: string;
       const AHasEquals: Boolean); virtual;
+    { Raises TParseError when AValue is not a valid value, without applying
+      it. Used to validate config files read through lookups rather than
+      applied. The default accepts every value. }
+    procedure CheckValue(const AValue: string); virtual;
     function ConsumesSeparateValue: Boolean; virtual;
     function FormatForHelp: string; virtual; abstract;
     function ValidValues: string; virtual;
@@ -82,6 +99,9 @@ type
     { Skipped when a config file is applied: the value only takes effect once
       the config is trusted (ADR 0122). }
     property RequiresTrust: Boolean read FRequiresTrust write FRequiresTrust;
+    { Config files may name the key, but the binary does not use it: it is
+      neither validated nor applied (a limit a binary does not honor). }
+    property ConfigIgnored: Boolean read FConfigIgnored write FConfigIgnored;
   end;
 
   TOptionArray = array of TOptionBase;
@@ -132,35 +152,49 @@ type
   TInt64Option = class(TOptionBase)
   private
     FValue: Int64;
+    FMaximum: Int64;
+  protected
+    { Parses AValue or raises TParseError; the unit-aware subclasses override
+      it. Enforces Maximum. }
+    function ParseValue(const AValue: string): Int64; virtual;
+    procedure RaiseInvalidValue(const AValue, AReason: string);
   public
     procedure Apply(const AValue: string); override;
+    procedure CheckValue(const AValue: string); override;
     function ConsumesSeparateValue: Boolean; override;
     function FormatForHelp: string; override;
 
     function ValueOr(const ADefault: Int64): Int64;
+    { Parses a value the way Apply does, for a value read from a config
+      entry rather than applied. }
+    function Parse(const AValue: string): Int64;
 
     property Value: Int64 read FValue;
+    { The largest accepted value; 0 means no bound beyond Int64. }
+    property Maximum: Int64 read FMaximum write FMaximum;
   end;
 
   { A byte size: a whole number of bytes, or KiB/MiB/GiB (CLI.Units). }
   TByteSizeOption = class(TInt64Option)
+  protected
+    function ParseValue(const AValue: string): Int64; override;
   public
-    procedure Apply(const AValue: string); override;
     function FormatForHelp: string; override;
   end;
 
   { A duration in milliseconds: plain milliseconds, or ms/s/m (CLI.Units). }
   TDurationOption = class(TInt64Option)
+  protected
+    function ParseValue(const AValue: string): Int64; override;
   public
-    procedure Apply(const AValue: string); override;
     function FormatForHelp: string; override;
     function Milliseconds(const ADefault: Integer): Integer;
   end;
 
   { A non-negative whole number. }
   TCountOption = class(TInt64Option)
-  public
-    procedure Apply(const AValue: string); override;
+  protected
+    function ParseValue(const AValue: string): Int64; override;
   end;
 
   { `--name[=scope,...]`: an unscoped occurrence, a comma-separated scope
@@ -277,6 +311,17 @@ implementation
 uses
   CLI.Units;
 
+{ EOptionValueError }
+
+constructor EOptionValueError.CreateValue(const AOptionName, AValue,
+  AReason: string);
+begin
+  inherited CreateFmt('Invalid value for --%s: %s (%s)',
+    [AOptionName, AValue, AReason]);
+  FValue := AValue;
+  FReason := AReason;
+end;
+
 { ConcatOptions }
 
 function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
@@ -314,7 +359,12 @@ begin
   FHidden := False;
   FCommandLineOnly := False;
   FRequiresTrust := False;
+  FConfigIgnored := False;
   FConfigHint := '';
+end;
+
+procedure TOptionBase.CheckValue(const AValue: string);
+begin
 end;
 
 procedure TOptionBase.ApplyExplicit(const AValue: string;
@@ -442,15 +492,34 @@ end;
 
 { TInt64Option }
 
-procedure TInt64Option.Apply(const AValue: string);
-var
-  Parsed: Int64;
+procedure TInt64Option.RaiseInvalidValue(const AValue, AReason: string);
 begin
-  if not TryStrToInt64(AValue, Parsed) then
+  raise EOptionValueError.CreateValue(LongName, AValue, AReason);
+end;
+
+function TInt64Option.ParseValue(const AValue: string): Int64;
+begin
+  if not TryStrToInt64(AValue, Result) then
     raise TParseError.CreateFmt('Invalid integer value for --%s: %s',
       [LongName, AValue]);
-  FValue := Parsed;
+  if (FMaximum > 0) and (Result > FMaximum) then
+    RaiseInvalidValue(AValue, TOO_LARGE_ERROR);
+end;
+
+function TInt64Option.Parse(const AValue: string): Int64;
+begin
+  Result := ParseValue(AValue);
+end;
+
+procedure TInt64Option.Apply(const AValue: string);
+begin
+  FValue := ParseValue(AValue);
   FPresent := True;
+end;
+
+procedure TInt64Option.CheckValue(const AValue: string);
+begin
+  ParseValue(AValue);
 end;
 
 function TInt64Option.FormatForHelp: string;
@@ -473,16 +542,14 @@ end;
 
 { TByteSizeOption }
 
-procedure TByteSizeOption.Apply(const AValue: string);
+function TByteSizeOption.ParseValue(const AValue: string): Int64;
 var
-  Bytes: Int64;
   ErrorText: string;
 begin
-  if not TryParseByteSize(AValue, Bytes, ErrorText) then
-    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
-      [LongName, AValue, ErrorText]);
-  FValue := Bytes;
-  FPresent := True;
+  if not TryParseByteSize(AValue, Result, ErrorText) then
+    RaiseInvalidValue(AValue, ErrorText);
+  if (Maximum > 0) and (Result > Maximum) then
+    RaiseInvalidValue(AValue, TOO_LARGE_ERROR);
 end;
 
 function TByteSizeOption.FormatForHelp: string;
@@ -492,17 +559,14 @@ end;
 
 { TDurationOption }
 
-procedure TDurationOption.Apply(const AValue: string);
+function TDurationOption.ParseValue(const AValue: string): Int64;
 var
-  ParsedMilliseconds: Int64;
   ErrorText: string;
 begin
-  if not TryParseDurationMilliseconds(AValue, ParsedMilliseconds,
-     ErrorText) then
-    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
-      [LongName, AValue, ErrorText]);
-  FValue := ParsedMilliseconds;
-  FPresent := True;
+  if not TryParseDurationMilliseconds(AValue, Result, ErrorText) then
+    RaiseInvalidValue(AValue, ErrorText);
+  if (Maximum > 0) and (Result > Maximum) then
+    RaiseInvalidValue(AValue, TOO_LARGE_ERROR);
 end;
 
 function TDurationOption.FormatForHelp: string;
@@ -522,16 +586,14 @@ end;
 
 { TCountOption }
 
-procedure TCountOption.Apply(const AValue: string);
+function TCountOption.ParseValue(const AValue: string): Int64;
 var
-  Count: Int64;
   ErrorText: string;
 begin
-  if not TryParseNonNegativeCount(AValue, Count, ErrorText) then
-    raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
-      [LongName, AValue, ErrorText]);
-  FValue := Count;
-  FPresent := True;
+  if not TryParseNonNegativeCount(AValue, Result, ErrorText) then
+    RaiseInvalidValue(AValue, ErrorText);
+  if (Maximum > 0) and (Result > Maximum) then
+    RaiseInvalidValue(AValue, TOO_LARGE_ERROR);
 end;
 
 { TScopeListOption }

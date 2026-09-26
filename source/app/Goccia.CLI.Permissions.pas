@@ -103,8 +103,8 @@ function ReadConfigPermissionRequest(const AEntries: TConfigEntryArray;
 
 { One message per capability the request asks to allow that AHonored does
   not include, and per unsafe-* request when not AHonorsUnsafe:
-  `Warning: <config> requests allow-<cap>, which <Program> cannot grant;
-  ignoring it`. }
+  `requests allow-<cap>, which <Program> cannot grant; ignoring it`. Callers
+  prefix the config path in their own output format. }
 function UnsupportedRequestWarnings(
   const ARequest: TGocciaConfigPermissionRequest;
   const AHonored: TGocciaHonoredCapabilities;
@@ -333,6 +333,7 @@ var
   Scopes: TGocciaPermissionScopes;
   UnsafeRequest: TGocciaUnsafeRequest;
   UnsafeSeen: TGocciaUnsafeRequests;
+  Overridden: Boolean;
 begin
   Result := TGocciaConfigPermissionRequest.Empty;
   Result.ConfigPath := AConfigPath;
@@ -377,11 +378,14 @@ begin
     else
       Scopes := Result.Deny[Capability];
     { Entries arrive child first: a key a nearer file declared is not
-      extended by its base's value for the same key. }
-    if Scopes.Declared and (Scopes.SourcePath <> Entry.SourcePath) then
-      Continue;
-    Scopes.Declared := True;
-    Scopes.SourcePath := Entry.SourcePath;
+      extended by its base's value for the same key. The value is still
+      validated, so a malformed base fails wherever it is used. }
+    Overridden := Scopes.Declared and (Scopes.SourcePath <> Entry.SourcePath);
+    if not Overridden then
+    begin
+      Scopes.Declared := True;
+      Scopes.SourcePath := Entry.SourcePath;
+    end;
 
     if (Entry.Kind = cvkBoolean) and not Entry.InArray then
     begin
@@ -399,19 +403,24 @@ begin
     else if (Entry.Kind = cvkString) and Entry.InArray then
     begin
       if Trim(Entry.Value) = '' then
-        raise EGocciaConfigPermissionError.CreateFmt(
+        raise TParseError.CreateFmt(
           '%s: "%s" has an empty scope', [Location, Entry.Key]);
       Scope := ResolvePermissionScope(Capability, Entry.Value,
         ExtractFilePath(Location));
       ValidateScope(Location, Entry.Key, Capability, Scope, Entry.Value);
-      SetLength(Scopes.Scopes, Length(Scopes.Scopes) + 1);
-      Scopes.Scopes[High(Scopes.Scopes)] := Scope;
+      if not Overridden then
+      begin
+        SetLength(Scopes.Scopes, Length(Scopes.Scopes) + 1);
+        Scopes.Scopes[High(Scopes.Scopes)] := Scope;
+      end;
     end
     else
       raise EGocciaConfigPermissionError.CreateFmt(
         '%s: "%s" must be true, false, or an array of strings',
         [Location, Entry.Key]);
 
+    if Overridden then
+      Continue;
     if Allow then
       Result.Allow[Capability] := Scopes
     else
@@ -459,8 +468,8 @@ var
   begin
     SetLength(Warnings, Length(Warnings) + 1);
     Warnings[High(Warnings)] := Format(
-      'Warning: %s requests %s, which %s cannot grant; ignoring it',
-      [ARequest.ConfigPath, AKey, AProgramName]);
+      'requests %s, which %s cannot grant; ignoring it',
+      [AKey, AProgramName]);
   end;
 
 var

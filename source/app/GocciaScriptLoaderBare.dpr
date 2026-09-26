@@ -244,6 +244,41 @@ begin
   WriteProfileJSON(TGocciaProfiler.Instance, AOptions.ProfileOutputPath);
 end;
 
+const
+  BARE_HONORED_SETTINGS: TGocciaHonoredSettings = [grsTimeout, grsMaxMemory,
+    grsMaxInstructions, grsMaxStack];
+  BARE_BOOLEAN_FLAGS: array[0..9] of string = ('--compat-label',
+    '--compat-for-in-loop', '--experimental-js-module-source',
+    '--warning-unsupported-features', '--strict-types',
+    '--unsafe-function-constructor', '--unsafe-shadowrealm', '--deterministic',
+    '--print', '--help');
+
+{ A boolean flag given a value (`--print=false`) is a usage error, as on the
+  shared-application binaries. }
+procedure RejectFlagValue(const AArgument: string);
+var
+  Name: string;
+  EqualPos, I: Integer;
+  Flag: TGocciaCompatibility;
+  IsFlag: Boolean;
+begin
+  EqualPos := Pos('=', AArgument);
+  if (Copy(AArgument, 1, 2) <> '--') or (EqualPos = 0) then
+    Exit;
+  Name := Copy(AArgument, 1, EqualPos - 1);
+  IsFlag := False;
+  for I := Low(BARE_BOOLEAN_FLAGS) to High(BARE_BOOLEAN_FLAGS) do
+    if Name = BARE_BOOLEAN_FLAGS[I] then
+      IsFlag := True;
+  for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
+    if Name = '--' + CompatibilityFlagDescriptor(Flag).OptionName then
+      IsFlag := True;
+  if IsFlag then
+    raise TCLIUsageError.CreateFmt(
+      '%s does not take a value; got "%s". Omit the flag to leave it off',
+      [Name, Copy(AArgument, EqualPos + 1, MaxInt)]);
+end;
+
 procedure ParseOptions(out AOptions: TBareOptions);
 var
   Arg: string;
@@ -278,6 +313,9 @@ begin
   for I := 0 to High(Arguments) do
   begin
     Arg := Arguments[I];
+    RejectFlagValue(Arg);
+    RejectUnsupportedSettingArgument(Arg, BARE_PROGRAM_NAME,
+      BARE_HONORED_SETTINGS);
     if Arg = '--help' then
     begin
       PrintUsage(Output);

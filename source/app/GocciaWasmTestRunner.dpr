@@ -360,25 +360,51 @@ var
   TotalTests, TotalPassed, TotalFailed, TotalSkipped: Int64;
   GC: TGarbageCollector;
 
+  procedure WriteUsage(var AOutput: Text);
+  begin
+    WriteLn(AOutput, 'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
+    WriteLn(AOutput,
+      '  manifest: one script path per line, # starts a comment');
+    WriteLn(AOutput,
+      '  -P, --accept-config-permissions: apply the permission requests ' +
+      'of the files'' configs (there is no trust store)');
+  end;
+
 begin
+  if (ParamCount = 1) and ((ParamStr(1) = '--help') or
+     (ParamStr(1) = '-h')) then
+  begin
+    WriteUsage(Output);
+    Exit;
+  end;
   ManifestPath := '';
   for Index := 1 to ParamCount do
     if (ParamStr(Index) = '-' + ACCEPT_CONFIG_PERMISSIONS_SHORT_FLAG) or
        (ParamStr(Index) = '--' + ACCEPT_CONFIG_PERMISSIONS_FLAG) then
       GAcceptConfigPermissions := True
+    else if Copy(ParamStr(Index), 1, 1) = '-' then
+    begin
+      WriteLn(ErrOutput, 'Error: Unknown option: ', ParamStr(Index));
+      ExitCode := 2;
+      Exit;
+    end
     else if ManifestPath = '' then
       ManifestPath := ParamStr(Index)
     else
-      ManifestPath := #0;
-  if (ManifestPath = '') or (ManifestPath = #0) then
+    begin
+      WriteUsage(ErrOutput);
+      ExitCode := 2;
+      Exit;
+    end;
+  if ManifestPath = '' then
   begin
-    WriteLn(ErrOutput,
-      'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
-    WriteLn(ErrOutput,
-      '  manifest: one script path per line, # starts a comment');
-    WriteLn(ErrOutput,
-      '  -P, --accept-config-permissions: apply the permission requests ' +
-      'of the files'' configs (there is no trust store)');
+    WriteUsage(ErrOutput);
+    ExitCode := 2;
+    Exit;
+  end;
+  if not FileExists(ManifestPath) then
+  begin
+    WriteLn(ErrOutput, 'Error: manifest not found: ', ManifestPath);
     ExitCode := 2;
     Exit;
   end;

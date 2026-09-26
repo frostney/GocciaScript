@@ -286,6 +286,7 @@ uses
   Goccia.AST.Statements,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.Evaluator,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
@@ -774,14 +775,14 @@ var
   Allowed: Boolean;
   CanonicalPath: string;
 
-  procedure Deny(const AReason: string);
+  procedure Deny(const AReason, ASuggestion: string);
   begin
     if Assigned(FCapabilityAuditEmitter) then
       FCapabilityAuditEmitter(gckReadFile, gcdDeny, CanonicalPath, AReason);
-    { The guest sees the specifier it wrote; the expanded host path travels
-      only in the host-side suggestion (ADR 0108). }
-    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
-      Format('the read capability does not cover %s', [CanonicalPath]));
+    { The guest sees the specifier it wrote; the expanded host path and the
+      grant that would allow it travel only in the host-side suggestion
+      (ADR 0108). }
+    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier, ASuggestion);
   end;
 
 begin
@@ -792,12 +793,14 @@ begin
 
   CanonicalPath := CanonicalCapabilityPath(APath);
   if FCapabilities.DeniesPath(gcRead, CanonicalPath) then
-    Deny('read is denied for this path');
+    Deny('read is denied for this path',
+      Format(SSuggestReadDenied, [CanonicalPath]));
   { Before probing, a deny scope the extension or index probe could land on
     refuses too, so whether that file exists stays hidden. }
   if APreResolution and
      FCapabilities.DeniesPathsStartingWith(gcRead, CanonicalPath) then
-    Deny('read is denied for a path this request could resolve to');
+    Deny('read is denied for a path this request could resolve to',
+      Format(SSuggestReadDenied, [CanonicalPath]));
 
   if AIsLiteral and (FProjectRoot <> '') and
      IsPathWithinScope(CanonicalPath, FProjectRoot) then
@@ -813,9 +816,13 @@ begin
   if not Allowed then
   begin
     if AIsLiteral then
-      Deny('the path is outside the project and no read grant covers it')
+      Deny('the path is outside the project and no read grant covers it',
+        Format(SSuggestReadNotGranted, [CanonicalPath,
+          ExtractFileDir(CanonicalPath)]))
     else
-      Deny('a computed import specifier needs a read grant');
+      Deny('a computed import specifier needs a read grant',
+        Format(SSuggestReadComputed, [CanonicalPath,
+          ExtractFileDir(CanonicalPath)]));
   end;
   if (not APreResolution) and Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckReadFile, gcdAllow, CanonicalPath,

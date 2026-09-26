@@ -132,6 +132,10 @@ begin
   ExpectDuration('500ms', 500);
   ExpectDuration('5s', 5000);
   ExpectDuration('2m', 120000);
+  { Units are case-insensitive, like byte-size units. }
+  ExpectDuration('5S', 5000);
+  ExpectDuration('500MS', 500);
+  ExpectDuration('2M', 120000);
 end;
 
 procedure TCLIUnitsTests.TestDurationsRejected;

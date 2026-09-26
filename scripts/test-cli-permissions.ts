@@ -13,7 +13,7 @@
  * store explicitly with --trust-store.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -106,7 +106,7 @@ console.log("Removed flags exit 2 and name their replacement...");
 {
   const removedFlags: [string, string][] = [
     ["--allowed-host=example.com", "--allowed-host was removed in GocciaScript 0.14.0; use --allow-net=<host>[,<host>...] instead"],
-    ["--fetch-deny-private-ranges", "--fetch-deny-private-ranges was removed in GocciaScript 0.14.0; private ranges are denied by default; allow them with --allow-net=private"],
+    ["--fetch-deny-private-ranges", "--fetch-deny-private-ranges was removed in GocciaScript 0.14.0; private ranges are denied by default; allow them with --allow-net=private, or refuse them outright with --deny-net=private"],
     ["--fetch-max-response-bytes=10", "--fetch-max-response-bytes was removed in GocciaScript 0.14.0; use --max-fetch-bytes instead (units: 1MiB)"],
     ["--unsafe-ffi", "--unsafe-ffi was removed in GocciaScript 0.14.0; use --allow-ffi[=<library>,...] instead"],
     ["--allow-node-modules", "--allow-node-modules was removed in GocciaScript 0.14.0; use --allow-import=node_modules[=<dir>] instead"],
@@ -138,6 +138,17 @@ console.log("Removed flags exit 2 and name their replacement...");
 
   const test262 = run(TEST262RUNNER, ["--timeout-ms=50"]);
   expectExit(test262, 2, "GocciaTest262Runner --timeout-ms");
+  // An invalid value is exit 1 there as everywhere else; only usage errors
+  // exit 2.
+  for (const [flag, message] of [
+    ["--timeout=5x", "Invalid value for --timeout: 5x"],
+    ["--max-memory=64MB", '"MB" is ambiguous'],
+    ["--jobs=many", "--jobs requires a non-negative integer"],
+  ] as const) {
+    const invalid = run(TEST262RUNNER, [flag]);
+    expectExit(invalid, 1, `GocciaTest262Runner ${flag}`);
+    expectIncludes(invalid.stderr, message, `GocciaTest262Runner ${flag}`);
+  }
   expectIncludes(test262.stderr, "Error: --timeout-ms was removed in GocciaScript 0.14.0; use --timeout instead (units: 20s)", "Test262 --timeout-ms");
 
   // Removed flags stay out of --help.
@@ -158,7 +169,7 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"unsafe-ffi": true}', `"unsafe-ffi" ${REMOVED}; use "permissions": { "allow-ffi": true } instead`],
       ['{"allow-node-modules": true}', `"allow-node-modules" ${REMOVED}; use "permissions": { "allow-import": ["node_modules"] } instead`],
       ['{"no-host-filesystem": true}', `"no-host-filesystem" ${REMOVED}; use "permissions": { "deny-read": true } instead`],
-      ['{"fetch-deny-private-ranges": true}', `"fetch-deny-private-ranges" ${REMOVED}; private ranges are denied by default`],
+      ['{"fetch-deny-private-ranges": true}', `"fetch-deny-private-ranges" ${REMOVED}; private ranges are denied by default; allow them with "permissions": { "allow-net": ["private"] }, or refuse them outright with "deny-net": ["private"]`],
       ['{"fetch-max-response-bytes": 10}', `"fetch-max-response-bytes" ${REMOVED}; use "max-fetch-bytes" instead`],
       ['{"stack-size": 100}', `"stack-size" ${REMOVED}; use "max-stack" instead`],
       ['{"allow-net": ["example.com"]}', `"allow-net" can only be given on the command line; declare it in the config's "permissions" object instead`],
@@ -187,6 +198,26 @@ console.log("Removed and command-line-only config keys exit 2...");
     const flagValue = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(flagValue, 1, "config flag value");
     expectIncludes(flagValue.combined, `${configPath}: "compat-asi" must be true or false, got "yes"`, "config flag value");
+
+    // A flag in config is exactly a boolean; a scalar option takes one value.
+    const valueCases: [string, string][] = [
+      ['{"compat-var": null}', '"compat-var" must be true or false, got null'],
+      ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
+      ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
+      ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
+      ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
+      ['{"permissions": {"allow-net": [""]}}', `${configPath}: "permissions.allow-net" has an empty scope`],
+    ];
+    for (const [config, message] of valueCases) {
+      writeFileSync(configPath, config + "\n");
+      const result = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(result, 1, `config ${config}`);
+      expectIncludes(result.combined, message, `config ${config}`);
+    }
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-var = "true"\n');
+    const tomlString = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(tomlString, 1, "TOML string flag");
+    rmSync(join(tmp, "goccia.toml"));
 
     // An unknown permission is a usage error naming the valid keys.
     writeFileSync(configPath, '{"permissions": {"deny-nett": true}}\n');
@@ -265,6 +296,71 @@ console.log("Unsupported capabilities and limits are rejected on the command lin
   const loaderHelp = run(LOADER, ["--help"]).stdout;
   for (const flag of ["--allow-read", "--allow-net", "--allow-ffi", "--allow-import", "--deny-read", "--max-stack", "--max-fetch-bytes"])
     expectIncludes(loaderHelp, flag, "Loader --help");
+}
+
+console.log("Binaries with their own parser follow the same grammar...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "print(1);\n");
+    // Malformed deny flags fail exactly as on the shared-application binaries.
+    const malformed: [string, string, number][] = [
+      ["--deny-import", "--deny-import needs a scope: node_modules[=<dir>] or a provider such as github", 1],
+      ["--deny-net=", "--deny-net= has an empty scope list", 1],
+      ["--deny-read=a,,b", "Empty scope in --deny-read=a,,b", 1],
+      ["--deny-net=http://x", 'Invalid scope for --deny-net: "http://x"', 1],
+    ];
+    for (const [flag, message, code] of malformed) {
+      for (const [binary, args] of [[BARE, [flag, "main.js"]], [TEST262RUNNER, [flag]], [LOADER, [flag, "main.js"]]] as const) {
+        const result = run(binary, [...args], { cwd: tmp });
+        expectExit(result, code, `${binary} ${flag}`);
+        expectIncludes(result.combined, message, `${binary} ${flag}`);
+      }
+    }
+    // A well-formed deny is accepted.
+    expectExit(run(BARE, ["--deny-net=example.com", "main.js"], { cwd: tmp }), 0, "Bare --deny-net=example.com");
+
+    // Boolean flags reject a value.
+    const bareFlag = run(BARE, ["--compat-var=false", "main.js"], { cwd: tmp });
+    expectExit(bareFlag, 2, "Bare --compat-var=false");
+    expectIncludes(bareFlag.stderr, "--compat-var does not take a value", "Bare --compat-var=false");
+
+    // Limits a binary does not apply are rejected like the bundler's.
+    const unsupportedLimits: [string, string[], string][] = [
+      [BARE, ["--max-fetch-bytes=1MiB", "main.js"], "GocciaScriptLoaderBare does not support --max-fetch-bytes. Remove it."],
+      [TEST262RUNNER, ["--max-stack=100"], "GocciaTest262Runner does not support --max-stack. Remove it."],
+      [TEST262RUNNER, ["--max-instructions=100"], "GocciaTest262Runner does not support --max-instructions. Remove it."],
+      [TEST262RUNNER, ["--max-fetch-bytes=1MiB"], "GocciaTest262Runner does not support --max-fetch-bytes. Remove it."],
+    ];
+    for (const [binary, args, message] of unsupportedLimits) {
+      const result = run(binary, args, { cwd: tmp });
+      expectExit(result, 2, `${binary} ${args[0]}`);
+      expectIncludes(result.stderr, `Error: ${message}`, `${binary} ${args[0]}`);
+    }
+
+    // The WASM runner rejects options cleanly instead of crashing.
+    const wasmHelp = run(WASMTESTRUNNER, ["--help"], { cwd: tmp });
+    expectExit(wasmHelp, 0, "WasmTestRunner --help");
+    expectIncludes(wasmHelp.stdout, "Usage: GocciaWasmTestRunner [-P] <manifest-file>", "WasmTestRunner --help");
+    const wasmFlag = run(WASMTESTRUNNER, ["--allow-read"], { cwd: tmp });
+    expectExit(wasmFlag, 2, "WasmTestRunner --allow-read");
+    expectIncludes(wasmFlag.stderr, "Unknown option: --allow-read", "WasmTestRunner --allow-read");
+    const wasmMissing = run(WASMTESTRUNNER, [join(tmp, "missing.txt")], { cwd: tmp });
+    expectExit(wasmMissing, 2, "WasmTestRunner missing manifest");
+    expectIncludes(wasmMissing.stderr, "manifest not found", "WasmTestRunner missing manifest");
+
+    // Its unsupported-request warning names the config once.
+    mkdirSync(join(tmp, "wasm"));
+    writeFileSync(join(tmp, "wasm", "goccia.json"), '{"permissions": {"allow-import": ["node_modules"]}}\n');
+    writeFileSync(join(tmp, "wasm", "t.js"), 'test("t", () => {});\n');
+    writeFileSync(join(tmp, "manifest.txt"), join(tmp, "wasm", "t.js") + "\n");
+    const wasmWarn = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")], { cwd: tmp });
+    const configPath = join(tmp, "wasm", "goccia.json");
+    expectIncludes(wasmWarn.stderr, `WARN ${configPath} :: requests allow-import, which GocciaWasmTestRunner cannot grant; ignoring it`, "WasmTestRunner warning");
+    expectExcludes(wasmWarn.stderr, `:: Warning: ${configPath}`, "WasmTestRunner warning names the config once");
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("Config requests a binary cannot honor are warnings...");
@@ -420,6 +516,76 @@ console.log("Private network ranges need an explicit address or private...");
 
 // -- Config permissions ------------------------------------------------------------
 
+console.log("A malformed permissions value fails instead of being ignored...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(tmp, "outside"), { recursive: true });
+    mkdirSync(project);
+    writeFileSync(join(tmp, "outside", "secret.js"), 'export const secret = "OUTSIDE";\n');
+    writeFileSync(join(project, "main.mjs"), 'import { secret } from "../outside/secret.js";\nconsole.log(secret);\n');
+    const configPath = join(project, "goccia.json");
+    const cases: [string, string][] = [
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": {"path": "../outside"}}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": null}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": [["../outside"]]}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-nett": null}}', 'unknown permission "deny-nett"'],
+    ];
+    for (const [config, message] of cases) {
+      writeFileSync(configPath, config + "\n");
+      const result = run(LOADER, [join(project, "main.mjs")]);
+      expectExit(result, 2, `malformed ${config}`);
+      expectIncludes(result.stderr, `${configPath}: ${message}`, `malformed ${config}`);
+      expectExcludes(result.stdout, "OUTSIDE", `malformed ${config}`);
+    }
+    rmSync(configPath);
+    writeFileSync(join(project, "goccia.toml"), '[permissions]\nallow-read = ["../outside"]\ndeny-read = { a = 1 }\n');
+    const toml = run(LOADER, [join(project, "main.mjs")]);
+    expectExit(toml, 2, "malformed TOML deny-read");
+    expectExcludes(toml.stdout, "OUTSIDE", "malformed TOML deny-read");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A per-file config usage error stops the run before any file executes...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a"));
+    mkdirSync(join(tmp, "b"));
+    writeFileSync(join(tmp, "a", "s.js"), 'console.log("A-RAN");\n');
+    writeFileSync(join(tmp, "b", "s.js"), 'console.log("B-RAN");\n');
+    writeFileSync(join(tmp, "b", "goccia.json"), '{"unsafe-ffi": true}\n');
+    for (const args of [[], ["--jobs=2"], ["--mode=bytecode"]]) {
+      const loader = run(LOADER, [join("a", "s.js"), join("b", "s.js"), ...args], { cwd: tmp });
+      expectExit(loader, 2, `Loader multi-file ${args.join(" ")}`);
+      expectIncludes(loader.stderr, `Error: ${join(tmp, "b", "goccia.json")}: "unsafe-ffi" ${REMOVED}`, "Loader multi-file");
+      expectExcludes(loader.stdout, "A-RAN", "Loader multi-file runs nothing");
+    }
+    writeFileSync(join(tmp, "a", "t.js"), 'test("a", () => { console.log("A-RAN"); });\n');
+    writeFileSync(join(tmp, "b", "t.js"), 'test("b", () => {});\n');
+    for (const args of [[], ["--jobs=2"]]) {
+      const tests = run(TESTRUNNER, [join("a", "t.js"), join("b", "t.js"), "--no-progress", ...args], { cwd: tmp });
+      expectExit(tests, 2, `TestRunner multi-file ${args.join(" ")}`);
+      expectIncludes(tests.stderr, `"unsafe-ffi" ${REMOVED}`, "TestRunner multi-file");
+      expectExcludes(tests.combined, "A-RAN", "TestRunner multi-file runs nothing");
+    }
+    const bench = run(BENCHRUNNER, [join("b", "s.js"), "--no-progress"], { cwd: tmp });
+    expectExit(bench, 2, "BenchmarkRunner per-file usage error");
+    // An invalid value in a per-file config is still an exit-1 error, reported
+    // before anything runs.
+    writeFileSync(join(tmp, "b", "goccia.json"), '{"max-memory": "64MB"}\n');
+    const badValue = run(LOADER, [join("a", "s.js"), join("b", "s.js")], { cwd: tmp });
+    expectExit(badValue, 1, "per-file invalid value");
+    expectIncludes(badValue.combined, '"MB" is ambiguous', "per-file invalid value");
+    expectExcludes(badValue.stdout, "A-RAN", "per-file invalid value runs nothing");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config permissions resolve against the declaring file...");
 {
   const tmp = makeTmp();
@@ -485,6 +651,46 @@ console.log("Limits take units on the command line and in config...");
     const repl = run(REPL, ["--timeout=100ms"], { stdin: spin + "1 + 1\n" });
     expectIncludes(repl.combined, "timed out", "REPL --timeout");
     expectIncludes(repl.combined, "2", "REPL continues after a timeout");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Limit bounds and unsupported limits in config...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'console.log("RAN");\n');
+    // Values a limit cannot hold are rejected while parsing options, the same
+    // way on every binary, before anything runs.
+    const tooLarge: [string, string[], string][] = [
+      [LOADER, ["--max-fetch-bytes=3GiB", "main.js"], "Invalid value for --max-fetch-bytes: 3GiB (value is too large)"],
+      [LOADER, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
+      [BARE, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
+      [SANDBOXRUNNER, ["--max-fs-nodes=99999999999", "/main.js"], "Invalid value for --max-fs-nodes: 99999999999 (value is too large)"],
+    ];
+    for (const [binary, args, message] of tooLarge) {
+      const result = run(binary, args, { cwd: tmp });
+      expectExit(result, 1, `${binary} ${args.join(" ")}`);
+      expectIncludes(result.combined, message, `${binary} ${args.join(" ")}`);
+      expectExcludes(result.combined, "Fatal error", `${binary} ${args.join(" ")}`);
+      expectExcludes(result.stdout, "RAN", `${binary} ${args.join(" ")}`);
+    }
+
+    // A per-file limit is bounded the same way.
+    mkdirSync(join(tmp, "sub"));
+    writeFileSync(join(tmp, "sub", "main.js"), 'console.log("RAN");\n');
+    writeFileSync(join(tmp, "sub", "goccia.json"), '{"max-fetch-bytes": "3GiB"}\n');
+    const perFile = run(LOADER, [join("sub", "main.js")], { cwd: tmp });
+    expectExit(perFile, 1, "per-file max-fetch-bytes 3GiB");
+    expectIncludes(perFile.combined, `Invalid value for "max-fetch-bytes" in ${join(tmp, "sub", "goccia.json")}: 3GiB (value is too large)`, "per-file max-fetch-bytes 3GiB");
+
+    // A limit a binary does not apply is ignored in config, not validated.
+    writeFileSync(join(tmp, "goccia.json"), '{"timeout": "5x", "max-memory": "64MB", "max-stack": -1}\n');
+    const bundle = run(BUNDLER, ["main.js"], { cwd: tmp });
+    expectExit(bundle, 0, "Bundler ignores unsupported limits in config");
+    const loader = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(loader, 1, "Loader validates the same config");
   } finally {
     clean(tmp);
   }

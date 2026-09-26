@@ -496,7 +496,7 @@ var
   function NonNegativeInteger(const AName, ARaw: string): Integer;
   begin
     if not TryStrToInt(ARaw, Result) or (Result < 0) then
-      raise Exception.Create(AName +
+      raise TParseError.Create(AName +
         ' requires a non-negative integer, got: ' + ARaw);
   end;
 
@@ -504,7 +504,7 @@ var
   begin
     Result := NonNegativeInteger(AName, ARaw);
     if Result = 0 then
-      raise Exception.Create(AName +
+      raise TParseError.Create(AName +
         ' requires a positive integer, got: ' + ARaw);
   end;
 
@@ -513,6 +513,8 @@ begin
   while I <= ParamCount do
   begin
     Argument := ParamStr(I);
+    RejectUnsupportedSettingArgument(Argument, TEST262_PROGRAM_NAME,
+      [grsTimeout, grsMaxMemory]);
     if (Argument = '--help') or (Argument = '-h') then
     begin
       PrintUsage;
@@ -541,7 +543,7 @@ begin
       else if Value = 'module' then
         FOptions.HostEvalSourceType := stModule
       else
-        raise Exception.Create('--source-type requires script or module');
+        raise TParseError.Create('--source-type requires script or module');
     end
     else if (Argument = '--suite-dir') or
         StartsStr('--suite-dir=', Argument) then
@@ -573,10 +575,10 @@ begin
     begin
       Value := ArgumentValue('--timeout');
       if not TryParseDurationMilliseconds(Value, Parsed, ParseError) then
-        raise Exception.CreateFmt('Invalid value for --timeout: %s (%s)',
+        raise TParseError.CreateFmt('Invalid value for --timeout: %s (%s)',
           [Value, ParseError]);
       if Parsed <= 0 then
-        raise Exception.Create('--timeout requires a positive duration');
+        raise TParseError.Create('--timeout requires a positive duration');
       FOptions.TimeoutMs := Integer(Parsed);
     end
     else if (Argument = '--max-memory') or
@@ -584,10 +586,10 @@ begin
     begin
       Value := ArgumentValue('--max-memory');
       if not TryParseByteSize(Value, FOptions.MaxMemoryBytes, ParseError) then
-        raise Exception.CreateFmt('Invalid value for --max-memory: %s (%s)',
+        raise TParseError.CreateFmt('Invalid value for --max-memory: %s (%s)',
           [Value, ParseError]);
       if FOptions.MaxMemoryBytes <= 0 then
-        raise Exception.Create('--max-memory requires a positive size');
+        raise TParseError.Create('--max-memory requires a positive size');
     end
     else if TryHandleCapabilityArgument(Argument, TEST262_PROGRAM_NAME,
         []) then
@@ -609,7 +611,7 @@ begin
       else if Value = 'bytecode' then
         FOptions.Mode := t262emBytecode
       else
-        raise Exception.Create(
+        raise TParseError.Create(
           '--mode requires interpreted or bytecode');
     end
     else if (Argument = '--profile-mode') or
@@ -623,7 +625,7 @@ begin
       else if Value = 'all' then
         FOptions.ProfileMode := tpmAll
       else
-        raise Exception.Create(
+        raise TParseError.Create(
           '--profile-mode requires opcodes, functions, or all');
     end
     else
@@ -1910,6 +1912,19 @@ begin
     try
       ExitCode := App.Run;
     except
+      { A usage error and an unusable invocation (a missing or unknown
+        argument) exit 2; an invalid option value exits 1, as on every other
+        binary. }
+      on E: TCLIUsageError do
+      begin
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+        ExitCode := EXIT_CODE_USAGE;
+      end;
+      on E: TParseError do
+      begin
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+        ExitCode := 1;
+      end;
       on E: Exception do
       begin
         WriteLn(ErrOutput, 'Error: ', E.Message);

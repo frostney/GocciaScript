@@ -27,6 +27,8 @@ type
     procedure TestValuesTrueArrayFalse;
     procedure TestUnknownKeysRejected;
     procedure TestValueShapesRejected;
+    procedure TestUnrepresentableValuesRejected;
+    procedure TestMalformedBaseValueRejected;
     procedure TestRelativeScopesResolveAgainstDeclaringFile;
     procedure TestChildOverridesBasePerKey;
     procedure TestNodeModulesCeiling;
@@ -62,6 +64,10 @@ begin
   Test('Values: true, arrays, and false', TestValuesTrueArrayFalse);
   Test('Unknown permission keys are rejected', TestUnknownKeysRejected);
   Test('Values of the wrong shape are rejected', TestValueShapesRejected);
+  Test('null, object, and nested-array values are rejected, not ignored',
+    TestUnrepresentableValuesRejected);
+  Test('A malformed value in an extends base is rejected even when overridden',
+    TestMalformedBaseValueRejected);
   Test('Relative scopes resolve against the declaring file',
     TestRelativeScopesResolveAgainstDeclaringFile);
   Test('A child config overrides its base key by key',
@@ -224,6 +230,80 @@ begin
   Path := WriteConfig('not-object/goccia.json', '{"permissions": true}');
   Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
     Path + ': "permissions" must be an object of allow-* and deny-* keys');
+end;
+
+procedure TPermissionsTests.TestUnrepresentableValuesRejected;
+const
+  SHAPE_ERROR = 'must be true, false, or an array of strings';
+var
+  Path: string;
+begin
+  Path := WriteConfig('object/goccia.json', '{"permissions": {' +
+    '"allow-read": ["../outside"], "deny-read": {"path": "../outside"}}}');
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('null/goccia.json',
+    '{"permissions": {"deny-read": null}}');
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('nested-array/goccia.json',
+    '{"permissions": {"deny-read": [["x"]]}}');
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('null-element/goccia.json',
+    '{"permissions": {"deny-net": ["a.test", null]}}');
+  Expect<Boolean>(Pos('"permissions.deny-net" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('null-typo/goccia.json',
+    '{"permissions": {"deny-nett": null}}');
+  Expect<Boolean>(Pos('unknown permission "deny-nett"',
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('null-block/goccia.json', '{"permissions": null}');
+  Expect<Boolean>(Pos('"permissions" must be an object',
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('toml-object/goccia.toml',
+    '[permissions]' + LineEnding + 'deny-read = { a = 1 }' + LineEnding);
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('toml-nested/goccia.toml',
+    '[permissions]' + LineEnding + 'deny-read = [["x"]]' + LineEnding);
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('json5-null/goccia.json5',
+    '{ permissions: { "deny-read": null } }');
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('object-typo/goccia.json',
+    '{"permissions": {"deny-nett": {"a": 1}}}');
+  Expect<Boolean>(Pos('unknown permission "deny-nett"',
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('toml-subtable/goccia.toml',
+    '[permissions.deny-read]' + LineEnding + 'a = 1' + LineEnding);
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  { A null in a child is an error, not a fall-through to its base. }
+  WriteConfig('null-child/goccia.json', '{"permissions": {"allow-ffi": true}}');
+  Path := WriteConfig('null-child/child/goccia.json',
+    '{"extends": "../goccia.json", "permissions": {"allow-ffi": null}}');
+  Expect<Boolean>(Pos('"permissions.allow-ffi" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  { An empty scope is an invalid value (exit 1), as on the command line. }
+  Path := WriteConfig('empty-scope/goccia.json',
+    '{"permissions": {"allow-net": [""]}}');
+  Expect<string>(RequestError(Path)).ToBe('TParseError: ' + Path +
+    ': "permissions.allow-net" has an empty scope');
+end;
+
+procedure TPermissionsTests.TestMalformedBaseValueRejected;
+var
+  Path: string;
+begin
+  WriteConfig('bad-base/goccia.json',
+    '{"permissions": {"deny-read": {"x": 1}}}');
+  Path := WriteConfig('bad-base/child/goccia.json', '{"extends": ' +
+    '"../goccia.json", "permissions": {"deny-read": ["./secrets"]}}');
+  Expect<Boolean>(Pos('must be true, false, or an array of strings',
+    RequestError(Path)) > 0).ToBe(True);
 end;
 
 procedure TPermissionsTests.TestRelativeScopesResolveAgainstDeclaringFile;
@@ -409,8 +489,8 @@ begin
   Expect<Boolean>(Capabilities.Grants(gcRead)).ToBe(False);
   Warnings := UnsupportedRequestWarnings(Request, [gcNet], 'Sandbox');
   Expect<Integer>(Length(Warnings)).ToBe(1);
-  Expect<string>(Warnings[0]).ToBe('Warning: ' + Path + ' requests ' +
-    'allow-read, which Sandbox cannot grant; ignoring it');
+  Expect<string>(Warnings[0]).ToBe('requests allow-read, which Sandbox ' +
+    'cannot grant; ignoring it');
 end;
 
 procedure TPermissionsTests.TestUnhonoredCommandLineAllowRaises;

@@ -8,7 +8,7 @@ unit CLI.Units;
     (binary multiples, case-insensitive, the trailing `B` optional). The
     decimal-looking `K`/`KB`/`M`/`MB`/`G`/`GB` are rejected as ambiguous.
   - Durations: a whole number of milliseconds, or a whole number followed by
-    `ms`, `s`, or `m`.
+    `ms`, `s`, or `m` (case-insensitive).
   - Counts: a non-negative whole number.
 
   No form accepts a sign, a fraction, or surrounding whitespace. }
@@ -147,6 +147,7 @@ begin
     Exit(False);
   end;
 
+  Suffix := LowerCase(Suffix);
   if (Suffix = '') or (Suffix = 'ms') then
     Factor := 1
   else if Suffix = 's' then

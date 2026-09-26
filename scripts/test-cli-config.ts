@@ -1146,20 +1146,35 @@ console.log("CLI --allow-net adds to and --deny-net subtracts from config permis
 {
   const tmp = makeTmp();
   try {
-    // Config allows example.com
-    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
-    // Script fetches example.com — allowed by config.
-    writeFileSync(join(tmp, "test.js"), 'const p = fetch("http://example.com"); p.catch(() => {}); p;\n');
+    // The .invalid hosts never resolve, so an allowed request fails fast at
+    // lookup; the net check itself runs synchronously in fetch() and throws
+    // PermissionDenied for a refused host.
+    writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["config.invalid"]}}\n');
+    writeFileSync(
+      join(tmp, "test.js"),
+      [
+        'for (const host of ["config.invalid", "cli.invalid", "other.invalid"]) {',
+        "  try {",
+        '    fetch("http://" + host + "/").catch(() => {});',
+        '    console.log(host + " allowed");',
+        "  } catch (error) {",
+        '    console.log(host + " " + error.name);',
+        "  }",
+        "}",
+      ].join("\n") + "\n",
+    );
 
     // A CLI allow adds to the config's grants rather than replacing them.
-    const out = runCwd(LOADER, ["-P", "--print", "test.js", "--allow-net=other.test"], tmp);
-    if (!out.combined.includes("[object Promise]") && !out.combined.includes("Promise"))
-      throw new Error(`CLI allow should keep the config-granted host, got: ${out.combined}`);
+    const added = runCwd(LOADER, ["-P", "test.js", "--allow-net=cli.invalid"], tmp);
+    for (const line of ["config.invalid allowed", "cli.invalid allowed", "other.invalid PermissionDenied"])
+      if (!containsLine(added.stdout, line))
+        throw new Error(`CLI allow should add to the config's grants (${line}), got: ${added.combined}`);
 
     // A CLI deny subtracts from the config's grants.
-    const res = runCwd(LOADER, ["-P", "test.js", "--deny-net=example.com"], tmp, { expectFail: true });
-    if (!res.combined.includes("PermissionDenied: net: example.com"))
-      throw new Error(`CLI deny should subtract a config-granted host, got: ${res.combined}`);
+    const subtracted = runCwd(LOADER, ["-P", "test.js", "--allow-net=cli.invalid", "--deny-net=config.invalid"], tmp);
+    for (const line of ["config.invalid PermissionDenied", "cli.invalid allowed", "other.invalid PermissionDenied"])
+      if (!containsLine(subtracted.stdout, line))
+        throw new Error(`CLI deny should subtract a config-granted host (${line}), got: ${subtracted.combined}`);
   } finally {
     clean(tmp);
   }

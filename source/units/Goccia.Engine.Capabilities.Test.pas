@@ -81,6 +81,7 @@ type
     procedure TestProviderFollowsReadCapability;
     procedure TestStaticImportInsideProjectIsExempt;
     procedure TestStaticImportOutsideProjectIsDenied;
+    procedure TestDenialSuggestionsNameTheGrant;
     procedure TestHostLoadedModuleOutsideProjectIsExempt;
     procedure TestReadGrantCoversOutsidePath;
     procedure TestMissingOutsideFileIsDeniedBeforeProbing;
@@ -118,6 +119,8 @@ begin
     TestStaticImportInsideProjectIsExempt);
   Test('A static import outside the project is denied without a host path',
     TestStaticImportOutsideProjectIsDenied);
+  Test('Read and ffi denials suggest the flag that grants them',
+    TestDenialSuggestionsNameTheGrant);
   Test('A module the host loads itself is exempt outside the project',
     TestHostLoadedModuleOutsideProjectIsExempt);
   Test('A read grant covers a path outside the project',
@@ -399,6 +402,30 @@ begin
     .ToBe(True);
 end;
 
+procedure TEngineCapabilitiesTests.TestDenialSuggestionsNameTheGrant;
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := Run(
+    'import { value } from "../outside/secret.js"; globalThis.result = value;',
+    TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('--allow-read=' + CanonicalCapabilityPath(FOutside),
+    Outcome.Suggestion) > 0).ToBe(True);
+  Expect<Boolean>(Pos('"allow-read"', Outcome.Suggestion) > 0).ToBe(True);
+
+  Outcome := Run(
+    'import { value } from "../outside/secret.js"; globalThis.result = value;',
+    TGocciaCapabilities.None.Allow(gcRead).Deny(gcRead, FOutside));
+  Expect<Boolean>(Pos('--deny-read', Outcome.Suggestion) > 0).ToBe(True);
+
+  Outcome := OpenLibrary('../outside/lib.so',
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  Expect<Boolean>(Pos('--allow-ffi=', Outcome.Suggestion) > 0).ToBe(True);
+  Outcome := OpenLibrary('libgoccia-capability-probe.so',
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  Expect<Boolean>(Pos('--allow-ffi', Outcome.Suggestion) > 0).ToBe(True);
+end;
+
 procedure TEngineCapabilitiesTests.TestHostLoadedModuleOutsideProjectIsExempt;
 var
   Source: TStringList;
@@ -667,7 +694,10 @@ begin
       Engine.Execute;
     except
       on E: TGocciaThrowValue do
+      begin
         CaptureThrown(E.Value, Result);
+        Result.Suggestion := E.Suggestion;
+      end;
     end;
   finally
     Engine.Free;
