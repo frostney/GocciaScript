@@ -719,7 +719,8 @@ end;
   FromCommandLine distinguishes CLI-set options from root config values
   so that a per-file config can override a root-level config value. }
 { An unsafe-* flag: the command line, else the file's own config, else the
-  root config only when it governs the file. }
+  root config only when ARootConfigGoverns: the file has no config of its
+  own and lies inside the root config's tree (or --config named it). }
 function ResolveUnsafeFlag(const AFlag: TFlagOption;
   const AFileConfig: TConfigEntryArray;
   const ARootConfigGoverns: Boolean): Boolean;
@@ -1304,8 +1305,13 @@ begin
     end;
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
+      { One config per file: a file with its own config takes its unsafe-*
+        keys from that config (and its extends chain) alone; the root config
+        fills in only for a file without one, inside its tree. }
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName,
-        (FileConfigPath <> '') or RootConfigGoverns(AFileName));
+        ((FileConfigPath = '') or
+         (ExpandFileName(FileConfigPath) = ExpandFileName(FRootConfigPath))) and
+        RootConfigGoverns(AFileName));
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=

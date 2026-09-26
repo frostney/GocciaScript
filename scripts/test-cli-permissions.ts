@@ -653,6 +653,69 @@ console.log("A config's permissions govern only files in its own directory tree.
   }
 }
 
+console.log("A file with its own config inherits no unsafe-* keys or grants from the root config...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a", "sub"), { recursive: true });
+    mkdirSync(join(tmp, "c"));
+    writeFileSync(join(tmp, "a", "goccia.json"), JSON.stringify({
+      "unsafe-function-constructor": true,
+      "unsafe-shadowrealm": true,
+      permissions: { "allow-ffi": true },
+    }) + "\n");
+    writeFileSync(join(tmp, "c", "goccia.json"), '{"compat-var": true}\n');
+    writeFileSync(join(tmp, "a", "sub", "goccia.json"), '{"compat-var": true}\n');
+    const probe = [
+      'let fn = "off"; try { new Function("return 1")(); fn = "on"; } catch (e) {}',
+      'console.log("probe", fn, typeof ShadowRealm, typeof FFI);',
+      "",
+    ].join("\n");
+    for (const file of [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")])
+      writeFileSync(join(tmp, file), probe);
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const result = run(LOADER, [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs"), ...args], { cwd: tmp });
+      const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
+      if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
+      if (probes[0] !== "probe on function object")
+        throw new Error(`a/x.mjs should use a's config: ${probes[0]}`);
+      for (const [index, name] of [[1, "c/x.mjs"], [2, "a/sub/x.mjs"]] as const)
+        if (probes[index] !== "probe off undefined undefined")
+          throw new Error(`${name} has its own config and must inherit nothing from a/goccia.json (${args.join(" ")}): ${probes[index]}`);
+    }
+
+    // The benchmark runner resolves the same way.
+    writeFileSync(join(tmp, "c", "bench.js"), [
+      'import("goccia:microbench").then(({ bench, group }) => {',
+      '  group("inherit", () => {',
+      '    bench("unsafe", () => {',
+      '      if (typeof ShadowRealm !== "undefined" || typeof FFI !== "undefined") throw new Error("LEAKED");',
+      '      let on = false; try { new Function("return 1")(); on = true; } catch (e) {}',
+      '      if (on) throw new Error("LEAKED");',
+      "      return 1;",
+      "    });",
+      "  });",
+      "});",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "a", "bench.js"), 'import("goccia:microbench").then(({ bench, group }) => { group("a", () => { bench("a", () => 1); }); });\n');
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const bench = Bun.spawnSync([resolve(BENCHRUNNER), join("a", "bench.js"), join("c", "bench.js"), "--no-progress", ...args], {
+        cwd: tmp,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "20", GOCCIA_BENCH_ROUNDS: "1" } as Record<string, string>,
+        timeout: 60_000,
+      });
+      const text = bench.stdout.toString() + bench.stderr.toString();
+      if (bench.exitCode !== 0 || text.includes("LEAKED"))
+        throw new Error(`BenchmarkRunner c/bench.js must inherit nothing from a/goccia.json (${args.join(" ")}): exit ${bench.exitCode}\n${text}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config permissions resolve against the declaring file...");
 {
   const tmp = makeTmp();
