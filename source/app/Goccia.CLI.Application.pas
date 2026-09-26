@@ -170,7 +170,6 @@ uses
 
   Goccia.CLI.Help,
   Goccia.Coverage,
-  Goccia.FetchManager,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -182,6 +181,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Profiler,
+  Goccia.RuntimeExtensions.Fetch,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
   Goccia.TextFiles,
@@ -700,9 +700,9 @@ begin
   end;
 
   { fetch-deny-private-ranges / fetch-max-response-bytes: CLI flag > per-file
-    config > root config > defaults. Always assigned, for the same reason
-    max-memory is: the fetch manager is process-global, so leaving a previous
-    file's policy in place would silently apply it to the next one. }
+    config > root config > defaults. Applied to this engine's fetch only, so
+    a nested engine (a sandbox runScript child) configured here cannot change
+    the policy its parent's requests run under. }
   FetchPolicy := DefaultHTTPPolicy;
   FetchPolicy.DenyPrivateRanges := ResolveFlagOption(
     AEngineOptions.FetchDenyPrivateRanges, AFileConfig);
@@ -723,7 +723,9 @@ begin
   if FetchPolicy.MaxResponseBytes < 0 then
     raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
 
-  SetFetchRequestPolicy(FetchPolicy);
+  { False only for an engine without the fetch runtime extension, which has
+    no fetch() for the policy to govern. }
+  SetFetchRequestPolicy(AEngine, FetchPolicy);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
