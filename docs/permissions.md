@@ -93,7 +93,10 @@ Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
 is covered by an explicit IP or CIDR allow. An unscoped allow does not name
 them, but an explicit range does, however broad: `0.0.0.0/0` covers loopback,
-RFC 1918, and the `169.254.169.254` metadata address too. A `private` **deny**
+RFC 1918, and the `169.254.169.254` metadata address too. An address scope with
+a port names the address for that port only: `127.0.0.1:18765` lifts the
+private refusal for port 18765, not for port 22, whether the URL names the
+address or a host name that resolves to it. A `private` **deny**
 wins over every allow, explicit addresses and ranges included. IPv6 forms that
 embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
 6to4 `2002::/16` — are private when the host they embed is.

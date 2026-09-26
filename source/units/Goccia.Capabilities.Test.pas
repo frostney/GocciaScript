@@ -49,6 +49,7 @@ type
     procedure TestNetEmbeddedIPv4Ranges;
     procedure TestNetEmbeddedIPv4Scopes;
     procedure TestNetIPLiteralTrailingDot;
+    procedure TestPortScopedAddressNamesOnlyItsPort;
     procedure TestNetCIDRZero;
     procedure TestExplainNetHostDenial;
     procedure TestToJSON;
@@ -98,6 +99,8 @@ begin
     'embeds; allows do not', TestNetEmbeddedIPv4Scopes);
   Test('A trailing dot on an IP-literal scope names the same address',
     TestNetIPLiteralTrailingDot);
+  Test('A port-scoped IP names a private address for that port only',
+    TestPortScopedAddressNamesOnlyItsPort);
   Test('A /0 range covers every address, private ones included',
     TestNetCIDRZero);
   Test('ExplainNetHostDenial names the reason a host is refused',
@@ -809,6 +812,36 @@ begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Deny(gcNet, '198.51.100.7.');
   Expect<Boolean>(Capabilities.AllowsNetHost('198.51.100.7', 80)).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7')).ToBe(False);
+end;
+
+{ Naming a private address through `127.0.0.1:18765` lifts the private
+  refusal for that port, not for every port of the host — neither for the
+  literal nor for a host name that resolves to it. }
+procedure TCapabilitiesTests.TestPortScopedAddressNamesOnlyItsPort;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Allow(gcNet, '127.0.0.1:18765');
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18765)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 22)).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 18765))
+    .ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22)).ToBe(False);
+  Expect<Boolean>(Pos('private',
+    Capabilities.ExplainNetHostDenial('127.0.0.1', 22)) > 0).ToBe(True);
+  { An unported scope names the address on every port. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Allow(gcNet, '127.0.0.1');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22)).ToBe(True);
+  { A port-scoped deny applies to its port; with no port known it applies. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Deny(gcNet, '198.51.100.7:22');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 80))
+    .ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 22))
+    .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7')).ToBe(False);
 end;
 

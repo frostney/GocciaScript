@@ -56,7 +56,8 @@ type
     FLayers: TGocciaCapabilityLayers;
     function CopyWithScope(const ACapability: TGocciaCapability;
       const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
-    function PrivateAddressNamed(const AAddressText: string): Boolean;
+    function PrivateAddressNamed(const AAddressText: string;
+      const APort: Integer): Boolean;
     function NetHostVerdict(const AHost: string;
       const APort: Integer): TGocciaNetHostVerdict;
   public
@@ -116,10 +117,14 @@ type
       const APort: Integer): string;
 
     { net, after name resolution: the resolved address of a request whose host
-      already passed AllowsNetHost. Private, loopback, and link-local addresses
-      are denied unless every layer names them, through the `private` scope or
-      an explicit IP/CIDR scope that covers the address. }
-    function AllowsNetAddress(const AAddress: string): Boolean;
+      already passed AllowsNetHost, for its port APort. Private, loopback, and
+      link-local addresses are denied unless every layer names them, through
+      the `private` scope or an explicit IP/CIDR scope that covers the address
+      and, when the scope has a port, names APort. APort of zero means the
+      port is not known: only unported scopes name the address then, and
+      port-scoped denies apply. }
+    function AllowsNetAddress(const AAddress: string;
+      const APort: Integer = 0): Boolean;
 
     { import: whether a bare specifier imported from AImportingDirectory may be
       resolved against node_modules, and the highest directory the ancestor
@@ -840,8 +845,20 @@ begin
   Result := True;
 end;
 
+{ A scope with a port names (or, for a deny, covers) only that port. APort of
+  NET_ANY_PORT asks about any port. }
+function ScopePortMatches(const ANetScope: TGocciaNetScope;
+  const APort: Integer): Boolean;
+begin
+  Result := (ANetScope.Port = 0) or (APort = NET_ANY_PORT) or
+    (ANetScope.Port = APort);
+end;
+
+{ Whether every layer names AAddressText for APort: the `private` scope, or
+  an IP/CIDR allow covering the address whose port, if it has one, is APort.
+  APort of zero (not known) is named only by an unported scope. }
 function TGocciaCapabilities.PrivateAddressNamed(
-  const AAddressText: string): Boolean;
+  const AAddressText: string; const APort: Integer): Boolean;
 var
   Address: TNetworkAddress;
   I, J: Integer;
@@ -859,7 +876,8 @@ begin
     for J := 0 to High(Rule.AllowScopes) do
       if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
          ((NetScope.Kind = nskPrivate) or
-          NetScopeCoversAddress(NetScope, Address, False)) then
+          (ScopePortMatches(NetScope, APort) and
+           NetScopeCoversAddress(NetScope, Address, False))) then
       begin
         LayerNames := True;
         Break;
@@ -924,7 +942,7 @@ begin
       Exit(nhvNotAllowed);
   end;
 
-  if HostIsPrivate and not PrivateAddressNamed(Host) then
+  if HostIsPrivate and not PrivateAddressNamed(Host, APort) then
     Exit(nhvPrivateNotNamed);
   Result := nhvAllowed;
 end;
@@ -955,8 +973,8 @@ begin
   end;
 end;
 
-function TGocciaCapabilities.AllowsNetAddress(
-  const AAddress: string): Boolean;
+function TGocciaCapabilities.AllowsNetAddress(const AAddress: string;
+  const APort: Integer): Boolean;
 var
   Address: TNetworkAddress;
   AddressText: string;
@@ -983,13 +1001,17 @@ begin
       begin
         if (NetScope.Kind = nskPrivate) and IsPrivate then
           Exit(False);
-        if NetScopeCoversAddress(NetScope, Address, True) then
+        { A port-scoped deny covers its port, and any request whose port is
+          not known. }
+        if ((NetScope.Port = 0) or (APort <= 0) or
+            (NetScope.Port = APort)) and
+           NetScopeCoversAddress(NetScope, Address, True) then
           Exit(False);
       end;
   end;
 
   if IsPrivate then
-    Exit(PrivateAddressNamed(AddressText));
+    Exit(PrivateAddressNamed(AddressText, APort));
   Result := True;
 end;
 
