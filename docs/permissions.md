@@ -197,20 +197,16 @@ for: the specifier as written, the host (plus a non-default port), or the
 library path as passed to `FFI.open`. It never contains an expanded host path
 ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)). The host-side
 report — the CLI's `Suggestion:` line, or `TGocciaThrowValue.Suggestion` for an
-<<<<<<< HEAD
 embedder — names the canonical path and how to grant it: `--allow-read=<dir>`
 or `"allow-read"` in a `permissions` block for a read the capability does not
 cover (with a note that a computed `import()` is outside the module graph),
 `--allow-ffi[=<dir>]` for a library, `--allow-net=<host>` or `private` for a
 host, and the `--deny-*` or `deny-*` entry that refused a denied one.
-=======
-embedder — may name the canonical path and the option that would grant it. The
-suggestion also travels on the error object (never as a guest-visible property),
-so a denial that surfaces through a rejected `import()` or `fetch()` promise
-still reports it. Both executors locate a denial at the guest request that
-caused it: the `import` or `export … from` declaration, the `import()`
-expression, or the `fetch()`/`FFI.open()` call.
->>>>>>> origin/feat/engine-capabilities
+The suggestion also travels on the error object (never as a guest-visible
+property), so a denial that surfaces through a rejected `import()` or
+`fetch()` promise still reports it. Both executors locate a denial at the
+guest request that caused it: the `import` or `export … from` declaration, the
+`import()` expression, or the `fetch()`/`FFI.open()` call.
 
 ## Audit events
 

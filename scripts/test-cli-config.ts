@@ -1649,7 +1649,7 @@ console.log("Executable manifests keep --deny-read in force...");
       }
     }
 
-    // A JavaScript manifest runs host code. Under --no-host-filesystem it is
+    // A JavaScript manifest runs host code. Under --deny-read it is
     // evaluated in an isolated loader, so a function it leaves on the global
     // object imports as the guest, not as the host that loaded the manifest.
     writeFileSync(
@@ -1666,7 +1666,7 @@ console.log("Executable manifests keep --deny-read in force...");
         LOADER,
         [
           join(projDir, "trampoline.mjs"),
-          "--no-host-filesystem",
+          "--deny-read",
           `--mode=${mode}`,
           "--modules",
           join(projDir, "trampoline.js"),
@@ -1675,7 +1675,7 @@ console.log("Executable manifests keep --deny-read in force...");
         { expectFail: true },
       );
       if (trampoline.combined.includes("HOST-FILE-READ"))
-        throw new Error(`A manifest's global function imported as the host under --no-host-filesystem (${mode}): ${trampoline.combined}`);
+        throw new Error(`A manifest's global function imported as the host under --deny-read (${mode}): ${trampoline.combined}`);
       if (!trampoline.combined.includes(`PermissionDenied: read: ${outside}`))
         throw new Error(`A manifest's global function import should be refused by the read capability (${mode}): ${trampoline.combined}`);
       // Without the deny the manifest is evaluated in place, as host code.
