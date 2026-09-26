@@ -259,6 +259,15 @@ begin
       IsUsageError)).ToBe('Empty scope in --allow-read=a,,b');
     Expect<string>(ParseMessage(['--allow-read=a,'], Options,
       IsUsageError)).ToBe('Empty scope in --allow-read=a,');
+    { A whitespace-only item is empty too: trimmed, it would become an
+      unscoped grant. }
+    Expect<string>(ParseMessage(['--allow-read=a, '], Options,
+      IsUsageError)).ToBe('Empty scope in --allow-read=a, ');
+    Expect<string>(ParseMessage(['--allow-read= '], Options,
+      IsUsageError)).ToBe('Empty scope in --allow-read= ');
+    Expect<string>(ParseMessage(['--allow-read=a,'#9',b'], Options,
+      IsUsageError)).ToBe('Empty scope in --allow-read=a,'#9',b');
+    Expect<Boolean>(IsUsageError).ToBe(False);
   finally
     Opt.Free;
   end;
