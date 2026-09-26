@@ -832,7 +832,8 @@ begin
 
   Warnings := UnsupportedRequestWarnings(Result, HonoredCapabilities, Name);
   for I := 0 to High(Warnings) do
-    WarnOnce(Warnings[I], Warnings[I]);
+    WarnOnce(Result.ConfigPath + #0 + Warnings[I],
+      'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);
 end;
 
 function TGocciaCLIApplication.ResolveEngineCapabilities(

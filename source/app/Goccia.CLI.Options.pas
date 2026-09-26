@@ -171,10 +171,18 @@ function ResolveCapabilities(const AOptions: TGocciaCapabilityOptions;
   const AWorkingDirectory: string): TGocciaCapabilities;
 
 { For binaries with their own argument parser: True when AArgument is an
-  --allow-<cap> or --deny-<cap> flag. An --allow-* for a capability outside
-  AHonored raises TCLIUsageError; a --deny-* is accepted. }
+  --allow-<cap> or --deny-<cap> flag, validated exactly as the shared parser
+  validates it (scope syntax and scope values raise TParseError). An
+  --allow-* for a capability outside AHonored raises TCLIUsageError; a
+  well-formed --deny-* is accepted. }
 function TryHandleCapabilityArgument(const AArgument, AProgramName: string;
   const AHonored: TGocciaHonoredCapabilities): Boolean;
+
+{ For binaries with their own argument parser: raises TCLIUsageError when
+  AArgument is a limit (--timeout, --max-*) outside AHonored, with the same
+  message the shared application gives. }
+procedure RejectUnsupportedSettingArgument(const AArgument,
+  AProgramName: string; const AHonored: TGocciaHonoredSettings);
 
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
@@ -189,6 +197,8 @@ implementation
 uses
   Classes,
   SysUtils,
+
+  CLI.Parser,
 
   Goccia.StackLimit;
 
@@ -481,6 +491,7 @@ var
   Allow: Boolean;
   Capability: TGocciaCapability;
   EqualPos: Integer;
+  Options: TGocciaCapabilityOptions;
 begin
   if Copy(AArgument, 1, Length(ALLOW_FLAG_PREFIX)) = ALLOW_FLAG_PREFIX then
   begin
@@ -505,7 +516,31 @@ begin
       '%s cannot grant %s; it supports %s. Remove --%s.',
       [AProgramName, CapabilityName(Capability),
        DescribeCapabilities(AHonored), PermissionKeyName(True, Capability)]);
+  Options := TGocciaCapabilityOptions.Create;
+  try
+    ParseArguments([AArgument], Options.Options).Free;
+    Options.ValidateScopes(GetCurrentDir);
+  finally
+    Options.Free;
+  end;
   Result := True;
+end;
+
+procedure RejectUnsupportedSettingArgument(const AArgument,
+  AProgramName: string; const AHonored: TGocciaHonoredSettings);
+var
+  Setting: TGocciaRuntimeSetting;
+  Name: string;
+begin
+  if Copy(AArgument, 1, 2) <> '--' then
+    Exit;
+  Name := Copy(AArgument, 3, MaxInt);
+  if Pos('=', Name) > 0 then
+    Name := Copy(Name, 1, Pos('=', Name) - 1);
+  for Setting := Low(TGocciaRuntimeSetting) to High(TGocciaRuntimeSetting) do
+    if (Name = SETTING_NAMES[Setting]) and not (Setting in AHonored) then
+      raise TCLIUsageError.CreateFmt('%s does not support --%s. Remove it.',
+        [AProgramName, Name]);
 end;
 
 const
@@ -589,9 +624,10 @@ begin
   AList.Add(TRemovedOption.Create('fetch-deny-private-ranges',
     'fetch-deny-private-ranges',
     'private ranges are denied by default; allow them with ' +
-    '--allow-net=private',
+    '--allow-net=private, or refuse them outright with --deny-net=private',
     'private ranges are denied by default; allow them with ' +
-    '"permissions": { "allow-net": ["private"] }'));
+    '"permissions": { "allow-net": ["private"] }, or refuse them outright ' +
+    'with "deny-net": ["private"]'));
   AList.Add(TRemovedOption.Create('fetch-max-response-bytes',
     'fetch-max-response-bytes',
     'use --max-fetch-bytes instead (units: 1MiB)',

@@ -349,12 +349,31 @@ var
   GC: TGarbageCollector;
 
 begin
-  if ParamCount < 1 then
+  if (ParamCount = 1) and ((ParamStr(1) = '--help') or
+     (ParamStr(1) = '-h')) then
+  begin
+    WriteLn('Usage: GocciaWasmTestRunner <manifest-file>');
+    WriteLn('  manifest: one script path per line, # starts a comment');
+    Exit;
+  end;
+  if ParamCount <> 1 then
   begin
     WriteLn(ErrOutput,
       'Usage: GocciaWasmTestRunner <manifest-file>');
     WriteLn(ErrOutput,
       '  manifest: one script path per line, # starts a comment');
+    ExitCode := 2;
+    Exit;
+  end;
+  if Copy(ParamStr(1), 1, 1) = '-' then
+  begin
+    WriteLn(ErrOutput, 'Error: Unknown option: ', ParamStr(1));
+    ExitCode := 2;
+    Exit;
+  end;
+  if not FileExists(ParamStr(1)) then
+  begin
+    WriteLn(ErrOutput, 'Error: manifest not found: ', ParamStr(1));
     ExitCode := 2;
     Exit;
   end;

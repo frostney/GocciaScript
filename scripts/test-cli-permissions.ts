@@ -19,6 +19,7 @@ import {
   SANDBOXRUNNER,
   TEST262RUNNER,
   TESTRUNNER,
+  WASMTESTRUNNER,
 } from "./test-cli/binaries";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
@@ -75,7 +76,7 @@ console.log("Removed flags exit 2 and name their replacement...");
 {
   const removedFlags: [string, string][] = [
     ["--allowed-host=example.com", "--allowed-host was removed in GocciaScript 0.14.0; use --allow-net=<host>[,<host>...] instead"],
-    ["--fetch-deny-private-ranges", "--fetch-deny-private-ranges was removed in GocciaScript 0.14.0; private ranges are denied by default; allow them with --allow-net=private"],
+    ["--fetch-deny-private-ranges", "--fetch-deny-private-ranges was removed in GocciaScript 0.14.0; private ranges are denied by default; allow them with --allow-net=private, or refuse them outright with --deny-net=private"],
     ["--fetch-max-response-bytes=10", "--fetch-max-response-bytes was removed in GocciaScript 0.14.0; use --max-fetch-bytes instead (units: 1MiB)"],
     ["--unsafe-ffi", "--unsafe-ffi was removed in GocciaScript 0.14.0; use --allow-ffi[=<library>,...] instead"],
     ["--allow-node-modules", "--allow-node-modules was removed in GocciaScript 0.14.0; use --allow-import=node_modules[=<dir>] instead"],
@@ -138,7 +139,7 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"unsafe-ffi": true}', `"unsafe-ffi" ${REMOVED}; use "permissions": { "allow-ffi": true } instead`],
       ['{"allow-node-modules": true}', `"allow-node-modules" ${REMOVED}; use "permissions": { "allow-import": ["node_modules"] } instead`],
       ['{"no-host-filesystem": true}', `"no-host-filesystem" ${REMOVED}; use "permissions": { "deny-read": true } instead`],
-      ['{"fetch-deny-private-ranges": true}', `"fetch-deny-private-ranges" ${REMOVED}; private ranges are denied by default`],
+      ['{"fetch-deny-private-ranges": true}', `"fetch-deny-private-ranges" ${REMOVED}; private ranges are denied by default; allow them with "permissions": { "allow-net": ["private"] }, or refuse them outright with "deny-net": ["private"]`],
       ['{"fetch-max-response-bytes": 10}', `"fetch-max-response-bytes" ${REMOVED}; use "max-fetch-bytes" instead`],
       ['{"stack-size": 100}', `"stack-size" ${REMOVED}; use "max-stack" instead`],
       ['{"allow-net": ["example.com"]}', `"allow-net" can only be given on the command line; declare it in the config's "permissions" object instead`],
@@ -265,6 +266,71 @@ console.log("Unsupported capabilities and limits are rejected on the command lin
   const loaderHelp = run(LOADER, ["--help"]).stdout;
   for (const flag of ["--allow-read", "--allow-net", "--allow-ffi", "--allow-import", "--deny-read", "--max-stack", "--max-fetch-bytes"])
     expectIncludes(loaderHelp, flag, "Loader --help");
+}
+
+console.log("Binaries with their own parser follow the same grammar...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "print(1);\n");
+    // Malformed deny flags fail exactly as on the shared-application binaries.
+    const malformed: [string, string, number][] = [
+      ["--deny-import", "--deny-import needs a scope: node_modules[=<dir>] or a provider such as github", 1],
+      ["--deny-net=", "--deny-net= has an empty scope list", 1],
+      ["--deny-read=a,,b", "Empty scope in --deny-read=a,,b", 1],
+      ["--deny-net=http://x", 'Invalid scope for --deny-net: "http://x"', 1],
+    ];
+    for (const [flag, message, code] of malformed) {
+      for (const [binary, args] of [[BARE, [flag, "main.js"]], [TEST262RUNNER, [flag]], [LOADER, [flag, "main.js"]]] as const) {
+        const result = run(binary, [...args], { cwd: tmp });
+        expectExit(result, code, `${binary} ${flag}`);
+        expectIncludes(result.combined, message, `${binary} ${flag}`);
+      }
+    }
+    // A well-formed deny is accepted.
+    expectExit(run(BARE, ["--deny-net=example.com", "main.js"], { cwd: tmp }), 0, "Bare --deny-net=example.com");
+
+    // Boolean flags reject a value.
+    const bareFlag = run(BARE, ["--compat-var=false", "main.js"], { cwd: tmp });
+    expectExit(bareFlag, 2, "Bare --compat-var=false");
+    expectIncludes(bareFlag.stderr, "--compat-var does not take a value", "Bare --compat-var=false");
+
+    // Limits a binary does not apply are rejected like the bundler's.
+    const unsupportedLimits: [string, string[], string][] = [
+      [BARE, ["--max-fetch-bytes=1MiB", "main.js"], "GocciaScriptLoaderBare does not support --max-fetch-bytes. Remove it."],
+      [TEST262RUNNER, ["--max-stack=100"], "GocciaTest262Runner does not support --max-stack. Remove it."],
+      [TEST262RUNNER, ["--max-instructions=100"], "GocciaTest262Runner does not support --max-instructions. Remove it."],
+      [TEST262RUNNER, ["--max-fetch-bytes=1MiB"], "GocciaTest262Runner does not support --max-fetch-bytes. Remove it."],
+    ];
+    for (const [binary, args, message] of unsupportedLimits) {
+      const result = run(binary, args, { cwd: tmp });
+      expectExit(result, 2, `${binary} ${args[0]}`);
+      expectIncludes(result.stderr, `Error: ${message}`, `${binary} ${args[0]}`);
+    }
+
+    // The WASM runner rejects options cleanly instead of crashing.
+    const wasmHelp = run(WASMTESTRUNNER, ["--help"], { cwd: tmp });
+    expectExit(wasmHelp, 0, "WasmTestRunner --help");
+    expectIncludes(wasmHelp.stdout, "Usage: GocciaWasmTestRunner <manifest-file>", "WasmTestRunner --help");
+    const wasmFlag = run(WASMTESTRUNNER, ["--allow-read"], { cwd: tmp });
+    expectExit(wasmFlag, 2, "WasmTestRunner --allow-read");
+    expectIncludes(wasmFlag.stderr, "Unknown option: --allow-read", "WasmTestRunner --allow-read");
+    const wasmMissing = run(WASMTESTRUNNER, [join(tmp, "missing.txt")], { cwd: tmp });
+    expectExit(wasmMissing, 2, "WasmTestRunner missing manifest");
+    expectIncludes(wasmMissing.stderr, "manifest not found", "WasmTestRunner missing manifest");
+
+    // Its unsupported-request warning names the config once.
+    mkdirSync(join(tmp, "wasm"));
+    writeFileSync(join(tmp, "wasm", "goccia.json"), '{"permissions": {"allow-import": ["node_modules"]}}\n');
+    writeFileSync(join(tmp, "wasm", "t.js"), 'test("t", () => {});\n');
+    writeFileSync(join(tmp, "manifest.txt"), join(tmp, "wasm", "t.js") + "\n");
+    const wasmWarn = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")], { cwd: tmp });
+    const configPath = join(tmp, "wasm", "goccia.json");
+    expectIncludes(wasmWarn.stderr, `WARN ${configPath} :: requests allow-import, which GocciaWasmTestRunner cannot grant; ignoring it`, "WasmTestRunner warning");
+    expectExcludes(wasmWarn.stderr, `:: Warning: ${configPath}`, "WasmTestRunner warning names the config once");
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("Config requests a binary cannot honor are warnings...");

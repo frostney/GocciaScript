@@ -461,8 +461,8 @@ begin
   Expect<Boolean>(Capabilities.Grants(gcRead)).ToBe(False);
   Warnings := UnsupportedRequestWarnings(Request, [gcNet], 'Sandbox');
   Expect<Integer>(Length(Warnings)).ToBe(1);
-  Expect<string>(Warnings[0]).ToBe('Warning: ' + Path + ' requests ' +
-    'allow-read, which Sandbox cannot grant; ignoring it');
+  Expect<string>(Warnings[0]).ToBe('requests allow-read, which Sandbox ' +
+    'cannot grant; ignoring it');
 end;
 
 procedure TPermissionsTests.TestUnhonoredCommandLineAllowRaises;

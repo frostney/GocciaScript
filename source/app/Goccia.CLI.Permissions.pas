@@ -78,8 +78,8 @@ function ReadConfigPermissionRequest(const AEntries: TConfigEntryArray;
   const AConfigPath: string): TGocciaConfigPermissionRequest;
 
 { One message per capability the request asks to allow that AHonored does
-  not include: `Warning: <config> requests allow-<cap>, which <Program>
-  cannot grant; ignoring it`. }
+  not include: `requests allow-<cap>, which <Program> cannot grant; ignoring
+  it`. Callers prefix the config path in their own output format. }
 function UnsupportedRequestWarnings(
   const ARequest: TGocciaConfigPermissionRequest;
   const AHonored: TGocciaHonoredCapabilities;
@@ -374,9 +374,8 @@ begin
     begin
       SetLength(Result, Length(Result) + 1);
       Result[High(Result)] := Format(
-        'Warning: %s requests %s, which %s cannot grant; ignoring it',
-        [ARequest.ConfigPath, PermissionKeyName(True, Capability),
-         AProgramName]);
+        'requests %s, which %s cannot grant; ignoring it',
+        [PermissionKeyName(True, Capability), AProgramName]);
     end;
 end;
 

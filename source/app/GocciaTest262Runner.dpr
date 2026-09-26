@@ -513,6 +513,8 @@ begin
   while I <= ParamCount do
   begin
     Argument := ParamStr(I);
+    RejectUnsupportedSettingArgument(Argument, TEST262_PROGRAM_NAME,
+      [grsTimeout, grsMaxMemory]);
     if (Argument = '--help') or (Argument = '-h') then
     begin
       PrintUsage;
