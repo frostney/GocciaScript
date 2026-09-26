@@ -124,6 +124,7 @@ type
     procedure TestCallDenialSitesMatchAcrossExecutors;
     procedure TestStaticImportDenialSitesMatchAcrossExecutors;
     procedure TestHostModuleCodeImportsAsTheGuestLater;
+    procedure TestDeferredGraphDependenciesAreJudged;
   public
     procedure SetupTests; override;
   end;
@@ -203,6 +204,8 @@ begin
     TestStaticImportDenialSitesMatchAcrossExecutors);
   Test('An import a host module''s code makes after enrollment is a guest ' +
     'read', TestHostModuleCodeImportsAsTheGuestLater);
+  Test('import defer judges every module of the deferred graph before ' +
+    'reading it', TestDeferredGraphDependenciesAreJudged);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -260,6 +263,9 @@ begin
   WriteFile(ProjectPath('sub/index.js'), 'export const value = "sub";');
   WriteFile(ProjectPath('sub/secret.json'), '{}');
   WriteFile(ProjectPath('hidden.js'), 'export const value = "hidden";');
+  WriteFile(ProjectPath('deferred-dep.js'),
+    'import { value } from "../outside/secret.js";' + sLineBreak +
+    'export const v = value;');
   WriteFile(ProjectPath('shadow/index.js'), 'export const value = "shadow";');
   WriteFile(ProjectPath('node_modules/probe/package.json'),
     '{"name":"probe","type":"module","exports":"./main"}');
@@ -1574,6 +1580,36 @@ begin
     Outcome := Run(SOURCE_TEXT,
       TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
     Expect<string>(Outcome.Result).ToBe('outside');
+  end;
+end;
+
+
+{ import defer links the whole graph eagerly and defers only evaluation.
+  Each module that linking reads — here an allowed project module's import
+  of a file outside the project — is judged before it is read, as the eager
+  path judges it. }
+procedure TEngineCapabilitiesTests.TestDeferredGraphDependenciesAreJudged;
+const
+  SOURCE_TEXT =
+    'import defer * as ns from "./deferred-dep.js";' + sLineBreak +
+    'globalThis.result = "linked";';
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  for Bytecode in [False, True] do
+  begin
+    FEvents.Clear;
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+    Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/secret.js');
+    Expect<Boolean>(FEvents.IndexOf('read.file|deny|' +
+      CanonicalCapabilityPath(OutsidePath('secret.js'))) >= 0).ToBe(True);
+    { With a grant the graph links and evaluation stays deferred. }
+    Outcome := Run(SOURCE_TEXT,
+      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('linked');
   end;
 end;
 
