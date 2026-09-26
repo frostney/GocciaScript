@@ -7658,7 +7658,9 @@ await section("Runner sandbox mode: --diff prints JSON with metadata, or unified
 });
 
 await section("Runner sandbox mode: only net is granted; host capabilities are refused...", async () => {
-  const tmp = makeTmp();
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = realpathSync(makeTmp());
   try {
     writeFileSync(join(tmp, "main.js"), 'console.log("ran");');
     for (const [flags, reason] of [
@@ -7852,7 +7854,9 @@ await section("Runner sandbox mode: a discovered config's limits apply...", asyn
 });
 
 await section("Runner sandbox mode: a trusted sandbox section switches it on...", async () => {
-  const tmp = makeTmp();
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = realpathSync(makeTmp());
   try {
     const project = join(tmp, "project");
     mkdirSync(join(project, "src"), { recursive: true });
@@ -7920,6 +7924,41 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
   }
 });
 
+await section("Runner sandbox mode: the section's entry and diff keys, from the root config only...", async () => {
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src", "main.js"), 'console.log("config-entry");');
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      sandbox: { copy: ["src=/"], entry: "/main.js", diff: true },
+    }));
+    // No positional and no --entry: the section names the entry, and stdin
+    // (piped here) is not read.
+    for (const stdin of [undefined, 'console.log("from-stdin");']) {
+      const run = runSandboxCli(["-P"], { cwd: project, stdin });
+      if (run.exitCode !== 0 || !run.stdout.startsWith("config-entry\n"))
+        throw new Error(`The section's entry should run, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      const diff = JSON.parse(run.stdout.slice("config-entry\n".length));
+      if (!Array.isArray(diff.changes) || !Array.isArray(diff.metadataChanges))
+        throw new Error(`The section's diff: true should print a JSON diff, got:\n${run.stdout}`);
+    }
+
+    // Only the root config's section counts. With --config naming another
+    // root, the entry directory's section is not used: host mode, where
+    // "fs" does not resolve.
+    const other = join(tmp, "other");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "goccia.json"), JSON.stringify({ timeout: "5s" }));
+    writeFileSync(join(project, "host.mjs"), 'import fs from "fs";\nconsole.log(typeof fs);\n');
+    const hostRun = runSandboxCli(["host.mjs", `--config=${other}`, "-P"], { cwd: project });
+    if (hostRun.exitCode === 0 || !(hostRun.stdout + hostRun.stderr).includes('Cannot resolve bare module specifier "fs"'))
+      throw new Error(`A non-root sandbox section should not switch sandbox mode on, got (exit ${hostRun.exitCode}):\n${hostRun.stdout}${hostRun.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: the sandbox section in TOML...", async () => {
   const tmp = makeTmp();
   try {
@@ -7943,7 +7982,9 @@ await section("Runner sandbox mode: the sandbox section in TOML...", async () =>
 });
 
 await section("Runner sandbox mode: sandbox section keys are validated...", async () => {
-  const tmp = makeTmp();
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = realpathSync(makeTmp());
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     mkdirSync(join(tmp, "project"), { recursive: true });
@@ -8001,7 +8042,9 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
 });
 
 await section("Runner sandbox mode: binaries that ignore the sandbox section warn about it...", async () => {
-  const tmp = makeTmp();
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = realpathSync(makeTmp());
   try {
     const configPath = join(tmp, "goccia.json");
     writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["missing-dir"] } }));
