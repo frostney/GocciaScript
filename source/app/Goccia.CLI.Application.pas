@@ -799,13 +799,16 @@ begin
      (Extension = '.ts') then
   begin
     { The manifest is a host file named by the host, so it always loads from
-      the filesystem. Evaluated through the engine's own loader it and its
-      imports become host-owned there, so anything it leaves behind (a global
-      function that calls import(), say) would import as the host. Under an
-      outright read deny (--no-host-filesystem) it is therefore evaluated in
-      an isolated loader, and a later import made from its code is a guest
-      read the deny refuses. }
-    if AEngine.Capabilities.DeniesAll(gcRead) then
+      the host filesystem. An engine whose own provider does not read the
+      host (the sandbox runner) cannot evaluate it in place. Evaluated through
+      the engine's own loader, the manifest and its imports become host-owned
+      there, so anything it leaves behind (a global function that calls
+      import(), say) would import as the host; under an outright read deny
+      (--no-host-filesystem) it is therefore evaluated in an isolated loader
+      too, and a later import made from its code is a guest read the deny
+      refuses. }
+    if AEngine.Capabilities.DeniesAll(gcRead) or
+       not AEngine.ContentProvider.ReadsHostFileSystem then
       InjectModulesFromFileSystemModule(AEngine, APath)
     else
       AEngine.InjectModulesFromModule(APath);

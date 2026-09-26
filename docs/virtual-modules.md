@@ -66,7 +66,8 @@ script's module loader, so code it leaves behind — a global function that call
 `import()`, say — imports as the host did. Under `--no-host-filesystem` (an
 outright `read` deny) it is evaluated in an isolated loader instead, so such an
 import is a guest read and is refused with `PermissionDenied` like the script's
-own imports.
+own imports. An engine whose module provider does not read the host filesystem
+(the sandbox runner) always evaluates it in an isolated loader.
 
 Project config may contain a module map directly:
 
