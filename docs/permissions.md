@@ -404,7 +404,7 @@ being validated.
 | `GocciaSandboxRunner` | net | all, plus `--max-fs-bytes` and `--max-fs-nodes` | `--config` only |
 | `GocciaScriptLoaderBare` | none | `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack` | none |
 | `GocciaTest262Runner` | none | `--timeout`, `--max-memory` | none |
-| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file |
+| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file; accepts `-P`, currently a no-op |
 
 ## Limits and units
 

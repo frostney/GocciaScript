@@ -311,10 +311,13 @@ console.log("Binaries with their own parser follow the same grammar...");
     // The WASM runner rejects options cleanly instead of crashing.
     const wasmHelp = run(WASMTESTRUNNER, ["--help"], { cwd: tmp });
     expectExit(wasmHelp, 0, "WasmTestRunner --help");
-    expectIncludes(wasmHelp.stdout, "Usage: GocciaWasmTestRunner <manifest-file>", "WasmTestRunner --help");
+    expectIncludes(wasmHelp.stdout, "Usage: GocciaWasmTestRunner [-P] <manifest-file>", "WasmTestRunner --help");
     const wasmFlag = run(WASMTESTRUNNER, ["--allow-read"], { cwd: tmp });
     expectExit(wasmFlag, 2, "WasmTestRunner --allow-read");
     expectIncludes(wasmFlag.stderr, "Unknown option: --allow-read", "WasmTestRunner --allow-read");
+    expectIncludes(wasmHelp.stdout, "-P", "WasmTestRunner --help lists -P");
+    const wasmNoManifest = run(WASMTESTRUNNER, ["-P"], { cwd: tmp });
+    expectExit(wasmNoManifest, 2, "WasmTestRunner -P without a manifest");
     const wasmMissing = run(WASMTESTRUNNER, [join(tmp, "missing.txt")], { cwd: tmp });
     expectExit(wasmMissing, 2, "WasmTestRunner missing manifest");
     expectIncludes(wasmMissing.stderr, "manifest not found", "WasmTestRunner missing manifest");
@@ -325,6 +328,12 @@ console.log("Binaries with their own parser follow the same grammar...");
     writeFileSync(join(tmp, "wasm", "t.js"), 'test("t", () => {});\n');
     writeFileSync(join(tmp, "manifest.txt"), join(tmp, "wasm", "t.js") + "\n");
     const wasmWarn = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")], { cwd: tmp });
+    // -P is accepted (a no-op until config trust exists), and extra
+    // positional arguments are ignored with a warning, as before.
+    const wasmTolerant = run(WASMTESTRUNNER, ["-P", join(tmp, "manifest.txt"), "extra-argument"], { cwd: tmp });
+    expectExit(wasmTolerant, 0, "WasmTestRunner -P with an extra argument");
+    expectIncludes(wasmTolerant.stdout, "SUMMARY files=1", "WasmTestRunner -P runs the manifest");
+    expectIncludes(wasmTolerant.stderr, "Warning: ignoring extra argument: extra-argument", "WasmTestRunner extra argument");
     const configPath = join(tmp, "wasm", "goccia.json");
     expectIncludes(wasmWarn.stderr, `WARN ${configPath} :: requests allow-import, which GocciaWasmTestRunner cannot grant; ignoring it`, "WasmTestRunner warning");
     expectExcludes(wasmWarn.stderr, `:: Warning: ${configPath}`, "WasmTestRunner warning names the config once");

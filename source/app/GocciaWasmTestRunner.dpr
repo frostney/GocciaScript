@@ -339,7 +339,20 @@ begin
   end;
 end;
 
+procedure PrintUsage(var AOut: Text);
+begin
+  WriteLn(AOut, 'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
+  WriteLn(AOut, '  manifest: one script path per line, # starts a comment');
+  WriteLn(AOut, '  -P        accept config permission requests (currently a ' +
+    'no-op: they');
+  WriteLn(AOut, '            already apply; reserved for config trust)');
+  WriteLn(AOut, '  Extra arguments after the manifest are ignored with a ' +
+    'warning.');
+end;
+
 var
+  ManifestPath, Argument: string;
+  ArgumentIndex: Integer;
   Manifest: TStringList;
   Verdict: TFileVerdict;
   FileName, Line: string;
@@ -349,31 +362,43 @@ var
   GC: TGarbageCollector;
 
 begin
-  if (ParamCount = 1) and ((ParamStr(1) = '--help') or
-     (ParamStr(1) = '-h')) then
+  { Arguments: [-P] [--help] <manifest>. The external LAKON harness drives
+    this runner, so the parse stays tolerant: extra positional arguments are
+    ignored with a warning, as they always were. Only an unknown option or a
+    missing manifest is an unusable invocation (exit 2). }
+  ManifestPath := '';
+  for ArgumentIndex := 1 to ParamCount do
   begin
-    WriteLn('Usage: GocciaWasmTestRunner <manifest-file>');
-    WriteLn('  manifest: one script path per line, # starts a comment');
-    Exit;
+    Argument := ParamStr(ArgumentIndex);
+    if (Argument = '--help') or (Argument = '-h') then
+    begin
+      PrintUsage(Output);
+      Exit;
+    end
+    else if (Argument = '-P') or
+       (Argument = '--accept-config-permissions') then
+      { Accepted for the harness; config permissions already apply
+        without a trust step (ADR 0122 layer 2). }
+    else if Copy(Argument, 1, 1) = '-' then
+    begin
+      WriteLn(ErrOutput, 'Error: Unknown option: ', Argument);
+      ExitCode := 2;
+      Exit;
+    end
+    else if ManifestPath = '' then
+      ManifestPath := Argument
+    else
+      WriteLn(ErrOutput, 'Warning: ignoring extra argument: ', Argument);
   end;
-  if ParamCount <> 1 then
+  if ManifestPath = '' then
   begin
-    WriteLn(ErrOutput,
-      'Usage: GocciaWasmTestRunner <manifest-file>');
-    WriteLn(ErrOutput,
-      '  manifest: one script path per line, # starts a comment');
+    PrintUsage(ErrOutput);
     ExitCode := 2;
     Exit;
   end;
-  if Copy(ParamStr(1), 1, 1) = '-' then
+  if not FileExists(ManifestPath) then
   begin
-    WriteLn(ErrOutput, 'Error: Unknown option: ', ParamStr(1));
-    ExitCode := 2;
-    Exit;
-  end;
-  if not FileExists(ParamStr(1)) then
-  begin
-    WriteLn(ErrOutput, 'Error: manifest not found: ', ParamStr(1));
+    WriteLn(ErrOutput, 'Error: manifest not found: ', ManifestPath);
     ExitCode := 2;
     Exit;
   end;
@@ -393,7 +418,7 @@ begin
 
   Manifest := TStringList.Create;
   try
-    Manifest.LoadFromFile(ParamStr(1));
+    Manifest.LoadFromFile(ManifestPath);
     for Index := 0 to Manifest.Count - 1 do
     begin
       Line := Trim(Manifest[Index]);
