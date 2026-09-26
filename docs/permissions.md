@@ -220,7 +220,9 @@ The suggestion also travels on the error object (never as a guest-visible
 property), so a denial that surfaces through a rejected `import()` or
 `fetch()` promise still reports it. Both executors locate a denial at the
 guest request that caused it: the `import` or `export … from` declaration, the
-`import()` expression, or the `fetch()`/`FFI.open()` call.
+`import()` expression, or the `fetch()`/`FFI.open()` call — each at the
+position the parser records for that expression, which both executors report
+identically.
 
 ## Audit events
 

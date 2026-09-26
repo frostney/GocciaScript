@@ -3436,7 +3436,7 @@
             { The import() is the call site of whatever its load decides or
               refuses (audit events, PermissionDenied), as in the tree-walk
               evaluator; a deferred start re-enters it. }
-            CurrentImportCallLocation(DebugLine, DebugColumn);
+            CurrentCallExpressionLocation(DebugLine, DebugColumn);
             EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
               PreviousCallSite);
             try
@@ -3532,7 +3532,7 @@
               SpecifierString, AttributeType);
             if DynImportComputed then
               SpecifierString := MarkComputedImportSpecifier(SpecifierString);
-            CurrentImportCallLocation(DebugLine, DebugColumn);
+            CurrentCallExpressionLocation(DebugLine, DebugColumn);
             EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
               PreviousCallSite);
             try
