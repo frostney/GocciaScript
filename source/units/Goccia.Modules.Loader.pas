@@ -125,8 +125,8 @@ type
       out APackageRoot: string): string;
     procedure EnforceHostRead(const ASpecifier, APath, AImportingFilePath,
       APackageRoot: string; const AIsLiteral, AIsHostOwned: Boolean);
-    function TryHostCandidate(const ASpecifier, AImportingFilePath: string;
-      out ACandidate: string): Boolean;
+    function GuardsRequest(const ASpecifier,
+      AImportingFilePath: string): Boolean;
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
     function IsHostRequest(const ASpecifier,
       AImportingFilePath: string): Boolean;
@@ -843,6 +843,13 @@ begin
   if not FProbeActive then
     Exit;
   CanonicalPath := CanonicalCapabilityPath(ACandidatePath);
+  { A file probe inside the package a literal bare specifier is being
+    resolved in belongs to the module graph, as the resolved file will. }
+  if FProbeLiteral and (FResolver.ProbePackageDirectory <> '') and
+     IsPathWithinScope(CanonicalPath,
+       CanonicalCapabilityPath(FResolver.ProbePackageDirectory)) and
+     not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
+    Exit;
   if HostReadVerdict(CanonicalPath, FProbeImporter, FProbeLiteral, Reason) then
     Exit;
   if FProbeQuiet then
@@ -883,13 +890,12 @@ function TGocciaModuleLoader.ResolveRequestAddress(const ASpecifier,
   AImportingFilePath: string; const AIsLiteral, AQuiet: Boolean;
   out APackageRoot: string): string;
 var
-  Candidate, SavedImporter, SavedSpecifier: string;
+  SavedImporter, SavedSpecifier: string;
   SavedActive, SavedLiteral, SavedQuiet: Boolean;
   SavedGuard: TModuleResolverProbeGuard;
 begin
   APackageRoot := '';
-  if not (Assigned(FResolver) and
-     TryHostCandidate(ASpecifier, AImportingFilePath, Candidate)) then
+  if not GuardsRequest(ASpecifier, AImportingFilePath) then
   begin
     Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
     APackageRoot := FLastPackageRoot;
@@ -910,6 +916,7 @@ begin
   FResolver.ProbeGuard := HostProbeGuard;
   try
     Result := ResolveModuleAddress(ASpecifier, AImportingFilePath);
+    APackageRoot := FLastPackageRoot;
   finally
     FResolver.ProbeGuard := SavedGuard;
     FProbeActive := SavedActive;
@@ -958,39 +965,19 @@ begin
       'a read grant covers the path');
 end;
 
-{ The lexical host candidate for a relative or absolute specifier that the
-  resolver would probe the host for; False for anything else (virtual
-  modules, aliases, bare specifiers, host-owned importers). }
-function TGocciaModuleLoader.TryHostCandidate(const ASpecifier,
-  AImportingFilePath: string; out ACandidate: string): Boolean;
+{ Whether HostProbeGuard judges the resolution of a module request: every
+  guest request an engine enforcing host reads resolves against the host —
+  relative, absolute, alias- or import-map-rewritten, or a bare specifier's
+  package files. A virtual module or a host request probes nothing guarded. }
+function TGocciaModuleLoader.GuardsRequest(const ASpecifier,
+  AImportingFilePath: string): Boolean;
 var
-  BaseDirectory, VirtualAddress: string;
+  VirtualAddress: string;
 begin
-  ACandidate := '';
-  Result := False;
-  if not EnforcesHostReads then
-    Exit;
-  if IsAbsoluteHostPath(ASpecifier) then
-    ACandidate := ASpecifier
-  else if StartsStr('./', ASpecifier) or StartsStr('../', ASpecifier) then
-  begin
-    BaseDirectory := ExtractFilePath(AImportingFilePath);
-    if BaseDirectory = '' then
-      BaseDirectory := IncludeTrailingPathDelimiter(GetCurrentDir);
-    ACandidate := BaseDirectory + ASpecifier;
-  end
-  else
-    Exit;
-  if FVirtualModules.Resolve(ASpecifier, AImportingFilePath,
-     VirtualAddress) then
-    Exit;
-  if Assigned(FResolver) and
-     (FResolver.ApplyAlias(ASpecifier, AImportingFilePath) <> ASpecifier) then
-    Exit;
-  if IsHostRequest(ASpecifier, AImportingFilePath) then
-    Exit;
-  ACandidate := ExpandFileName(ACandidate);
-  Result := True;
+  Result := EnforcesHostReads and Assigned(FResolver) and
+    (not FVirtualModules.Resolve(ASpecifier, AImportingFilePath,
+      VirtualAddress)) and
+    (not IsHostRequest(ASpecifier, AImportingFilePath));
 end;
 
 function TGocciaModuleLoader.ResolveModuleRequestWithAttribute(
@@ -1195,6 +1182,7 @@ var
   AliasCandidate, BaseDirectory, PackageRoot, ResolvedAddress,
     VirtualCandidate: string;
 begin
+  AliasCandidate := AModulePath;
   if AModulePath = AImportingFilePath then
   begin
     if FVirtualModules.Contains(AModulePath) then
@@ -1229,7 +1217,11 @@ begin
     on E: Exception do;
   end;
 
-  if (AModulePath <> '') and
+  { Answered lexically: an alias or import map still rewrites the
+    specifier, so the answer names the path it maps to. }
+  if AliasCandidate <> AModulePath then
+    ResolvedAddress := ExpandFileName(AliasCandidate)
+  else if (AModulePath <> '') and
      ((AModulePath[1] = '/') or (AModulePath[1] = '\') or
      ((Length(AModulePath) >= 2) and (AModulePath[2] = ':'))) then
     ResolvedAddress := ExpandFileName(AModulePath)
