@@ -156,9 +156,6 @@ begin
   Result := Goccia.Engine.stScript;
 end;
 
-{ allowed-hosts: per-file config > empty (fetch blocked) — the
-  ApplyFileConfigToEngine rule without the CLI arm. The empty-value
-  sentinel of a merged extends chain stops accumulation. }
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;

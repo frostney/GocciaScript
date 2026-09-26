@@ -202,7 +202,8 @@ begin
   Expect<Boolean>(Raised).ToBe(True);
 end;
 
-{ The ranges --fetch-deny-private-ranges exists to keep a script away from.
+{ The ranges the net capability refuses unless `private` or an explicit
+  address names them (ADR 0122).
   169.254.169.254 is called out explicitly because the cloud
   instance-metadata endpoint is the payload SSRF is usually aiming at. }
 procedure THTTPClientTests.TestClassifiesPrivateAddressRanges;
