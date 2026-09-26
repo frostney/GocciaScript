@@ -399,8 +399,8 @@ resourcestring
 
   // Fetch API
   SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
-  SSuggestFetchAllowedHosts = 'add --allowed-host=<hostname> or set "allowed-hosts" in goccia.json';
-  SSuggestFetchPrivateDestination = 'private, loopback, and link-local destinations are refused while --fetch-deny-private-ranges is in force';
+  SSuggestFetchAllowedHosts = 'grant it with --allow-net=<host>, or "allow-net" in the "permissions" block of goccia.json';
+  SSuggestFetchPrivateDestination = 'private, loopback, and link-local destinations need --allow-net=private or --allow-net=<address>, and --deny-net=private refuses them';
   SSuggestHeadersThisType = 'Headers prototype methods must be called on a Headers object';
   SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
 

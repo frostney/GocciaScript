@@ -13,7 +13,7 @@ const
   // costs a real native stack frame (kilobytes), and the 8 MB thread stack is
   // exhausted after roughly 1000-1500 levels -> SIGSEGV. This fixed cap fences
   // that off well before the native stack runs out, independent of the
-  // configurable --stack-size limit (which bounds the much cheaper trampolined
+  // configurable --max-stack limit (which bounds the much cheaper trampolined
   // JS frames). Generator-mediated infinite recursion now throws a RangeError
   // instead of crashing the engine.
   MAX_NATIVE_REENTRY_DEPTH = 512;

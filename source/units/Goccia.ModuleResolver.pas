@@ -403,7 +403,7 @@ begin
     paths outside it. The segment validation in Goccia.Modules.NodeResolution
     rejects the specifiers and targets that are invalid on their face; this
     catches whatever any combination of them still normalized into, and is what
-    makes the --allow-node-modules ceiling a real boundary (ADR 0111). }
+    makes the --allow-import=node_modules=<dir> ceiling a real boundary (ADR 0111). }
   if not IsPathInsideDirectory(TargetCandidate, PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
 

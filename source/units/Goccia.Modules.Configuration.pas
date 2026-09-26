@@ -9,38 +9,17 @@ uses
 
   Goccia.Modules.Resolver;
 
-const
-  { Config-file spellings of the node_modules capability. `true`/`false` are
-    what a JSON boolean flattens to; any other value is read as the ceiling
-    directory for the ancestor walk. }
-  NODE_MODULES_SETTING_ENABLED = 'true';
-  NODE_MODULES_SETTING_DISABLED = 'false';
-
 procedure ConfigureModuleResolver(const AResolver: TGocciaModuleResolver;
   const AEntryFileName, AExplicitImportMapPath: string;
   const AInlineAliases: TStrings;
   const AInlineAliasBaseDirectory: string = '');
-
-{ Translates an --allow-node-modules / "allow-node-modules" setting into an
-  import capability scope (ADR 0122).
-
-  Returns False for the disabled setting. Otherwise AScope is
-  `node_modules` for the unbounded walk (an empty or `true` setting) or
-  `node_modules=<dir>` with the ceiling made absolute. ABaseDirectory anchors
-  a relative ceiling: the invocation directory for a command-line flag and the
-  configuration file's own directory for a config key, matching how relative
-  `--alias` targets are anchored. }
-function TryNodeModulesImportScope(const ASetting, ABaseDirectory: string;
-  out AScope: string): Boolean;
 
 implementation
 
 uses
   SysUtils,
 
-  FileUtils,
-
-  Goccia.Capabilities;
+  FileUtils;
 
 type
   TModuleAliasPair = record
@@ -111,29 +90,6 @@ begin
     AliasPair := ParseAliasPair(AInlineAliases[I]);
     AResolver.AddAlias(AliasPair.Key, AliasPair.ValueText);
   end;
-end;
-
-function AnchorCeilingDirectory(const ASetting,
-  ABaseDirectory: string): string;
-begin
-  if (ABaseDirectory = '') or IsAbsoluteHostPath(ASetting) then
-    Exit(ASetting);
-  Result := IncludeTrailingPathDelimiter(ExpandHostFileName(ABaseDirectory)) +
-    ASetting;
-end;
-
-function TryNodeModulesImportScope(const ASetting, ABaseDirectory: string;
-  out AScope: string): Boolean;
-begin
-  AScope := '';
-  if ASetting = NODE_MODULES_SETTING_DISABLED then
-    Exit(False);
-  if (ASetting = '') or (ASetting = NODE_MODULES_SETTING_ENABLED) then
-    AScope := IMPORT_NODE_MODULES_SCOPE
-  else
-    AScope := IMPORT_NODE_MODULES_SCOPE + '=' + ExpandHostFileName(
-      AnchorCeilingDirectory(ASetting, ABaseDirectory));
-  Result := True;
 end;
 
 end.
