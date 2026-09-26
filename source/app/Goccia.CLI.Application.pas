@@ -110,6 +110,11 @@ type
     { Parses the config at APath and rejects removed and command-line-only
       keys and malformed flag values. }
     function LoadFileConfig(const APath: string): TConfigEntryArray;
+    { Loads and validates, on the calling thread, the config and permissions
+      block of every distinct config governing AFiles, so a config error stops
+      the run before any file executes (a usage error exits 2 through
+      Goccia.Application.Run) instead of failing one file among many. }
+    procedure ValidateFileConfigs(const AFiles: TStrings);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -541,6 +546,28 @@ begin
   ValidateConfigEntries(Result, FAllOptions);
 end;
 
+procedure TGocciaCLIApplication.ValidateFileConfigs(const AFiles: TStrings);
+var
+  Seen: TStringList;
+  I, Index: Integer;
+  ConfigPath: string;
+begin
+  Seen := TStringList.Create;
+  try
+    Seen.Sorted := True;
+    for I := 0 to AFiles.Count - 1 do
+    begin
+      ConfigPath := DiscoverFileConfigPath(AFiles[I]);
+      if (ConfigPath = '') or Seen.Find(ConfigPath, Index) then
+        Continue;
+      Seen.Add(ConfigPath);
+      FilePermissionRequest(LoadFileConfig(ConfigPath), ConfigPath);
+    end;
+  finally
+    Seen.Free;
+  end;
+end;
+
 procedure TGocciaCLIApplication.WarnOnce(const AKey, AMessage: string);
 var
   Index: Integer;
@@ -647,16 +674,18 @@ begin
     AEngineOptions.WarningUnsupportedFeatures, AFileConfig);
 end;
 
-{ A per-file config value of a byte-size setting. Per-file values are read
-  from the entries rather than applied to the options, so they are parsed
-  here with the same units. }
-function ParseConfigByteSize(const AEntry: TConfigEntry): Int64;
-var
-  ErrorText: string;
+{ A per-file config value of a limit. Per-file values are read from the
+  entries rather than applied to the options, so they are parsed here by the
+  option itself, with its units and bounds. }
+function ParseConfigValue(const AOption: TInt64Option;
+  const AEntry: TConfigEntry): Int64;
 begin
-  if not TryParseByteSize(AEntry.Value, Result, ErrorText) then
-    raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
-      [AEntry.Key, AEntry.SourcePath, AEntry.Value, ErrorText]);
+  try
+    Result := AOption.Parse(AEntry.Value);
+  except
+    on E: TParseError do
+      raise TParseError.CreateFmt('%s: %s', [AEntry.SourcePath, E.Message]);
+  end;
 end;
 
 { Apply per-file config entries to the engine.
@@ -701,10 +730,11 @@ begin
   begin
     if AEngineOptions.MaxMemory.FromCommandLine then
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
-    else if TryFindConfigEntry(AFileConfig, AEngineOptions.MaxMemory.LongName,
+    else if (not AEngineOptions.MaxMemory.ConfigIgnored) and
+      TryFindConfigEntry(AFileConfig, AEngineOptions.MaxMemory.LongName,
       Entry) then
     begin
-      MemoryLimit := ParseConfigByteSize(Entry);
+      MemoryLimit := ParseConfigValue(AEngineOptions.MaxMemory, Entry);
       GC.MaxBytes := MemoryLimit;
     end
     else if AEngineOptions.MaxMemory.Present then
@@ -719,17 +749,15 @@ begin
   ResponseLimit := 0;
   if AEngineOptions.MaxFetchBytes.FromCommandLine then
     ResponseLimit := AEngineOptions.MaxFetchBytes.Value
-  else if TryFindConfigEntry(AFileConfig,
-    AEngineOptions.MaxFetchBytes.LongName, Entry) then
-    ResponseLimit := ParseConfigByteSize(Entry)
+  else if (not AEngineOptions.MaxFetchBytes.ConfigIgnored) and
+    TryFindConfigEntry(AFileConfig, AEngineOptions.MaxFetchBytes.LongName,
+    Entry) then
+    ResponseLimit := ParseConfigValue(AEngineOptions.MaxFetchBytes, Entry)
   else if AEngineOptions.MaxFetchBytes.Present then
     ResponseLimit := AEngineOptions.MaxFetchBytes.Value;
 
-  if ResponseLimit > High(Integer) then
-    raise TParseError.CreateFmt('--%s is too large (at most %d bytes)',
-      [AEngineOptions.MaxFetchBytes.LongName, High(Integer)]);
-
-  AEngine.FetchMaxResponseBytes := ResponseLimit;
+  { The option's Maximum keeps the value within Integer. }
+  AEngine.FetchMaxResponseBytes := Integer(ResponseLimit);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
@@ -1391,8 +1419,9 @@ begin
   SetInspectDepth(DEFAULT_INSPECT_DEPTH);
   if Assigned(FEngineOptions) then
   begin
-    SetMaxStackDepth(Integer(Min(FEngineOptions.MaxStack.ValueOr(
-      DEFAULT_MAX_STACK_DEPTH), High(Integer))));
+    { MaxStack.Maximum keeps the value within Integer. }
+    SetMaxStackDepth(Integer(FEngineOptions.MaxStack.ValueOr(
+      DEFAULT_MAX_STACK_DEPTH)));
     SetInspectDepth(FEngineOptions.InspectDepth.ValueOr(DEFAULT_INSPECT_DEPTH));
   end;
   if Assigned(FCoverageOptions) then
@@ -1450,6 +1479,7 @@ begin
     if not MultifileEnabled then
     begin
       Result.AddStrings(AFiles);
+      ValidateFileConfigs(Result);
       Exit;
     end;
 
@@ -1512,6 +1542,7 @@ begin
         FullSource.Free;
       end;
     end;
+    ValidateFileConfigs(Result);
   except
     Result.Free;
     raise;

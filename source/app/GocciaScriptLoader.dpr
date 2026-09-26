@@ -815,6 +815,9 @@ begin
       else
         PrintHumanReadableResult(AFileName, Report, Extension);
     except
+      { A config usage error is the invocation's, not this file's. }
+      on E: TCLIUsageError do
+        raise;
       on E: Exception do
       begin
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
@@ -1416,6 +1419,26 @@ begin
       if IsStdinPath(APaths[I]) then
         raise TParseError.Create(
           'stdin is supported only as the sole input.');
+
+    { Every config governing the inputs is checked before any of them runs. }
+    RawFiles := TStringList.Create;
+    try
+      for I := 0 to APaths.Count - 1 do
+        if DirectoryExists(APaths[I]) then
+        begin
+          Files := FindAllFiles(APaths[I], ScriptExtensions);
+          try
+            RawFiles.AddStrings(Files);
+          finally
+            Files.Free;
+          end;
+        end
+        else
+          RawFiles.Add(APaths[I]);
+      ValidateFileConfigs(RawFiles);
+    finally
+      RawFiles.Free;
+    end;
 
     for I := 0 to APaths.Count - 1 do
     begin

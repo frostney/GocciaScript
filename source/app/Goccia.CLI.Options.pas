@@ -86,6 +86,8 @@ type
     function CompatibilityFlagOption(
       const AFlag: TGocciaCompatibility): TFlagOption;
     function SettingOption(const ASetting: TGocciaRuntimeSetting): TOptionBase;
+    { Hides the limits a binary does not apply from --help and makes config
+      files ignore them without validation. }
     procedure HideUnsupportedSettings(const AHonored: TGocciaHonoredSettings);
 
     property Mode: TEnumOption<TGocciaExecutionMode> read FMode;
@@ -637,9 +639,11 @@ begin
   FMaxStack := TCountOption.Create('max-stack',
     Format('Maximum call stack depth (default: %d; 0 = no limit)',
       [DEFAULT_MAX_STACK_DEPTH]), LIMITS_GROUP);
+  FMaxStack.Maximum := High(Integer);
   FMaxFetchBytes := TByteSizeOption.Create('max-fetch-bytes',
     'Maximum fetch response body: 1MiB or plain bytes (default: 8MiB; ' +
     'TypeError on exceed)', LIMITS_GROUP);
+  FMaxFetchBytes.Maximum := High(Integer);
   FUnsafeFunctionConstructor := TFlagOption.Create('unsafe-function-constructor',
     'Enable the Function constructor (dynamic code generation)', 'Engine');
   FUnsafeShadowRealm := TFlagOption.Create('unsafe-shadowrealm',
@@ -783,7 +787,10 @@ var
   Setting: TGocciaRuntimeSetting;
 begin
   for Setting := Low(TGocciaRuntimeSetting) to High(TGocciaRuntimeSetting) do
+  begin
     SettingOption(Setting).Hidden := not (Setting in AHonored);
+    SettingOption(Setting).ConfigIgnored := not (Setting in AHonored);
+  end;
 end;
 
 { TGocciaCoverageOptions }

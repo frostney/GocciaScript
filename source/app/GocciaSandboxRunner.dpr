@@ -269,6 +269,7 @@ begin
   FFsNodeLimit := TCountOption.Create('max-fs-nodes',
     'Maximum files and directories in the sandbox filesystem ' +
     '(default: 4096)', 'Limits');
+  FFsNodeLimit.Maximum := High(Integer);
   Add(FFsNodeLimit);
   Add(TRemovedOption.Create('fs-quota-bytes', 'fs-quota-bytes',
     'use --max-fs-bytes instead (units: 16MiB)',
@@ -896,8 +897,9 @@ begin
     try
       ConfigureSandboxResolver(Resolver);
 
-      { The root run's set comes from the options the sandbox runner has
-        always honored: net and ffi. It loads no host files and has no
+      { The root run's set comes from the command line and the --config
+        permissions block, restricted to net, the only capability the
+        sandbox runner grants: it loads no host files and has no
         node_modules lookup. A nested run inherits its parent's set. }
       if FHasCurrentCapabilities then
         EngineCapabilities := FCurrentCapabilities
@@ -1372,8 +1374,7 @@ begin
   FContext.Free;
   FContext := TGocciaSandboxContext.Create(
     FFsQuotaBytes.ValueOr(DEFAULT_SANDBOX_BYTE_QUOTA),
-    Integer(Min(FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA),
-      High(Integer))));
+    Integer(FFsNodeLimit.ValueOr(DEFAULT_SANDBOX_NODE_QUOTA)));
   FContext.RunScriptCallback := ExecuteSandboxPath;
   LoadSeeds;
   FContext.CaptureBaseline;

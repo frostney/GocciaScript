@@ -8,7 +8,7 @@
  * config permissions blocks, and the --max-* limits with units.
  */
 
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -378,6 +378,76 @@ console.log("Private network ranges need an explicit address or private...");
 
 // -- Config permissions ------------------------------------------------------------
 
+console.log("A malformed permissions value fails instead of being ignored...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(tmp, "outside"), { recursive: true });
+    mkdirSync(project);
+    writeFileSync(join(tmp, "outside", "secret.js"), 'export const secret = "OUTSIDE";\n');
+    writeFileSync(join(project, "main.mjs"), 'import { secret } from "../outside/secret.js";\nconsole.log(secret);\n');
+    const configPath = join(project, "goccia.json");
+    const cases: [string, string][] = [
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": {"path": "../outside"}}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": null}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-read": [["../outside"]]}}', '"permissions.deny-read" must be true, false, or an array of strings'],
+      ['{"permissions": {"allow-read": ["../outside"], "deny-nett": null}}', 'unknown permission "deny-nett"'],
+    ];
+    for (const [config, message] of cases) {
+      writeFileSync(configPath, config + "\n");
+      const result = run(LOADER, [join(project, "main.mjs")]);
+      expectExit(result, 2, `malformed ${config}`);
+      expectIncludes(result.stderr, `${configPath}: ${message}`, `malformed ${config}`);
+      expectExcludes(result.stdout, "OUTSIDE", `malformed ${config}`);
+    }
+    rmSync(configPath);
+    writeFileSync(join(project, "goccia.toml"), '[permissions]\nallow-read = ["../outside"]\ndeny-read = { a = 1 }\n');
+    const toml = run(LOADER, [join(project, "main.mjs")]);
+    expectExit(toml, 2, "malformed TOML deny-read");
+    expectExcludes(toml.stdout, "OUTSIDE", "malformed TOML deny-read");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A per-file config usage error stops the run before any file executes...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a"));
+    mkdirSync(join(tmp, "b"));
+    writeFileSync(join(tmp, "a", "s.js"), 'console.log("A-RAN");\n');
+    writeFileSync(join(tmp, "b", "s.js"), 'console.log("B-RAN");\n');
+    writeFileSync(join(tmp, "b", "goccia.json"), '{"unsafe-ffi": true}\n');
+    for (const args of [[], ["--jobs=2"], ["--mode=bytecode"]]) {
+      const loader = run(LOADER, [join("a", "s.js"), join("b", "s.js"), ...args], { cwd: tmp });
+      expectExit(loader, 2, `Loader multi-file ${args.join(" ")}`);
+      expectIncludes(loader.stderr, `Error: ${join(tmp, "b", "goccia.json")}: "unsafe-ffi" ${REMOVED}`, "Loader multi-file");
+      expectExcludes(loader.stdout, "A-RAN", "Loader multi-file runs nothing");
+    }
+    writeFileSync(join(tmp, "a", "t.js"), 'test("a", () => { console.log("A-RAN"); });\n');
+    writeFileSync(join(tmp, "b", "t.js"), 'test("b", () => {});\n');
+    for (const args of [[], ["--jobs=2"]]) {
+      const tests = run(TESTRUNNER, [join("a", "t.js"), join("b", "t.js"), "--no-progress", ...args], { cwd: tmp });
+      expectExit(tests, 2, `TestRunner multi-file ${args.join(" ")}`);
+      expectIncludes(tests.stderr, `"unsafe-ffi" ${REMOVED}`, "TestRunner multi-file");
+      expectExcludes(tests.combined, "A-RAN", "TestRunner multi-file runs nothing");
+    }
+    const bench = run(BENCHRUNNER, [join("b", "s.js"), "--no-progress"], { cwd: tmp });
+    expectExit(bench, 2, "BenchmarkRunner per-file usage error");
+    // An invalid value in a per-file config is still an exit-1 error, reported
+    // before anything runs.
+    writeFileSync(join(tmp, "b", "goccia.json"), '{"max-memory": "64MB"}\n');
+    const badValue = run(LOADER, [join("a", "s.js"), join("b", "s.js")], { cwd: tmp });
+    expectExit(badValue, 1, "per-file invalid value");
+    expectIncludes(badValue.combined, '"MB" is ambiguous', "per-file invalid value");
+    expectExcludes(badValue.stdout, "A-RAN", "per-file invalid value runs nothing");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Config permissions resolve against the declaring file...");
 {
   const tmp = makeTmp();
@@ -443,6 +513,46 @@ console.log("Limits take units on the command line and in config...");
     const repl = run(REPL, ["--timeout=100ms"], { stdin: spin + "1 + 1\n" });
     expectIncludes(repl.combined, "timed out", "REPL --timeout");
     expectIncludes(repl.combined, "2", "REPL continues after a timeout");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Limit bounds and unsupported limits in config...");
+{
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'console.log("RAN");\n');
+    // Values a limit cannot hold are rejected while parsing options, the same
+    // way on every binary, before anything runs.
+    const tooLarge: [string, string[], string][] = [
+      [LOADER, ["--max-fetch-bytes=3GiB", "main.js"], "Invalid value for --max-fetch-bytes: 3GiB (value is too large)"],
+      [LOADER, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
+      [BARE, ["--max-stack=99999999999", "main.js"], "Invalid value for --max-stack: 99999999999 (value is too large)"],
+      [SANDBOXRUNNER, ["--max-fs-nodes=99999999999", "/main.js"], "Invalid value for --max-fs-nodes: 99999999999 (value is too large)"],
+    ];
+    for (const [binary, args, message] of tooLarge) {
+      const result = run(binary, args, { cwd: tmp });
+      expectExit(result, 1, `${binary} ${args.join(" ")}`);
+      expectIncludes(result.combined, message, `${binary} ${args.join(" ")}`);
+      expectExcludes(result.combined, "Fatal error", `${binary} ${args.join(" ")}`);
+      expectExcludes(result.stdout, "RAN", `${binary} ${args.join(" ")}`);
+    }
+
+    // A per-file limit is bounded the same way.
+    mkdirSync(join(tmp, "sub"));
+    writeFileSync(join(tmp, "sub", "main.js"), 'console.log("RAN");\n');
+    writeFileSync(join(tmp, "sub", "goccia.json"), '{"max-fetch-bytes": "3GiB"}\n');
+    const perFile = run(LOADER, [join("sub", "main.js")], { cwd: tmp });
+    expectExit(perFile, 1, "per-file max-fetch-bytes 3GiB");
+    expectIncludes(perFile.combined, "Invalid value for --max-fetch-bytes: 3GiB (value is too large)", "per-file max-fetch-bytes 3GiB");
+
+    // A limit a binary does not apply is ignored in config, not validated.
+    writeFileSync(join(tmp, "goccia.json"), '{"timeout": "5x", "max-memory": "64MB", "max-stack": -1}\n');
+    const bundle = run(BUNDLER, ["main.js"], { cwd: tmp });
+    expectExit(bundle, 0, "Bundler ignores unsupported limits in config");
+    const loader = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(loader, 1, "Loader validates the same config");
   } finally {
     clean(tmp);
   }
