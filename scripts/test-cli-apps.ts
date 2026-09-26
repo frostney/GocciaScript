@@ -2740,6 +2740,45 @@ await section("Loader: a relative config ceiling anchors to the config file...",
   }
 });
 
+// macOS's temporary directory is /var, a link to /private/var, and Windows
+// hands out 8.3 short names: the config's relative ceiling is resolved from
+// its canonical directory while the script is named through the link. A
+// symlinked temporary directory reproduces that on Linux.
+await section("Loader: a relative config ceiling holds when the project is reached through a link...", async () => {
+  if (process.platform === "win32") return;
+  const tmp = makeTmp();
+  try {
+    const real = join(tmp, "real");
+    mkdirSync(real, { recursive: true });
+    const project = writeNodeModulesProject(real);
+    const link = join(tmp, "link");
+    symlinkSync(real, link);
+    const foreign = join(tmp, "foreign");
+    mkdirSync(foreign, { recursive: true });
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
+    const proc = Bun.spawnSync(
+      [resolve(LOADER), "-P", join(link, "project", "app.js"), "--source-type=module"],
+      { cwd: foreign, stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
+      throw new Error(`A relative config ceiling should hold through a link: ${proc.stdout}${proc.stderr}`);
+
+    // Still a ceiling: bounded at a directory with no node_modules, it refuses.
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src", "app.js"), 'import "pkg-exports";\n');
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
+    const bounded = Bun.spawnSync(
+      [resolve(LOADER), "-P", join(link, "project", "src", "app.js"), "--source-type=module"],
+      { cwd: foreign, stdout: "pipe", stderr: "pipe" },
+    );
+    const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
+    if (bounded.exitCode === 0 || !boundedOut.includes('Module not found: "pkg-exports"'))
+      throw new Error(`A ceiling reached through a link should bound the walk, got: ${boundedOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --allow-import=node_modules audits every node_modules resolution...", async () => {
   const tmp = makeTmp();
   try {

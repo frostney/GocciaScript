@@ -1100,13 +1100,16 @@ end;
   expanded spellings, and the walk compares expanded spellings, so the
   expanded ceiling is used when the spellings agree. They can disagree while
   naming the same place — macOS's /var is /private/var, and the working
-  directory comes back physical — so containment is also asked of the
-  canonical paths; the ceiling is then handed on canonically, which is how a
-  physically spelled importer is compared. }
+  directory comes back physical, and a config's relative ceiling is resolved
+  from the config's canonical directory while the importer may be spelled
+  through a link — so containment is also asked of the canonical paths. The
+  ceiling is then handed on as the importer's own ancestor that names the
+  same place, so the walk meets it whichever way either was spelled; failing
+  that (an ancestor that cannot be canonicalized), canonically. }
 function DirectoryWithinCeiling(const ADirectory, ACeiling: string;
   out AWalkCeiling: string): Boolean;
 var
-  CanonicalCeiling: string;
+  Ancestor, CanonicalCeiling, Parent: string;
 begin
   AWalkCeiling := ACeiling;
   if IsPathWithinScope(ADirectory, ACeiling) then
@@ -1114,8 +1117,22 @@ begin
   CanonicalCeiling := CanonicalCapabilityPath(ACeiling);
   Result := (CanonicalCeiling <> '') and IsPathWithinScope(
     CanonicalCapabilityPath(ADirectory), CanonicalCeiling);
-  if Result then
-    AWalkCeiling := CanonicalCeiling;
+  if not Result then
+    Exit;
+  AWalkCeiling := CanonicalCeiling;
+  Ancestor := ADirectory;
+  while Ancestor <> '' do
+  begin
+    if SamePathText(CanonicalCapabilityPath(Ancestor), CanonicalCeiling) then
+    begin
+      AWalkCeiling := Ancestor;
+      Exit;
+    end;
+    Parent := ExtractFileDir(Ancestor);
+    if (Parent = '') or SamePathText(Parent, Ancestor) then
+      Exit;
+    Ancestor := Parent;
+  end;
 end;
 
 function TGocciaCapabilities.NodeModulesCeiling(
