@@ -14390,19 +14390,6 @@ var
     AColumn := Template.DebugInfo.GetColumnForPC(InstructionStartIP);
   end;
 
-  procedure EnterCurrentInstructionCallSite(
-    out APrevious: TGocciaCallSite);
-  var
-    SourcePath: string;
-  begin
-    CurrentInstructionDebugLocation(DebugLine, DebugColumn);
-    if Assigned(Template) and Assigned(Template.DebugInfo) then
-      SourcePath := Template.DebugInfo.SourceFile
-    else
-      SourcePath := '';
-    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
-  end;
-
   { Stamps the executing frame with this instruction's source position so the
     error object's stack trace — and therefore the runner's
     `--> file:line:column` header and code frame — matches what the tree-walk
@@ -14440,10 +14427,11 @@ var
     end;
   end;
 
-  { The position of the import() this instruction compiles: the recorded
-    expression position, which is what the tree-walk evaluator uses, or the
-    instruction's own when none was recorded (binary-loaded bytecode). }
-  procedure CurrentImportCallLocation(out ALine, AColumn: Integer);
+  { The position of the call or import() expression this instruction
+    compiles: the recorded expression position, which is what the tree-walk
+    evaluator uses, or the instruction's own when none was recorded
+    (binary-loaded bytecode). }
+  procedure CurrentCallExpressionLocation(out ALine, AColumn: Integer);
   var
     ImportSite: TGocciaCallSiteEntry;
   begin
@@ -14455,6 +14443,22 @@ var
     end
     else
       CurrentInstructionDebugLocation(ALine, AColumn);
+  end;
+
+  { Makes this call instruction the current call site, at the same position
+    the tree-walk evaluator records for the call expression (ADR 0014), so a
+    native callee's audit events and PermissionDenied locate identically. }
+  procedure EnterCurrentInstructionCallSite(
+    out APrevious: TGocciaCallSite);
+  var
+    SourcePath: string;
+  begin
+    CurrentCallExpressionLocation(DebugLine, DebugColumn);
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      SourcePath := Template.DebugInfo.SourceFile
+    else
+      SourcePath := '';
+    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
   end;
 
   { Stamps the frame with the call expression's own position when the compiler

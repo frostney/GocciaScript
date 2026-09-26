@@ -7411,6 +7411,32 @@ await section("Loader: read denials report one suggestion and location in both m
   }
 });
 
+await section("Loader: a fetch() denial is located alike in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "denied-fetch.js");
+    writeFileSync(file, 'const x = 1;\n  globalThis.result = fetch("http://example.com/");\n');
+    const locations: string[] = [];
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync([resolve(LOADER), file, `--mode=${mode}`], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd: tmp,
+      });
+      const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      const location = text.split("\n").find((line) => line.includes("--> "));
+      if (proc.exitCode === 0 || !text.includes("PermissionDenied: net: example.com") || !location)
+        throw new Error(`fetch denial (${mode}) should be located: ${text}`);
+      locations.push(location.trim());
+    }
+    // ADR 0014: the call expression's own position, as import() uses.
+    if (locations[0] !== `--> ${file}:2:28` || locations[1] !== locations[0])
+      throw new Error(`fetch denial location differs between modes: ${JSON.stringify(locations)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --allow-net multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
   // The comma list and the repeated flag are two spellings of the same grant.

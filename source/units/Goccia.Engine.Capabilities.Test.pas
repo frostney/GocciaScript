@@ -52,6 +52,7 @@ type
     ErrorCapability: string;
     ErrorScope: string;
     Suggestion: string;
+    Location: string;
   end;
 
   TEngineCapabilitiesTests = class(TTestSuite)
@@ -66,6 +67,7 @@ type
     FVirtualModuleName: string;
     FAliasPattern: string;
     FAliasTarget: string;
+    FInstallFetchAndFFI: Boolean;
     FVirtualModuleSource: string;
     function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -122,6 +124,7 @@ type
     procedure TestAbortAtScriptEndRecordsAbandonment;
     procedure TestAliasCandidatesAreJudged;
     procedure TestPackageProbesAreJudged;
+    procedure TestCallDenialSitesMatchAcrossExecutors;
   public
     procedure SetupTests; override;
   end;
@@ -200,6 +203,8 @@ begin
     'probing', TestAliasCandidatesAreJudged);
   Test('File probes inside a granted package are judged too',
     TestPackageProbesAreJudged);
+  Test('fetch() and FFI.open() denials are located alike in both executors',
+    TestCallDenialSitesMatchAcrossExecutors);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -290,6 +295,7 @@ begin
   FVirtualModuleSource := '';
   FAliasPattern := '';
   FAliasTarget := '';
+  FInstallFetchAndFFI := False;
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -340,6 +346,12 @@ begin
   AOutcome.ErrorCapability :=
     ErrorObject.GetProperty('capability').ToStringLiteral.Value;
   AOutcome.ErrorScope := ErrorObject.GetProperty('scope').ToStringLiteral.Value;
+  if (ErrorObject is TGocciaErrorObjectValue) and
+     TGocciaErrorObjectValue(ErrorObject).HasErrorSourceLocation then
+    AOutcome.Location := Format('%s:%d:%d', [
+      ExtractFileName(TGocciaErrorObjectValue(ErrorObject).ErrorSourcePath),
+      TGocciaErrorObjectValue(ErrorObject).ErrorSourceLine,
+      TGocciaErrorObjectValue(ErrorObject).ErrorSourceColumn]);
 end;
 
 function TEngineCapabilitiesTests.Run(const ASource: string;
@@ -348,6 +360,7 @@ function TEngineCapabilitiesTests.Run(const ASource: string;
 var
   Source: TStringList;
   Executor: TGocciaExecutor;
+  Runtime: TGocciaRuntimeCore;
   Engine: TGocciaEngine;
   ResultValue: TGocciaValue;
 begin
@@ -365,7 +378,12 @@ begin
       ACapabilities);
   try
     Engine.CapabilityAuditSink := RecordEvent;
-    AttachRuntime(Engine);
+    Runtime := AttachRuntime(Engine);
+    if FInstallFetchAndFFI then
+    begin
+      Runtime.Install(TGocciaFetchRuntimeExtension.Create);
+      InstallFFIIfGranted(Runtime);
+    end;
     if FVirtualModuleName <> '' then
       Engine.InjectModule(FVirtualModuleName, FVirtualModuleSource);
     if FAliasPattern <> '' then
@@ -1559,6 +1577,35 @@ begin
     Grant.Deny(gcRead, ProjectPath('node_modules/probe/main.js')));
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Outcome.ErrorMessage).ToBe('read: probe');
+end;
+
+
+{ ADR 0014: a denial raised by a native call is located at the call
+  expression's own position in both executors, as import() is. }
+procedure TEngineCapabilitiesTests.TestCallDenialSitesMatchAcrossExecutors;
+const
+  FETCH_SOURCE = 'const x = 1;' + sLineBreak +
+    '  globalThis.result = fetch("http://example.com/");';
+  FFI_SOURCE = 'const x = 1;' + sLineBreak +
+    '  globalThis.result = FFI.open("../outside/lib.so");';
+var
+  Interpreted, Bytecode: TRunOutcome;
+  Grant: TGocciaCapabilities;
+begin
+  FInstallFetchAndFFI := True;
+  Grant := TGocciaCapabilities.None.Allow(gcFFI, FProject);
+  Interpreted := Run(FETCH_SOURCE, Grant);
+  Bytecode := Run(FETCH_SOURCE, Grant, True);
+  Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Interpreted.Location).ToBe('app.mjs:2:28');
+  Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
+  Interpreted := Run(FFI_SOURCE, Grant);
+  Bytecode := Run(FFI_SOURCE, Grant, True);
+  Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
+  Expect<Boolean>(Interpreted.Location <> '').ToBe(True);
+  Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
 end;
 
 begin
