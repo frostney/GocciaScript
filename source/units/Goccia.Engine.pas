@@ -306,6 +306,12 @@ type
     procedure EmitCapabilityAudit(const AKind: TGocciaCapabilityKind;
       const ADecision: TGocciaCapabilityDecision;
       const ASubject, AReason: string);
+    { As EmitCapabilityAudit, attributed to ASource instead of the current
+      call site; an empty file path falls back to the engine's entry. }
+    procedure EmitCapabilityAuditAt(const AKind: TGocciaCapabilityKind;
+      const ADecision: TGocciaCapabilityDecision;
+      const ASubject, AReason: string;
+      const ASource: TGocciaCapabilityAuditSource);
     procedure ConfigureCapabilityAuditAsChildOf(
       const AParent: TGocciaEngine);
     { Emits the one capabilities.effective event for this engine: the set's
@@ -1893,8 +1899,28 @@ procedure TGocciaEngine.EmitCapabilityAudit(
   const ADecision: TGocciaCapabilityDecision;
   const ASubject, AReason: string);
 var
-  AuditEvent: TGocciaCapabilityAuditEvent;
   CallSite: TGocciaCallSite;
+  Source: TGocciaCapabilityAuditSource;
+begin
+  if not Assigned(FCapabilityAuditSink) then
+    Exit;
+  Source := Default(TGocciaCapabilityAuditSource);
+  if CurrentGocciaCallSite(CallSite) then
+  begin
+    Source.FilePath := CallSite.FilePath;
+    Source.Line := CallSite.Line;
+    Source.Column := CallSite.Column;
+  end;
+  EmitCapabilityAuditAt(AKind, ADecision, ASubject, AReason, Source);
+end;
+
+procedure TGocciaEngine.EmitCapabilityAuditAt(
+  const AKind: TGocciaCapabilityKind;
+  const ADecision: TGocciaCapabilityDecision;
+  const ASubject, AReason: string;
+  const ASource: TGocciaCapabilityAuditSource);
+var
+  AuditEvent: TGocciaCapabilityAuditEvent;
 begin
   if not Assigned(FCapabilityAuditSink) then
     Exit;
@@ -1905,13 +1931,8 @@ begin
   AuditEvent.Decision := ADecision;
   AuditEvent.Subject := ASubject;
   AuditEvent.Reason := AReason;
-  if CurrentGocciaCallSite(CallSite) then
-  begin
-    AuditEvent.Source.FilePath := CallSite.FilePath;
-    AuditEvent.Source.Line := CallSite.Line;
-    AuditEvent.Source.Column := CallSite.Column;
-  end
-  else
+  AuditEvent.Source := ASource;
+  if AuditEvent.Source.FilePath = '' then
   begin
     AuditEvent.Source.FilePath := FSourcePath;
     AuditEvent.Source.Line := 0;

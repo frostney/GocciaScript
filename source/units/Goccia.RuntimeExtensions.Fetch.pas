@@ -71,7 +71,8 @@ begin
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
-    EngineMaxResponseBytes, Runtime.Engine.Realm);
+    Runtime.Engine.EmitCapabilityAuditAt, EngineMaxResponseBytes,
+    Runtime.Engine.Realm);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;

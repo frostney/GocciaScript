@@ -54,6 +54,15 @@ type
     const ADecision: TGocciaCapabilityDecision;
     const ASubject, AReason: string) of object;
 
+  { An emitter for decisions reported after the fact — a fetch worker's hop
+    decisions replayed when the request settles — which carry the source
+    location of the call that caused them rather than whatever runs now. }
+  TGocciaCapabilityAuditSourcedEmitter = procedure(
+    const AKind: TGocciaCapabilityKind;
+    const ADecision: TGocciaCapabilityDecision;
+    const ASubject, AReason: string;
+    const ASource: TGocciaCapabilityAuditSource) of object;
+
 function CapabilityKindName(const AKind: TGocciaCapabilityKind): string;
 function CapabilityDecisionName(
   const ADecision: TGocciaCapabilityDecision): string;

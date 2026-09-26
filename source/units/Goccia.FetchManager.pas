@@ -31,9 +31,12 @@ type
     Capabilities: TGocciaCapabilities;
     { Response-body ceiling in bytes; zero selects the default. }
     MaxResponseBytes: Integer;
-    { Receives the per-hop net.fetch decisions made while the request ran.
-      They are delivered on the runtime thread when the request settles. }
-    AuditEmitter: TGocciaCapabilityAuditEmitter;
+    { Receives the per-hop net.fetch decisions made while the request ran,
+      attributed to AuditSource (the fetch() call). They are delivered on the
+      runtime thread when the completion arrives, even after an abort, until
+      the engine discards its requests. }
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
   end;
 
   { One manager serves every engine on a thread: engines nest there (a sandbox
@@ -181,7 +184,8 @@ type
 
   TGocciaPendingFetch = record
     RequestID: Integer;
-    AuditEmitter: TGocciaCapabilityAuditEmitter;
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
     // Realm of the engine that started the request; see TGocciaFetchManager.
     Realm: TGocciaRealm;
     Promise: TGocciaPromiseValue;
@@ -225,7 +229,13 @@ type
     FState: TGocciaFetchState;
     FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
+    { Requests settled early (aborted) whose completion has not arrived yet:
+      kept only so the worker's hop decisions still reach the audit sink. }
+    FAbandoned: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
+    procedure ReplayHopDecisions(const APending: TGocciaPendingFetch;
+      const ACompletion: TGocciaFetchCompletion);
+    procedure KeepForAudit(const APending: TGocciaPendingFetch);
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
@@ -549,6 +559,7 @@ begin
   FState := TGocciaFetchState.Create;
   FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
+  FAbandoned := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
 end;
 
@@ -563,6 +574,7 @@ begin
   FState.Release;
   FLimiter.Release;
   FPending.Free;
+  FAbandoned.Free;
   inherited;
 end;
 
@@ -601,6 +613,7 @@ begin
   Inc(FNextRequestID);
   Pending.Realm := ARealm;
   Pending.AuditEmitter := APolicy.AuditEmitter;
+  Pending.AuditSource := APolicy.AuditSource;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
@@ -714,11 +727,38 @@ begin
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
+  KeepForAudit(Pending);
   try
     Pending.Promise.Reject(Pending.Signal.Reason);
   finally
     ReleasePendingRoots(Pending);
   end;
+end;
+
+procedure TGocciaFetchManagerImpl.KeepForAudit(
+  const APending: TGocciaPendingFetch);
+begin
+  if Assigned(APending.AuditEmitter) then
+    FAbandoned.Add(APending);
+end;
+
+procedure TGocciaFetchManagerImpl.ReplayHopDecisions(
+  const APending: TGocciaPendingFetch;
+  const ACompletion: TGocciaFetchCompletion);
+var
+  I: Integer;
+begin
+  if not Assigned(APending.AuditEmitter) then
+    Exit;
+  for I := 0 to High(ACompletion.HopDecisions) do
+    if ACompletion.HopDecisions[I].Allowed then
+      APending.AuditEmitter(gckNetFetch, gcdAllow,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource)
+    else
+      APending.AuditEmitter(gckNetFetch, gcdDeny,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource);
 end;
 
 // Settles fetches whose signal has aborted. Controller-driven aborts already
@@ -821,7 +861,18 @@ var
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
+  begin
+    { Settled early by an abort: only the audit trail is still owed. }
+    for I := FAbandoned.Count - 1 downto 0 do
+      if FAbandoned[I].RequestID = ACompletion.RequestID then
+      begin
+        Pending := FAbandoned[I];
+        FAbandoned.Delete(I);
+        ReplayHopDecisions(Pending, ACompletion);
+        Break;
+      end;
     Exit;
+  end;
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
@@ -835,16 +886,7 @@ begin
     if Assigned(Pending.Realm) then
       SetCurrentRealm(Pending.Realm);
     try
-      if Assigned(Pending.AuditEmitter) then
-        for I := 0 to High(ACompletion.HopDecisions) do
-          if ACompletion.HopDecisions[I].Allowed then
-            Pending.AuditEmitter(gckNetFetch, gcdAllow,
-              ACompletion.HopDecisions[I].Host,
-              ACompletion.HopDecisions[I].Reason)
-          else
-            Pending.AuditEmitter(gckNetFetch, gcdDeny,
-              ACompletion.HopDecisions[I].Host,
-              ACompletion.HopDecisions[I].Reason);
+      ReplayHopDecisions(Pending, ACompletion);
 
       if ACompletion.Success then
       begin
@@ -968,11 +1010,16 @@ begin
     ReleasePendingRoots(Pending);
     HadPending := True;
   end;
+  { The engine is discarding its requests, so its audit emitter must not
+    outlive this call. }
+  for I := FAbandoned.Count - 1 downto 0 do
+    if FAbandoned[I].Realm = ARealm then
+      FAbandoned.Delete(I);
 
   { Another engine still has requests in flight, so the completion queue is
     shared with live work. The detached requests' late completions no longer
     match a pending entry and are dropped when popped. }
-  if FPending.Count > 0 then
+  if (FPending.Count > 0) or (FAbandoned.Count > 0) then
     Exit;
 
   if not HadPending then

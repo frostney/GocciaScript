@@ -30,6 +30,7 @@ type
   private
     FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FSourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     FMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
     FRealm: TGocciaRealm;
     FAcquiredFetchManager: Boolean;
@@ -45,6 +46,7 @@ type
       const AThrowError: TGocciaThrowErrorCallback;
       const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+      const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
       const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
       const ARealm: TGocciaRealm);
     destructor Destroy; override;
@@ -66,6 +68,7 @@ uses
   Goccia.EngineFault,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Execution.CallSite,
   Goccia.FetchManager,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
@@ -89,6 +92,7 @@ constructor TGocciaGlobalFetch.Create(const AName: string;
   const AThrowError: TGocciaThrowErrorCallback;
   const ACapabilities: TGocciaCapabilities;
   const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+  const ASourcedAuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
   const AMaxResponseBytesProvider: TGocciaFetchMaxResponseBytesProvider;
   const ARealm: TGocciaRealm);
 begin
@@ -96,6 +100,7 @@ begin
 
   FCapabilities := ACapabilities;
   FCapabilityAuditEmitter := ACapabilityAuditEmitter;
+  FSourcedAuditEmitter := ASourcedAuditEmitter;
   FMaxResponseBytesProvider := AMaxResponseBytesProvider;
   FRealm := ARealm;
   TGocciaFetchManager.AcquireInstance;
@@ -199,6 +204,7 @@ var
   I: Integer;
   Policy: TGocciaFetchPolicy;
   Manager: TGocciaFetchManager;
+  CallSite: TGocciaCallSite;
 begin
   // Extract URL
   if AArgs.Length = 0 then
@@ -282,7 +288,16 @@ begin
     FCapabilityAuditEmitter(gckNetDispatch, gcdAllow, URLStr,
       'fetch dispatch is allowed');
   Policy.Capabilities := FCapabilities;
-  Policy.AuditEmitter := FCapabilityAuditEmitter;
+  Policy.AuditEmitter := FSourcedAuditEmitter;
+  { The worker's decisions are delivered later, from whatever code is
+    running then; attribute them to this fetch() call. }
+  Policy.AuditSource := Default(TGocciaCapabilityAuditSource);
+  if CurrentGocciaCallSite(CallSite) then
+  begin
+    Policy.AuditSource.FilePath := CallSite.FilePath;
+    Policy.AuditSource.Line := CallSite.Line;
+    Policy.AuditSource.Column := CallSite.Column;
+  end;
   if Assigned(FMaxResponseBytesProvider) then
     Policy.MaxResponseBytes := FMaxResponseBytesProvider()
   else

@@ -14,6 +14,7 @@ uses
   FileUtils,
   TestingPascalLibrary,
 
+  Goccia.Arguments.Collection,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
@@ -22,12 +23,14 @@ uses
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FetchManager,
   Goccia.Modules.ContentProvider,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
   Goccia.RuntimeExtensions.FFI,
   Goccia.TestSetup,
   Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.VM.Exception;
@@ -48,6 +51,10 @@ type
     FProject: string;
     FOutside: string;
     FEvents: TStringList;
+    FEventSources: TStringList;
+    FAuditedHopIndex: Integer;
+    function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
     function ProjectPath(const AName: string): string;
     function OutsidePath(const AName: string): string;
@@ -76,6 +83,8 @@ type
     procedure TestFFIOpenChecksLibraryScopes;
     procedure TestFFIBareNamesNeedAnUnscopedGrant;
     procedure TestImportMetaResolveDoesNotProbeOutsideTheGrant;
+    procedure TestAbortedFetchStillAuditsItsHops;
+    procedure TestAbortedFetchAuditEndsWithItsEngine;
     function OpenLibrary(const ALibrary: string;
       const ACapabilities: TGocciaCapabilities): TRunOutcome;
     procedure TestNodeModulesDenyThrowsPermissionDenied;
@@ -117,6 +126,10 @@ begin
     TestFFIBareNamesNeedAnUnscopedGrant);
   Test('import.meta.resolve does not probe the host outside the read grant',
     TestImportMetaResolveDoesNotProbeOutsideTheGrant);
+  Test('An aborted fetch still audits its hops, attributed to its fetch() call',
+    TestAbortedFetchStillAuditsItsHops);
+  Test('An aborted fetch''s audit is dropped when its engine discards its ' +
+    'requests', TestAbortedFetchAuditEndsWithItsEngine);
   Test('A node_modules deny throws PermissionDenied',
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
@@ -171,11 +184,13 @@ begin
   WriteFile(ProjectPath('node_modules/pkg/index.js'),
     'export const value = "package";');
   FEvents := TStringList.Create;
+  FEventSources := TStringList.Create;
 end;
 
 procedure TEngineCapabilitiesTests.AfterAll;
 begin
   FEvents.Free;
+  FEventSources.Free;
   DeleteTree(FRoot);
   inherited AfterAll;
 end;
@@ -184,6 +199,7 @@ procedure TEngineCapabilitiesTests.BeforeEach;
 begin
   inherited BeforeEach;
   FEvents.Clear;
+  FEventSources.Clear;
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -191,6 +207,8 @@ procedure TEngineCapabilitiesTests.RecordEvent(
 begin
   FEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
     CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
+  FEventSources.Add(ExtractFileName(AEvent.Source.FilePath) + ':' +
+    IntToStr(AEvent.Source.Line));
 end;
 
 function TEngineCapabilitiesTests.ProjectPath(const AName: string): string;
@@ -611,6 +629,126 @@ begin
   Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Allow(gcRead,
     FOutside));
   Expect<string>(Outcome.Result).ToBe('secret.js|missing|lib.js');
+end;
+
+{ The worker still resolves and checks an aborted request's destination;
+  its decisions must reach the audit sink when the completion arrives while
+  the engine is still running, even though the abort already settled the
+  promise, and be attributed to the fetch() call that started it. The script
+  hands control to PumpUntilAudited, standing in for any later work that
+  drains fetch completions. }
+function TEngineCapabilitiesTests.PumpUntilAudited(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+const
+  SETTLE_DEADLINE_MS = 5000;
+var
+  Waited: Integer;
+begin
+  FAuditedHopIndex := -1;
+  Waited := 0;
+  while (FAuditedHopIndex < 0) and (Waited < SETTLE_DEADLINE_MS) do
+  begin
+    TGocciaFetchManager.Instance.PumpCompletions;
+    if (FEvents.Count > 3) and (Pos('net.fetch|', FEvents[3]) = 1) then
+      FAuditedHopIndex := 3
+    else
+    begin
+      Sleep(1);
+      Inc(Waited);
+    end;
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TEngineCapabilitiesTests.TestAbortedFetchStillAuditsItsHops;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'const controller = new AbortController();' + sLineBreak +
+    'const request = fetch("http://localhost:1/", ' +
+    '{ signal: controller.signal });' + sLineBreak +
+    'request.catch(() => {});' + sLineBreak +
+    'controller.abort();' + sLineBreak +
+    'pumpUntilAudited();';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('abort.mjs'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+      .Allow(gcNet, NET_PRIVATE_SCOPE));
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+    Engine.RegisterGlobal('pumpUntilAudited',
+      TGocciaNativeFunctionValue.Create(PumpUntilAudited, 'pumpUntilAudited',
+        0));
+    Engine.Execute;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  { capabilities.effective, the name check, net.dispatch, then the replayed
+    address check for the aborted request. }
+  Expect<Integer>(FAuditedHopIndex).ToBe(3);
+  Expect<string>(FEventSources[3]).ToBe('abort.mjs:2');
+end;
+
+{ Execute discards the engine's requests when it returns, so a completion
+  that arrives afterwards — here pumped by another engine still using the
+  thread's fetch manager — must find nothing to report to: the first engine
+  and its audit sink are gone. }
+procedure TEngineCapabilitiesTests.TestAbortedFetchAuditEndsWithItsEngine;
+const
+  DRAIN_MS = 300;
+var
+  KeeperSource, Source: TStringList;
+  KeeperExecutor, Executor: TGocciaInterpreterExecutor;
+  Keeper, Engine: TGocciaEngine;
+  EventsAfterFree, Waited: Integer;
+begin
+  KeeperSource := TStringList.Create;
+  KeeperExecutor := TGocciaInterpreterExecutor.Create;
+  Keeper := TGocciaEngine.Create(ProjectPath('keeper.js'), KeeperSource,
+    KeeperExecutor);
+  try
+    AttachRuntime(Keeper).Install(TGocciaFetchRuntimeExtension.Create);
+    Source := TStringList.Create;
+    Source.Text :=
+      'const controller = new AbortController();' + sLineBreak +
+      'fetch("http://localhost:1/", { signal: controller.signal })' +
+      '.catch(() => {});' + sLineBreak +
+      'controller.abort();';
+    Executor := TGocciaInterpreterExecutor.Create;
+    Engine := TGocciaEngine.Create(ProjectPath('gone.mjs'), Source, Executor,
+      TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+        .Allow(gcNet, NET_PRIVATE_SCOPE));
+    try
+      Engine.CapabilityAuditSink := RecordEvent;
+      AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+      Engine.Execute;
+    finally
+      Engine.Free;
+      Executor.Free;
+      Source.Free;
+    end;
+    EventsAfterFree := FEvents.Count;
+    Waited := 0;
+    while Waited < DRAIN_MS do
+    begin
+      TGocciaFetchManager.Instance.PumpCompletions;
+      Sleep(1);
+      Inc(Waited);
+    end;
+    Expect<Integer>(FEvents.Count).ToBe(EventsAfterFree);
+  finally
+    Keeper.Free;
+    KeeperExecutor.Free;
+    KeeperSource.Free;
+  end;
 end;
 
 procedure TEngineCapabilitiesTests.TestNodeModulesDenyThrowsPermissionDenied;
