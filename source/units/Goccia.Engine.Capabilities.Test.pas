@@ -111,6 +111,7 @@ type
     procedure TestDenyScopeHidesExistenceInsideProject;
     procedure TestImportMetaResolveHonoursDenyScopes;
     procedure TestVirtualBareModuleAuditsNoNodeModules;
+    procedure TestAbortAtScriptEndRecordsAbandonment;
   public
     procedure SetupTests; override;
   end;
@@ -177,6 +178,8 @@ begin
     TestImportMetaResolveHonoursDenyScopes);
   Test('A bare specifier served by a virtual module audits no node_modules ' +
     'decision', TestVirtualBareModuleAuditsNoNodeModules);
+  Test('A fetch aborted as the script ends records that its later hops go ' +
+    'unaudited', TestAbortAtScriptEndRecordsAbandonment);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -730,8 +733,8 @@ begin
   while (FAuditedHopIndex < 0) and (Waited < SETTLE_DEADLINE_MS) do
   begin
     TGocciaFetchManager.Instance.PumpCompletions;
-    if (FEvents.Count > 3) and (Pos('net.fetch|', FEvents[3]) = 1) then
-      FAuditedHopIndex := 3
+    if (FEvents.Count > 4) and (Pos('net.fetch|', FEvents[4]) = 1) then
+      FAuditedHopIndex := 4
     else
     begin
       Sleep(1);
@@ -771,10 +774,11 @@ begin
     Executor.Free;
     Source.Free;
   end;
-  { capabilities.effective, the name check, net.dispatch, then the replayed
-    address check for the aborted request. }
-  Expect<Integer>(FAuditedHopIndex).ToBe(3);
-  Expect<string>(FEventSources[3]).ToBe('abort.mjs:2');
+  { capabilities.effective, the name check, net.dispatch, the abandonment
+    the abort records, then the replayed address check. }
+  Expect<Integer>(FAuditedHopIndex).ToBe(4);
+  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|http://localhost:1/');
+  Expect<string>(FEventSources[4]).ToBe('abort.mjs:2');
 end;
 
 { Execute discards the engine's requests when it returns, so a completion
@@ -1303,6 +1307,43 @@ begin
   Run('import { value } from "pkg"; globalThis.result = value;',
     TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE));
   Expect<Boolean>(EventsOfKind('import.node-modules') > 0).ToBe(True);
+end;
+
+
+{ Execute discards the engine's requests when the script ends, so an
+  aborted request's worker may report its address and redirect decisions
+  too late to audit. The abort itself records that, attributed to the
+  fetch() call, so the gap is explicit in the log. }
+procedure TEngineCapabilitiesTests.TestAbortAtScriptEndRecordsAbandonment;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  EventIndex: Integer;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'const controller = new AbortController();' + sLineBreak +
+    'fetch("http://localhost:1/", { signal: controller.signal })' +
+    '.catch(() => {});' + sLineBreak +
+    'controller.abort();';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('end.mjs'), Source, Executor,
+    TGocciaCapabilities.None.Allow(gcNet, 'localhost')
+      .Allow(gcNet, NET_PRIVATE_SCOPE));
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    AttachRuntime(Engine).Install(TGocciaFetchRuntimeExtension.Create);
+    Engine.Execute;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+  EventIndex := FEvents.IndexOf('net.fetch|allow|http://localhost:1/');
+  Expect<Boolean>(EventIndex >= 0).ToBe(True);
+  if EventIndex >= 0 then
+    Expect<string>(FEventSources[EventIndex]).ToBe('end.mjs:2');
 end;
 
 begin

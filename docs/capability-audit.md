@@ -80,9 +80,16 @@ for what the grant permits.
 
 Every event is delivered on the runtime thread. The decisions a fetch worker
 makes for resolved addresses and redirect hops are recorded with the request
-and delivered when its completion arrives — also after an abort, until the
-engine discards its requests — attributed to the `fetch()` call that started
-it. The HTTP worker never calls the sink.
+and delivered when its completion arrives, attributed to the `fetch()` call
+that started it. The HTTP worker never calls the sink.
+
+An engine does not wait for requests the script aborted: when `Execute`
+returns it discards them, and a worker that reports afterwards has no one to
+report to. So an abort records a `net.fetch` `allow` event of its own, whose
+subject is the request URL and whose reason says the request was aborted and
+that hop decisions reported after the engine ends are not audited. Decisions
+that do arrive while the engine still runs follow it as usual. The log never
+silently stops at an aborted request's `net.dispatch`.
 
 ## Embedding
 

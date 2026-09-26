@@ -125,6 +125,8 @@ const
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_LIMIT_ERROR = 'fetch worker limit exceeded';
+  FETCH_ABANDONED_AUDIT_REASON = 'the request was aborted; hop decisions ' +
+    'its worker reports after the engine ends are not audited';
 
 type
   { One net decision a worker made for a hop, replayed to the audit sink on
@@ -186,6 +188,8 @@ type
     RequestID: Integer;
     AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     AuditSource: TGocciaCapabilityAuditSource;
+    // The request URL, the subject of the abandonment event an abort records.
+    AuditSubject: string;
     // Realm of the engine that started the request; see TGocciaFetchManager.
     Realm: TGocciaRealm;
     Promise: TGocciaPromiseValue;
@@ -614,6 +618,7 @@ begin
   Pending.Realm := ARealm;
   Pending.AuditEmitter := APolicy.AuditEmitter;
   Pending.AuditSource := APolicy.AuditSource;
+  Pending.AuditSubject := AURL;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
@@ -735,11 +740,20 @@ begin
   end;
 end;
 
+{ An aborted request's worker still checks, and records, its address and
+  redirect decisions; they are replayed if its completion arrives while the
+  engine runs. The engine does not wait for aborted requests, so when it
+  ends first they are never delivered. The abort itself therefore records
+  the abandonment, so the log shows where a request's hop decisions may
+  stop. }
 procedure TGocciaFetchManagerImpl.KeepForAudit(
   const APending: TGocciaPendingFetch);
 begin
-  if Assigned(APending.AuditEmitter) then
-    FAbandoned.Add(APending);
+  if not Assigned(APending.AuditEmitter) then
+    Exit;
+  APending.AuditEmitter(gckNetFetch, gcdAllow, APending.AuditSubject,
+    FETCH_ABANDONED_AUDIT_REASON, APending.AuditSource);
+  FAbandoned.Add(APending);
 end;
 
 procedure TGocciaFetchManagerImpl.ReplayHopDecisions(
