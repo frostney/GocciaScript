@@ -95,12 +95,16 @@ A bound on how often or how much an installed capability may be exercised — at
 _Avoid_: Capability audit event, rate limit, allowlist.
 
 **Seed baseline**:
-An explicitly imported snapshot used to initialise a sandbox-visible filesystem. Top-level sandbox seeds copy from host paths or inline seed config entries; nested child sandbox seeds copy from the parent virtual filesystem or inline child entries. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
+An explicitly imported snapshot used to initialise a sandbox-visible filesystem. At the top level it is built from the copy inputs and the entry file; a nested child sandbox's baseline is its `runScript` `copy` entries, copied from the parent virtual filesystem or given inline. A seed baseline is not a live mount and does not make the source path ambiently available to running source.
 _Avoid_: Mount, host filesystem access, import baseline.
 
+**Copy input**:
+A host file or directory the Runner copies into the sandbox filesystem before a sandbox-mode run, named with `--copy`, `--copy-rw`, or the `sandbox` section of the root config. A `--copy` input is read-only; a `--copy-rw` input is also written back to its host path after a successful run. See [Permissions](docs/permissions.md#sandbox-mode).
+_Avoid_: Seed, mount, write-back target.
+
 **Metadata diff**:
-An opt-in sandbox diff dimension that reports timestamp changes independently from content and namespace changes. It compares a path's access, modification, change, and birth timestamps against the seed baseline without turning timestamp-only activity into a content modification.
-_Avoid_: Default diff, content diff.
+A sandbox diff dimension that reports timestamp changes independently from content and namespace changes. It compares a path's access, modification, change, and birth timestamps against the seed baseline without turning timestamp-only activity into a content modification. JSON diffs always include it; unified diffs never do.
+_Avoid_: Content diff.
 
 **Sandbox filesystem error**:
 A JavaScript `Error` reported by a sandbox runtime extension when a virtual filesystem operation fails. It carries a stable error code and operation/path context plus a target-appropriate numeric errno. It is shared by synchronous and promise APIs, and by callback APIs when installed.
@@ -378,17 +382,21 @@ _Avoid_: Module source.
 Source evaluated with module entry semantics, including module `this`, imports, exports, and import metadata.
 _Avoid_: Script source.
 
-**Script Loader**:
-The CLI host that executes source files, stdin, or `.gbc` artifacts.
-_Avoid_: Script executor.
+**Runner**:
+The CLI host (`GocciaRunner`, named `GocciaScriptLoader` before 0.14) that executes source files, stdin, or `.gbc` artifacts in host mode, or one entry in sandbox mode.
+_Avoid_: Script Loader, script executor.
+
+**Host mode**:
+The Runner's default mode: source runs against the host filesystem, and what it may reach outside the process is its capability set.
+_Avoid_: Loader mode, normal mode.
+
+**Sandbox mode**:
+The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs` and `goccia`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
+_Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
 
 **Bare Script Loader**:
 The CLI host that executes through the core engine without attaching the runtime surface.
 _Avoid_: Loader profile.
-
-**Sandbox Runner**:
-The CLI host (`GocciaSandboxRunner`) that executes an entry file inside an isolated sandbox virtual filesystem populated from a seed baseline, and reports a structured run result. See [Architecture](docs/architecture.md) and [Build System](docs/build-system.md).
-_Avoid_: Script Loader, sandbox mode.
 
 **Test Runner**:
 The CLI host (`GocciaTestRunner`) that discovers and runs GocciaScript test files against the built-in Vitest-compatible testing API and reports per-file and aggregate results. See [Testing](docs/testing.md).
@@ -400,7 +408,7 @@ _Avoid_: Performance Barometer, profiler.
 
 **REPL**:
 The interactive CLI host (`GocciaREPL`) that evaluates entered source in one persistent realm across inputs.
-_Avoid_: Script Loader, shell.
+_Avoid_: Runner, shell.
 
 **Differential suite**:
 A shared test suite executed both on GocciaScript and on an external runtime in continuous integration, so a behavioral disagreement in either direction fails the build. See [Differential Testing](docs/differential-testing.md).
@@ -543,8 +551,8 @@ Use **runtime surface** for the aggregate host-exposed set of APIs. Use **runtim
 **Function vocabulary**:
 Use **user-defined function** for source-defined functions in general. Use **arrow function**, **ordinary function**, or **method** only when that semantic distinction matters.
 
-**Script Loader**:
-Use **Script Loader** for `GocciaScriptLoader`. Avoid **script executor** except when describing the generic act of executing source.
+**Runner**:
+Use **Runner** for `GocciaRunner`, and **host mode** or **sandbox mode** when the distinction matters. Use **Script Loader** only for the pre-0.14 name and for `GocciaScriptLoaderBare`. Avoid **script executor** except when describing the generic act of executing source.
 
 **Frontend/backend terminology**:
 Avoid frontend/backend terminology in GocciaScript architecture. Use **source pipeline** for lexer/parser/AST work and **CLI host** for command-line programs.

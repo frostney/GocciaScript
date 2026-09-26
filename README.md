@@ -17,10 +17,10 @@ host.
 
 ## Start with an agent sandbox
 
-`GocciaSandboxRunner` seeds an in-memory virtual filesystem from explicit host
-paths, runs an entry script with host-owned limits, and reports sandbox changes
-as a diff. Seed entries are snapshots, not live mounts, and scripts receive no
-ambient host filesystem access.
+`GocciaRunner`'s sandbox mode copies explicit host paths into an in-memory
+virtual filesystem, runs an entry script with host-owned limits, and reports
+sandbox changes as a diff. Copies are snapshots, not live mounts, and scripts
+receive no ambient host filesystem access.
 
 ```javascript
 // agent-workspace/main.js
@@ -32,23 +32,25 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
 ```
 
 ```bash
-./build.pas sandboxrunner
-./build/GocciaSandboxRunner /main.js \
-  --seed=./agent-workspace=/ \
-  --timeout=5s \
+./build.pas runner
+./build/GocciaRunner agent-workspace/main.js \
+  --copy agent-workspace/task.txt \
+  --timeout=5000 \
   --diff
 ```
 
-Nothing the script writes reaches the host unless the host asks for it:
-`--write-back` writes the files a successful run changed to the host paths they
-were seeded from, and without it the virtual filesystem is discarded. A program
-that only reports and a program that fixes are therefore the same program, and
-the difference is a word on the host's command line. See
-[ADR 0119](docs/adr/0119-host-applied-sandbox-write-back.md).
+The entry file lands at `/main.js` and the copied input at `/task.txt`.
+Nothing the script writes reaches the host unless the host asks for it: an
+input copied with `--copy-rw` instead of `--copy` has the files a successful
+run changed inside it written back to their host paths, and everything else in
+the virtual filesystem is discarded. A program that only reports and a program
+that fixes are therefore the same program, and the difference is a word on the
+host's command line. See
+[Permissions — Sandbox mode](docs/permissions.md#sandbox-mode).
 
 The host can also define globals, virtual modules, allowed network hosts,
 instruction and memory limits, deterministic time/randomness, and
-application-specific APIs. See [Build System — Sandbox Runner](docs/build-system.md#gocciasandboxrunner-virtual-filesystem-sandbox)
+application-specific APIs. See [Build System — GocciaRunner sandbox mode](docs/build-system.md#gocciarunner-sandbox-mode)
 and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas).
 
 ## ECMAScript implementation and recommended profile
@@ -102,8 +104,8 @@ parsing rules.
 
 GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm
 package resolution, `process`, `Buffer`, or the general `node:` module set.
-`GocciaSandboxRunner` does provide a Node-compatible `fs` API over its virtual
-filesystem:
+`GocciaRunner`'s sandbox mode does provide a Node-compatible `fs` API over its
+virtual filesystem:
 
 - synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
   `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
@@ -194,8 +196,8 @@ console.log(`Your order total: $${total.toFixed(2)}`);
 # Production build
 ./build.pas --prod
 
-# Build the script loader only
-./build.pas loader
+# Build the runner only
+./build.pas runner
 ```
 
 See [Build System](docs/build-system.md#build-commands) for build modes,
@@ -204,13 +206,13 @@ targets, clean builds, and troubleshooting.
 ### Run a Script
 
 ```bash
-./build.pas loader && ./build/GocciaScriptLoader example.js
-printf "const x = 2 + 2; x;" | ./build/GocciaScriptLoader --print
+./build.pas runner && ./build/GocciaRunner example.js
+printf "const x = 2 + 2; x;" | ./build/GocciaRunner --print
 ```
 
-By default, both loaders are silent about the script's last evaluated value.
+By default, the runner is silent about the script's last evaluated value.
 Pass `--print` to emit it; use `--output=json` for programmatic consumers. See
-[Build System](docs/build-system.md#compile-and-run) for loader options,
+[Build System](docs/build-system.md#compile-and-run) for runner options,
 bytecode mode, JSON output, sandbox execution, import maps, config files, and
 resource limits.
 
@@ -220,9 +222,9 @@ GocciaScript includes bytecode execution, and `GocciaBundler` compiles source to
 the public `.gbc` artifact.
 
 ```bash
-./build/GocciaScriptLoader example.js --mode=bytecode
+./build/GocciaRunner example.js --mode=bytecode
 ./build/GocciaBundler example.js
-./build/GocciaScriptLoader example.gbc
+./build/GocciaRunner example.gbc
 ```
 
 See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor architecture.
@@ -232,7 +234,7 @@ See [Bytecode VM](docs/bytecode-vm.md) for the current bytecode executor archite
 Use one fixed JavaScript-visible clock, UTC time zone, and portable random stream in either execution mode:
 
 ```bash
-./build/GocciaScriptLoader example.js --deterministic
+./build/GocciaRunner example.js --deterministic
 ```
 
 Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
@@ -342,7 +344,7 @@ complete implementation, default-profile, and compatibility-path detail, see
 FreePascal is the cross-platform toolchain used for normal builds, releases, and
 the documented embedding API. The repository also includes
 [`GocciaScript.Delphi.groupproj`](source/app/GocciaScript.Delphi.groupproj) and
-Delphi projects for the REPL, both script loaders, Sandbox Runner, Test Runner,
+Delphi projects for the REPL, the Runner, the Bare Script Loader, Test Runner,
 Benchmark Runner, and Bundler on Win32 and Win64.
 
 The Delphi support contract requires the complete application matrix and all
