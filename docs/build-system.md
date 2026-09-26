@@ -528,9 +528,10 @@ sandbox mode on. `--entry`, `--diff`, `--diff-file`, and `--max-fs-*` on the
 command line without sandbox mode are usage errors that name `--sandbox` and
 `--copy`; `max-fs-bytes` and `max-fs-nodes` in a config file apply in sandbox
 mode and are ignored, unvalidated, in host mode. A config's `modules`,
-`globals`, and `host-environment` are not applied in sandbox mode. Errors the
-host reports in sandbox mode, an invalid option value included, go to standard
-error.
+`globals`, and `host-environment` are not applied in sandbox mode, while
+`--module` and `--modules` on the command line, the user's explicit choice, are.
+Errors the host reports in sandbox mode, an invalid option value included, go
+to standard error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.
