@@ -50,6 +50,7 @@ type
     procedure TestNetEmbeddedIPv4Scopes;
     procedure TestNetIPLiteralTrailingDot;
     procedure TestPortScopedAddressNamesOnlyItsPort;
+    procedure TestNodeModulesCeilingThroughASymlink;
     procedure TestNetCIDRZero;
     procedure TestExplainNetHostDenial;
     procedure TestToJSON;
@@ -101,6 +102,8 @@ begin
     TestNetIPLiteralTrailingDot);
   Test('A port-scoped IP names a private address for that port only',
     TestPortScopedAddressNamesOnlyItsPort);
+  Test('A node_modules ceiling contains an importer spelled through a ' +
+    'symlink', TestNodeModulesCeilingThroughASymlink);
   Test('A /0 range covers every address, private ones included',
     TestNetCIDRZero);
   Test('ExplainNetHostDenial names the reason a host is refused',
@@ -846,6 +849,56 @@ begin
   Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 22))
     .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7')).ToBe(False);
+end;
+
+{ macOS hands out temporary directories under /var, a symlink to
+  /private/var, and reports the working directory physically. A ceiling
+  spelled one way must still contain an importer spelled the other, and the
+  walk must get a ceiling spelled like the importer. }
+procedure TCapabilitiesTests.TestNodeModulesCeilingThroughASymlink;
+{$IFDEF UNIX}
+var
+  Base, RealDir, LinkDir, Ceiling: string;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  Base := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-ceiling-' + IntToStr(GetProcessID);
+  RealDir := Base + '/private-var/project';
+  LinkDir := Base + '/var';
+  ForceDirectories(RealDir + '/src');
+  if fpSymlink(PAnsiChar(AnsiString(Base + '/private-var')),
+     PAnsiChar(AnsiString(LinkDir))) <> 0 then
+    Fail('could not create the test symlink');
+  try
+    { The ceiling is spelled through the link; the importer physically. }
+    Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
+      'node_modules=' + LinkDir + '/project/src')
+      .NodeModulesCeiling(RealDir + '/src', Ceiling)).ToBe(True);
+    Expect<string>(Ceiling).ToBe(CanonicalCapabilityPath(RealDir + '/src'));
+    { Spelled alike, the ceiling is handed on as written. }
+    Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
+      'node_modules=' + LinkDir + '/project')
+      .NodeModulesCeiling(LinkDir + '/project/src', Ceiling)).ToBe(True);
+    Expect<string>(Ceiling).ToBe(LinkDir + '/project');
+    { A deny scope spelled through the link covers the physical importer. }
+    Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport)
+      .Deny(gcImport, 'node_modules=' + LinkDir + '/project')
+      .DeniesNodeModules(RealDir + '/src')).ToBe(True);
+    { Outside the ceiling stays outside. }
+    Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
+      'node_modules=' + LinkDir + '/project/src')
+      .NodeModulesCeiling(RealDir, Ceiling)).ToBe(False);
+  finally
+    DeleteFile(LinkDir);
+    RemoveDir(RealDir + '/src');
+    RemoveDir(RealDir);
+    RemoveDir(Base + '/private-var');
+    RemoveDir(Base);
+  end;
+  {$ELSE}
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
 end;
 
 procedure TCapabilitiesTests.TestNetCIDRZero;
