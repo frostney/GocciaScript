@@ -205,7 +205,8 @@ console.log("Removed and command-line-only config keys exit 2...");
       ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
       ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
       ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
-      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (`],
+      ['{"max-memory": 1e20}', `Invalid value for "max-memory" in ${configPath}: 1e20 (value is too large)`],
+      ['{"max-memory": 1.5}', `Invalid value for "max-memory" in ${configPath}: 1.5 (use a whole number`],
       ['{"extends": {"path": "base.json"}}', `${configPath}: "extends" must be a path`],
       ['{"extends": 1}', `${configPath}: "extends" must be a path`],
       ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
@@ -221,6 +222,30 @@ console.log("Removed and command-line-only config keys exit 2...");
     const tomlString = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(tomlString, 1, "TOML string flag");
     rmSync(join(tmp, "goccia.toml"));
+    // A number reads the same in every format: an exact whole number is
+    // accepted whatever its spelling, anything else is an invalid value.
+    rmSync(configPath);
+    for (const [name, text] of [
+      ["goccia.json", '{"max-memory": 1e8}'],
+      ["goccia.json5", "{ 'max-memory': 1e8 }"],
+      ["goccia.toml", "max-memory = 1e8\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const accepted = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(accepted, 0, `${name} whole-number exponent`);
+      rmSync(join(tmp, name));
+    }
+    for (const [name, text] of [
+      ["goccia.json5", "{ 'max-memory': 1e20 }"],
+      ["goccia.toml", "max-memory = 1e20\n"],
+    ] as const) {
+      writeFileSync(join(tmp, name), text);
+      const tooLarge = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(tooLarge, 1, `${name} oversized number`);
+      expectIncludes(tooLarge.combined, "(value is too large)", `${name} oversized number`);
+      rmSync(join(tmp, name));
+    }
+    writeFileSync(configPath, "{}\n");
     writeFileSync(join(tmp, "goccia.toml"), '[extends]\npath = "base.toml"\n');
     const tomlExtends = run(LOADER, ["main.js"], { cwd: tmp });
     expectExit(tomlExtends, 1, "TOML extends table");
@@ -340,6 +365,9 @@ console.log("Binaries with their own parser follow the same grammar...");
     const test262Flag = run(TEST262RUNNER, ["--verbose=false"], { cwd: tmp });
     expectExit(test262Flag, 2, "Test262 --verbose=false");
     expectIncludes(test262Flag.stderr, "--verbose does not take a value", "Test262 --verbose=false");
+    const test262Realm = run(TEST262RUNNER, ["--unsafe-shadowrealm=1"], { cwd: tmp });
+    expectExit(test262Realm, 2, "Test262 --unsafe-shadowrealm=1");
+    expectIncludes(test262Realm.stderr, "--unsafe-shadowrealm does not take a value", "Test262 --unsafe-shadowrealm=1");
     const bareShort = run(BARE, ["-A", "main.js"], { cwd: tmp });
     expectExit(bareShort, 1, "Bare -A");
     expectIncludes(bareShort.stderr, "Unknown option: -A", "Bare -A");
@@ -689,6 +717,69 @@ console.log("A config's permissions govern only files in its own directory tree.
     // An explicit --config governs every input.
     const explicit = run(LOADER, ["-P", `--config=${join(tmp, "a", "goccia.json")}`, join("c", "l.mjs")], { cwd: tmp });
     expectIncludes(explicit.stdout, "read OUTSIDE", "explicit --config governs every input");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A file with its own config inherits no unsafe-* keys or grants from the root config...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "a", "sub"), { recursive: true });
+    mkdirSync(join(tmp, "c"));
+    writeFileSync(join(tmp, "a", "goccia.json"), JSON.stringify({
+      "unsafe-function-constructor": true,
+      "unsafe-shadowrealm": true,
+      permissions: { "allow-ffi": true },
+    }) + "\n");
+    writeFileSync(join(tmp, "c", "goccia.json"), '{"compat-var": true}\n');
+    writeFileSync(join(tmp, "a", "sub", "goccia.json"), '{"compat-var": true}\n');
+    const probe = [
+      'let fn = "off"; try { new Function("return 1")(); fn = "on"; } catch (e) {}',
+      'console.log("probe", fn, typeof ShadowRealm, typeof FFI);',
+      "",
+    ].join("\n");
+    for (const file of [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")])
+      writeFileSync(join(tmp, file), probe);
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const result = run(LOADER, ["-P", join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs"), ...args], { cwd: tmp });
+      const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
+      if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
+      if (probes[0] !== "probe on function object")
+        throw new Error(`a/x.mjs should use a's config: ${probes[0]}`);
+      for (const [index, name] of [[1, "c/x.mjs"], [2, "a/sub/x.mjs"]] as const)
+        if (probes[index] !== "probe off undefined undefined")
+          throw new Error(`${name} has its own config and must inherit nothing from a/goccia.json (${args.join(" ")}): ${probes[index]}`);
+    }
+
+    // The benchmark runner resolves the same way.
+    writeFileSync(join(tmp, "c", "bench.js"), [
+      'import("goccia:microbench").then(({ bench, group }) => {',
+      '  group("inherit", () => {',
+      '    bench("unsafe", () => {',
+      '      if (typeof ShadowRealm !== "undefined" || typeof FFI !== "undefined") throw new Error("LEAKED");',
+      '      let on = false; try { new Function("return 1")(); on = true; } catch (e) {}',
+      '      if (on) throw new Error("LEAKED");',
+      "      return 1;",
+      "    });",
+      "  });",
+      "});",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "a", "bench.js"), 'import("goccia:microbench").then(({ bench, group }) => { group("a", () => { bench("a", () => 1); }); });\n');
+    for (const args of [[], ["--mode=bytecode"]]) {
+      const bench = Bun.spawnSync([resolve(BENCHRUNNER), "-P", join("a", "bench.js"), join("c", "bench.js"), "--no-progress", ...args], {
+        cwd: tmp,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "20", GOCCIA_BENCH_ROUNDS: "1" } as Record<string, string>,
+        timeout: 60_000,
+      });
+      const text = bench.stdout.toString() + bench.stderr.toString();
+      if (bench.exitCode !== 0 || text.includes("LEAKED"))
+        throw new Error(`BenchmarkRunner c/bench.js must inherit nothing from a/goccia.json (${args.join(" ")}): exit ${bench.exitCode}\n${text}`);
+    }
   } finally {
     clean(tmp);
   }

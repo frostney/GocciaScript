@@ -385,8 +385,11 @@ allow-ffi = ["../fixtures/ffi"]
   `a/goccia.json` is the root config, but `c/y.js` (with no config of its
   own) gets no permissions or `unsafe-*` keys from it. Its other settings
   apply to every input as before. An explicit `--config` governs every
-  input. `GocciaTestRunner` given several inputs applies no root config at
-  all, only each file's own.
+  input that has no config of its own. `GocciaTestRunner` given several
+  inputs applies no root config at all, only each file's own.
+- A file with its own config takes its `permissions` and `unsafe-*` keys from
+  that config (and its `extends` chain) alone, even inside the root config's
+  tree: a root key the file's config does not set is not inherited.
 - An unknown key (`deny-nett`), `"allow-import": true`, or a value that is not
   `true`, `false`, or an array of strings (including `null`, an object, or a
   nested array) is a malformed block and fails the run with status 2. A

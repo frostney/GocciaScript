@@ -1183,6 +1183,14 @@ begin
   WriteTextFile(Path, '{"max-memory": 100000000000000000000}');
   Entries := ParseConfigFile(Path);
   Expect<string>(Entries[0].Value).ToBe('100000000000000000000');
+  { An exact whole number reads as digits in any spelling; the spelling is
+    kept for messages. }
+  WriteTextFile(Path, '{"max-memory": 1e8, "ratio": 1.5}');
+  Entries := ParseConfigFile(Path);
+  Expect<string>(Entries[0].Value).ToBe('100000000');
+  Expect<string>(Entries[0].Written).ToBe('1e8');
+  Expect<string>(Entries[1].Value).ToBe('1.5');
+  Expect<string>(Entries[1].Written).ToBe('');
   { Lookups and option application never see an unrepresentable value. }
   Expect<Boolean>(FindConfigEntry(Entries, 'a', Found)).ToBe(False);
   Mode := TStringOption.Create('a', 'A');

@@ -471,9 +471,9 @@ end;
 procedure TTest262App.ParseArguments;
 const
   TEST262_PROGRAM_NAME = 'GocciaTest262Runner';
-  TEST262_BOOLEAN_FLAGS: array[0..5] of string = ('--help', '--verbose',
+  TEST262_BOOLEAN_FLAGS: array[0..6] of string = ('--help', '--verbose',
     '--eval-host', '--deterministic', '--warning-unsupported-features',
-    '--unsafe-function-constructor');
+    '--unsafe-function-constructor', '--unsafe-shadowrealm');
 var
   Argument: string;
   I: Integer;
