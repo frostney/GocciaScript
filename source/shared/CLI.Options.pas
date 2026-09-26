@@ -25,6 +25,18 @@ type
     a config file. Applications exit with status 2 for it. }
   TCLIUsageError = class(TParseError);
 
+  { An option value its parser rejected, with the parts a config-file
+    message restates in config spelling. }
+  EOptionValueError = class(TParseError)
+  private
+    FValue: string;
+    FReason: string;
+  public
+    constructor CreateValue(const AOptionName, AValue, AReason: string);
+    property Value: string read FValue;
+    property Reason: string read FReason;
+  end;
+
   TOptionBase = class
   private
     FLongName: string;
@@ -299,6 +311,17 @@ implementation
 uses
   CLI.Units;
 
+{ EOptionValueError }
+
+constructor EOptionValueError.CreateValue(const AOptionName, AValue,
+  AReason: string);
+begin
+  inherited CreateFmt('Invalid value for --%s: %s (%s)',
+    [AOptionName, AValue, AReason]);
+  FValue := AValue;
+  FReason := AReason;
+end;
+
 { ConcatOptions }
 
 function ConcatOptions(const AArrays: array of TOptionArray): TOptionArray;
@@ -471,8 +494,7 @@ end;
 
 procedure TInt64Option.RaiseInvalidValue(const AValue, AReason: string);
 begin
-  raise TParseError.CreateFmt('Invalid value for --%s: %s (%s)',
-    [LongName, AValue, AReason]);
+  raise EOptionValueError.CreateValue(LongName, AValue, AReason);
 end;
 
 function TInt64Option.ParseValue(const AValue: string): Int64;

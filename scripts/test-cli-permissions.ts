@@ -168,6 +168,26 @@ console.log("Removed and command-line-only config keys exit 2...");
     expectExit(flagValue, 1, "config flag value");
     expectIncludes(flagValue.combined, `${configPath}: "compat-asi" must be true or false, got "yes"`, "config flag value");
 
+    // A flag in config is exactly a boolean; a scalar option takes one value.
+    const valueCases: [string, string][] = [
+      ['{"compat-var": null}', '"compat-var" must be true or false, got null'],
+      ['{"compat-var": "true"}', '"compat-var" must be true or false, got "true"'],
+      ['{"max-stack": [1]}', '"max-stack" must be a single value, not an array'],
+      ['{"max-memory": 100000000000000000000}', `Invalid value for "max-memory" in ${configPath}: 100000000000000000000 (value is too large)`],
+      ['{"max-memory": "64MB"}', `Invalid value for "max-memory" in ${configPath}: 64MB ("MB" is ambiguous`],
+      ['{"permissions": {"allow-net": [""]}}', `${configPath}: "permissions.allow-net" has an empty scope`],
+    ];
+    for (const [config, message] of valueCases) {
+      writeFileSync(configPath, config + "\n");
+      const result = run(LOADER, ["main.js"], { cwd: tmp });
+      expectExit(result, 1, `config ${config}`);
+      expectIncludes(result.combined, message, `config ${config}`);
+    }
+    writeFileSync(join(tmp, "goccia.toml"), 'compat-var = "true"\n');
+    const tomlString = run(LOADER, ["main.js"], { cwd: tmp });
+    expectExit(tomlString, 1, "TOML string flag");
+    rmSync(join(tmp, "goccia.toml"));
+
     // An unknown permission is a usage error naming the valid keys.
     writeFileSync(configPath, '{"permissions": {"deny-nett": true}}\n');
     const typo = run(LOADER, ["main.js"], { cwd: tmp });
@@ -556,7 +576,7 @@ console.log("Limit bounds and unsupported limits in config...");
     writeFileSync(join(tmp, "sub", "goccia.json"), '{"max-fetch-bytes": "3GiB"}\n');
     const perFile = run(LOADER, [join("sub", "main.js")], { cwd: tmp });
     expectExit(perFile, 1, "per-file max-fetch-bytes 3GiB");
-    expectIncludes(perFile.combined, "Invalid value for --max-fetch-bytes: 3GiB (value is too large)", "per-file max-fetch-bytes 3GiB");
+    expectIncludes(perFile.combined, `Invalid value for "max-fetch-bytes" in ${join(tmp, "sub", "goccia.json")}: 3GiB (value is too large)`, "per-file max-fetch-bytes 3GiB");
 
     // A limit a binary does not apply is ignored in config, not validated.
     writeFileSync(join(tmp, "goccia.json"), '{"timeout": "5x", "max-memory": "64MB", "max-stack": -1}\n');

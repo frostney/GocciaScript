@@ -310,7 +310,13 @@ begin
   if FSkipDepth > 0 then
     Exit;
   FormatSettings := CreateInvariantFormatSettings;
-  AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
+  { A whole number too large for Int64 keeps its digits rather than an
+    exponent, so a unit parser can report it as too large. }
+  if (Frac(AValue) = 0) and (Abs(AValue) >= 1e15) and
+     (Abs(AValue) < 1e300) then
+    AddScalar(Format('%.0f', [AValue], FormatSettings), cvkNumber)
+  else
+    AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
 end;
 
 procedure TConfigJSONParser.OnBeginObject;
@@ -441,8 +447,34 @@ begin
     Result := 'config';
 end;
 
+function DescribeFlagValue(const AEntry: TConfigEntry): string;
+begin
+  if AEntry.InArray then
+    Result := 'an array'
+  else if AEntry.Kind = cvkUnsupported then
+    Result := 'null'
+  else if AEntry.Kind = cvkString then
+    Result := '"' + AEntry.Value + '"'
+  else
+    Result := AEntry.Value;
+end;
+
+{ Restates an option's value error in config spelling. }
+procedure RaiseConfigValueError(const AEntry: TConfigEntry;
+  const AError: TParseError);
+begin
+  if AError is EOptionValueError then
+    raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
+      [AEntry.Key, ConfigEntryLocation(AEntry),
+       EOptionValueError(AError).Value, EOptionValueError(AError).Reason]);
+  raise TParseError.CreateFmt('%s: %s',
+    [ConfigEntryLocation(AEntry), AError.Message]);
+end;
+
 { The checks shared by ApplyConfigEntries and ValidateConfigEntries. False
-  when the entry must not be applied (a RequiresTrust key). }
+  when the entry must not be applied (a RequiresTrust key). A flag takes
+  exactly a boolean; any other option other than a repeatable one takes a
+  single scalar. }
 function CheckConfigEntry(const AEntry: TConfigEntry;
   const AOption: TOptionBase): Boolean;
 begin
@@ -455,10 +487,27 @@ begin
     raise TCLIUsageError.CreateFmt(
       '%s: "%s" can only be given on the command line%s',
       [ConfigEntryLocation(AEntry), AEntry.Key, AOption.ConfigHint]);
-  if (AOption is TFlagOption) and (AEntry.Value <> 'true') and
-     (AEntry.Value <> 'false') then
-    raise TParseError.CreateFmt('%s: "%s" must be true or false, got "%s"',
-      [ConfigEntryLocation(AEntry), AEntry.Key, AEntry.Value]);
+  if AOption is TFlagOption then
+  begin
+    if (AEntry.Kind <> cvkBoolean) or AEntry.InArray then
+      raise TParseError.CreateFmt('%s: "%s" must be true or false, got %s',
+        [ConfigEntryLocation(AEntry), AEntry.Key, DescribeFlagValue(AEntry)]);
+  end
+  else if AOption is TRepeatableOption then
+  begin
+    if AEntry.Kind = cvkUnsupported then
+      raise TParseError.CreateFmt(
+        '%s: "%s" must be a value or an array of values',
+        [ConfigEntryLocation(AEntry), AEntry.Key]);
+  end
+  else if AEntry.Kind = cvkUnsupported then
+    raise TParseError.CreateFmt(
+      '%s: "%s" must be a single value, not null or an object',
+      [ConfigEntryLocation(AEntry), AEntry.Key])
+  else if AEntry.InArray then
+    raise TParseError.CreateFmt(
+      '%s: "%s" must be a single value, not an array',
+      [ConfigEntryLocation(AEntry), AEntry.Key]);
   Result := not AOption.RequiresTrust;
 end;
 
@@ -470,8 +519,6 @@ var
 begin
   for I := 0 to High(AEntries) do
   begin
-    if AEntries[I].Kind = cvkUnsupported then
-      Continue;
     Option := FindOptionByName(AOptions, AEntries[I].Key);
     if (Option = nil) or not CheckConfigEntry(AEntries[I], Option) then
       Continue;
@@ -483,8 +530,7 @@ begin
       on E: TCLIUsageError do
         raise;
       on E: TParseError do
-        raise TParseError.CreateFmt('%s: %s',
-          [ConfigEntryLocation(AEntries[I]), E.Message]);
+        RaiseConfigValueError(AEntries[I], E);
     end;
   end;
 end;
@@ -497,8 +543,6 @@ var
 begin
   for I := 0 to High(AEntries) do
   begin
-    if AEntries[I].Kind = cvkUnsupported then
-      Continue;
     Option := FindOptionByName(AOptions, AEntries[I].Key);
     if Option = nil then
       Continue;
@@ -537,8 +581,7 @@ begin
         on E: TCLIUsageError do
           raise;
         on E: TParseError do
-          raise TParseError.CreateFmt('%s: %s',
-            [ConfigEntryLocation(AEntries[I]), E.Message]);
+          RaiseConfigValueError(AEntries[I], E);
       end;
   end;
 end;

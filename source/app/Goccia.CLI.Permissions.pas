@@ -307,7 +307,7 @@ begin
     else if (Entry.Kind = cvkString) and Entry.InArray then
     begin
       if Trim(Entry.Value) = '' then
-        raise EGocciaConfigPermissionError.CreateFmt(
+        raise TParseError.CreateFmt(
           '%s: "%s" has an empty scope', [Location, Entry.Key]);
       Scope := ResolvePermissionScope(Capability, Entry.Value,
         ExtractFilePath(Location));

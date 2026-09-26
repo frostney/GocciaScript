@@ -106,7 +106,7 @@ begin
   Test('JSON: boolean false is omitted', TestJSONBooleanFalseOmitted);
   Test('JSON: array produces multiple entries', TestJSONArrayProducesMultipleEntries);
   Test('JSON: nested object is skipped', TestJSONNestedObjectSkipped);
-  Test('JSON: null is skipped', TestJSONNullSkipped);
+  Test('JSON: null for a known option is an error', TestJSONNullSkipped);
   Test('JSON: nested objects flatten one level', TestJSONNestedObjectFlattened);
   Test('JSON: entries record their value kind', TestJSONValueKinds);
   Test('JSON: null, deep objects, and nested arrays are marked unsupported',
@@ -227,6 +227,21 @@ procedure TConfigFileTests.WriteFixtureFile(const APath, AText: string);
 begin
   ForceDirectories(ExtractFileDir(APath));
   FileUtils.WriteUTF8FileText(APath, AText);
+end;
+
+function ConfigErrorMessage(const AEntries: TConfigEntryArray;
+  const AOptions: TOptionArray; const AValidateOnly: Boolean): string;
+begin
+  Result := '';
+  try
+    if AValidateOnly then
+      ValidateConfigEntries(AEntries, AOptions)
+    else
+      ApplyConfigEntries(AEntries, AOptions);
+  except
+    on E: Exception do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
 end;
 
 { ── JSON parsing tests ─────────────────────────────────────── }
@@ -388,15 +403,16 @@ var
 begin
   Dir := CreateTempDirectory;
   Path := IncludeTrailingPathDelimiter(Dir) + 'test.json';
-  WriteTextFile(Path, '{"mode": null}');
+  WriteTextFile(Path, '{"mode": null, "other": null}');
 
   Mode := TStringOption.Create('mode', 'Mode');
   try
     SetLength(Options, 1);
     Options[0] := Mode;
 
-    ApplyConfigFile(Path, Options);
-
+    Expect<string>(ConfigErrorMessage(ParseConfigFile(Path), Options, False))
+      .ToBe('TParseError: ' + Path + ': "mode" must be a single value, not ' +
+        'null or an object');
     Expect<Boolean>(Mode.Present).ToBe(False);
   finally
     Mode.Free;
@@ -418,6 +434,7 @@ begin
     SetLength(Entries, 1);
     Entries[0].Key := 'feature';
     Entries[0].Value := 'true';
+    Entries[0].Kind := cvkBoolean;
 
     ApplyConfigEntries(Entries, Options);
 
@@ -440,6 +457,7 @@ begin
     SetLength(Entries, 1);
     Entries[0].Key := 'feature';
     Entries[0].Value := 'false';
+    Entries[0].Kind := cvkBoolean;
 
     ApplyConfigEntries(Entries, Options);
 
@@ -921,6 +939,7 @@ begin
   Entries[0].Value := 'bytecode';
   Entries[1].Key := 'feature';
   Entries[1].Value := 'true';
+  Entries[1].Kind := cvkBoolean;
 
   Expect<Boolean>(FindConfigEntry(Entries, 'feature', Value)).ToBe(True);
   Expect<string>(Value).ToBe('true');
@@ -969,6 +988,7 @@ begin
     SetLength(FileConfig, 1);
     FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'false';
+    FileConfig[0].Kind := cvkBoolean;
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
   finally
@@ -992,12 +1012,14 @@ begin
     SetLength(RootEntries, 1);
     RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'false';
+    RootEntries[0].Kind := cvkBoolean;
     ApplyConfigEntries(RootEntries, Options);
 
     { Per-file config says true — should override root }
     SetLength(FileConfig, 1);
     FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'true';
+    FileConfig[0].Kind := cvkBoolean;
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
   finally
@@ -1020,6 +1042,7 @@ begin
     SetLength(RootEntries, 1);
     RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'true';
+    RootEntries[0].Kind := cvkBoolean;
     ApplyConfigEntries(RootEntries, Options);
     Expect<Boolean>(Flag.Present).ToBe(True);
 
@@ -1027,6 +1050,7 @@ begin
     SetLength(FileConfig, 1);
     FileConfig[0].Key := 'feature';
     FileConfig[0].Value := 'false';
+    FileConfig[0].Kind := cvkBoolean;
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(False);
   finally
@@ -1049,6 +1073,7 @@ begin
     SetLength(RootEntries, 1);
     RootEntries[0].Key := 'feature';
     RootEntries[0].Value := 'true';
+    RootEntries[0].Kind := cvkBoolean;
     ApplyConfigEntries(RootEntries, Options);
 
     { No per-file config — should fall back to root (Present=True) }
@@ -1072,6 +1097,7 @@ begin
     FileConfig[0].Value := '';
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(False);
     FileConfig[0].Value := 'true';
+    FileConfig[0].Kind := cvkBoolean;
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
   finally
     Flag.Free;
@@ -1128,6 +1154,11 @@ begin
   Entries := ParseConfigFile(Path);
   Expect<string>(EntryText(Entries)).ToBe('a=?;b.c=?;b.d=?;b.d=y;b.e=?;' +
     'mode=bytecode;g=?');
+  { A number too large for Int64 keeps its digits, so a unit parser can say
+    it is too large rather than misreading an exponent. }
+  WriteTextFile(Path, '{"max-memory": 100000000000000000000}');
+  Entries := ParseConfigFile(Path);
+  Expect<string>(Entries[0].Value).ToBe('100000000000000000000');
   { Lookups and option application never see an unrepresentable value. }
   Expect<Boolean>(FindConfigEntry(Entries, 'a', Found)).ToBe(False);
   Mode := TStringOption.Create('a', 'A');
@@ -1185,12 +1216,16 @@ end;
 
 { ── Validation ─────────────────────────────────────────────── }
 
-function SingleEntry(const AKey, AValue: string): TConfigEntryArray;
+function SingleEntry(const AKey, AValue: string;
+  const AKind: TConfigValueKind = cvkString;
+  const AInArray: Boolean = False): TConfigEntryArray;
 begin
   SetLength(Result, 1);
   Result[0].Key := AKey;
   Result[0].Value := AValue;
   Result[0].SourcePath := '/project/goccia.json';
+  Result[0].Kind := AKind;
+  Result[0].InArray := AInArray;
 end;
 
 procedure TConfigFileTests.TestRemovedKeyRaises;
@@ -1278,9 +1313,23 @@ begin
     Expect<string>(Message).ToBe('/project/goccia.json: "strict-types" ' +
       'must be true or false, got "yes"');
     Expect<Boolean>(IsUsageError).ToBe(False);
-    ApplyConfigEntries(SingleEntry('strict-types', 'false'), Options);
+    ApplyConfigEntries(SingleEntry('strict-types', 'false', cvkBoolean),
+      Options);
     Expect<Boolean>(Flag.Present).ToBe(False);
-    ApplyConfigEntries(SingleEntry('strict-types', 'true'), Options);
+    { Only a boolean, never a string that spells one or null. }
+    Expect<string>(ConfigErrorMessage(SingleEntry('strict-types', 'true'),
+      Options, False)).ToBe('TParseError: /project/goccia.json: ' +
+      '"strict-types" must be true or false, got "true"');
+    Expect<string>(ConfigErrorMessage(SingleEntry('strict-types', '',
+      cvkUnsupported), Options, True)).ToBe('TParseError: ' +
+      '/project/goccia.json: "strict-types" must be true or false, got null');
+    Expect<string>(ConfigErrorMessage(SingleEntry('strict-types', 'true',
+      cvkBoolean, True), Options, True)).ToBe('TParseError: ' +
+      '/project/goccia.json: "strict-types" must be true or false, got an ' +
+      'array');
+    Expect<Boolean>(Flag.Present).ToBe(False);
+    ApplyConfigEntries(SingleEntry('strict-types', 'true', cvkBoolean),
+      Options);
     Expect<Boolean>(Flag.Present).ToBe(True);
   finally
     Flag.Free;
@@ -1297,7 +1346,8 @@ begin
     Flag.RequiresTrust := True;
     SetLength(Options, 1);
     Options[0] := Flag;
-    ApplyConfigEntries(SingleEntry('unsafe-thing', 'true'), Options);
+    ApplyConfigEntries(SingleEntry('unsafe-thing', 'true', cvkBoolean),
+      Options);
     Expect<Boolean>(Flag.Present).ToBe(False);
   finally
     Flag.Free;
@@ -1318,7 +1368,8 @@ begin
     SetLength(Options, 2);
     Options[0] := Flag;
     Options[1] := Removed;
-    ValidateConfigEntries(SingleEntry('strict-types', 'true'), Options);
+    ValidateConfigEntries(SingleEntry('strict-types', 'true', cvkBoolean),
+      Options);
     Expect<Boolean>(Flag.Present).ToBe(False);
     ValidateConfigEntries(SingleEntry('unknown-key', 'x'), Options);
     Raised := False;
@@ -1352,9 +1403,21 @@ begin
       on E: TParseError do
         Message := E.Message;
     end;
-    Expect<string>(Message).ToBe('/project/goccia.json: Invalid value for ' +
-      '--max-memory: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, or a ' +
-      'plain byte count)');
+    Expect<string>(Message).ToBe('Invalid value for "max-memory" in ' +
+      '/project/goccia.json: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, ' +
+      'or a plain byte count)');
+    Expect<string>(ConfigErrorMessage(SingleEntry('max-memory', '64MB'),
+      Options, True)).ToBe('TParseError: Invalid value for "max-memory" in ' +
+      '/project/goccia.json: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, ' +
+      'or a plain byte count)');
+    { A scalar option takes one value, not an array. }
+    Expect<string>(ConfigErrorMessage(SingleEntry('max-memory', '1', cvkNumber,
+      True), Options, True)).ToBe('TParseError: /project/goccia.json: ' +
+      '"max-memory" must be a single value, not an array');
+    Expect<string>(ConfigErrorMessage(SingleEntry('max-memory', '',
+      cvkUnsupported), Options, True)).ToBe('TParseError: ' +
+      '/project/goccia.json: "max-memory" must be a single value, not null ' +
+      'or an object');
     ApplyConfigEntries(SingleEntry('max-memory', '64MiB'), Options);
     Expect<Int64>(MaxMemory.Value).ToBe(64 * 1024 * 1024);
   finally
@@ -1373,6 +1436,7 @@ begin
     SetLength(FileConfig, 1);
     FileConfig[0].Key := 'unsafe-ffi';
     FileConfig[0].Value := 'true';
+    FileConfig[0].Kind := cvkBoolean;
 
     Expect<Boolean>(ResolveFlagOption(Flag, FileConfig)).ToBe(True);
   finally

@@ -782,6 +782,7 @@ begin
     SetLength(Entries, 1);
     Entries[0].Key := 'feature';
     Entries[0].Value := 'true';
+    Entries[0].Kind := cvkBoolean;
 
     ApplyConfigEntries(Entries, Options);
 

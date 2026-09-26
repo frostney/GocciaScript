@@ -245,6 +245,25 @@ begin
     '{ permissions: { "deny-read": null } }');
   Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
     RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('object-typo/goccia.json',
+    '{"permissions": {"deny-nett": {"a": 1}}}');
+  Expect<Boolean>(Pos('unknown permission "deny-nett"',
+    RequestError(Path)) > 0).ToBe(True);
+  Path := WriteConfig('toml-subtable/goccia.toml',
+    '[permissions.deny-read]' + LineEnding + 'a = 1' + LineEnding);
+  Expect<Boolean>(Pos('"permissions.deny-read" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  { A null in a child is an error, not a fall-through to its base. }
+  WriteConfig('null-child/goccia.json', '{"permissions": {"allow-ffi": true}}');
+  Path := WriteConfig('null-child/child/goccia.json',
+    '{"extends": "../goccia.json", "permissions": {"allow-ffi": null}}');
+  Expect<Boolean>(Pos('"permissions.allow-ffi" ' + SHAPE_ERROR,
+    RequestError(Path)) > 0).ToBe(True);
+  { An empty scope is an invalid value (exit 1), as on the command line. }
+  Path := WriteConfig('empty-scope/goccia.json',
+    '{"permissions": {"allow-net": [""]}}');
+  Expect<string>(RequestError(Path)).ToBe('TParseError: ' + Path +
+    ': "permissions.allow-net" has an empty scope');
 end;
 
 procedure TPermissionsTests.TestMalformedBaseValueRejected;
