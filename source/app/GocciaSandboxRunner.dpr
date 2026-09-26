@@ -91,6 +91,10 @@ type
       inherits it, so a child never reaches more than its parent (ADR 0122). }
     FCurrentCapabilities: TGocciaCapabilities;
     FHasCurrentCapabilities: Boolean;
+    { The running sandbox engine; a nested runScript child is its audit
+      child, reporting through the same sink without repeating the
+      inherited capabilities.effective event. }
+    FCurrentEngine: TGocciaEngine;
 
     procedure SeedHostPathSpec(const ASpec, ABaseDirectory: string);
     procedure SeedHostPath(const AHostPath, ASandboxPath: string);
@@ -692,7 +696,10 @@ var
   EmptyConfig: TConfigEntryArray;
 begin
   EmptyConfig := EmptyConfigEntries;
-  ConfigureCapabilityAudit(AEngine);
+  if Assigned(FCurrentEngine) then
+    AEngine.ConfigureCapabilityAuditAsChildOf(FCurrentEngine)
+  else
+    ConfigureCapabilityAudit(AEngine);
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
   else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
@@ -844,6 +851,7 @@ var
   PreviousHostEnvironment: TGocciaHostEnvironment;
   PreviousCapabilities: TGocciaCapabilities;
   PreviousHasCapabilities: Boolean;
+  PreviousEngine: TGocciaEngine;
   EngineCapabilities: TGocciaCapabilities;
   RenderScope: TGocciaDiagnosticSourceScope;
   ExpectedPrincipal: Int64;
@@ -877,6 +885,7 @@ begin
   PreviousHostEnvironment := FCurrentHostEnvironment;
   PreviousCapabilities := FCurrentCapabilities;
   PreviousHasCapabilities := FHasCurrentCapabilities;
+  PreviousEngine := FCurrentEngine;
   FCurrentOutputLines := OutputLines;
   try
     try
@@ -913,6 +922,7 @@ begin
         PreviousHostEnvironment);
       ApplyVirtualModulesToEngine(Engine, '');
       FCurrentHostEnvironment := Engine.HostEnvironment;
+      FCurrentEngine := Engine;
 
       { The recipient owns render authorization. A top-level runner invocation
         explicitly authorizes the engine it just created. During nested
@@ -1025,6 +1035,7 @@ begin
     FCurrentHostEnvironment := PreviousHostEnvironment;
     FCurrentCapabilities := PreviousCapabilities;
     FHasCurrentCapabilities := PreviousHasCapabilities;
+    FCurrentEngine := PreviousEngine;
     FCurrentOutputLines := PreviousOutputLines;
     OutputLines.Free;
     Source.Free;

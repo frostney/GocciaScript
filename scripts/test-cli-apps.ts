@@ -8918,6 +8918,45 @@ const fetchPort1Lines = (label: string): string[] => [
   "}",
 ];
 
+await section("SandboxRunner: a nested runScript child inherits its set silently and its fetch events name the child...", async () => {
+  // A child inherits its parent's capability set, so like a ShadowRealm child
+  // it reports no capabilities.effective of its own. The worker's address
+  // check for the child's request is pumped by the parent, but belongs to the
+  // child's fetch() call.
+  const tmp = makeTmp();
+  try {
+    const main = [
+      "import { runScript } from 'goccia';",
+      "runScript('/child.js');",
+      "",
+    ].join("\n");
+    const child = [
+      "const pending = fetch('http://localhost:1/');",
+      "pending.catch(() => {});",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `nested-${mode}.jsonl`);
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": child },
+        mode,
+        [`--audit-log=${audit}`],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: nested run should exit 0: ${run.combined}`);
+      const { effective, events } = readCapabilityEvents(audit);
+      if (effective.length !== 1)
+        throw new Error(`${mode}: only the root engine should report its set: ${JSON.stringify(effective)}`);
+      const fetchEvents = events.filter((event) => event.kind.startsWith("net."));
+      if (fetchEvents.length === 0 ||
+          fetchEvents.some((event) => event.source?.file !== "/child.js"))
+        throw new Error(`${mode}: the child's fetch events should name /child.js: ${JSON.stringify(fetchEvents)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("SandboxRunner: a nested runScript leaves the parent's --fetch-deny-private-ranges in place...", async () => {
   const main = [
     "import { runScript } from 'goccia';",
