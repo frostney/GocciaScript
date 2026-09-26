@@ -8,8 +8,13 @@ uses
   CLI.Options;
 
 type
-  { What a config value was before it became text. }
-  TConfigValueKind = (cvkString, cvkNumber, cvkBoolean, cvkEmptyArray);
+  { What a config value was before it became text. cvkUnsupported marks a
+    value with no flat form (null, an object below the first nesting level,
+    an array element that is not a scalar): option application and lookups
+    skip it, and a consumer that must not ignore it (a permissions block) can
+    reject it. }
+  TConfigValueKind = (cvkString, cvkNumber, cvkBoolean, cvkEmptyArray,
+    cvkUnsupported);
 
   { A single key-value pair extracted from a configuration file. }
   TConfigEntry = record
@@ -32,8 +37,9 @@ type
     Arrays produce multiple entries with the same key; an empty array
     produces one cvkEmptyArray entry with an empty value.
     Nested objects are flattened one level: an "allow-net" array inside a
-    "permissions" object produces `permissions.allow-net` entries. Deeper
-    objects are skipped. }
+    "permissions" object produces `permissions.allow-net` entries.
+    null values, deeper objects, and non-scalar array elements produce
+    cvkUnsupported entries. }
   TConfigParseFunc = function(const AContent: string): TConfigEntryArray;
 
 { Register a parser for a file extension.
@@ -55,9 +61,10 @@ procedure RegisterConfigParser(const AExtension: string;
 procedure ApplyConfigEntries(const AEntries: TConfigEntryArray;
   const AOptions: TOptionArray);
 
-{ The checks ApplyConfigEntries makes, without applying anything. For
-  per-file configs, which are read through FindConfigEntry instead of being
-  applied to the options. }
+{ The checks ApplyConfigEntries makes, without applying anything, plus each
+  option's value check (CheckValue). For per-file configs, which are read
+  through FindConfigEntry instead of being applied to the options. Options
+  marked ConfigIgnored are skipped entirely. }
 procedure ValidateConfigEntries(const AEntries: TConfigEntryArray;
   const AOptions: TOptionArray);
 
@@ -182,7 +189,13 @@ type
     FInNestedObject: Boolean;
     FArrayDepth: Integer;
     FArrayHadElements: Boolean;
+    { Depth of an unrepresentable object or array being skipped; 0 when none. }
+    FSkipDepth: Integer;
     function CurrentKey: string;
+    { True, after recording it, when a container opened at FDepth has no flat
+      form: an element of a collected array, or an object as a nested
+      object's value. }
+    function MarkUnsupportedContainer(const AIsObject: Boolean): Boolean;
     procedure AddEntry(const AValue: string; const AKind: TConfigValueKind;
       const AInArray: Boolean);
     procedure AddScalar(const AValue: string; const AKind: TConfigValueKind);
@@ -239,13 +252,37 @@ begin
     AddEntry(AValue, AKind, False);
 end;
 
+function TConfigJSONParser.MarkUnsupportedContainer(
+  const AIsObject: Boolean): Boolean;
+begin
+  Result := False;
+  if (FArrayDepth > 0) and (FDepth = FArrayDepth + 1) then
+  begin
+    FArrayHadElements := True;
+    AddEntry('', cvkUnsupported, True);
+    Result := True;
+  end
+  else if AIsObject and (FArrayDepth = 0) and FInNestedObject and
+    (FDepth = 3) then
+  begin
+    AddEntry('', cvkUnsupported, False);
+    Result := True;
+  end;
+  if Result then
+    FSkipDepth := FDepth;
+end;
+
 procedure TConfigJSONParser.OnNull;
 begin
-  { Skip null values. }
+  if FSkipDepth > 0 then
+    Exit;
+  AddScalar('', cvkUnsupported);
 end;
 
 procedure TConfigJSONParser.OnBoolean(const AValue: Boolean);
 begin
+  if FSkipDepth > 0 then
+    Exit;
   if AValue then
     AddScalar('true', cvkBoolean)
   else
@@ -254,11 +291,15 @@ end;
 
 procedure TConfigJSONParser.OnString(const AValue: string);
 begin
+  if FSkipDepth > 0 then
+    Exit;
   AddScalar(AValue, cvkString);
 end;
 
 procedure TConfigJSONParser.OnInteger(const AValue: Int64);
 begin
+  if FSkipDepth > 0 then
+    Exit;
   AddScalar(IntToStr(AValue), cvkNumber);
 end;
 
@@ -266,6 +307,8 @@ procedure TConfigJSONParser.OnFloat(const AValue: Double);
 var
   FormatSettings: TFormatSettings;
 begin
+  if FSkipDepth > 0 then
+    Exit;
   FormatSettings := CreateInvariantFormatSettings;
   AddScalar(FloatToStr(AValue, FormatSettings), cvkNumber);
 end;
@@ -273,6 +316,8 @@ end;
 procedure TConfigJSONParser.OnBeginObject;
 begin
   Inc(FDepth);
+  if (FSkipDepth > 0) or MarkUnsupportedContainer(True) then
+    Exit;
   if (FDepth = 2) and (FArrayDepth = 0) then
   begin
     FInNestedObject := True;
@@ -282,6 +327,8 @@ end;
 
 procedure TConfigJSONParser.OnObjectKey(const AKey: string);
 begin
+  if FSkipDepth > 0 then
+    Exit;
   if FDepth = 1 then
     FTopKey := AKey
   else if (FDepth = 2) and FInNestedObject then
@@ -290,7 +337,9 @@ end;
 
 procedure TConfigJSONParser.OnEndObject;
 begin
-  if (FDepth = 2) and FInNestedObject then
+  if FSkipDepth = FDepth then
+    FSkipDepth := 0
+  else if (FSkipDepth = 0) and (FDepth = 2) and FInNestedObject then
     FInNestedObject := False;
   Dec(FDepth);
 end;
@@ -298,6 +347,8 @@ end;
 procedure TConfigJSONParser.OnBeginArray;
 begin
   Inc(FDepth);
+  if (FSkipDepth > 0) or MarkUnsupportedContainer(False) then
+    Exit;
   if (FArrayDepth = 0) and
      (((FDepth = 2) and not FInNestedObject) or
       ((FDepth = 3) and FInNestedObject)) then
@@ -309,7 +360,9 @@ end;
 
 procedure TConfigJSONParser.OnEndArray;
 begin
-  if FDepth = FArrayDepth then
+  if FSkipDepth = FDepth then
+    FSkipDepth := 0
+  else if (FSkipDepth = 0) and (FDepth = FArrayDepth) then
   begin
     FArrayDepth := 0;
     if not FArrayHadElements then
@@ -325,6 +378,7 @@ begin
   FInNestedObject := False;
   FArrayDepth := 0;
   FArrayHadElements := False;
+  FSkipDepth := 0;
   FTopKey := '';
   FChildKey := '';
   SetLength(FEntries, 16);
@@ -368,9 +422,10 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if ((AOption.ConfigName <> '') and
+    if (AEntries[I].Kind <> cvkUnsupported) and
+       (((AOption.ConfigName <> '') and
         (AEntries[I].Key = AOption.ConfigName)) or
-       (AEntries[I].Key = AOption.LongName) then
+       (AEntries[I].Key = AOption.LongName)) then
     begin
       AValue := AEntries[I].Value;
       Exit(True);
@@ -391,6 +446,8 @@ end;
 function CheckConfigEntry(const AEntry: TConfigEntry;
   const AOption: TOptionBase): Boolean;
 begin
+  if AOption.ConfigIgnored then
+    Exit(False);
   if AOption is TRemovedOption then
     raise TCLIUsageError.Create(TRemovedOption(AOption).RemovedConfigMessage(
       ConfigEntryLocation(AEntry)));
@@ -413,9 +470,22 @@ var
 begin
   for I := 0 to High(AEntries) do
   begin
+    if AEntries[I].Kind = cvkUnsupported then
+      Continue;
     Option := FindOptionByName(AOptions, AEntries[I].Key);
-    if Option <> nil then
-      CheckConfigEntry(AEntries[I], Option);
+    if (Option = nil) or not CheckConfigEntry(AEntries[I], Option) then
+      Continue;
+    if (Option is TFlagOption) or (AEntries[I].Kind = cvkEmptyArray) then
+      Continue;
+    try
+      Option.CheckValue(AEntries[I].Value);
+    except
+      on E: TCLIUsageError do
+        raise;
+      on E: TParseError do
+        raise TParseError.CreateFmt('%s: %s',
+          [ConfigEntryLocation(AEntries[I]), E.Message]);
+    end;
   end;
 end;
 
@@ -427,6 +497,8 @@ var
 begin
   for I := 0 to High(AEntries) do
   begin
+    if AEntries[I].Kind = cvkUnsupported then
+      Continue;
     Option := FindOptionByName(AOptions, AEntries[I].Key);
     if Option = nil then
       Continue;
@@ -517,7 +589,8 @@ begin
   { Look for an "extends" entry. }
   ExtendsIndex := -1;
   for I := 0 to High(OwnEntries) do
-    if OwnEntries[I].Key = EXTENDS_KEY then
+    if (OwnEntries[I].Key = EXTENDS_KEY) and
+       (OwnEntries[I].Kind <> cvkUnsupported) then
     begin
       ExtendsIndex := I;
       Break;
@@ -629,7 +702,7 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if AEntries[I].Key = AKey then
+    if (AEntries[I].Key = AKey) and (AEntries[I].Kind <> cvkUnsupported) then
     begin
       AValue := AEntries[I].Value;
       Exit(True);
@@ -643,7 +716,7 @@ var
   I: Integer;
 begin
   for I := 0 to High(AEntries) do
-    if AEntries[I].Key = AKey then
+    if (AEntries[I].Key = AKey) and (AEntries[I].Kind <> cvkUnsupported) then
     begin
       AEntry := AEntries[I];
       Exit(True);

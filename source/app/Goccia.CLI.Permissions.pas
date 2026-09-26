@@ -252,6 +252,7 @@ var
   SubKey, Location, Scope: string;
   Entry: TConfigEntry;
   Scopes: TGocciaPermissionScopes;
+  Overridden: Boolean;
 begin
   Result := TGocciaConfigPermissionRequest.Empty;
   Result.ConfigPath := AConfigPath;
@@ -281,11 +282,14 @@ begin
     else
       Scopes := Result.Deny[Capability];
     { Entries arrive child first: a key a nearer file declared is not
-      extended by its base's value for the same key. }
-    if Scopes.Declared and (Scopes.SourcePath <> Entry.SourcePath) then
-      Continue;
-    Scopes.Declared := True;
-    Scopes.SourcePath := Entry.SourcePath;
+      extended by its base's value for the same key. The value is still
+      validated, so a malformed base fails wherever it is used. }
+    Overridden := Scopes.Declared and (Scopes.SourcePath <> Entry.SourcePath);
+    if not Overridden then
+    begin
+      Scopes.Declared := True;
+      Scopes.SourcePath := Entry.SourcePath;
+    end;
 
     if (Entry.Kind = cvkBoolean) and not Entry.InArray then
     begin
@@ -308,14 +312,19 @@ begin
       Scope := ResolvePermissionScope(Capability, Entry.Value,
         ExtractFilePath(Location));
       ValidateScope(Location, Entry.Key, Capability, Scope, Entry.Value);
-      SetLength(Scopes.Scopes, Length(Scopes.Scopes) + 1);
-      Scopes.Scopes[High(Scopes.Scopes)] := Scope;
+      if not Overridden then
+      begin
+        SetLength(Scopes.Scopes, Length(Scopes.Scopes) + 1);
+        Scopes.Scopes[High(Scopes.Scopes)] := Scope;
+      end;
     end
     else
       raise EGocciaConfigPermissionError.CreateFmt(
         '%s: "%s" must be true, false, or an array of strings',
         [Location, Entry.Key]);
 
+    if Overridden then
+      Continue;
     if Allow then
       Result.Allow[Capability] := Scopes
     else

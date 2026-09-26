@@ -303,12 +303,16 @@ begin
       else
         for J := 0 to Arr.GetLength - 1 do
           if TryScalarText(Arr.GetElement(J), Text, Kind) then
-            AddEntry(Key, Text, Kind, True);
+            AddEntry(Key, Text, Kind, True)
+          else
+            AddEntry(Key, '', cvkUnsupported, True);
     end
     else if (Value is TGocciaObjectValue) and not ANested then
       AppendObjectEntries(TGocciaObjectValue(Value), Key + '.', True,
-        AEntries, ACount);
-    { Deeper objects and other types are silently skipped. }
+        AEntries, ACount)
+    else
+      { null, deeper objects, and anything else without a flat form. }
+      AddEntry(Key, '', cvkUnsupported, False);
   end;
 end;
 

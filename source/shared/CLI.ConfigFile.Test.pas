@@ -32,6 +32,7 @@ type
     procedure TestJSONNullSkipped;
     procedure TestJSONNestedObjectFlattened;
     procedure TestJSONValueKinds;
+    procedure TestJSONUnrepresentableValuesMarked;
 
     { SourcePath }
     procedure TestSourcePathOnOwnAndBaseEntries;
@@ -108,6 +109,8 @@ begin
   Test('JSON: null is skipped', TestJSONNullSkipped);
   Test('JSON: nested objects flatten one level', TestJSONNestedObjectFlattened);
   Test('JSON: entries record their value kind', TestJSONValueKinds);
+  Test('JSON: null, deep objects, and nested arrays are marked unsupported',
+    TestJSONUnrepresentableValuesMarked);
   Test('SourcePath names the declaring file through extends',
     TestSourcePathOnOwnAndBaseEntries);
   Test('A removed key raises a usage error naming its replacement',
@@ -1086,7 +1089,10 @@ begin
   begin
     if I > 0 then
       Result := Result + ';';
-    Result := Result + AEntries[I].Key + '=' + AEntries[I].Value;
+    if AEntries[I].Kind = cvkUnsupported then
+      Result := Result + AEntries[I].Key + '=?'
+    else
+      Result := Result + AEntries[I].Key + '=' + AEntries[I].Value;
   end;
 end;
 
@@ -1103,7 +1109,36 @@ begin
   Entries := ParseConfigFile(Path);
   Expect<string>(EntryText(Entries)).ToBe('timeout=5s;' +
     'permissions.allow-net=a.test;permissions.allow-net=b.test;' +
-    'permissions.allow-ffi=true;permissions.deny-read=;list=z;after=1');
+    'permissions.allow-ffi=true;permissions.deny-read=;' +
+    'permissions.deep=?;list=?;list=z;after=1');
+end;
+
+procedure TConfigFileTests.TestJSONUnrepresentableValuesMarked;
+var
+  Dir, Path: string;
+  Entries: TConfigEntryArray;
+  Mode: TStringOption;
+  Options: TOptionArray;
+  Found: string;
+begin
+  Dir := CreateTempDirectory;
+  Path := IncludeTrailingPathDelimiter(Dir) + 'goccia.json';
+  WriteTextFile(Path, '{"a": null, "b": {"c": null, "d": [["x"], "y"], ' +
+    '"e": {"f": 1}}, "mode": "bytecode", "g": [null]}');
+  Entries := ParseConfigFile(Path);
+  Expect<string>(EntryText(Entries)).ToBe('a=?;b.c=?;b.d=?;b.d=y;b.e=?;' +
+    'mode=bytecode;g=?');
+  { Lookups and option application never see an unrepresentable value. }
+  Expect<Boolean>(FindConfigEntry(Entries, 'a', Found)).ToBe(False);
+  Mode := TStringOption.Create('a', 'A');
+  try
+    SetLength(Options, 1);
+    Options[0] := Mode;
+    ApplyConfigEntries(Entries, Options);
+    Expect<Boolean>(Mode.Present).ToBe(False);
+  finally
+    Mode.Free;
+  end;
 end;
 
 procedure TConfigFileTests.TestJSONValueKinds;
