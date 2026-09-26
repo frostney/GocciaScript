@@ -411,6 +411,7 @@ resourcestring
   SSuggestFFINotGranted = 'the ffi capability does not cover %s; grant it with --allow-ffi=%s, or "allow-ffi" in the "permissions" block of goccia.json';
   SSuggestFFIDenied = 'an ffi deny (--deny-ffi or "deny-ffi" in goccia.json) covers %s';
   SSuggestFFIBareName = 'a library name searched for by the platform loader needs an unscoped ffi grant: --allow-ffi, or "allow-ffi": true in the "permissions" block of goccia.json';
+  SSuggestFFIBareNameDenyScope = 'an ffi deny scope is in force, so a library name searched for by the platform loader cannot be judged against it; open the library by a path outside the deny instead';
   SSuggestHeadersThisType = 'Headers prototype methods must be called on a Headers object';
   SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
 

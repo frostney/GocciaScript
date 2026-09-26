@@ -271,7 +271,12 @@ begin
   begin
     LoadPath := LibPath;
     Allowed := FCapabilities.AllowsUnscoped(gcFFI);
-    DenialDetail := SSuggestFFIBareName;
+    { With a deny scope in force, asking for the unscoped grant would not
+      help. (An unscoped deny never gets here: FFI is not installed.) }
+    if FCapabilities.HasDeny(gcFFI) then
+      DenialDetail := SSuggestFFIBareNameDenyScope
+    else
+      DenialDetail := SSuggestFFIBareName;
   end
   else
   begin

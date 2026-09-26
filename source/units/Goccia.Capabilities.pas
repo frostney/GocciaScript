@@ -88,6 +88,10 @@ type
       For read this also removes the module-graph exemption. }
     function DeniesAll(const ACapability: TGocciaCapability): Boolean;
 
+    { True when some layer denies the capability outright or has a deny
+      scope for it: whether any deny could apply, for host-side advice. }
+    function HasDeny(const ACapability: TGocciaCapability): Boolean;
+
     { read/ffi: true when some layer denies APath, outright or through a deny
       scope covering it. Deny wins over grants and exemptions alike. }
     function DeniesPath(const ACapability: TGocciaCapability;
@@ -781,6 +785,18 @@ begin
       Exit(False);
   end;
   Result := True;
+end;
+
+function TGocciaCapabilities.HasDeny(
+  const ACapability: TGocciaCapability): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FLayers) do
+    if FLayers[I].Rules[ACapability].DenyAll or
+       (Length(FLayers[I].Rules[ACapability].DenyScopes) > 0) then
+      Exit(True);
+  Result := False;
 end;
 
 function TGocciaCapabilities.DeniesAll(

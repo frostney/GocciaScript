@@ -29,6 +29,7 @@ uses
   Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.Executor,
   Goccia.GarbageCollector,
   Goccia.Executor.Bytecode,
@@ -876,10 +877,14 @@ begin
     TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Outcome.ErrorMessage).ToBe('ffi: ' + BARE_NAME);
+  Expect<string>(Outcome.Suggestion).ToBe(SSuggestFFIBareName);
 
+  { The unscoped grant is already there: a deny scope is what refuses the
+    name, so the suggestion must not ask for the grant again. }
   Outcome := OpenLibrary(BARE_NAME,
     TGocciaCapabilities.None.Allow(gcFFI).Deny(gcFFI, FOutside));
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.Suggestion).ToBe(SSuggestFFIBareNameDenyScope);
 
   { Unscoped and undenied: the capability allows it, and the load itself
     fails without naming any host path. }

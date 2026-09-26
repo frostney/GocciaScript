@@ -93,7 +93,8 @@ begin
   Test('node_modules denies win', TestNodeModulesDeny);
   Test('Provider import scopes', TestProviderScopes);
   Test('Grants and DeniesAll', TestGrantsAndDeniesAll);
-  Test('AllowsUnscoped needs an unscoped allow and no deny in every layer',
+  Test('AllowsUnscoped needs an unscoped allow and no deny in every ' +
+    'layer; HasDeny sees any deny',
     TestAllowsUnscoped);
   Test('A trailing dot names the same host', TestNetTrailingDot);
   Test('IPv4-mapped IPv6 literals are judged as IPv4', TestNetMappedIPv6);
@@ -752,6 +753,18 @@ begin
     .AllowsUnscoped(gcFFI)).ToBe(False);
   Expect<Boolean>(Default(TGocciaCapabilities).AllowsUnscoped(gcFFI))
     .ToBe(False);
+  { HasDeny: any deny, scoped or not, in any layer. }
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI).HasDeny(gcFFI))
+    .ToBe(False);
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI)
+    .Deny(gcFFI, RootPath('lib')).HasDeny(gcFFI)).ToBe(True);
+  Expect<Boolean>(TGocciaCapabilities.None.Deny(gcFFI).HasDeny(gcFFI))
+    .ToBe(True);
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI)
+    .Narrow(TGocciaCapabilities.None.Allow(gcFFI).Deny(gcFFI,
+      RootPath('lib'))).HasDeny(gcFFI)).ToBe(True);
+  Expect<Boolean>(TGocciaCapabilities.None.Deny(gcRead, RootPath('lib'))
+    .HasDeny(gcFFI)).ToBe(False);
 end;
 
 procedure TCapabilitiesTests.TestNetTrailingDot;
