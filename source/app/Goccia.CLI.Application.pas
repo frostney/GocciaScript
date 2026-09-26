@@ -96,6 +96,11 @@ type
       config when the file has none), minus every deny. }
     function ResolveEngineCapabilities(const AFileConfig: TConfigEntryArray;
       const AFileConfigPath: string): TGocciaCapabilities;
+    { The permission request that governs a file: its own config's
+      (AFileConfigPath), else the root config's. Requests this binary cannot
+      honor are reported once on stderr. }
+    function FilePermissionRequest(const AFileConfig: TConfigEntryArray;
+      const AFileConfigPath: string): TGocciaConfigPermissionRequest;
     { The set for a main-thread warm-up engine: it grants ffi when any of
       AFiles would, so the FFI prototypes are warmed before workers start. }
     function WarmUpCapabilities(const AFiles: TStrings): TGocciaCapabilities;
@@ -765,26 +770,33 @@ begin
     end;
 end;
 
+function TGocciaCLIApplication.FilePermissionRequest(
+  const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath: string): TGocciaConfigPermissionRequest;
+var
+  Warnings: TGocciaCapabilityScopes;
+  I: Integer;
+begin
+  { One config per file: the file's nearest config, else the root config.
+    extends is the only way configs compose. }
+  if AFileConfigPath <> '' then
+    Result := ReadConfigPermissionRequest(AFileConfig, AFileConfigPath)
+  else
+    Result := FRootPermissionRequest;
+
+  Warnings := UnsupportedRequestWarnings(Result, HonoredCapabilities, Name);
+  for I := 0 to High(Warnings) do
+    WarnOnce(Warnings[I], Warnings[I]);
+end;
+
 function TGocciaCLIApplication.ResolveEngineCapabilities(
   const AFileConfig: TConfigEntryArray;
   const AFileConfigPath: string): TGocciaCapabilities;
 var
   Request: TGocciaConfigPermissionRequest;
-  Warnings: TGocciaCapabilityScopes;
-  I: Integer;
   CapabilityOptions: TGocciaCapabilityOptions;
 begin
-  { One config per file: the file's nearest config, else the root config.
-    extends is the only way configs compose. }
-  if AFileConfigPath <> '' then
-    Request := ReadConfigPermissionRequest(AFileConfig, AFileConfigPath)
-  else
-    Request := FRootPermissionRequest;
-
-  Warnings := UnsupportedRequestWarnings(Request, HonoredCapabilities, Name);
-  for I := 0 to High(Warnings) do
-    WarnOnce(Warnings[I], Warnings[I]);
-
+  Request := FilePermissionRequest(AFileConfig, AFileConfigPath);
   if Assigned(FEngineOptions) then
     CapabilityOptions := FEngineOptions.Capabilities
   else
