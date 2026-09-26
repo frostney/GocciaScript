@@ -1,3 +1,8 @@
 {
-  "source-type": "module"
+  "source-type": "module",
+  "permissions": {
+    "allow-read": [
+      "../modules/helpers"
+    ]
+  }
 }

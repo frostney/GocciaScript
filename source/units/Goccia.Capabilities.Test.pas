@@ -34,6 +34,7 @@ type
     procedure TestNetCIDR;
     procedure TestNetIPv6;
     procedure TestPrivateMustBeNamed;
+    procedure TestPrivateIsAStandaloneGrant;
     procedure TestExplicitAddressNamesPrivate;
     procedure TestDenyPrivateWins;
     procedure TestNarrowingNeverWidens;
@@ -78,6 +79,8 @@ begin
   Test('net CIDR scopes match addresses in range', TestNetCIDR);
   Test('net IPv6 literals and ranges', TestNetIPv6);
   Test('Private ranges must be named', TestPrivateMustBeNamed);
+  Test('private grants private destinations on its own',
+    TestPrivateIsAStandaloneGrant);
   Test('An explicit IP or CIDR names a private address',
     TestExplicitAddressNamesPrivate);
   Test('Deny private wins over explicit addresses', TestDenyPrivateWins);
@@ -163,7 +166,8 @@ begin
   Expect<Boolean>(Capabilities.AllowsPath(gcFFI, RootPath('lib.so'))).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('example.com', 443)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('10.0.0.1')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('intranet.test', 80,
+    '10.0.0.1')).ToBe(True);
   Expect<Boolean>(Capabilities.NodeModulesCeiling(RootPath('a'),
     Ceiling)).ToBe(True);
   Expect<string>(Ceiling).ToBe('');
@@ -434,8 +438,10 @@ begin
     .Deny(gcNet, '198.51.100.0/24');
   Expect<Boolean>(Capabilities.AllowsNetHost('198.51.100.9', 80)).ToBe(False);
   { A CIDR deny also applies to where a hostname resolved. }
-  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.9')).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('203.0.113.9')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '198.51.100.9')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '203.0.113.9')).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestNetIPv6;
@@ -460,26 +466,64 @@ begin
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('169.254.169.254', 80))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('10.1.2.3')).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('93.184.216.34')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '10.1.2.3')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '93.184.216.34')).ToBe(True);
 
   { A hostname allow whose resolution lands in a private range is refused. }
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, 'intranet.example');
   Expect<Boolean>(Capabilities.AllowsNetHost('intranet.example', 80))
     .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('10.0.0.5')).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('::1')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('intranet.example', 80,
+    '10.0.0.5')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('intranet.example', 80,
+    '::1')).ToBe(False);
 
   { Naming `private` lifts the refusal for otherwise allowed destinations. }
   Capabilities := Capabilities.Allow(gcNet, NET_PRIVATE_SCOPE);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('10.0.0.5')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('intranet.example', 80,
+    '10.0.0.5')).ToBe(True);
+end;
 
-  { `private` does not grant a destination on its own. }
+procedure TCapabilitiesTests.TestPrivateIsAStandaloneGrant;
+var
+  Capabilities: TGocciaCapabilities;
+begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, NET_PRIVATE_SCOPE);
-  Expect<Boolean>(Capabilities.AllowsNetHost('10.0.0.5', 80)).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetHost('example.com', 80)).ToBe(False);
-  Capabilities := Capabilities.Allow(gcNet);
+  Expect<Boolean>(Capabilities.Grants(gcNet)).ToBe(True);
+  { Private, loopback, and link-local literals are granted by `private`. }
   Expect<Boolean>(Capabilities.AllowsNetHost('10.0.0.5', 80)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 8080)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('[::1]', 8080)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('169.254.169.254', 80))
+    .ToBe(True);
+  { Public literals are not. }
+  Expect<Boolean>(Capabilities.AllowsNetHost('93.184.216.34', 80))
+    .ToBe(False);
+  { A name passes provisionally; where it resolves decides. }
+  Expect<Boolean>(Capabilities.AllowsNetHost('localhost', 8080)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('localhost', 8080,
+    '127.0.0.1')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 443,
+    '93.184.216.34')).ToBe(False);
+
+  { With a host allow beside it, public destinations need the host. }
+  Capabilities := Capabilities.Allow(gcNet, 'example.com');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 443,
+    '93.184.216.34')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('other.test', 443,
+    '93.184.216.35')).ToBe(False);
+
+  { Every layer must grant the private destination. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, NET_PRIVATE_SCOPE)
+    .Narrow(TGocciaCapabilities.None.Allow(gcNet, 'localhost'));
+  Expect<Boolean>(Capabilities.AllowsNetAddress('localhost', 80,
+    '127.0.0.1')).ToBe(False);
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, NET_PRIVATE_SCOPE)
+    .Narrow(TGocciaCapabilities.None.Allow(gcNet, NET_PRIVATE_SCOPE));
+  Expect<Boolean>(Capabilities.AllowsNetAddress('localhost', 80,
+    '127.0.0.1')).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestExplicitAddressNamesPrivate;
@@ -488,11 +532,23 @@ var
 begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1');
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 8080)).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1')).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.2')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 8080,
+    '127.0.0.1')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 8080,
+    '127.0.0.2')).ToBe(False);
+  { An IP scope does not match a name: localhost needs a host allow. }
+  Expect<Boolean>(Capabilities.AllowsNetHost('localhost', 8080)).ToBe(False);
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, '10.0.0.0/8');
   Expect<Boolean>(Capabilities.AllowsNetHost('10.20.30.40', 80)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('192.168.0.1', 80)).ToBe(False);
+  { A port-scoped address names the address for that port only. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1:8080');
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 8080)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 8081)).ToBe(False);
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1')
+    .Deny(gcNet, '127.0.0.1:9000');
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 8080)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 9000)).ToBe(False);
 end;
 
 procedure TCapabilitiesTests.TestDenyPrivateWins;
@@ -503,8 +559,13 @@ begin
     .Allow(gcNet, NET_PRIVATE_SCOPE)
     .Deny(gcNet, NET_PRIVATE_SCOPE);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1')).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('93.184.216.34')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 80,
+    '127.0.0.1')).ToBe(False);
+  Capabilities := Capabilities.Allow(gcNet, 'example.com');
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '93.184.216.34')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '10.0.0.1')).ToBe(False);
 end;
 
 procedure TCapabilitiesTests.TestNarrowingNeverWidens;
@@ -546,7 +607,8 @@ begin
   Narrowed := Parent.Narrow(TGocciaCapabilities.Unrestricted);
   Expect<Boolean>(Narrowed.AllowsNetHost('example.com', 443)).ToBe(True);
   Expect<Boolean>(Narrowed.AllowsNetHost('other.test', 443)).ToBe(False);
-  Expect<Boolean>(Narrowed.AllowsNetAddress('127.0.0.1')).ToBe(False);
+  Expect<Boolean>(Narrowed.AllowsNetAddress('example.com', 443,
+    '127.0.0.1')).ToBe(False);
   Expect<Boolean>(Narrowed.Grants(gcFFI)).ToBe(False);
   Expect<Integer>(Narrowed.LayerCount).ToBe(2);
   { An allow added after narrowing lands in the child layer only. }
@@ -721,7 +783,8 @@ begin
     .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('[::ffff:a9fe:a9fe]', 80))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('::ffff:a9fe:a9fe'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '::ffff:a9fe:a9fe'))
     .ToBe(False);
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Deny(gcNet, '198.51.100.0/24');
@@ -736,7 +799,8 @@ begin
     .ToBe(True);
   { A mapped public address is as public as its IPv4 form. }
   Capabilities := TGocciaCapabilities.None.Allow(gcNet);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('::ffff:8.8.8.8'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '::ffff:8.8.8.8'))
     .ToBe(True);
 end;
 
@@ -745,18 +809,25 @@ var
   Capabilities: TGocciaCapabilities;
 begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('::127.0.0.1')).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a9fe:a9fe'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '::127.0.0.1')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '64:ff9b::a9fe:a9fe'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::808:808'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '64:ff9b::808:808'))
     .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:7f00:1::1'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '2002:7f00:1::1'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:c0a8:101::'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '2002:c0a8:101::'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:808:808::1'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '2002:808:808::1'))
     .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2606:4700::1111'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('example.com', 80,
+    '2606:4700::1111'))
     .ToBe(True);
 end;
 
@@ -768,9 +839,11 @@ var
 begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Allow(gcNet, NET_PRIVATE_SCOPE).Deny(gcNet, '169.254.169.254');
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a9fe:a9fe'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a9fe:a9fe', 80,
+    '64:ff9b::a9fe:a9fe'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a9fe:a9fe::1'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a9fe:a9fe::1', 80,
+    '2002:a9fe:a9fe::1'))
     .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('[64:ff9b::a9fe:a9fe]', 80))
     .ToBe(False);
@@ -778,12 +851,15 @@ begin
     .ToBe(False);
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Deny(gcNet, '198.51.100.0/24');
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::c633:6407'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::c633:6407', 80,
+    '64:ff9b::c633:6407'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:c633:6407::'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:c633:6407::', 80,
+    '2002:c633:6407::'))
     .ToBe(False);
   { The IPv6 spelling of an address outside the range stays allowed. }
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::808:808'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::808:808', 80,
+    '64:ff9b::808:808'))
     .ToBe(True);
   { An IPv4 allow does not reach its translated spellings: 2002:a00:5::/48
     names a 6to4 relay site, not the host 10.0.0.5. NAT64 behaves the same. }
@@ -791,14 +867,17 @@ begin
   Expect<Boolean>(Capabilities.AllowsNetHost('10.0.0.5', 80)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a00:5::1]', 80))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a00:5::1'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a00:5::1', 80,
+    '2002:a00:5::1'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:5'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:5', 80,
+    '64:ff9b::a00:5'))
     .ToBe(False);
   { Nor does an IPv4 range name the private hosts they translate to. }
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Allow(gcNet, '10.0.0.0/8');
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:1'))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:1', 80,
+    '64:ff9b::a00:1'))
     .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a00:1::1]', 80))
     .ToBe(False);
@@ -811,14 +890,16 @@ begin
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1.');
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 80)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1.', 80)).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 80,
+    '127.0.0.1')).ToBe(True);
   Capabilities := TGocciaCapabilities.None.Allow(gcNet, '127.0.0.1.:18765');
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18765)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18766)).ToBe(False);
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Deny(gcNet, '198.51.100.7.');
   Expect<Boolean>(Capabilities.AllowsNetHost('198.51.100.7', 80)).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 80,
+    '198.51.100.7')).ToBe(False);
 end;
 
 { Naming a private address through `127.0.0.1:18765` lifts the private
@@ -832,23 +913,29 @@ begin
     .Allow(gcNet, '127.0.0.1:18765');
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 18765)).ToBe(True);
   Expect<Boolean>(Capabilities.AllowsNetHost('127.0.0.1', 22)).ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 18765))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 18765,
+    '127.0.0.1'))
     .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22)).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22,
+    '127.0.0.1')).ToBe(False);
   Expect<Boolean>(Pos('private',
     Capabilities.ExplainNetHostDenial('127.0.0.1', 22)) > 0).ToBe(True);
   { An unported scope names the address on every port. }
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Allow(gcNet, '127.0.0.1');
-  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('127.0.0.1', 22,
+    '127.0.0.1')).ToBe(True);
   { A port-scoped deny applies to its port; with no port known it applies. }
   Capabilities := TGocciaCapabilities.None.Allow(gcNet)
     .Deny(gcNet, '198.51.100.7:22');
-  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 80))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 80,
+    '198.51.100.7'))
     .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 22))
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 22,
+    '198.51.100.7'))
     .ToBe(False);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('198.51.100.7', 0,
+    '198.51.100.7')).ToBe(False);
 end;
 
 { macOS hands out temporary directories under /var, a symlink to

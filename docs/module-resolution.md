@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Four kinds of specifier** — virtual modules, aliases and import maps, relative and absolute paths, and (opt-in) bare package names, tried in that order
-- **Bare specifiers are sealed by default** — `import "zod"` fails until the engine's `import` capability grants `node_modules` (`--allow-node-modules` on the command line), keeping the default profile free of ambient package lookup
+- **Bare specifiers are sealed by default** — `import "zod"` fails until the engine's `import` capability grants `node_modules` (`--allow-import=node_modules` on the command line), keeping the default profile free of ambient package lookup
 - **A subset of Node's ESM resolver** — the `exports` map with the `import` and `default` conditions, wildcard patterns, and the legacy entry fields; no `require`/`node` conditions, no `imports` map, no self-reference
 - **Two deliberate deviations** — the bundler-only `module` field is honoured (Node ignores it), and a package that resolves to CommonJS is refused by name instead of being parsed
 - **The sandbox host stays sealed** — `GocciaSandboxRunner` offers no `node_modules` opt-in, because its filesystem is seeded by the embedder rather than walked
@@ -38,37 +38,38 @@ file extension, and a directory resolves to its `index` file.
 
 ```bash
 # Walk up from each importing file, exactly as Node does.
-./build/GocciaScriptLoader app.js --allow-node-modules
+./build/GocciaScriptLoader app.js --allow-import=node_modules
 
 # Same walk, but no node_modules above ./project is ever consulted.
-./build/GocciaScriptLoader app.js --allow-node-modules=./project
+./build/GocciaScriptLoader app.js --allow-import=node_modules=./project
 
 # Any shared CLI host takes it, and so does a config file.
-./build/GocciaTestRunner tests --allow-node-modules
+./build/GocciaTestRunner tests --allow-import=node_modules
 ```
 
 ```json
 {
-  "allow-node-modules": true
+  "permissions": {
+    "allow-import": ["node_modules=."]
+  }
 }
 ```
 
-```json
-{
-  "allow-node-modules": "./project"
-}
-```
-
-Without the option, a bare specifier fails with `Cannot resolve bare module
+Without the grant, a bare specifier fails with `Cannot resolve bare module
 specifier "<name>". Imports must start with "./" or "../"`. This is a
 capability in the sense [VISION](../VISION.md) uses the word: the engine gains
 the ability to read a directory tree the script never named, so a host has to
-ask for it. The option grants the engine's `import` capability for
+ask for it. The grant is the engine's `import` capability for
 `node_modules` — `node_modules=<dir>` when it names a ceiling — and the
 resolver asks the engine's set before every walk; an embedder grants the same
 scope with `TGocciaCapabilities.Allow(gcImport, 'node_modules')`. See
 [Permissions](permissions.md#import-scopes) for how grants and denies combine;
 an explicit deny throws `PermissionDenied` instead of the sealed message.
+
+A package the walk reaches through a granted `node_modules` scope is part of
+the [module graph](permissions.md#the-module-graph-exemption): its files need
+no `read` grant, wherever that `node_modules` directory is, though a `read`
+deny covering them still refuses them.
 
 The optional value is a **ceiling**, not a starting point. The walk still
 begins at the importing file's directory, so a package that ships its own
@@ -83,14 +84,14 @@ imported from outside every granted ceiling stays sealed.
 
 A relative ceiling is anchored to whatever supplied it: the invocation
 directory for the command-line flag, and the configuration file's own directory
-for a config key, the same rule relative `--alias` targets follow. The ceiling
+for a `permissions` entry, the same rule relative `--alias` targets follow. The ceiling
 is compared against expanded host paths, so give it the path the engine will
 see; a spelling that reaches the same directory through a symlink does not
 match, and the resolver fails closed rather than widening the boundary.
 
-The value is also how a config file distinguishes the two forms. `true` (or a
-bare `--allow-node-modules`) means an unbounded walk, `false` means the option
-is off, and any other string is the ceiling directory.
+In a config file the two forms are the scopes `"node_modules"` (an unbounded
+walk) and `"node_modules=<dir>"` (a ceiling). `import` always takes a scope, so
+`"allow-import": true` and a bare `--allow-import` are errors.
 
 `GocciaSandboxRunner` has no equivalent. Its filesystem is a seeded in-memory
 image with no ambient host access, so there is nothing to walk up into; a bare

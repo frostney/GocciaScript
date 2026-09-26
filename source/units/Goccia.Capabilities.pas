@@ -56,10 +56,6 @@ type
     FLayers: TGocciaCapabilityLayers;
     function CopyWithScope(const ACapability: TGocciaCapability;
       const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
-    function PrivateAddressNamed(const AAddressText: string;
-      const APort: Integer): Boolean;
-    function NetHostVerdict(const AHost: string;
-      const APort: Integer): TGocciaNetHostVerdict;
   public
     { Grants nothing. The default for an engine created without a set. }
     class function None: TGocciaCapabilities; static;
@@ -113,24 +109,37 @@ type
     function AllowsCanonicalPath(const ACapability: TGocciaCapability;
       const APath: string): Boolean;
 
-    { net, before name resolution. An IP-literal host in a private range also
-      needs private ranges to be named (see AllowsNetAddress). }
+    { net, before name resolution. An IP-literal host is judged as the
+      destination address it names. A host name allowed only through the
+      `private` scope passes provisionally: `private` grants private
+      destinations, and whether the name is one is known only once it
+      resolves (see AllowsNetAddress). }
     function AllowsNetHost(const AHost: string; const APort: Integer): Boolean;
+
+    { net, after name resolution: the request's host and port with the address
+      the host resolved to. Private, loopback, and link-local addresses are
+      allowed only when every layer names them, through the `private` scope or
+      an explicit IP/CIDR scope that covers the address; a host allow alone,
+      even an unscoped one, does not. A public address needs a host allow. A
+      deny of `private` or of a covering IP/CIDR refuses the address whatever
+      allows it. }
+    { The verdict AllowsNetHost is based on: allowed, denied by a deny rule,
+      a private address nothing names, or not allowed by any rule. }
+    function NetHostVerdict(const AHost: string;
+      const APort: Integer): TGocciaNetHostVerdict;
+
+    { When a net deny refuses AHost:APort, True with the deny scope that
+      matched it ('' for an unscoped deny), for host-side reports. }
+    function NetDenyScope(const AHost: string; const APort: Integer;
+      out AScope: string): Boolean;
 
     { Why AllowsNetHost refuses AHost:APort, for audit reasons; empty when it
       allows it. Host-side text: never shown to the guest. }
     function ExplainNetHostDenial(const AHost: string;
       const APort: Integer): string;
 
-    { net, after name resolution: the resolved address of a request whose host
-      already passed AllowsNetHost, for its port APort. Private, loopback, and
-      link-local addresses are denied unless every layer names them, through
-      the `private` scope or an explicit IP/CIDR scope that covers the address
-      and, when the scope has a port, names APort. APort of zero means the
-      port is not known: only unported scopes name the address then, and
-      port-scoped denies apply. }
-    function AllowsNetAddress(const AAddress: string;
-      const APort: Integer = 0): Boolean;
+    function AllowsNetAddress(const AHost: string; const APort: Integer;
+      const AAddress: string): Boolean;
 
     { import: whether a bare specifier imported from AImportingDirectory may be
       resolved against node_modules, and the highest directory the ancestor
@@ -861,45 +870,147 @@ begin
   Result := True;
 end;
 
-{ A scope with a port names (or, for a deny, covers) only that port. APort of
-  NET_ANY_PORT asks about any port. }
-function ScopePortMatches(const ANetScope: TGocciaNetScope;
+type
+  { One net request as the rules see it: the host the URL names and, once
+    known, the address the connection would reach. An IP-literal host is its
+    own address before any lookup. }
+  TGocciaNetRequest = record
+    Host: string;
+    HostIsAddress: Boolean;
+    HostAddress: TNetworkAddress;
+    Port: Integer;
+    HasAddress: Boolean;
+    Address: TNetworkAddress;
+    AddressIsPrivate: Boolean;
+  end;
+
+function NetScopePortMatches(const ANetScope: TGocciaNetScope;
   const APort: Integer): Boolean;
 begin
   Result := (ANetScope.Port = 0) or (APort = NET_ANY_PORT) or
     (ANetScope.Port = APort);
 end;
 
-{ Whether every layer names AAddressText for APort: the `private` scope, or
-  an IP/CIDR allow covering the address whose port, if it has one, is APort.
-  APort of zero (not known) is named only by an unported scope. }
-function TGocciaCapabilities.PrivateAddressNamed(
-  const AAddressText: string; const APort: Integer): Boolean;
-var
-  Address: TNetworkAddress;
-  I, J: Integer;
-  NetScope: TGocciaNetScope;
-  LayerNames: Boolean;
-  Rule: TGocciaCapabilityRule;
+{ A port-scoped deny covers its port, and any request whose port is not
+  known (zero). }
+function NetDenyPortMatches(const ANetScope: TGocciaNetScope;
+  const APort: Integer): Boolean;
 begin
-  if (Length(FLayers) = 0) or
-     not TryParseIPAddress(AAddressText, Address) then
-    Exit(False);
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcNet];
-    LayerNames := False;
-    for J := 0 to High(Rule.AllowScopes) do
-      if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
-         ((NetScope.Kind = nskPrivate) or
-          (ScopePortMatches(NetScope, APort) and
-           NetScopeCoversAddress(NetScope, Address, False))) then
+  Result := (ANetScope.Port = 0) or (APort <= 0) or
+    (APort = NET_ANY_PORT) or (ANetScope.Port = APort);
+end;
+
+function NetRuleDenies(const ARule: TGocciaCapabilityRule;
+  const ARequest: TGocciaNetRequest): Boolean;
+var
+  I: Integer;
+  NetScope: TGocciaNetScope;
+begin
+  if ARule.DenyAll then
+    Exit(True);
+  for I := 0 to High(ARule.DenyScopes) do
+    if TryParseNetScope(ARule.DenyScopes[I], NetScope) then
+    begin
+      if NetScope.Kind = nskPrivate then
       begin
-        LayerNames := True;
-        Break;
+        if ARequest.HasAddress and ARequest.AddressIsPrivate then
+          Exit(True);
+      end
+      else if NetScopeMatchesHost(NetScope, ARequest.Host,
+        ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port,
+        True) then
+        Exit(True)
+      else if ARequest.HasAddress and NetDenyPortMatches(NetScope,
+        ARequest.Port) and NetScopeCoversAddress(NetScope,
+        ARequest.Address, True) then
+        Exit(True);
+    end;
+  Result := False;
+end;
+
+{ Whether one layer allows the request. A host allow (unscoped, host,
+  wildcard, or an IP/CIDR matching an IP-literal host) reaches public
+  destinations. `private` reaches private destinations on its own. A private
+  destination reached through a host allow also needs `private` or an IP/CIDR
+  scope covering the address to be named. Before resolution a host name that
+  only `private` could allow passes provisionally. }
+function NetRuleAllows(const ARule: TGocciaCapabilityRule;
+  const ARequest: TGocciaNetRequest): Boolean;
+var
+  I: Integer;
+  HostMatches, HasPrivate, NamesAddress: Boolean;
+  NetScope: TGocciaNetScope;
+begin
+  HostMatches := ARule.AllowAll;
+  HasPrivate := False;
+  NamesAddress := False;
+  for I := 0 to High(ARule.AllowScopes) do
+    if TryParseNetScope(ARule.AllowScopes[I], NetScope) then
+    begin
+      if NetScope.Kind = nskPrivate then
+        HasPrivate := True
+      else
+      begin
+        if (not HostMatches) and NetScopeMatchesHost(NetScope, ARequest.Host,
+           ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port,
+           False) then
+          HostMatches := True;
+        if ARequest.HasAddress and (not NamesAddress) and
+           NetScopePortMatches(NetScope, ARequest.Port) and
+           NetScopeCoversAddress(NetScope, ARequest.Address, False) then
+          NamesAddress := True;
       end;
-    if not LayerNames then
-      Exit(False);
+    end;
+
+  if not ARequest.HasAddress then
+    Result := HostMatches or HasPrivate
+  else if ARequest.AddressIsPrivate then
+    Result := HasPrivate or (HostMatches and NamesAddress)
+  else
+    Result := HostMatches;
+end;
+
+function NetRequestVerdict(const ALayers: TGocciaCapabilityLayers;
+  const ARequest: TGocciaNetRequest): TGocciaNetHostVerdict;
+var
+  I: Integer;
+  PublicRequest: TGocciaNetRequest;
+begin
+  if Length(ALayers) = 0 then
+    Exit(nhvNotAllowed);
+  for I := 0 to High(ALayers) do
+    if NetRuleDenies(ALayers[I].Rules[gcNet], ARequest) then
+      Exit(nhvDenied);
+  for I := 0 to High(ALayers) do
+    if not NetRuleAllows(ALayers[I].Rules[gcNet], ARequest) then
+    begin
+      { A private destination the layer would allow were it public was
+        refused only because nothing names the private address. }
+      PublicRequest := ARequest;
+      PublicRequest.AddressIsPrivate := False;
+      if ARequest.HasAddress and ARequest.AddressIsPrivate and
+         NetRuleAllows(ALayers[I].Rules[gcNet], PublicRequest) then
+        Exit(nhvPrivateNotNamed);
+      Exit(nhvNotAllowed);
+    end;
+  Result := nhvAllowed;
+end;
+
+function TryBuildNetRequest(const AHost: string; const APort: Integer;
+  out ARequest: TGocciaNetRequest): Boolean;
+begin
+  ARequest := Default(TGocciaNetRequest);
+  ARequest.Host := NormalizeRequestHost(AHost);
+  ARequest.Port := APort;
+  if ARequest.Host = '' then
+    Exit(False);
+  ARequest.HostIsAddress := TryParseIPAddress(ARequest.Host,
+    ARequest.HostAddress);
+  if ARequest.HostIsAddress then
+  begin
+    ARequest.HasAddress := True;
+    ARequest.Address := ARequest.HostAddress;
+    ARequest.AddressIsPrivate := IsPrivateIPAddress(ARequest.Address);
   end;
   Result := True;
 end;
@@ -907,66 +1018,46 @@ end;
 function TGocciaCapabilities.NetHostVerdict(const AHost: string;
   const APort: Integer): TGocciaNetHostVerdict;
 var
-  Host: string;
-  HostAddress: TNetworkAddress;
-  HostIsAddress, HostIsPrivate, LayerAllows: Boolean;
-  I, J: Integer;
-  NetScope: TGocciaNetScope;
-  Rule: TGocciaCapabilityRule;
+  Request: TGocciaNetRequest;
 begin
-  if Length(FLayers) = 0 then
+  if not TryBuildNetRequest(AHost, APort, Request) then
     Exit(nhvNotAllowed);
-  Host := NormalizeRequestHost(AHost);
-  if Host = '' then
-    Exit(nhvNotAllowed);
-  HostIsAddress := TryParseIPAddress(Host, HostAddress);
-  HostIsPrivate := HostIsAddress and IsPrivateIPAddress(HostAddress);
-
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcNet];
-    if Rule.DenyAll then
-      Exit(nhvDenied);
-    for J := 0 to High(Rule.DenyScopes) do
-      if TryParseNetScope(Rule.DenyScopes[J], NetScope) then
-      begin
-        if NetScope.Kind = nskPrivate then
-        begin
-          if HostIsPrivate then
-            Exit(nhvDenied);
-        end
-        else if NetScopeMatchesHost(NetScope, Host, HostIsAddress,
-          HostAddress, APort, True) then
-          Exit(nhvDenied);
-      end;
-  end;
-
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcNet];
-    LayerAllows := Rule.AllowAll;
-    J := 0;
-    while (not LayerAllows) and (J <= High(Rule.AllowScopes)) do
-    begin
-      if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
-         (NetScope.Kind <> nskPrivate) then
-        LayerAllows := NetScopeMatchesHost(NetScope, Host, HostIsAddress,
-          HostAddress, APort, False);
-      Inc(J);
-    end;
-    if not LayerAllows then
-      Exit(nhvNotAllowed);
-  end;
-
-  if HostIsPrivate and not PrivateAddressNamed(Host, APort) then
-    Exit(nhvPrivateNotNamed);
-  Result := nhvAllowed;
+  Result := NetRequestVerdict(FLayers, Request);
 end;
 
 function TGocciaCapabilities.AllowsNetHost(const AHost: string;
   const APort: Integer): Boolean;
 begin
   Result := NetHostVerdict(AHost, APort) = nhvAllowed;
+end;
+
+function TGocciaCapabilities.NetDenyScope(const AHost: string;
+  const APort: Integer; out AScope: string): Boolean;
+var
+  Request: TGocciaNetRequest;
+  Single: TGocciaCapabilityRule;
+  I, J: Integer;
+begin
+  AScope := '';
+  if not TryBuildNetRequest(AHost, APort, Request) then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    if FLayers[I].Rules[gcNet].DenyAll then
+      Exit(True);
+    for J := 0 to High(FLayers[I].Rules[gcNet].DenyScopes) do
+    begin
+      Single := Default(TGocciaCapabilityRule);
+      SetLength(Single.DenyScopes, 1);
+      Single.DenyScopes[0] := FLayers[I].Rules[gcNet].DenyScopes[J];
+      if NetRuleDenies(Single, Request) then
+      begin
+        AScope := Single.DenyScopes[0];
+        Exit(True);
+      end;
+    end;
+  end;
+  Result := False;
 end;
 
 function TGocciaCapabilities.ExplainNetHostDenial(const AHost: string;
@@ -989,46 +1080,19 @@ begin
   end;
 end;
 
-function TGocciaCapabilities.AllowsNetAddress(const AAddress: string;
-  const APort: Integer): Boolean;
+function TGocciaCapabilities.AllowsNetAddress(const AHost: string;
+  const APort: Integer; const AAddress: string): Boolean;
 var
-  Address: TNetworkAddress;
-  AddressText: string;
-  IsPrivate: Boolean;
-  I, J: Integer;
-  NetScope: TGocciaNetScope;
-  Rule: TGocciaCapabilityRule;
+  Request: TGocciaNetRequest;
 begin
-  if Length(FLayers) = 0 then
+  if not TryBuildNetRequest(AHost, APort, Request) then
     Exit(False);
-  AddressText := NormalizeRequestHost(AAddress);
   { An unparseable resolution result is refused rather than classified. }
-  if not TryParseIPAddress(AddressText, Address) then
+  if not TryParseIPAddress(NormalizeRequestHost(AAddress), Request.Address) then
     Exit(False);
-  IsPrivate := IsPrivateIPAddress(Address);
-
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcNet];
-    if Rule.DenyAll then
-      Exit(False);
-    for J := 0 to High(Rule.DenyScopes) do
-      if TryParseNetScope(Rule.DenyScopes[J], NetScope) then
-      begin
-        if (NetScope.Kind = nskPrivate) and IsPrivate then
-          Exit(False);
-        { A port-scoped deny covers its port, and any request whose port is
-          not known. }
-        if ((NetScope.Port = 0) or (APort <= 0) or
-            (NetScope.Port = APort)) and
-           NetScopeCoversAddress(NetScope, Address, True) then
-          Exit(False);
-      end;
-  end;
-
-  if IsPrivate then
-    Exit(PrivateAddressNamed(AddressText, APort));
-  Result := True;
+  Request.HasAddress := True;
+  Request.AddressIsPrivate := IsPrivateIPAddress(Request.Address);
+  Result := NetRequestVerdict(FLayers, Request) = nhvAllowed;
 end;
 
 { Whether ADirectory lies inside the node_modules ceiling ACeiling, and the

@@ -14,6 +14,7 @@ uses
   Goccia.CLI.Application,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Engine,
@@ -23,6 +24,7 @@ uses
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.MicrotaskQueue,
   Goccia.Modules.Resolver,
   Goccia.REPL.Formatter,
@@ -34,6 +36,7 @@ uses
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
   Goccia.TextFiles,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.Primitives,
   Goccia.Version;
@@ -47,7 +50,7 @@ type
     FTiming: TFlagOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
-    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
@@ -70,10 +73,9 @@ begin
   InstallFFIIfGranted(Runtime);
 end;
 
-{ The REPL has never honored --no-host-filesystem. }
-function TREPLApp.HonoredCapabilityOptions: TGocciaCapabilityOptions;
+function TREPLApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
-  Result := AllCapabilityOptions - [gcoNoHostFilesystem];
+  Result := ALL_CAPABILITIES;
 end;
 
 procedure TREPLApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -120,6 +122,20 @@ var
   Module: TGocciaCompiledModule;
   StartTime, CompileStart, CompileEnd, ExecStart, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
+
+  { --timeout and --max-instructions bound each evaluated input. }
+  procedure StartLimits;
+  begin
+    StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
+    StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
+  end;
+
+  procedure ClearLimits;
+  begin
+    ClearExecutionTimeout;
+    ClearInstructionLimit;
+  end;
+
 begin
   if APaths.Count > 0 then
   begin
@@ -198,8 +214,13 @@ begin
               end;
 
               ExecStart := GetNanoseconds;
-              ResultValue := Eng.RunModuleForSourceType(Module,
-                REPL_FILE_NAME);
+              StartLimits;
+              try
+                ResultValue := Eng.RunModuleForSourceType(Module,
+                  REPL_FILE_NAME);
+              finally
+                ClearLimits;
+              end;
               ExecEnd := GetNanoseconds;
             finally
               ActiveOptionsScope.Free;
@@ -261,7 +282,12 @@ begin
           Source.Add(Line);
 
           try
-            ScriptResult := Eng.Execute;
+            StartLimits;
+            try
+              ScriptResult := Eng.Execute;
+            finally
+              ClearLimits;
+            end;
             if ScriptResult.Result <> nil then
               WriteLn(FormatREPLValue(ScriptResult.Result, IsColorTerminal));
           except

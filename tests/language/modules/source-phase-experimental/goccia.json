@@ -1,3 +1,9 @@
 {
-  "experimental-js-module-source": true
+  "experimental-js-module-source": true,
+  "permissions": {
+    "allow-read": [
+      "../../../../fixtures/modules",
+      "../helpers"
+    ]
+  }
 }

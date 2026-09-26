@@ -424,8 +424,11 @@ that depend on missing features fail with a real diagnostic, not an
 invisible skip. On POSIX, each worker process owns exactly one test, so its
 heap, roots, queues, executor, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
-Cooperative timeouts, per-test memory ceilings, and the native worker watchdog
-bound ordinary hangs and memory growth.
+Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
+(`--max-memory`, a size such as `512MiB`), and the native worker watchdog bound
+ordinary hangs and memory growth. The runner grants no capabilities: it rejects
+`--allow-*` and accepts `--deny-*` as a no-op (see
+[Permissions](permissions.md#what-each-binary-honors)).
 
 ## Known engine crashes
 

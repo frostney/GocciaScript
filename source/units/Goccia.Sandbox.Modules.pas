@@ -318,7 +318,7 @@ begin
 
   { The sandbox host stays sealed: its filesystem is seeded by the embedder, so
     a bare specifier has no ancestor node_modules to walk and the
-    --allow-node-modules capability is deliberately not offered here.
+    --allow-import=node_modules capability is deliberately not offered here.
     The message is the shared one so the two resolvers cannot drift. }
   raise EModuleNotFound.CreateFmt(BARE_SPECIFIER_MESSAGE_FORMAT,
     [AModulePath]);

@@ -18,6 +18,7 @@ uses
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
@@ -240,7 +241,7 @@ type
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
   protected
-    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure Validate; override;
     procedure AfterExecute; override;
@@ -364,7 +365,7 @@ begin
           ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
           ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
@@ -497,7 +498,7 @@ begin
 
             ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
-            StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+            StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
             StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
             try
               RunBytecodeBenchmarkModule(Engine, Module, AFileName);
@@ -613,7 +614,7 @@ begin
         ExpectedPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
         ConfigureBenchmarkRuntime(Engine, AShowProgress, False);
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           EngineResult := Engine.Execute;
@@ -725,7 +726,7 @@ begin
 
           ConfigureBenchmarkRuntime(Engine, AShowProgress, True);
 
-          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+          StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             RunBytecodeBenchmarkModule(Engine, Module, AFileName);
@@ -1198,11 +1199,10 @@ begin
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
-{ The benchmark runner has never honored --no-host-filesystem. }
-function TBenchmarkRunnerApp.HonoredCapabilityOptions:
-  TGocciaCapabilityOptions;
+function TBenchmarkRunnerApp.HonoredCapabilities:
+  TGocciaHonoredCapabilities;
 begin
-  Result := AllCapabilityOptions - [gcoNoHostFilesystem];
+  Result := ALL_CAPABILITIES;
 end;
 
 procedure TBenchmarkRunnerApp.ExecuteWithPaths(const APaths: TStringList);

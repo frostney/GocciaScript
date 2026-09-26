@@ -198,10 +198,15 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 # Add one-off import-map-style aliases from the CLI (relative targets use the invocation directory)
 ./build/GocciaScriptLoader app.js --alias @/=./src/ --alias config=./config/default.js
 
-# Resolve bare specifiers against node_modules (off by default; see docs/module-resolution.md).
-# Bare form walks up from each importing file; the value form caps the walk at that directory.
-./build/GocciaScriptLoader app.js --allow-node-modules
-./build/GocciaScriptLoader app.js --allow-node-modules=./project
+# Grant capabilities beyond the project's own imports (all denied by default;
+# see docs/permissions.md for scopes, config blocks, and what each binary honors)
+./build/GocciaScriptLoader app.js --allow-read=../shared --allow-net=api.example.com
+./build/GocciaScriptLoader app.js --allow-ffi=./libs/libcalc.so
+
+# Resolve bare specifiers against node_modules (see docs/module-resolution.md).
+# The plain scope walks up from each importing file; =<dir> caps the walk at that directory.
+./build/GocciaScriptLoader app.js --allow-import=node_modules
+./build/GocciaScriptLoader app.js --allow-import=node_modules=./project
 
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
 ./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
@@ -210,22 +215,23 @@ printf "name;" | ./build/GocciaScriptLoader --globals=context.toml --output=json
 
 # REPL supports the same engine options as the script loader:
 ./build/GocciaREPL --log=repl.log           # Console log capture
-./build/GocciaREPL --stack-size=5000         # Custom call stack depth limit
-./build/GocciaREPL --max-memory=10485760     # 10 MB GC heap limit
+./build/GocciaREPL --max-stack=5000          # Custom call stack depth limit
+./build/GocciaREPL --max-memory=10MiB        # GC heap limit
+./build/GocciaREPL --timeout=5s              # Applied to each evaluated input
 
 # When --import-map is omitted, the CLI walks up from the entry file's directory
 # and uses the first goccia.json (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaScriptLoader
 
-# Abort long-running scripts
-printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100
+# Abort long-running scripts (durations: 500ms, 5s, 2m, or plain milliseconds)
+printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --timeout=100ms
 
 # Abort after a fixed number of bytecode instructions
 printf "const f = () => f(); f();" | ./build/GocciaScriptLoader --max-instructions=1000000 --mode=bytecode
 
-# Set call stack depth limit (default 2900; 0 = unlimited)
-./build/GocciaScriptLoader example.js --stack-size=5000
-./build/GocciaScriptLoader example.js --stack-size=0
+# Set call stack depth limit (default 2200; 0 = unlimited)
+./build/GocciaScriptLoader example.js --max-stack=5000
+./build/GocciaScriptLoader example.js --max-stack=0
 
 # Write .map source map alongside execution
 ./build/GocciaScriptLoader example.jsx --source-map --mode=bytecode
@@ -322,21 +328,23 @@ Relative paths are resolved against the current working directory. A missing fil
   "compat-while-loops": true,
   "experimental-js-module-source": true,
   "strict-types": true,
-  "unsafe-ffi": true,
   "unsafe-shadowrealm": true,
   "deterministic": true,
-  "timeout": 5000,
-  "max-memory": 10485760,
-  "stack-size": 2900,
+  "timeout": "5s",
+  "max-memory": "10MiB",
+  "max-stack": 2200,
   "inspect-depth": 5,
-  "allowed-hosts": ["api.example.com", "cdn.example.com"],
+  "permissions": {
+    "allow-net": ["api.example.com", "cdn.example.com"],
+    "allow-ffi": true
+  },
   "imports": {
     "@/": "./src/"
   }
 }
 ```
 
-Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags use `true`/`false`, and array-valued options like `alias` and `allowed-hosts` use JSON arrays. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
+Config keys mirror CLI option names (e.g. `--mode` -> `"mode"`, `--max-memory` -> `"max-memory"`). A config value is the value assigned to a config key and the setting it carries: boolean flags must be exactly `true` or `false`, and array-valued options like `alias` use JSON arrays. Capability grants and denies go in a `permissions` object, never at the top level; limits take the same units as on the command line. See [Permissions](permissions.md#config-files) for the `permissions` block, how its relative scopes resolve, and the removed keys that now fail with status 2. `warning-unsupported-features` is a parser diagnostic policy flag, not a compatibility flag: it restores warning/recovery behavior for disabled syntax without enabling that syntax's runtime semantics. The `imports` object is handled by the module resolver and coexists with CLI option keys. `--deterministic` (or `"deterministic": true`) freezes JavaScript-visible time at the Unix epoch, uses UTC, and starts a portable seeded random stream; `--host-environment=./provider.js` (or the `"host-environment"` config key) supplies custom providers instead. Timeouts, profiling, and benchmark measurement remain live; see [Host Environment](host-environment.md) for the provider contract.
 **`extends`** — A config file can inherit from a base config using the `extends` key. The path is resolved relative to the config file's directory. Child values override parent values:
 
 ```json
@@ -354,11 +362,13 @@ This is useful for test subdirectories that need specific flags. For example, `t
 }
 ```
 
-Likewise, `tests/built-ins/FFI/goccia.json` enables FFI only for the FFI tests:
+Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests, scoped to the fixture libraries (relative to the config file):
 
 ```json
 {
-  "unsafe-ffi": true
+  "permissions": {
+    "allow-ffi": ["../../../fixtures/ffi"]
+  }
 }
 ```
 
@@ -367,11 +377,13 @@ TOML equivalent (`goccia.toml`):
 ```toml
 compat-asi = true
 mode = "bytecode"
-unsafe-ffi = true
-timeout = 5000
-max-memory = 10485760
-stack-size = 2900
+timeout = "5s"
+max-memory = "10MiB"
+max-stack = 2200
 inspect-depth = 5
+
+[permissions]
+allow-ffi = true
 ```
 
 **CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
@@ -501,12 +513,13 @@ const shellChild = await $`goccia --sandbox --seed /child.js --diff-metadata /ch
 
 Child seed entries are copied from the parent virtual filesystem, not the host filesystem. Child writes are discarded with the child VFS; request `diff: true` or shell `--diff` to inspect them. Use nested `diffMetadata: true` or shell `--diff-metadata` to include timestamp changes; either form implies a diff.
 
-Engine options apply to sandboxed execution exactly as they do to the other binaries — `--max-memory`, `--timeout`, `--max-instructions`, `--allowed-host`, `--fetch-deny-private-ranges`, and `--fetch-max-response-bytes` all bound the sandboxed program:
+Limits apply to sandboxed execution exactly as they do to the other binaries — `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack`, and `--max-fetch-bytes` all bound the sandboxed program, and `--max-fs-bytes` / `--max-fs-nodes` bound its virtual filesystem. The only capability the sandbox runner grants is `net` (`--allow-net`, `--deny-net`); see [Permissions](permissions.md#what-each-binary-honors):
 
 ```bash
-# Refuse allocations past 64 MiB and any fetch that resolves into private space.
+# Refuse allocations past 64 MiB; fetch reaches only api.example.com, and a
+# host that resolves into private space is refused by default.
 ./build/GocciaSandboxRunner /main.js --seed-config=seed.json \
-  --max-memory=67108864 --allowed-host=api.example.com --fetch-deny-private-ranges
+  --max-memory=64MiB --allow-net=api.example.com
 ```
 
 Config-file values reach the sandbox runner **only** through an explicit `--config`. It is the one binary that does not auto-discover a `goccia.json`, because the entry path names a file in the virtual filesystem: walking up from it leaves the sandbox namespace and climbs the host filesystem instead, from wherever the spelling happens to start — the host root for `/main.js`, the current directory for `main.js`. Config picked up by accident of spelling is a poor default for the binary that runs untrusted code, so the operator has to name the file.

@@ -25,6 +25,7 @@ import {
 } from "@/lib/response-cache";
 import {
   findVersion,
+  hostFilesystemBoundaryFlag,
   isFlagSupported,
   isPublicExecutionSafe,
   parseAdvertisedFlags,
@@ -244,7 +245,7 @@ async function probeBinaryFeatures(
       const flags = parseAdvertisedFlags(
         Buffer.concat(chunks).toString("utf8"),
       );
-      if (!flags.includes("--no-host-filesystem")) {
+      if (hostFilesystemBoundaryFlag(flags) === null) {
         finish(null);
         return;
       }
@@ -345,8 +346,9 @@ function resolveBinaryPath(
 
 /** Build the per-request arg list. Sandbox/infrastructure flags are
  *  filtered against the binary's probed `features` so older engines that
- *  don't recognize them (`--max-memory`, `--allowed-host`, …) still execute
- *  instead of erroring on first unknown-option.
+ *  don't recognize them (`--max-memory`, `--allow-net`, …) still execute
+ *  instead of erroring on first unknown-option. Flags renamed in 0.14.0
+ *  (ADR 0122) use whichever spelling the binary advertises.
  *
  *  User-toggled compat flags (`--compat-var`, `--compat-function`) are an
  *  exception: when the user explicitly opted in, we want the engine's own
@@ -364,12 +366,21 @@ function buildEngineArgs(
   const accept = (arg: string) => {
     if (isFlagSupported(features, arg, kind)) args.push(arg);
   };
-  accept("--no-host-filesystem");
+  const boundaryFlag = features
+    ? hostFilesystemBoundaryFlag(features[kind])
+    : "--no-host-filesystem";
+  if (boundaryFlag) args.push(boundaryFlag);
   accept(`--timeout=${TIMEOUT_MS}`);
   accept(`--max-memory=${MAX_MEMORY_BYTES}`);
   accept(`--max-instructions=${MAX_INSTRUCTIONS}`);
-  accept(`--stack-size=${STACK_SIZE}`);
-  if (isFlagSupported(features, "--allowed-host", kind)) {
+  if (isFlagSupported(features, "--max-stack", kind) && features) {
+    args.push(`--max-stack=${STACK_SIZE}`);
+  } else {
+    accept(`--stack-size=${STACK_SIZE}`);
+  }
+  if (isFlagSupported(features, "--allow-net", kind) && features) {
+    args.push(`--allow-net=${ALLOWED_HOSTS.join(",")}`);
+  } else if (isFlagSupported(features, "--allowed-host", kind)) {
     for (const host of ALLOWED_HOSTS) {
       args.push("--allowed-host", host);
     }

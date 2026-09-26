@@ -1,5 +1,10 @@
 {
   "unsafe-shadowrealm": true,
   "compat-var": true,
-  "compat-function": true
+  "compat-function": true,
+  "permissions": {
+    "allow-read": [
+      "./helpers"
+    ]
+  }
 }

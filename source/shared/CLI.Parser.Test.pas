@@ -45,6 +45,16 @@ type
     procedure TestFromCommandLineIsFalseInitially;
     procedure TestMarkFromCommandLineSetsTrue;
     procedure TestConfigAppliedOptionNotFromCommandLine;
+    procedure TestFlagRejectsValue;
+    procedure TestScopeListBareAndScoped;
+    procedure TestScopeListAccumulates;
+    procedure TestScopeListDoesNotConsumeNextArgument;
+    procedure TestScopeListEmptyListRaises;
+    procedure TestScopeListEmptyItemRaises;
+    procedure TestScopeListRequiredScope;
+    procedure TestRemovedOptionRaises;
+    procedure TestHiddenOptionOmittedFromHelp;
+    procedure TestUnitOptionsParse;
   public
     procedure SetupTests; override;
   end;
@@ -75,6 +85,283 @@ begin
   Test('FromCommandLine is False initially', TestFromCommandLineIsFalseInitially);
   Test('MarkFromCommandLine sets FromCommandLine to True', TestMarkFromCommandLineSetsTrue);
   Test('Config-applied option has Present but not FromCommandLine', TestConfigAppliedOptionNotFromCommandLine);
+  Test('A flag given a value is a usage error', TestFlagRejectsValue);
+  Test('Scope list: bare flag and scoped list', TestScopeListBareAndScoped);
+  Test('Scope list: repeats accumulate', TestScopeListAccumulates);
+  Test('Scope list: the next argument is never consumed',
+    TestScopeListDoesNotConsumeNextArgument);
+  Test('Scope list: an empty list is an error', TestScopeListEmptyListRaises);
+  Test('Scope list: an empty item is an error', TestScopeListEmptyItemRaises);
+  Test('Scope list: a required scope is enforced', TestScopeListRequiredScope);
+  Test('A removed option raises naming its replacement',
+    TestRemovedOptionRaises);
+  Test('Hidden options are omitted from help', TestHiddenOptionOmittedFromHelp);
+  Test('Byte size, duration, and count options parse units',
+    TestUnitOptionsParse);
+end;
+
+function ParseMessage(const AArgs: array of string;
+  const AOptions: TOptionArray; out AIsUsageError: Boolean): string;
+var
+  Positionals: TStringList;
+begin
+  Result := '';
+  AIsUsageError := False;
+  try
+    Positionals := ParseArguments(AArgs, AOptions);
+    Positionals.Free;
+  except
+    on E: TParseError do
+    begin
+      Result := E.Message;
+      AIsUsageError := E is TCLIUsageError;
+    end;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestFlagRejectsValue;
+var
+  Flag: TFlagOption;
+  Options: TOptionArray;
+  IsUsageError: Boolean;
+begin
+  Flag := TFlagOption.Create('silent', 'Silence');
+  try
+    SetLength(Options, 1);
+    Options[0] := Flag;
+    Expect<string>(ParseMessage(['--silent=false'], Options, IsUsageError))
+      .ToBe('--silent does not take a value; got "false". Omit the flag to ' +
+        'leave it off');
+    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<string>(ParseMessage(['--silent='], Options, IsUsageError))
+      .ToBe('--silent does not take a value; got "". Omit the flag to ' +
+        'leave it off');
+    Expect<Boolean>(Flag.Present).ToBe(False);
+    Expect<string>(ParseMessage(['--silent'], Options, IsUsageError)).ToBe('');
+    Expect<Boolean>(Flag.Present).ToBe(True);
+  finally
+    Flag.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListBareAndScoped;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+begin
+  Opt := TScopeListOption.Create('allow-net', 'Allow net', '<host>');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Positionals := ParseArguments(['--allow-net'], Options);
+    Positionals.Free;
+    Expect<Boolean>(Opt.Unscoped).ToBe(True);
+    Expect<Integer>(Opt.Scopes.Count).ToBe(0);
+  finally
+    Opt.Free;
+  end;
+  Opt := TScopeListOption.Create('allow-net', 'Allow net', '<host>');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Positionals := ParseArguments(['--allow-net=a.test,b.test'], Options);
+    Positionals.Free;
+    Expect<Boolean>(Opt.Unscoped).ToBe(False);
+    Expect<string>(Opt.Scopes.CommaText).ToBe('a.test,b.test');
+    Expect<string>(Opt.FormatForHelp).ToBe('--allow-net[=<host>,...]');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListAccumulates;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+begin
+  Opt := TScopeListOption.Create('allow-read', 'Allow read', '<path>');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Positionals := ParseArguments(['--allow-read=a', '--allow-read',
+      '--allow-read=b,c'], Options);
+    Positionals.Free;
+    Expect<Boolean>(Opt.Unscoped).ToBe(True);
+    Expect<string>(Opt.Scopes.CommaText).ToBe('a,b,c');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListDoesNotConsumeNextArgument;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+begin
+  Opt := TScopeListOption.Create('allow-read', 'Allow read', '<path>');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Positionals := ParseArguments(['--allow-read', 'foo.js'], Options);
+    try
+      Expect<Boolean>(Opt.Unscoped).ToBe(True);
+      Expect<Integer>(Positionals.Count).ToBe(1);
+      Expect<string>(Positionals[0]).ToBe('foo.js');
+    finally
+      Positionals.Free;
+    end;
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListEmptyListRaises;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  IsUsageError: Boolean;
+begin
+  Opt := TScopeListOption.Create('allow-net', 'Allow net', '<host>', '',
+    False, 'allow every public host');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Expect<string>(ParseMessage(['--allow-net='], Options, IsUsageError))
+      .ToBe('--allow-net= has an empty scope list; omit "=" to allow every ' +
+        'public host');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListEmptyItemRaises;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  IsUsageError: Boolean;
+begin
+  Opt := TScopeListOption.Create('allow-read', 'Allow read', '<path>');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Expect<string>(ParseMessage(['--allow-read=a,,b'], Options,
+      IsUsageError)).ToBe('Empty scope in --allow-read=a,,b');
+    Expect<string>(ParseMessage(['--allow-read=a,'], Options,
+      IsUsageError)).ToBe('Empty scope in --allow-read=a,');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestScopeListRequiredScope;
+var
+  Opt: TScopeListOption;
+  Options: TOptionArray;
+  IsUsageError: Boolean;
+begin
+  Opt := TScopeListOption.Create('allow-import', 'Allow import', '<source>',
+    '', True, '', 'node_modules[=<dir>] or a provider such as github');
+  try
+    SetLength(Options, 1);
+    Options[0] := Opt;
+    Expect<string>(ParseMessage(['--allow-import'], Options, IsUsageError))
+      .ToBe('--allow-import needs a scope: node_modules[=<dir>] or a ' +
+        'provider such as github');
+    Expect<string>(ParseMessage(['--allow-import='], Options, IsUsageError))
+      .ToBe('--allow-import needs a scope: node_modules[=<dir>] or a ' +
+        'provider such as github');
+    Expect<string>(ParseMessage(['--allow-import=node_modules'], Options,
+      IsUsageError)).ToBe('');
+    Expect<string>(Opt.FormatForHelp).ToBe('--allow-import=<source>,...');
+  finally
+    Opt.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestRemovedOptionRaises;
+var
+  Removed: TRemovedOption;
+  Options: TOptionArray;
+  IsUsageError: Boolean;
+begin
+  Removed := TRemovedOption.Create('stack-size', 'stack-size',
+    'use --max-stack instead', 'use "max-stack" instead');
+  try
+    SetLength(Options, 1);
+    Options[0] := Removed;
+    Expect<string>(ParseMessage(['--stack-size=100'], Options, IsUsageError))
+      .ToBe('--stack-size was removed in GocciaScript 0.14.0; use ' +
+        '--max-stack instead');
+    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<string>(ParseMessage(['--stack-size'], Options, IsUsageError))
+      .ToBe('--stack-size was removed in GocciaScript 0.14.0; use ' +
+        '--max-stack instead');
+    Expect<Boolean>(Removed.Hidden).ToBe(True);
+    Expect<Boolean>(Removed.ConsumesSeparateValue).ToBe(False);
+  finally
+    Removed.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestHiddenOptionOmittedFromHelp;
+var
+  Visible, Hidden: TFlagOption;
+  Options: TOptionArray;
+  HelpText: string;
+begin
+  Visible := TFlagOption.Create('visible-flag', 'Shown');
+  Hidden := TFlagOption.Create('hidden-flag', 'Not shown');
+  try
+    Hidden.Hidden := True;
+    SetLength(Options, 2);
+    Options[0] := Visible;
+    Options[1] := Hidden;
+    HelpText := GenerateHelpText('Test', '[options]', Options);
+    Expect<Boolean>(Pos('--visible-flag', HelpText) > 0).ToBe(True);
+    Expect<Boolean>(Pos('--hidden-flag', HelpText) > 0).ToBe(False);
+  finally
+    Visible.Free;
+    Hidden.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestUnitOptionsParse;
+var
+  Bytes: TByteSizeOption;
+  Duration: TDurationOption;
+  Count: TCountOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+  IsUsageError: Boolean;
+begin
+  Bytes := TByteSizeOption.Create('max-memory', 'Memory');
+  Duration := TDurationOption.Create('timeout', 'Timeout');
+  Count := TCountOption.Create('max-stack', 'Stack');
+  try
+    SetLength(Options, 3);
+    Options[0] := Bytes;
+    Options[1] := Duration;
+    Options[2] := Count;
+    Positionals := ParseArguments(['--max-memory=64MiB', '--timeout', '5s',
+      '--max-stack=2900'], Options);
+    Positionals.Free;
+    Expect<Int64>(Bytes.Value).ToBe(64 * 1024 * 1024);
+    Expect<Integer>(Duration.Milliseconds(0)).ToBe(5000);
+    Expect<Int64>(Count.Value).ToBe(2900);
+    Expect<string>(ParseMessage(['--max-stack=-1'], Options, IsUsageError))
+      .ToBe('Invalid value for --max-stack: -1 (use a non-negative whole ' +
+        'number)');
+    Expect<string>(Bytes.FormatForHelp).ToBe('--max-memory=<bytes>');
+    Expect<string>(Duration.FormatForHelp).ToBe('--timeout=<duration>');
+  finally
+    Bytes.Free;
+    Duration.Free;
+    Count.Free;
+  end;
 end;
 
 { TFlagOption tests }
@@ -495,6 +782,7 @@ begin
     SetLength(Entries, 1);
     Entries[0].Key := 'feature';
     Entries[0].Value := 'true';
+    Entries[0].Kind := cvkBoolean;
 
     ApplyConfigEntries(Entries, Options);
 

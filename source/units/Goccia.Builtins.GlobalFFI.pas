@@ -271,15 +271,17 @@ begin
   begin
     LoadPath := LibPath;
     Allowed := FCapabilities.AllowsUnscoped(gcFFI);
-    DenialDetail := 'a library name searched for by the platform loader ' +
-      'needs an unscoped ffi grant';
+    DenialDetail := SSuggestFFIBareName;
   end
   else
   begin
     LoadPath := CanonicalCapabilityPath(LibPath);
     Allowed := FCapabilities.AllowsPath(gcFFI, LoadPath);
-    DenialDetail := Format('the ffi capability does not cover %s',
-      [LoadPath]);
+    if FCapabilities.DeniesPath(gcFFI, LoadPath) then
+      DenialDetail := Format(SSuggestFFIDenied, [LoadPath])
+    else
+      DenialDetail := Format(SSuggestFFINotGranted, [LoadPath,
+        ExtractFileDir(LoadPath)]);
   end;
   if not Allowed then
     Deny(DenialDetail, NOT_COVERED_REASON);

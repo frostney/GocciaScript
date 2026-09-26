@@ -19,6 +19,7 @@ uses
   Goccia.CLI.Stdin,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Coverage,
@@ -224,6 +225,7 @@ type
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
     function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
   protected
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
@@ -526,6 +528,11 @@ begin
   if Assigned(TestingExtension) and
     Assigned(TestingExtension.BuiltinTestAssertions) then
     TestingExtension.BuiltinTestAssertions.SuppressOutput := True;
+end;
+
+function TTestRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+begin
+  Result := ALL_CAPABILITIES;
 end;
 
 procedure TTestRunnerApp.Configure;
@@ -1029,7 +1036,7 @@ begin
           if IsJsonOutput then
             SuppressTestReporterOutput(Engine);
 
-          StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+          StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
           StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
           try
             EngineResult := Engine.Execute;
@@ -1239,7 +1246,7 @@ begin
               SourcePipelineResult.Free;
               SourcePipelineResult := nil;
 
-              StartExecutionTimeout(EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS));
+              StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
               StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
               try
                 ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
@@ -1797,7 +1804,7 @@ begin
     // than a small one.
     // When the effective timeout is 0 (user passed --timeout=0), disable
     // the watchdog entirely so the no-timeout contract is honoured.
-    EffectiveTimeoutMs := EngineOptions.Timeout.ValueOr(DEFAULT_TIMEOUT_MS);
+    EffectiveTimeoutMs := EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS);
     if EffectiveTimeoutMs > 0 then
       WatchdogMs := 2 * EffectiveTimeoutMs + 10000
     else

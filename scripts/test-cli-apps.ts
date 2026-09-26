@@ -653,26 +653,26 @@ await section("Bare Loader: print global...", async () => {
   if (proc.stdout.toString().trim() !== "hello 7") throw new Error(`Bare print expected hello 7, got: ${proc.stdout.toString()}`);
 });
 
-await section("Bare Loader: --stack-size bounds deep non-tail recursion with RangeError...", async () => {
+await section("Bare Loader: --max-stack bounds deep non-tail recursion with RangeError...", async () => {
   const src =
     "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1)); try { f(100000); print('NO THROW'); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
   });
-  if (proc.exitCode !== 0) throw new Error(`Bare --stack-size exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (proc.exitCode !== 0) throw new Error(`Bare --max-stack exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "RangeError")
-    throw new Error(`Bare --stack-size expected RangeError, got: ${proc.stdout.toString()}`);
+    throw new Error(`Bare --max-stack expected RangeError, got: ${proc.stdout.toString()}`);
 });
 
 await section("Bare Loader: proper tail calls reuse the frame (deep strict tail recursion completes)...", async () => {
-  // Without proper tail calls this 100k-deep recursion would exceed --stack-size;
+  // Without proper tail calls this 100k-deep recursion would exceed --max-stack;
   // a tail call in strict-mode code reuses the current frame, so it runs in O(1)
   // stack and completes well under the 1000-frame limit.
   const src =
     "const f = (n) => { 'use strict'; return n === 0 ? 'done' : f(n - 1); }; print(f(100000));\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -684,10 +684,10 @@ await section("Bare Loader: proper tail calls reuse the frame (deep strict tail 
 
 await section("Bare Loader: tail-call optimization stays strict-mode only...", async () => {
   // The same tail recursion in sloppy-mode code is NOT a proper tail call, so it
-  // is bounded by --stack-size and throws RangeError.
+  // is bounded by --max-stack and throws RangeError.
   const src =
     "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--max-stack=1000"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -695,6 +695,18 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
   if (proc.exitCode !== 0) throw new Error(`Bare sloppy tail-call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (proc.stdout.toString().trim() !== "RangeError")
     throw new Error(`Bare sloppy tail-call expected RangeError, got: ${proc.stdout.toString()}`);
+});
+
+await section("Bare Loader: removed --stack-size names --max-stack...", async () => {
+  const proc = Bun.spawnSync([BARE, "--mode=bytecode", "--stack-size=1000"], {
+    stdin: new TextEncoder().encode("print(1);\n"),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stderr = proc.stderr.toString();
+  if (proc.exitCode !== 2) throw new Error(`Bare --stack-size should exit 2, got ${proc.exitCode}: ${stderr}`);
+  if (!stderr.includes("--stack-size was removed") || !stderr.includes("--max-stack"))
+    throw new Error(`Bare --stack-size should name its --max-stack replacement, got: ${stderr}`);
 });
 
 await section("Bare Loader: native re-entry recursion throws RangeError instead of crashing...", async () => {
@@ -1009,7 +1021,7 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--filter", "built-ins/timeout-loop.js",
         "--mode=bytecode",
         "--jobs=1",
-        "--timeout-ms=50",
+        "--timeout=50ms",
         "--output", timeoutOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1033,7 +1045,7 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--filter", "built-ins/timeout-like-error.js",
         "--mode=bytecode",
         "--jobs=1",
-        "--timeout-ms=50",
+        "--timeout=50ms",
         "--output", thrownErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1057,7 +1069,7 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--filter", "built-ins/timeout-marker-error.js",
         "--mode=bytecode",
         "--jobs=1",
-        "--timeout-ms=50",
+        "--timeout=50ms",
         "--output", markerErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -2193,7 +2205,7 @@ await section("Loader: --audit-log records capability decisions with source loca
         [
           LOADER,
           `--mode=${mode}`,
-          "--unsafe-ffi",
+          "--allow-ffi",
           "--unsafe-shadowrealm",
           `--audit-log=${audit}`,
         ],
@@ -2437,8 +2449,17 @@ await section("Loader: ShadowRealm.importValue inherits the host module aliases.
         "",
       ].join("\n"),
     );
+    // importValue's specifier is computed, so the module-graph exemption does
+    // not cover it; the aliased file needs its own read grant.
     const proc = Bun.spawnSync(
-      [LOADER, entry, "--unsafe-shadowrealm", "--alias", `aliased=${join(tmp, "real.js")}`],
+      [
+        LOADER,
+        entry,
+        "--unsafe-shadowrealm",
+        "--alias",
+        `aliased=${join(tmp, "real.js")}`,
+        `--allow-read=${join(tmp, "real.js")}`,
+      ],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
@@ -2480,6 +2501,9 @@ await section("Loader: relative aliases use the invocation or config directory..
           "--unsafe-shadowrealm",
           "--alias",
           "@/=./src/",
+          // The child realm's importValue is a computed specifier, so it needs
+          // a read grant even inside the project; CLI scopes resolve from cwd.
+          "--allow-read=./src",
         ],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
@@ -2504,6 +2528,8 @@ await section("Loader: relative aliases use the invocation or config directory..
         extends: "../base-config/goccia.json",
         "source-type": "module",
         "unsafe-shadowrealm": true,
+        // Config scopes resolve from the config file's directory.
+        permissions: { "allow-read": ["./src"] },
       }),
     );
     for (const mode of ["interpreted", "bytecode"] as const) {
@@ -2601,7 +2627,7 @@ const writeNodeModulesProject = (tmp: string): string => {
   return project;
 };
 
-await section("Loader: bare specifiers stay sealed without --allow-node-modules...", async () => {
+await section("Loader: bare specifiers stay sealed without --allow-import=node_modules...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
@@ -2620,24 +2646,24 @@ await section("Loader: bare specifiers stay sealed without --allow-node-modules.
   }
 });
 
-await section("Loader: --allow-node-modules resolves exports, wildcards, and transitive deps...", async () => {
+await section("Loader: --allow-import=node_modules resolves exports, wildcards, and transitive deps...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-node-modules"],
+        [resolve(LOADER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
         throw new Error(
-          `--allow-node-modules should resolve the ${mode} run: ${proc.stdout}${proc.stderr}`,
+          `--allow-import=node_modules should resolve the ${mode} run: ${proc.stdout}${proc.stderr}`,
         );
     }
 
     // The config-file spelling has to reach the resolver too, since a project
     // that needs the capability wants it recorded, not retyped.
-    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": true }));
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules"] } }));
     const configProc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
@@ -2645,14 +2671,14 @@ await section("Loader: --allow-node-modules resolves exports, wildcards, and tra
     });
     if (configProc.exitCode !== 0 || !containsLine(configProc.stdout.toString(), "chained:42"))
       throw new Error(
-        `"allow-node-modules": true should resolve from a config file: ${configProc.stdout}${configProc.stderr}`,
+        `"permissions": { "allow-import": ["node_modules"] } should resolve from a config file: ${configProc.stdout}${configProc.stderr}`,
       );
   } finally {
     clean(tmp);
   }
 });
 
-await section("Loader: --allow-node-modules=<dir> caps the ancestor walk...", async () => {
+await section("Loader: --allow-import=node_modules=<dir> caps the ancestor walk...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
@@ -2662,7 +2688,7 @@ await section("Loader: --allow-node-modules=<dir> caps the ancestor walk...", as
     mkdirSync(inner, { recursive: true });
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "src/app.js", "--source-type=module", `--allow-node-modules=${inner}`],
+      [resolve(LOADER), "src/app.js", "--source-type=module", `--allow-import=node_modules=${inner}`],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2686,7 +2712,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     // not whatever directory the command happened to be run from. Running from
     // a foreign cwd is the whole point: anchored to the cwd this would look
     // for <foreign>/node_modules and find nothing.
-    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": "./" }));
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
       [resolve(LOADER), join(project, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
@@ -2701,7 +2727,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     const inner = join(project, "src");
     mkdirSync(inner, { recursive: true });
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
-    writeFileSync(join(project, "goccia.json"), JSON.stringify({ "allow-node-modules": "./src" }));
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
       [resolve(LOADER), join(inner, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
@@ -2714,7 +2740,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
   }
 });
 
-await section("Loader: --allow-node-modules audits every node_modules resolution...", async () => {
+await section("Loader: --allow-import=node_modules audits every node_modules resolution...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
@@ -2724,7 +2750,7 @@ await section("Loader: --allow-node-modules audits every node_modules resolution
         resolve(LOADER),
         "app.js",
         "--source-type=module",
-        "--allow-node-modules=.",
+        "--allow-import=node_modules=.",
         `--audit-log=${audit}`,
       ],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
@@ -2750,7 +2776,7 @@ await section("Loader: --allow-node-modules audits every node_modules resolution
         resolve(LOADER),
         "app.js",
         "--source-type=module",
-        "--allow-node-modules",
+        "--allow-import=node_modules",
         `--audit-log=${unboundedAudit}`,
       ],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
@@ -2794,7 +2820,7 @@ await section("Loader: package resolution cannot escape the package directory...
     ]) {
       writeFileSync(join(project, "escape.js"), `import ${JSON.stringify(specifier)};\n`);
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "escape.js", "--source-type=module", "--allow-node-modules"],
+        [resolve(LOADER), "escape.js", "--source-type=module", "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2814,7 +2840,7 @@ await section("Loader: a CommonJS package is refused by name, not parsed...", as
     const project = writeNodeModulesProject(tmp);
     writeFileSync(join(project, "cjs.js"), 'import "pkg-commonjs";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "cjs.js", "--source-type=module", "--allow-node-modules"],
+      [resolve(LOADER), "cjs.js", "--source-type=module", "--allow-import=node_modules"],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -7288,14 +7314,14 @@ await section("SandboxRunner: Windows directory junction seed is rejected (no le
 });
 
 // ============================================================================
-// --allowed-host option
+// --allow-net option
 // ============================================================================
 
-await section("Loader: --allowed-host blocks unlisted host...", async () => {
+await section("Loader: --allow-net blocks unlisted host...", async () => {
   const tmp = makeTmp();
   try {
     const audit = join(tmp, "blocked-fetch-audit.jsonl");
-    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allow-net=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
     const { events } = readCapabilityEvents(audit);
@@ -7320,7 +7346,7 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
     ];
     for (const [url, reason] of cases) {
       const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
-      await $`echo ${`fetch("${url}");`} | ${LOADER} --allowed-host=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      await $`echo ${`fetch("${url}");`} | ${LOADER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
       const { events } = readCapabilityEvents(audit);
       if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
         throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
@@ -7330,15 +7356,17 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
   }
 });
 
-await section("Loader: no --allowed-host blocks all fetch...", async () => {
+await section("Loader: no --allow-net blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
-  if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");
+  if (res.exitCode === 0) throw new Error("Fetch without --allow-net should fail");
   // The denial names the capability and the host; the host-side suggestion
   // names the option that grants it.
   if (!res.text().includes("PermissionDenied: net: example.com"))
     throw new Error(`Error should be a net PermissionDenied, got: ${res.text()}`);
-  if (!res.text().includes("--allowed-host"))
-    throw new Error(`Suggestion should name --allowed-host, got: ${res.text()}`);
+  if (!res.text().includes("--allow-net"))
+    throw new Error(`Suggestion should name --allow-net, got: ${res.text()}`);
+  if (res.text().includes("--allowed-host") || res.text().includes("allowed-hosts"))
+    throw new Error(`Suggestion should not name the removed --allowed-host, got: ${res.text()}`);
 });
 
 await section("Loader: read denials report one suggestion and location in both modes...", async () => {
@@ -7356,12 +7384,12 @@ await section("Loader: read denials report one suggestion and location in both m
     // symlinks resolved and, on Windows, 8.3 short names (RUNNER~1) expanded.
     // realpathSync.native computes the same; plain realpathSync keeps the
     // short spelling the temporary directory was handed out with.
-    const suggestion = `Suggestion: the read capability does not cover ${realpathSync.native(outside)}`;
+    const suggestion = `Suggestion: a read deny (--deny-read or "deny-read" in goccia.json) covers ${realpathSync.native(outside)}`;
     for (const file of ["static.mjs", "dynamic.mjs"]) {
       const outputs: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--no-host-filesystem"],
+          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--deny-read"],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
@@ -7401,7 +7429,7 @@ await section("Loader: a static-import denial is located alike in both modes..."
       const locations: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), file, `--mode=${mode}`, "--no-host-filesystem"],
+          [resolve(LOADER), file, `--mode=${mode}`],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
@@ -7444,21 +7472,25 @@ await section("Loader: a fetch() denial is located alike in both modes...", asyn
   }
 });
 
-await section("Loader: --allowed-host multiple hosts...", async () => {
+await section("Loader: --allow-net multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
-  const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} --allowed-host=example.com --allowed-host=other.com 2>&1`.nothrow();
-  if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail with multiple --allowed-host");
-  if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
+  // The comma list and the repeated flag are two spellings of the same grant.
+  for (const args of [["--allow-net=example.com,other.com"], ["--allow-net=example.com", "--allow-net=other.com"]]) {
+    const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} ${args} 2>&1`.nothrow();
+    if (res.exitCode === 0) throw new Error(`Fetch to unlisted host should fail with ${args.join(" ")}`);
+    if (!res.text().includes("PermissionDenied: net: blocked.test"))
+      throw new Error(`Error should be a net PermissionDenied naming the blocked host, got: ${res.text()}`);
+  }
 });
 
-console.log("Loader: local fetch smoke with --allowed-host...");
+console.log("Loader: local fetch smoke with --allow-net...");
 await withFetchTestServer(async (baseUrl) => {
   const tmp = makeTmp();
   const audit = join(tmp, "fetch-audit.jsonl");
   try {
     const { exitCode, json, stderr } = await runLoaderJsonAsync(
       `const response = await fetch("${baseUrl}/", { method: "HEAD" });\nresponse.status;\n`,
-      ["--compat-asi", "--allowed-host=127.0.0.1", `--audit-log=${audit}`],
+      ["--compat-asi", "--allow-net=127.0.0.1", `--audit-log=${audit}`],
       { timeout: 10_000 },
     );
     if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
@@ -7511,7 +7543,7 @@ console.log("Loader: fetch re-checks the net capability on every redirect hop...
         "globalThis.outcome;",
         "",
       ].join("\n"),
-      ["--compat-asi", "--allowed-host=127.0.0.1", `--audit-log=${audit}`],
+      ["--compat-asi", "--allow-net=127.0.0.1", `--audit-log=${audit}`],
       { timeout: 10_000 },
     );
     if (exitCode !== 0) throw new Error(`Redirect run should exit 0, got ${exitCode}: ${stderr}`);
@@ -8932,53 +8964,75 @@ await section("SandboxRunner: --max-memory bounds the sandboxed program...", asy
   }
 });
 
-await section("SandboxRunner: --fetch-deny-private-ranges reaches the sandboxed fetch...", async () => {
+await section("SandboxRunner: --allow-net and --deny-net reach the sandboxed fetch...", async () => {
   const tmp = makeTmp();
   try {
     const seed = join(tmp, "seed.json");
+    // Port 1 on loopback needs no server: a refused request never dispatches,
+    // an allowed one fails at connect.
+    const fetchScript = (url: string): string =>
+      [
+        "try {",
+        `  await fetch('${url}');`,
+        "  console.log('no-error');",
+        "} catch (error) {",
+        "  console.log('err:' + error.message);",
+        "}",
+      ].join("\n");
     writeFileSync(seed, JSON.stringify({
       files: [
-        {
-          path: "/fetch.js",
-          // Port 1 on loopback needs no server: with the policy on the request
-          // is refused before any connect, with it off it fails at connect.
-          text: [
-            "try {",
-            "  await fetch('http://127.0.0.1:1/');",
-            "  console.log('no-error');",
-            "} catch (error) {",
-            "  console.log('err:' + error.message);",
-            "}",
-          ].join("\n"),
-        },
+        { path: "/address.js", text: fetchScript("http://127.0.0.1:1/") },
+        { path: "/name.js", text: fetchScript("http://localhost:1/") },
       ],
     }));
-    const args = [
-      SANDBOXRUNNER,
-      "/fetch.js",
-      `--seed-config=${seed}`,
-      "--source-type=module",
-      "--allowed-host=127.0.0.1",
-    ];
+    const run = (file: string, flags: string[]): { exitCode: number | null; out: string } => {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, file, `--seed-config=${seed}`, "--source-type=module", ...flags],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      return { exitCode: proc.exitCode, out: proc.stdout.toString() + proc.stderr.toString() };
+    };
+    // Asserted positively: a reaching arm has to prove the request got to the
+    // connect, because an absent refusal is also what a script that never ran
+    // produces.
+    const expectConnect = (label: string, result: { exitCode: number | null; out: string }, host: string) => {
+      if (result.exitCode !== 0 || !result.out.includes(`err:Failed to connect to ${host}:1`))
+        throw new Error(`Sandbox fetch ${label} should reach the connect, got (exit ${result.exitCode}):\n${result.out}`);
+    };
+    // A refusal is a PermissionDenied carrying the guest-visible scope.
+    const expectRefused = (label: string, result: { exitCode: number | null; out: string }, scope: string) => {
+      if (result.exitCode !== 0 || !result.out.includes(`err:net: ${scope}`))
+        throw new Error(`Sandbox fetch ${label} should be refused by the net capability, got (exit ${result.exitCode}):\n${result.out}`);
+    };
 
-    const denied = Bun.spawnSync([...args, "--fetch-deny-private-ranges"], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const deniedOut = denied.stdout.toString() + denied.stderr.toString();
-    // A private address literal is refused by the net capability before the
-    // request is dispatched, with the guest-visible scope as the message.
-    if (!deniedOut.includes("err:net: 127.0.0.1:1"))
-      throw new Error(`Sandbox fetch should be refused by address policy, got:\n${deniedOut}`);
+    // Deny by default: no grant, no request.
+    expectRefused("without --allow-net", run("/address.js", []), "127.0.0.1:1");
+    // An explicit IP allow names the private address, so it reaches it.
+    expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), "127.0.0.1");
+    // --deny-net=private refuses private destinations even when the IP is allowed.
+    expectRefused(
+      "with --deny-net=private",
+      run("/address.js", ["--allow-net=127.0.0.1", "--deny-net=private"]),
+      "127.0.0.1:1",
+    );
+    // A host name that resolves to a private address is refused unless
+    // private destinations are granted.
+    expectRefused("to a privately-resolving name", run("/name.js", ["--allow-net=localhost"]), "localhost:1");
+    expectConnect(
+      "to a privately-resolving name with --allow-net=private",
+      run("/name.js", ["--allow-net=localhost,private"]),
+      "127.0.0.1",
+    );
 
-    // Asserted positively: the default arm has to prove the request reached
-    // the connect, because an absent substring is also what a script that
-    // never ran produces.
-    const allowed = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
-    const allowedOut = allowed.stdout.toString() + allowed.stderr.toString();
-    if (allowed.exitCode !== 0 ||
-        !allowedOut.includes("err:Failed to connect to 127.0.0.1:1"))
-      throw new Error(`Sandbox fetch should reach the connect by default, got (exit ${allowed.exitCode}):\n${allowedOut}`);
+    // The removed flags name their replacements.
+    for (const [flag, replacement] of [
+      ["--fetch-deny-private-ranges", "--allow-net=private"],
+      ["--allowed-host=127.0.0.1", "--allow-net="],
+    ] as const) {
+      const removed = run("/address.js", [flag]);
+      if (removed.exitCode !== 2 || !removed.out.includes("was removed") || !removed.out.includes(replacement))
+        throw new Error(`Sandbox ${flag} should exit 2 naming ${replacement}, got (exit ${removed.exitCode}):\n${removed.out}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -9012,8 +9066,7 @@ const runNestedFetchSandbox = async (
         `--seed-config=${seed}`,
         "--source-type=module",
         `--mode=${mode}`,
-        "--allowed-host=127.0.0.1",
-        "--allowed-host=localhost",
+        "--allow-net=127.0.0.1,localhost",
         ...extraArgs,
       ],
       { stdout: "pipe", stderr: "pipe" },
@@ -9096,7 +9149,7 @@ await section("SandboxRunner: a nested runScript child inherits its set silently
   }
 });
 
-await section("SandboxRunner: a nested runScript leaves the parent's --fetch-deny-private-ranges in place...", async () => {
+await section("SandboxRunner: a nested runScript leaves the parent's --deny-net=private in place...", async () => {
   const main = [
     "import { runScript } from 'goccia';",
     "const child = runScript('/child.js');",
@@ -9107,7 +9160,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --fetch-den
     const run = await runNestedFetchSandbox(
       { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
       mode,
-      ["--fetch-deny-private-ranges"],
+      ["--deny-net=private"],
     );
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
@@ -9118,7 +9171,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --fetch-den
   }
 });
 
-await section("SandboxRunner: a nested runScript leaves the parent's --fetch-max-response-bytes in place...", async () => {
+await section("SandboxRunner: a nested runScript leaves the parent's --max-fetch-bytes in place...", async () => {
   const body = "x".repeat(64);
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -9143,7 +9196,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --fetch-max
       const run = await runNestedFetchSandbox(
         { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
         mode,
-        ["--fetch-max-response-bytes=16"],
+        ["--max-fetch-bytes=16"],
       );
       if (run.timedOut || run.exitCode !== 0)
         throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
@@ -9167,7 +9220,7 @@ await section("SandboxRunner: a fetch followed by a nested runScript completes..
     const run = await runNestedFetchSandbox(
       { "/main.js": main, "/child.js": NESTED_FETCH_CHILD },
       mode,
-      ["--fetch-deny-private-ranges"],
+      ["--deny-net=private"],
     );
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${mode}: fetch then runScript should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
@@ -9187,7 +9240,7 @@ await section("SandboxRunner: fetch, nested runScript, fetch completes without a
   ].join("\n");
   for (const mode of ["interpreted", "bytecode"] as const) {
     for (const [policyArgs, expectedError] of [
-      [["--fetch-deny-private-ranges"], `${PRIVATE_DENIAL}`],
+      [["--deny-net=private"], `${PRIVATE_DENIAL}`],
       [[], "Failed to connect to 127.0.0.1:1"],
     ] as const) {
       const run = await runNestedFetchSandbox(
@@ -9230,7 +9283,7 @@ await section("SandboxRunner: a failing nested runScript keeps the parent's in-f
     const run = await runNestedFetchSandbox(
       { "/main.js": main, "/child.js": child },
       mode,
-      ["--fetch-deny-private-ranges"],
+      ["--deny-net=private"],
     );
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
@@ -9454,7 +9507,7 @@ await section("SandboxRunner: every host-set ceiling reports itself as one...", 
       if (!containsLine(timeout.stdout, "timeout:timeout:false"))
         throw new Error(`SandboxRunner ${mode} deadline should classify as a timeout, got:\n${timeout.combined}`);
 
-      const quota = runSandboxKinds(quotaSeed, mode, ["--fs-node-limit=32"]);
+      const quota = runSandboxKinds(quotaSeed, mode, ["--max-fs-nodes=32"]);
       const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
       if (quota.stdout !== expectedQuota)
         throw new Error(`SandboxRunner ${mode} filesystem quota should classify as a resource limit, got:\n${quota.combined}`);

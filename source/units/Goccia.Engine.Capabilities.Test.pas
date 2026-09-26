@@ -34,6 +34,7 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.FetchManager,
+  Goccia.Modules,
   Goccia.Modules.ContentProvider,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
@@ -93,8 +94,12 @@ type
     procedure TestProviderFollowsReadCapability;
     procedure TestStaticImportInsideProjectIsExempt;
     procedure TestStaticImportOutsideProjectIsDenied;
+    procedure TestDenialSuggestionsNameTheGrant;
+    function ComputedImportSuggestion(const ASpecifier: string): string;
+    procedure TestHostLoadedModuleOutsideProjectIsExempt;
     procedure TestReadGrantCoversOutsidePath;
     procedure TestMissingOutsideFileIsDeniedBeforeProbing;
+    procedure TestExtensionProbingCannotRevealDeniedFiles;
     procedure TestComputedDynamicImportNeedsRead;
     procedure TestLiteralDynamicImportIsExempt;
     procedure TestComputedImportInBytecodeNeedsRead;
@@ -143,10 +148,16 @@ begin
     TestStaticImportInsideProjectIsExempt);
   Test('A static import outside the project is denied without a host path',
     TestStaticImportOutsideProjectIsDenied);
+  Test('Read and ffi denials suggest the flag that grants them',
+    TestDenialSuggestionsNameTheGrant);
+  Test('A module the host loads itself is exempt outside the project',
+    TestHostLoadedModuleOutsideProjectIsExempt);
   Test('A read grant covers a path outside the project',
     TestReadGrantCoversOutsidePath);
   Test('A missing file outside the project is denied before probing',
     TestMissingOutsideFileIsDeniedBeforeProbing);
+  Test('Extension probing cannot reveal whether a denied file exists',
+    TestExtensionProbingCannotRevealDeniedFiles);
   Test('A computed dynamic import needs a read grant',
     TestComputedDynamicImportNeedsRead);
   Test('A literal dynamic import inside the project needs no grant',
@@ -505,6 +516,103 @@ begin
     .ToBe(True);
 end;
 
+function TEngineCapabilitiesTests.ComputedImportSuggestion(
+  const ASpecifier: string): string;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Caught: TGocciaValue;
+begin
+  Result := '';
+  Source := TStringList.Create;
+  Source.Text := 'const name = "' + ASpecifier + '";' + sLineBreak +
+    'import(name).catch((e) => { globalThis.caught = e; });';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    TGocciaCapabilities.None);
+  try
+    AttachRuntime(Engine);
+    Engine.Execute;
+    Engine.WaitForRuntimeIdle;
+    Caught := TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('caught');
+    if Caught is TGocciaErrorObjectValue then
+      Result := TGocciaErrorObjectValue(Caught).ErrorHostSuggestion;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEngineCapabilitiesTests.TestDenialSuggestionsNameTheGrant;
+var
+  Outcome: TRunOutcome;
+  Suggestion: string;
+begin
+  Outcome := Run(
+    'import { value } from "../outside/secret.js"; globalThis.result = value;',
+    TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('--allow-read=' + CanonicalCapabilityPath(FOutside),
+    Outcome.Suggestion) > 0).ToBe(True);
+  Expect<Boolean>(Pos('"allow-read"', Outcome.Suggestion) > 0).ToBe(True);
+
+  Expect<Boolean>(Pos('computed', Outcome.Suggestion) > 0).ToBe(False);
+
+  Outcome := Run(
+    'import { value } from "../outside/secret.js"; globalThis.result = value;',
+    TGocciaCapabilities.None.Allow(gcRead).Deny(gcRead, FOutside));
+  Expect<Boolean>(Pos('a read deny (--deny-read', Outcome.Suggestion) = 1)
+    .ToBe(True);
+
+  { A computed import() names why the module graph does not cover it. The
+    rejection reaches the guest, so the suggestion is read from the error
+    object it carries. }
+  Suggestion := ComputedImportSuggestion('../outside/secret.js');
+  Expect<Boolean>(Pos('a computed import() specifier is not part of the ' +
+    'module graph', Suggestion) = 1).ToBe(True);
+  Expect<Boolean>(Pos('--allow-read=' + CanonicalCapabilityPath(FOutside),
+    Suggestion) > 0).ToBe(True);
+
+  Outcome := OpenLibrary('../outside/lib.so',
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  Expect<Boolean>(Pos('--allow-ffi=', Outcome.Suggestion) > 0).ToBe(True);
+  Outcome := OpenLibrary('libgoccia-capability-probe.so',
+    TGocciaCapabilities.None.Allow(gcFFI, FProject));
+  Expect<Boolean>(Pos('--allow-ffi', Outcome.Suggestion) > 0).ToBe(True);
+end;
+
+procedure TEngineCapabilitiesTests.TestHostLoadedModuleOutsideProjectIsExempt;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Module: TGocciaModule;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+      TGocciaCapabilities.None);
+    try
+      Engine.CapabilityAuditSink := RecordEvent;
+      AttachRuntime(Engine);
+      { --globals, --modules, and host environment providers load this way. }
+      Module := Engine.ModuleLoader.LoadHostModule(OutsidePath('secret.js'),
+        ProjectPath('app.mjs'));
+      Expect<Boolean>(Assigned(Module)).ToBe(True);
+      Expect<Boolean>(Module.IsHostOwned).ToBe(True);
+      Expect<Integer>(EventsOfKind('read.file')).ToBe(0);
+    finally
+      Engine.Free;
+    end;
+  finally
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
 procedure TEngineCapabilitiesTests.TestReadGrantCoversOutsidePath;
 var
   Outcome: TRunOutcome;
@@ -525,6 +633,23 @@ begin
   Outcome := Run('import "../outside/missing.js";', TGocciaCapabilities.None);
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/missing.js');
+end;
+
+procedure TEngineCapabilitiesTests.TestExtensionProbingCannotRevealDeniedFiles;
+var
+  Existing, Missing: TRunOutcome;
+  Capabilities: TGocciaCapabilities;
+begin
+  { lib.js exists and absent.js does not; both are denied. An extensionless
+    import of either must fail the same way, before the resolver probes. }
+  Capabilities := TGocciaCapabilities.None
+    .Deny(gcRead, ProjectPath('lib.js'))
+    .Deny(gcRead, ProjectPath('absent.js'));
+  Existing := Run('import "./lib";', Capabilities);
+  Missing := Run('import "./absent";', Capabilities);
+  Expect<string>(Existing.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Missing.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Missing.ErrorMessage).ToBe('read: ./absent');
 end;
 
 procedure TEngineCapabilitiesTests.TestComputedDynamicImportNeedsRead;
@@ -726,7 +851,10 @@ begin
       Engine.Execute;
     except
       on E: TGocciaThrowValue do
+      begin
         CaptureThrown(E.Value, Result);
+        Result.Suggestion := E.Suggestion;
+      end;
     end;
   finally
     Engine.Free;
