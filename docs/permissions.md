@@ -58,9 +58,11 @@ directory through a link. A path that does not exist yet is judged by its
 deepest existing ancestor. Matching stops at a separator: `/a/b` covers
 `/a/b/c.js` but not `/a/bc`.
 
-`FFI.open("./lib.so")` is judged where the dynamic loader looks for it, the
-working directory. A bare library name such as `libc.so.6` is searched for by
-the platform loader, so only an unscoped `ffi` allow covers it.
+`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path, so
+the file checked is the file opened. A bare library name such as `libc.so.6`
+has no directory part and is searched for by the platform loader, which no
+path scope can describe: it is allowed only when every layer allows `ffi`
+unscoped and no layer has an `ffi` deny scope.
 
 ### `net` scopes and private ranges
 

@@ -74,6 +74,9 @@ type
     procedure TestBytesImportOutsideProjectIsDenied;
     procedure TestFFIRefusesWithoutGrant;
     procedure TestFFIOpenChecksLibraryScopes;
+    procedure TestFFIBareNamesNeedAnUnscopedGrant;
+    function OpenLibrary(const ALibrary: string;
+      const ACapabilities: TGocciaCapabilities): TRunOutcome;
     procedure TestNodeModulesDenyThrowsPermissionDenied;
     procedure TestShadowRealmInheritsCapabilities;
     procedure TestFetchPolicyTravelsWithEachEngine;
@@ -109,6 +112,8 @@ begin
     TestFFIRefusesWithoutGrant);
   Test('FFI.open checks library path scopes',
     TestFFIOpenChecksLibraryScopes);
+  Test('A bare library name needs an unscoped ffi grant and no deny scope',
+    TestFFIBareNamesNeedAnUnscopedGrant);
   Test('A node_modules deny throws PermissionDenied',
     TestNodeModulesDenyThrowsPermissionDenied);
   Test('A ShadowRealm child inherits its creator''s capability set',
@@ -521,6 +526,66 @@ begin
   Expect<string>(Outcome.ErrorMessage).ToBe('ffi: ../outside/lib.so');
   Expect<Boolean>(FEvents.IndexOf('ffi.open|deny|../outside/lib.so') >= 0)
     .ToBe(True);
+end;
+
+function TEngineCapabilitiesTests.OpenLibrary(const ALibrary: string;
+  const ACapabilities: TGocciaCapabilities): TRunOutcome;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Result := Default(TRunOutcome);
+  Source := TStringList.Create;
+  Source.Text := 'FFI.open("' + ALibrary + '");';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+    ACapabilities);
+  try
+    Engine.CapabilityAuditSink := RecordEvent;
+    InstallFFIIfGranted(AttachRuntime(Engine));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        CaptureThrown(E.Value, Result);
+    end;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+{ A name with no directory part is found by the platform loader's search
+  path, not the working directory, so a path scope can never describe where
+  it loads from: only an unscoped grant with no deny scope covers it. }
+procedure TEngineCapabilitiesTests.TestFFIBareNamesNeedAnUnscopedGrant;
+const
+  BARE_NAME = 'libgoccia-capability-probe.so';
+var
+  Outcome: TRunOutcome;
+begin
+  Outcome := OpenLibrary(BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Outcome.ErrorMessage).ToBe('ffi: ' + BARE_NAME);
+
+  Outcome := OpenLibrary(BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI).Deny(gcFFI, FOutside));
+  Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
+
+  { Unscoped and undenied: the capability allows it, and the load itself
+    fails without naming any host path. }
+  Outcome := OpenLibrary(BARE_NAME, TGocciaCapabilities.None.Allow(gcFFI));
+  Expect<string>(Outcome.ErrorName).ToBe('TypeError');
+  Expect<Boolean>(Pos(GetCurrentDir, Outcome.ErrorMessage) > 0).ToBe(False);
+
+  { A path with a directory part is judged, and loaded, where it resolves. }
+  Outcome := OpenLibrary('./' + BARE_NAME,
+    TGocciaCapabilities.None.Allow(gcFFI, GetCurrentDir));
+  Expect<string>(Outcome.ErrorName).ToBe('TypeError');
+  Expect<Boolean>(Pos(GetCurrentDir, Outcome.ErrorMessage) > 0).ToBe(False);
 end;
 
 procedure TEngineCapabilitiesTests.TestNodeModulesDenyThrowsPermissionDenied;

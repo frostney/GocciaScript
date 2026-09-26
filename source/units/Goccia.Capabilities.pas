@@ -77,6 +77,11 @@ type
       allows at least one scope and none denies the capability outright. }
     function Grants(const ACapability: TGocciaCapability): Boolean;
 
+    { True when every layer allows the capability unscoped and no layer denies
+      any scope of it. The only answer for a request that no scope can
+      describe, such as a library name the platform loader searches for. }
+    function AllowsUnscoped(const ACapability: TGocciaCapability): Boolean;
+
     { True when some layer denies the capability outright (an unscoped deny).
       For read this also removes the module-graph exemption. }
     function DeniesAll(const ACapability: TGocciaCapability): Boolean;
@@ -693,6 +698,24 @@ begin
     Rule := FLayers[I].Rules[ACapability];
     if Rule.DenyAll or ((not Rule.AllowAll) and
        (Length(Rule.AllowScopes) = 0)) then
+      Exit(False);
+  end;
+  Result := True;
+end;
+
+function TGocciaCapabilities.AllowsUnscoped(
+  const ACapability: TGocciaCapability): Boolean;
+var
+  I: Integer;
+  Rule: TGocciaCapabilityRule;
+begin
+  if Length(FLayers) = 0 then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[ACapability];
+    if (not Rule.AllowAll) or Rule.DenyAll or
+       (Length(Rule.DenyScopes) > 0) then
       Exit(False);
   end;
   Result := True;

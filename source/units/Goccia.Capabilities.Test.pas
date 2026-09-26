@@ -43,6 +43,7 @@ type
     procedure TestNodeModulesDeny;
     procedure TestProviderScopes;
     procedure TestGrantsAndDeniesAll;
+    procedure TestAllowsUnscoped;
     procedure TestToJSON;
   public
     procedure SetupTests; override;
@@ -80,6 +81,8 @@ begin
   Test('node_modules denies win', TestNodeModulesDeny);
   Test('Provider import scopes', TestProviderScopes);
   Test('Grants and DeniesAll', TestGrantsAndDeniesAll);
+  Test('AllowsUnscoped needs an unscoped allow and no deny in every layer',
+    TestAllowsUnscoped);
   Test('ToJSON serializes every layer', TestToJSON);
 end;
 
@@ -644,6 +647,21 @@ begin
   Expect<Boolean>(Capabilities.DeniesAll(gcRead)).ToBe(True);
   Expect<Boolean>(Capabilities.Grants(gcRead)).ToBe(False);
   Expect<Boolean>(Capabilities.Grants(gcNet)).ToBe(True);
+end;
+
+procedure TCapabilitiesTests.TestAllowsUnscoped;
+begin
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI)
+    .AllowsUnscoped(gcFFI)).ToBe(True);
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI, RootPath('lib'))
+    .AllowsUnscoped(gcFFI)).ToBe(False);
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI)
+    .Deny(gcFFI, RootPath('lib')).AllowsUnscoped(gcFFI)).ToBe(False);
+  Expect<Boolean>(TGocciaCapabilities.None.Allow(gcFFI)
+    .Narrow(TGocciaCapabilities.None.Allow(gcFFI, RootPath('lib')))
+    .AllowsUnscoped(gcFFI)).ToBe(False);
+  Expect<Boolean>(Default(TGocciaCapabilities).AllowsUnscoped(gcFFI))
+    .ToBe(False);
 end;
 
 procedure TCapabilitiesTests.TestToJSON;
