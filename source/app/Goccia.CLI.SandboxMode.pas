@@ -19,6 +19,7 @@ uses
   Classes,
 
   CLI.Options,
+  SandboxHostInputs,
 
   Goccia.CLI.Options,
   Goccia.CLI.Permissions;
@@ -39,6 +40,13 @@ type
     SandboxPath: string;
     ReadWrite: Boolean;
     FromConfig: Boolean;
+    { How messages name the input: `--copy src`, or `<config>:
+      "sandbox.copy" entry "src"`. }
+    Description: string;
+    { For a config-named read-write input, where write-back may reach it
+      (TSandboxHostPin), pinned when the config is checked. Unset for the
+      command line's inputs, which are the user's own choice. }
+    Pin: TSandboxHostPin;
   end;
   TGocciaSandboxInputs = array of TGocciaSandboxInput;
 
@@ -57,6 +65,9 @@ type
     DiffFormat: TGocciaSandboxDiffFormat;
     { Absolute host path the diff is written to; '' prints it. }
     DiffFile: string;
+    { Set when the config named the diff file: the write goes through it.
+      A command-line --diff-file is written as the user named it. }
+    DiffFilePin: TSandboxHostPin;
     MaxFsBytes: Int64;
     MaxFsNodes: Integer;
     { Lines for stderr about how the request was read, such as a config
@@ -241,6 +252,8 @@ begin
       AOrigin);
   Result.ReadWrite := AReadWrite;
   Result.FromConfig := False;
+  Result.Description := AOrigin + ' ' + ASpec;
+  Result.Pin := Default(TSandboxHostPin);
 end;
 
 function TryInferDiffFormat(const AFileName: string;
@@ -339,17 +352,30 @@ end;
 { Maintainer decision B on #1255: a path a config writes to stays inside the
   config's own directory tree, compared canonically so a symbolic link cannot
   lead out of it. The command line can write anywhere. }
-procedure RequireInsideConfigDirectory(const APath, AConfigPath, AKey,
-  AFlag: string);
+procedure RaiseOutsideConfigDirectory(const APath, AConfigPath, AKey,
+  AFlag, AProblem: string);
+begin
+  raise TParseError.CreateFmt('%s: "%s" writes to %s, which %s; a ' +
+    'config may only write inside its own directory (pass %s on the ' +
+    'command line to write elsewhere)',
+    [AConfigPath, AKey, APath, AProblem, AFlag]);
+end;
+
+{ Pins APinTarget under the config's directory first, then checks APath:
+  the pin is taken as the path is judged, so an ancestor swapped for a link
+  afterwards leads nowhere — every later write walks the pinned route
+  without following links. }
+function PinInsideConfigDirectory(const APath, APinTarget, AConfigPath, AKey,
+  AFlag: string): TSandboxHostPin;
 var
   Problem: string;
 begin
+  if not TryPinBeneath(ExtractFileDir(ExpandHostFileName(AConfigPath)),
+     APinTarget, Result, Problem) then
+    RaiseOutsideConfigDirectory(APath, AConfigPath, AKey, AFlag, Problem);
   Problem := ConfigOutputPathProblem(APath, AConfigPath);
   if Problem <> '' then
-    raise TParseError.CreateFmt('%s: "%s" writes to %s, which %s; a ' +
-      'config may only write inside its own directory (pass %s on the ' +
-      'command line to write elsewhere)',
-      [AConfigPath, AKey, APath, Problem, AFlag]);
+    RaiseOutsideConfigDirectory(APath, AConfigPath, AKey, AFlag, Problem);
 end;
 
 function ConfigInputs(const AConfig: TGocciaSandboxRequest): TGocciaSandboxInputs;
@@ -381,9 +407,19 @@ begin
         '"');
     Input.ReadWrite := AConfig.Inputs[I].ReadWrite;
     Input.FromConfig := True;
+    Input.Description := Format('%s: "%s" entry "%s"',
+      [AConfig.Inputs[I].SourcePath, Key, AConfig.Inputs[I].Spec]);
+    Input.Pin := Default(TSandboxHostPin);
+    { Write-back writes under the input's directory: the input itself, or
+      a file input's directory. }
     if Input.ReadWrite then
-      RequireInsideConfigDirectory(Input.HostPath,
-        AConfig.Inputs[I].SourcePath, Key, COPY_READ_WRITE_FLAG);
+      if HostDirectoryExists(Input.HostPath) then
+        Input.Pin := PinInsideConfigDirectory(Input.HostPath, Input.HostPath,
+          AConfig.Inputs[I].SourcePath, Key, COPY_READ_WRITE_FLAG)
+      else
+        Input.Pin := PinInsideConfigDirectory(Input.HostPath,
+          ExtractFileDir(Input.HostPath), AConfig.Inputs[I].SourcePath, Key,
+          COPY_READ_WRITE_FLAG);
     Result[I] := Input;
   end;
 end;
@@ -401,8 +437,9 @@ begin
   Result := SandboxTargetKey(Target);
 end;
 
-{ Two command-line inputs that land on the same sandbox path would leave the
-  run with whichever was copied last, so they are refused. }
+{ Two inputs from one source (the command line, or config) that land on the
+  same sandbox path would leave the run with whichever was copied last, so
+  they are refused. }
 procedure RejectDuplicateTargets(const AInputs: TGocciaSandboxInputs);
 var
   I, J: Integer;
@@ -414,10 +451,10 @@ begin
       if (EffectiveTargetKey(AInputs[I]) = EffectiveTargetKey(AInputs[J])) and
          not (HostDirectoryExists(AInputs[I].HostPath) and
               not HostDirectoryExists(AInputs[J].HostPath)) then
-        raise TCLIUsageError.CreateFmt('%s %s and %s %s both copy to %s; ' +
-          'give one of them an explicit =<sandbox> path',
-          [AInputs[I].Origin, AInputs[I].Spec, AInputs[J].Origin,
-           AInputs[J].Spec, EffectiveTargetKey(AInputs[I])]);
+        raise TCLIUsageError.CreateFmt('%s and %s both copy to %s; give ' +
+          'one of them an explicit =<sandbox> path',
+          [AInputs[I].Description, AInputs[J].Description,
+           EffectiveTargetKey(AInputs[I])]);
 end;
 
 function CommandLineInputs(const AOptions: TGocciaSandboxOptions;
@@ -467,9 +504,9 @@ begin
   end
   else if AUseConfig and (AConfig.DiffFile <> '') then
   begin
-    RequireInsideConfigDirectory(AConfig.DiffFile,
-      AConfig.DiffFileSourcePath, SANDBOX_CONFIG_KEY + '.diff-file',
-      '--diff-file');
+    ARequest.DiffFilePin := PinInsideConfigDirectory(AConfig.DiffFile,
+      AConfig.DiffFile, AConfig.DiffFileSourcePath,
+      SANDBOX_CONFIG_KEY + '.diff-file', '--diff-file');
     ARequest.DiffFile := AConfig.DiffFile;
   end;
 
@@ -519,6 +556,7 @@ function ResolveSandboxMode(const AOptions: TGocciaSandboxOptions;
 var
   UseConfig: Boolean;
   SandboxOnly, Path, ConfigEntry: string;
+  FromConfig: TGocciaSandboxInputs;
   I: Integer;
 begin
   Result := Default(TGocciaSandboxModeRequest);
@@ -598,8 +636,12 @@ begin
 
   { The inputs. }
   if UseConfig then
-    Result.Inputs := MergeSandboxInputs(ConfigInputs(AConfig),
-      CommandLineInputs(AOptions, ACommandLine.WorkingDirectory))
+  begin
+    FromConfig := ConfigInputs(AConfig);
+    RejectDuplicateTargets(FromConfig);
+    Result.Inputs := MergeSandboxInputs(FromConfig,
+      CommandLineInputs(AOptions, ACommandLine.WorkingDirectory));
+  end
   else
     Result.Inputs := CommandLineInputs(AOptions,
       ACommandLine.WorkingDirectory);

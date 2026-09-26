@@ -142,9 +142,9 @@ type
     function ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
       const ARequest: TGocciaSandboxModeRequest): string;
     procedure WriteSandboxDiff(const AHost: TGocciaSandboxHost;
-      const ARequest: TGocciaSandboxModeRequest;
-      const ADiffFile: TSandboxHostOutputFile);
+      const ARequest: TGocciaSandboxModeRequest);
     procedure VerifyRootConfig;
+    function ConfigRequestsSandbox: Boolean;
     procedure ApplyConfigSandboxLimits;
     function ConfigSandboxReason(
       const AVerdict: TGocciaConfigTrustVerdict): string;
@@ -1602,8 +1602,7 @@ begin
 end;
 
 procedure TRunnerApp.WriteSandboxDiff(const AHost: TGocciaSandboxHost;
-  const ARequest: TGocciaSandboxModeRequest;
-  const ADiffFile: TSandboxHostOutputFile);
+  const ARequest: TGocciaSandboxModeRequest);
 var
   DiffText, Problem: string;
   Bytes: TBytes;
@@ -1619,9 +1618,17 @@ begin
   end;
   if not TryEncodeUTF8(DiffText, Bytes, ErrorOffset) then
     raise EConvertError.Create('the diff cannot be encoded as UTF-8');
-  if not ADiffFile.Write(Bytes, Problem) then
-    raise Exception.CreateFmt('diff file %s: %s', [ARequest.DiffFile,
-      Problem]);
+  { A config's diff file goes through the route pinned when the config was
+    checked; the command line's is the user's own choice, written as named. }
+  if ARequest.DiffFilePin.IsSet then
+  begin
+    if not TSandboxHostOutputFile.Create(ARequest.DiffFile,
+       ARequest.DiffFilePin).Write(Bytes, Problem) then
+      raise Exception.CreateFmt('diff file %s: %s', [ARequest.DiffFile,
+        Problem]);
+  end
+  else
+    WriteCommandLineOutputFile(ARequest.DiffFile, Bytes);
 end;
 
 procedure TRunnerApp.VerifyRootConfig;
@@ -1707,7 +1714,6 @@ var
   RunResult: TGocciaSandboxRunResult;
   Report: TStringList;
   EntryPath: string;
-  DiffFile: TSandboxHostOutputFile;
   I: Integer;
 begin
   { The root config is the only one that governs a sandbox run; its
@@ -1733,14 +1739,12 @@ begin
     Host.RootCapabilities := ResolveEngineCapabilities('');
     Host.OnConfigureEngine := ConfigureSandboxEngine;
 
+    { A config-named read-write input carries the pin taken when the config
+      was checked, so write-back reaches it only along that route. }
     for I := 0 to High(ARequest.Inputs) do
       Host.CopyIn(ARequest.Inputs[I].HostPath, ARequest.Inputs[I].SandboxPath,
-        ARequest.Inputs[I].ReadWrite);
+        ARequest.Inputs[I].ReadWrite, ARequest.Inputs[I].Pin);
     EntryPath := ResolveSandboxEntry(Host, ARequest);
-    { Pinned before the run, so a directory swapped for a link while it runs
-      cannot carry the diff elsewhere. }
-    if ARequest.DiffFile <> '' then
-      DiffFile := TSandboxHostOutputFile.Pin(ARequest.DiffFile);
     Host.CaptureBaseline;
 
     RunResult := Host.Run(EntryPath);
@@ -1781,7 +1785,7 @@ begin
       end;
     end;
 
-    WriteSandboxDiff(Host, ARequest, DiffFile);
+    WriteSandboxDiff(Host, ARequest);
   finally
     FSandboxHost := nil;
     Host.Free;
@@ -1979,12 +1983,90 @@ end;
 
 { TRunnerApp - HandleError }
 
+{ The root config, or the one discovery would find, has a sandbox section:
+  for an error raised before sandbox mode is decided (an invalid value on
+  the command line, or in that config), so it reports on stderr. The config
+  may not be applied yet, so it is found here as Execute would find it:
+  --config, else from the first existing path argument, else the working
+  directory. }
+function TRunnerApp.ConfigRequestsSandbox: Boolean;
+var
+  Arguments: TCommandLineArguments;
+  ConfigPath, StartDirectory, Candidate: string;
+  Entries: TConfigEntryArray;
+  I, J: Integer;
+begin
+  Result := False;
+  try
+    ConfigPath := RootConfigPath;
+    if ConfigPath = '' then
+    begin
+      Arguments := GetCommandLineArguments;
+      StartDirectory := '';
+      for I := 0 to High(Arguments) do
+      begin
+        Candidate := '';
+        if Copy(Arguments[I], 1, Length('--config=')) = '--config=' then
+          Candidate := Copy(Arguments[I], Length('--config=') + 1, MaxInt)
+        else if (Arguments[I] = '--config') and (I < High(Arguments)) then
+          Candidate := Arguments[I + 1];
+        if Candidate <> '' then
+        begin
+          Candidate := ExpandFileName(Candidate);
+          if DirectoryExists(Candidate) then
+          begin
+            for J := 0 to High(CONFIG_FILE_EXTENSIONS) do
+              if FileExists(IncludeTrailingPathDelimiter(Candidate) +
+                 CONFIG_FILE_BASE_NAME + CONFIG_FILE_EXTENSIONS[J]) then
+              begin
+                ConfigPath := IncludeTrailingPathDelimiter(Candidate) +
+                  CONFIG_FILE_BASE_NAME + CONFIG_FILE_EXTENSIONS[J];
+                Break;
+              end;
+          end
+          else
+            ConfigPath := Candidate;
+          Break;
+        end;
+        if (StartDirectory = '') and (Arguments[I] <> '') and
+           (Arguments[I][1] <> '-') then
+          if DirectoryExists(Arguments[I]) then
+            StartDirectory := ExpandFileName(Arguments[I])
+          else if FileExists(Arguments[I]) then
+            StartDirectory := ExtractFilePath(ExpandFileName(Arguments[I]));
+      end;
+      if ConfigPath = '' then
+      begin
+        if StartDirectory = '' then
+          StartDirectory := GetCurrentDir;
+        EnsureConfigParsersRegistered;
+        ConfigPath := DiscoverConfigFile(StartDirectory,
+          [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
+      end;
+    end;
+    if (ConfigPath = '') or not FileExists(ConfigPath) then
+      Exit;
+    EnsureConfigParsersRegistered;
+    Entries := ParseConfigFile(ConfigPath);
+    for I := 0 to High(Entries) do
+      if (Entries[I].Key = SANDBOX_CONFIG_KEY) or
+         (Copy(Entries[I].Key, 1, Length(SANDBOX_CONFIG_KEY) + 1) =
+          SANDBOX_CONFIG_KEY + '.') then
+        Exit(True);
+  except
+    { A config that does not parse cannot say; the error reports as usual. }
+    on E: Exception do
+      Result := False;
+  end;
+end;
+
 procedure TRunnerApp.HandleError(const AException: Exception);
 begin
   { In sandbox mode stdout carries only the guest's output and the diff; the
     guest's own failures are reported by RunSandbox, so what reaches here is
     the host's (a copy that failed, an invalid value) and goes to stderr. }
-  if FSandboxActive or FSandboxRequestedByArguments then
+  if FSandboxActive or FSandboxRequestedByArguments or
+     ConfigRequestsSandbox then
     WriteLn(ErrOutput, 'Error: ', AException.Message)
   else if IsJsonOutput then
     WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),

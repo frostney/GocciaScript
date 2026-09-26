@@ -45,6 +45,10 @@ type
       during the run cannot redirect it. }
     WriteRoot: string;
     WriteRootIdentity: THostDirectoryIdentity;
+    { The route from WriteRoot to the input's directory: '' for a
+      command-line input, which is pinned at itself; the route from the
+      config's directory for a config-named one (TSandboxHostPin). }
+    WriteRoute: string;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
 
@@ -69,17 +73,27 @@ type
   end;
   TSandboxWriteBackPlan = array of TSandboxWriteBackItem;
 
-  { A host file written after the run, such as the diff file, pinned before
-    it: its nearest existing directory, canonical and as the directory it
-    was. The write goes through that directory and refuses one moved or
-    swapped for a link during the run, and a link at the file itself. }
-  TSandboxHostOutputFile = record
-    Path: string;
-    RootPath: string;
+  { A host path a config named for writing, pinned at the moment the config
+    is checked: the config's directory (canonical, and which directory it
+    was) and the route from it. Every later use walks the route from that
+    directory without following a link, so nothing swapped in after the
+    check, an ancestor on the route included, can lead elsewhere. }
+  TSandboxHostPin = record
     Root: string;
     RootIdentity: THostDirectoryIdentity;
-    RelativePath: string;
-    class function Pin(const APath: string): TSandboxHostOutputFile; static;
+    { Components below Root, separated by PathDelim; '' for Root itself. }
+    Route: string;
+    function IsSet: Boolean;
+  end;
+
+  { A host file written after the run from a config's `diff-file`: written
+    through its pin, refusing a route that no longer leads where it did and
+    a link at the file itself. }
+  TSandboxHostOutputFile = record
+    Path: string;
+    Pin: TSandboxHostPin;
+    class function Create(const APath: string;
+      const APin: TSandboxHostPin): TSandboxHostOutputFile; static;
     function Write(const ABytes: TBytes; out AError: string): Boolean;
   end;
 
@@ -88,7 +102,7 @@ type
     FFs: TSandboxVirtualFileSystem;
     FOrigins: TSandboxHostOriginArray;
     procedure RecordOrigin(const AHostPath, ASandboxPath: string;
-      const AIsDirectory, AReadWrite: Boolean);
+      const AIsDirectory, AReadWrite: Boolean; const APin: TSandboxHostPin);
     procedure CopyFile(const AHostPath, ASandboxPath: string);
     procedure CopyDirectoryContents(const AHostDirectory,
       ASandboxDirectory: string);
@@ -102,7 +116,13 @@ type
       ASandboxPath. A file is copied to ASandboxPath, or inside it when
       ASandboxPath is '/', ends in '/', or names an existing directory. }
     function CopyIn(const AHostPath, ASandboxPath: string;
-      const AReadWrite: Boolean): string;
+      const AReadWrite: Boolean): string; overload;
+    { As CopyIn, for an input a config named: write-back reaches it only
+      through APin, which leads to the input's directory (the input itself,
+      or a file input's directory). }
+    function CopyIn(const AHostPath, ASandboxPath: string;
+      const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
+      overload;
 
     { The sandbox path at which the host file AHostPath was copied, when it is
       one of the inputs or lies inside a copied directory. Paths are compared
@@ -139,12 +159,31 @@ type
     property Origins: TSandboxHostOriginArray read FOrigins;
   end;
 
+{ Pins APath under the directory ARoot as it is now: ARoot canonical, which
+  directory it is, and the route to APath's canonical form (its existing part
+  resolved, the rest appended). False, with AError, when APath does not lie
+  within ARoot. }
+function TryPinBeneath(const ARoot, APath: string; out APin: TSandboxHostPin;
+  out AError: string): Boolean;
+
+{ Writes ABytes to APath, a path the user named on the command line: a
+  regular file (or none) is replaced atomically, through a temporary beside
+  it; anything else the user chose — a link, /dev/null, a FIFO — is opened
+  and written as it is. }
+procedure WriteCommandLineOutputFile(const APath: string;
+  const ABytes: TBytes);
+
 const
   OUTPUT_TEMPORARY_SUFFIX = '.goccia-output';
   WRITE_BACK_REPORT_PREFIX = 'write-back: ';
   WRITE_BACK_TEMPORARY_SUFFIX = '.goccia-write-back';
 
 implementation
+
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+uses
+  BaseUnix;
+{$ENDIF}
 
 const
   SANDBOX_SEPARATOR = '/';
@@ -239,34 +278,113 @@ begin
      CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
 end;
 
+{ APath canonical where it exists, the missing rest appended, so a path
+  that does not exist yet compares against a canonical root. }
+function CanonicalWithMissingTail(const APath: string): string;
+var
+  Existing, Tail: string;
+begin
+  Existing := ExcludeTrailingPathDelimiter(ExpandHostFileName(APath));
+  Tail := '';
+  while (Existing <> '') and not HostFileExists(Existing) and
+     not HostDirectoryExists(Existing) and
+     (ExtractFileDir(Existing) <> Existing) do
+  begin
+    if Tail = '' then
+      Tail := ExtractFileName(Existing)
+    else
+      Tail := ExtractFileName(Existing) + PathDelim + Tail;
+    Existing := ExcludeTrailingPathDelimiter(ExtractFileDir(Existing));
+  end;
+  Result := CanonicalOrExpanded(Existing);
+  if Tail <> '' then
+    Result := IncludeTrailingPathDelimiter(Result) + Tail;
+end;
+
+function TryPinBeneath(const ARoot, APath: string; out APin: TSandboxHostPin;
+  out AError: string): Boolean;
+var
+  Target: string;
+begin
+  APin := Default(TSandboxHostPin);
+  AError := '';
+  APin.Root := CanonicalOrExpanded(ARoot);
+  if not TryHostDirectoryIdentity(APin.Root, APin.RootIdentity) then
+  begin
+    AError := ARoot + ' is not a directory';
+    Exit(False);
+  end;
+  Target := CanonicalWithMissingTail(APath);
+  if not HostPathIsWithin(Target, APin.Root) then
+  begin
+    AError := 'is outside ' + APin.Root;
+    Exit(False);
+  end;
+  APin.Route := Copy(Target, Length(IncludeTrailingPathDelimiter(APin.Root)) +
+    1, MaxInt);
+  Result := True;
+end;
+
+{ APath, links followed, is a regular file. }
+function HostPathIsRegularFile(const APath: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+begin
+  Result := (fpStat(APath, Info) = 0) and fpS_ISREG(Info.st_mode);
+end;
+{$ELSE}
+begin
+  Result := FileExists(APath) and not DirectoryExists(APath);
+end;
+{$ENDIF}
+
+procedure WriteCommandLineOutputFile(const APath: string;
+  const ABytes: TBytes);
+var
+  Stream: TFileStream;
+  ErrorMessage: string;
+begin
+  if HostPathIsSymlink(ExcludeTrailingPathDelimiter(APath)) or
+     (HostFileExists(APath) and not HostPathIsRegularFile(APath)) then
+  begin
+    Stream := TFileStream.Create(APath, fmCreate);
+    try
+      if Length(ABytes) > 0 then
+        Stream.WriteBuffer(ABytes[0], Length(ABytes));
+    finally
+      Stream.Free;
+    end;
+    Exit;
+  end;
+  if not ReplaceHostFile(APath, APath + OUTPUT_TEMPORARY_SUFFIX, ABytes,
+     ErrorMessage) then
+    raise EInOutError.Create(APath + ': ' + ErrorMessage);
+end;
+
+{ TSandboxHostPin }
+
+function TSandboxHostPin.IsSet: Boolean;
+begin
+  Result := Root <> '';
+end;
+
 { TSandboxHostOutputFile }
 
-class function TSandboxHostOutputFile.Pin(
-  const APath: string): TSandboxHostOutputFile;
+class function TSandboxHostOutputFile.Create(const APath: string;
+  const APin: TSandboxHostPin): TSandboxHostOutputFile;
 begin
-  Result := Default(TSandboxHostOutputFile);
-  Result.Path := ExcludeTrailingPathDelimiter(ExpandHostFileName(APath));
-  Result.RootPath := ExcludeTrailingPathDelimiter(ExtractFileDir(Result.Path));
-  while (Result.RootPath <> '') and not HostDirectoryExists(Result.RootPath) and
-     (ExtractFileDir(Result.RootPath) <> Result.RootPath) do
-    Result.RootPath := ExcludeTrailingPathDelimiter(ExtractFileDir(
-      Result.RootPath));
-  Result.Root := CanonicalOrExpanded(Result.RootPath);
-  TryHostDirectoryIdentity(Result.Root, Result.RootIdentity);
-  Result.RelativePath := Copy(Result.Path,
-    Length(IncludeTrailingPathDelimiter(Result.RootPath)) + 1, MaxInt);
+  Result.Path := APath;
+  Result.Pin := APin;
 end;
 
 function TSandboxHostOutputFile.Write(const ABytes: TBytes;
   out AError: string): Boolean;
 begin
-  if CanonicalOrExpanded(RootPath) <> Root then
-  begin
-    AError := RootPath + ' was replaced during the run';
-    Exit(False);
-  end;
-  Result := ReplaceHostFileBeneath(Root, RootIdentity, RelativePath,
+  Result := ReplaceHostFileBeneath(Pin.Root, Pin.RootIdentity, Pin.Route,
     OUTPUT_TEMPORARY_SUFFIX, ABytes, AError);
+  if not Result and (Pos('was replaced', AError) > 0) then
+    AError := Pin.Root + ' was replaced during the run';
 end;
 
 { TSandboxHostInputs }
@@ -289,7 +407,8 @@ begin
 end;
 
 procedure TSandboxHostInputs.RecordOrigin(const AHostPath,
-  ASandboxPath: string; const AIsDirectory, AReadWrite: Boolean);
+  ASandboxPath: string; const AIsDirectory, AReadWrite: Boolean;
+  const APin: TSandboxHostPin);
 var
   Index: Integer;
 begin
@@ -299,10 +418,18 @@ begin
   FOrigins[Index].HostPath := ExcludeTrailingPathDelimiter(AHostPath);
   FOrigins[Index].IsDirectory := AIsDirectory;
   FOrigins[Index].ReadWrite := AReadWrite;
+  if APin.IsSet then
+  begin
+    FOrigins[Index].WriteRoot := APin.Root;
+    FOrigins[Index].WriteRootIdentity := APin.RootIdentity;
+    FOrigins[Index].WriteRoute := APin.Route;
+    Exit;
+  end;
   FOrigins[Index].WriteRoot := CanonicalOrExpanded(OriginRootPath(
     FOrigins[Index]));
   TryHostDirectoryIdentity(FOrigins[Index].WriteRoot,
     FOrigins[Index].WriteRootIdentity);
+  FOrigins[Index].WriteRoute := '';
 end;
 
 { The input's directory still resolves to the one recorded at the copy, and
@@ -311,7 +438,13 @@ function TSandboxHostInputs.OriginRootUnchanged(
   const AOrigin: TSandboxHostOrigin): Boolean;
 var
   Identity: THostDirectoryIdentity;
+  Problem: string;
 begin
+  { A pinned input: its route from the pinned directory must still lead,
+    link-free, to a directory. }
+  if AOrigin.WriteRoute <> '' then
+    Exit(TryHostDirectoryIdentityBeneath(AOrigin.WriteRoot,
+      AOrigin.WriteRootIdentity, AOrigin.WriteRoute, Identity, Problem));
   if CanonicalOrExpanded(OriginRootPath(AOrigin)) <> AOrigin.WriteRoot then
     Exit(False);
   if not TryHostDirectoryIdentity(AOrigin.WriteRoot, Identity) then
@@ -360,6 +493,13 @@ end;
 
 function TSandboxHostInputs.CopyIn(const AHostPath, ASandboxPath: string;
   const AReadWrite: Boolean): string;
+begin
+  Result := CopyIn(AHostPath, ASandboxPath, AReadWrite,
+    Default(TSandboxHostPin));
+end;
+
+function TSandboxHostInputs.CopyIn(const AHostPath, ASandboxPath: string;
+  const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
 var
   HostPath: string;
 begin
@@ -383,7 +523,7 @@ begin
         'Cannot copy directory %s to %s: the sandbox already has a file ' +
         'there', [HostPath, Result]);
     CopyDirectoryContents(HostPath, Result);
-    RecordOrigin(HostPath, Result, True, AReadWrite);
+    RecordOrigin(HostPath, Result, True, AReadWrite, APin);
     Exit;
   end;
 
@@ -393,7 +533,7 @@ begin
     Result := FFs.Normalize(SandboxJoinPath(Result,
       ExtractFileName(HostPath)));
   CopyFile(HostPath, Result);
-  RecordOrigin(HostPath, Result, False, AReadWrite);
+  RecordOrigin(HostPath, Result, False, AReadWrite, APin);
 end;
 
 function TSandboxHostInputs.SandboxPathOfHostFile(const AHostPath: string;
@@ -594,6 +734,9 @@ begin
         Result[Count].RelativePath := Copy(HostPath,
           Length(IncludeTrailingPathDelimiter(OriginRootPath(Origin))) + 1,
           MaxInt);
+        if Origin.WriteRoute <> '' then
+          Result[Count].RelativePath := Origin.WriteRoute + PathDelim +
+            Result[Count].RelativePath;
         if not Origin.ReadWrite then
           Result[Count].Action := swaSkipReadOnly
         else if not WriteStaysInside(HostPath, Origin.WriteRoot) then

@@ -103,6 +103,15 @@ type
 function TryHostDirectoryIdentity(const APath: string;
   out AIdentity: THostDirectoryIdentity): Boolean;
 
+{ The identity of the directory ARoute leads to under ARoot, which must still
+  be the directory recorded as ARootIdentity. ARoute ('' for ARoot itself) is
+  walked without following a symbolic link, as ReplaceHostFileBeneath walks
+  it, so the answer is False, with AError saying why, when anything on the
+  way was replaced by a link or is not a directory. }
+function TryHostDirectoryIdentityBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity; const ARoute: string;
+  out AIdentity: THostDirectoryIdentity; out AError: string): Boolean;
+
 { ReplaceHostFile for ARelativePath under the directory ARoot, which must
   still be the directory recorded as ARootIdentity: a root replaced since (a
   different directory, or a link to one) is refused. Every directory between
@@ -901,6 +910,106 @@ begin
       end;
     end;
     Result := ReplaceHostFile(Path, Path + ATemporarySuffix, ABytes, AError);
+  finally
+    Parts.Free;
+  end;
+end;
+{$ENDIF}
+
+
+function TryHostDirectoryIdentityBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity; const ARoute: string;
+  out AIdentity: THostDirectoryIdentity; out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Parts: TStringList;
+  Directory, Next: cint;
+  Info: Stat;
+  NameBytes: TBytes;
+  ErrorOffset, I: Integer;
+begin
+  Result := False;
+  AError := '';
+  AIdentity := Default(THostDirectoryIdentity);
+  Parts := SplitRelativeHostPath(ARoute);
+  Directory := -1;
+  try
+    if not TryEncodeUTF8NullTerminated(ARoot, NameBytes, ErrorOffset) then
+    begin
+      AError := 'path cannot be encoded for the host';
+      Exit;
+    end;
+    Directory := fpOpen(PAnsiChar(@NameBytes[0]),
+      O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+    if (Directory < 0) or (fpFStat(Directory, Info) <> 0) or
+       (ARootIdentity.Known and
+        ((QWord(Info.st_dev) <> ARootIdentity.Device) or
+         (QWord(Info.st_ino) <> ARootIdentity.Inode))) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      if (Parts[I] = '.') or (Parts[I] = '..') or
+         not TryEncodeUTF8NullTerminated(Parts[I], NameBytes, ErrorOffset) then
+      begin
+        AError := 'the route climbs out of ' + ARoot;
+        Exit;
+      end;
+      Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+        O_RDONLY or O_DIRECTORY or O_NOFOLLOW);
+      if Next < 0 then
+      begin
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+      fpClose(Directory);
+      Directory := Next;
+    end;
+    if fpFStat(Directory, Info) <> 0 then
+    begin
+      AError := SysErrorMessage(fpgeterrno);
+      Exit;
+    end;
+    AIdentity.Known := True;
+    AIdentity.Device := QWord(Info.st_dev);
+    AIdentity.Inode := QWord(Info.st_ino);
+    Result := True;
+  finally
+    if Directory >= 0 then
+      fpClose(Directory);
+    Parts.Free;
+  end;
+end;
+{$ELSE}
+var
+  Parts: TStringList;
+  Path: string;
+  I: Integer;
+begin
+  Result := False;
+  AError := '';
+  AIdentity := Default(THostDirectoryIdentity);
+  Parts := SplitRelativeHostPath(ARoute);
+  try
+    Path := ExcludeTrailingPathDelimiter(ARoot);
+    if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      Path := Path + PathDelim + Parts[I];
+      if (Parts[I] = '.') or (Parts[I] = '..') or HostPathIsSymlink(Path) or
+         not DirectoryExists(Path) then
+      begin
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+    end;
+    Result := True;
   finally
     Parts.Free;
   end;

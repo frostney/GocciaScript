@@ -37,6 +37,11 @@ type
     procedure TestWriteBackRefusesFileInputDirectoryReplaced;
     procedure TestOutputFileRefusesReplacedDirectory;
     procedure TestOutputFileRefusesLeafSymlink;
+    function PinUnderRoot(const ARelativePath: string): TSandboxHostPin;
+    procedure TestPinRefusesPathOutsideRoot;
+    procedure TestPinnedInputRefusesAncestorSwappedBeforeCopy;
+    procedure TestPinnedInputWritesAlongItsRoute;
+    procedure TestCommandLineOutputWritesAsNamed;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -73,6 +78,13 @@ begin
     TestOutputFileRefusesReplacedDirectory);
   Test('An output file refuses a link at its own name',
     TestOutputFileRefusesLeafSymlink);
+  Test('A pin refuses a path outside its root', TestPinRefusesPathOutsideRoot);
+  Test('A pinned input refuses an ancestor swapped before it was copied',
+    TestPinnedInputRefusesAncestorSwappedBeforeCopy);
+  Test('A pinned input writes back along its route',
+    TestPinnedInputWritesAlongItsRoute);
+  Test('A command-line output is written as the user named it',
+    TestCommandLineOutputWritesAsNamed);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -471,6 +483,15 @@ begin
   {$ENDIF}
 end;
 
+function TSandboxHostInputsTests.PinUnderRoot(
+  const ARelativePath: string): TSandboxHostPin;
+var
+  Problem: string;
+begin
+  Expect<Boolean>(TryPinBeneath(FRoot, HostPath(ARelativePath), Result,
+    Problem)).ToBe(True);
+end;
+
 procedure TSandboxHostInputsTests.TestOutputFileRefusesReplacedDirectory;
 var
   Output: TSandboxHostOutputFile;
@@ -480,17 +501,19 @@ begin
   ForceDirectories(HostPath('dd'));
   ForceDirectories(HostPath('victim'));
   Bytes := TEncoding.UTF8.GetBytes('{}');
-  Output := TSandboxHostOutputFile.Pin(HostPath('dd/nested/diff.json'));
+  Output := TSandboxHostOutputFile.Create(HostPath('dd/nested/diff.json'),
+    PinUnderRoot('dd/nested/diff.json'));
   Expect<Boolean>(Output.Write(Bytes, Problem)).ToBe(True);
   Expect<string>(ReadHostText('dd/nested/diff.json')).ToBe('{}');
   {$IFDEF UNIX}
-  Output := TSandboxHostOutputFile.Pin(HostPath('dd/diff.json'));
+  Output := TSandboxHostOutputFile.Create(HostPath('dd/diff.json'),
+    PinUnderRoot('dd/diff.json'));
   Expect<Boolean>(RenameFile(HostPath('dd'), HostPath('dd.real')))
     .ToBe(True);
   Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('victim'))),
     PAnsiChar(AnsiString(HostPath('dd'))))).ToBe(0);
   Expect<Boolean>(Output.Write(Bytes, Problem)).ToBe(False);
-  Expect<string>(Problem).ToBe(HostPath('dd') + ' was replaced during the run');
+  Expect<string>(Problem).ToBe('dd is a symbolic link or not a directory');
   Expect<Boolean>(FileExists(HostPath('victim/diff.json'))).ToBe(False);
   {$ENDIF}
 end;
@@ -505,7 +528,8 @@ begin
   {$IFDEF UNIX}
   WriteHostFile('victim.txt', 'keep');
   ForceDirectories(HostPath('dd'));
-  Output := TSandboxHostOutputFile.Pin(HostPath('dd/diff.json'));
+  Output := TSandboxHostOutputFile.Create(HostPath('dd/diff.json'),
+    PinUnderRoot('dd/diff.json'));
   Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('victim.txt'))),
     PAnsiChar(AnsiString(HostPath('dd/diff.json'))))).ToBe(0);
   Expect<Boolean>(Output.Write(TEncoding.UTF8.GetBytes('{}'), Problem))
@@ -513,6 +537,118 @@ begin
   Expect<string>(Problem).ToBe(
     'the target is a symbolic link or cannot be opened');
   Expect<string>(ReadHostText('victim.txt')).ToBe('keep');
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestPinRefusesPathOutsideRoot;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+begin
+  ForceDirectories(HostPath('config'));
+  ForceDirectories(HostPath('outside'));
+  Expect<Boolean>(TryPinBeneath(HostPath('config'), HostPath('outside/x'),
+    Pin, Problem)).ToBe(False);
+  Expect<string>(Problem).ToBe('is outside ' + HostPath('config'));
+  Expect<Boolean>(TryPinBeneath(HostPath('config'),
+    HostPath('config/new/deeper/x.json'), Pin, Problem)).ToBe(True);
+  Expect<string>(Pin.Route).ToBe('new' + PathDelim + 'deeper' + PathDelim +
+    'x.json');
+  {$IFDEF UNIX}
+  { A link inside the root that leads out is judged where it leads. }
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('outside'))),
+    PAnsiChar(AnsiString(HostPath('config/away'))))).ToBe(0);
+  Expect<Boolean>(TryPinBeneath(HostPath('config'), HostPath('config/away/x'),
+    Pin, Problem)).ToBe(False);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestPinnedInputRefusesAncestorSwappedBeforeCopy;
+{$IFDEF UNIX}
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { The config is checked and the input pinned; then, before the input is
+    even copied (a long copy of another input), an ancestor on its route is
+    swapped for a link out of the config's directory. }
+  WriteHostFile('project/a/out/f.txt', 'orig');
+  WriteHostFile('evil/out/f.txt', 'evil-orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/a/out'),
+    Pin, Problem)).ToBe(True);
+  Expect<Boolean>(RenameFile(HostPath('project/a'), HostPath('project/a.real')))
+    .ToBe(True);
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('evil'))),
+    PAnsiChar(AnsiString(HostPath('project/a'))))).ToBe(0);
+  FInputs.CopyIn(HostPath('project/a/out'), '/out', True, Pin);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'PWNED');
+    FFs.WriteAllText('/out/planted.sh', 'echo planted');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<string>(ReadHostText('evil/out/f.txt')).ToBe('evil-orig');
+    Expect<Boolean>(FileExists(HostPath('evil/out/planted.sh'))).ToBe(False);
+    Expect<string>(ReadHostText('project/a.real/out/f.txt')).ToBe('orig');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestPinnedInputWritesAlongItsRoute;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+begin
+  WriteHostFile('project/a/out/f.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/a/out'),
+    Pin, Problem)).ToBe(True);
+  FInputs.CopyIn(HostPath('project/a/out'), '/out', True, Pin);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'NEW');
+    FFs.MakeDirectory('/out/sub', True);
+    FFs.WriteAllText('/out/sub/g.txt', 'G');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(True);
+    Expect<string>(ReadHostText('project/a/out/f.txt')).ToBe('NEW');
+    Expect<string>(ReadHostText('project/a/out/sub/g.txt')).ToBe('G');
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+end;
+
+procedure TSandboxHostInputsTests.TestCommandLineOutputWritesAsNamed;
+begin
+  { A regular file is replaced; a missing one is created. }
+  WriteHostFile('out.json', 'old');
+  WriteCommandLineOutputFile(HostPath('out.json'),
+    TEncoding.UTF8.GetBytes('new'));
+  Expect<string>(ReadHostText('out.json')).ToBe('new');
+  WriteCommandLineOutputFile(HostPath('fresh.json'),
+    TEncoding.UTF8.GetBytes('fresh'));
+  Expect<string>(ReadHostText('fresh.json')).ToBe('fresh');
+  {$IFDEF UNIX}
+  { What the user named, even a device or a link, is written as named. }
+  WriteCommandLineOutputFile('/dev/null', TEncoding.UTF8.GetBytes('x'));
+  WriteHostFile('real.json', 'old');
+  Expect<Integer>(FpSymlink(PAnsiChar(AnsiString(HostPath('real.json'))),
+    PAnsiChar(AnsiString(HostPath('link.json'))))).ToBe(0);
+  WriteCommandLineOutputFile(HostPath('link.json'),
+    TEncoding.UTF8.GetBytes('through'));
+  Expect<string>(ReadHostText('real.json')).ToBe('through');
+  Expect<Boolean>(HostPathIsSymlink(HostPath('link.json'))).ToBe(True);
   {$ENDIF}
 end;
 

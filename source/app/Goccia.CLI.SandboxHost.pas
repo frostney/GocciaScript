@@ -77,7 +77,10 @@ type
 
     { Copies a host input into the sandbox; see TSandboxHostInputs.CopyIn. }
     function CopyIn(const AHostPath, ASandboxPath: string;
-      const AReadWrite: Boolean): string;
+      const AReadWrite: Boolean): string; overload;
+    function CopyIn(const AHostPath, ASandboxPath: string;
+      const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
+      overload;
     { Records the filesystem as the run starts, for the diff and the
       write-back. Call after the inputs are copied. }
     procedure CaptureBaseline;
@@ -338,6 +341,12 @@ function TGocciaSandboxHost.CopyIn(const AHostPath, ASandboxPath: string;
   const AReadWrite: Boolean): string;
 begin
   Result := FInputs.CopyIn(AHostPath, ASandboxPath, AReadWrite);
+end;
+
+function TGocciaSandboxHost.CopyIn(const AHostPath, ASandboxPath: string;
+  const AReadWrite: Boolean; const APin: TSandboxHostPin): string;
+begin
+  Result := FInputs.CopyIn(AHostPath, ASandboxPath, AReadWrite, APin);
 end;
 
 procedure TGocciaSandboxHost.CaptureBaseline;

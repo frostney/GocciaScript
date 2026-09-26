@@ -716,7 +716,8 @@ never reachable from the guest.
   `/x`, and `dir=/` into the root.
 - A target is an absolute sandbox path. An empty target (`x=`), a relative one
   (`x=rel`), or one that climbs above the root (`x=/../etc`) is a usage error
-  (exit 2); so are two command-line inputs that land on the same path.
+  (exit 2); so are two command-line inputs, or two config inputs, that land on
+  the same path.
 - A file whose target ends in `/`, or names a directory that already exists, is
   copied inside it.
 - A host path with no basename (a filesystem root) is an error that asks for
@@ -758,16 +759,20 @@ the host paths they were copied from, including new files created inside a
 - each file is written to an exclusively created temporary beside it and then
   replaces it in one rename, so a failed write leaves the original intact.
 
-Each input's directory is recorded when it is copied: its canonical path and,
-on POSIX, its device and inode. Before anything is written, every read-write
-input must still be that directory; one that was moved, or swapped for a
-symbolic link, while the run went on means nothing is written. Each write then
-walks from that directory down without following a link (on POSIX through
-directory descriptors opened with `O_NOFOLLOW`), creating missing directories,
-so a link planted after the plan cannot carry a write out either. A diff file
-is pinned the same way: its nearest existing directory is recorded before the
-run and must be unchanged when the diff is written, and a link at the file's
-own name is refused. A write that fails or is refused makes the run exit 1.
+Each input's directory is pinned: a command-line input when it is copied (its
+canonical path and, on POSIX, its device and inode), and a config-named one
+when the config is checked, as the config's directory plus the route from it.
+Before anything is written, every read-write input must still be reachable as
+pinned; one that was moved, or swapped for a symbolic link (an ancestor on a
+config input's route included), means nothing is written. Each write then
+walks down from the pinned directory without following a link (on POSIX
+through directory descriptors opened with `O_NOFOLLOW`), creating missing
+directories, so a link planted at any point after the check cannot carry a
+write out. A config's `diff-file` is pinned the same way, from the config's
+directory, and a link at its own name is refused. A `--diff-file` on the
+command line is the user's own choice and is written as named — `/dev/null`, a
+FIFO, or a link the user chose — replacing a regular file atomically. A write
+that fails or is refused makes the run exit 1.
 
 The report, one `write-back:` line per path, goes to standard error so the
 guest's standard output stays clean.

@@ -7590,7 +7590,9 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
         writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"], "diff-file": "dd/diff.json" } }));
       const proc = Bun.spawn(
         [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module", `--mode=${mode}`,
-          ...(fromConfig ? ["-P"] : ["--copy-rw", "out", "--diff-file=dd/diff.json"])],
+          // A command-line --diff-file is the user's choice and follows
+          // links; only the config's is pinned.
+          ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])],
         { cwd: tmp, stdout: "pipe", stderr: "pipe" },
       );
       // While the guest runs: the copied directory and the diff file's
@@ -7598,8 +7600,10 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
       await Bun.sleep(500);
       renameSync(join(tmp, "out"), join(tmp, "out.real"));
       symlinkSync(join(tmp, "target"), join(tmp, "out"));
-      renameSync(join(tmp, "dd"), join(tmp, "dd.real"));
-      symlinkSync(join(tmp, "target"), join(tmp, "dd"));
+      if (fromConfig) {
+        renameSync(join(tmp, "dd"), join(tmp, "dd.real"));
+        symlinkSync(join(tmp, "target"), join(tmp, "dd"));
+      }
       const exitCode = await proc.exited;
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -7610,7 +7614,7 @@ await section("Runner sandbox mode: write-back and the diff file refuse a direct
         throw new Error(`(${mode}) the moved-away input must be left alone`);
       if (exitCode !== 1 ||
           !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`) ||
-          !stderr.includes(`Error: diff file ${join(tmp, "dd", "diff.json")}: ${join(tmp, "dd")} was replaced during the run`))
+          (fromConfig && !stderr.includes(`Error: diff file ${join(tmp, "dd", "diff.json")}: dd is a symbolic link or not a directory`)))
         throw new Error(`(${mode}) a swapped directory should be refused on stderr with exit 1, got (exit ${exitCode}):\n${stdout}${stderr}`);
     } finally {
       clean(tmp);
@@ -7782,6 +7786,66 @@ await section("Runner sandbox mode: the entry's own config's sandbox section is 
     if (run.exitCode !== 0 || run.stdout.trim() !== "ran" ||
         !run.stderr.includes(`Warning: ${join(tmp, "proj", "goccia.json")} declares a "sandbox" section, which GocciaRunner reads only from the root config; ignoring it`))
       throw new Error(`Sandbox mode should warn about the entry config's unread section, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a config-enabled sandbox reports value errors on stderr...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const [config, args] of [
+      [{ sandbox: {} }, ["--timeout=abc"]],
+      [{ sandbox: {} }, ["--max-fs-bytes=abc"]],
+      [{ sandbox: {}, timeout: "abc" }, []],
+    ] as const) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify(config));
+      const run = runSandboxCli(["main.js", "-P", ...args], { cwd: tmp });
+      if (run.exitCode === 0 || run.stdout !== "" || !run.stderr.includes("Error:"))
+        throw new Error(`${JSON.stringify(config)} ${args.join(" ")} should fail on stderr only, got (exit ${run.exitCode}):\nstdout: ${run.stdout}\nstderr: ${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a command-line --diff-file is written as the user named it...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    const devNull = runSandboxCli(["main.js", "--sandbox", "--diff=json", "--diff-file=/dev/null"], { cwd: tmp });
+    if (process.platform !== "win32" && devNull.exitCode !== 0)
+      throw new Error(`--diff-file=/dev/null should work, got (exit ${devNull.exitCode}):\n${devNull.stdout}${devNull.stderr}`);
+    if (process.platform !== "win32") {
+      mkdirSync(join(tmp, "elsewhere"));
+      writeFileSync(join(tmp, "elsewhere", "d.json"), "old");
+      symlinkSync(join(tmp, "elsewhere", "d.json"), join(tmp, "link.json"));
+      const linked = runSandboxCli(["main.js", "--sandbox", "--diff-file=link.json"], { cwd: tmp });
+      if (linked.exitCode !== 0 || !readFileSync(join(tmp, "elsewhere", "d.json"), "utf-8").includes('"changes"'))
+        throw new Error(`A symlinked --diff-file the user chose should be written through, got (exit ${linked.exitCode}):\n${linked.stdout}${linked.stderr}`);
+    }
+    // A regular file is replaced.
+    writeFileSync(join(tmp, "d.json"), "old");
+    const regular = runSandboxCli(["main.js", "--sandbox", "--diff-file=d.json"], { cwd: tmp });
+    if (regular.exitCode !== 0 || !readFileSync(join(tmp, "d.json"), "utf-8").includes('"changes"'))
+      throw new Error(`--diff-file should replace a regular file, got (exit ${regular.exitCode}):\n${regular.stdout}${regular.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: two config inputs with one target are refused...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "b"));
+    writeFileSync(join(tmp, "a.txt"), "a");
+    writeFileSync(join(tmp, "b", "a.txt"), "b");
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["a.txt"], "copy-rw": ["b/a.txt"] } }));
+    expectSandboxUsageError("Duplicate config targets", runSandboxCli(["main.js", "-P"], { cwd: tmp }),
+      `${configPath}: "sandbox.copy" entry "a.txt" and ${configPath}: "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; give one of them an explicit =<sandbox> path`);
   } finally {
     clean(tmp);
   }

@@ -37,6 +37,8 @@ type
     procedure TestCopySpecTargetsMustBeAbsolute;
     procedure TestDuplicateCommandLineTargetsRejected;
     procedure TestConfigEntryYieldsToPositional;
+    procedure TestDuplicateConfigTargetsRejected;
+    procedure TestConfigOutputsArePinnedCommandLineOnesAreNot;
     procedure TestDiffFormatInference;
     procedure TestDiffFormatValues;
     procedure TestMergeReplacesSameTarget;
@@ -69,6 +71,10 @@ begin
     TestDuplicateCommandLineTargetsRejected);
   Test('A positional entry beats the config''s entry, with a note',
     TestConfigEntryYieldsToPositional);
+  Test('Two config inputs with one target are refused',
+    TestDuplicateConfigTargetsRejected);
+  Test('Config-named outputs are pinned; command-line ones are not',
+    TestConfigOutputsArePinnedCommandLineOnesAreNot);
   Test('--diff-file infers only .json and .diff', TestDiffFormatInference);
   Test('--diff accepts json and unified', TestDiffFormatValues);
   Test('A command-line input replaces the config input with its target',
@@ -685,6 +691,62 @@ begin
     Expect<string>(Request.Notes[0]).ToBe('Note: ' + FRoot + PathDelim +
       'entry-note' + PathDelim + 'goccia.json: "sandbox.entry" /app/main.js ' +
       'is not used; the command line names the entry (main.js)');
+  finally
+    Options.Free;
+  end;
+end;
+
+
+procedure TSandboxModeTests.TestDuplicateConfigTargetsRejected;
+var
+  Config: TGocciaSandboxRequest;
+  ConfigPath: string;
+begin
+  WriteFile('config-dup/a.txt', 'a');
+  WriteFile('config-dup/b/a.txt', 'b');
+  ConfigPath := FRoot + PathDelim + 'config-dup' + PathDelim + 'goccia.json';
+  Config := ConfigSection('config-dup/goccia.json',
+    '{"sandbox": {"copy": ["a.txt"], "copy-rw": ["b/a.txt"]}}');
+  Expect<string>(ResolveError(['--entry=/a.txt'], Config, CommandLine)).ToBe(
+    'TCLIUsageError: ' + ConfigPath + ': "sandbox.copy" entry "a.txt" and ' +
+    ConfigPath + ': "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; ' +
+    'give one of them an explicit =<sandbox> path');
+  { The command line replacing a config entry for its target is not a
+    duplicate. }
+  Config := ConfigSection('config-dup/goccia.json',
+    '{"sandbox": {"copy": ["a.txt"]}}');
+  Expect<string>(ResolveError(['--entry=/a.txt', '--copy',
+    '../config-dup/b/a.txt'], Config, CommandLine)).ToBe('');
+end;
+
+procedure TSandboxModeTests.TestConfigOutputsArePinnedCommandLineOnesAreNot;
+var
+  Options: TGocciaSandboxOptions;
+  Request: TGocciaSandboxModeRequest;
+  Config: TGocciaSandboxRequest;
+begin
+  WriteFile('pinned/out/f.txt', 'f');
+  WriteFile('pinned/main.js', '1;');
+  Config := ConfigSection('pinned/goccia.json',
+    '{"sandbox": {"copy-rw": ["out"], "diff-file": "logs/d.json"}}');
+  Options := ParseSandboxOptions(['main.js']);
+  try
+    Request := ResolveSandboxMode(Options, Config, True, CommandLine);
+    Expect<Boolean>(Request.Inputs[0].Pin.IsSet).ToBe(True);
+    Expect<string>(Request.Inputs[0].Pin.Route).ToBe('out');
+    Expect<Boolean>(Request.DiffFilePin.IsSet).ToBe(True);
+    Expect<string>(Request.DiffFilePin.Route).ToBe('logs' + PathDelim +
+      'd.json');
+  finally
+    Options.Free;
+  end;
+  Options := ParseSandboxOptions(['main.js', '--copy-rw',
+    '../pinned/out=/o', '--diff-file=../pinned/d.json']);
+  try
+    Request := ResolveSandboxMode(Options, Default(TGocciaSandboxRequest),
+      True, CommandLine);
+    Expect<Boolean>(Request.Inputs[0].Pin.IsSet).ToBe(False);
+    Expect<Boolean>(Request.DiffFilePin.IsSet).ToBe(False);
   finally
     Options.Free;
   end;
