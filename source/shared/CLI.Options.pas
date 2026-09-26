@@ -50,6 +50,7 @@ type
     FCommandLineOnly: Boolean;
     FRequiresTrust: Boolean;
     FConfigIgnored: Boolean;
+    FAcceptsObject: Boolean;
     FConfigHint: string;
   public
     constructor Create(const ALongName, AHelpText: string; const AGroup: string = '');
@@ -102,6 +103,9 @@ type
     { Config files may name the key, but the binary does not use it: it is
       neither validated nor applied (a limit a binary does not honor). }
     property ConfigIgnored: Boolean read FConfigIgnored write FConfigIgnored;
+    { A config file may give the key an object, read by the option's owner
+      (a virtual modules descriptor map). Any other option rejects one. }
+    property AcceptsObject: Boolean read FAcceptsObject write FAcceptsObject;
   end;
 
   TOptionArray = array of TOptionBase;
@@ -360,6 +364,7 @@ begin
   FCommandLineOnly := False;
   FRequiresTrust := False;
   FConfigIgnored := False;
+  FAcceptsObject := False;
   FConfigHint := '';
 end;
 
