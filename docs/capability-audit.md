@@ -84,6 +84,7 @@ repeat it. Its `subject` is
 engine's `CapabilityProvenance` when the host sets one; the CLI records the
 command-line grants and the governing config's trust decision, such as
 `cli --allow-read=data; config /repo/goccia.json trusted sha256:<hex>`, or
+`config /repo/goccia.json denies only` for a config that only denies, or
 `defaults` when neither contributes.
 
 `import.node-modules` subjects are the bare specifier; the reason carries the

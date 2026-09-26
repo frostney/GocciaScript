@@ -59,6 +59,8 @@ type
     function RequestsHonoredGrants(
       const AHonored: TGocciaHonoredCapabilities;
       const AHonorsUnsafe: Boolean = True): Boolean;
+    { True when some deny-* key denies something. }
+    function DeclaresDenies: Boolean;
   end;
 
   { A malformed permissions block: an unknown key or a value of the wrong
@@ -267,6 +269,16 @@ end;
 function TGocciaConfigPermissionRequest.RequestsGrants: Boolean;
 begin
   Result := RequestsHonoredGrants(ALL_CAPABILITIES, True);
+end;
+
+function TGocciaConfigPermissionRequest.DeclaresDenies: Boolean;
+var
+  Capability: TGocciaCapability;
+begin
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    if Deny[Capability].RequestsAny then
+      Exit(True);
+  Result := False;
 end;
 
 function TGocciaConfigPermissionRequest.RequestsHonoredGrants(

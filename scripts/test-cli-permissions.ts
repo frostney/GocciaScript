@@ -1221,6 +1221,18 @@ console.log("Audit records config trust and where capabilities came from...");
     if (!trustedEvent || !/^trusted sha256:[0-9a-f]{64}$/.test(trustedEvent.reason))
       throw new Error(`trusted config.permissions event: ${JSON.stringify(trusted)}`);
 
+    // A deny-only config needs no trust but still shapes the set, so the
+    // provenance names it.
+    mkdirSync(join(tmp, "denies"));
+    writeFileSync(join(tmp, "denies", "goccia.json"), '{"permissions": {"deny-net": ["example.com"]}}\n');
+    writeFileSync(join(tmp, "denies", "main.js"), "1;\n");
+    run(LOADER, ["--audit-log=denies.jsonl", join("denies", "main.js")], { cwd: tmp });
+    const deniesEffective = readFileSync(join(tmp, "denies.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .find((event) => event.kind === "capabilities.effective");
+    if (!deniesEffective || !String(deniesEffective.reason).startsWith("config ") ||
+        !String(deniesEffective.reason).endsWith("goccia.json denies only"))
+      throw new Error(`deny-only provenance: ${JSON.stringify(deniesEffective)}`);
+
     run(LOADER, ["--trust-store=none.json", "--audit-log=denied.jsonl", join("project", "main.js")], { cwd: tmp });
     const denied = readFileSync(join(tmp, "denied.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     if (!denied.some((event) => event.kind === "config.permissions" && event.decision === "deny" && event.reason === "not trusted"))

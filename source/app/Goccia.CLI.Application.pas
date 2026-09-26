@@ -1265,6 +1265,13 @@ begin
       Result := Result + '; ';
     Result := Result + 'config ' + AVerdict.ConfigPath + ' ' +
       ConfigTrustAuditReason(AVerdict, Name);
+  end
+  else if AVerdict.Request.DeclaresDenies then
+  begin
+    { A deny-only config needs no trust, but its denies shape the set. }
+    if Result <> '' then
+      Result := Result + '; ';
+    Result := Result + 'config ' + AVerdict.ConfigPath + ' denies only';
   end;
   if Result = '' then
     Result := 'defaults';
