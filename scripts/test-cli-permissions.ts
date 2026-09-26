@@ -902,6 +902,9 @@ console.log("An untrusted config refuses the run with a report naming the fix...
     expectIncludes(unconfirmed.stderr, "Error: --trust needs confirmation; re-run with --yes to trust without a prompt", "--trust without --yes");
     expectIncludes(unconfirmed.stdout, "(new)\n    allow-read:", "--trust shows the requests first");
     if (existsSync(join(tmp, "trust.json"))) throw new Error("An unconfirmed --trust must not write the store");
+    // The working directory itself is shown as ./.
+    const here = run(LOADER, [`--trust-store=${join(tmp, "trust.json")}`, "--trust", "."], { cwd: project });
+    expectIncludes(here.stdout, `Permission requests under .${isWindows ? "\\" : "/"}:`, "--trust . header");
 
     // 2. --trust <dir> --yes records it, and the run proceeds.
     const trusted = run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
@@ -1086,8 +1089,8 @@ console.log("Trust follows each file's own config...");
     writeFileSync(join(tmp, "bundle", "bad", "b.js"), "2;\n");
     writeFileSync(join(tmp, "bundle", "bad", "goccia.json"), '{"permissions": {"deny-nett": true}}\n');
     mkdirSync(join(tmp, "bundle", "out"));
-    const partial = run(BUNDLER, [join("bundle", "good", "a.js"), join("bundle", "bad", "b.js"), `--output=${join("bundle", "out")}`], { cwd: tmp });
-    expectExit(partial, 2, "Bundler with a malformed config among its files");
+    const bundled2 = run(BUNDLER, [join("bundle", "good", "a.js"), join("bundle", "bad", "b.js"), `--output=${join("bundle", "out")}`], { cwd: tmp });
+    expectExit(bundled2, 2, "Bundler with a malformed config among its files");
     if (existsSync(join(tmp, "bundle", "out", "a.gbc"))) throw new Error("The bundler emitted a.gbc before refusing b's config");
     const bundleAudit = run(BUNDLER, [join("unsafe", "main.js"), "--output=single.gbc", "--audit-log=bundle.jsonl"], { cwd: tmp });
     expectExit(bundleAudit, 0, "Bundler audit for a single file");
@@ -1154,7 +1157,8 @@ console.log("Unreadable trust stores are errors, not trust...");
     if (readFileSync(join(tmp, "corrupt.json"), "utf8") !== "{ not json") throw new Error("--trust overwrote a corrupt store");
     const corruptRun = run(LOADER, ["--trust-store=corrupt.json", join("project", "main.js")], { cwd: tmp });
     expectExit(corruptRun, 2, "run with a corrupt store");
-    expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then, to trust these requests:", "run with a corrupt store");
+    expectIncludes(corruptRun.stderr, "Nothing was run. Trust store ", "run with a corrupt store");
+    expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then trust these requests:", "run with a corrupt store");
 
     writeFileSync(join(tmp, "newer.json"), '{"version": 2, "trusted": {}}\n');
     const newer = run(LOADER, ["--trust-store=newer.json", "--list-trusted"], { cwd: tmp });

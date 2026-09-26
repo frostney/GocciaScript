@@ -822,6 +822,9 @@ var
 begin
   ConfigPaths := TStringList.Create;
   try
+    { Byte order, so reports list configs the same way in every locale. }
+    ConfigPaths.UseLocale := False;
+    ConfigPaths.CaseSensitive := True;
     ConfigPaths.Sorted := True;
     ConfigPaths.Duplicates := dupIgnore;
     for I := 0 to AFiles.Count - 1 do

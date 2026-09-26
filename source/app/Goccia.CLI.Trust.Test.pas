@@ -896,8 +896,8 @@ begin
     'trust store /s.json is not valid JSON; fix or delete it', '/s.json',
     ['a b'], FRoot);
   Expect<Boolean>(Pos('1 config file requests', Report) = 1).ToBe(True);
-  Expect<Boolean>(Pos('Nothing was run. trust store /s.json is not valid ' +
-    'JSON; fix or delete it. Then, to trust these requests:' + sLineBreak +
+  Expect<Boolean>(Pos('Nothing was run. Trust store /s.json is not valid ' +
+    'JSON; fix or delete it. Then trust these requests:' + sLineBreak +
     '  GocciaTestRunner --trust-store=/s.json --trust', Report) > 0)
     .ToBe(True);
   {$IFNDEF MSWINDOWS}
@@ -915,15 +915,19 @@ begin
   WriteFile('scan/goccia.toml', '');
   WriteFile('scan/a/goccia.json5', '{}');
   WriteFile('scan/a/goccia.json', '{}');
+  WriteFile('scan/Z/goccia.json', '{}');
   WriteFile('scan/b/other.json', '{}');
   WriteFile('scan/node_modules/p/goccia.json', '{}');
   WriteFile('scan/.git/goccia.json', '{}');
   Configs := TStringList.Create;
   try
     FindTrustableConfigs(Base, Configs);
-    Expect<Integer>(Configs.Count).ToBe(2);
+    { Byte order: Z (0x5A) before a (0x61), whatever the locale. }
+    Expect<Integer>(Configs.Count).ToBe(3);
     Expect<string>(Configs[0]).ToBe(Base + PathDelim + 'goccia.toml');
-    Expect<string>(Configs[1]).ToBe(Base + PathDelim + 'a' + PathDelim +
+    Expect<string>(Configs[1]).ToBe(Base + PathDelim + 'Z' + PathDelim +
+      'goccia.json');
+    Expect<string>(Configs[2]).ToBe(Base + PathDelim + 'a' + PathDelim +
       'goccia.json5');
     Configs.Clear;
     FindTrustableConfigs(Base + PathDelim + 'b' + PathDelim + 'other.json',

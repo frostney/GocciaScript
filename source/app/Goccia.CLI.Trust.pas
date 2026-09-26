@@ -1621,7 +1621,9 @@ begin
       AStoreProblem + '); to trust these requests, name a store:' +
       sLineBreak)
   else if AStoreProblem <> '' then
-    Buffer.Append(AStoreProblem + '. Then, to trust these requests:' +
+    { The store's messages start in lower case for the "Error: " prefix. }
+    Buffer.Append(UpperCase(Copy(AStoreProblem, 1, 1)) +
+      Copy(AStoreProblem, 2, MaxInt) + '. Then trust these requests:' +
       sLineBreak)
   else
     Buffer.Append('To trust these requests (stored in ' + AStorePath +
@@ -1669,6 +1671,7 @@ begin
 
   Effective := TStringList.Create;
   try
+    Effective.UseLocale := False;
     Effective.Sorted := True;
     Effective.CaseSensitive := True;
     Found := FindAllFilesExcludingDirectories(APath, CONFIG_FILE_EXTENSIONS,
