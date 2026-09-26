@@ -7380,7 +7380,11 @@ await section("Loader: read denials report one suggestion and location in both m
       'import { secret } from "../outside.js";\nconsole.log(secret);\n');
     writeFileSync(join(proj, "dynamic.mjs"),
       'const name = "../outside" + ".js";\nconst m = await import(name);\nconsole.log(m.secret);\n');
-    const suggestion = `Suggestion: a read deny (--deny-read or "deny-read" in goccia.json) covers ${realpathSync(outside)}`;
+    // The suggestion names the canonical path the read capability judges:
+    // symlinks resolved and, on Windows, 8.3 short names (RUNNER~1) expanded.
+    // realpathSync.native computes the same; plain realpathSync keeps the
+    // short spelling the temporary directory was handed out with.
+    const suggestion = `Suggestion: a read deny (--deny-read or "deny-read" in goccia.json) covers ${realpathSync.native(outside)}`;
     for (const file of ["static.mjs", "dynamic.mjs"]) {
       const outputs: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
