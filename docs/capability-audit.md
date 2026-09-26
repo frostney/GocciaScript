@@ -40,7 +40,7 @@ consulted it, allow and deny alike:
 | `net.fetch` | A `net` decision for a fetch destination: the host name, the address it resolved to, and every redirect hop |
 | `net.dispatch` | An allowed fetch request reached the dispatch boundary |
 | `ffi.open` | An `ffi` decision for a library-open attempt |
-| `import.node-modules` | An `import` decision for a bare specifier resolved against `node_modules` |
+| `import.node-modules` | An `import` decision for a bare specifier resolved against `node_modules`; one a virtual module, import-map alias, or host module serves never reaches `node_modules` and emits none |
 | `import.provider` | Reserved for provider imports |
 
 The remaining kinds report engine features that are not capabilities:
