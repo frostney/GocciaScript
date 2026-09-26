@@ -158,8 +158,11 @@ denial.
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
 Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
-and their imports) are host requests and never checked; a guest importing the
-same file later is checked like any other guest read, cached or not.
+and the imports they make while the host loads them) are host requests and never
+checked. That exemption ends when the host's load returns: a function such a
+module exports runs later as guest code, so an `import()` it makes then is a
+guest read and is checked, and a guest importing the same file later is checked
+like any other guest read, cached or not.
 
 For a relative or absolute specifier — and for the path an alias or import map
 rewrites a specifier to — the resolver tries candidates in order: the exact

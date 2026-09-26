@@ -1578,15 +1578,19 @@ begin
 end;
 
 { Whether a module request is made by the host rather than by guest code:
-  the root of a host enrollment, or an import whose importer is host-owned.
-  Host requests are never read-checked. Whether the *target* was ever loaded
-  by the host does not matter: a guest importing the same file is a guest
-  read. }
+  while a host enrollment (LoadHostModule) is in progress, its root request
+  or an import whose importer is host-owned. Host requests are never
+  read-checked. Once the enrollment returns, code a host module left behind
+  (an exported function that calls import(), say) runs as guest code, so its
+  imports are guest reads even though their importer is host-owned. Whether
+  the *target* was ever loaded by the host does not matter either: a guest
+  importing the same file is a guest read. }
 function TGocciaModuleLoader.IsHostRequest(const ASpecifier,
   AImportingFilePath: string): Boolean;
 begin
-  Result := ((FHostRequestDepth > 0) and
-    (ASpecifier = FHostRequestSpecifier) and
+  if FHostRequestDepth <= 0 then
+    Exit(False);
+  Result := ((ASpecifier = FHostRequestSpecifier) and
     (AImportingFilePath = FHostRequestImporter)) or
     IsHostOwnedImporter(AImportingFilePath);
 end;

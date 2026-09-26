@@ -68,6 +68,7 @@ type
     FAliasPattern: string;
     FAliasTarget: string;
     FInstallFetchAndFFI: Boolean;
+    FHostGlobalsModule: string;
     FVirtualModuleSource: string;
     function PumpUntilAudited(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
@@ -122,6 +123,7 @@ type
     procedure TestPackageProbesAreJudged;
     procedure TestCallDenialSitesMatchAcrossExecutors;
     procedure TestStaticImportDenialSitesMatchAcrossExecutors;
+    procedure TestHostModuleCodeImportsAsTheGuestLater;
   public
     procedure SetupTests; override;
   end;
@@ -199,6 +201,8 @@ begin
   Test('Static import and export-from denials are located at the ' +
     'declaration in both executors',
     TestStaticImportDenialSitesMatchAcrossExecutors);
+  Test('An import a host module''s code makes after enrollment is a guest ' +
+    'read', TestHostModuleCodeImportsAsTheGuestLater);
 end;
 
 procedure WriteFile(const APath, AText: string);
@@ -242,6 +246,10 @@ begin
   WriteFile(ProjectPath('lib.js'), 'export const value = "inside";');
   WriteFile(OutsidePath('secret.js'), 'export const value = "outside";');
   WriteFile(OutsidePath('data.bin'), 'bytes');
+  WriteFile(OutsidePath('host-globals.js'),
+    'import { value } from "./secret.js";' + sLineBreak +
+    'export const enrolled = value;' + sLineBreak +
+    'export const readLater = () => import("./secret.js");');
   WriteFile(ProjectPath('node_modules/pkg/package.json'),
     '{"name":"pkg","type":"module","exports":"./index.js"}');
   WriteFile(ProjectPath('node_modules/pkg/index.js'),
@@ -290,6 +298,7 @@ begin
   FAliasPattern := '';
   FAliasTarget := '';
   FInstallFetchAndFFI := False;
+  FHostGlobalsModule := '';
 end;
 
 procedure TEngineCapabilitiesTests.RecordEvent(
@@ -382,6 +391,8 @@ begin
       Engine.InjectModule(FVirtualModuleName, FVirtualModuleSource);
     if FAliasPattern <> '' then
       Engine.ModuleLoader.Resolver.AddAlias(FAliasPattern, FAliasTarget);
+    if FHostGlobalsModule <> '' then
+      Engine.InjectGlobalsFromModule(FHostGlobalsModule);
     if AShadowRealm then
       EnableShadowRealm(Engine);
     try
@@ -1533,6 +1544,37 @@ begin
   { export-from belongs to modules. }
   ExpectLocatedAlike(OUTSIDE_REEXPORT, ProjectPath('app.mjs'), 'app.mjs:2:1',
     TGocciaCapabilities.None);
+end;
+
+
+{ A --globals module is host code while the host enrolls it: its own static
+  imports need no grant. A function it exports runs later as guest code, so
+  an import() it makes then is a guest read like any other. }
+procedure TEngineCapabilitiesTests.TestHostModuleCodeImportsAsTheGuestLater;
+const
+  SOURCE_TEXT =
+    'globalThis.result = "pending";' + sLineBreak +
+    'globalThis.enrolledValue = enrolled;' + sLineBreak +
+    'readLater().then((m) => { globalThis.result = m.value; },' +
+    ' (e) => { globalThis.result = e.name; });';
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  FHostGlobalsModule := OutsidePath('host-globals.js');
+  for Bytecode in [False, True] do
+  begin
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+    Outcome := Run(SOURCE_TEXT, TGocciaCapabilities.None.Deny(gcRead),
+      Bytecode);
+    Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+    { A read grant lets the same late import through. }
+    Outcome := Run(SOURCE_TEXT,
+      TGocciaCapabilities.None.Allow(gcRead, FOutside), Bytecode);
+    Expect<string>(Outcome.Result).ToBe('outside');
+  end;
 end;
 
 begin
