@@ -210,7 +210,7 @@ jobs:
           if [ "${{ matrix.mode }}" = "bytecode" ]; then modeflag="--mode=bytecode"; fi
           # HEAPTRC halt-on-error would abort mid-suite; capture and inspect
           # the summary instead so a leak reports alongside the test results.
-          ./build/GocciaTestRunnerHeaptrc tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
+          ./build/GocciaTestRunnerHeaptrc -P tests $modeflag 2> build/heaptrc-${{ matrix.mode }}.log
           tail -20 build/heaptrc-${{ matrix.mode }}.log
           if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc-${{ matrix.mode }}.log; then
             echo "::error::heaptrc reported unfreed blocks in ${{ matrix.mode }} mode"
@@ -230,7 +230,7 @@ jobs:
             --leak-check=no \
             --track-origins=yes \
             --log-file=build/valgrind-${{ matrix.mode }}.log \
-            ./build/GocciaTestRunner tests $modeflag
+            ./build/GocciaTestRunner -P tests $modeflag
           tail -40 build/valgrind-${{ matrix.mode }}.log
 
       - name: Upload memory-safety logs

@@ -13,7 +13,7 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 
 - Test coverage follows [Testing](docs/testing.md) and the public-surface testing strategy identified during readiness.
 - The relevant focused checks pass before broader checks.
-- **JavaScript suite gate** — Always run `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`.
+- **JavaScript suite gate** — Always run `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`. Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
 - **Format gate** — Run `./format.pas --check` before push or PR.
 - If a clean build is needed to rule out stale FPC artifacts, the relevant `./build.pas --clean <target>` check has been run before diagnosing source failures.
 

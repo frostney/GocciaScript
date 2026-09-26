@@ -60,7 +60,7 @@ The codes actually in use, which new commands should follow:
 |---|---|
 | `0` | Success |
 | `1` | The work was attempted and failed — a script threw, a test failed, a path did not exist, an option value was invalid |
-| `2` | The command could not be run as invoked — no input at a terminal, a missing required argument, a removed flag or config key, a value given to a boolean flag, an `--allow-*` or limit the binary cannot honor, a command-line-only key or malformed `permissions` block in a config file |
+| `2` | The command could not be run as invoked — no input at a terminal, a missing required argument, a removed flag or config key, a value given to a boolean flag, an `--allow-*` or limit the binary cannot honor, a command-line-only key or malformed `permissions` block in a config file, a config whose permission requests are not trusted, `--trust` without confirmation, a conflicting combination of the trust options |
 | `70` | The engine abandoned the run: an engine-integrity fault reached the host, `GocciaTestRunner` only |
 | `124` | test262 timeout marker, `GocciaScriptLoaderBare` only |
 
@@ -73,7 +73,8 @@ Raise `TCLIUsageError` (in `CLI.Options`) for a usage error. `TGocciaApplication
 - a removed flag or config key, with a message naming the replacement (see [Removed flags and keys](../permissions.md#removed-flags-and-keys));
 - a value given to a boolean flag, such as `--print=false`;
 - an `--allow-*` flag for a capability, or a limit, the binary does not honor;
-- a command-line-only key, such as `allow-net`, at the top level of a config file, and a malformed `permissions` block.
+- a command-line-only key, such as `allow-net`, at the top level of a config file, and a malformed `permissions` block;
+- a config whose permission requests are not trusted (`EGocciaConfigTrustError`, whose message is the whole [untrusted report](../permissions.md#when-trust-is-checked)), `--trust` with no terminal and no `--yes`, and conflicting trust options such as `-P` with `--ignore-config-permissions`.
 
 An invalid *value* for an accepted option — a bad unit, an empty or malformed scope, a config flag that is not exactly `true` or `false` — is still a `TParseError` and exits `1`.
 
@@ -97,6 +98,7 @@ Be aware that the boundary is not clean everywhere yet. Other errors raised out 
 1. Derive from `TGocciaCLIApplication` unless there is a concrete reason not to — it supplies option parsing, config discovery, `--help`, logging, the multifile split, and the no-argument rule.
 2. Implement `Configure` (declare options), `UsageLine`, and `ExecuteWithPaths`.
 3. If the command reads a program from stdin when given no path, override `StdinUsage`. Point users at `GocciaREPL` only where an interactive session is a sensible alternative.
-4. Override `HonoredCapabilities` and `HonoredSettings` to declare which capabilities the binary can grant (default: none) and which limits it applies (default: all). The base class hides the rest from `--help`, rejects them on the command line with exit `2`, and ignores or warns about them in config; add the binary to the table in [Permissions — What each binary honors](../permissions.md#what-each-binary-honors).
-5. Register the build target in `build.pas` and add the binary path to `scripts/test-cli/binaries.ts`.
-6. Add CLI behavior coverage under `scripts/test-cli-*.ts`; see [Testing](../testing.md) for which harness owns what.
+4. Override `HonoredCapabilities` and `HonoredSettings` to declare which capabilities the binary can grant (default: none) and which limits it applies (default: all). The base class hides the rest from `--help`, rejects them on the command line with exit `2`, and ignores or warns about them in config; add the binary to the table in [Permissions — What each binary honors](../permissions.md#what-each-binary-honors). Override `HonorsUnsafeRequests` to return `False` when the binary runs no code, so a config's `unsafe-*` keys are warned about rather than needing trust.
+5. Check config trust before anything runs: expand file inputs with `PrepareRunFiles` (or call `VerifyConfigPermissions` / `VerifyGoverningConfigs` for other inputs, such as stdin or a session's working directory) before the first file starts, and build engines through `CreateEngine` (or `ResolveEngineCapabilities` and `FileConfigVerdict`), which apply a config's grants only when its verdict accepts them. See [Permissions — Config trust](../permissions.md#config-trust).
+6. Register the build target in `build.pas` and add the binary path to `scripts/test-cli/binaries.ts`.
+7. Add CLI behavior coverage under `scripts/test-cli-*.ts`; see [Testing](../testing.md) for which harness owns what.

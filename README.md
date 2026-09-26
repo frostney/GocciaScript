@@ -255,6 +255,8 @@ GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, c
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
 
+Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
+
 The test runner supports Vitest-compatible external and inline snapshots,
 property shapes, asymmetric matchers, custom serializers, and `-u` updates.
 Importing `vi` from `"vitest"` resolves to a bundled compatibility shim, so

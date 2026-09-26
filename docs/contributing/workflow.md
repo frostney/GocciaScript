@@ -6,7 +6,7 @@
 
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Branch workflow** — Branch from `main`, implement with [implementation principles](../../CONTRIBUTING.md#implementation-principles), [critical rules](../../CONTRIBUTING.md#critical-rules), and [code style](code-style.md), add tests, update docs, commit
-- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`
+- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`. Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes
 
 ## Local setup
 
@@ -105,5 +105,7 @@ the newest run — a dispatched run belongs to the commit it started from.
 ./build/GocciaTestRunner tests
 ./build/GocciaTestRunner tests --mode=bytecode
 ```
+
+Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
 
 For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).

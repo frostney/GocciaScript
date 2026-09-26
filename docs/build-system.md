@@ -372,6 +372,18 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 }
 ```
 
+**Config trust** — A config's `allow-*` permissions and `unsafe-*` keys are requests: they take effect only once trusted, while every other key (`compat-*`, limits, import maps, aliases, and `deny-*` permissions) applies automatically. Before any file runs, the CLI checks every config that governs its inputs; an untrusted one fails the run with status 2 and a report naming each config and the command that would fix it. Trust is recorded in a per-user store outside the repository:
+
+```bash
+./build/GocciaTestRunner --trust tests/          # review and trust every config under tests/
+./build/GocciaTestRunner --list-trusted          # what is trusted, and what changed since
+./build/GocciaTestRunner --untrust tests/        # forget it again
+./build/GocciaTestRunner -P tests                # accept the requests for this run only (CI)
+./build/GocciaTestRunner --ignore-config-permissions tests   # command-line grants only
+```
+
+The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every CLI tool. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
+
 TOML equivalent (`goccia.toml`):
 
 ```toml

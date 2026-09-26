@@ -50,6 +50,14 @@ The remaining kinds report engine features that are not capabilities:
 | `function.constructor` | Dynamic Function construction was allowed or denied |
 | `shadow-realm.construct` | An installed ShadowRealm constructor was invoked |
 | `sandbox.fs.path` | A sandbox path attempted to cross above the virtual root |
+| `config.permissions` | A host's [trust](permissions.md#config-trust) decision on a config's permission requests; `subject` is the config path |
+
+The CLI emits one `config.permissions` event per config that requests a grant,
+before any file runs and before the engines' own events. `allow` reasons are
+`trusted sha256:<hex>`, `accepted for this run (-P)`, and `not needed:
+<Program> honors none of these requests`; `deny` reasons are `not trusted`,
+`changed since trusted`, and `ignored (--ignore-config-permissions)`. A denied
+config still contributes its `deny-*` permissions.
 
 `net.fetch` subjects contain only the checked host. URL user information,
 paths, and query parameters are not included in host-authorization events.
@@ -72,7 +80,11 @@ otherwise just before the engine's first other event. Child contexts that
 inherit the set — ShadowRealm realms and sandbox `runScript` children — do not
 repeat it. Its `subject` is
 `TGocciaCapabilities.ToJSON`: one object per layer, each with `allowAll`,
-`allow`, `denyAll`, and `deny` for every capability.
+`allow`, `denyAll`, and `deny` for every capability. Its `reason` is the
+engine's `CapabilityProvenance` when the host sets one; the CLI records the
+command-line grants and the governing config's trust decision, such as
+`cli --allow-read=data; config /repo/goccia.json trusted sha256:<hex>`, or
+`defaults` when neither contributes.
 
 `import.node-modules` subjects are the bare specifier; the reason carries the
 ceiling the walk was bounded by. See [Module Resolution](module-resolution.md)

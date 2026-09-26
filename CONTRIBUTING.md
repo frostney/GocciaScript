@@ -79,6 +79,8 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
   ./build/GocciaTestRunner tests --mode=bytecode
   ```
 
+  Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
+
 See [docs/testing.md](docs/testing.md) for the full testing guide including directory structure, naming conventions, and platform-specific rules.
 
 ### 4. Language Profile and Restrictions
