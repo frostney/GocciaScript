@@ -81,10 +81,13 @@ ignored on both sides, for names and IPv4 literals alike, so
 `tracker.example.com.` is the host `tracker.example.com` and `127.0.0.1.` the
 address `127.0.0.1`. An IP or CIDR scope matches only a URL that names an
 address; host names are never resolved to match one. An IPv4-mapped IPv6
-address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names, and
-an IP or CIDR scope also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names. An IP
+or CIDR **deny** also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
 (`2002::/16`) address reaches: a deny on `169.254.169.254` covers
-`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`.
+`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`. An **allow** does not extend that
+way — a 6to4 prefix names a relay site, not the IPv4 host, and NAT64 follows
+the same rule — so allowing `10.0.0.5` does not allow `2002:a00:5::1` or
+`64:ff9b::a00:5`; name those spellings explicitly to reach them.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address

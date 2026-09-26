@@ -94,8 +94,8 @@ begin
   Test('IPv4-mapped IPv6 literals are judged as IPv4', TestNetMappedIPv6);
   Test('NAT64, 6to4, and IPv4-compatible forms of private addresses stay ' +
     'private', TestNetEmbeddedIPv4Ranges);
-  Test('IP and CIDR scopes match the IPv4 host a NAT64 or 6to4 address ' +
-    'embeds', TestNetEmbeddedIPv4Scopes);
+  Test('IP and CIDR denies match the IPv4 host a NAT64 or 6to4 address ' +
+    'embeds; allows do not', TestNetEmbeddedIPv4Scopes);
   Test('A trailing dot on an IP-literal scope names the same address',
     TestNetIPLiteralTrailingDot);
   Test('A /0 range covers every address, private ones included',
@@ -776,13 +776,22 @@ begin
   { The IPv6 spelling of an address outside the range stays allowed. }
   Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::808:808'))
     .ToBe(True);
-  { An explicit IPv4 range names the private hosts it embeds. }
-  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '10.0.0.0/8');
+  { An IPv4 allow does not reach its translated spellings: 2002:a00:5::/48
+    names a 6to4 relay site, not the host 10.0.0.5. NAT64 behaves the same. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, '10.0.0.5');
+  Expect<Boolean>(Capabilities.AllowsNetHost('10.0.0.5', 80)).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a00:5::1]', 80))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('2002:a00:5::1'))
+    .ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:5'))
+    .ToBe(False);
+  { Nor does an IPv4 range name the private hosts they translate to. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet)
+    .Allow(gcNet, '10.0.0.0/8');
   Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::a00:1'))
-    .ToBe(True);
+    .ToBe(False);
   Expect<Boolean>(Capabilities.AllowsNetHost('[2002:a00:1::1]', 80))
-    .ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsNetAddress('64:ff9b::c0a8:101'))
     .ToBe(False);
 end;
 
