@@ -37,9 +37,9 @@ and builds; `prebuild` fills it in. `/api/versions` reports what a deployment
 actually vendored.
 
 A build **fails** when the vendored set has no stable release, or none that
-advertises `--no-host-filesystem` on both binaries — a playground offering
-only `nightly` is a broken playground, not a degraded one. Individual tag
-failures stay warnings. Override with `ALLOW_NIGHTLY_ONLY_PLAYGROUND=1` only
+advertises `--deny-read` (or, before 0.14.0, `--no-host-filesystem`) on both
+binaries — a playground offering only `nightly` is a broken playground, not a
+degraded one. Individual tag failures stay warnings. Override with `ALLOW_NIGHTLY_ONLY_PLAYGROUND=1` only
 when shipping without a stable engine is intended.
 
 ### Releases reach the site
