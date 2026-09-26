@@ -1,4 +1,8 @@
 {
   "extends": "../goccia.json",
-  "allow-node-modules": true
+  "permissions": {
+    "allow-import": [
+      "node_modules=."
+    ]
+  }
 }
