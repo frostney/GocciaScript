@@ -57,6 +57,7 @@ type
   private
     FPath: string;
     FCaseInsensitive: Boolean;
+    FPrivateDirectory: Boolean;
     FEntries: array of TGocciaTrustEntry;
     FChanges: array of TChange;
     function IndexOf(const AKey: string): Integer;
@@ -99,6 +100,11 @@ type
     function Count: Integer;
     function EntryAt(const AIndex: Integer): TGocciaTrustEntry;
     property Path: string read FPath;
+    { Save makes the store's directory private (0700) even when it already
+      exists. True for the per-user default store, whose directory is its
+      own; a --trust-store directory is the user's and is left alone. }
+    property PrivateDirectory: Boolean read FPrivateDirectory
+      write FPrivateDirectory;
   end;
 
   { How a run treats config permission requests. }
@@ -296,6 +302,9 @@ const
   TEMPORARY_SUFFIX = '.tmp';
   LOCK_TIMEOUT_MILLISECONDS = 2000;
   LOCK_RETRY_MILLISECONDS = 50;
+  { A lock older than this, or whose process is gone, was left by a writer
+    that crashed: writers hold it for milliseconds. }
+  LOCK_STALE_SECONDS = 60;
   REPORT_INDENT = '  ';
   REPORT_DETAIL_INDENT = '    ';
   MAX_LISTED_TRUST_TARGETS = 3;
@@ -641,6 +650,8 @@ begin
   inherited Create;
   FPath := APath;
   FCaseInsensitive := ACaseInsensitive;
+  FPrivateDirectory := (APath <> '') and
+    SameFileName(APath, DefaultPath(nil));
 end;
 
 class function TGocciaTrustStore.DefaultPathFor(
@@ -1011,30 +1022,146 @@ begin
 end;
 {$IFEND}
 
+function UnixNow: Int64;
+begin
+  Result := DateTimeToUnix(LocalTimeToUniversal(Now));
+end;
+
+{ `<pid> <unix seconds>`: who holds the lock and since when, so a lock a
+  crashed writer left behind can be recognized. }
+procedure RecordLockOwner(const ALockPath: string);
+var
+  Stream: TFileStream;
+  Owner: TBytes;
+begin
+  Owner := EncodeUTF8WithReplacement(IntToStr(GetProcessID) + ' ' +
+    IntToStr(UnixNow) + sLineBreak);
+  try
+    Stream := TFileStream.Create(ALockPath, fmOpenWrite or fmShareDenyNone);
+    try
+      Stream.WriteBuffer(Owner[0], Length(Owner));
+    finally
+      Stream.Free;
+    end;
+  except
+    { The lock still excludes other writers; only staleness detection is
+      weaker without an owner. }
+    on E: EStreamError do;
+  end;
+end;
+
+function ProcessIsGone(const AProcessID: Int64): Boolean;
+begin
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  Result := (AProcessID > 0) and (AProcessID <= High(TPid)) and
+    (fpKill(TPid(AProcessID), 0) <> 0) and (fpgeterrno = ESysESRCH);
+  {$ELSE}
+  { Without a portable liveness probe the age alone decides. }
+  Result := False;
+  {$IFEND}
+end;
+
+{ Whether the lock at ALockPath was left by a writer that no longer holds
+  it: its process is gone, or it is older than LOCK_STALE_SECONDS. AOwner is
+  the lock's content that was judged; AReason says why it is stale. }
+function LockIsStale(const ALockPath: string; out AOwner,
+  AReason: string): Boolean;
+var
+  Owner: string;
+  Separator: Integer;
+  ProcessID, Since: Int64;
+  Modified: TDateTime;
+begin
+  Result := False;
+  AReason := '';
+  try
+    AOwner := ReadUTF8FileText(ALockPath);
+  except
+    { Gone, or unreadable: let the next attempt decide. }
+    on E: Exception do
+      Exit(False);
+  end;
+  Owner := Trim(AOwner);
+  Separator := Pos(' ', Owner);
+  if (Separator > 1) and
+     TryStrToInt64(Copy(Owner, 1, Separator - 1), ProcessID) and
+     TryStrToInt64(Copy(Owner, Separator + 1, MaxInt), Since) then
+  begin
+    if ProcessIsGone(ProcessID) then
+    begin
+      AReason := Format('process %d that held it is gone', [ProcessID]);
+      Exit(True);
+    end;
+    if UnixNow - Since > LOCK_STALE_SECONDS then
+    begin
+      AReason := Format('held for more than %d seconds',
+        [LOCK_STALE_SECONDS]);
+      Exit(True);
+    end;
+    Exit(False);
+  end;
+  { No owner recorded: judge by the file's age. }
+  if FileAge(ALockPath, Modified) and
+     (SecondsBetween(Now, Modified) > LOCK_STALE_SECONDS) then
+  begin
+    AReason := Format('no owner recorded and older than %d seconds',
+      [LOCK_STALE_SECONDS]);
+    Result := True;
+  end;
+end;
+
+{ Removes a stale lock, unless another writer replaced it meanwhile. }
+function RemoveStaleLock(const ALockPath: string): Boolean;
+var
+  Owner, Reason, Current: string;
+begin
+  Result := False;
+  if not LockIsStale(ALockPath, Owner, Reason) then
+    Exit;
+  try
+    Current := ReadUTF8FileText(ALockPath);
+  except
+    on E: Exception do
+      Exit;
+  end;
+  if (Current = Owner) and DeleteFile(ALockPath) then
+  begin
+    WriteLn(ErrOutput, Format('Warning: removed stale trust store lock %s ' +
+      '(%s)', [ALockPath, Reason]));
+    Result := True;
+  end;
+end;
+
 procedure TGocciaTrustStore.WriteFile;
 var
   Error: string;
 begin
+  { Private from creation: the temporary is 0600 before it is renamed. }
   if not ReplaceHostFile(FPath, FPath + '.' + IntToStr(GetProcessID) +
-     TEMPORARY_SUFFIX, EncodeUTF8WithReplacement(Serialize), Error) then
+     TEMPORARY_SUFFIX, EncodeUTF8WithReplacement(Serialize), STORE_FILE_MODE,
+     Error) then
     raise EGocciaTrustStoreError.CreateFmt('cannot write trust store %s: %s',
       [FPath, Error]);
-  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-  fpChmod(FPath, STORE_FILE_MODE);
-  {$IFEND}
 end;
 
 procedure TGocciaTrustStore.Save;
 var
-  LockPath: string;
+  LockPath, Directory: string;
   Waited: Integer;
   I: Integer;
 begin
-  CreateStoreDirectory(ExtractFileDir(FPath));
+  Directory := ExtractFileDir(FPath);
+  CreateStoreDirectory(Directory);
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  if FPrivateDirectory then
+    fpChmod(Directory, STORE_DIRECTORY_MODE);
+  {$IFEND}
   LockPath := FPath + LOCK_SUFFIX;
   Waited := 0;
   while not TryCreateLockFile(LockPath) do
   begin
+    if RemoveStaleLock(LockPath) then
+      Continue;
     if Waited >= LOCK_TIMEOUT_MILLISECONDS then
       raise EGocciaTrustStoreError.CreateFmt(
         'trust store %s is locked by another process (%s exists); retry, or ' +
@@ -1043,6 +1170,7 @@ begin
     Sleep(LOCK_RETRY_MILLISECONDS);
     Inc(Waited, LOCK_RETRY_MILLISECONDS);
   end;
+  RecordLockOwner(LockPath);
   try
     { Another writer may have changed the file since it was read: apply
       this store's changes to the file as it is now. }

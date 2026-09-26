@@ -6,6 +6,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes,
+  DateUtils,
   SysUtils,
 
   CLI.ConfigFile,
@@ -33,6 +34,9 @@ type
     procedure TestSymlinkedDirectoryHashesAtItsTarget;
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestLockContention;
+    function SaveWithLock(const AName, ALockContent: string): string;
+    procedure TestStaleLocksAreReplaced;
+    procedure TestPrivateDirectoryIsTightened;
     procedure TestSaveMergesConcurrentChanges;
     procedure TestRemoveAtOrUnderRespectsBoundaries;
     procedure TestDefaultPathPerPlatform;
@@ -101,6 +105,9 @@ begin
     TestNewerAndCorruptStoresRefused);
   Test('A held lock fails with a message naming the lock file',
     TestLockContention);
+  Test('A stale lock is replaced; a live one is not', TestStaleLocksAreReplaced);
+  Test('The default store''s directory is made private',
+    TestPrivateDirectoryIsTightened);
   Test('Save applies its changes to the store as it is on disk',
     TestSaveMergesConcurrentChanges);
   Test('RemoveAtOrUnder stops at directory boundaries',
@@ -460,6 +467,91 @@ begin
     .ToBe('{"version": 1, "trusted": {}}');
   Expect<Boolean>(FileExists(StorePath + '.lock')).ToBe(True);
 end;
+
+function TTrustTests.SaveWithLock(const AName, ALockContent: string): string;
+var
+  StorePath: string;
+  Store: TGocciaTrustStore;
+  Entry: TGocciaTrustEntry;
+begin
+  Result := '';
+  StorePath := FRoot + PathDelim + 'stale-' + AName + PathDelim +
+    'trust.json';
+  ForceDirectories(ExtractFileDir(StorePath));
+  WriteUTF8FileText(StorePath + '.lock', ALockContent);
+  Entry := Default(TGocciaTrustEntry);
+  Entry.ConfigPath := ExtractFileDir(StorePath) + PathDelim + 'goccia.json';
+  Entry.Hash := 'abc';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(Entry);
+    try
+      Store.Save;
+      Result := 'saved';
+    except
+      on E: EGocciaTrustStoreError do
+        Result := E.Message;
+    end;
+  finally
+    Store.Free;
+  end;
+end;
+
+function UnixSecondsAgo(const ASeconds: Integer): string;
+begin
+  Result := IntToStr(DateTimeToUnix(LocalTimeToUniversal(Now)) - ASeconds);
+end;
+
+procedure TTrustTests.TestStaleLocksAreReplaced;
+const
+  VANISHED_PROCESS = '999999999';
+begin
+  { A crashed writer's lock: its process is gone. }
+  Expect<string>(SaveWithLock('gone', VANISHED_PROCESS + ' ' +
+    UnixSecondsAgo(0))).ToBe('saved');
+  Expect<Boolean>(FileExists(FRoot + PathDelim + 'stale-gone' + PathDelim +
+    'trust.json.lock')).ToBe(False);
+  { A live process, but held for far longer than any write takes. }
+  Expect<string>(SaveWithLock('old', IntToStr(GetProcessID) + ' ' +
+    UnixSecondsAgo(3600))).ToBe('saved');
+  { A live, recent owner still excludes the writer. }
+  Expect<Boolean>(Pos('is locked by another process', SaveWithLock('live',
+    IntToStr(GetProcessID) + ' ' + UnixSecondsAgo(0))) > 0).ToBe(True);
+end;
+
+procedure TTrustTests.TestPrivateDirectoryIsTightened;
+{$IFDEF UNIX}
+const
+  OPEN_DIRECTORY = &755;
+  PRIVATE_DIRECTORY = &700;
+  PERMISSION_BITS = &777;
+var
+  Directory: string;
+  Store: TGocciaTrustStore;
+  Info: Stat;
+begin
+  Directory := FRoot + PathDelim + 'tighten';
+  ForceDirectories(Directory);
+  fpChmod(Directory, OPEN_DIRECTORY);
+  Store := TGocciaTrustStore.Load(Directory + PathDelim + 'trust.json');
+  try
+    Expect<Boolean>(Store.PrivateDirectory).ToBe(False);
+    Store.Save;
+    Expect<Integer>(FpStat(Directory, Info)).ToBe(0);
+    Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(OPEN_DIRECTORY);
+    Store.PrivateDirectory := True;
+    Store.Save;
+    Expect<Integer>(FpStat(Directory, Info)).ToBe(0);
+    Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(PRIVATE_DIRECTORY);
+  finally
+    Store.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
 
 procedure TTrustTests.TestSaveMergesConcurrentChanges;
 var

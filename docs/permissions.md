@@ -561,11 +561,16 @@ runs with its permissions.
 Keys are compared case-insensitively on macOS and Windows. The stored `block`
 is only used to show what changed; grants always come from the current file,
 and only when its hash matches. The directory is created private to the user
-(`0700`) and the file is `0600`. A run reads the store once and never locks
-it. A writer takes an exclusive `trust.json.lock` (retrying for 2 seconds, then
-failing with an error that names the lock file), applies its changes to the
-store as it is on disk at that moment, and replaces the file in one rename, so
-concurrent readers and writers always see a whole store.
+(`0700`), and the per-user default directory is made private again if it is
+not; a `--trust-store` directory is left as it is. The file is written `0600`
+from creation, before it replaces the store. A run reads the store once and
+never locks it. A writer takes an exclusive `trust.json.lock` (retrying for 2
+seconds, then failing with an error that names the lock file), applies its
+changes to the store as it is on disk at that moment, and replaces the file in
+one rename, so concurrent readers and writers always see a whole store. The
+lock records its writer's process ID and start time; a lock whose process is
+gone, or that is older than 60 seconds, was left by a writer that crashed, and
+is removed with a warning.
 
 A missing store is empty. A store that is not JSON, or that a newer
 GocciaScript wrote, is an error for `--trust`, `--untrust`, and
