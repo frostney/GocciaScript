@@ -85,9 +85,12 @@ that started it. The HTTP worker never calls the sink.
 
 An engine does not wait for requests the script aborted: when `Execute`
 returns it discards them, and a worker that reports afterwards has no one to
-report to. So an abort records a `net.fetch` `allow` event of its own, whose
-subject is the request URL and whose reason says the request was aborted and
-that hop decisions reported after the engine ends are not audited. Decisions
+report to. So an abort records a `net.fetch` event of its own. Its subject is
+the request's host, as for every `net.fetch` event (never the URL's path or
+query), and its reason starts with `abandoned:` and says that hop decisions
+reported after the engine ends are not audited. Its decision is `allow`,
+because the request was allowed and dispatched; the `abandoned:` tag is what
+tells it apart from a destination check. Decisions
 that do arrive while the engine still runs follow it as usual. The log never
 silently stops at an aborted request's `net.dispatch`.
 

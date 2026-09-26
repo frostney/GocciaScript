@@ -125,8 +125,10 @@ const
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_LIMIT_ERROR = 'fetch worker limit exceeded';
-  FETCH_ABANDONED_AUDIT_REASON = 'the request was aborted; hop decisions ' +
-    'its worker reports after the engine ends are not audited';
+  { The decision stays allow — the request was allowed and dispatched — and
+    the `abandoned:` tag tells this event apart from a destination check. }
+  FETCH_ABANDONED_AUDIT_REASON = 'abandoned: the request was aborted; hop ' +
+    'decisions its worker reports after the engine ends are not audited';
 
 type
   { One net decision a worker made for a hop, replayed to the audit sink on
@@ -188,7 +190,9 @@ type
     RequestID: Integer;
     AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
     AuditSource: TGocciaCapabilityAuditSource;
-    // The request URL, the subject of the abandonment event an abort records.
+    // The request's host, the subject of the abandonment event an abort
+    // records, as it is of every net.fetch event (never the URL's path or
+    // query).
     AuditSubject: string;
     // Realm of the engine that started the request; see TGocciaFetchManager.
     Realm: TGocciaRealm;
@@ -618,7 +622,12 @@ begin
   Pending.Realm := ARealm;
   Pending.AuditEmitter := APolicy.AuditEmitter;
   Pending.AuditSource := APolicy.AuditSource;
-  Pending.AuditSubject := AURL;
+  try
+    Pending.AuditSubject := HTTPURLAuditHost(AURL);
+  except
+    on EHTTPError do
+      Pending.AuditSubject := '';
+  end;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;

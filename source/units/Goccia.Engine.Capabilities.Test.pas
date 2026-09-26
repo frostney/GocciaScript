@@ -60,6 +60,7 @@ type
     FOutside: string;
     FEvents: TStringList;
     FEventSources: TStringList;
+    FEventReasons: TStringList;
     FAuditedHopIndex: Integer;
     FVirtualModuleName: string;
     FVirtualModuleSource: string;
@@ -244,12 +245,14 @@ begin
     'export const detail = "linked";');
   FEvents := TStringList.Create;
   FEventSources := TStringList.Create;
+  FEventReasons := TStringList.Create;
 end;
 
 procedure TEngineCapabilitiesTests.AfterAll;
 begin
   FEvents.Free;
   FEventSources.Free;
+  FEventReasons.Free;
   DeleteTree(FRoot);
   inherited AfterAll;
 end;
@@ -259,6 +262,7 @@ begin
   inherited BeforeEach;
   FEvents.Clear;
   FEventSources.Clear;
+  FEventReasons.Clear;
   FVirtualModuleName := '';
   FVirtualModuleSource := '';
 end;
@@ -268,6 +272,7 @@ procedure TEngineCapabilitiesTests.RecordEvent(
 begin
   FEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
     CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
+  FEventReasons.Add(AEvent.Reason);
   FEventSources.Add(ExtractFileName(AEvent.Source.FilePath) + ':' +
     IntToStr(AEvent.Source.Line));
 end;
@@ -777,7 +782,9 @@ begin
   { capabilities.effective, the name check, net.dispatch, the abandonment
     the abort records, then the replayed address check. }
   Expect<Integer>(FAuditedHopIndex).ToBe(4);
-  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|http://localhost:1/');
+  { The abandonment names the host, like every net.fetch event. }
+  Expect<string>(FEvents[3]).ToBe('net.fetch|allow|localhost');
+  Expect<Boolean>(Pos('abandoned: ', FEventReasons[3]) = 1).ToBe(True);
   Expect<string>(FEventSources[4]).ToBe('abort.mjs:2');
 end;
 
@@ -1319,12 +1326,13 @@ var
   Source: TStringList;
   Executor: TGocciaInterpreterExecutor;
   Engine: TGocciaEngine;
-  EventIndex: Integer;
+  EventIndex, Index: Integer;
 begin
   Source := TStringList.Create;
   Source.Text :=
     'const controller = new AbortController();' + sLineBreak +
-    'fetch("http://localhost:1/", { signal: controller.signal })' +
+    'fetch("http://localhost:1/private?token=secret",' +
+    ' { signal: controller.signal })' +
     '.catch(() => {});' + sLineBreak +
     'controller.abort();';
   Executor := TGocciaInterpreterExecutor.Create;
@@ -1340,10 +1348,17 @@ begin
     Executor.Free;
     Source.Free;
   end;
-  EventIndex := FEvents.IndexOf('net.fetch|allow|http://localhost:1/');
+  EventIndex := -1;
+  for Index := 0 to FEvents.Count - 1 do
+    if Pos('abandoned: ', FEventReasons[Index]) = 1 then
+      EventIndex := Index;
   Expect<Boolean>(EventIndex >= 0).ToBe(True);
   if EventIndex >= 0 then
+  begin
+    { The subject is the host, never the URL with its path and query. }
+    Expect<string>(FEvents[EventIndex]).ToBe('net.fetch|allow|localhost');
     Expect<string>(FEventSources[EventIndex]).ToBe('end.mjs:2');
+  end;
 end;
 
 begin
