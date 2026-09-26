@@ -68,6 +68,7 @@ type
     procedure TestHostLoadedModuleOutsideProjectIsExempt;
     procedure TestReadGrantCoversOutsidePath;
     procedure TestMissingOutsideFileIsDeniedBeforeProbing;
+    procedure TestExtensionProbingCannotRevealDeniedFiles;
     procedure TestComputedDynamicImportNeedsRead;
     procedure TestLiteralDynamicImportIsExempt;
     procedure TestComputedImportInBytecodeNeedsRead;
@@ -97,6 +98,8 @@ begin
     TestReadGrantCoversOutsidePath);
   Test('A missing file outside the project is denied before probing',
     TestMissingOutsideFileIsDeniedBeforeProbing);
+  Test('Extension probing cannot reveal whether a denied file exists',
+    TestExtensionProbingCannotRevealDeniedFiles);
   Test('A computed dynamic import needs a read grant',
     TestComputedDynamicImportNeedsRead);
   Test('A literal dynamic import inside the project needs no grant',
@@ -392,6 +395,23 @@ begin
   Outcome := Run('import "../outside/missing.js";', TGocciaCapabilities.None);
   Expect<string>(Outcome.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Outcome.ErrorMessage).ToBe('read: ../outside/missing.js');
+end;
+
+procedure TEngineCapabilitiesTests.TestExtensionProbingCannotRevealDeniedFiles;
+var
+  Existing, Missing: TRunOutcome;
+  Capabilities: TGocciaCapabilities;
+begin
+  { lib.js exists and absent.js does not; both are denied. An extensionless
+    import of either must fail the same way, before the resolver probes. }
+  Capabilities := TGocciaCapabilities.None
+    .Deny(gcRead, ProjectPath('lib.js'))
+    .Deny(gcRead, ProjectPath('absent.js'));
+  Existing := Run('import "./lib";', Capabilities);
+  Missing := Run('import "./absent";', Capabilities);
+  Expect<string>(Existing.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Missing.ErrorName).ToBe('PermissionDenied');
+  Expect<string>(Missing.ErrorMessage).ToBe('read: ./absent');
 end;
 
 procedure TEngineCapabilitiesTests.TestComputedDynamicImportNeedsRead;

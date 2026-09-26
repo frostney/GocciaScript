@@ -98,6 +98,8 @@ type
       const AIsLiteral, AIsHostOwned, APreResolution: Boolean);
     procedure PreCheckHostRead(const ASpecifier, AImportingFilePath: string;
       const AIsLiteral: Boolean);
+    function DeniedProbeCandidate(const ACandidate: string;
+      out ADeniedPath: string): Boolean;
     function IsHostOwnedImporter(const AImportingFilePath: string): Boolean;
 
     procedure CopyModuleContents(const ASourceModule,
@@ -280,6 +282,7 @@ uses
   Goccia.ImportMeta,
   Goccia.JSON,
   Goccia.Keywords.Reserved,
+  Goccia.ModuleResolver,
   Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
@@ -801,10 +804,48 @@ begin
       'a read grant covers the path');
 end;
 
+{ Every path the resolver could probe for ACandidate: the candidate itself,
+  its TypeScript sources, and each resolver extension, directly and as an
+  index file. True when a deny covers one of them, so the request is refused
+  before the resolver reveals whether a denied file exists. }
+function TGocciaModuleLoader.DeniedProbeCandidate(const ACandidate: string;
+  out ADeniedPath: string): Boolean;
+var
+  Extensions: TModuleResolverExtensionArray;
+  TypeScriptCandidates: TFileExtensionArray;
+  I: Integer;
+
+  function Denies(const APath: string): Boolean;
+  begin
+    Result := FCapabilities.DeniesPath(gcRead, APath);
+    if Result then
+      ADeniedPath := APath;
+  end;
+
+begin
+  ADeniedPath := '';
+  if Denies(ACandidate) then
+    Exit(True);
+  TypeScriptCandidates := TypeScriptSourceCandidates(ACandidate);
+  for I := 0 to High(TypeScriptCandidates) do
+    if Denies(TypeScriptCandidates[I]) then
+      Exit(True);
+  if Assigned(FResolver) then
+  begin
+    Extensions := FResolver.GetExtensions;
+    for I := 0 to High(Extensions) do
+      if Denies(ACandidate + Extensions[I]) or
+         Denies(IncludeTrailingPathDelimiter(ACandidate) + 'index' +
+           Extensions[I]) then
+        Exit(True);
+  end;
+  Result := False;
+end;
+
 procedure TGocciaModuleLoader.PreCheckHostRead(const ASpecifier,
   AImportingFilePath: string; const AIsLiteral: Boolean);
 var
-  BaseDirectory, Candidate, VirtualAddress: string;
+  BaseDirectory, Candidate, DeniedPath, VirtualAddress: string;
 begin
   if not EnforcesHostReads then
     Exit;
@@ -829,6 +870,8 @@ begin
     before loading), or one it imports, is host-owned and never checked. }
   if IsHostOwnedLoad(ExpandFileName(Candidate), AImportingFilePath) then
     Exit;
+  if DeniedProbeCandidate(ExpandFileName(Candidate), DeniedPath) then
+    EnforceHostRead(ASpecifier, DeniedPath, AIsLiteral, False, True);
   EnforceHostRead(ASpecifier, ExpandFileName(Candidate), AIsLiteral, False,
     True);
 end;
