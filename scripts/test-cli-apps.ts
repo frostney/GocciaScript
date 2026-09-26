@@ -6225,6 +6225,42 @@ await section("SandboxRunner: deterministic nested engines use stable distinct s
   }
 });
 
+await section("SandboxRunner: a runScript child's stderr carries no host-side suggestion...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "suggestion-seed.json");
+    // The child's uncaught PermissionDenied becomes the parent guest's
+    // `stderr` string. Its suggestion names the CLI option that would grant
+    // the host and is meant for the host alone.
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import { runScript } from "goccia";',
+            'const child = runScript("/child.js");',
+            "console.log(JSON.stringify(child.stderr));",
+          ].join("\n"),
+        },
+        { path: "/child.js", text: 'fetch("http://example.com/");' },
+      ],
+    }));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0 || !stdout.includes("PermissionDenied: net: example.com"))
+        throw new Error(`SandboxRunner ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
+      if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
+        throw new Error(`SandboxRunner ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("SandboxRunner: inline seeds, fs, $, runScript, and diffs...", async () => {
   const tmp = makeTmp();
   try {
