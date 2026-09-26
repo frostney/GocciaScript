@@ -43,15 +43,19 @@ type
   private
     FThrownValue: TGocciaValue;
     FSuggestion: string;
+    FSuggestionIsHostOnly: Boolean;
   public
     constructor Create(const AThrownValue: TGocciaValue;
-      const ASuggestion: string = '');
+      const ASuggestion: string = '';
+      const ASuggestionIsHostOnly: Boolean = False);
     property ThrownValue: TGocciaValue read FThrownValue;
     { The engine-authored "Suggestion:" line of the diagnostic, carried across
       the VM unwind so a throw that escapes to a host runner renders the same
       hint the tree-walk evaluator's TGocciaThrowValue would. Empty for a
       user-authored `throw`. }
     property Suggestion: string read FSuggestion;
+    { See TGocciaThrowValue.SuggestionIsHostOnly. }
+    property SuggestionIsHostOnly: Boolean read FSuggestionIsHostOnly;
   end;
 
 // A JS throw escaping the bytecode VM through a native builtin arrives as
@@ -85,7 +89,8 @@ procedure ReraiseBytecodeThrow(const AException: Exception);
 begin
   if AException is EGocciaBytecodeThrow then
     raise TGocciaThrowValue.Create(EGocciaBytecodeThrow(AException).ThrownValue,
-      EGocciaBytecodeThrow(AException).Suggestion);
+      EGocciaBytecodeThrow(AException).Suggestion,
+      EGocciaBytecodeThrow(AException).SuggestionIsHostOnly);
 end;
 
 function UnwrapThrownValue(const AException: Exception;
@@ -169,7 +174,7 @@ begin
 end;
 
 constructor EGocciaBytecodeThrow.Create(const AThrownValue: TGocciaValue;
-  const ASuggestion: string);
+  const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
 var
   MessageText: string;
   ErrorObject: TGocciaObjectValue;
@@ -194,6 +199,7 @@ begin
   inherited Create(MessageText);
   FThrownValue := AThrownValue;
   FSuggestion := ASuggestion;
+  FSuggestionIsHostOnly := ASuggestionIsHostOnly;
 end;
 
 end.

@@ -19,6 +19,7 @@ type
   private
     function CreateSourceLines: TStringList;
     function CreateSingleLineSource: TStringList;
+    procedure TestGuestBoundOutputDropsHostOnlySuggestions;
     procedure TestGetDetailedMessageShowsJSFriendlyErrorName;
     procedure TestGetDetailedMessageShowsLocation;
     procedure TestGetDetailedMessageShowsContextLinesBefore;
@@ -92,6 +93,8 @@ begin
     TestErrorDisplayNameMapsReferenceErrorCorrectly);
   Test('GetDetailedMessage handles single source line',
     TestGetDetailedMessageHandlesSingleSourceLine);
+  Test('Guest-bound FormatThrowDetail drops a host-only suggestion whatever ' +
+    'value was thrown', TestGuestBoundOutputDropsHostOnlySuggestions);
   Test('FormatThrowDetail withholds a retained foreign excerpt without an ' +
     'explicit matching principal',
     TestFormatThrowDetailRequiresExpectedPrincipal);
@@ -735,6 +738,28 @@ begin
   end;
 end;
 
+
+{ A host-only suggestion must not reach output handed back to guest code,
+  even when the thrown value carries no error data to compare it with. }
+procedure TErrorTests.TestGuestBoundOutputDropsHostOnlySuggestions;
+const
+  HINT = 'the read capability does not cover /srv/secret';
+var
+  Thrown: TGocciaValue;
+  Output: string;
+begin
+  Thrown := TGocciaStringLiteralValue.Create('boom');
+  Output := FormatThrowDetail(Thrown, 'guest.js', nil, False, 0, HINT, True,
+    True);
+  Expect<Boolean>(Pos(HINT, Output) > 0).ToBe(False);
+  { Host output keeps it; so does guest output for an ordinary hint. }
+  Output := FormatThrowDetail(Thrown, 'guest.js', nil, False, 0, HINT, False,
+    True);
+  Expect<Boolean>(Pos(HINT, Output) > 0).ToBe(True);
+  Output := FormatThrowDetail(Thrown, 'guest.js', nil, False, 0, HINT, True,
+    False);
+  Expect<Boolean>(Pos(HINT, Output) > 0).ToBe(True);
+end;
 begin
   TestRunnerProgram.AddSuite(TErrorTests.Create('Error'));
   TestRunnerProgram.Run;
