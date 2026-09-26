@@ -2,7 +2,7 @@
 //
 // The fixture packages are committed under ./mods/nodemods/node_modules, so
 // bun resolves them natively and goccia resolves them under the
-// --allow-node-modules capability the suite's `gocciaFlags` entry carries.
+// --allow-import=node_modules capability the suite's `gocciaFlags` entry carries.
 // Every expectation here is one both runtimes must reach the same way; the
 // two goccia-specific behaviours live in n-nodemods.goccia.test.js.
 import {

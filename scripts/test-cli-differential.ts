@@ -42,7 +42,7 @@
  *   runtimes — is named `*.goccia.test.js` and is classified `skip` for both
  *   external runtimes, so only mode parity is checked for it.
  * - A differential suite that needs a goccia capability the default profile
- *   seals (today: `--allow-node-modules`) names it in its classification's
+ *   seals (today: `--allow-import=node_modules`) names it in its classification's
  *   `gocciaFlags`. The flag reaches only that suite, so enabling a capability
  *   for one file cannot silently change what the other suites are testing.
  *   External runtimes get no equivalent knob — a suite belongs here only when
@@ -152,7 +152,7 @@ const CLASSIFICATION: Record<string, Classification> = {
     kind: "language",
     bun: "gate",
     vitest: "skip",
-    gocciaFlags: ["--allow-node-modules"],
+    gocciaFlags: ["--allow-import=node_modules"],
   },
   // The two node_modules behaviours no external runtime shares: the
   // "module"-field preference (Node ignores the field; bun resolves that
@@ -163,7 +163,7 @@ const CLASSIFICATION: Record<string, Classification> = {
     kind: "language",
     bun: "skip",
     vitest: "skip",
-    gocciaFlags: ["--allow-node-modules"],
+    gocciaFlags: ["--allow-import=node_modules"],
   },
   // node:async_hooks context propagation. Bun gates: async-context propagation
   // is runtime semantics, not testing-API semantics, and bun implements
