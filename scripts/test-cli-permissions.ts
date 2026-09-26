@@ -107,6 +107,17 @@ console.log("Removed flags exit 2 and name their replacement...");
 
   const test262 = run(TEST262RUNNER, ["--timeout-ms=50"]);
   expectExit(test262, 2, "GocciaTest262Runner --timeout-ms");
+  // An invalid value is exit 1 there as everywhere else; only usage errors
+  // exit 2.
+  for (const [flag, message] of [
+    ["--timeout=5x", "Invalid value for --timeout: 5x"],
+    ["--max-memory=64MB", '"MB" is ambiguous'],
+    ["--jobs=many", "--jobs requires a non-negative integer"],
+  ] as const) {
+    const invalid = run(TEST262RUNNER, [flag]);
+    expectExit(invalid, 1, `GocciaTest262Runner ${flag}`);
+    expectIncludes(invalid.stderr, message, `GocciaTest262Runner ${flag}`);
+  }
   expectIncludes(test262.stderr, "Error: --timeout-ms was removed in GocciaScript 0.14.0; use --timeout instead (units: 20s)", "Test262 --timeout-ms");
 
   // Removed flags stay out of --help.
