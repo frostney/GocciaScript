@@ -35,6 +35,7 @@ type
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestLockContention;
     function SaveWithLock(const AName, ALockContent: string): string;
+    procedure TestTimestampIgnoresLocale;
     procedure TestStaleLocksAreReplaced;
     procedure TestPrivateDirectoryIsTightened;
     procedure TestSaveMergesConcurrentChanges;
@@ -105,6 +106,8 @@ begin
     TestNewerAndCorruptStoresRefused);
   Test('A held lock fails with a message naming the lock file',
     TestLockContention);
+  Test('Timestamps ignore the locale''s separators',
+    TestTimestampIgnoresLocale);
   Test('A stale lock is replaced; a live one is not', TestStaleLocksAreReplaced);
   Test('The default store''s directory is made private',
     TestPrivateDirectoryIsTightened);
@@ -500,6 +503,25 @@ end;
 function UnixSecondsAgo(const ASeconds: Integer): string;
 begin
   Result := IntToStr(DateTimeToUnix(LocalTimeToUniversal(Now)) - ASeconds);
+end;
+
+procedure TTrustTests.TestTimestampIgnoresLocale;
+var
+  Previous: TFormatSettings;
+  Stamp: string;
+begin
+  Previous := DefaultFormatSettings;
+  try
+    DefaultFormatSettings.TimeSeparator := '.';
+    DefaultFormatSettings.DateSeparator := '/';
+    Stamp := TrustTimestamp;
+  finally
+    DefaultFormatSettings := Previous;
+  end;
+  { yyyy-mm-ddThh:nn:ssZ whatever the locale's separators. }
+  Expect<Integer>(Length(Stamp)).ToBe(20);
+  Expect<string>(Stamp[5] + Stamp[8] + Stamp[11] + Stamp[14] + Stamp[17] +
+    Stamp[20]).ToBe('--T::Z');
 end;
 
 procedure TTrustTests.TestStaleLocksAreReplaced;

@@ -305,6 +305,11 @@ const
   { A lock older than this, or whose process is gone, was left by a writer
     that crashed: writers hold it for milliseconds. }
   LOCK_STALE_SECONDS = 60;
+  { Initial capacities: a normalized block, a whole store, a report. They
+    only size the first allocation; the buffers grow as needed. }
+  BLOCK_BUFFER_CAPACITY = 128;
+  STORE_BUFFER_CAPACITY = 256;
+  REPORT_BUFFER_CAPACITY = 512;
   REPORT_INDENT = '  ';
   REPORT_DETAIL_INDENT = '    ';
   MAX_LISTED_TRUST_TARGETS = 3;
@@ -417,8 +422,10 @@ end;
 
 function TrustTimestamp: string;
 begin
-  Result := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss"Z"',
-    LocalTimeToUniversal(Now));
+  { Separators are quoted literals and the settings invariant, so no locale
+    changes the stored text. }
+  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"',
+    LocalTimeToUniversal(Now), CreateInvariantFormatSettings);
 end;
 
 { ── Store reader ──────────────────────────────────────────────── }
@@ -565,7 +572,7 @@ begin
   begin
     FInBlock := True;
     FBlockDepth := FDepth;
-    FBlock := TStringBuffer.Create(128);
+    FBlock := TStringBuffer.Create(BLOCK_BUFFER_CAPACITY);
     FBlockContainers := '';
     BlockOpen('o', '{');
   end
@@ -919,7 +926,7 @@ begin
       Sorted.AddObject(FEntries[I].ConfigPath, TObject(NativeInt(I)));
     Sorted.Sort;
 
-    Buffer := TStringBuffer.Create(256);
+    Buffer := TStringBuffer.Create(STORE_BUFFER_CAPACITY);
     Buffer.Append('{' + sLineBreak);
     Buffer.Append('  "' + VERSION_KEY + '": ' + IntToStr(TRUST_STORE_VERSION) +
       ',' + sLineBreak);
@@ -1422,7 +1429,7 @@ var
   Paths: array of string;
   TrustCommand, Arguments, Target: string;
 begin
-  Buffer := TStringBuffer.Create(512);
+  Buffer := TStringBuffer.Create(REPORT_BUFFER_CAPACITY);
   if Length(AVerdicts) = 1 then
     Buffer.Append('1 config file requests permissions that have not been ' +
       'trusted:' + sLineBreak)
