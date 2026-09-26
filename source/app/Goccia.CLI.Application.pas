@@ -278,6 +278,8 @@ uses
 
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.Error.Suggestions,
+  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -289,6 +291,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Profiler,
+  Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
@@ -296,6 +299,7 @@ uses
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
@@ -1520,10 +1524,118 @@ end;
 procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
   const ADefinition, ABaseAddress: string); forward;
 
+{ A manifest a config file names is the repository's choice, not the user's,
+  so it is read under the capability set of the script the config governs
+  (ADR 0122): a file inside the project is part of the module graph, anything
+  else needs a read grant, and a read deny refuses it. ASpecifier is the path
+  as the config wrote it, which is all the refusal names. }
+procedure CheckConfiguredManifestRead(const AEngine: TGocciaEngine;
+  const APath, ASpecifier: string);
+var
+  CanonicalPath: string;
+  InProject: Boolean;
+begin
+  CanonicalPath := CanonicalCapabilityPath(APath);
+  InProject := (AEngine.ProjectRoot <> '') and
+    IsPathWithinScope(CanonicalPath, AEngine.ProjectRoot);
+  if AEngine.Capabilities.DeniesPath(gcRead, CanonicalPath) then
+  begin
+    AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
+      'read is denied for this path');
+    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
+      Format(SSuggestReadDenied, [CanonicalPath]));
+  end;
+  if InProject then
+    Exit;
+  if not AEngine.Capabilities.AllowsPath(gcRead, CanonicalPath) then
+  begin
+    AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
+      'the path is outside the project and no read grant covers it');
+    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
+      Format(SSuggestReadNotGranted, [CanonicalPath,
+        ExtractFileDir(CanonicalPath)]));
+  end;
+  AEngine.EmitCapabilityAudit(gckReadFile, gcdAllow, CanonicalPath,
+    'a read grant covers the path');
+end;
+
+{ A JavaScript or TypeScript manifest a config file names runs in an engine
+  of its own, with the capability set and project of the script it governs:
+  its imports are guest reads, judged like the script's, and whatever it
+  leaves on its global object stays there. Only its default export, as data,
+  reaches the script's engine. }
+procedure InjectModulesFromIsolatedManifest(const AEngine: TGocciaEngine;
+  const APath: string);
+var
+  Isolated: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Source: TStringList;
+  Module: TGocciaModule;
+  DefaultValue: TGocciaValue;
+  Stringifier: TGocciaJSONStringifier;
+  ManifestJSON, ModulePath: string;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Isolated := TGocciaEngine.Create(APath, Source, Executor,
+      AEngine.Capabilities);
+    try
+      Isolated.ProjectRoot := AEngine.ProjectRoot;
+      Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
+      Isolated.Preprocessors := AEngine.Preprocessors;
+      Isolated.Compatibility := AEngine.Compatibility;
+      Isolated.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
+      Isolated.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
+      Isolated.StrictTypes := AEngine.StrictTypes;
+      { The filesystem content provider, with every read it makes checked. }
+      AttachRuntime(Isolated);
+      Module := Isolated.ModuleLoader.LoadModule(APath, APath);
+      if not Module.TryGetExportValue(KEYWORD_DEFAULT, DefaultValue) then
+        raise EArgumentException.Create(
+          'Virtual modules manifest module must have a default export.');
+      ModulePath := Module.Path;
+      if TGarbageCollector.Instance <> nil then
+        TGarbageCollector.Instance.AddTempRoot(DefaultValue);
+      try
+        Stringifier := TGocciaJSONStringifier.Create;
+        try
+          ManifestJSON := Stringifier.Stringify(DefaultValue);
+        finally
+          Stringifier.Free;
+        end;
+      finally
+        if TGarbageCollector.Instance <> nil then
+          TGarbageCollector.Instance.RemoveTempRoot(DefaultValue);
+      end;
+    finally
+      Isolated.Free;
+    end;
+  finally
+    Executor.Free;
+    Source.Free;
+  end;
+  AEngine.InjectModulesFromJSON(ManifestJSON, ModulePath);
+end;
+
+{ A manifest path from a config file's "modules" key. }
+procedure InjectConfiguredManifest(const AEngine: TGocciaEngine;
+  const APath, ASpecifier: string);
+var
+  Extension: string;
+begin
+  CheckConfiguredManifestRead(AEngine, APath, ASpecifier);
+  Extension := LowerCase(ExtractFileExt(APath));
+  if (Extension = '.js') or (Extension = '.mjs') or (Extension = '.ts') then
+    InjectModulesFromIsolatedManifest(AEngine, APath)
+  else
+    InjectModulesFromManifestFile(AEngine, APath);
+end;
+
 procedure InjectModulesFromConfigFile(const AEngine: TGocciaEngine;
   const APath: string; const ADepth: Integer = 0);
 var
-  Content, Extension, ExtendsPath, ItemPath: string;
+  Content, Extension, ExtendsPath, ItemPath, Written: string;
   I: Integer;
   ArrayValue: TGocciaArrayValue;
   ModulesValue, ParsedValue: TGocciaValue;
@@ -1593,10 +1705,11 @@ begin
       if ModulesValue is TGocciaStringLiteralValue then
       begin
         ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+        Written := ItemPath;
         if not IsAbsoluteFilePath(ItemPath) then
           ItemPath := ExpandFileName(
             IncludeTrailingPathDelimiter(ExtractFilePath(APath)) + ItemPath);
-        InjectModulesFromManifestFile(AEngine, ItemPath);
+        InjectConfiguredManifest(AEngine, ItemPath, Written);
       end
       else if ModulesValue is TGocciaArrayValue then
       begin
@@ -1608,11 +1721,12 @@ begin
             raise EArgumentException.Create(
               'Config modules manifest paths must be strings.');
           ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+          Written := ItemPath;
           if not IsAbsoluteFilePath(ItemPath) then
             ItemPath := ExpandFileName(
               IncludeTrailingPathDelimiter(ExtractFilePath(APath)) +
               ItemPath);
-          InjectModulesFromManifestFile(AEngine, ItemPath);
+          InjectConfiguredManifest(AEngine, ItemPath, Written);
         end;
       end
       else if ModulesValue is TGocciaObjectValue then

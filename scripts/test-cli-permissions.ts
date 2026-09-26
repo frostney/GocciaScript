@@ -1166,6 +1166,70 @@ console.log("Trust follows each file's own config...");
   }
 }
 
+console.log("Module manifests a config names run under the script's capabilities...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    mkdirSync(join(tmp, "outside"));
+    const secret = join(tmp, "outside", "secret.txt");
+    writeFileSync(secret, "OUTSIDE-SECRET\n");
+    writeFileSync(join(project, "goccia.json"), '{"modules": "./manifest.js"}\n');
+
+    // A manifest's own imports are guest reads.
+    writeFileSync(join(project, "manifest.js"), [
+      `import secret from ${JSON.stringify(secret)} with { type: "text" };`,
+      'export default { "host:leak": { content: "export default " + JSON.stringify(secret.trim()) + ";" } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "main.mjs"), 'import leak from "host:leak"; console.log("LEAK", leak);\n');
+    const refused = run(LOADER, [join(project, "main.mjs")]);
+    expectExit(refused, 1, "config manifest importing outside the project");
+    expectIncludes(refused.combined, `PermissionDenied: read: ${secret}`, "config manifest importing outside the project");
+    expectExcludes(refused.combined, "OUTSIDE-SECRET", "config manifest importing outside the project");
+    const granted = run(LOADER, [`--allow-read=${join(tmp, "outside")}`, join(project, "main.mjs")]);
+    expectIncludes(granted.stdout, "LEAK OUTSIDE-SECRET", "config manifest with a read grant");
+
+    // What a manifest leaves on its global object stays in its own engine.
+    writeFileSync(join(project, "manifest.js"), [
+      'globalThis.f = (p) => import(p, { with: { type: "text" } });',
+      'export default { "host:ok": { content: "export default 1;" } };',
+      "",
+    ].join("\n"));
+    writeFileSync(join(project, "main.mjs"), [
+      'import ok from "host:ok";',
+      `try { const m = await globalThis.f(${JSON.stringify(secret)}); console.log("LEAK", m.default); }`,
+      'catch (e) { console.log("CAUGHT", typeof globalThis.f, ok); }',
+      "",
+    ].join("\n"));
+    const leftBehind = run(LOADER, [join(project, "main.mjs")]);
+    expectExit(leftBehind, 0, "a manifest's global");
+    expectIncludes(leftBehind.stdout, "CAUGHT undefined 1", "a manifest's global does not reach the script");
+
+    // A data manifest outside the project needs a read grant too.
+    writeFileSync(join(tmp, "outside", "manifest.json"), '{"host:x": {"content": "export default 2;"}}\n');
+    writeFileSync(join(project, "goccia.json"), '{"modules": "../outside/manifest.json"}\n');
+    writeFileSync(join(project, "main.mjs"), 'import x from "host:x"; console.log("X", x);\n');
+    const data = run(LOADER, [join(project, "main.mjs")]);
+    expectExit(data, 1, "config data manifest outside the project");
+    expectIncludes(data.combined, "PermissionDenied: read: ../outside/manifest.json", "config data manifest outside the project");
+    const dataAudit = run(LOADER, [`--audit-log=${join(tmp, "audit.jsonl")}`, join(project, "main.mjs")]);
+    expectExit(dataAudit, 1, "config data manifest audit");
+    expectIncludes(readFileSync(join(tmp, "audit.jsonl"), "utf8"), '"kind":"read.file","decision":"deny"', "config data manifest audit");
+
+    // Inside the project it is part of the module graph; on the command line
+    // it is the user's own choice.
+    writeFileSync(join(project, "manifest.json"), '{"host:x": {"content": "export default 3;"}}\n');
+    writeFileSync(join(project, "goccia.json"), '{"modules": "./manifest.json"}\n');
+    expectIncludes(run(LOADER, [join(project, "main.mjs")]).stdout, "X 3", "config data manifest in the project");
+    writeFileSync(join(project, "goccia.json"), "{}\n");
+    expectIncludes(run(LOADER, [`--modules=${join(tmp, "outside", "manifest.json")}`, join(project, "main.mjs")]).stdout, "X 2", "--modules outside the project");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Output paths set in a config stay inside the config's directory...");
 {
   const tmp = makeTmp();
