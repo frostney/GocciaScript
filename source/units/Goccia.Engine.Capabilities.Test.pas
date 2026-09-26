@@ -1666,12 +1666,12 @@ var
 begin
   {$IFDEF LINUX}
   Fixture := ExpandFileName('fixtures/ffi/libfixture.so');
+  { The fixture is built by the testrunner target (./build.pas testrunner)
+    and by CI's fixtures/ffi/build.sh step before the Pascal unit tests; a
+    missing fixture is a broken setup, not a reason to pass. }
   if not FileExists(Fixture) then
-  begin
-    { The FFI fixture is built by the testrunner target. }
-    Expect<Boolean>(True).ToBe(True);
-    Exit;
-  end;
+    Fail('FFI fixture not found: ' + Fixture +
+      ' (build it with ./build.pas testrunner or fixtures/ffi/build.sh)');
   Good := ProjectPath('ffilibs/good');
   Outside := OutsidePath('ffilibs-evil');
   CopyFileContents(Fixture, Good + '/libfixture.so');
