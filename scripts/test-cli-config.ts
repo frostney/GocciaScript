@@ -633,16 +633,16 @@ console.log("Per-file allow-ffi config across runtime apps...");
     const loaderNoConfig = await $`${LOADER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
     if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without allow-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
 
-    const loaderOut = await $`${LOADER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const loaderOut = await $`${LOADER} -P --print ${join(tmp, "test.js")} 2>&1`.text();
     if (!containsLine(loaderOut, "object")) throw new Error(`Loader allow-ffi config should expose FFI, got: ${loaderOut}`);
 
-    const loaderBc = await $`${LOADER} --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
+    const loaderBc = await $`${LOADER} -P --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode allow-ffi config should expose FFI, got: ${loaderBc}`);
 
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    const trInterp = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
     if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner allow-ffi config should pass, got: ${trInterp}`);
 
-    const trBc = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
+    const trBc = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
     if (!trBc.includes("Passed: 1")) throw new Error(`TestRunner bytecode allow-ffi config should pass, got: ${trBc}`);
 
     const parallelLoaderDir = join(tmp, "loader-parallel");
@@ -656,7 +656,7 @@ console.log("Per-file allow-ffi config across runtime apps...");
       join(parallelLoaderDir, "b.js"),
       'if (typeof FFI !== "object") throw new Error("FFI missing");\n',
     );
-    runCwd(LOADER, ["a.js", "b.js", "--jobs=2", "--output=compact-json"], parallelLoaderDir);
+    runCwd(LOADER, ["-P", "a.js", "b.js", "--jobs=2", "--output=compact-json"], parallelLoaderDir);
 
     const parallelTestDir = join(tmp, "test-parallel");
     mkdirSync(parallelTestDir);
@@ -669,13 +669,13 @@ console.log("Per-file allow-ffi config across runtime apps...");
       join(parallelTestDir, "b.js"),
       'test("allow-ffi config b", () => { expect(typeof FFI).toBe("object"); });\n',
     );
-    const trParallel = runCwd(TESTRUNNER, [".", "--jobs=2", "--no-progress"], parallelTestDir);
+    const trParallel = runCwd(TESTRUNNER, ["-P", ".", "--jobs=2", "--no-progress"], parallelTestDir);
     if (!trParallel.combined.includes("Passed: 2"))
       throw new Error(`TestRunner parallel allow-ffi config should pass, got: ${trParallel.combined}`);
 
     for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
       const bench = Bun.spawnSync(
-        [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress", ...modeArgs],
+        [resolve(BENCHRUNNER), "-P", join(tmp, "bench.js"), "--no-progress", ...modeArgs],
         {
           stdout: "pipe",
           stderr: "pipe",
@@ -706,7 +706,7 @@ console.log("Per-file allow-ffi config across runtime apps...");
       );
     }
     const benchParallel = Bun.spawnSync(
-      [resolve(BENCHRUNNER), parallelBenchDir, "--jobs=2", "--no-progress"],
+      [resolve(BENCHRUNNER), "-P", parallelBenchDir, "--jobs=2", "--no-progress"],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -717,7 +717,7 @@ console.log("Per-file allow-ffi config across runtime apps...");
     if (benchParallel.exitCode !== 0)
       throw new Error(`BenchmarkRunner parallel allow-ffi config exited ${benchParallel.exitCode}: ${benchParallel.stderr.toString()}`);
 
-    const replOut = runCwd(REPL, [`--config=${join(tmp, "goccia.json")}`], tmp, {
+    const replOut = runCwd(REPL, ["-P", `--config=${join(tmp, "goccia.json")}`], tmp, {
       stdin: "typeof FFI;\n",
     });
     if (!replOut.combined.includes("object")) throw new Error(`REPL allow-ffi config should expose FFI, got: ${replOut.combined}`);
@@ -1096,7 +1096,7 @@ console.log("Config allow-net blocks unlisted host...");
     writeFileSync(join(tmp, "goccia.json"), '{"permissions": {"allow-net": ["example.com"]}}\n');
     writeFileSync(join(tmp, "test.js"), 'fetch("http://blocked.test");\n');
 
-    const res = runCwd(LOADER, ["test.js"], tmp, { expectFail: true });
+    const res = runCwd(LOADER, ["-P", "test.js"], tmp, { expectFail: true });
     if (!res.combined.includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.combined}`);
   } finally {
     clean(tmp);
@@ -1115,7 +1115,7 @@ console.log("Config allow-net allows listed host...");
       'const p = fetch("http://0.0.0.0:1/"); p.catch(() => {}); typeof p.then;\n',
     );
 
-    const out = runCwd(LOADER, ["--print", "test.js"], tmp);
+    const out = runCwd(LOADER, ["-P", "--print", "test.js"], tmp);
     if (!out.combined.includes("function")) throw new Error(`Allowed host should return promise, got: ${out.combined}`);
   } finally {
     clean(tmp);
@@ -1135,7 +1135,7 @@ console.log("Config allow-net per-file overrides root...");
     writeFileSync(join(subDir, "test.js"), 'fetch("http://example.com");\n');
 
     // example.com is NOT in the subdirectory config, so it should be blocked
-    const res = runCwd(LOADER, [join(subDir, "test.js")], tmp, { expectFail: true });
+    const res = runCwd(LOADER, ["-P", join(subDir, "test.js")], tmp, { expectFail: true });
     if (!res.combined.includes("example.com")) throw new Error(`Per-file config should override root, got: ${res.combined}`);
   } finally {
     clean(tmp);
@@ -1152,12 +1152,12 @@ console.log("CLI --allow-net adds to and --deny-net subtracts from config permis
     writeFileSync(join(tmp, "test.js"), 'const p = fetch("http://example.com"); p.catch(() => {}); p;\n');
 
     // A CLI allow adds to the config's grants rather than replacing them.
-    const out = runCwd(LOADER, ["--print", "test.js", "--allow-net=other.test"], tmp);
+    const out = runCwd(LOADER, ["-P", "--print", "test.js", "--allow-net=other.test"], tmp);
     if (!out.combined.includes("[object Promise]") && !out.combined.includes("Promise"))
       throw new Error(`CLI allow should keep the config-granted host, got: ${out.combined}`);
 
     // A CLI deny subtracts from the config's grants.
-    const res = runCwd(LOADER, ["test.js", "--deny-net=example.com"], tmp, { expectFail: true });
+    const res = runCwd(LOADER, ["-P", "test.js", "--deny-net=example.com"], tmp, { expectFail: true });
     if (!res.combined.includes("PermissionDenied: net: example.com"))
       throw new Error(`CLI deny should subtract a config-granted host, got: ${res.combined}`);
   } finally {
@@ -1199,7 +1199,7 @@ console.log("Config allow-net TestRunner integration...");
       ].join("\n") + "\n",
     );
 
-    const out = runCwd(TESTRUNNER, ["test.js", "--no-progress"], tmp);
+    const out = runCwd(TESTRUNNER, ["-P", "test.js", "--no-progress"], tmp);
     if (!out.combined.includes("Passed: 1")) throw new Error(`TestRunner should pass with allow-net permission, got: ${out.combined}`);
   } finally {
     clean(tmp);

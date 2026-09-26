@@ -2534,7 +2534,7 @@ await section("Loader: relative aliases use the invocation or config directory..
     );
     for (const mode of ["interpreted", "bytecode"] as const) {
       const configProc = Bun.spawnSync(
-        [loader, "project/api-tests/alias.test.js", `--mode=${mode}`],
+        [loader, "-P", "project/api-tests/alias.test.js", `--mode=${mode}`],
         { cwd: tmp, stdout: "pipe", stderr: "pipe" },
       );
       if (configProc.exitCode !== 0 ||
@@ -2664,7 +2664,7 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
     // The config-file spelling has to reach the resolver too, since a project
     // that needs the capability wants it recorded, not retyped.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules"] } }));
-    const configProc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
+    const configProc = Bun.spawnSync([resolve(LOADER), "-P", "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -2714,7 +2714,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     // for <foreign>/node_modules and find nothing.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
-      [resolve(LOADER), join(project, "app.js"), "--source-type=module"],
+      [resolve(LOADER), "-P", join(project, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2729,7 +2729,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
-      [resolve(LOADER), join(inner, "app.js"), "--source-type=module"],
+      [resolve(LOADER), "-P", join(inner, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();

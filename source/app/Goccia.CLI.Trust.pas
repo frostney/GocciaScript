@@ -346,8 +346,14 @@ end;
 
 function QuoteShellArgument(const AArgument: string): string;
 const
+  {$IFDEF MSWINDOWS}
+  { cmd and PowerShell take path separators and 8.3 names as they are. }
+  PLAIN_CHARACTERS = ['A'..'Z', 'a'..'z', '0'..'9', '_', '-', '.', '/', '=',
+    ':', ',', '@', '%', '+', '\', '~'];
+  {$ELSE}
   PLAIN_CHARACTERS = ['A'..'Z', 'a'..'z', '0'..'9', '_', '-', '.', '/', '=',
     ':', ',', '@', '%', '+'];
+  {$ENDIF}
 var
   I: Integer;
   NeedsQuotes: Boolean;

@@ -5,10 +5,15 @@
  * The ADR 0122 command-line surface across the Goccia binaries: the
  * --allow-<cap> / --deny-<cap> grammar, the removed flags and config keys and
  * their replacements, what each binary honors, the deny-by-default profile,
- * config permissions blocks, and the --max-* limits with units.
+ * config permissions blocks and the trust they need, and the --max-* limits
+ * with units.
+ *
+ * Every run gets a private HOME (and no XDG_CONFIG_HOME or APPDATA), so the
+ * per-user trust store is never the developer's own; trust tests also name a
+ * store explicitly with --trust-store.
  */
 
-import { mkdirSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -19,12 +24,21 @@ import {
   SANDBOXRUNNER,
   TEST262RUNNER,
   TESTRUNNER,
+  WASMTESTRUNNER,
 } from "./test-cli/binaries";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 
 const makeTmp = makeTmpFactory("goccia-permissions-");
+const isWindows = process.platform === "win32";
 
 type RunResult = { exitCode: number; stdout: string; stderr: string; combined: string };
+
+const privateHome = makeTmp();
+const isolatedEnv: Record<string, string> = {};
+for (const [key, value] of Object.entries(process.env))
+  if (value !== undefined && key !== "XDG_CONFIG_HOME" && key !== "APPDATA") isolatedEnv[key] = value;
+isolatedEnv.HOME = privateHome;
+isolatedEnv.USERPROFILE = privateHome;
 
 function run(
   binary: string,
@@ -33,6 +47,7 @@ function run(
 ): RunResult {
   const proc = Bun.spawnSync([resolve(binary), ...args], {
     cwd: options.cwd,
+    env: isolatedEnv,
     stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin),
     stdout: "pipe",
     stderr: "pipe",
@@ -41,6 +56,22 @@ function run(
   const stdout = proc.stdout.toString();
   const stderr = proc.stderr.toString();
   return { exitCode: proc.exitCode ?? -1, stdout, stderr, combined: stdout + stderr };
+}
+
+async function runAsync(binary: string, args: string[], cwd?: string): Promise<RunResult> {
+  const proc = Bun.spawn([resolve(binary), ...args], {
+    cwd,
+    env: isolatedEnv,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout, stderr, combined: stdout + stderr };
 }
 
 function expectExit(result: RunResult, code: number, label: string): void {
@@ -248,11 +279,22 @@ console.log("Config requests a binary cannot honor are warnings...");
     expectExit(bundle, 0, "Bundler with a declaring config");
     expectIncludes(bundle.stderr, `Warning: ${configPath} requests allow-read, which GocciaBundler cannot grant; ignoring it`, "Bundler warning");
 
+    // The sandbox honors net only: a config asking for read alone warns and
+    // needs no trust, and one asking for net needs trust.
     writeFileSync(join(tmp, "entry.js"), "1 + 1;\n");
-    const sandbox = run(SANDBOXRUNNER, [`--config=${configPath}`, "--seed", `${join(tmp, "entry.js")}=/entry.js`, "/entry.js"], { cwd: tmp });
+    const sandboxArgs = [`--config=${configPath}`, "--seed", `${join(tmp, "entry.js")}=/entry.js`, "/entry.js"];
+    writeFileSync(configPath, '{"permissions": {"allow-read": ["."]}}\n');
+    const sandbox = run(SANDBOXRUNNER, sandboxArgs, { cwd: tmp });
     expectExit(sandbox, 0, "SandboxRunner with allow-read config");
     expectIncludes(sandbox.stderr, `Warning: ${configPath} requests allow-read, which GocciaSandboxRunner cannot grant; ignoring it`, "SandboxRunner warning");
-    expectExcludes(sandbox.stderr, "allow-net", "SandboxRunner honors net");
+
+    writeFileSync(configPath, '{"permissions": {"allow-read": ["."], "allow-net": ["example.com"]}}\n');
+    const untrusted = run(SANDBOXRUNNER, sandboxArgs, { cwd: tmp });
+    expectExit(untrusted, 2, "SandboxRunner with allow-net config");
+    expectIncludes(untrusted.stderr, "goccia.json (never trusted)\n    allow-net: example.com", "SandboxRunner allow-net needs trust");
+    const accepted = run(SANDBOXRUNNER, ["-P", ...sandboxArgs], { cwd: tmp });
+    expectExit(accepted, 0, "SandboxRunner -P");
+    expectExcludes(accepted.stderr, "allow-net", "SandboxRunner honors net");
   } finally {
     clean(tmp);
   }
@@ -389,19 +431,19 @@ console.log("Config permissions resolve against the declaring file...");
     writeFileSync(join(project, "goccia.json"), '{"permissions": {"allow-read": ["../shared"]}}\n');
     writeFileSync(join(project, "main.mjs"), 'import { data } from "../shared/data.js";\nconsole.log(data);\n');
     // Run from an unrelated directory: the scope still means ../shared from
-    // the config file.
-    const result = run(LOADER, [join(project, "main.mjs")], { cwd: join(tmp, "shared") });
+    // the config file. -P accepts the request for the run.
+    const result = run(LOADER, ["-P", join(project, "main.mjs")], { cwd: join(tmp, "shared") });
     expectExit(result, 0, "config allow-read");
     expectIncludes(result.stdout, "SHARED", "config allow-read");
 
     // A command-line deny subtracts from the config's allow.
-    const denied = run(LOADER, ["--deny-read=shared", join(project, "main.mjs")], { cwd: tmp });
+    const denied = run(LOADER, ["-P", "--deny-read=shared", join(project, "main.mjs")], { cwd: tmp });
     expectExit(denied, 1, "CLI deny over config allow");
 
     // TOML and JSON5 declare the same block.
     writeFileSync(join(project, "goccia.json"), "{}\n");
     writeFileSync(join(project, "goccia.toml"), '[permissions]\nallow-read = ["../shared"]\n');
-    expectIncludes(run(LOADER, [join(project, "main.mjs")]).stdout, "SHARED", "TOML permissions");
+    expectIncludes(run(LOADER, ["-P", join(project, "main.mjs")]).stdout, "SHARED", "TOML permissions");
   } finally {
     clean(tmp);
   }
@@ -448,4 +490,359 @@ console.log("Limits take units on the command line and in config...");
   }
 }
 
+// -- Config trust ---------------------------------------------------------------------
+
+function expectEmptyDirectory(path: string, label: string): void {
+  const entries = Bun.spawnSync(["ls", "-A", path]).stdout.toString().trim();
+  if (!isWindows && entries !== "") throw new Error(`${label}: expected ${path} to stay empty, got: ${entries}`);
+}
+
+function readJSON(path: string): any {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+console.log("An untrusted config refuses the run with a report naming the fix...");
+{
+  const tmp = makeTmp();
+  try {
+    const real = realpathSync(tmp);
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "data"), { recursive: true });
+    writeFileSync(join(project, "goccia.json"), '{"permissions": {"allow-read": ["./data"]}}\n');
+    writeFileSync(join(project, "main.js"), 'console.log("RAN");\n');
+    const main = join("project", "main.js");
+
+    // 1. Nothing runs, and the report is exact.
+    const refused = run(LOADER, ["--trust-store=trust.json", main], { cwd: tmp });
+    expectExit(refused, 2, "untrusted config");
+    expectExcludes(refused.stdout, "RAN", "untrusted config runs nothing");
+    if (!isWindows) {
+      const expected = [
+        "Error: 1 config file requests permissions that have not been trusted:",
+        "",
+        "  project/goccia.json (never trusted)",
+        `    allow-read: ${real}/project/data`,
+        "",
+        `Nothing was run. To trust these requests (stored in ${real}/trust.json):`,
+        "  GocciaScriptLoader --trust-store=trust.json --trust project/goccia.json",
+        "To accept them for this run only:",
+        "  GocciaScriptLoader -P --trust-store=trust.json project/main.js",
+        "To run with command-line grants only:",
+        "  GocciaScriptLoader --ignore-config-permissions --trust-store=trust.json project/main.js",
+        "",
+      ].join("\n");
+      if (refused.stderr !== expected)
+        throw new Error(`untrusted report: expected\n${expected}\ngot\n${refused.stderr}`);
+    }
+    if (existsSync(join(tmp, "trust.json"))) throw new Error("A refused run must not create the store");
+
+    // 3. --trust needs a terminal or --yes; the store is left alone.
+    const unconfirmed = run(LOADER, ["--trust-store=trust.json", "--trust", "project"], { cwd: tmp });
+    expectExit(unconfirmed, 2, "--trust without --yes");
+    expectIncludes(unconfirmed.stderr, "Error: --trust needs confirmation; re-run with --yes to trust without a prompt", "--trust without --yes");
+    expectIncludes(unconfirmed.stdout, "(new)\n    allow-read:", "--trust shows the requests first");
+    if (existsSync(join(tmp, "trust.json"))) throw new Error("An unconfirmed --trust must not write the store");
+
+    // 2. --trust <dir> --yes records it, and the run proceeds.
+    const trusted = run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
+    expectExit(trusted, 0, "--trust --yes");
+    expectIncludes(trusted.stdout, `Trusted 1 config file in ${real}/trust.json`.replaceAll("/", isWindows ? "\\" : "/"), "--trust --yes");
+    const store = readJSON(join(tmp, "trust.json"));
+    if (store.version !== 1 || Object.keys(store.trusted).length !== 1)
+      throw new Error(`trust store shape: ${JSON.stringify(store)}`);
+    const again = run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
+    expectIncludes(again.stdout, "The config file under project/ is already trusted".replaceAll("/", isWindows ? "\\" : "/"), "--trust twice");
+    const ran = run(LOADER, ["--trust-store=trust.json", main], { cwd: tmp });
+    expectExit(ran, 0, "trusted run");
+    expectIncludes(ran.stdout, "RAN", "trusted run");
+
+    // 4. An edit invalidates the trust and shows what changed.
+    writeFileSync(join(project, "goccia.json"), '{"permissions": {"allow-read": ["./data"], "allow-net": ["example.com"]}}\n');
+    const changed = run(LOADER, ["--trust-store=trust.json", main], { cwd: tmp });
+    expectExit(changed, 2, "changed config");
+    expectIncludes(changed.stderr, "goccia.json (changed since trusted ", "changed config");
+    expectIncludes(changed.stderr, "\n    allow-read: ", "changed config keeps unchanged lines");
+    expectIncludes(changed.stderr, "  + allow-net: example.com", "changed config marks the addition");
+    const listed = run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp });
+    expectExit(listed, 0, "--list-trusted");
+    expectIncludes(listed.stdout, "Trust store: ", "--list-trusted header");
+    expectIncludes(listed.stdout, "  allow-read  (changed)", "--list-trusted marks a change");
+
+    // 20. The same block at another path is not trusted.
+    run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
+    cpSync(project, join(tmp, "copy"), { recursive: true });
+    const copied = run(LOADER, ["--trust-store=trust.json", join("copy", "main.js")], { cwd: tmp });
+    expectExit(copied, 2, "copied block");
+    expectIncludes(copied.stderr, "(never trusted)", "copied block");
+
+    // 13. --untrust, and a trusted config that disappeared.
+    const untrusted = run(LOADER, ["--trust-store=trust.json", "--untrust", "copy"], { cwd: tmp });
+    expectIncludes(untrusted.stdout, "No trusted config at or under copy", "--untrust of nothing");
+    run(LOADER, ["--trust-store=trust.json", "--trust", "copy", "--yes"], { cwd: tmp });
+    clean(join(tmp, "copy"));
+    const missing = run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp });
+    expectIncludes(missing.stdout, "(missing)", "--list-trusted marks a missing config");
+    const removed = run(LOADER, ["--trust-store=trust.json", "--untrust", "copy"], { cwd: tmp });
+    expectIncludes(removed.stdout, "Removed trust for 1 config file under copy", "--untrust");
+    const after = run(LOADER, ["--trust-store=trust.json", "--list-trusted"], { cwd: tmp });
+    expectExcludes(after.stdout, "(missing)", "--untrust removed the entry");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("-P and --ignore-config-permissions decide for one run...");
+{
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    writeFileSync(join(project, "goccia.json"), '{"permissions": {"allow-net": ["127.0.0.1"], "deny-net": ["10.0.0.0/8"]}}\n');
+    const probe = (url: string) =>
+      `try { fetch(${JSON.stringify(url)}).then(() => console.log("reached"), (e) => console.log(e.name, e.message)); } catch (e) { console.log(e.name, e.message); }\n`;
+    writeFileSync(join(project, "loopback.js"), probe("http://127.0.0.1:1/"));
+    writeFileSync(join(project, "ten.js"), probe("http://10.1.2.3:1/"));
+
+    // 5. -P accepts the request; it reads and writes no store.
+    const accepted = run(LOADER, ["-P", join(project, "loopback.js")]);
+    expectExit(accepted, 0, "-P");
+    expectIncludes(accepted.stdout, "TypeError", "-P grants the config's allow");
+    const acceptedLong = run(LOADER, ["--accept-config-permissions", "--trust-store=never.json", join(project, "loopback.js")], { cwd: tmp });
+    expectExcludes(acceptedLong.stdout, "PermissionDenied", "--accept-config-permissions");
+    if (existsSync(join(tmp, "never.json"))) throw new Error("-P must not create a store");
+    expectEmptyDirectory(privateHome, "-P leaves HOME alone");
+
+    // 6. --ignore-config-permissions drops the grant but keeps the deny.
+    const ignored = run(LOADER, ["--ignore-config-permissions", join(project, "loopback.js")]);
+    expectExit(ignored, 0, "--ignore-config-permissions");
+    expectIncludes(ignored.stdout, "PermissionDenied net: 127.0.0.1:1", "--ignore-config-permissions drops the allow");
+    const ignoredDeny = run(LOADER, ["--ignore-config-permissions", "--allow-net=10.0.0.0/8", join(project, "ten.js")]);
+    expectIncludes(ignoredDeny.stdout, "PermissionDenied net: 10.1.2.3:1", "a config deny subtracts from a CLI allow");
+
+    // 7. A command-line deny subtracts from a trusted allow.
+    run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
+    const trustedDeny = run(LOADER, ["--trust-store=trust.json", "--deny-net=127.0.0.1", join("project", "loopback.js")], { cwd: tmp });
+    expectExit(trustedDeny, 0, "CLI deny over trusted allow");
+    expectIncludes(trustedDeny.stdout, "PermissionDenied net: 127.0.0.1:1", "CLI deny over trusted allow");
+
+    // 18. -P and --ignore-config-permissions cannot be combined.
+    const both = run(LOADER, ["-P", "--ignore-config-permissions", join(project, "loopback.js")]);
+    expectExit(both, 2, "-P with --ignore-config-permissions");
+    expectIncludes(both.stderr, "Error: -P and --ignore-config-permissions cannot be combined", "-P with --ignore-config-permissions");
+    const modeWithInput = run(LOADER, ["--trust", "project", join(project, "loopback.js")], { cwd: tmp });
+    expectExit(modeWithInput, 2, "--trust with input files");
+    expectIncludes(modeWithInput.stderr, "Error: --trust cannot be combined with input files; run it on its own", "--trust with input files");
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Trust follows each file's own config...");
+{
+  const tmp = makeTmp();
+  try {
+    // 10. A deny-only config needs no trust.
+    mkdirSync(join(tmp, "deny"));
+    writeFileSync(join(tmp, "deny", "goccia.json"), '{"permissions": {"deny-read": true}}\n');
+    writeFileSync(join(tmp, "deny", "main.js"), 'console.log("RAN");\n');
+    const denyOnly = run(LOADER, ["--trust-store=trust.json", join("deny", "main.js")], { cwd: tmp });
+    expectExit(denyOnly, 0, "deny-only config");
+    expectIncludes(denyOnly.stdout, "RAN", "deny-only config");
+
+    // 8. Per-file configs: only the untrusted one is reported, and a change to
+    // an extends base invalidates its child.
+    for (const name of ["a", "b"]) {
+      mkdirSync(join(tmp, "suite", name), { recursive: true });
+      writeFileSync(join(tmp, "suite", name, "x.test.js"), 'test("x", () => { expect(1).toBe(1); });\n');
+    }
+    writeFileSync(join(tmp, "suite", "base.json"), '{"permissions": {"allow-net": ["a.test"]}}\n');
+    writeFileSync(join(tmp, "suite", "a", "goccia.json"), '{"extends": "../base.json", "permissions": {"allow-read": ["."]}}\n');
+    writeFileSync(join(tmp, "suite", "b", "goccia.json"), '{"permissions": {"allow-net": ["b.test"]}}\n');
+    run(TESTRUNNER, ["--trust-store=trust.json", "--trust", join("suite", "a"), "--yes"], { cwd: tmp });
+    const partial = run(TESTRUNNER, ["--trust-store=trust.json", "suite", "--no-progress"], { cwd: tmp });
+    expectExit(partial, 2, "one untrusted config");
+    expectIncludes(partial.stderr, "Error: 1 config file requests", "one untrusted config");
+    expectIncludes(partial.stderr, join("suite", "b", "goccia.json"), "one untrusted config");
+    expectExcludes(partial.stderr, join("suite", "a", "goccia.json"), "one untrusted config");
+    run(TESTRUNNER, ["--trust-store=trust.json", "--trust", "suite", "--yes"], { cwd: tmp });
+    expectIncludes(run(TESTRUNNER, ["--trust-store=trust.json", "suite", "--no-progress"], { cwd: tmp }).stdout, "Passed: 2", "trusted suite");
+    writeFileSync(join(tmp, "suite", "base.json"), '{"permissions": {"allow-net": ["a.test", "c.test"]}}\n');
+    const baseChanged = run(TESTRUNNER, ["--trust-store=trust.json", "suite", "--no-progress"], { cwd: tmp });
+    expectExit(baseChanged, 2, "extends base changed");
+    expectIncludes(baseChanged.stderr, `${join("suite", "a", "goccia.json")} (changed since trusted`, "extends base changed");
+    expectIncludes(baseChanged.stderr, "  + allow-net: a.test, c.test", "extends base changed");
+
+    // 11. unsafe-function-constructor in config needs trust; the flag does not.
+    mkdirSync(join(tmp, "unsafe"));
+    writeFileSync(join(tmp, "unsafe", "goccia.json"), '{"unsafe-function-constructor": true}\n');
+    writeFileSync(join(tmp, "unsafe", "main.js"), 'console.log(new Function("return 6 * 7")());\n');
+    const unsafeUntrusted = run(LOADER, ["--trust-store=trust.json", join("unsafe", "main.js")], { cwd: tmp });
+    expectExit(unsafeUntrusted, 2, "config unsafe-function-constructor");
+    expectIncludes(unsafeUntrusted.stderr, "    unsafe-function-constructor: true", "config unsafe-function-constructor");
+    const unsafeIgnored = run(LOADER, ["--ignore-config-permissions", join("unsafe", "main.js")], { cwd: tmp });
+    expectExcludes(unsafeIgnored.stdout, "42", "ignored unsafe-function-constructor");
+    const unsafeFlag = run(LOADER, ["--ignore-config-permissions", "--unsafe-function-constructor", join("unsafe", "main.js")], { cwd: tmp });
+    expectExit(unsafeFlag, 0, "--unsafe-function-constructor");
+    expectIncludes(unsafeFlag.stdout, "42", "--unsafe-function-constructor");
+    expectIncludes(run(LOADER, ["-P", join("unsafe", "main.js")], { cwd: tmp }).stdout, "42", "-P unsafe-function-constructor");
+
+    // 15. The bundler runs nothing, so a declaring config only warns.
+    const bundled = run(BUNDLER, [join("unsafe", "main.js"), "--output=out.gbc"], { cwd: tmp });
+    expectExit(bundled, 0, "Bundler with unsafe config");
+    expectIncludes(bundled.stderr, "requests unsafe-function-constructor, which GocciaBundler cannot grant; ignoring it", "Bundler warns");
+
+    // 17. The REPL refuses before its prompt.
+    const repl = run(REPL, ["--trust-store=trust.json"], { cwd: join(tmp, "unsafe"), stdin: "1 + 1\n" });
+    expectExit(repl, 2, "REPL with an untrusted config");
+    expectExcludes(repl.stdout, "Goccia REPL", "REPL refuses before the prompt");
+
+    // 12. The trust options, and top-level grants, are command-line-only.
+    mkdirSync(join(tmp, "keys"));
+    writeFileSync(join(tmp, "keys", "main.js"), "1;\n");
+    for (const key of ['"allow-net": ["a.test"]', '"accept-config-permissions": true', '"trust-store": "x.json"', '"ignore-config-permissions": true']) {
+      writeFileSync(join(tmp, "keys", "goccia.json"), `{${key}}\n`);
+      const result = run(LOADER, [join("keys", "main.js")], { cwd: tmp });
+      expectExit(result, 2, `config ${key}`);
+      expectIncludes(result.stderr, "can only be given on the command line", `config ${key}`);
+    }
+
+    // 21. Trusting through a symlink covers the real path.
+    if (!isWindows) {
+      mkdirSync(join(tmp, "real"));
+      writeFileSync(join(tmp, "real", "goccia.json"), '{"permissions": {"allow-net": ["a.test"]}}\n');
+      writeFileSync(join(tmp, "real", "main.js"), 'console.log("RAN");\n');
+      symlinkSync(join(tmp, "real"), join(tmp, "link"));
+      run(LOADER, ["--trust-store=trust.json", "--trust", join("link", "goccia.json"), "--yes"], { cwd: tmp });
+      const viaReal = run(LOADER, ["--trust-store=trust.json", join("real", "main.js")], { cwd: tmp });
+      expectExit(viaReal, 0, "trusted through a symlink");
+      expectIncludes(viaReal.stdout, "RAN", "trusted through a symlink");
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Unreadable trust stores are errors, not trust...");
+{
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "project"));
+    writeFileSync(join(tmp, "project", "goccia.json"), '{"permissions": {"allow-net": ["a.test"]}}\n');
+    writeFileSync(join(tmp, "project", "main.js"), "1;\n");
+
+    // 14. A corrupt store refuses --trust and leaves runs untrusted.
+    writeFileSync(join(tmp, "corrupt.json"), "{ not json");
+    const corruptTrust = run(LOADER, ["--trust-store=corrupt.json", "--trust", "project", "--yes"], { cwd: tmp });
+    expectExit(corruptTrust, 1, "--trust into a corrupt store");
+    expectIncludes(corruptTrust.combined, "corrupt.json is not valid JSON; fix or delete it", "--trust into a corrupt store");
+    if (readFileSync(join(tmp, "corrupt.json"), "utf8") !== "{ not json") throw new Error("--trust overwrote a corrupt store");
+    const corruptRun = run(LOADER, ["--trust-store=corrupt.json", join("project", "main.js")], { cwd: tmp });
+    expectExit(corruptRun, 2, "run with a corrupt store");
+    expectIncludes(corruptRun.stderr, "corrupt.json is not valid JSON; fix or delete it. Then, to trust these requests:", "run with a corrupt store");
+
+    writeFileSync(join(tmp, "newer.json"), '{"version": 2, "trusted": {}}\n');
+    const newer = run(LOADER, ["--trust-store=newer.json", "--list-trusted"], { cwd: tmp });
+    expectExit(newer, 1, "newer store");
+    expectIncludes(newer.combined, "newer.json was written by a newer GocciaScript (version 2); upgrade GocciaScript or remove the file", "newer store");
+
+    // Without a HOME there is no default store to name.
+    const noHomeEnv = { ...isolatedEnv };
+    delete noHomeEnv.HOME;
+    delete noHomeEnv.USERPROFILE;
+    const noHome = Bun.spawnSync([resolve(LOADER), "--list-trusted"], { cwd: tmp, env: noHomeEnv, stdout: "pipe", stderr: "pipe" });
+    if (!isWindows && !(noHome.stdout.toString() + noHome.stderr.toString()).includes("cannot locate the per-user trust store (HOME is not set); pass --trust-store=<path>"))
+      throw new Error(`no HOME: ${noHome.stdout}${noHome.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Runs read a store another --trust is rewriting...");
+{
+  const tmp = makeTmp();
+  try {
+    // 9. Eight trusted folders run on four workers while --trust rewrites the
+    // store: readers never lock and always see a whole file.
+    for (let i = 0; i < 8; i++) {
+      const dir = join(tmp, "suite", `f${i}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "goccia.json"), `{"permissions": {"allow-net": ["h${i}.test"]}}\n`);
+      writeFileSync(join(dir, "x.test.js"), 'test("x", () => { expect(1).toBe(1); });\n');
+    }
+    run(TESTRUNNER, ["--trust-store=trust.json", "--trust", "suite", "--yes"], { cwd: tmp });
+    for (let i = 0; i < 4; i++) {
+      mkdirSync(join(tmp, "other", `o${i}`), { recursive: true });
+      writeFileSync(join(tmp, "other", `o${i}`, "goccia.json"), `{"permissions": {"allow-net": ["o${i}.test"]}}\n`);
+    }
+    const runs = [0, 1, 2].map(() => runAsync(TESTRUNNER, ["--trust-store=trust.json", "suite", "--jobs=4", "--no-progress"], tmp));
+    const writers = [0, 1, 2, 3].map((i) =>
+      runAsync(TESTRUNNER, ["--trust-store=trust.json", "--trust", join("other", `o${i}`), "--yes"], tmp));
+    for (const result of await Promise.all(runs)) {
+      expectExit(result, 0, "run during --trust");
+      expectIncludes(result.stdout, "Passed: 8", "run during --trust");
+    }
+    for (const result of await Promise.all(writers)) expectExit(result, 0, "concurrent --trust");
+    const store = readJSON(join(tmp, "trust.json"));
+    if (Object.keys(store.trusted).length !== 12)
+      throw new Error(`concurrent --trust lost entries: ${Object.keys(store.trusted).length}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Audit records config trust and where capabilities came from...");
+{
+  const tmp = makeTmp();
+  try {
+    // 19. config.permissions and capabilities.effective provenance.
+    mkdirSync(join(tmp, "project"));
+    writeFileSync(join(tmp, "project", "goccia.json"), '{"permissions": {"allow-net": ["a.test"]}}\n');
+    writeFileSync(join(tmp, "project", "main.js"), "1;\n");
+    const audited = run(LOADER, ["-P", "--allow-read=project", "--audit-log=audit.jsonl", join("project", "main.js")], { cwd: tmp });
+    expectExit(audited, 0, "audited run");
+    const events = readFileSync(join(tmp, "audit.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const config = events.find((event) => event.kind === "config.permissions");
+    if (!config || config.decision !== "allow" || config.reason !== "accepted for this run (-P)" || !String(config.subject).endsWith("goccia.json"))
+      throw new Error(`config.permissions event: ${JSON.stringify(events)}`);
+    const effective = events.find((event) => event.kind === "capabilities.effective");
+    if (!effective || !String(effective.reason).startsWith("cli --allow-read=project; config ") ||
+        !String(effective.reason).endsWith("goccia.json accepted for this run (-P)"))
+      throw new Error(`capabilities.effective provenance: ${JSON.stringify(effective)}`);
+
+    run(LOADER, ["--trust-store=trust.json", "--trust", "project", "--yes"], { cwd: tmp });
+    run(LOADER, ["--trust-store=trust.json", "--audit-log=trusted.jsonl", join("project", "main.js")], { cwd: tmp });
+    const trusted = readFileSync(join(tmp, "trusted.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const trustedEvent = trusted.find((event) => event.kind === "config.permissions");
+    if (!trustedEvent || !/^trusted sha256:[0-9a-f]{64}$/.test(trustedEvent.reason))
+      throw new Error(`trusted config.permissions event: ${JSON.stringify(trusted)}`);
+
+    run(LOADER, ["--trust-store=none.json", "--audit-log=denied.jsonl", join("project", "main.js")], { cwd: tmp });
+    const denied = readFileSync(join(tmp, "denied.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    if (!denied.some((event) => event.kind === "config.permissions" && event.decision === "deny" && event.reason === "not trusted"))
+      throw new Error(`denied config.permissions event: ${JSON.stringify(denied)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("GocciaWasmTestRunner takes -P instead of a trust store...");
+if (existsSync(resolve(WASMTESTRUNNER))) {
+  const tmp = makeTmp();
+  try {
+    mkdirSync(join(tmp, "unsafe"));
+    writeFileSync(join(tmp, "unsafe", "goccia.json"), '{"unsafe-function-constructor": true}\n');
+    writeFileSync(join(tmp, "unsafe", "x.test.js"), 'test("x", () => { expect(new Function("return 1")()).toBe(1); });\n');
+    writeFileSync(join(tmp, "manifest.txt"), `${join(tmp, "unsafe", "x.test.js")}\n`);
+    const refused = run(WASMTESTRUNNER, [join(tmp, "manifest.txt")]);
+    expectExit(refused, 1, "Wasm runner without -P");
+    expectIncludes(refused.stdout, `FILEERROR ${join(tmp, "unsafe", "x.test.js")} :: ${join(tmp, "unsafe", "goccia.json")} requests permissions; pass -P to accept them (GocciaWasmTestRunner has no trust store)`, "Wasm runner without -P");
+    const accepted = run(WASMTESTRUNNER, ["-P", join(tmp, "manifest.txt")]);
+    expectExit(accepted, 0, "Wasm runner -P");
+    expectIncludes(accepted.stdout, "PASS ", "Wasm runner -P");
+  } finally {
+    clean(tmp);
+  }
+}
+
+clean(privateHome);
 console.log("\nAll test-cli-permissions.ts tests passed.");

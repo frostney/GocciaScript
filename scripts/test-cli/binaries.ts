@@ -14,3 +14,4 @@ export const TEST262RUNNER = `./build/GocciaTest262Runner${ext}`;
 export const BUNDLER = `./build/GocciaBundler${ext}`;
 export const BENCHRUNNER = `./build/GocciaBenchmarkRunner${ext}`;
 export const FUZZHARNESS = `./build/GocciaFuzzHarness${ext}`;
+export const WASMTESTRUNNER = `./build/GocciaWasmTestRunner${ext}`;
