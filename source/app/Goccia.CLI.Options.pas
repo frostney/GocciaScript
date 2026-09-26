@@ -196,12 +196,6 @@ const
   LIMITS_GROUP = 'Limits';
   PERMISSIONS_CONFIG_HINT =
     '; declare it in the config''s "permissions" object instead';
-  NET_SCOPE_HINT =
-    'use host, host:port, *.domain, an IP, a CIDR range, or private';
-  IMPORT_SCOPE_HINT =
-    'use node_modules, node_modules=<dir>, or a provider such as github';
-  IMPORT_SCOPE_REQUIREMENT =
-    'node_modules[=<dir>] or a provider such as github';
 
 type
   TGocciaCapabilityOptionText = record
@@ -351,7 +345,6 @@ procedure ValidateOptionScopes(const AOption: TScopeListOption;
   const ACapability: TGocciaCapability; const AWorkingDirectory: string);
 var
   I: Integer;
-  Hint: string;
 begin
   for I := 0 to AOption.Scopes.Count - 1 do
     try
@@ -359,18 +352,9 @@ begin
         ACapability, AOption.Scopes[I], AWorkingDirectory));
     except
       on E: EGocciaCapabilityScopeError do
-      begin
-        case ACapability of
-          gcNet:
-            Hint := NET_SCOPE_HINT;
-          gcImport:
-            Hint := IMPORT_SCOPE_HINT;
-        else
-          Hint := E.Message;
-        end;
         raise TParseError.CreateFmt('Invalid scope for --%s: "%s" (%s)',
-          [AOption.LongName, AOption.Scopes[I], Hint]);
-      end;
+          [AOption.LongName, AOption.Scopes[I],
+           PermissionScopeHint(ACapability)]);
     end;
 end;
 

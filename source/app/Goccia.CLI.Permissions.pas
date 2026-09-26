@@ -52,6 +52,9 @@ type
 
 const
   PERMISSIONS_CONFIG_KEY = 'permissions';
+  { What an import scope must name, for the missing-scope errors. }
+  IMPORT_SCOPE_REQUIREMENT =
+    'node_modules[=<dir>] or a provider such as github';
   ALL_CAPABILITIES: TGocciaHonoredCapabilities = [gcRead, gcNet, gcFFI,
     gcImport];
 
@@ -82,6 +85,9 @@ function UnsupportedRequestWarnings(
   const AHonored: TGocciaHonoredCapabilities;
   const AProgramName: string): TGocciaCapabilityScopes;
 
+{ The parenthesized advice of an invalid-scope error for ACapability. }
+function PermissionScopeHint(const ACapability: TGocciaCapability): string;
+
 { `read, net, and ffi`; `no capability flags` for an empty set. }
 function DescribeCapabilities(const ACapabilities: TGocciaHonoredCapabilities):
   string;
@@ -98,8 +104,6 @@ const
   ALLOW_PREFIX = 'allow-';
   DENY_PREFIX = 'deny-';
   NODE_MODULES_CEILING_PREFIX = IMPORT_NODE_MODULES_SCOPE + '=';
-  IMPORT_SCOPE_REQUIREMENT =
-    'node_modules[=<dir>] or a provider such as github';
   NET_SCOPE_HINT =
     'use host, host:port, *.domain, an IP, a CIDR range, or private';
   IMPORT_SCOPE_HINT =
@@ -215,7 +219,7 @@ begin
   Result := False;
 end;
 
-function ScopeHint(const ACapability: TGocciaCapability): string;
+function PermissionScopeHint(const ACapability: TGocciaCapability): string;
 begin
   case ACapability of
     gcNet:
@@ -235,7 +239,7 @@ begin
   except
     on E: EGocciaCapabilityScopeError do
       raise TParseError.CreateFmt('%s: invalid scope in "%s": "%s" (%s)',
-        [ALocation, AKey, AWritten, ScopeHint(ACapability)]);
+        [ALocation, AKey, AWritten, PermissionScopeHint(ACapability)]);
   end;
 end;
 
