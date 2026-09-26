@@ -9645,14 +9645,14 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
     clean(tmp);
   }
 });
-// ── Sandbox runner engine options (WP-5) ───────────────────────────────
+// ── Sandbox mode engine options (WP-5) ─────────────────────────────────
 //
-// The sandbox runner builds its own engine, because it needs its own module
-// resolver. It used to build it without applying the engine options, so the
-// binary whose entire purpose is running untrusted code silently ignored its
-// own resource and network policy flags. These assert the flags reach the
-// engine, and — for the budget — that the refusal is a refusal rather than a
-// broken gate that rejects everything.
+// Sandbox mode builds its own engine, because it needs its own module
+// resolver. The sandbox runner it replaced once built it without applying the
+// engine options, so the mode whose entire purpose is running untrusted code
+// silently ignored its own resource and network policy flags. These assert
+// the flags reach the engine, and — for the budget — that the refusal is a
+// refusal rather than a broken gate that rejects everything.
 
 await section("Runner sandbox mode: --max-memory bounds the sandboxed program...", async () => {
   const tmp = makeTmp();
