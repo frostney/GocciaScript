@@ -125,6 +125,42 @@ console.log("Removed flags exit 2 and name their replacement...");
   }
   expectIncludes(test262.stderr, "Error: --timeout-ms was removed in GocciaScript 0.14.0; use --timeout instead (units: 20s)", "Test262 --timeout-ms");
 
+  // Argument problems keep the convention; a failure of the run itself (here,
+  // a report it cannot write) exits 1, not 2.
+  {
+    const tmp = makeTmp();
+    try {
+      const suite = join(tmp, "suite");
+      mkdirSync(join(suite, "harness"), { recursive: true });
+      mkdirSync(join(suite, "test", "built-ins"), { recursive: true });
+      writeFileSync(join(suite, "harness", "sta.js"), "");
+      writeFileSync(join(suite, "harness", "assert.js"), "");
+      writeFileSync(join(suite, "test", "built-ins", "ok.js"), "1;\n");
+      const base = ["--suite-dir", suite, "--categories", "built-ins", "--jobs=1"];
+      const cases: [string[], string, number][] = [
+        [["--jobs"], "--jobs requires a value", 2],
+        [["--suite-dir="], "--suite-dir requires a value", 2],
+        [["--bogus"], "Unknown argument: --bogus", 2],
+        [[], "--suite-dir is required", 2],
+        [[...base, "--shard-index=0"], "--shard-index and --shard-count must be provided together", 2],
+        [[...base, "--mode=interpreted", `--profile-dir=${join(tmp, "profiles")}`], "--profile-dir requires --mode=bytecode", 2],
+        [[...base, "--shard-index=2", "--shard-count=2"], "--shard-index must be less than --shard-count", 1],
+        [["--suite-dir", join(tmp, "missing")], "test262 test directory not found under", 1],
+        // The output path is a directory, so the report cannot be written.
+        [[...base, "--output", suite], "Error: ", 1],
+      ];
+      // The runner finds its harness relative to the repository root.
+      for (const [args, message, code] of cases) {
+        const result = run(TEST262RUNNER, args);
+        expectExit(result, code, `GocciaTest262Runner ${args.join(" ")}`);
+        expectIncludes(result.stderr, message, `GocciaTest262Runner ${args.join(" ")}`);
+      }
+      expectExit(run(TEST262RUNNER, [...base, "--output", join(tmp, "report.json")]), 0, "GocciaTest262Runner with a writable report");
+    } finally {
+      clean(tmp);
+    }
+  }
+
   // Removed flags stay out of --help.
   const help = run(LOADER, ["--help"]);
   expectExit(help, 0, "Loader --help");
