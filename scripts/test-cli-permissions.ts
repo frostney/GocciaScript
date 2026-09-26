@@ -1347,6 +1347,19 @@ console.log("Module manifests a config names run under the script's capabilities
     expectExit(dataAudit, 1, "config data manifest audit");
     expectIncludes(readFileSync(join(tmp, "audit.jsonl"), "utf8"), '"kind":"read.file","decision":"deny"', "config data manifest audit");
 
+    // A manifest is judged against the directory of the config that names
+    // it: a root config's manifest still serves a subfolder that has a config
+    // of its own (and so a project of its own).
+    mkdirSync(join(tmp, "repo", "tests", "sub"), { recursive: true });
+    writeFileSync(join(tmp, "repo", "goccia.json"), '{"modules": "./manifest.json"}\n');
+    writeFileSync(join(tmp, "repo", "manifest.json"), '{"host:x": {"content": "export default 4;"}}\n');
+    writeFileSync(join(tmp, "repo", "tests", "sub", "goccia.json"), '{"compat-var": true}\n');
+    writeFileSync(join(tmp, "repo", "tests", "sub", "a.test.js"),
+      'import x from "host:x"; test("x", () => { expect(x).toBe(4); });\n');
+    const rootManifest = run(TESTRUNNER, ["tests", "--no-progress"], { cwd: join(tmp, "repo") });
+    expectExit(rootManifest, 0, "root config manifest for a subfolder with its own config");
+    expectIncludes(rootManifest.stdout, "Passed: 1", "root config manifest for a subfolder with its own config");
+
     // Inside the project it is part of the module graph; on the command line
     // it is the user's own choice.
     writeFileSync(join(project, "manifest.json"), '{"host:x": {"content": "export default 3;"}}\n');

@@ -411,12 +411,16 @@ allow-ffi = ["../fixtures/ffi"]
   value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
-- A module manifest a config names (`"modules"`) is read and evaluated under
-  the capability set of the script the config governs: inside the project it
-  is part of the module graph, elsewhere it needs a read grant, and a
-  JavaScript or TypeScript manifest runs in an engine of its own (see
-  [Virtual Modules](virtual-modules.md)). `--modules` on the command line
-  stays a host request.
+- A file a config names as an input — a module manifest (`"modules"`), a
+  globals file or module (`"globals"`), or a host-environment module
+  (`"host-environment"`) — is read under the capability set of the script
+  the config governs, with the config's own directory as the project: inside
+  that directory it is covered as the module graph is, elsewhere it needs a
+  read grant. A JavaScript or TypeScript manifest or globals module runs in an
+  engine of its own and only data crosses back; a host-environment module is a
+  guest module of the script's engine, never host-owned (see
+  [Virtual Modules](virtual-modules.md)). The same options on the command line
+  stay host requests.
 - A config writes host files only inside its own directory: `log`,
   `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
   and `diff-output` resolve against the declaring file and fail with status 1
