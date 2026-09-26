@@ -41,6 +41,9 @@ type
     procedure ReleaseDependent; override;
     procedure ReleaseOwner;
     function FindSymbol(const AName: string): Pointer;
+    { The file the platform loader mapped, where it can say; see
+      DynamicLibraries.LoadedLibraryPath. }
+    function LoadedPath: string;
     function ClosedErrorMessage: string; override;
     procedure Close;
 
@@ -117,6 +120,11 @@ begin
   FOwnerAttached := False;
   if FDependentCount = 0 then
     Free;
+end;
+
+function TGocciaFFILibraryGuard.LoadedPath: string;
+begin
+  Result := LoadedLibraryPath(FHandle);
 end;
 
 function TGocciaFFILibraryGuard.FindSymbol(const AName: string): Pointer;

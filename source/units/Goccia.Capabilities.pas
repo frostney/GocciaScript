@@ -103,6 +103,12 @@ type
     function AllowsPath(const ACapability: TGocciaCapability;
       const APath: string): Boolean;
 
+    { read/ffi: APath is already canonical — for example the path the kernel
+      reports for a file descriptor already opened — and is matched as
+      written, without touching the filesystem again. }
+    function AllowsCanonicalPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
+
     { net, before name resolution. An IP-literal host is judged as the
       destination address it names. A host name allowed only through the
       `private` scope passes provisionally: `private` grants private
@@ -826,13 +832,23 @@ end;
 
 function TGocciaCapabilities.AllowsPath(
   const ACapability: TGocciaCapability; const APath: string): Boolean;
+begin
+  Result := AllowsCanonicalPath(ACapability,
+    CanonicalPathRequest(ACapability, APath));
+end;
+
+function TGocciaCapabilities.AllowsCanonicalPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
 var
   I, J: Integer;
   Path: string;
   LayerAllows: Boolean;
   Rule: TGocciaCapabilityRule;
 begin
-  Path := CanonicalPathRequest(ACapability, APath);
+  if not (ACapability in [gcRead, gcFFI]) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s is not a path capability', [CapabilityName(ACapability)]);
+  Path := APath;
   if (Length(FLayers) = 0) or (Path = '') then
     Exit(False);
   if LayersDenyCanonicalPath(FLayers, ACapability, Path) then
@@ -875,6 +891,15 @@ begin
     (ANetScope.Port = APort);
 end;
 
+{ A port-scoped deny covers its port, and any request whose port is not
+  known (zero). }
+function NetDenyPortMatches(const ANetScope: TGocciaNetScope;
+  const APort: Integer): Boolean;
+begin
+  Result := (ANetScope.Port = 0) or (APort <= 0) or
+    (APort = NET_ANY_PORT) or (ANetScope.Port = APort);
+end;
+
 function NetRuleDenies(const ARule: TGocciaCapabilityRule;
   const ARequest: TGocciaNetRequest): Boolean;
 var
@@ -895,7 +920,7 @@ begin
         ARequest.HostIsAddress, ARequest.HostAddress, ARequest.Port,
         True) then
         Exit(True)
-      else if ARequest.HasAddress and NetScopePortMatches(NetScope,
+      else if ARequest.HasAddress and NetDenyPortMatches(NetScope,
         ARequest.Port) and NetScopeCoversAddress(NetScope,
         ARequest.Address, True) then
         Exit(True);

@@ -65,14 +65,14 @@ Who named the manifest decides how much it may do:
 
 - A manifest named on the command line (`--modules`) is the user's own choice.
   It is a host file, always read from the filesystem, and it and its own
-  imports are host requests the `read` capability does not check. Normally it
-  is evaluated through the script's module loader, so code it leaves behind —
-  a global function that calls `import()`, say — imports as the host did.
-  Under `--deny-read` (an outright `read` deny) it is evaluated in an isolated
-  loader instead, so such an import is a guest read and is refused with
-  `PermissionDenied` like the script's own imports. An engine whose module
-  provider does not read the host filesystem (`GocciaRunner`'s sandbox mode)
-  always evaluates it in an isolated loader.
+  imports are host requests the `read` capability does not check while the
+  manifest is being loaded. Code it leaves behind — a global function that
+  calls `import()`, say — runs later as guest code, so such an import is a
+  guest read: it needs a `read` grant outside the module graph and is refused
+  with `PermissionDenied` without one. Under `--deny-read` (an outright `read`
+  deny) the manifest is evaluated in an isolated loader. An engine whose
+  module provider does not read the host filesystem (`GocciaRunner`'s sandbox
+  mode) always evaluates it in an isolated loader.
 - A manifest a config file names (`"modules": "./manifest.js"`, or an array of
   paths, of any format) is the repository's choice, so it runs under the
   capability set of the script the config governs
@@ -81,8 +81,9 @@ Who named the manifest decides how much it may do:
   else needs a read grant, and a read deny refuses it with `PermissionDenied`
   and a `read.file` audit event. A JavaScript or TypeScript manifest is
   evaluated in an engine of its own with that capability set, so its imports
-  are judged like the script's, and whatever it leaves on its global object
-  stays in that engine; only its default export reaches the script, as data.
+  are judged like the script's even while it loads, and whatever it leaves on
+  its global object stays in that engine; only its default export reaches the
+  script, as data.
 
 Project config may contain a module map directly:
 
