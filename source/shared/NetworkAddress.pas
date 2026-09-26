@@ -49,6 +49,12 @@ function IsAddressInNetwork(const AAddress, ANetwork: TNetworkAddress;
 
 function AddressesEqual(const A, B: TNetworkAddress): Boolean;
 
+{ The IPv4 host an IPv6 address is translated or relayed to: the well-known
+  NAT64 prefix 64:ff9b::/96 (RFC 6052) carries it in the last four bytes,
+  6to4 2002::/16 (RFC 3056) in bytes 2..5. False for any other address. }
+function TryGetTranslatedIPv4(const AAddress: TNetworkAddress;
+  out AIPv4: TNetworkAddress): Boolean;
+
 { True when the address belongs to a range that is not routable on the public
   internet: RFC 1918, loopback, "this host", link-local (which includes the
   cloud metadata endpoint 169.254.169.254), CGNAT, the IETF protocol block,
@@ -348,10 +354,36 @@ begin
   Result := True;
 end;
 
+function TryGetTranslatedIPv4(const AAddress: TNetworkAddress;
+  out AIPv4: TNetworkAddress): Boolean;
+var
+  I: Integer;
+begin
+  FillChar(AIPv4, SizeOf(AIPv4), 0);
+  if AAddress.Family <> nafIPv6 then
+    Exit(False);
+  if (AAddress.Bytes[0] = $00) and (AAddress.Bytes[1] = $64) and
+     (AAddress.Bytes[2] = $FF) and (AAddress.Bytes[3] = $9B) then
+  begin
+    for I := 4 to 11 do
+      if AAddress.Bytes[I] <> 0 then
+        Exit(False);
+    AIPv4 := EmbeddedIPv4(AAddress, 12);
+    Exit(True);
+  end;
+  if (AAddress.Bytes[0] = $20) and (AAddress.Bytes[1] = $02) then
+  begin
+    AIPv4 := EmbeddedIPv4(AAddress, 2);
+    Exit(True);
+  end;
+  Result := False;
+end;
+
 function IsPrivateIPAddress(const AAddress: TNetworkAddress): Boolean;
 var
   I: Integer;
   AllZeroBeforeLast, AllZero: Boolean;
+  Translated: TNetworkAddress;
 begin
   if AAddress.Family = nafIPv4 then
   begin
@@ -405,26 +437,15 @@ begin
     end;
   if AllZero then
     Exit(True);
-  { 64:ff9b::/96 — NAT64 translates to the embedded IPv4 host;
-    64:ff9b:1::/48 is local-use NAT64 and never public. }
+  { 64:ff9b:1::/48 is local-use NAT64 and never public. }
   if (AAddress.Bytes[0] = $00) and (AAddress.Bytes[1] = $64) and
-     (AAddress.Bytes[2] = $FF) and (AAddress.Bytes[3] = $9B) then
-  begin
-    if (AAddress.Bytes[4] = $00) and (AAddress.Bytes[5] = $01) then
-      Exit(True);
-    AllZero := True;
-    for I := 4 to 11 do
-      if AAddress.Bytes[I] <> 0 then
-      begin
-        AllZero := False;
-        Break;
-      end;
-    if AllZero then
-      Exit(IsPrivateIPAddress(EmbeddedIPv4(AAddress, 12)));
-  end;
-  { 2002::/16 — 6to4 relays to the IPv4 host in bytes 2..5. }
-  if (AAddress.Bytes[0] = $20) and (AAddress.Bytes[1] = $02) then
-    Exit(IsPrivateIPAddress(EmbeddedIPv4(AAddress, 2)));
+     (AAddress.Bytes[2] = $FF) and (AAddress.Bytes[3] = $9B) and
+     (AAddress.Bytes[4] = $00) and (AAddress.Bytes[5] = $01) then
+    Exit(True);
+  { 64:ff9b::/96 (NAT64) and 2002::/16 (6to4) reach the IPv4 host they
+    embed, so they are as private as it is. }
+  if TryGetTranslatedIPv4(AAddress, Translated) then
+    Exit(IsPrivateIPAddress(Translated));
   Result := False;
 end;
 

@@ -39,6 +39,7 @@ uses
 
   Goccia.Constants.PropertyNames,
   Goccia.Error,
+  Goccia.Terminal.Colors,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.SymbolValue;
@@ -100,7 +101,15 @@ var
   StackText, MessageText, NameText: string;
   ExcerptLines: TStringList;
   SourceAuthorized: Boolean;
+  Suggestion: string;
 begin
+  { A denial's host-side suggestion travels on the error itself, so it is
+    shown even when the error reached the host through a rejected promise
+    rather than the exception that first carried it. }
+  Suggestion := ASuggestion;
+  if (Suggestion = '') and (AThrown is TGocciaErrorObjectValue) then
+    Suggestion := TGocciaErrorObjectValue(AThrown).ErrorHostSuggestion;
+
   // A code frame is rendered ONLY from the engine's own recorded provenance,
   // captured onto the error object when the engine created it (see
   // Goccia.Values.ErrorHelper.AttachErrorSourceProvenance). The thrown value's
@@ -138,7 +147,7 @@ begin
       try
         Exit(FormatErrorWithSourceContext(ErrorName, ErrorMessage,
           ErrorObject.ErrorSourcePath, ErrorObject.ErrorSourceLine,
-          ErrorObject.ErrorSourceColumn, ExcerptLines, AUseColor, ASuggestion,
+          ErrorObject.ErrorSourceColumn, ExcerptLines, AUseColor, Suggestion,
           ErrorObject.ErrorSourceExcerptFirstLine));
       finally
         ExcerptLines.Free;
@@ -154,14 +163,14 @@ begin
       // lines are withheld and only the location is shown.
       Exit(FormatErrorWithSourceContext(ErrorName, ErrorMessage,
         ErrorObject.ErrorSourcePath, ErrorObject.ErrorSourceLine,
-        ErrorObject.ErrorSourceColumn, ASourceLines, AUseColor, ASuggestion))
+        ErrorObject.ErrorSourceColumn, ASourceLines, AUseColor, Suggestion))
     else if ErrorObject.ErrorSourceLine > 0 then
       // Provenance recorded, but the source is unavailable (not the entry, not
       // a captured module). Show the header/location without a code frame rather
       // than quoting any other file.
       Exit(FormatErrorWithSourceContext(ErrorName, ErrorMessage,
         ErrorObject.ErrorSourcePath, ErrorObject.ErrorSourceLine,
-        ErrorObject.ErrorSourceColumn, nil, AUseColor, ASuggestion));
+        ErrorObject.ErrorSourceColumn, nil, AUseColor, Suggestion));
   end;
 
   // Fallback: forged error object, thrown non-error object, or a primitive —
@@ -191,6 +200,9 @@ begin
     // Primitive non-Symbol values: ToStringLiteral cannot invoke user code
     // and cannot throw, so it is safe to call here.
     Result := AThrown.ToStringLiteral.Value;
+  if Suggestion <> '' then
+    Result := Result + sLineBreak + '  ' +
+      Colorize('Suggestion: ' + Suggestion, ANSI_YELLOW, AUseColor);
 end;
 
 end.

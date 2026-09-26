@@ -2335,6 +2335,7 @@ procedure EvaluateEntryRequestedModulesInSourceOrder(
 var
   I: Integer;
   ImportDecl: TGocciaImportDeclaration;
+  PreviousCallSite: TGocciaCallSite;
   RequestedModule: TGocciaModule;
   Stmt: TGocciaStatement;
 begin
@@ -2344,33 +2345,45 @@ begin
   for I := 0 to AProgram.Body.Count - 1 do
   begin
     Stmt := AProgram.Body[I];
-    if Stmt is TGocciaImportDeclaration then
-    begin
-      ImportDecl := TGocciaImportDeclaration(Stmt);
-      case ImportDecl.Phase of
-        icpEvaluation:
-        begin
-          RequestedModule := AModuleLoader.LoadModule(EncodeImportSpecifierAttribute(
-            ImportDecl.ModulePath, ImportDecl.AttributeType),
-            AImportingFilePath);
-          if Assigned(RequestedModule) and Assigned(ARequestedModules) then
-            ARequestedModules.Add(RequestedModule);
+    if not ((Stmt is TGocciaImportDeclaration) or
+       (Stmt is TGocciaReExportDeclaration)) then
+      Continue;
+    { The declaration is the call site of what loading it decides or refuses,
+      as OP_IMPORT makes it in the VM. }
+    EnterGocciaCallSite(AImportingFilePath, Stmt.Line, Stmt.Column,
+      PreviousCallSite);
+    try
+      if Stmt is TGocciaImportDeclaration then
+      begin
+        ImportDecl := TGocciaImportDeclaration(Stmt);
+        case ImportDecl.Phase of
+          icpEvaluation:
+          begin
+            RequestedModule := AModuleLoader.LoadModule(
+              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+              ImportDecl.AttributeType), AImportingFilePath);
+            if Assigned(RequestedModule) and Assigned(ARequestedModules) then
+              ARequestedModules.Add(RequestedModule);
+          end;
+          icpDefer:
+            AModuleLoader.LoadDeferredModuleNamespaceValueForEvaluation(
+              EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+              ImportDecl.AttributeType), AImportingFilePath,
+              ARequestedModules);
         end;
-        icpDefer:
-          AModuleLoader.LoadDeferredModuleNamespaceValueForEvaluation(
-            EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
-            ImportDecl.AttributeType), AImportingFilePath, ARequestedModules);
+      end
+      else
+      begin
+        RequestedModule := AModuleLoader.LoadModule(
+          EncodeImportSpecifierAttribute(
+            TGocciaReExportDeclaration(Stmt).ModulePath,
+            TGocciaReExportDeclaration(Stmt).AttributeType),
+          AImportingFilePath);
+        if Assigned(RequestedModule) and Assigned(ARequestedModules) then
+          ARequestedModules.Add(RequestedModule);
       end;
-    end
-    else if Stmt is TGocciaReExportDeclaration then
-    begin
-      RequestedModule := AModuleLoader.LoadModule(
-        EncodeImportSpecifierAttribute(
-          TGocciaReExportDeclaration(Stmt).ModulePath,
-          TGocciaReExportDeclaration(Stmt).AttributeType),
-        AImportingFilePath);
-      if Assigned(RequestedModule) and Assigned(ARequestedModules) then
-        ARequestedModules.Add(RequestedModule);
+    finally
+      LeaveGocciaCallSite(PreviousCallSite);
     end;
   end;
 end;

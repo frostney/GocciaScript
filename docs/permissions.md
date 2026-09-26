@@ -78,10 +78,14 @@ unscoped and no layer has an `ffi` deny scope.
 
 Host scopes are matched against the URL's host before any name lookup, so a
 refused request never becomes an observable side effect. One trailing dot is
-ignored on both sides, so `tracker.example.com.` is the host
-`tracker.example.com`. An IP or CIDR scope matches only a URL that names an
+ignored on both sides, for names and IPv4 literals alike, so
+`tracker.example.com.` is the host `tracker.example.com` and `127.0.0.1.` the
+address `127.0.0.1`. An IP or CIDR scope matches only a URL that names an
 address; host names are never resolved to match one. An IPv4-mapped IPv6
-address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names.
+address (`::ffff:169.254.169.254`) is judged as the IPv4 address it names, and
+an IP or CIDR scope also matches the IPv4 host a NAT64 (`64:ff9b::/96`) or 6to4
+(`2002::/16`) address reaches: a deny on `169.254.169.254` covers
+`64:ff9b::a9fe:a9fe` and `2002:a9fe:a9fe::1`.
 
 Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
@@ -116,18 +120,23 @@ message; one it explicitly denies throws `PermissionDenied`.
 Provider hosts (`github`) are modeled so a set can carry them, but provider
 resolution is not implemented yet.
 
-Files the import capability grants are part of the module graph (see below):
-once a package is reached through a granted `node_modules` scope, its files
-need no `read` grant, wherever that `node_modules` directory is. Provider
-packages will follow the same rule.
+Packages the import capability grants are part of the module graph (see
+below): when a bare specifier resolves through a granted `node_modules` scope,
+the package's canonical root — symlinks resolved, so a workspace or pnpm link
+counts where it really lives — joins the graph. Provider packages will follow
+the same rule.
 
 ## The module-graph exemption
 
 Code needs to import its own files. Reads of the host filesystem made by a
 **static import with a literal specifier** — including `json`, `text`, and
 `bytes` imports, and `import()` whose specifier is a string literal — of a file
-inside the **project**, or inside a `node_modules` directory the `import`
-capability grants, need no `read` grant. The project is the directory of the
+inside the **project** need no `read` grant. Neither does the file a literal
+bare specifier resolved to through the `import` capability, nor a literal import
+made by a file of that package that stays inside the package's canonical root.
+A path that merely contains a `node_modules` segment is no grant: a relative or
+absolute import of `./node_modules/x/file` is judged like any other path, by
+where it canonically lives. The project is the directory of the
 nearest `goccia.json`, `goccia.json5`, or `goccia.toml` above the entry file,
 or the entry file's own directory when there is none (the `ProjectRoot` property of `TGocciaEngine`).
 
@@ -151,13 +160,20 @@ Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
 Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
 and their imports) are host requests and never checked; a guest importing the
-same file later is checked like any other guest read, cached or not. Before the
-resolver probes the host for a relative or absolute specifier the request is
-checked against its lexical candidate — and refused when a deny scope names a
-file the extension or index probe could reach — so a request the set refuses
-cannot learn whether the file exists. For the same reason
-`import.meta.resolve` answers with the unprobed URL for a path the engine may
-not read.
+same file later is checked like any other guest read, cached or not.
+
+For a relative or absolute specifier the resolver tries candidates in order —
+the exact path, the extension variants, then `<path>/index.<ext>` — and each
+candidate is judged, canonically, before the host is asked whether it exists. A
+candidate the set refuses stops resolution with `PermissionDenied` there, so
+whether a file the engine may not read exists can never decide between
+`PermissionDenied`, "Module not found", or a later candidate loading. Deny
+scopes that no candidate reaches do not matter: denying `lib.js.map` or
+`lib-private` leaves `import "./lib"` alone, and a deny naming the directory
+`lib` refuses `import "./lib"` because `lib` itself is the first candidate. The
+path a request finally resolves to is judged again before any cache serves it.
+`import.meta.resolve` runs the same judgment and, when a candidate is refused,
+answers with the unprobed URL instead.
 
 ## PermissionDenied
 
@@ -180,11 +196,20 @@ for: the specifier as written, the host (plus a non-default port), or the
 library path as passed to `FFI.open`. It never contains an expanded host path
 ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)). The host-side
 report — the CLI's `Suggestion:` line, or `TGocciaThrowValue.Suggestion` for an
+<<<<<<< HEAD
 embedder — names the canonical path and how to grant it: `--allow-read=<dir>`
 or `"allow-read"` in a `permissions` block for a read the capability does not
 cover (with a note that a computed `import()` is outside the module graph),
 `--allow-ffi[=<dir>]` for a library, `--allow-net=<host>` or `private` for a
 host, and the `--deny-*` or `deny-*` entry that refused a denied one.
+=======
+embedder — may name the canonical path and the option that would grant it. The
+suggestion also travels on the error object (never as a guest-visible property),
+so a denial that surfaces through a rejected `import()` or `fetch()` promise
+still reports it. Both executors locate a denial at the guest request that
+caused it: the `import` or `export … from` declaration, the `import()`
+expression, or the `fetch()`/`FFI.open()` call.
+>>>>>>> origin/feat/engine-capabilities
 
 ## Audit events
 
@@ -237,7 +262,7 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaCapabilities.None` / `.Unrestricted` | Grants nothing / everything including `private` (tests, fully trusted hosts) |
 | `.Allow(cap, scope)` / `.Deny(cap, scope)` | Return a copy with the scope added to the innermost layer |
 | `.Narrow(child)` | Return a copy with the child's layers appended |
-| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesPathsStartingWith`, `.DeniesNodeModules`, `.AllowsProvider` | Queries |
+| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesNodeModules`, `.AllowsProvider` | Queries |
 | `.ExplainNetHostDenial` | The host-side reason a net host is refused, for audit |
 | `.ToJSON` | The layers, as `capabilities.effective` reports them |
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |

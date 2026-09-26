@@ -3300,9 +3300,18 @@
             GlobalName := Template.DebugInfo.SourceFile
           else
             GlobalName := FCurrentModuleSourcePath;
-          SetRegister(A, ImportModuleValue(
-            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
-            GlobalName));
+          { The import declaration is the call site of what its load decides
+            or refuses, as for import(). }
+          CurrentInstructionDebugLocation(DebugLine, DebugColumn);
+          EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
+            PreviousCallSite);
+          try
+            SetRegister(A, ImportModuleValue(
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+              GlobalName));
+          finally
+            LeaveGocciaCallSite(PreviousCallSite);
+          end;
         end;
 
       OP_IMPORT_DEFER:
@@ -3312,9 +3321,18 @@
             GlobalName := Template.DebugInfo.SourceFile
           else
             GlobalName := FCurrentModuleSourcePath;
-          SetRegister(A, ImportDeferredModuleNamespaceValue(
-            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
-            GlobalName));
+          { The import declaration is the call site of what its load decides
+            or refuses, as for import(). }
+          CurrentInstructionDebugLocation(DebugLine, DebugColumn);
+          EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
+            PreviousCallSite);
+          try
+            SetRegister(A, ImportDeferredModuleNamespaceValue(
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+              GlobalName));
+          finally
+            LeaveGocciaCallSite(PreviousCallSite);
+          end;
         end;
 
       OP_IMPORT_SOURCE:
@@ -3324,9 +3342,18 @@
             GlobalName := Template.DebugInfo.SourceFile
           else
             GlobalName := FCurrentModuleSourcePath;
-          SetRegister(A, ImportModuleSourceValue(
-            Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
-            GlobalName));
+          { The import declaration is the call site of what its load decides
+            or refuses, as for import(). }
+          CurrentInstructionDebugLocation(DebugLine, DebugColumn);
+          EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
+            PreviousCallSite);
+          try
+            SetRegister(A, ImportModuleSourceValue(
+              Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue,
+              GlobalName));
+          finally
+            LeaveGocciaCallSite(PreviousCallSite);
+          end;
         end;
 
       OP_GET_IMPORT_BINDING:
@@ -3406,30 +3433,42 @@
               tphString).ToStringLiteral.Value;
             if DynImportComputed then
               SpecifierString := MarkComputedImportSpecifier(SpecifierString);
-            case C of
-              Ord(icpEvaluation):
-                if (TGocciaMicrotaskQueue.Instance <> nil) then
-                begin
-                  DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
-                    Self, DynImportPromise, SpecifierString, GlobalName);
-                  DynImportTask.Value :=
-                    TGocciaUndefinedLiteralValue.UndefinedValue;
-                  DynImportTask.ResultPromise := nil;
-                  DynImportTask.ReactionType := prtFulfill;
-                  TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
-                end
-                else
-                  ResolveDynamicImportPromise(DynImportPromise,
-                    SpecifierString, GlobalName);
-              Ord(icpSource):
-                DynImportPromise.Resolve(ImportModuleSourceValue(
-                  SpecifierString, GlobalName));
-              Ord(icpDefer):
-                DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
-                  SpecifierString, GlobalName));
-            else
-              raise Exception.CreateFmt(
-                'Unsupported dynamic import phase: %d', [C]);
+            { The import() is the call site of whatever its load decides or
+              refuses (audit events, PermissionDenied), as in the tree-walk
+              evaluator; a deferred start re-enters it. }
+            CurrentImportCallLocation(DebugLine, DebugColumn);
+            EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
+              PreviousCallSite);
+            try
+              case C of
+                Ord(icpEvaluation):
+                  if (TGocciaMicrotaskQueue.Instance <> nil) then
+                  begin
+                    DynImportTask.Handler :=
+                      TGocciaVMDynamicImportStartValue.Create(Self,
+                        DynImportPromise, SpecifierString, GlobalName,
+                        DebugLine, DebugColumn);
+                    DynImportTask.Value :=
+                      TGocciaUndefinedLiteralValue.UndefinedValue;
+                    DynImportTask.ResultPromise := nil;
+                    DynImportTask.ReactionType := prtFulfill;
+                    TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
+                  end
+                  else
+                    ResolveDynamicImportPromise(DynImportPromise,
+                      SpecifierString, GlobalName);
+                Ord(icpSource):
+                  DynImportPromise.Resolve(ImportModuleSourceValue(
+                    SpecifierString, GlobalName));
+                Ord(icpDefer):
+                  DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
+                    SpecifierString, GlobalName));
+              else
+                raise Exception.CreateFmt(
+                  'Unsupported dynamic import phase: %d', [C]);
+              end;
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
             end;
           except
             on E: EGocciaBytecodeThrow do
@@ -3493,27 +3532,36 @@
               SpecifierString, AttributeType);
             if DynImportComputed then
               SpecifierString := MarkComputedImportSpecifier(SpecifierString);
-            case TGocciaOpCode(Op) of
-              OP_DYNAMIC_IMPORT_OPTIONS:
-                if (TGocciaMicrotaskQueue.Instance <> nil) then
-                begin
-                  DynImportTask.Handler := TGocciaVMDynamicImportStartValue.Create(
-                    Self, DynImportPromise, SpecifierString, GlobalName);
-                  DynImportTask.Value :=
-                    TGocciaUndefinedLiteralValue.UndefinedValue;
-                  DynImportTask.ResultPromise := nil;
-                  DynImportTask.ReactionType := prtFulfill;
-                  TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
-                end
-                else
-                  ResolveDynamicImportPromise(DynImportPromise, SpecifierString,
-                    GlobalName);
-              OP_DYNAMIC_IMPORT_SOURCE_OPTIONS:
-                DynImportPromise.Resolve(ImportModuleSourceValue(
-                  SpecifierString, GlobalName));
-              OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
-                DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
-                  SpecifierString, GlobalName));
+            CurrentImportCallLocation(DebugLine, DebugColumn);
+            EnterGocciaCallSite(GlobalName, DebugLine, DebugColumn,
+              PreviousCallSite);
+            try
+              case TGocciaOpCode(Op) of
+                OP_DYNAMIC_IMPORT_OPTIONS:
+                  if (TGocciaMicrotaskQueue.Instance <> nil) then
+                  begin
+                    DynImportTask.Handler :=
+                      TGocciaVMDynamicImportStartValue.Create(Self,
+                        DynImportPromise, SpecifierString, GlobalName,
+                        DebugLine, DebugColumn);
+                    DynImportTask.Value :=
+                      TGocciaUndefinedLiteralValue.UndefinedValue;
+                    DynImportTask.ResultPromise := nil;
+                    DynImportTask.ReactionType := prtFulfill;
+                    TGocciaMicrotaskQueue.Instance.Enqueue(DynImportTask);
+                  end
+                  else
+                    ResolveDynamicImportPromise(DynImportPromise,
+                      SpecifierString, GlobalName);
+                OP_DYNAMIC_IMPORT_SOURCE_OPTIONS:
+                  DynImportPromise.Resolve(ImportModuleSourceValue(
+                    SpecifierString, GlobalName));
+                OP_DYNAMIC_IMPORT_DEFER_OPTIONS:
+                  DynImportPromise.Resolve(ImportDeferredModuleNamespaceValue(
+                    SpecifierString, GlobalName));
+              end;
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
             end;
           except
             on E: EGocciaBytecodeThrow do
