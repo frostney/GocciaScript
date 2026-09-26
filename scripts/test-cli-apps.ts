@@ -923,6 +923,70 @@ await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", asy
     throw new Error(`Test262 runner should expose realm hooks, got: ${proc.stdout.toString()}`);
 });
 
+await section("test262 runner: computed imports and importValue may read the suite...", async () => {
+  // test262 loads its fixtures through computed import() specifiers and
+  // ShadowRealm.prototype.importValue, neither of which is part of the static
+  // module graph; the case engine's capability set has to grant reads of the
+  // suite (ADR 0122).
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), [
+      "function $DONE(error) {",
+      "  if (error) print('Test262:AsyncTestFailure:' + error.name + ': ' + error.message);",
+      "  else print('Test262:AsyncTestComplete');",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "value_FIXTURE.js"), "export const value = 1;\n");
+    writeFileSync(join(tests, "computed-import.js"), [
+      "/*---",
+      "flags: [async]",
+      "---*/",
+      "const name = './value' + '_FIXTURE.js';",
+      "import(name).then((ns) => {",
+      "  if (ns.value !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "import-value.js"), [
+      "/*---",
+      "flags: [async]",
+      "features: [ShadowRealm]",
+      "---*/",
+      "new ShadowRealm().importValue('./value_FIXTURE.js', 'value').then((v) => {",
+      "  if (v !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = join(tmp, `computed-${mode}.json`);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "language",
+          `--mode=${mode}`,
+          "--jobs=1",
+          "--output", out,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+      );
+      const report = JSON.parse(readFileSync(out, "utf8"));
+      if (proc.exitCode !== 0 || report.summary.passed !== 2)
+        throw new Error(`${mode}: computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("test262 runner: engine timeout is classified as TIMEOUT...", async () => {
   const tmp = makeTmp();
   try {
