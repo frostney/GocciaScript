@@ -374,7 +374,8 @@ begin
     else if StartsStr('--profile-output=', Arg) then
       AOptions.ProfileOutputPath :=
         Copy(Arg, Length('--profile-output=') + 1, MaxInt)
-    else if StartsStr('--', Arg) then
+    else if StartsStr('--', Arg) or
+       ((Length(Arg) = 2) and (Arg[1] = '-') and (Arg[2] <> '-')) then
       raise Exception.Create('Unknown option: ' + Arg)
     else if not AOptions.FileNameExplicit then
     begin

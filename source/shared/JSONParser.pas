@@ -53,6 +53,7 @@ type
     FLength: Integer;
     FPosition: Integer;
     FText: string;
+    FLastNumberText: string;
 
     class function HexDigitValue(const AChar: Char): Integer; static;
     class function IsASCIIDigit(const AChar: Char): Boolean; static;
@@ -113,6 +114,9 @@ type
 
     property CurrentPosition: Integer read FPosition;
     property SourceTextData: string read FText;
+    { The decimal literal behind the most recent OnInteger or OnFloat, as
+      written ('' for a literal such as Infinity or a hex number). }
+    property LastNumberText: string read FLastNumberText;
   public
     constructor Create; overload; virtual;
     constructor Create(
@@ -540,6 +544,7 @@ var
 begin
   NumStr := '';
   SignText := '';
+  FLastNumberText := '';
   DecimalPointSeen := False;
   ExponentSeen := False;
 
@@ -610,6 +615,7 @@ begin
       NumStr := NumStr + ReadChar;
   end;
 
+  FLastNumberText := NumStr;
   Val(NumStr, IntegerValue, Code);
   if (Code = 0) and not DecimalPointSeen and not ExponentSeen then
   begin

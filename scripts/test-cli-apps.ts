@@ -7411,6 +7411,37 @@ await section("Loader: read denials report one suggestion and location in both m
   }
 });
 
+await section("Loader: a static-import denial is located alike in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const proj = join(tmp, "proj");
+    mkdirSync(proj, { recursive: true });
+    writeFileSync(join(tmp, "outside.js"), "export const o = 1;\n");
+    // A script entry (.js) and a module entry (.mjs) take different paths
+    // through the interpreter; both must locate the denial at the declaration.
+    for (const name of ["static.js", "static.mjs"]) {
+      const file = join(proj, name);
+      writeFileSync(file, 'const x = 1;\nimport { o } from "../outside.js";\nconsole.log(o);\n');
+      const locations: string[] = [];
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(LOADER), file, `--mode=${mode}`, "--no-host-filesystem"],
+          { stdout: "pipe", stderr: "pipe", cwd: tmp },
+        );
+        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+        const location = text.split("\n").find((line) => line.includes("--> "));
+        if (proc.exitCode === 0 || !text.includes("PermissionDenied: read: ../outside.js") || !location)
+          throw new Error(`${name} static-import denial (${mode}) should be located: ${text}`);
+        locations.push(location.trim());
+      }
+      if (locations[0] !== `--> ${file}:2:1` || locations[1] !== locations[0])
+        throw new Error(`${name} static-import denial location differs between modes: ${JSON.stringify(locations)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: a fetch() denial is located alike in both modes...", async () => {
   const tmp = makeTmp();
   try {

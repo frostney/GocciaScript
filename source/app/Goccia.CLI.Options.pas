@@ -511,14 +511,17 @@ begin
   if (not TryParseCapabilityName(Name, Capability)) or
      (Name <> CapabilityName(Capability)) then
     Exit(False);
-  if Allow and not (Capability in AHonored) then
-    raise TCLIUsageError.CreateFmt(
-      '%s cannot grant %s; it supports %s. Remove --%s.',
-      [AProgramName, CapabilityName(Capability),
-       DescribeCapabilities(AHonored), PermissionKeyName(True, Capability)]);
+  { The shared parser's order: grammar (exit 1), then support (exit 2),
+    then scope values (exit 1). }
   Options := TGocciaCapabilityOptions.Create;
   try
     ParseArguments([AArgument], Options.Options).Free;
+    if Allow and not (Capability in AHonored) then
+      raise TCLIUsageError.CreateFmt(
+        '%s cannot grant %s; it supports %s. Remove --%s.',
+        [AProgramName, CapabilityName(Capability),
+         DescribeCapabilities(AHonored),
+         PermissionKeyName(True, Capability)]);
     Options.ValidateScopes(GetCurrentDir);
   finally
     Options.Free;
@@ -627,7 +630,7 @@ begin
     '--allow-net=private, or refuse them outright with --deny-net=private',
     'private ranges are denied by default; allow them with ' +
     '"permissions": { "allow-net": ["private"] }, or refuse them outright ' +
-    'with "deny-net": ["private"]'));
+    'with "permissions": { "deny-net": ["private"] }'));
   AList.Add(TRemovedOption.Create('fetch-max-response-bytes',
     'fetch-max-response-bytes',
     'use --max-fetch-bytes instead (units: 1MiB)',

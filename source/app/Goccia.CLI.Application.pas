@@ -47,6 +47,7 @@ type
     FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
+    FRootConfigExplicit: Boolean;
     FWarnLock: TGocciaCriticalSection;
     FWarned: TStringList;
     FTrust: TRepeatableOption;
@@ -115,21 +116,27 @@ type
       needing trust. Default: True. }
     function HonorsUnsafeRequests: Boolean; virtual;
     { The engine capability set for a file: command-line grants, plus the
-      permission request of the file's config (AFileConfigPath, or the root
-      config when the file has none) once the request is trusted or
-      accepted, minus every deny. }
-    function ResolveEngineCapabilities(
-      const AFileConfigPath: string): TGocciaCapabilities;
+      permission request of the config that governs AFileName (see
+      FileConfigVerdict) once the request is trusted or accepted, minus every
+      deny. }
+    function ResolveEngineCapabilities(const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaCapabilities;
     { The trust verdict of the config that governs a file: its own config
-      (AFileConfigPath), else the root config. Requests this binary cannot
-      honor are reported once on stderr. }
-    function FileConfigVerdict(
-      const AFileConfigPath: string): TGocciaConfigTrustVerdict;
+      (AFileConfigPath), else the root config when RootConfigGoverns
+      AFileName, else none. Requests this binary cannot honor are reported
+      once on stderr. }
+    function FileConfigVerdict(const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaConfigTrustVerdict;
     { The permission request of FileConfigVerdict. }
-    function FilePermissionRequest(
-      const AFileConfigPath: string): TGocciaConfigPermissionRequest;
+    function FilePermissionRequest(const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaConfigPermissionRequest;
+    { Whether the root config's permissions and unsafe-* keys apply to
+      AFileName: always for an explicit --config (and for AFileName = ''),
+      otherwise only when the file is inside the root config's directory
+      tree. A discovered config never grants to files outside its tree. }
+    function RootConfigGoverns(const AFileName: string): Boolean;
     { The config whose permissions govern AFileName: its nearest config, or
-      the root config when it has none. '' when there is neither. }
+      the root config when it governs the file. '' when there is neither. }
     function GoverningConfigPath(const AFileName: string): string;
     { The trust half of ValidateFileConfigs, for config paths rather than
       files: loads and validates each config, emits one config.permissions
@@ -1051,8 +1058,8 @@ begin
     Exit;
   for I := 0 to AFiles.Count - 1 do
     try
-      if ResolveEngineCapabilities(DiscoverFileConfigPath(AFiles[I]))
-         .Grants(gcFFI) then
+      if ResolveEngineCapabilities(DiscoverFileConfigPath(AFiles[I]),
+         AFiles[I]).Grants(gcFFI) then
         Exit(Result.Allow(gcFFI));
     except
       { A config error belongs to that file's own run, which reports it. }
@@ -1064,22 +1071,36 @@ end;
 function TGocciaCLIApplication.GoverningConfigPath(
   const AFileName: string): string;
 begin
-  { One config per file: the file's nearest config, else the root config.
-    extends is the only way configs compose. }
+  { One config per file: the file's nearest config, else the root config
+    when it governs the file. extends is the only way configs compose. }
   Result := DiscoverFileConfigPath(AFileName);
-  if Result = '' then
+  if (Result = '') and RootConfigGoverns(AFileName) then
     Result := FRootConfigPath;
 end;
 
-function TGocciaCLIApplication.FileConfigVerdict(
-  const AFileConfigPath: string): TGocciaConfigTrustVerdict;
+function TGocciaCLIApplication.RootConfigGoverns(
+  const AFileName: string): Boolean;
+var
+  FileDirectory: string;
+begin
+  if FRootConfigPath = '' then
+    Exit(False);
+  if FRootConfigExplicit or (AFileName = '') then
+    Exit(True);
+  FileDirectory := ExtractFileDir(ExpandFileName(AFileName));
+  Result := IsPathWithinScope(CanonicalCapabilityPath(FileDirectory),
+    CanonicalCapabilityPath(ExtractFileDir(FRootConfigPath)));
+end;
+
+function TGocciaCLIApplication.FileConfigVerdict(const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigTrustVerdict;
 var
   ConfigPath: string;
   Warnings: TGocciaCapabilityScopes;
   I: Integer;
 begin
   ConfigPath := AFileConfigPath;
-  if ConfigPath = '' then
+  if (ConfigPath = '') and RootConfigGoverns(AFileName) then
     ConfigPath := FRootConfigPath;
   if not Assigned(FTrustGate) then
     CreateTrustGate;
@@ -1093,9 +1114,10 @@ begin
 end;
 
 function TGocciaCLIApplication.FilePermissionRequest(
-  const AFileConfigPath: string): TGocciaConfigPermissionRequest;
+  const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigPermissionRequest;
 begin
-  Result := FileConfigVerdict(AFileConfigPath).Request;
+  Result := FileConfigVerdict(AFileConfigPath, AFileName).Request;
 end;
 
 function ResolveVerdictCapabilities(const AEngineOptions: TGocciaEngineOptions;
@@ -1115,10 +1137,11 @@ begin
 end;
 
 function TGocciaCLIApplication.ResolveEngineCapabilities(
-  const AFileConfigPath: string): TGocciaCapabilities;
+  const AFileConfigPath: string;
+  const AFileName: string): TGocciaCapabilities;
 begin
   Result := ResolveVerdictCapabilities(FEngineOptions,
-    FileConfigVerdict(AFileConfigPath), HonoredCapabilities);
+    FileConfigVerdict(AFileConfigPath, AFileName), HonoredCapabilities);
 end;
 
 procedure TGocciaCLIApplication.VerifyGoverningConfigs(
@@ -1629,7 +1652,7 @@ begin
     FileConfig := LoadFileConfig(FileConfigPath)
   else
     SetLength(FileConfig, 0);
-  Verdict := FileConfigVerdict(FileConfigPath);
+  Verdict := FileConfigVerdict(FileConfigPath, AFileName);
   { The capability set is fixed when the engine is created (ADR 0122). }
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
     ResolveVerdictCapabilities(FEngineOptions, Verdict, HonoredCapabilities));
@@ -2187,6 +2210,7 @@ begin
       ConfigPath := DiscoverConfigFile(ConfigStartDir,
         [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
     end;
+    FRootConfigExplicit := FConfig.Present;
     if (ConfigPath <> '') and
        ShouldApplyRootConfig(Paths, ConfigPath, FConfig.Present) then
     begin

@@ -56,8 +56,6 @@ type
     FLayers: TGocciaCapabilityLayers;
     function CopyWithScope(const ACapability: TGocciaCapability;
       const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
-    function NetHostVerdict(const AHost: string;
-      const APort: Integer): TGocciaNetHostVerdict;
   public
     { Grants nothing. The default for an engine created without a set. }
     class function None: TGocciaCapabilities; static;
@@ -119,6 +117,16 @@ type
       even an unscoped one, does not. A public address needs a host allow. A
       deny of `private` or of a covering IP/CIDR refuses the address whatever
       allows it. }
+    { The verdict AllowsNetHost is based on: allowed, denied by a deny rule,
+      a private address nothing names, or not allowed by any rule. }
+    function NetHostVerdict(const AHost: string;
+      const APort: Integer): TGocciaNetHostVerdict;
+
+    { When a net deny refuses AHost:APort, True with the deny scope that
+      matched it ('' for an unscoped deny), for host-side reports. }
+    function NetDenyScope(const AHost: string; const APort: Integer;
+      out AScope: string): Boolean;
+
     { Why AllowsNetHost refuses AHost:APort, for audit reasons; empty when it
       allows it. Host-side text: never shown to the guest. }
     function ExplainNetHostDenial(const AHost: string;
@@ -996,6 +1004,35 @@ function TGocciaCapabilities.AllowsNetHost(const AHost: string;
   const APort: Integer): Boolean;
 begin
   Result := NetHostVerdict(AHost, APort) = nhvAllowed;
+end;
+
+function TGocciaCapabilities.NetDenyScope(const AHost: string;
+  const APort: Integer; out AScope: string): Boolean;
+var
+  Request: TGocciaNetRequest;
+  Single: TGocciaCapabilityRule;
+  I, J: Integer;
+begin
+  AScope := '';
+  if not TryBuildNetRequest(AHost, APort, Request) then
+    Exit(False);
+  for I := 0 to High(FLayers) do
+  begin
+    if FLayers[I].Rules[gcNet].DenyAll then
+      Exit(True);
+    for J := 0 to High(FLayers[I].Rules[gcNet].DenyScopes) do
+    begin
+      Single := Default(TGocciaCapabilityRule);
+      SetLength(Single.DenyScopes, 1);
+      Single.DenyScopes[0] := FLayers[I].Rules[gcNet].DenyScopes[J];
+      if NetRuleDenies(Single, Request) then
+      begin
+        AScope := Single.DenyScopes[0];
+        Exit(True);
+      end;
+    end;
+  end;
+  Result := False;
 end;
 
 function TGocciaCapabilities.ExplainNetHostDenial(const AHost: string;
