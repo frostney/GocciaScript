@@ -29,6 +29,8 @@ type
     procedure TestRoundTripLeavesNoTemporaryFile;
     procedure TestKeysCaseSensitivity;
     procedure TestSymlinkedConfigKeysToTarget;
+    procedure TestSymlinkedConfigFileHasItsOwnKey;
+    procedure TestSymlinkedDirectoryHashesAtItsTarget;
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestLockContention;
     procedure TestSaveMergesConcurrentChanges;
@@ -89,8 +91,12 @@ begin
     TestRoundTripLeavesNoTemporaryFile);
   Test('Keys compare case-sensitively unless the platform folds case',
     TestKeysCaseSensitivity);
-  Test('A config reached through a symlink keys to its target',
+  Test('A config in a symlinked directory keys to its target',
     TestSymlinkedConfigKeysToTarget);
+  Test('A symlinked config file has its own key and location',
+    TestSymlinkedConfigFileHasItsOwnKey);
+  Test('A config in a symlinked directory hashes at its target',
+    TestSymlinkedDirectoryHashesAtItsTarget);
   Test('Newer and corrupt stores are refused',
     TestNewerAndCorruptStoresRefused);
   Test('A held lock fails with a message naming the lock file',
@@ -169,9 +175,11 @@ end;
 function TTrustTests.EntryFor(const AConfigPath: string): TGocciaTrustEntry;
 var
   Request: TGocciaConfigPermissionRequest;
+  Location: string;
 begin
-  Request := ReadConfigPermissionRequest(ParseConfigFile(AConfigPath),
-    AConfigPath);
+  { As --trust does: the request is read at the config's key location. }
+  Location := TrustKeyForPath(AConfigPath);
+  Request := ReadConfigPermissionRequest(ParseConfigFile(Location), Location);
   Result.ConfigPath := AConfigPath;
   Result.Hash := PermissionBlockHash(Request);
   Result.BlockJSON := NormalizedPermissionBlock(Request);
@@ -300,6 +308,101 @@ begin
       .ToBe(Target);
   finally
     Store.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestSymlinkedConfigFileHasItsOwnKey;
+{$IFDEF UNIX}
+var
+  Trusted, Evil, StorePath: string;
+  Store: TGocciaTrustStore;
+  Gate: TGocciaConfigTrustGate;
+begin
+  { evil/goccia.json -> ../trusted/goccia.json: trusting trusted/ must not
+    trust evil/, whose files the same text would govern. }
+  Trusted := WriteFile('symfile/trusted/goccia.json',
+    '{"unsafe-function-constructor": true, ' +
+    '"permissions": {"allow-read": ["./data"]}}');
+  ForceDirectories(FRoot + PathDelim + 'symfile' + PathDelim + 'evil');
+  Evil := FRoot + PathDelim + 'symfile' + PathDelim + 'evil' + PathDelim +
+    'goccia.json';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString('../trusted/goccia.json')),
+    PAnsiChar(AnsiString(Evil)))).ToBe(0);
+  Expect<string>(TrustKeyForPath(Evil)).ToBe(Evil);
+  Expect<string>(TrustKeyForPath(Trusted)).ToBe(Trusted);
+
+  StorePath := FRoot + PathDelim + 'symfile' + PathDelim + 'trust.json';
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(Trusted));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<Boolean>(Gate.Verify(Trusted).State = ctsTrusted).ToBe(True);
+    Expect<Boolean>(Gate.Verify(Evil).State = ctsNotTrusted).ToBe(True);
+    { The request is read at the config's own location: ./data is under
+      evil/, not trusted/. }
+    Expect<string>(Gate.Verify(Evil).Request.Allow[gcRead].Scopes[0]).ToBe(
+      FRoot + PathDelim + 'symfile' + PathDelim + 'evil' + PathDelim +
+      'data');
+  finally
+    Gate.Free;
+  end;
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestSymlinkedDirectoryHashesAtItsTarget;
+{$IFDEF UNIX}
+var
+  Real, Link, StorePath: string;
+  Store: TGocciaTrustStore;
+  Gate: TGocciaConfigTrustGate;
+begin
+  { A config reached through a symlinked directory governs the same files,
+    so it keys, and resolves its relative scopes, at the target: one key,
+    one hash, whichever spelling is used. }
+  Real := WriteFile('symdir/real/goccia.json',
+    '{"permissions": {"allow-read": ["./data"]}}');
+  Link := FRoot + PathDelim + 'symdir' + PathDelim + 'link';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(ExtractFileDir(Real))),
+    PAnsiChar(AnsiString(Link)))).ToBe(0);
+  StorePath := FRoot + PathDelim + 'symdir' + PathDelim + 'trust.json';
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<string>(Gate.Verify(Link + PathDelim + 'goccia.json').Hash)
+      .ToBe(Gate.Verify(Real).Hash);
+    Expect<string>(Gate.Verify(Link + PathDelim + 'goccia.json').ConfigPath)
+      .ToBe(Real);
+  finally
+    Gate.Free;
+  end;
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(Link + PathDelim + 'goccia.json'));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+    ALL_CAPABILITIES, True, LoadConfig);
+  try
+    Expect<Boolean>(Gate.Verify(Real).State = ctsTrusted).ToBe(True);
+  finally
+    Gate.Free;
   end;
 end;
 {$ELSE}

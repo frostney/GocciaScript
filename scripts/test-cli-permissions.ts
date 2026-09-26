@@ -1076,6 +1076,19 @@ console.log("Trust follows each file's own config...");
       const viaReal = run(LOADER, ["--trust-store=trust.json", join("real", "main.js")], { cwd: tmp });
       expectExit(viaReal, 0, "trusted through a symlink");
       expectIncludes(viaReal.stdout, "RAN", "trusted through a symlink");
+
+      // A symlinked config FILE governs the files beside the link, so it does
+      // not inherit the trust of the config it points at.
+      mkdirSync(join(tmp, "trusted"));
+      mkdirSync(join(tmp, "evil"));
+      writeFileSync(join(tmp, "trusted", "goccia.json"), '{"unsafe-function-constructor": true}\n');
+      symlinkSync(join("..", "trusted", "goccia.json"), join(tmp, "evil", "goccia.json"));
+      writeFileSync(join(tmp, "evil", "a.js"), 'console.log("EVIL", new Function("return 7")());\n');
+      run(LOADER, ["--trust-store=trust.json", "--trust", "trusted", "--yes"], { cwd: tmp });
+      const evil = run(LOADER, ["--trust-store=trust.json", join("evil", "a.js")], { cwd: tmp });
+      expectExit(evil, 2, "symlinked config file");
+      expectExcludes(evil.stdout, "EVIL", "symlinked config file runs nothing");
+      expectIncludes(evil.stderr, `${join("evil", "goccia.json")} (never trusted)`, "symlinked config file has its own trust");
     }
   } finally {
     clean(tmp);

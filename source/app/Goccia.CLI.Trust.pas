@@ -196,9 +196,15 @@ const
   TRUST_KEYS_CASE_INSENSITIVE = False;
   {$IFEND}
 
-{ The store key of a config path: its canonical path with symbolic links
-  resolved, or the expanded path when it cannot be resolved. }
+{ The store key, and the location a request is read at, of a config path:
+  its directory with symbolic links resolved, plus its own file name, which
+  is not resolved. A config reached through a symlinked directory keys to the
+  target; a symlinked config file keys to where the link is, because it
+  governs the files beside the link. }
 function TrustKeyForPath(const APath: string): string;
+{ TrustKeyForPath, except that an existing directory is itself resolved (for
+  --untrust <dir>). }
+function TrustKeyForDirectory(const APath: string): string;
 
 { The platform this build keeps its store for. }
 function CurrentTrustStorePlatform: TGocciaTrustStorePlatform;
@@ -301,13 +307,38 @@ const
 
 { ── Paths ─────────────────────────────────────────────────────── }
 
-function TrustKeyForPath(const APath: string): string;
+function CanonicalDirectory(const APath: string): string;
 begin
   Result := ExpandHostFileName(APath);
   if CanonicalHostPath(Result) <> '' then
     Result := CanonicalHostPath(Result);
   if (Length(Result) > 1) and IsPathDelimiter(Result, Length(Result)) then
     Result := ExcludeTrailingPathDelimiter(Result);
+end;
+
+function TrustKeyForPath(const APath: string): string;
+var
+  Expanded, Name: string;
+begin
+  Expanded := ExpandHostFileName(APath);
+  if (Length(Expanded) > 1) and IsPathDelimiter(Expanded, Length(Expanded)) then
+    Expanded := ExcludeTrailingPathDelimiter(Expanded);
+  Name := ExtractFileName(Expanded);
+  if Name = '' then
+    Exit(CanonicalDirectory(Expanded));
+  { The directory is resolved, the file name is not: a symlinked directory
+    holds the same files as its target, while a symlinked config file
+    governs different files than the one it points at. }
+  Result := IncludeTrailingPathDelimiter(
+    CanonicalDirectory(ExtractFileDir(Expanded))) + Name;
+end;
+
+function TrustKeyForDirectory(const APath: string): string;
+begin
+  if DirectoryExists(APath) then
+    Result := CanonicalDirectory(APath)
+  else
+    Result := TrustKeyForPath(APath);
 end;
 
 function CurrentTrustStorePlatform: TGocciaTrustStorePlatform;
@@ -832,7 +863,7 @@ var
   I: Integer;
   Change: TChange;
 begin
-  Key := TrustKeyForPath(APath);
+  Key := TrustKeyForDirectory(APath);
   Result := 0;
   for I := 0 to High(FEntries) do
     if IsAtOrUnder(FEntries[I].ConfigPath, Key) then
@@ -1125,11 +1156,15 @@ function TGocciaConfigTrustGate.Decide(
   const AConfigPath: string): TGocciaConfigTrustVerdict;
 var
   Entry: TGocciaTrustEntry;
+  Location: string;
 begin
   Result := Default(TGocciaConfigTrustVerdict);
-  Result.ConfigPath := AConfigPath;
-  Result.Request := ReadConfigPermissionRequest(FLoadConfig(AConfigPath),
-    AConfigPath);
+  { Read at the key's location, so every spelling of the config yields one
+    key and one hash. }
+  Location := TrustKeyForPath(AConfigPath);
+  Result.ConfigPath := Location;
+  Result.Request := ReadConfigPermissionRequest(FLoadConfig(Location),
+    Location);
   if not Result.Request.RequestsGrants then
   begin
     Result.State := ctsNoRequest;
@@ -1424,7 +1459,7 @@ procedure RunTrustCommand(const AStorePath: string; const ATargets: TStrings;
   const AProgramName: string);
 var
   Store: TGocciaTrustStore;
-  Configs: TStringList;
+  Configs, Found: TStringList;
   Pending: TGocciaConfigTrustVerdicts;
   Verdict: TGocciaConfigTrustVerdict;
   Entry: TGocciaTrustEntry;
@@ -1441,10 +1476,20 @@ begin
   Store := TGocciaTrustStore.Load(AStorePath);
   Configs := TStringList.Create;
   try
+    Configs.UseLocale := False;
+    Configs.CaseSensitive := True;
     Configs.Sorted := True;
     Configs.Duplicates := dupIgnore;
-    for I := 0 to ATargets.Count - 1 do
-      FindTrustableConfigs(ATargets[I], Configs);
+    Found := TStringList.Create;
+    try
+      for I := 0 to ATargets.Count - 1 do
+        FindTrustableConfigs(ATargets[I], Found);
+      { Two spellings of one config are one entry. }
+      for I := 0 to Found.Count - 1 do
+        Configs.Add(TrustKeyForPath(Found[I]));
+    finally
+      Found.Free;
+    end;
 
     Pending := nil;
     Declaring := 0;
@@ -1452,9 +1497,9 @@ begin
     for I := 0 to Configs.Count - 1 do
     begin
       Verdict := Default(TGocciaConfigTrustVerdict);
-      Verdict.ConfigPath := Configs[I];
-      Verdict.Request := ReadConfigPermissionRequest(ALoadConfig(Configs[I]),
-        Configs[I]);
+      Verdict.ConfigPath := TrustKeyForPath(Configs[I]);
+      Verdict.Request := ReadConfigPermissionRequest(
+        ALoadConfig(Verdict.ConfigPath), Verdict.ConfigPath);
       if not Verdict.Request.RequestsGrants then
         Continue;
       Inc(Declaring);
