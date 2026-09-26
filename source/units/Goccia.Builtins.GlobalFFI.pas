@@ -53,6 +53,10 @@ uses
   {$ENDIF}{$ENDIF}
   SysUtils,
 
+  {$IFDEF MSWINDOWS}
+  FileUtils,
+  {$ENDIF}
+
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -200,26 +204,36 @@ end;
   - Linux: the file is opened first, the kernel's path for that descriptor
     is judged verbatim, and the loader maps the descriptor itself
     (/proc/self/fd/N), so what is loaded is exactly what was judged.
-  - Windows: after loading, the path the loader reports for the module is
-    judged again; a library outside the grant is unloaded and refused.
-  - Elsewhere (macOS, BSD): after loading, the path is canonicalized again
-    and must still be the judged one; a swap that is undone again inside
-    the load window is not detectable there. }
+  - Windows: the file is opened first without write or delete sharing, so
+    neither it nor any directory on its path can be renamed or replaced
+    while the handle is held; the path of the opened file is judged
+    verbatim, the library is loaded while the handle is held, and the path
+    the loader reports for the module is judged once more.
+  - Elsewhere (macOS, BSD): no pre-load pin is available. After loading,
+    the path is canonicalized again and must still be the judged one, and
+    a mismatch unloads and refuses the library — but a swapped library's
+    initializers (Mach-O/ELF constructors) have already run by then, and a
+    swap undone again inside the load window is not detected at all. }
 function TGocciaGlobalFFI.FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+const
+  NOT_COVERED_REASON = 'the ffi capability does not cover this library';
+  CHANGED_REASON = 'the library changed between the ffi check and the load';
 var
-  LibPath, LoadPath, DenialDetail, PinnedLoadPath: string;
-  Allowed: Boolean;
+  LibPath, LoadPath, DenialDetail, PinnedLoadPath, PinnedPath: string;
+  Allowed, IsBareName: Boolean;
   Handle: TGocciaFFILibraryHandle;
   {$IFDEF FPC}{$IFDEF LINUX}
   PinnedDescriptor: LongInt;
-  PinnedPath: string;
   {$ENDIF}{$ENDIF}
+  {$IFDEF MSWINDOWS}
+  PinnedHandle: THandle;
+  HoldingPin: Boolean;
+  {$ENDIF}
 
-  procedure Deny(const ADetail: string);
+  procedure Deny(const ADetail, AReason: string);
   begin
     if Assigned(FCapabilityAuditEmitter) then
-      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath,
-        'the ffi capability does not cover this library');
+      FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath, AReason);
     ThrowPermissionDenied(CapabilityName(gcFFI), LibPath, ADetail);
   end;
 
@@ -247,11 +261,12 @@ begin
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
+  IsBareName := IsBareLibraryName(LibPath);
   { A name with no directory part is found by the platform loader's search
     path, which no path scope describes, so only an unscoped grant with no
     deny scope covers it. Anything else is judged, and then loaded, at its
     canonical path, so the file checked is the file opened. }
-  if IsBareLibraryName(LibPath) then
+  if IsBareName then
   begin
     LoadPath := LibPath;
     Allowed := FCapabilities.AllowsUnscoped(gcFFI);
@@ -266,15 +281,16 @@ begin
       [LoadPath]);
   end;
   if not Allowed then
-    Deny(DenialDetail);
+    Deny(DenialDetail, NOT_COVERED_REASON);
   if Assigned(FCapabilityAuditEmitter) then
     FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
       'the ffi capability covers this library');
 
   PinnedLoadPath := LoadPath;
+  PinnedPath := '';
   {$IFDEF FPC}{$IFDEF LINUX}
   PinnedDescriptor := -1;
-  if not IsBareLibraryName(LibPath) then
+  if not IsBareName then
   begin
     PinnedDescriptor := FpOpen(LoadPath, O_RDONLY);
     if PinnedDescriptor < 0 then
@@ -286,11 +302,29 @@ begin
        not FCapabilities.AllowsCanonicalPath(gcFFI, PinnedPath) then
     begin
       FpClose(PinnedDescriptor);
-      Deny(Format('the ffi capability does not cover %s', [PinnedPath]));
+      Deny(Format('the ffi capability does not cover %s', [PinnedPath]),
+        CHANGED_REASON);
     end;
   end;
-  try
   {$ENDIF}{$ENDIF}
+  {$IFDEF MSWINDOWS}
+  HoldingPin := False;
+  PinnedHandle := 0;
+  if not IsBareName then
+  begin
+    if not OpenPinnedHostFile(LoadPath, PinnedHandle, PinnedPath) then
+      ThrowTypeError('Failed to load library: ' + LibPath,
+        SSuggestFFILibraryOpen);
+    HoldingPin := True;
+    if not FCapabilities.AllowsCanonicalPath(gcFFI, PinnedPath) then
+    begin
+      ClosePinnedHostFile(PinnedHandle);
+      Deny(Format('the ffi capability does not cover %s', [PinnedPath]),
+        CHANGED_REASON);
+    end;
+  end;
+  {$ENDIF}
+  try
     if Assigned(GocciaFFIAfterOpenCheck) then
       GocciaFFIAfterOpenCheck;
 
@@ -300,17 +334,21 @@ begin
       on E: Exception do
         ThrowTypeError(E.Message, SSuggestFFILibraryOpen);
     end;
-  {$IFDEF FPC}{$IFDEF LINUX}
   finally
+    {$IFDEF FPC}{$IFDEF LINUX}
     if PinnedDescriptor >= 0 then
       FpClose(PinnedDescriptor);
+    {$ENDIF}{$ENDIF}
+    {$IFDEF MSWINDOWS}
+    if HoldingPin then
+      ClosePinnedHostFile(PinnedHandle);
+    {$ENDIF}
   end;
-  {$ENDIF}{$ENDIF}
 
-  if (not IsBareLibraryName(LibPath)) and LoadedOutsideJudgedPath then
+  if (not IsBareName) and LoadedOutsideJudgedPath then
   begin
     Handle.ReleaseOwner;
-    Deny('the library changed between the ffi check and the load');
+    Deny(CHANGED_REASON, CHANGED_REASON);
   end;
 
   try

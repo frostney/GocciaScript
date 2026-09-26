@@ -63,11 +63,16 @@ directory on that path could be swapped between the check and the load, so the
 load is pinned to what was judged as far as the platform allows. On Linux the
 file is opened first, the kernel's path for that descriptor is judged, and the
 loader maps the descriptor itself, so the file checked is the file loaded.
-On Windows the path the loader reports for the loaded module is judged again,
-and a library outside the grant is unloaded and refused. On macOS and other
-Unix systems the path is canonicalized again after the load and must still be
-the judged one; a swap that is undone again within the load window cannot be
-detected there. A bare library name such as `libc.so.6`
+On Windows the file is opened first without write or delete sharing, which
+keeps it and every directory on its path from being renamed or replaced; the
+opened file's path is judged, the library is loaded while that handle is
+held, and the path the loader reports for the module is judged once more. On
+macOS and other Unix systems no pre-load pin is available: the path is
+canonicalized again after the load and must still be the judged one, and a
+library that fails that check is unloaded and refused — but a swapped
+library's initializers have already run by then, and a swap undone again
+within the load window is not detected. A refusal after the check passed is
+audited as `the library changed between the ffi check and the load`. A bare library name such as `libc.so.6`
 has no directory part and is searched for by the platform loader, which no
 path scope can describe: it is allowed only when every layer allows `ffi`
 unscoped and no layer has an `ffi` deny scope.
