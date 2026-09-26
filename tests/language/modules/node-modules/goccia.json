@@ -1,8 +1,7 @@
 {
   "extends": "../goccia.json",
   "permissions": {
-    "allow-import": [
-      "node_modules=."
-    ]
+    "allow-import": ["node_modules=."],
+    "allow-read": ["../../../../fixtures/modules", "../helpers", "./node_modules"]
   }
 }
