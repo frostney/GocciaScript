@@ -84,7 +84,7 @@ Be aware that the boundary is not clean everywhere yet. Other errors raised out 
 
 - **A machine-readable output mode owns stdout.** When `--output=json` or another structured mode is active, stdout must contain the envelope and nothing else — no progress markers, no per-test symbols, no summaries. Anything a human would want during such a run goes to stderr or is suppressed. This is why the runners gate reporter output on the output mode rather than only gating the final summary.
 - **New diagnostics go to stderr.** The no-argument help, path-not-found errors in the runners, and configuration warnings are all written there.
-- **Existing placement is uneven.** `GocciaRunner` in host mode routes uncaught errors, syntax errors, and invalid option values through the shared error handler, which writes to stdout (usage errors exiting `2` go to stderr); in sandbox mode, whose stdout is the guest's output and the diff, it writes them to stderr. The runners write their inline errors to stderr. Match the surrounding code when editing an existing path, and prefer stderr for anything new.
+- **Existing placement is uneven.** `GocciaRunner` in host mode routes uncaught errors, syntax errors, and invalid option values through the shared error handler, which writes to stdout (usage errors exiting `2` go to stderr); in sandbox mode, whose stdout is the guest's output and the diff, it writes them to stderr — decided from the raw arguments before any option value is parsed, so an invalid value is on stderr too. The runners write their inline errors to stderr. Match the surrounding code when editing an existing path, and prefer stderr for anything new.
 
 ## Help output
 

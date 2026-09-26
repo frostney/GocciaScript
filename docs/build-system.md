@@ -523,10 +523,14 @@ discovered as for any other run. Options that only make sense against the host
 are usage errors (exit 2) in sandbox mode: standard input or `-`, a directory,
 more than one positional input, a `.gbc` entry, `--multifile`, `--output`,
 `--coverage*`, `--profile*`, `--source-map`, `--host-environment`, and
-`--global` / `--globals`. `--entry`, `--diff`, `--diff-file`, and `--max-fs-*`
-on the command line without sandbox mode are usage errors that name `--sandbox`
-and `--copy`; `max-fs-bytes` and `max-fs-nodes` in a config file are ordinary
-limits that host mode ignores.
+`--global` / `--globals`, also when only the config's `sandbox` section turns
+sandbox mode on. `--entry`, `--diff`, `--diff-file`, and `--max-fs-*` on the
+command line without sandbox mode are usage errors that name `--sandbox` and
+`--copy`; `max-fs-bytes` and `max-fs-nodes` in a config file apply in sandbox
+mode and are ignored, unvalidated, in host mode. A config's `modules`,
+`globals`, and `host-environment` are not applied in sandbox mode. Errors the
+host reports in sandbox mode, an invalid option value included, go to standard
+error.
 
 Standard output carries only what the guest prints — `--print` prints the last
 value, `undefined` included, as in host mode — followed by a printed diff.

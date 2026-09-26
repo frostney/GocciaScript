@@ -496,6 +496,11 @@ begin
 
       Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor,
         EngineCapabilities);
+      { The entry is a sandbox path, so the project the engine derives from
+        it names a host directory that has nothing to do with the run (for
+        /tmp/x.js, the host's /tmp). No host directory is exempt from the
+        read capability here. }
+      Engine.ProjectRoot := '';
       FCurrentCapabilities := Engine.Capabilities;
       FHasCurrentCapabilities := True;
       Engine.ModuleLoader.SetContentProvider(Provider, True);

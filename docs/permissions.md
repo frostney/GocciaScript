@@ -700,6 +700,9 @@ never reachable from the guest.
 - The default target is `/<basename>`, for files and directories alike, so
   `--copy src` lands at `/src`. `dir=/x` copies the directory's contents into
   `/x`, and `dir=/` into the root.
+- A target is an absolute sandbox path. An empty target (`x=`), a relative one
+  (`x=rel`), or one that climbs above the root (`x=/../etc`) is a usage error
+  (exit 2); so are two command-line inputs that land on the same path.
 - A file whose target ends in `/`, or names a directory that already exists, is
   copied inside it.
 - A host path with no basename (a filesystem root) is an error that asks for
@@ -712,9 +715,16 @@ The positional entry file is copied read-only to `/<basename>` — unless it lie
 inside a copied input, in which case it runs at that input's sandbox path and is
 not copied again: `GocciaRunner src/main.js --copy src` runs `/src/main.js`. An
 entry that would land on another input's path is an error that suggests
-`--entry` or an explicit target. `--entry=<sandbox-path>` runs a path that only
-exists in the sandbox; giving both a positional file and `--entry` is a usage
-error.
+`--entry` or an explicit target. A positional entry that is a symbolic link is
+refused like any other copy. `--entry=<sandbox-path>` runs a path that only
+exists in the sandbox, and must be absolute; giving both a positional file and
+`--entry` is a usage error.
+
+Sandbox mode sees only the virtual filesystem. A root config's `modules`,
+`module`, `globals`, `global`, and `host-environment`, which read host files,
+are not applied: each gets one warning, such as
+`Warning: <config> sets "modules", which GocciaRunner sandbox mode does not
+apply; ignoring it`. The command line's `--module` and `--modules` still apply.
 
 ### Write-back
 
@@ -731,6 +741,17 @@ the host paths they were copied from, including new files created inside a
 - a host target that is a symbolic link is skipped;
 - each file is written to an exclusively created temporary beside it and then
   replaces it in one rename, so a failed write leaves the original intact.
+
+Each input's directory is recorded when it is copied: its canonical path and,
+on POSIX, its device and inode. Before anything is written, every read-write
+input must still be that directory; one that was moved, or swapped for a
+symbolic link, while the run went on means nothing is written. Each write then
+walks from that directory down without following a link (on POSIX through
+directory descriptors opened with `O_NOFOLLOW`), creating missing directories,
+so a link planted after the plan cannot carry a write out either. A diff file
+is pinned the same way: its nearest existing directory is recorded before the
+run and must be unchanged when the diff is written, and a link at the file's
+own name is refused. A write that fails or is refused makes the run exit 1.
 
 The report, one `write-back:` line per path, goes to standard error so the
 guest's standard output stays clean.
@@ -759,8 +780,8 @@ copy-rw = ["out"]
 
 | Key | Value |
 |---|---|
-| `copy`, `copy-rw` | Arrays of `<host>[=<sandbox>]` strings, as on the command line, relative to the declaring config file |
-| `entry` | A sandbox path, as `--entry` |
+| `copy`, `copy-rw` | Arrays of `<host>[=<sandbox>]` strings, as on the command line, relative to the declaring config file; a single string is an error |
+| `entry` | An absolute sandbox path, as `--entry`; a positional entry on the command line wins, with a note on stderr |
 | `diff` | `true`, `"json"`, or `"unified"` |
 | `diff-file` | A host path, as `--diff-file`, relative to the declaring config file |
 
@@ -770,10 +791,13 @@ copy-rw = ["out"]
 - An empty section, `"sandbox": {}`, turns sandbox mode on with no inputs.
 - Only the root config's section is read: `--config`, or the one discovered
   from the entry file (from the working directory when `--entry` names the
-  entry). A section in any other config is ignored with a warning and needs
-  no trust.
-- `max-fs-bytes` and `max-fs-nodes` are ordinary limits at the top level of any
-  config, not part of the section.
+  entry). A section in any other config, the entry's own config under
+  `--config=<other>` included, is ignored with the warning
+  `declares a "sandbox" section, which GocciaRunner reads only from the root
+  config; ignoring it`, and needs no trust.
+- `max-fs-bytes` and `max-fs-nodes` are limits at the top level of the root
+  config, not part of the section. Sandbox mode reads and validates them; host
+  mode ignores them without validating them.
 
 **Trust.** A config that can copy host files into a run and write results back
 asks for authority, so its `sandbox` section is a request like an `allow-*`

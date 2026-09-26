@@ -925,13 +925,29 @@ begin
       AReplacement);
 end;
 
+const
+  { The options runScript reads. A child inherits its parent's capabilities
+    and can only narrow them, so there is no option that grants any. }
+  RUN_SCRIPT_OPTION_NAMES: array[0..2] of string = ('sandbox', 'copy',
+    'diff');
+
+function IsRunScriptOptionName(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(RUN_SCRIPT_OPTION_NAMES) do
+    if RUN_SCRIPT_OPTION_NAMES[I] = AName then
+      Exit(True);
+  Result := False;
+end;
+
 function ParseRunScriptOptions(const AContext: TGocciaSandboxContext;
   const AValue: TGocciaValue; const AMethod: string):
   TGocciaSandboxRunOptions;
 var
   OptionsObject: TGocciaObjectValue;
   DiffValue: TGocciaValue;
-  DiffFormat: string;
+  DiffFormat, Key: string;
 begin
   Result := DefaultSandboxRunOptions;
   if (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue) or
@@ -950,6 +966,13 @@ begin
   RejectRemovedRunOption(OptionsObject, 'diffMetadata',
     'JSON diffs always include timestamp metadata; use diff: true',
     AMethod);
+  { An option it does not know, such as a capability, is refused rather
+    than ignored, so a caller cannot believe it was applied. }
+  for Key in OptionsObject.GetOwnPropertyKeys do
+    if not IsRunScriptOptionName(Key) then
+      ThrowTypeError(AMethod + ' does not accept option "' + Key +
+        '" (options: sandbox, copy, diff; a child inherits its parent''s ' +
+        'capabilities)');
 
   if ObjectBooleanProperty(OptionsObject, 'sandbox', AMethod) then
     Result.Isolated := True;

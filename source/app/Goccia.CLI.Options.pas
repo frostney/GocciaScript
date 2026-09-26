@@ -1047,6 +1047,10 @@ begin
     'Maximum files and directories in the sandbox filesystem ' +
     '(default: 4096)', SANDBOX_GROUP);
   FMaxFsNodes.Maximum := High(Integer);
+  { Read from the root config by GocciaRunner only in sandbox mode; host mode
+    ignores them without validating them. }
+  FMaxFsBytes.ConfigIgnored := True;
+  FMaxFsNodes.ConfigIgnored := True;
 
   FRemoved := TOptionList.Create;
   FRemoved.Add(TRemovedOption.Create('seed', 'seed',

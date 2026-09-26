@@ -59,6 +59,9 @@ type
     DiffFile: string;
     MaxFsBytes: Int64;
     MaxFsNodes: Integer;
+    { Lines for stderr about how the request was read, such as a config
+      entry the command line overrode. }
+    Notes: array of string;
   end;
 
   { The command-line facts ResolveSandboxMode needs beyond the sandbox
@@ -148,11 +151,39 @@ const
   NO_HOST_FILESYSTEM_HINT =
     'the sandbox has no host filesystem; copy inputs with --copy';
 
-function EnsureSandboxAbsolute(const APath: string): string;
+{ A sandbox path as given for a copy target or an entry: absolute, and not
+  climbing above the sandbox root (the virtual filesystem would clamp it
+  silently). Backslashes are separators. AWhere names the value in an error,
+  such as `--entry` or `--copy src=x`. }
+function CheckedSandboxPath(const APath, AWhere: string): string;
+var
+  Depth, Start, I: Integer;
+  Segment: string;
 begin
   Result := StringReplace(APath, '\', '/', [rfReplaceAll]);
-  if (Result = '') or (Result[1] <> '/') then
-    Result := '/' + Result;
+  if Result = '' then
+    raise TCLIUsageError.CreateFmt('%s: the sandbox path is empty; give an ' +
+      'absolute sandbox path such as /name', [AWhere]);
+  if Result[1] <> '/' then
+    raise TCLIUsageError.CreateFmt('%s: "%s" is not an absolute sandbox ' +
+      'path; start it with /', [AWhere, APath]);
+  Depth := 0;
+  Start := 2;
+  for I := 2 to Length(Result) + 1 do
+    if (I > Length(Result)) or (Result[I] = '/') then
+    begin
+      Segment := Copy(Result, Start, I - Start);
+      if Segment = '..' then
+      begin
+        if Depth = 0 then
+          raise TCLIUsageError.CreateFmt('%s: "%s" climbs above the sandbox ' +
+            'root', [AWhere, APath]);
+        Dec(Depth);
+      end
+      else if (Segment <> '') and (Segment <> '.') then
+        Inc(Depth);
+      Start := I + 1;
+    end;
 end;
 
 function HostAbsolutePath(const APath, ABaseDirectory: string): string;
@@ -203,8 +234,8 @@ begin
     ABaseDirectory));
   if Result.HostPath = '' then
     Result.HostPath := PathDelim;
-  if (Separator > 0) and (SandboxPart <> '') then
-    Result.SandboxPath := EnsureSandboxAbsolute(SandboxPart)
+  if Separator > 0 then
+    Result.SandboxPath := CheckedSandboxPath(SandboxPart, AOrigin + ' ' + ASpec)
   else
     Result.SandboxPath := DefaultSandboxPathFor(Result.HostPath, ASpec,
       AOrigin);
@@ -341,7 +372,9 @@ begin
     if Input.HostPath = '' then
       Input.HostPath := PathDelim;
     if AConfig.Inputs[I].SandboxPath <> '' then
-      Input.SandboxPath := EnsureSandboxAbsolute(AConfig.Inputs[I].SandboxPath)
+      Input.SandboxPath := CheckedSandboxPath(AConfig.Inputs[I].SandboxPath,
+        AConfig.Inputs[I].SourcePath + ': "' + Key + '" entry "' +
+        AConfig.Inputs[I].Spec + '"')
     else
       Input.SandboxPath := DefaultSandboxPathFor(Input.HostPath,
         AConfig.Inputs[I].Spec, AConfig.Inputs[I].SourcePath + ' "' + Key +
@@ -353,6 +386,38 @@ begin
         AConfig.Inputs[I].SourcePath, Key, COPY_READ_WRITE_FLAG);
     Result[I] := Input;
   end;
+end;
+
+{ Where an input lands: its target, or, for a file whose target is the root
+  or ends in `/`, the file's name inside it. }
+function EffectiveTargetKey(const AInput: TGocciaSandboxInput): string;
+var
+  Target: string;
+begin
+  Target := AInput.SandboxPath;
+  if (not HostDirectoryExists(AInput.HostPath)) and ((Target = SANDBOX_ROOT) or
+     (Target[Length(Target)] = '/')) then
+    Target := Target + '/' + ExtractFileName(AInput.HostPath);
+  Result := SandboxTargetKey(Target);
+end;
+
+{ Two command-line inputs that land on the same sandbox path would leave the
+  run with whichever was copied last, so they are refused. }
+procedure RejectDuplicateTargets(const AInputs: TGocciaSandboxInputs);
+var
+  I, J: Integer;
+begin
+  for I := 0 to High(AInputs) do
+    for J := I + 1 to High(AInputs) do
+      { A file copied after a directory to the directory's own path lands
+        inside it, as it would with a trailing `/`. }
+      if (EffectiveTargetKey(AInputs[I]) = EffectiveTargetKey(AInputs[J])) and
+         not (HostDirectoryExists(AInputs[I].HostPath) and
+              not HostDirectoryExists(AInputs[J].HostPath)) then
+        raise TCLIUsageError.CreateFmt('%s %s and %s %s both copy to %s; ' +
+          'give one of them an explicit =<sandbox> path',
+          [AInputs[I].Origin, AInputs[I].Spec, AInputs[J].Origin,
+           AInputs[J].Spec, EffectiveTargetKey(AInputs[I])]);
 end;
 
 function CommandLineInputs(const AOptions: TGocciaSandboxOptions;
@@ -379,6 +444,7 @@ begin
       AWorkingDirectory, COPY_READ_WRITE_FLAG, True);
     Inc(Count);
   end;
+  RejectDuplicateTargets(Result);
 end;
 
 procedure ResolveDiff(const AOptions: TGocciaSandboxOptions;
@@ -452,7 +518,7 @@ function ResolveSandboxMode(const AOptions: TGocciaSandboxOptions;
   const ACommandLine: TGocciaSandboxCommandLine): TGocciaSandboxModeRequest;
 var
   UseConfig: Boolean;
-  SandboxOnly, Path: string;
+  SandboxOnly, Path, ConfigEntry: string;
   I: Integer;
 begin
   Result := Default(TGocciaSandboxModeRequest);
@@ -478,16 +544,20 @@ begin
   RejectHostCapabilityFlags(ACommandLine.DeniedAllowFlags, Result.Reason);
   RejectHostModeOptions(ACommandLine.HostOnlyOptions, Result.Reason);
 
-  { The entry. }
+  { The entry. A config's entry is checked even when the command line names
+    another, so a malformed config fails wherever it is used. }
+  ConfigEntry := '';
+  if UseConfig and (AConfig.Entry <> '') then
+    ConfigEntry := CheckedSandboxPath(AConfig.Entry, AConfig.SourcePath +
+      ': "' + SANDBOX_CONFIG_KEY + '.entry"');
   if AOptions.Entry.FromCommandLine then
   begin
     if ACommandLine.Paths.Count > 0 then
       raise TCLIUsageError.CreateFmt(
         '--entry names the sandbox entry, so a host file cannot be given ' +
         'too; drop %s or --entry', [ACommandLine.Paths[0]]);
-    if AOptions.Entry.Value = '' then
-      raise TCLIUsageError.Create('--entry needs a sandbox path');
-    Result.EntrySandbox := EnsureSandboxAbsolute(AOptions.Entry.Value);
+    Result.EntrySandbox := CheckedSandboxPath(AOptions.Entry.Value,
+      '--entry');
   end
   else if ACommandLine.Paths.Count > 1 then
     raise TCLIUsageError.CreateFmt(
@@ -510,9 +580,17 @@ begin
         'sandbox mode runs source files, not bytecode: %s', [Path]);
     if not HostFileExists(Result.EntryHost) then
       raise Exception.Create('Path not found: ' + Path);
+    { The command line beats config. }
+    if UseConfig and (AConfig.Entry <> '') then
+    begin
+      SetLength(Result.Notes, Length(Result.Notes) + 1);
+      Result.Notes[High(Result.Notes)] := Format('Note: %s: "%s.entry" %s ' +
+        'is not used; the command line names the entry (%s)',
+        [AConfig.SourcePath, SANDBOX_CONFIG_KEY, AConfig.Entry, Path]);
+    end;
   end
-  else if UseConfig and (AConfig.Entry <> '') then
-    Result.EntrySandbox := EnsureSandboxAbsolute(AConfig.Entry)
+  else if ConfigEntry <> '' then
+    Result.EntrySandbox := ConfigEntry
   else
     raise TCLIUsageError.Create('sandbox mode needs an entry: pass a host ' +
       'file, or --entry <sandbox-path> for a copied one (sandbox mode does ' +

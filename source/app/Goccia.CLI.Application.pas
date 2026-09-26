@@ -70,6 +70,8 @@ type
     procedure CreateTrustGate;
     function TrustStoreArgument: string;
     procedure AuditConfigVerdict(const AVerdict: TGocciaConfigTrustVerdict);
+    procedure WarnUnreadSandboxSection(
+      const AVerdict: TGocciaConfigTrustVerdict);
     function CommandLineGrantDescription: string;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
@@ -138,6 +140,9 @@ type
       warnings FileConfigVerdict prints. No request when there is no root
       config. }
     function RootConfigVerdict: TGocciaConfigTrustVerdict;
+    { Warns once when the config at AConfigPath declares a sandbox section
+      this binary reads but that config is not the root config. }
+    procedure WarnIfSandboxSectionUnread(const AConfigPath: string);
     { The engine capability set for a file: command-line grants, plus the
       permission request of the config that governs AFileName (see
       FileConfigVerdict) once the request is trusted or accepted, minus every
@@ -214,6 +219,10 @@ type
     function DiscoverFileConfigPath(const AFileName: string): string;
     procedure ApplyVirtualModulesToEngine(const AEngine: TGocciaEngine;
       const AFileConfigPath: string);
+    { The command line's --module and --modules alone, without any config's
+      modules (GocciaRunner's sandbox mode). }
+    procedure ApplyCommandLineVirtualModulesToEngine(
+      const AEngine: TGocciaEngine);
     function CreateEngine(const AFileName: string;
       const ASource: TStringList;
       const AExecutor: TGocciaExecutor): TGocciaEngine;
@@ -1194,14 +1203,35 @@ begin
     CreateTrustGate;
   Result := FTrustGate.Verify(ConfigPath);
 
-  { Only the root config's sandbox section is read. }
   Warnings := UnsupportedRequestWarnings(Result.Request, HonoredCapabilities,
-    CapabilityPolicyName, HonorsUnsafeRequests, HonorsSandboxSection and
-    (FRootConfigPath <> '') and
-    (Result.ConfigPath = TrustKeyForPath(FRootConfigPath)));
+    CapabilityPolicyName, HonorsUnsafeRequests, HonorsSandboxSection);
   for I := 0 to High(Warnings) do
     WarnOnce(Result.ConfigPath + #0 + Warnings[I],
       'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);
+  WarnUnreadSandboxSection(Result);
+end;
+
+procedure TGocciaCLIApplication.WarnUnreadSandboxSection(
+  const AVerdict: TGocciaConfigTrustVerdict);
+begin
+  { Only the root config's sandbox section is read. }
+  if HonorsSandboxSection and AVerdict.Request.Sandbox.Declared and
+     ((FRootConfigPath = '') or
+      (AVerdict.ConfigPath <> TrustKeyForPath(FRootConfigPath))) then
+    WarnOnce(AVerdict.ConfigPath + #0 + SANDBOX_CONFIG_KEY, Format(
+      'Warning: %s declares a "%s" section, which %s reads only from the ' +
+      'root config; ignoring it', [AVerdict.ConfigPath, SANDBOX_CONFIG_KEY,
+      Name]));
+end;
+
+procedure TGocciaCLIApplication.WarnIfSandboxSectionUnread(
+  const AConfigPath: string);
+begin
+  if AConfigPath = '' then
+    Exit;
+  if not Assigned(FTrustGate) then
+    CreateTrustGate;
+  WarnUnreadSandboxSection(FTrustGate.Verify(AConfigPath));
 end;
 
 function TGocciaCLIApplication.FilePermissionRequest(
@@ -1891,6 +1921,12 @@ begin
     ApplyManifests;
   if AEngineOptions.ModuleDefinitions.FromCommandLine then
     ApplyDefinitions;
+end;
+
+procedure TGocciaCLIApplication.ApplyCommandLineVirtualModulesToEngine(
+  const AEngine: TGocciaEngine);
+begin
+  ApplyConfiguredVirtualModules(AEngine, FEngineOptions, '', '');
 end;
 
 procedure TGocciaCLIApplication.ApplyVirtualModulesToEngine(

@@ -870,14 +870,26 @@ begin
   Path := WriteConfig('sandbox-number/goccia.json',
     '{"sandbox": {"copy": ["src", 5]}}');
   Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
-    Path + ': "sandbox.copy" must be a string or an array of strings in ' +
-    'the --copy grammar <host>[=<sandbox>]');
+    Path + ': "sandbox.copy" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
+
+  Path := WriteConfig('sandbox-single/goccia.json',
+    '{"sandbox": {"copy": "src"}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
+
+  Path := WriteConfig('sandbox-empty-target/goccia.json',
+    '{"sandbox": {"copy-rw": ["out="]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy-rw" entry "out=" names no sandbox path after ' +
+    '"="');
 
   Path := WriteConfig('sandbox-object/goccia.json',
     '{"sandbox": {"copy-rw": [{"from": "out"}]}}');
   Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
-    Path + ': "sandbox.copy-rw" must be a string or an array of strings ' +
-    'in the --copy grammar <host>[=<sandbox>]');
+    Path + ': "sandbox.copy-rw" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
 
   Path := WriteConfig('sandbox-diff/goccia.json',
     '{"sandbox": {"diff": "patch"}}');

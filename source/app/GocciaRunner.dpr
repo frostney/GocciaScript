@@ -8,6 +8,7 @@ uses
   Generics.Collections,
   SysUtils,
 
+  TextEncoding,
   TimingUtils,
   TextSemantics,
 
@@ -25,6 +26,7 @@ uses
   Goccia.CLI.SandboxMode,
   Goccia.CLI.Trust,
   CLI.ConfigFile,
+  CLI.Parser,
   CLI.Options,
   Goccia.Capabilities,
   Goccia.Constants.PropertyNames,
@@ -123,6 +125,10 @@ type
     { Sandbox mode is on: set from the command line in ValidateCommandLine,
       or from a trusted root-config sandbox section in ExecuteWithPaths. }
     FSandboxActive: Boolean;
+    { The raw arguments switch sandbox mode on. Known before any option is
+      parsed, so even an invalid value is reported on stderr, keeping stdout
+      for the guest's output and the diff. }
+    FSandboxRequestedByArguments: Boolean;
     FSandboxHost: TGocciaSandboxHost;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
@@ -136,8 +142,13 @@ type
     function ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
       const ARequest: TGocciaSandboxModeRequest): string;
     procedure WriteSandboxDiff(const AHost: TGocciaSandboxHost;
-      const ARequest: TGocciaSandboxModeRequest);
+      const ARequest: TGocciaSandboxModeRequest;
+      const ADiffFile: TSandboxHostOutputFile);
     procedure VerifyRootConfig;
+    procedure ApplyConfigSandboxLimits;
+    function ConfigSandboxReason(
+      const AVerdict: TGocciaConfigTrustVerdict): string;
+    procedure WarnIgnoredConfigHostKeys;
     procedure RunSandbox(const ARequest: TGocciaSandboxModeRequest);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -323,8 +334,28 @@ begin
   Result := SandboxModeHelpNote;
 end;
 
+function ArgumentsRequestSandbox: Boolean;
+var
+  Arguments: TCommandLineArguments;
+  I: Integer;
+begin
+  Arguments := GetCommandLineArguments;
+  for I := 0 to High(Arguments) do
+  begin
+    if Arguments[I] = '--' then
+      Break;
+    if (Arguments[I] = '--sandbox') or (Arguments[I] = '--copy') or
+       (Arguments[I] = '--copy-rw') or
+       (Copy(Arguments[I], 1, Length('--copy=')) = '--copy=') or
+       (Copy(Arguments[I], 1, Length('--copy-rw=')) = '--copy-rw=') then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 procedure TRunnerApp.Configure;
 begin
+  FSandboxRequestedByArguments := ArgumentsRequestSandbox;
   AddEngineOptions;
   AddCoverageOptions;
   AddProfilerOptions;
@@ -489,9 +520,41 @@ end;
 
 { TRunnerApp - Validate }
 
-procedure TRunnerApp.Validate;
+function TRunnerApp.ConfigSandboxReason(
+  const AVerdict: TGocciaConfigTrustVerdict): string;
 begin
+  Result := Format('the "%s" section of %s', [SANDBOX_CONFIG_KEY,
+    AVerdict.Request.Sandbox.SourcePath]);
+end;
+
+procedure TRunnerApp.Validate;
+var
+  Verdict: TGocciaConfigTrustVerdict;
+begin
+  { A root-config sandbox section switches sandbox mode on too; decided here
+    so a host-mode option gets the sandbox-mode error rather than a host-mode
+    check's. Its trust is checked in ExecuteWithPaths, once the audit log is
+    open. --ignore-config-permissions ignores the section. }
+  if not FSandboxActive then
+  begin
+    Verdict := RootConfigVerdict;
+    if Verdict.Request.Sandbox.Declared and
+       (Verdict.State <> ctsIgnored) then
+    begin
+      FSandboxActive := True;
+      RejectHostCapabilityFlags(HostCapabilityAllowFlags,
+        ConfigSandboxReason(Verdict));
+      RejectHostModeOptions(HostOnlyCommandLineOptions(False),
+        ConfigSandboxReason(Verdict));
+    end;
+  end;
+
   inherited Validate;
+  { The host-mode implications below (profiling and coverage force bytecode)
+    do not apply: those options are refused on the command line, and ignored
+    from config, in sandbox mode. }
+  if FSandboxActive then
+    Exit;
 
   // --profile-format implies --profile=functions when no explicit --profile given
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
@@ -1470,7 +1533,11 @@ begin
 
   ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AEntryPath,
     Verdict.AcceptedUnsafe);
-  ApplyVirtualModulesToEngine(AEngine, '');
+  { Sandbox mode sees only the virtual filesystem: a config's modules,
+    globals, and host-environment, which read host files, are not applied
+    (WarnIgnoredConfigHostKeys says so). The command line's --module and
+    --modules are the user's own. }
+  ApplyCommandLineVirtualModulesToEngine(AEngine);
 
   Console := RuntimeConsole(AEngine);
   if Assigned(Console) then
@@ -1505,17 +1572,26 @@ begin
 end;
 
 procedure TRunnerApp.WriteSandboxDiff(const AHost: TGocciaSandboxHost;
-  const ARequest: TGocciaSandboxModeRequest);
+  const ARequest: TGocciaSandboxModeRequest;
+  const ADiffFile: TSandboxHostOutputFile);
 var
-  DiffText: string;
+  DiffText, Problem: string;
+  Bytes: TBytes;
+  ErrorOffset: Integer;
 begin
   if not ARequest.DiffRequested then
     Exit;
   DiffText := AHost.DiffText(ARequest.DiffFormat = sdfUnified);
-  if ARequest.DiffFile <> '' then
-    WriteUTF8FileText(ARequest.DiffFile, DiffText)
-  else
+  if ARequest.DiffFile = '' then
+  begin
     Write(DiffText);
+    Exit;
+  end;
+  if not TryEncodeUTF8(DiffText, Bytes, ErrorOffset) then
+    raise EConvertError.Create('the diff cannot be encoded as UTF-8');
+  if not ADiffFile.Write(Bytes, Problem) then
+    raise Exception.CreateFmt('diff file %s: %s', [ARequest.DiffFile,
+      Problem]);
 end;
 
 procedure TRunnerApp.VerifyRootConfig;
@@ -1531,17 +1607,89 @@ begin
   end;
 end;
 
+{ --max-fs-bytes and --max-fs-nodes are ConfigIgnored, so host mode never
+  reads (or validates) them from a config; sandbox mode takes them from the
+  root config here, unless the command line set them. }
+procedure TRunnerApp.ApplyConfigSandboxLimits;
+var
+  Entries: TConfigEntryArray;
+  Entry: TConfigEntry;
+  Limits: array[0..1] of TInt64Option;
+  I: Integer;
+begin
+  if RootConfigPath = '' then
+    Exit;
+  Entries := LoadFileConfig(RootConfigPath);
+  Limits[0] := SandboxOptions.MaxFsBytes;
+  Limits[1] := SandboxOptions.MaxFsNodes;
+  for I := 0 to High(Limits) do
+  begin
+    if Limits[I].FromCommandLine or
+       not TryFindConfigEntry(Entries, Limits[I].LongName, Entry) then
+      Continue;
+    if Entry.InArray or (Entry.Kind in [cvkObject, cvkUnsupported,
+       cvkEmptyArray]) then
+      raise TParseError.CreateFmt('%s: "%s" must be a single value',
+        [Entry.SourcePath, Entry.Key]);
+    try
+      Limits[I].Apply(Entry.Value);
+    except
+      on E: EOptionValueError do
+        raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
+          [Entry.Key, Entry.SourcePath, E.Value, E.Reason]);
+    end;
+  end;
+end;
+
+{ The root config's keys that read host files, which sandbox mode does not
+  apply: one warning each, in the style of an unsupported capability. }
+procedure TRunnerApp.WarnIgnoredConfigHostKeys;
+const
+  HOST_FILE_KEYS: array[0..4] of string = ('modules', 'module', 'globals',
+    'global', 'host-environment');
+var
+  Entries: TConfigEntryArray;
+  I, J: Integer;
+  Key: string;
+begin
+  if RootConfigPath = '' then
+    Exit;
+  Entries := LoadFileConfig(RootConfigPath);
+  for I := 0 to High(HOST_FILE_KEYS) do
+    for J := 0 to High(Entries) do
+    begin
+      Key := Entries[J].Key;
+      if (Key = HOST_FILE_KEYS[I]) or
+         (Copy(Key, 1, Length(HOST_FILE_KEYS[I]) + 1) =
+          HOST_FILE_KEYS[I] + '.') then
+      begin
+        WarnOnce(RootConfigPath + #0 + HOST_FILE_KEYS[I], Format(
+          'Warning: %s sets "%s", which %s does not apply; ignoring it',
+          [RootConfigPath, HOST_FILE_KEYS[I], CapabilityPolicyName]));
+        Break;
+      end;
+    end;
+end;
+
 procedure TRunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
 var
   Host: TGocciaSandboxHost;
   RunResult: TGocciaSandboxRunResult;
   Report: TStringList;
   EntryPath: string;
+  DiffFile: TSandboxHostOutputFile;
   I: Integer;
 begin
   { The root config is the only one that governs a sandbox run; its
     requests are checked before anything is copied in. }
   VerifyRootConfig;
+  WarnIgnoredConfigHostKeys;
+  { The entry's own config, when it is not the root config, has no say in a
+    sandbox run; a sandbox section there is not read. }
+  if ARequest.EntryHost <> '' then
+    WarnIfSandboxSectionUnread(DiscoverFileConfigPath(ARequest.EntryHost));
+  for I := 0 to High(ARequest.Notes) do
+    WriteLn(ErrOutput, ARequest.Notes[I]);
 
   Host := TGocciaSandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes);
   FSandboxHost := Host;
@@ -1559,6 +1707,10 @@ begin
       Host.CopyIn(ARequest.Inputs[I].HostPath, ARequest.Inputs[I].SandboxPath,
         ARequest.Inputs[I].ReadWrite);
     EntryPath := ResolveSandboxEntry(Host, ARequest);
+    { Pinned before the run, so a directory swapped for a link while it runs
+      cannot carry the diff elsewhere. }
+    if ARequest.DiffFile <> '' then
+      DiffFile := TSandboxHostOutputFile.Pin(ARequest.DiffFile);
     Host.CaptureBaseline;
 
     RunResult := Host.Run(EntryPath);
@@ -1582,8 +1734,13 @@ begin
       Report := TStringList.Create;
       try
         if RunResult.Ok then
-          Host.Inputs.ApplyWriteBack(Host.Inputs.PlanWriteBack(
-            Host.Context.Baseline), Report)
+        begin
+          { A write that failed, or an input replaced during the run, fails
+            the invocation: the host asked for files it did not get. }
+          if not Host.Inputs.ApplyWriteBack(Host.Inputs.PlanWriteBack(
+             Host.Context.Baseline), Report) then
+            ExitCode := 1;
+        end
         else
           Report.Add(WRITE_BACK_REPORT_PREFIX +
             'skipped, the run did not succeed.');
@@ -1594,7 +1751,7 @@ begin
       end;
     end;
 
-    WriteSandboxDiff(Host, ARequest);
+    WriteSandboxDiff(Host, ARequest, DiffFile);
   finally
     FSandboxHost := nil;
     Host.Free;
@@ -1629,6 +1786,8 @@ begin
     VerifyRootConfig;
     Verdict := RootConfigVerdict;
   end;
+  if FSandboxActive then
+    ApplyConfigSandboxLimits;
   SandboxCommandLine.Paths := APaths;
   SandboxCommandLine.DeniedAllowFlags := HostCapabilityAllowFlags;
   SandboxCommandLine.HostOnlyOptions := HostOnlyCommandLineOptions(False);
@@ -1795,7 +1954,7 @@ begin
   { In sandbox mode stdout carries only the guest's output and the diff; the
     guest's own failures are reported by RunSandbox, so what reaches here is
     the host's (a copy that failed, an invalid value) and goes to stderr. }
-  if FSandboxActive then
+  if FSandboxActive or FSandboxRequestedByArguments then
     WriteLn(ErrOutput, 'Error: ', AException.Message)
   else if IsJsonOutput then
     WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),

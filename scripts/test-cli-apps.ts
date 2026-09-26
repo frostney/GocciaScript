@@ -22,6 +22,8 @@ import {
   chmodSync,
   rmSync,
   symlinkSync,
+  readdirSync,
+  renameSync,
 } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -6674,8 +6676,11 @@ await section("Runner sandbox mode: the sandbox section rejects non-string entri
   try {
     writeFileSync(join(tmp, "main.js"), "1;");
     for (const [label, sandbox, needle] of [
-      ["null copy entry", { copy: [null] }, '"sandbox.copy" must be a string or an array of strings'],
-      ["numeric copy-rw entry", { "copy-rw": [42] }, '"sandbox.copy-rw" must be a string or an array of strings'],
+      ["null copy entry", { copy: [null] }, '"sandbox.copy" must be an array of strings'],
+      ["numeric copy-rw entry", { "copy-rw": [42] }, '"sandbox.copy-rw" must be an array of strings'],
+      ["a single string for copy", { copy: "src" }, '"sandbox.copy" must be an array of strings'],
+      ["an empty target", { "copy-rw": ["out="] }, '"sandbox.copy-rw" entry "out=" names no sandbox path after "="'],
+      ["a relative entry", { entry: "main.js" }, '"sandbox.entry": "main.js" is not an absolute sandbox path; start it with /'],
       ["object entry", { entry: { path: "/main.js" } }, '"sandbox.entry" must be a string'],
       ["non-object section", true, '"sandbox" must be an object'],
     ] as const) {
@@ -6874,8 +6879,9 @@ await section("Runner sandbox mode: --copy-rw refuses a symlink at its temporary
         { stdout: "pipe", stderr: "pipe" },
       );
       const stderr = normalizeLineEndings(proc.stderr.toString());
-      if (proc.exitCode !== 0)
-        throw new Error(`Sandbox mode --copy-rw should exit 0, got ${proc.exitCode}: ${stderr}`);
+      // A write-back that could not be carried out fails the invocation.
+      if (proc.exitCode !== 1)
+        throw new Error(`Sandbox mode --copy-rw should exit 1, got ${proc.exitCode}: ${stderr}`);
       if (readFileSync(join(tmp, "outside.txt"), "utf-8") !== "outside-secret")
         throw new Error("SECURITY: Sandbox mode --copy-rw wrote through a symlink at its temporary name");
       if (readFileSync(target, "utf-8") !== "before")
@@ -7564,6 +7570,220 @@ await section("Runner sandbox mode: rejects inputs and options it cannot run..."
   }
 });
 
+await section("Runner sandbox mode: write-back and the diff file refuse a directory swapped for a link during the run...", async () => {
+  if (process.platform === "win32") return;
+  for (const mode of ["interpreted", "bytecode"]) {
+    const tmp = realpathSync(makeTmp());
+    try {
+      mkdirSync(join(tmp, "out"));
+      mkdirSync(join(tmp, "dd"));
+      mkdirSync(join(tmp, "target"));
+      writeFileSync(join(tmp, "out", "a.txt"), "orig");
+      writeFileSync(join(tmp, "w.js"), [
+        'import fs from "fs";',
+        'const start = Date.now(); while (Date.now() - start < 1500) {}',
+        'fs.writeFileSync("/out/a.txt", "PWNED");',
+        'fs.writeFileSync("/out/b.txt", "PWNED2");',
+      ].join("\n"));
+      const proc = Bun.spawn(
+        [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module", `--mode=${mode}`,
+          "--copy-rw", "out", "--diff-file=dd/diff.json"],
+        { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+      );
+      // While the guest runs: the copied directory and the diff file's
+      // directory both become links to a directory outside.
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out"), join(tmp, "out.real"));
+      symlinkSync(join(tmp, "target"), join(tmp, "out"));
+      renameSync(join(tmp, "dd"), join(tmp, "dd.real"));
+      symlinkSync(join(tmp, "target"), join(tmp, "dd"));
+      const exitCode = await proc.exited;
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const written = readdirSync(join(tmp, "target"));
+      if (written.length !== 0)
+        throw new Error(`SECURITY (${mode}): write-back or the diff followed a swapped directory into ${written.join(", ")}:\n${stdout}${stderr}`);
+      if (readFileSync(join(tmp, "out.real", "a.txt"), "utf-8") !== "orig")
+        throw new Error(`(${mode}) the moved-away input must be left alone`);
+      if (exitCode !== 1 ||
+          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`) ||
+          !stderr.includes(`Error: diff file ${join(tmp, "dd", "diff.json")}: ${join(tmp, "dd")} was replaced during the run`))
+        throw new Error(`(${mode}) a swapped directory should be refused on stderr with exit 1, got (exit ${exitCode}):\n${stdout}${stderr}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+});
+
+await section("Runner sandbox mode: a config's modules, globals, and host-environment are not applied...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "secret.txt"), "HOST-SECRET");
+    writeFileSync(join(tmp, "manifest.json"), JSON.stringify({ leak: { content: "export default 'FROM-MANIFEST';" } }));
+    writeFileSync(join(tmp, "globals.json"), JSON.stringify({ injected: 1 }));
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({
+      modules: "./manifest.json",
+      globals: ["./globals.json"],
+      "host-environment": "./env.js",
+    }));
+    writeFileSync(join(tmp, "main.js"), [
+      'let leaked = "none";',
+      'try { leaked = (await import("leak")).default; } catch (e) { leaked = "refused"; }',
+      'console.log(leaked, typeof injected);',
+    ].join("\n"));
+    const run = runSandboxCli(["main.js", "--sandbox", "--source-type=module"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "refused undefined")
+      throw new Error(`Sandbox mode must not apply the config's modules or globals, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    for (const key of ["modules", "globals", "host-environment"])
+      if (!run.stderr.includes(`Warning: ${join(tmp, "goccia.json")} sets "${key}", which GocciaRunner sandbox mode does not apply; ignoring it`))
+        throw new Error(`Sandbox mode should warn that it ignores the config's ${key}, got:\n${run.stderr}`);
+
+    // The entry's sandbox path does not make a host directory the project:
+    // /tmp here would otherwise have exempted host reads under /tmp.
+    writeFileSync(join(tmp, "goccia.json"), "{}");
+    writeFileSync(join(tmp, "lk.js"), 'import s from "/secret.txt" with { type: "text" }; console.log(s);');
+    const probe = runSandboxCli(["--copy", `lk.js=${tmp}/lk.js`, `--entry=${tmp}/lk.js`, "--source-type=module"], { cwd: tmp });
+    if ((probe.stdout + probe.stderr).includes("HOST-SECRET"))
+      throw new Error(`SECURITY: a sandbox entry path granted a host read:\n${probe.stdout}${probe.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: invalid values report on stderr, before any option is parsed...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const args of [
+      ["--sandbox", "--max-fs-bytes=abc"],
+      ["--sandbox", "--max-fs-nodes=-1"],
+      ["--copy=main.js", "--timeout=abc"],
+      ["--copy-rw", "main.js", "--allow-net="],
+      ["--sandbox", "--max-memory=zz"],
+    ]) {
+      const run = runSandboxCli(["main.js", ...args], { cwd: tmp });
+      if (run.exitCode === 0 || run.stdout !== "" || !run.stderr.includes("Error:"))
+        throw new Error(`${args.join(" ")} should fail on stderr only, got (exit ${run.exitCode}):\nstdout: ${run.stdout}\nstderr: ${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a config-enabled sandbox rejects host-mode options with the sandbox error...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: {} }));
+    for (const option of ["--profile-output=p.json", "--profile-format=flamegraph", "--output=json", "--allow-read"]) {
+      const run = runSandboxCli(["main.js", "-P", option], { cwd: tmp });
+      const name = option.split("=")[0];
+      if (run.exitCode !== 2 || run.stdout !== "" ||
+          !run.stderr.includes(`Error: ${name} cannot be used in sandbox mode (enabled by the "sandbox" section of ${join(tmp, "goccia.json")})`))
+        throw new Error(`${option} with a config sandbox should give the sandbox-mode error, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: copy targets and entries are absolute, distinct, and inside the sandbox...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "b"));
+    mkdirSync(join(tmp, "x"));
+    writeFileSync(join(tmp, "a.txt"), "a");
+    writeFileSync(join(tmp, "b", "a.txt"), "b");
+    for (const [args, needle] of [
+      [["main.js", "--copy", "a.txt", "--copy", "b/a.txt"], "--copy a.txt and --copy b/a.txt both copy to /a.txt; give one of them an explicit =<sandbox> path"],
+      [["main.js", "--copy", "x", "--copy-rw", "x"], "--copy x and --copy-rw x both copy to /x"],
+      [["main.js", "--copy", "x="], "--copy x=: the sandbox path is empty"],
+      [["main.js", "--copy", "x=rel"], '--copy x=rel: "rel" is not an absolute sandbox path; start it with /'],
+      [["main.js", "--copy", "x=/../../etc"], '--copy x=/../../etc: "/../../etc" climbs above the sandbox root'],
+      [["--sandbox", "--entry=main.js"], '--entry: "main.js" is not an absolute sandbox path; start it with /'],
+    ] as const)
+      expectSandboxUsageError(`Sandbox mode ${args.join(" ")}`, runSandboxCli([...args], { cwd: tmp }), needle);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a positional entry wins over the section's entry, with a note...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('positional');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { entry: "/other.js" } }));
+    const run = runSandboxCli(["main.js", "-P"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "positional" ||
+        !run.stderr.includes(`Note: ${join(tmp, "goccia.json")}: "sandbox.entry" /other.js is not used; the command line names the entry (main.js)`))
+      throw new Error(`The positional entry should win with a note, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: runScript and the goccia builtin refuse options they do not take...", async () => {
+  const tmp = makeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, {
+      "child.js": "console.log('child');",
+      "main.js": [
+        'import { runScript, $ } from "goccia";',
+        'for (const option of ["allowNet", "permissions", "capabilities"]) {',
+        '  try { runScript("/child.js", { [option]: true }); console.log("accepted", option); }',
+        '  catch (e) { console.log(e.name, e.message); }',
+        '}',
+        'const shell = await $`goccia --allow-net=example.com /child.js`.nothrow().run();',
+        'console.log("shell", shell.exitCode, shell.stderr.trim());',
+      ].join("\n"),
+    });
+    const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"], { cwd: tmp });
+    const out = run.stdout;
+    for (const option of ["allowNet", "permissions", "capabilities"])
+      if (!out.includes(`TypeError runScript does not accept option "${option}"`))
+        throw new Error(`runScript should refuse ${option} by name, got (exit ${run.exitCode}):\n${out}${run.stderr}`);
+    if (!out.includes("shell 2 goccia: --allow-net=example.com: the nested goccia shell takes no capability flags; a child inherits its parent's capabilities"))
+      throw new Error(`goccia should refuse capability flags clearly, got:\n${out}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: an invalid config max-fs-* is ignored in host mode and rejected in sandbox mode...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('ran');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ "max-fs-bytes": "lots", "max-fs-nodes": -3 }));
+    const host = runSandboxCli(["main.js"], { cwd: tmp });
+    if (host.exitCode !== 0 || !host.stdout.includes("ran"))
+      throw new Error(`Host mode should ignore config max-fs-* without validating it, got (exit ${host.exitCode}):\n${host.stdout}${host.stderr}`);
+    const sandbox = runSandboxCli(["main.js", "--sandbox"], { cwd: tmp });
+    if (sandbox.exitCode !== 1 || sandbox.stdout !== "" ||
+        !sandbox.stderr.includes(`Error: Invalid value for "max-fs-bytes" in ${join(tmp, "goccia.json")}: lots`))
+      throw new Error(`Sandbox mode should reject an invalid config max-fs-bytes, got (exit ${sandbox.exitCode}):\n${sandbox.stdout}${sandbox.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: the entry's own config's sandbox section is reported as unread...", async () => {
+  const tmp = realpathSync(makeTmp());
+  try {
+    mkdirSync(join(tmp, "proj"));
+    mkdirSync(join(tmp, "other"));
+    writeFileSync(join(tmp, "proj", "main.js"), "console.log('ran');");
+    writeFileSync(join(tmp, "proj", "goccia.json"), JSON.stringify({ sandbox: { copy: ["."] } }));
+    writeFileSync(join(tmp, "other", "goccia.json"), "{}");
+    const run = runSandboxCli([join("proj", "main.js"), "--sandbox", `--config=${join(tmp, "other")}`], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "ran" ||
+        !run.stderr.includes(`Warning: ${join(tmp, "proj", "goccia.json")} declares a "sandbox" section, which GocciaRunner reads only from the root config; ignoring it`))
+      throw new Error(`Sandbox mode should warn about the entry config's unread section, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: --print prints the last value like host mode...", async () => {
   const tmp = makeTmp();
   try {
@@ -7935,7 +8155,7 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
     const other = runSandboxCli(["main.js", "--source-type=module", `--config=${otherDir}`,
       `--trust-store=${join(tmp, "empty-trust.json")}`], { cwd: project });
     if (other.exitCode === 0 || !(other.stdout + other.stderr).includes('Cannot resolve bare module specifier "fs"') ||
-        !other.stderr.includes(`Warning: ${configPath} declares a "sandbox" section, which GocciaRunner does not use; ignoring it`))
+        !other.stderr.includes(`Warning: ${configPath} declares a "sandbox" section, which GocciaRunner reads only from the root config; ignoring it`))
       throw new Error(`--config=<other> should leave the entry's sandbox section unused, got (exit ${other.exitCode}):\n${other.stdout}${other.stderr}`);
 
     // With --entry, the config is discovered from the working directory.

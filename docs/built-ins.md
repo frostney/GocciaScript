@@ -808,7 +808,7 @@ console.log(child.stdout);
 console.log(child.diff);
 ```
 
-`copy` accepts one entry or an array. A string entry `from[=to]` copies a parent-VFS path into the child, at the same path when `=to` is omitted; `{ from, to }` is the object form. When a file's target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files. `diff` is `true` (JSON), `"json"`, or `"unified"`; a JSON diff always carries timestamp changes as a separate metadata dimension, and a unified diff never does. The pre-0.14 option names `seed`, `seeds`, `diffFormat`, and `diffMetadata` throw a `TypeError` naming the replacement.
+`copy` accepts one entry or an array. A string entry `from[=to]` copies a parent-VFS path into the child, at the same path when `=to` is omitted; `{ from, to }` is the object form. When a file's target ends in `/`, the file is copied under that directory with its source name. Inline `{ path, text }` and `{ path, base64 }` entries create child-only files. `diff` is `true` (JSON), `"json"`, or `"unified"`; a JSON diff always carries timestamp changes as a separate metadata dimension, and a unified diff never does. The pre-0.14 option names `seed`, `seeds`, `diffFormat`, and `diffMetadata` throw a `TypeError` naming the replacement, and any other unknown option (`allowNet`, `permissions`, ...) throws a `TypeError` naming it: a child inherits its parent's capabilities and cannot be granted more.
 
 The sandbox shell exposes the same child mode:
 
@@ -816,7 +816,7 @@ The sandbox shell exposes the same child mode:
 const out = await $`goccia --sandbox --copy /child.js --copy /lib=/lib --diff /child.js`.text();
 ```
 
-Shell `goccia` takes `goccia [--sandbox] [--copy <from[=to]>]... [--diff[=json|unified]] <entry>`. Child diffs are appended to command stdout only when a diff is requested. `--seed`, `--diff-format`, and `--diff-metadata` fail with a message naming the replacement.
+Shell `goccia` takes `goccia [--sandbox] [--copy <from[=to]>]... [--diff[=json|unified]] <entry>`. Child diffs are appended to command stdout only when a diff is requested. `--seed`, `--diff-format`, and `--diff-metadata` fail with a message naming the replacement; capability flags such as `--allow-net` fail saying the nested shell takes none, and any other option fails as unknown.
 
 ### AST — experimental (`Goccia.Builtins.AST.pas`)
 

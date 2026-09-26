@@ -443,14 +443,14 @@ var
   Overridden: Boolean;
   Input: TGocciaSandboxInputRequest;
 
-  procedure RequireString(const AAllowArray: Boolean);
+  procedure RequireString(const ARequireArray: Boolean);
   begin
-    if (AEntry.Kind <> cvkString) or (AEntry.InArray and not AAllowArray) then
+    if (AEntry.Kind <> cvkString) or (AEntry.InArray <> ARequireArray) then
     begin
-      if AAllowArray then
+      if ARequireArray then
         raise EGocciaConfigPermissionError.CreateFmt(
-          '%s: "%s" must be a string or an array of strings in the --copy ' +
-          'grammar <host>[=<sandbox>]', [ALocation, AEntry.Key])
+          '%s: "%s" must be an array of strings in the --copy grammar ' +
+          '<host>[=<sandbox>]', [ALocation, AEntry.Key])
       else
         raise EGocciaConfigPermissionError.CreateFmt(
           '%s: "%s" must be a string', [ALocation, AEntry.Key]);
@@ -512,6 +512,10 @@ begin
       if HostPart = '' then
         raise EGocciaConfigPermissionError.CreateFmt(
           '%s: "%s" entry "%s" names no host path',
+          [ALocation, AEntry.Key, AEntry.Value]);
+      if (Pos('=', AEntry.Value) > 0) and (SandboxPart = '') then
+        raise EGocciaConfigPermissionError.CreateFmt(
+          '%s: "%s" entry "%s" names no sandbox path after "="',
           [ALocation, AEntry.Key, AEntry.Value]);
       Input.Spec := AEntry.Value;
       Input.HostPath := AbsolutePath(HostPart, ExtractFilePath(ALocation));

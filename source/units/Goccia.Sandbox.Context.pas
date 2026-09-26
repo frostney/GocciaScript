@@ -340,6 +340,18 @@ begin
         'timestamp metadata (use --diff)';
       Exit;
     end
+    else if HasPrefix(Arg, '--allow-') or HasPrefix(Arg, '--deny-') then
+    begin
+      AError := Arg + ': the nested goccia shell takes no capability flags; ' +
+        'a child inherits its parent''s capabilities';
+      Exit;
+    end
+    else if HasPrefix(Arg, '-') and (Arg <> '-') then
+    begin
+      AError := 'unknown option ' + Arg + ' (options: --sandbox, ' +
+        '--copy <from[=to]>, --diff[=json|unified])';
+      Exit;
+    end
     else if AEntryPath = '' then
       AEntryPath := Arg
     else

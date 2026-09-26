@@ -34,6 +34,9 @@ type
     procedure TestCopySpecDefaultTargets;
     procedure TestCopySpecExplicitTargets;
     procedure TestCopySpecWithoutName;
+    procedure TestCopySpecTargetsMustBeAbsolute;
+    procedure TestDuplicateCommandLineTargetsRejected;
+    procedure TestConfigEntryYieldsToPositional;
     procedure TestDiffFormatInference;
     procedure TestDiffFormatValues;
     procedure TestMergeReplacesSameTarget;
@@ -60,6 +63,12 @@ begin
   Test('--copy host=sandbox names the target', TestCopySpecExplicitTargets);
   Test('A host path with no name needs an explicit target',
     TestCopySpecWithoutName);
+  Test('Copy targets are absolute, non-empty, and stay in the sandbox',
+    TestCopySpecTargetsMustBeAbsolute);
+  Test('Two command-line inputs with one target are refused',
+    TestDuplicateCommandLineTargetsRejected);
+  Test('A positional entry beats the config''s entry, with a note',
+    TestConfigEntryYieldsToPositional);
   Test('--diff-file infers only .json and .diff', TestDiffFormatInference);
   Test('--diff accepts json and unified', TestDiffFormatValues);
   Test('A command-line input replaces the config input with its target',
@@ -228,12 +237,56 @@ begin
   Input := ParseCopySpec('dir=/', FRoot, '--copy', False);
   Expect<string>(Input.SandboxPath).ToBe('/');
 
-  Input := ParseCopySpec('a.txt=inbox/', FRoot, '--copy', False);
+  Input := ParseCopySpec('a.txt=/inbox/', FRoot, '--copy', False);
   Expect<string>(Input.SandboxPath).ToBe('/inbox/');
 
-  { An empty target falls back to the default. }
-  Input := ParseCopySpec('src=', FRoot, '--copy', False);
-  Expect<string>(Input.SandboxPath).ToBe('/src');
+  Input := ParseCopySpec('a.txt=\inbox\a.txt', FRoot, '--copy', False);
+  Expect<string>(Input.SandboxPath).ToBe('/inbox/a.txt');
+end;
+
+function CopySpecError(const ASpec, AOrigin: string): string;
+begin
+  Result := '';
+  try
+    ParseCopySpec(ASpec, GetTempDir(False), AOrigin, False);
+  except
+    on E: Exception do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+procedure TSandboxModeTests.TestCopySpecTargetsMustBeAbsolute;
+begin
+  Expect<string>(CopySpecError('rw=', '--copy')).ToBe('TCLIUsageError: ' +
+    '--copy rw=: the sandbox path is empty; give an absolute sandbox path ' +
+    'such as /name');
+  Expect<string>(CopySpecError('rw=rel', '--copy-rw')).ToBe(
+    'TCLIUsageError: --copy-rw rw=rel: "rel" is not an absolute sandbox ' +
+    'path; start it with /');
+  Expect<string>(CopySpecError('x=/../../etc', '--copy')).ToBe(
+    'TCLIUsageError: --copy x=/../../etc: "/../../etc" climbs above the ' +
+    'sandbox root');
+  Expect<string>(CopySpecError('x=/a/../b', '--copy')).ToBe('');
+end;
+
+procedure TSandboxModeTests.TestDuplicateCommandLineTargetsRejected;
+begin
+  WriteFile('dup/a.txt', 'a');
+  WriteFile('dup/b/a.txt', 'b');
+  WriteFile('dup/x/y.txt', 'y');
+  Expect<string>(ResolveError(['--sandbox', '--entry=/a.txt', '--copy',
+    '../dup/a.txt', '--copy', '../dup/b/a.txt'],
+    Default(TGocciaSandboxRequest), CommandLine)).ToBe('TCLIUsageError: ' +
+    '--copy ../dup/a.txt and --copy ../dup/b/a.txt both copy to /a.txt; ' +
+    'give one of them an explicit =<sandbox> path');
+  Expect<string>(ResolveError(['--sandbox', '--entry=/x/y.txt', '--copy',
+    '../dup/x', '--copy-rw', '../dup/x'], Default(TGocciaSandboxRequest),
+    CommandLine)).ToBe('TCLIUsageError: --copy ../dup/x and --copy-rw ' +
+    '../dup/x both copy to /x; give one of them an explicit =<sandbox> path');
+  { Files into one directory land on different paths. }
+  Expect<string>(ResolveError(['--sandbox', '--entry=/in/a.txt', '--copy',
+    '../dup/a.txt=/in/', '--copy', '../dup/x/y.txt=/in/'],
+    Default(TGocciaSandboxRequest), CommandLine)).ToBe('');
 end;
 
 procedure TSandboxModeTests.TestCopySpecWithoutName;
@@ -392,7 +445,7 @@ var
   Empty: TGocciaSandboxRequest;
 begin
   Empty := Default(TGocciaSandboxRequest);
-  Options := ParseSandboxOptions(['--sandbox', '--entry', 'tools/run.js']);
+  Options := ParseSandboxOptions(['--sandbox', '--entry', '/tools/run.js']);
   try
     Request := ResolveSandboxMode(Options, Empty, True, CommandLine);
     Expect<string>(Request.EntrySandbox).ToBe('/tools/run.js');
@@ -400,6 +453,12 @@ begin
   finally
     Options.Free;
   end;
+  Expect<string>(ResolveError(['--sandbox', '--entry=main.js'], Empty,
+    CommandLine)).ToBe('TCLIUsageError: --entry: "main.js" is not an ' +
+    'absolute sandbox path; start it with /');
+  Expect<string>(ResolveError(['--sandbox', '--entry=/../main.js'], Empty,
+    CommandLine)).ToBe('TCLIUsageError: --entry: "/../main.js" climbs ' +
+    'above the sandbox root');
 
   Expect<string>(ResolveError(['main.js', '--sandbox', '--entry=/x.js'],
     Empty, CommandLine)).ToBe('TCLIUsageError: --entry names the sandbox ' +
@@ -607,6 +666,28 @@ begin
   Expect<string>(ResolveError(['main.js', '--sandbox', '--max-fs-bytes=0'],
     Default(TGocciaSandboxRequest), CommandLine)).ToBe(
     'TParseError: --max-fs-bytes must be greater than 0.');
+end;
+
+
+procedure TSandboxModeTests.TestConfigEntryYieldsToPositional;
+var
+  Options: TGocciaSandboxOptions;
+  Request: TGocciaSandboxModeRequest;
+  Config: TGocciaSandboxRequest;
+begin
+  Config := ConfigSection('entry-note/goccia.json',
+    '{"sandbox": {"entry": "/app/main.js"}}');
+  Options := ParseSandboxOptions(['main.js']);
+  try
+    Request := ResolveSandboxMode(Options, Config, True, CommandLine);
+    Expect<string>(Request.EntrySandbox).ToBe('');
+    Expect<Integer>(Length(Request.Notes)).ToBe(1);
+    Expect<string>(Request.Notes[0]).ToBe('Note: ' + FRoot + PathDelim +
+      'entry-note' + PathDelim + 'goccia.json: "sandbox.entry" /app/main.js ' +
+      'is not used; the command line names the entry (main.js)');
+  finally
+    Options.Free;
+  end;
 end;
 
 begin

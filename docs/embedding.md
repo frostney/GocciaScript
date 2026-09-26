@@ -461,7 +461,7 @@ ConsoleExtension.BuiltinConsole.LogCallback := MyHandler.OnLog;
 ConsoleExtension.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
 ```
 
-The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, BenchmarkRunner, and REPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+The CLI hosts based on `TGocciaCLIApplication` (GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner, and GocciaREPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
 
 ## Built-in Registration
 
@@ -494,7 +494,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by GocciaRunner (both modes) and GocciaREPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
