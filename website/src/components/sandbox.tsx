@@ -707,7 +707,7 @@ export function Sandbox() {
               </div>
               <h4>Goccia sandbox</h4>
               <p>
-                explicit globals · copied inputs · capability gates · limits
+                copied inputs · command-line modules · capability gates · limits
               </p>
             </div>
             <div className="sb-arrow">

@@ -448,7 +448,7 @@ console.log(audit.diff);`;
     "",
     list([
       "AI agent emits GocciaScript via a tool call.",
-      "Goccia sandbox runs the script with explicit globals, copied inputs, capability gates, timeout, and memory cap.",
+      "Goccia sandbox runs the script over `--copy` inputs and any `--modules` named on the command line, with capability gates, timeout, and memory cap.",
       "The host receives a structured JSON result.",
     ]),
     "",

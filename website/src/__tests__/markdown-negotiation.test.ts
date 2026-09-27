@@ -160,6 +160,19 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("```js");
   });
 
+  test("describes the sandbox flow with the inputs sandbox mode accepts", async () => {
+    const markdown = (await createSiteMarkdown(["sandbox"])) ?? "";
+    const flow = markdown.slice(
+      markdown.indexOf("## Agent flow"),
+      markdown.indexOf("## Virtual filesystem runner"),
+    );
+
+    expect(flow).toContain("`--copy` inputs");
+    expect(flow).toContain("`--modules`");
+    // Sandbox mode rejects --globals and ignores config globals.
+    expect(flow).not.toMatch(/globals/i);
+  });
+
   test("renders a concise live compatibility alternate from dashboard data", () => {
     const markdown = renderCompatibilityMarkdown(compatibilityData);
 
