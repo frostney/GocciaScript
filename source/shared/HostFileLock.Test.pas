@@ -6,6 +6,8 @@ uses
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
   BaseUnix,
   UnixType,
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  Windows,
   {$IFEND}
   SysUtils,
 
@@ -20,6 +22,8 @@ type
     {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
     procedure TestALinkAtTheLockNameIsRefused;
     procedure TestAFlockErrorIsNotHeld;
+    {$ELSEIF DEFINED(MSWINDOWS)}
+    procedure TestALockFileExErrorIsNotHeld;
     {$IFEND}
   protected
     procedure BeforeEach; override;
@@ -35,6 +39,14 @@ begin
   fpseterrno(ESysEINVAL);
   Result := -1;
 end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+{ LockFileEx as a volume without byte-range locks answers it. }
+function UnsupportedLockFileEx(AHandle: THandle; AFlags: DWORD;
+  var AOverlapped: TOverlapped): BOOL;
+begin
+  SetLastError(ERROR_NOT_SUPPORTED);
+  Result := False;
+end;
 {$IFEND}
 
 procedure THostFileLockTests.SetupTests;
@@ -45,6 +57,9 @@ begin
     TestALinkAtTheLockNameIsRefused);
   Test('A flock error other than contention fails at once',
     TestAFlockErrorIsNotHeld);
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  Test('A LockFileEx error other than contention fails at once',
+    TestALockFileExErrorIsNotHeld);
   {$IFEND}
 end;
 
@@ -113,6 +128,23 @@ begin
     Outcome := TryAcquireHostFileLock(LockPath, &644, Lock, Error);
   finally
     HostFileLockFlock := nil;
+  end;
+  Expect<Boolean>(Outcome = hflFailed).ToBe(True);
+  Expect<Boolean>(Pos('cannot lock ' + LockPath, Error) = 1).ToBe(True);
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+procedure THostFileLockTests.TestALockFileExErrorIsNotHeld;
+var
+  Lock: THostFileLock;
+  Error, LockPath: string;
+  Outcome: THostFileLockResult;
+begin
+  LockPath := FDirectory + PathDelim + 'x.lock';
+  HostFileLockLockFileEx := UnsupportedLockFileEx;
+  try
+    Outcome := TryAcquireHostFileLock(LockPath, &644, Lock, Error);
+  finally
+    HostFileLockLockFileEx := nil;
   end;
   Expect<Boolean>(Outcome = hflFailed).ToBe(True);
   Expect<Boolean>(Pos('cannot lock ' + LockPath, Error) = 1).ToBe(True);

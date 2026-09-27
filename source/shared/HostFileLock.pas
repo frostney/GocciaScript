@@ -12,6 +12,8 @@ interface
 uses
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
   UnixType,
+  {$ELSEIF DEFINED(MSWINDOWS)}
+  Windows,
   {$IFEND}
   SysUtils;
 
@@ -45,6 +47,15 @@ var
   { Test seam: the flock(2) call, so a test can make it fail the way a
     filesystem without flock does. nil selects fpFlock. }
   HostFileLockFlock: THostFlock = nil;
+{$ELSEIF DEFINED(MSWINDOWS)}
+type
+  THostLockFileEx = function(AHandle: THandle; AFlags: DWORD;
+    var AOverlapped: TOverlapped): BOOL;
+
+var
+  { Test seam: the LockFileEx call, so a test can make it fail the way a
+    volume without byte-range locks does. nil selects LockFileEx. }
+  HostFileLockLockFileEx: THostLockFileEx = nil;
 {$IFEND}
 
 implementation
@@ -113,6 +124,8 @@ end;
 {$ELSEIF DEFINED(MSWINDOWS)}
 var
   Overlapped: TOverlapped;
+  Locked: BOOL;
+  Error: DWORD;
 begin
   ALock := Default(THostFileLock);
   AError := '';
@@ -127,11 +140,23 @@ begin
     Exit(hflFailed);
   end;
   FillChar(Overlapped, SizeOf(Overlapped), 0);
-  if not LockFileEx(ALock.Handle, LOCKFILE_EXCLUSIVE_LOCK or
-     LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, Overlapped) then
+  if Assigned(HostFileLockLockFileEx) then
+    Locked := HostFileLockLockFileEx(ALock.Handle, LOCKFILE_EXCLUSIVE_LOCK or
+      LOCKFILE_FAIL_IMMEDIATELY, Overlapped)
+  else
+    Locked := LockFileEx(ALock.Handle, LOCKFILE_EXCLUSIVE_LOCK or
+      LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, Overlapped);
+  if not Locked then
   begin
+    Error := GetLastError;
     CloseHandle(ALock.Handle);
-    Exit(hflHeld);
+    { Only another holder is "held"; any other failure, such as a volume
+      without byte-range locks, fails straight away. }
+    if Error = ERROR_LOCK_VIOLATION then
+      Exit(hflHeld);
+    AError := Format('cannot lock %s: %s', [ALockPath,
+      SysErrorMessage(Error)]);
+    Exit(hflFailed);
   end;
   ALock.Held := True;
   Result := hflAcquired;
