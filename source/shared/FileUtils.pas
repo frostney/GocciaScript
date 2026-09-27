@@ -220,6 +220,20 @@ function ReplaceHostFileBeneath(const ARoot: string;
   const ARelativePath, ATemporarySuffix: string; const ABytes: TBytes;
   out AError: string): Boolean;
 
+{ Deletes ARelativePath under the directory ARoot and everything below it,
+  following no symbolic link: a link met anywhere is removed itself, never
+  its target. On POSIX every directory is opened without following a link
+  and entries are removed relative to it (`unlinkat`); on Windows each
+  component is checked for a reparse point, and a reparse point is deleted
+  without being entered. True when nothing is left, including when the path
+  did not exist; False with AError otherwise. }
+function RemoveHostTreeBeneath(const ARoot, ARelativePath: string;
+  out AError: string): Boolean;
+
+{ The POSIX permission bits of the file APath. False where the host has no
+  POSIX modes, or the file cannot be examined. }
+function TryHostFileMode(const APath: string; out AMode: Cardinal): Boolean;
+
 implementation
 
 uses
@@ -1485,5 +1499,262 @@ begin
   Result := ReadFileBytes(APath);
 end;
 {$ENDIF}
+
+function TryHostFileMode(const APath: string; out AMode: Cardinal): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  PERMISSION_BITS = &7777;
+var
+  Info: Stat;
+  PathBytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  AMode := 0;
+  Result := TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) and
+    (fpStat(PAnsiChar(@PathBytes[0]), Info) = 0);
+  if Result then
+    AMode := Info.st_mode and PERMISSION_BITS;
+end;
+{$ELSE}
+begin
+  AMode := 0;
+  Result := False;
+end;
+{$IFEND}
+
+function RemoveHostTreeBeneath(const ARoot, ARelativePath: string;
+  out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Parts: TStringList;
+  Directory, Next: cint;
+  NameBytes: TBytes;
+  ErrorOffset, I: Integer;
+  ListingPath: string;
+
+  function Encode(const AText: string; out ABytes: TBytes): Boolean;
+  begin
+    Result := TryEncodeUTF8NullTerminated(AText, ABytes, ErrorOffset);
+    if not Result then
+      AError := 'path cannot be encoded for the host';
+  end;
+
+  { Removes AName in the directory AParent. The names below a directory are
+    listed by path, which may name something else if a link was swapped in,
+    but every removal is relative to the descriptor opened without following
+    a link, so nothing outside the tree can be removed. }
+  function RemoveEntry(const AParent: cint; const AName,
+    APath: string): Boolean;
+  var
+    Child: cint;
+    Entry: PDirent;
+    Listing: PDir;
+    Names: TStringList;
+    Bytes: TBytes;
+    J: Integer;
+  begin
+    Result := False;
+    if not Encode(AName, Bytes) then
+      Exit;
+    Child := HostOpenAt(AParent, PAnsiChar(@Bytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if Child < 0 then
+    begin
+      { A file or a link: removed itself. }
+      if (HostUnlinkAt(AParent, PAnsiChar(@Bytes[0]), 0) <> 0) and
+         (fpgetCerrno <> ESysENOENT) then
+      begin
+        AError := Format('cannot remove %s: %s', [APath,
+          SysErrorMessage(fpgetCerrno)]);
+        Exit;
+      end;
+      Exit(True);
+    end;
+    Names := TStringList.Create;
+    try
+      Listing := fpOpenDir(APath);
+      if Assigned(Listing) then
+      try
+        repeat
+          Entry := fpReadDir(Listing^);
+          if Assigned(Entry) and (StrPas(PAnsiChar(@Entry^.d_name[0])) <> '.')
+             and (StrPas(PAnsiChar(@Entry^.d_name[0])) <> '..') then
+            Names.Add(StrPas(PAnsiChar(@Entry^.d_name[0])));
+        until not Assigned(Entry);
+      finally
+        fpCloseDir(Listing^);
+      end;
+      for J := 0 to Names.Count - 1 do
+        if not RemoveEntry(Child, Names[J], APath + PathDelim + Names[J]) then
+          Exit;
+    finally
+      Names.Free;
+      fpClose(Child);
+    end;
+    if (HostUnlinkAt(AParent, PAnsiChar(@Bytes[0]), HOST_AT_REMOVEDIR) <> 0)
+       and (fpgetCerrno <> ESysENOENT) then
+    begin
+      AError := Format('cannot remove %s: %s', [APath,
+        SysErrorMessage(fpgetCerrno)]);
+      Exit;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+  AError := '';
+  Parts := SplitRelativeHostPath(ARelativePath);
+  Directory := -1;
+  try
+    if Parts.Count = 0 then
+    begin
+      AError := 'no path below ' + ARoot;
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+    if not Encode(ARoot, NameBytes) then
+      Exit;
+    Directory := fpOpen(PAnsiChar(@NameBytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if Directory < 0 then
+    begin
+      AError := ARoot + ' is a symbolic link or not a directory';
+      Exit;
+    end;
+    ListingPath := ExcludeTrailingPathDelimiter(ARoot);
+    for I := 0 to Parts.Count - 2 do
+    begin
+      if not Encode(Parts[I], NameBytes) then
+        Exit;
+      Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+      if Next < 0 then
+      begin
+        if fpgetCerrno = ESysENOENT then
+          Exit(True);
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+      fpClose(Directory);
+      Directory := Next;
+      ListingPath := ListingPath + PathDelim + Parts[I];
+    end;
+    Result := RemoveEntry(Directory, Parts[Parts.Count - 1],
+      ListingPath + PathDelim + Parts[Parts.Count - 1]);
+  finally
+    if Directory >= 0 then
+      fpClose(Directory);
+    Parts.Free;
+  end;
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+var
+  Parts: TStringList;
+  Path: string;
+  I: Integer;
+
+  function IsReparsePoint(const APath: string): Boolean;
+  var
+    Attributes: DWORD;
+  begin
+    Attributes := GetFileAttributesW(PWideChar(UnicodeString(APath)));
+    Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
+      ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+  end;
+
+  function RemoveEntry(const APath: string): Boolean;
+  var
+    Attributes: DWORD;
+    SearchRecord: TSearchRec;
+  begin
+    Result := False;
+    Attributes := GetFileAttributesW(PWideChar(UnicodeString(APath)));
+    if Attributes = INVALID_FILE_ATTRIBUTES then
+      Exit(True);
+    if (Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+    begin
+      if not DeleteFile(APath) then
+      begin
+        AError := Format('cannot remove %s: %s', [APath,
+          SysErrorMessage(GetLastError)]);
+        Exit;
+      end;
+      Exit(True);
+    end;
+    { A junction or directory link is removed itself, never entered. }
+    if (Attributes and FILE_ATTRIBUTE_REPARSE_POINT) = 0 then
+    begin
+      if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile,
+         SearchRecord) = 0 then
+      try
+        repeat
+          if (SearchRecord.Name = '.') or (SearchRecord.Name = '..') then
+            Continue;
+          if not RemoveEntry(IncludeTrailingPathDelimiter(APath) +
+             SearchRecord.Name) then
+            Exit;
+        until FindNext(SearchRecord) <> 0;
+      finally
+        FindClose(SearchRecord);
+      end;
+    end;
+    if not RemoveDir(APath) then
+    begin
+      AError := Format('cannot remove %s: %s', [APath,
+        SysErrorMessage(GetLastError)]);
+      Exit;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+  AError := '';
+  Parts := SplitRelativeHostPath(ARelativePath);
+  try
+    if Parts.Count = 0 then
+    begin
+      AError := 'no path below ' + ARoot;
+      Exit;
+    end;
+    Path := ExcludeTrailingPathDelimiter(ARoot);
+    if IsReparsePoint(Path) then
+    begin
+      AError := ARoot + ' is a reparse point';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 2 do
+    begin
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+      Path := Path + PathDelim + Parts[I];
+      if not DirectoryExists(Path) then
+        Exit(True);
+      if IsReparsePoint(Path) then
+      begin
+        AError := Parts[I] + ' is a reparse point';
+        Exit;
+      end;
+    end;
+    Result := RemoveEntry(Path + PathDelim + Parts[Parts.Count - 1]);
+  finally
+    Parts.Free;
+  end;
+end;
+{$ELSE}
+begin
+  AError := 'this build cannot remove a directory tree';
+  Result := False;
+end;
+{$IFEND}
 
 end.

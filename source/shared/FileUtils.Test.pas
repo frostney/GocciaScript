@@ -41,6 +41,9 @@ type
     procedure TestReadSharedHostFileBytes;
     procedure TestHostPathIsRegularFile;
     procedure TestReadHostHandleBytesReadsFromTheStart;
+    procedure TestRemoveHostTreeBeneathRemovesATree;
+    procedure TestRemoveHostTreeBeneathDoesNotFollowLinks;
+    procedure TestTryHostFileMode;
     procedure TestReplaceWhileASharedReaderHoldsTheFile;
   public
     procedure SetupTests; override;
@@ -95,6 +98,13 @@ begin
     TestHostPathIsRegularFile);
   Test('ReadHostHandleBytes reads the whole file through its handle',
     TestReadHostHandleBytesReadsFromTheStart);
+  Test('RemoveHostTreeBeneath removes a tree and refuses to climb',
+    TestRemoveHostTreeBeneathRemovesATree);
+  {$IFDEF UNIX}
+  Test('RemoveHostTreeBeneath removes links without following them',
+    TestRemoveHostTreeBeneathDoesNotFollowLinks);
+  Test('TryHostFileMode reads the permission bits', TestTryHostFileMode);
+  {$ENDIF}
   { Share modes exist only on Windows; POSIX renames over open files. }
   {$IFDEF MSWINDOWS}
   Test('ReplaceHostFile replaces a file a shared reader holds open',
@@ -523,6 +533,81 @@ begin
     FileClose(Handle);
   end;
 end;
+
+procedure TFileUtilsTests.TestRemoveHostTreeBeneathRemovesATree;
+var
+  Error: string;
+begin
+  CreateTempFile('cache' + PathDelim + 'a' + PathDelim + 'b' + PathDelim +
+    'x.txt');
+  CreateTempFile('cache' + PathDelim + 'a' + PathDelim + 'y.txt');
+  CreateTempFile('cache' + PathDelim + 'keep.txt');
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', 'a',
+    Error)).ToBe(True);
+  Expect<string>(Error).ToBe('');
+  Expect<Boolean>(DirectoryExists(FTempDir + PathDelim + 'cache' + PathDelim +
+    'a')).ToBe(False);
+  Expect<Boolean>(FileExists(FTempDir + PathDelim + 'cache' + PathDelim +
+    'keep.txt')).ToBe(True);
+  { Nothing to remove is success. }
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    'missing' + PathDelim + 'deeper', Error)).ToBe(True);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    '..' + PathDelim + 'cache', Error)).ToBe(False);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', '',
+    Error)).ToBe(False);
+end;
+
+procedure TFileUtilsTests.TestRemoveHostTreeBeneathDoesNotFollowLinks;
+{$IFDEF UNIX}
+var
+  Error, Outside: string;
+begin
+  CreateTempFile('outside' + PathDelim + 'secret.txt');
+  CreateTempFile('cache' + PathDelim + 'pkg' + PathDelim + 'file.txt');
+  Outside := FTempDir + PathDelim + 'outside';
+  { A link inside the tree, and one on the way to it. }
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Outside)),
+    PAnsiChar(AnsiString(FTempDir + PathDelim + 'cache' + PathDelim + 'pkg' +
+    PathDelim + 'link')))).ToBe(0);
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Outside)),
+    PAnsiChar(AnsiString(FTempDir + PathDelim + 'cache' + PathDelim +
+    'hop')))).ToBe(0);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    'hop' + PathDelim + 'secret.txt', Error)).ToBe(False);
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', 'pkg',
+    Error)).ToBe(True);
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+  Expect<Boolean>(DirectoryExists(FTempDir + PathDelim + 'cache' + PathDelim +
+    'pkg')).ToBe(False);
+  { A root that is a link is refused. }
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache' +
+    PathDelim + 'hop', 'secret.txt', Error)).ToBe(False);
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
+procedure TFileUtilsTests.TestTryHostFileMode;
+{$IFDEF UNIX}
+var
+  Mode: Cardinal;
+begin
+  CreateTempFile('mode.txt');
+  fpChmod(PAnsiChar(AnsiString(FTempDir + PathDelim + 'mode.txt')), &640);
+  Expect<Boolean>(TryHostFileMode(FTempDir + PathDelim + 'mode.txt', Mode))
+    .ToBe(True);
+  Expect<Integer>(Mode).ToBe(&640);
+  Expect<Boolean>(TryHostFileMode(FTempDir + PathDelim + 'missing', Mode))
+    .ToBe(False);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 { A run reads the trust store while another process's --trust replaces it.
   The reader opens it the way ReadSharedHostFileBytes does, sharing read,
