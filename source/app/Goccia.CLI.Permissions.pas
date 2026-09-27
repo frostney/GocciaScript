@@ -566,6 +566,26 @@ begin
   end;
 end;
 
+{ AInputs with the read-only ones first, then the read-write ones, each group
+  keeping its order. }
+function InputsInHashedOrder(
+  const AInputs: TGocciaSandboxInputRequests): TGocciaSandboxInputRequests;
+var
+  I, Count: Integer;
+  ReadWrite: Boolean;
+begin
+  Result := nil;
+  SetLength(Result, Length(AInputs));
+  Count := 0;
+  for ReadWrite := False to True do
+    for I := 0 to High(AInputs) do
+      if AInputs[I].ReadWrite = ReadWrite then
+      begin
+        Result[Count] := AInputs[I];
+        Inc(Count);
+      end;
+end;
+
 function ReadConfigPermissionRequest(const AEntries: TConfigEntryArray;
   const AConfigPath: string): TGocciaConfigPermissionRequest;
 var
@@ -681,6 +701,10 @@ begin
     else
       Result.Deny[Capability] := Scopes;
   end;
+  { The run copies inputs in the order the block is hashed in: every copy,
+    then every copy-rw, each in the order read. Two configs that differ only
+    in key order then hash alike and also run alike. }
+  Result.Sandbox.Inputs := InputsInHashedOrder(Result.Sandbox.Inputs);
 end;
 
 function DescribeCapabilities(const ACapabilities: TGocciaHonoredCapabilities):

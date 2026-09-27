@@ -58,6 +58,7 @@ type
     procedure TestSandboxSectionErrors;
     procedure TestSandboxSectionExtendsAndTOML;
     procedure TestSandboxSectionWarnsWhereUnused;
+    procedure TestSandboxInputsRunInHashedOrder;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -126,6 +127,8 @@ begin
     TestSandboxSectionExtendsAndTOML);
   Test('A binary that does not read the sandbox section warns',
     TestSandboxSectionWarnsWhereUnused);
+  Test('Sandbox inputs run in the order they are hashed in',
+    TestSandboxInputsRunInHashedOrder);
 end;
 
 procedure TPermissionsTests.BeforeAll;
@@ -1013,6 +1016,28 @@ begin
     'GocciaTestRunner does not use; ignoring it');
   Expect<Integer>(Length(UnsupportedRequestWarnings(Request, ALL_CAPABILITIES,
     'GocciaRunner', True, True))).ToBe(0);
+end;
+
+
+procedure TPermissionsTests.TestSandboxInputsRunInHashedOrder;
+var
+  First, Second: TGocciaConfigPermissionRequest;
+begin
+  First := ReadRequest(WriteConfig('order-a/goccia.json',
+    '{"sandbox": {"copy-rw": ["out"], "copy": ["src", "lib"]}}'));
+  Second := ReadRequest(WriteConfig('order-b/goccia.json',
+    '{"sandbox": {"copy": ["src", "lib"], "copy-rw": ["out"]}}'));
+  { copy then copy-rw, each as declared, whatever the key order. }
+  Expect<Integer>(Length(First.Sandbox.Inputs)).ToBe(3);
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[0].HostPath)).ToBe('src');
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[1].HostPath)).ToBe('lib');
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[2].HostPath)).ToBe('out');
+  Expect<Boolean>(First.Sandbox.Inputs[2].ReadWrite).ToBe(True);
+  Expect<string>(ExtractFileName(Second.Sandbox.Inputs[0].HostPath)).ToBe('src');
+  Expect<string>(ExtractFileName(Second.Sandbox.Inputs[2].HostPath)).ToBe('out');
+  { The same run, so the same block apart from the directory. }
+  Expect<string>(StringReplace(NormalizedPermissionBlock(First), 'order-a',
+    'order-b', [rfReplaceAll])).ToBe(NormalizedPermissionBlock(Second));
 end;
 
 begin
