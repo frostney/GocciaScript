@@ -141,15 +141,22 @@ done
 printf '\nGocciaScript %s installed to %s\n' "$VERSION" "$INSTALL_DIR"
 
 # 0.14 renamed GocciaScriptLoader to GocciaRunner and merged
-# GocciaSandboxRunner into it. Leave older binaries in place (something may
-# still call them), but say that they are no longer updated.
+# GocciaSandboxRunner into it. The version just installed wins: the other
+# generation's runner binaries in this same directory are removed, so a
+# pinned downgrade does not leave a newer GocciaRunner first on PATH, and an
+# upgrade does not leave the retired names behind. Nothing outside
+# INSTALL_DIR is touched.
 if [ "$RUNNER_BIN" = "GocciaRunner" ]; then
-  for stale in GocciaScriptLoader GocciaSandboxRunner; do
-    if [ -e "${INSTALL_DIR}/${stale}" ]; then
-      printf 'Note: %s/%s is from an older release and was not updated; use GocciaRunner instead and remove it when nothing depends on it.\n' "$INSTALL_DIR" "$stale"
-    fi
-  done
+  OTHER_GENERATION="GocciaScriptLoader GocciaSandboxRunner"
+else
+  OTHER_GENERATION="GocciaRunner"
 fi
+for stale in $OTHER_GENERATION; do
+  if [ -e "${INSTALL_DIR}/${stale}" ] || [ -L "${INSTALL_DIR}/${stale}" ]; then
+    $SUDO rm -f "${INSTALL_DIR}/${stale}"
+    printf 'Removed %s/%s, which belongs to a different GocciaScript release than %s.\n' "$INSTALL_DIR" "$stale" "$VERSION"
+  fi
+done
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
   *) printf 'Add %s to your PATH if it is not already there.\n' "$INSTALL_DIR" ;;

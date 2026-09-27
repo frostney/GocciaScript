@@ -129,14 +129,21 @@ try {
   Write-Host "GocciaScript $Version installed to $InstallDir"
 
   # 0.14 renamed GocciaScriptLoader to GocciaRunner and merged
-  # GocciaSandboxRunner into it. Leave older binaries in place (something
-  # may still call them), but say that they are no longer updated.
+  # GocciaSandboxRunner into it. The version just installed wins: the other
+  # generation's runner binaries in this same directory are removed, so a
+  # pinned downgrade does not leave a newer GocciaRunner.exe first on PATH,
+  # and an upgrade does not leave the retired names behind. Nothing outside
+  # InstallDir is touched.
   if ($RunnerExe -eq "GocciaRunner") {
-    foreach ($stale in @("GocciaScriptLoader", "GocciaSandboxRunner")) {
-      $StalePath = Join-Path $InstallDir "$stale.exe"
-      if (Test-Path -LiteralPath $StalePath -PathType Leaf) {
-        Write-Host "Note: $StalePath is from an older release and was not updated; use GocciaRunner.exe instead and remove it when nothing depends on it."
-      }
+    $OtherGeneration = @("GocciaScriptLoader", "GocciaSandboxRunner")
+  } else {
+    $OtherGeneration = @("GocciaRunner")
+  }
+  foreach ($stale in $OtherGeneration) {
+    $StalePath = Join-Path $InstallDir "$stale.exe"
+    if (Test-Path -LiteralPath $StalePath -PathType Leaf) {
+      Remove-Item -LiteralPath $StalePath -Force
+      Write-Host "Removed $StalePath, which belongs to a different GocciaScript release than $Version."
     }
   }
 } finally {
