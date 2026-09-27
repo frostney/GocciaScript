@@ -65,9 +65,6 @@ uses
   BaseUnix,
   Unix,
   {$IFEND}
-  {$IFDEF MSWINDOWS}
-  Windows,
-  {$ENDIF}
 
   FileUtils,
   TextEncoding;
