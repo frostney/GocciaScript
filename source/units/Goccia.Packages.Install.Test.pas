@@ -93,6 +93,7 @@ type
     procedure TestImportMapKeepsItsMode;
     {$ENDIF}
     procedure TestRemoveEditsTheImportMapFirst;
+    procedure TestRemoveTwiceIsAUsageError;
     procedure TestCaseCollisionsWriteNothing;
     procedure TestHeldInstallLockFails;
     procedure TestUsageErrorsExitTwo;
@@ -227,6 +228,8 @@ begin
   {$ENDIF}
   Test('--remove edits the import map before the lockfile',
     TestRemoveEditsTheImportMapFirst);
+  Test('--remove naming one entry twice is a usage error',
+    TestRemoveTwiceIsAUsageError);
   Test('Case-colliding files are refused before the cache is written',
     TestCaseCollisionsWriteNothing);
   Test('An install lock another install holds fails the run',
@@ -853,6 +856,24 @@ begin
     if Pos('Wrote', FLog[LockLine]) = 1 then
       Break;
   Expect<Boolean>(MapLine < LockLine).ToBe(True);
+end;
+
+procedure TInstallTests.TestRemoveTwiceIsAUsageError;
+var
+  Request: TGocciaInstallRequest;
+  Before, Outcome: string;
+begin
+  Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None);
+  Before := ReadFile('goccia.json');
+  Request := Default(TGocciaInstallRequest);
+  SetLength(Request.Removes, 2);
+  Request.Removes[0] := 'raylib';
+  Request.Removes[1] := 'raylib';
+  Outcome := Run(Request, TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('2: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('named twice', Outcome) > 0).ToBe(True);
+  Expect<string>(ReadFile('goccia.json')).ToBe(Before);
 end;
 
 procedure TInstallTests.TestCaseCollisionsWriteNothing;

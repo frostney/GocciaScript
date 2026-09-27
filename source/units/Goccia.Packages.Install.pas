@@ -711,6 +711,10 @@ var
 begin
   for I := 0 to High(FRequest.Removes) do
   begin
+    for J := 0 to I - 1 do
+      if FRequest.Removes[J] = FRequest.Removes[I] then
+        FailUsage(Format('%s is named twice; --remove takes each entry once',
+          [QuoteJSONString(FRequest.Removes[I])]));
     Index := IndexOfKey(FRequest.Removes[I]);
     if Index < 0 then
       FailUsage(Format('the import map %s has no entry %s', [FImportMapPath,
