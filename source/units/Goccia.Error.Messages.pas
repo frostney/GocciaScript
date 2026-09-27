@@ -395,6 +395,7 @@ resourcestring
   SErrorFFIBindRequiresNameAndSig = 'bind requires a function name and a signature object';
   SErrorFFIBindSigObject = 'bind second argument must be a signature object { args: [...], returns: "..." }';
   SErrorFFIUnknownType = 'Unknown FFI type: %s';
+  SErrorFFIOpenFileURL = 'FFI.open cannot use this file URL: %s';
   SErrorFFIVoidNotValidArg = 'void is not a valid argument type';
   SErrorFFISigArgsMustBeArray = 'signature args must be an array of type strings';
   SErrorFFIUnknownReturnType = 'Unknown FFI return type: %s';

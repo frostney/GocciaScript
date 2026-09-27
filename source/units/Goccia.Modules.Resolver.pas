@@ -301,12 +301,15 @@ function TGocciaModuleResolver.Resolve(const AModulePath,
 var
   Package: TGocciaMaterializedPackage;
 begin
+  { A package names its own files by relative specifier. An absolute path
+    is let through to CheckPathCandidate, which keeps it inside the package:
+    the loader reloads a changed module by its own resolved path. }
   Package := ProviderPackageOf(AImportingFilePath);
   if Assigned(Package) and
      (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) <>
       CURRENT_DIRECTORY_PREFIX) and
      (Copy(AModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) <>
-      PARENT_DIRECTORY_PREFIX) then
+      PARENT_DIRECTORY_PREFIX) and not IsAbsoluteHostPath(AModulePath) then
     raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
       'Provider package %s cannot import "%s": a package imports only its ' +
       'own files, by relative specifier', [Package.Key, AModulePath]), '');
@@ -331,7 +334,7 @@ begin
     raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
       'Cannot resolve "%s" in its provider package: %s',
       [AModulePath, Error]), ATarget);
-  if not FProviderImportMaps.TryGetValue(Address.PackageKey,
+  if not FProviderImportMaps.TryGetValue(Address.NormalizedPackageKey,
      ImportMapPath) then
     raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
       'Provider package %s is not declared by an import map',
@@ -475,12 +478,13 @@ begin
           raise Exception.CreateFmt(
             'Import map entry "%s" has an invalid provider address: %s',
             [Key, AddressError]);
-        if FProviderImportMaps.TryGetValue(Address.PackageKey,
+        if FProviderImportMaps.TryGetValue(Address.NormalizedPackageKey,
            DeclaringImportMap) and (DeclaringImportMap <> ImportMapPath) then
           raise Exception.CreateFmt(
             'Import map entry "%s" names %s, which %s already declares',
             [Key, Address.PackageKey, DeclaringImportMap]);
-        FProviderImportMaps.AddOrSetValue(Address.PackageKey, ImportMapPath);
+        FProviderImportMaps.AddOrSetValue(Address.NormalizedPackageKey,
+          ImportMapPath);
         AddAlias(NormalizedKey, TGocciaStringLiteralValue(Value).Value);
         Continue;
       end;

@@ -88,7 +88,6 @@ uses
   Goccia.Values.ObjectValue;
 
 const
-  FILE_URL_SCHEME_PREFIX = 'file:';
   {$IFDEF DARWIN}
   SHARED_LIBRARY_SUFFIX = '.dylib';
   {$ELSE}
@@ -209,57 +208,6 @@ begin
   Result := Metadata;
 end;
 
-{$IFDEF FPC}{$IFDEF LINUX}
-{ Every byte of the file ADescriptor names, read from the descriptor itself
-  so the bytes hashed are the bytes the loader maps. }
-function ReadDescriptorBytes(const ADescriptor: LongInt;
-  out ABytes: TBytes): Boolean;
-var
-  Info: Stat;
-  Offset: Int64;
-  Count: TSsize;
-begin
-  ABytes := nil;
-  if (fpFStat(ADescriptor, Info) <> 0) or
-     (fpLseek(ADescriptor, 0, SEEK_SET) <> 0) then
-    Exit(False);
-  SetLength(ABytes, Info.st_size);
-  Offset := 0;
-  while Offset < Length(ABytes) do
-  begin
-    Count := fpRead(ADescriptor, ABytes[Offset], Length(ABytes) - Offset);
-    if Count <= 0 then
-      Exit(False);
-    Inc(Offset, Count);
-  end;
-  Result := True;
-end;
-{$ENDIF}{$ENDIF}
-
-{$IFDEF MSWINDOWS}
-{ Every byte of the file AHandle pins, read through that handle. }
-function ReadHandleBytes(const AHandle: THandle; out ABytes: TBytes): Boolean;
-var
-  Size: Int64;
-  Offset, Count: LongInt;
-begin
-  ABytes := nil;
-  Size := FileSeek(AHandle, Int64(0), 2);
-  if (Size < 0) or (FileSeek(AHandle, Int64(0), 0) <> 0) then
-    Exit(False);
-  SetLength(ABytes, Size);
-  Offset := 0;
-  while Offset < Length(ABytes) do
-  begin
-    Count := FileRead(AHandle, ABytes[Offset], Length(ABytes) - Offset);
-    if Count <= 0 then
-      Exit(False);
-    Inc(Offset, Count);
-  end;
-  Result := True;
-end;
-{$ENDIF}
-
 { True when APath names a library without any directory part. }
 function IsBareLibraryName(const APath: string): Boolean;
 begin
@@ -291,7 +239,7 @@ const
   CHANGED_REASON = 'the library changed between the ffi check and the load';
 var
   LibPath, LoadPath, DenialDetail, PinnedLoadPath, PinnedPath,
-    RequestedPath, URLPath: string;
+    ReadError, RequestedPath, URLPath: string;
   Allowed, IsBareName, IsProviderLibrary: Boolean;
   LibraryBytes: TBytes;
   Handle: TGocciaFFILibraryHandle;
@@ -304,8 +252,10 @@ var
   {$ENDIF}
 
   { Verify on load: a library inside a provider package must be the bytes
-    its lockfile pins. The bytes come from the pinned descriptor or handle
-    where the platform has one, so the file hashed is the file loaded. }
+    its lockfile pins. The bytes are read through the pinned descriptor or
+    handle where the platform has one. That fixes which file is loaded, not
+    its contents: the file can still be rewritten in place between the hash
+    and the load, the same window macOS has. }
   procedure VerifyProviderLibrary(const ABytesRead: Boolean;
     const ABytes: TBytes);
   begin
@@ -359,11 +309,10 @@ begin
     encodes, so package code can open a library beside itself with
     `new URL("./lib.so", import.meta.url)`. It is judged like that path. }
   LoadPath := LibPath;
-  if SameText(Copy(LibPath, 1, Length(FILE_URL_SCHEME_PREFIX)),
-     FILE_URL_SCHEME_PREFIX) then
+  if IsFileURL(LibPath) then
   begin
     if not TryFileURLToHostPath(LibPath, URLPath) then
-      ThrowTypeError('FFI.open cannot use this file URL: ' + LibPath,
+      ThrowTypeError(Format(SErrorFFIOpenFileURL, [LibPath]),
         SSuggestFFILibraryOpen);
     LoadPath := URLPath;
   end;
@@ -422,8 +371,8 @@ begin
     end;
     if IsProviderLibrary then
       try
-        VerifyProviderLibrary(ReadDescriptorBytes(PinnedDescriptor,
-          LibraryBytes), LibraryBytes);
+        VerifyProviderLibrary(ReadHostHandleBytes(PinnedDescriptor,
+          LibraryBytes, ReadError), LibraryBytes);
       except
         FpClose(PinnedDescriptor);
         raise;
@@ -447,8 +396,8 @@ begin
     end;
     if IsProviderLibrary then
       try
-        VerifyProviderLibrary(ReadHandleBytes(PinnedHandle, LibraryBytes),
-          LibraryBytes);
+        VerifyProviderLibrary(ReadHostHandleBytes(PinnedHandle, LibraryBytes,
+          ReadError), LibraryBytes);
       except
         ClosePinnedHostFile(PinnedHandle);
         raise;

@@ -159,13 +159,8 @@ procedure RemoveCacheTree(const APath: string);
 implementation
 
 uses
-  {$IFDEF UNIX}
-  BaseUnix,
-  {$ENDIF}
-
   FileUtils,
   SHA256,
-  TextEncoding,
 
   Goccia.Capabilities;
 
@@ -182,28 +177,6 @@ function FromHostRelativePath(const APath: string): string;
 begin
   Result := StringReplace(APath, PathDelim, '/', [rfReplaceAll]);
 end;
-
-{ An existing cache entry must be a regular file reached without a link. }
-function IsRegularCacheFile(const APath: string): Boolean;
-{$IFDEF UNIX}
-var
-  ErrorOffset: Integer;
-  Info: Stat;
-  PathBytes: TBytes;
-begin
-  Result := TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) and
-    (fpLStat(PAnsiChar(@PathBytes[0]), Info) = 0) and
-    fpS_ISREG(Info.st_mode);
-end;
-{$ELSE}
-var
-  Attributes: LongInt;
-begin
-  Attributes := FileGetAttr(APath);
-  Result := (Attributes <> -1) and
-    ((Attributes and (faDirectory or faSymLink)) = 0);
-end;
-{$ENDIF}
 
 function PathEntryExists(const APath: string): Boolean;
 begin
@@ -260,7 +233,7 @@ begin
   Result := PathEntryExists(Candidate);
   if not Result then
     Exit;
-  if not IsRegularCacheFile(Candidate) then
+  if not HostPathIsRegularFile(Candidate) then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s: %s in the package cache is not a regular file',
       [AKey, FromHostRelativePath(AHostRelative)]), Candidate);
@@ -513,7 +486,8 @@ begin
   ImportMapDirectory := ExtractFilePath(ExpandHostFileName(AImportMapPath));
   LockPath := IncludeTrailingPathDelimiter(ImportMapDirectory) + LOCKFILE_NAME;
   for Known in FPackages do
-    if (Known.Key = AAddress.PackageKey) and (Known.LockPath = LockPath) then
+    if (Known.Address.NormalizedPackageKey = AAddress.NormalizedPackageKey) and
+       (Known.LockPath = LockPath) then
       Exit(Known);
 
   Locked := Lockfile(LockPath).FindPackage(AAddress.PackageKey);

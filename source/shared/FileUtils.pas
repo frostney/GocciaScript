@@ -76,6 +76,16 @@ function HostFileExists(const APath: string): Boolean;
   point / junction (Windows). Does not follow the link. }
 function HostPathIsSymlink(const APath: string): Boolean;
 
+{ True when APath itself is a regular file: not a directory, and not a
+  symbolic link or reparse point, which is not followed. }
+function HostPathIsRegularFile(const APath: string): Boolean;
+
+{ Every byte of the open file AHandle, read from its start through that
+  handle, so the bytes read are those of the file the handle pins. False
+  with AError when the handle cannot be read. }
+function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
+  out AError: string): Boolean;
+
 { APath with every symbolic link along it resolved to the file it physically
   names, or '' when the host cannot answer.
 
@@ -374,6 +384,61 @@ begin
   Result := (Attr <> -1) and ((Attr and faSymLink) <> 0);
 end;
 {$ENDIF}
+
+function HostPathIsRegularFile(const APath: string): Boolean;
+{$IFDEF UNIX}
+var
+  Info: Stat;
+  ErrorOffset: Integer;
+  PathBytes: TBytes;
+begin
+  Result := TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) and
+    (fpLStat(PAnsiChar(@PathBytes[0]), Info) = 0) and
+    fpS_ISREG(Info.st_mode);
+end;
+{$ELSE}
+var
+  Attributes: LongInt;
+begin
+  Attributes := FileGetAttr(APath);
+  Result := (Attributes <> -1) and
+    ((Attributes and (faDirectory or faSymLink)) = 0);
+end;
+{$ENDIF}
+
+function ReadHostHandleBytes(const AHandle: THandle; out ABytes: TBytes;
+  out AError: string): Boolean;
+var
+  Size, Offset: Int64;
+  Count: LongInt;
+begin
+  ABytes := nil;
+  AError := '';
+  Size := FileSeek(AHandle, Int64(0), fsFromEnd);
+  if (Size < 0) or (FileSeek(AHandle, Int64(0), fsFromBeginning) <> 0) then
+  begin
+    AError := SysErrorMessage(GetLastOSError);
+    Exit(False);
+  end;
+  SetLength(ABytes, Size);
+  Offset := 0;
+  while Offset < Size do
+  begin
+    Count := FileRead(AHandle, ABytes[Offset], Size - Offset);
+    if Count < 0 then
+    begin
+      AError := SysErrorMessage(GetLastOSError);
+      Exit(False);
+    end;
+    if Count = 0 then
+    begin
+      SetLength(ABytes, Offset);
+      Break;
+    end;
+    Inc(Offset, Count);
+  end;
+  Result := True;
+end;
 
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 { POSIX.1-2008 realpath(3). The two-argument form is used rather than the
@@ -1388,9 +1453,9 @@ function ReadSharedHostFileBytes(const APath: string): TBytes;
 {$IFDEF MSWINDOWS}
 var
   Handle: THandle;
-  LastError, BytesRead: DWORD;
+  LastError: DWORD;
   Attempt: Integer;
-  Size, Offset: Int64;
+  ReadError: string;
 begin
   Attempt := 0;
   repeat
@@ -1408,25 +1473,9 @@ begin
     SysUtils.Sleep(SHARING_RETRY_MILLISECONDS);
   until False;
   try
-    Size := FileSeek(Handle, Int64(0), fsFromEnd);
-    if (Size < 0) or (FileSeek(Handle, Int64(0), fsFromBeginning) <> 0) then
+    if not ReadHostHandleBytes(Handle, Result, ReadError) then
       raise EReadError.CreateFmt('Unable to read file "%s": %s',
-        [APath, SysErrorMessage(GetLastError)]);
-    SetLength(Result, Size);
-    Offset := 0;
-    while Offset < Size do
-    begin
-      if not Windows.ReadFile(Handle, Result[Offset], DWORD(Size - Offset),
-           BytesRead, nil) then
-        raise EReadError.CreateFmt('Unable to read file "%s": %s',
-          [APath, SysErrorMessage(GetLastError)]);
-      if BytesRead = 0 then
-      begin
-        SetLength(Result, Offset);
-        Break;
-      end;
-      Inc(Offset, BytesRead);
-    end;
+        [APath, ReadError]);
   finally
     CloseHandle(Handle);
   end;

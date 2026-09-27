@@ -85,6 +85,8 @@ type
   public
     constructor Create;
     destructor Destroy; override;
+    { The package pinned for AKey. Owner and repository compare
+      case-insensitively, the ref exactly. }
     function FindPackage(const AKey: string): TGocciaLockedPackage;
     property Packages: TGocciaLockedPackageList read FPackages;
   end;
@@ -264,12 +266,16 @@ end;
 function TGocciaLockfile.FindPackage(
   const AKey: string): TGocciaLockedPackage;
 var
+  Address: TGocciaProviderAddress;
+  Error: string;
   Package: TGocciaLockedPackage;
 begin
-  for Package in FPackages do
-    if Package.Key = AKey then
-      Exit(Package);
   Result := nil;
+  if not TryParsePackageKey(AKey, Address, Error) then
+    Exit;
+  for Package in FPackages do
+    if Package.Address.NormalizedPackageKey = Address.NormalizedPackageKey then
+      Exit(Package);
 end;
 
 { TLockfileReader }
@@ -307,6 +313,9 @@ var
 begin
   if not TryParsePackageKey(AKey, Address, Error) then
     Fail(Format('package "%s": %s', [AKey, Error]));
+  if Assigned(FLockfile.FindPackage(AKey)) then
+    Fail(Format('package "%s" is pinned twice (owner and repository names ' +
+      'differ only in case)', [AKey]));
   FPackage := TGocciaLockedPackage.Create(AKey, Address);
   FLockfile.Packages.Add(FPackage);
   FSawRef := False;
