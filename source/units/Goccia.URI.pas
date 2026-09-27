@@ -8,6 +8,11 @@ unit Goccia.URI;
 
 interface
 
+const
+  { RFC 8089 — the scheme of the URLs import.meta.url carries for host
+    files. }
+  FILE_URL_SCHEME = 'file:';
+
 { ES2026 §19.2.6.2 encodeURI(uriString) — encode a complete URI }
 function EncodeURI(const AString: string): string;
 
@@ -31,6 +36,9 @@ function PercentEncodePath(const APath: string): string;
   other form, for a query or fragment, for an encoded separator or NUL, and
   for bytes that are not UTF-8. }
 function TryFileURLToHostPath(const AURL: string; out APath: string): Boolean;
+
+{ True when AText is in the `file:` scheme, however well formed. }
+function IsFileURL(const AText: string): Boolean;
 
 implementation
 
@@ -374,30 +382,15 @@ begin
 end;
 
 const
-  FILE_URL_SCHEME = 'file:';
   FILE_URL_AUTHORITY_PREFIX = '//';
   FILE_URL_LOCALHOST = 'localhost';
-
-function HexValue(const AChar: Char): Integer;
-begin
-  case AChar of
-    '0'..'9':
-      Result := Ord(AChar) - Ord('0');
-    'a'..'f':
-      Result := Ord(AChar) - Ord('a') + 10;
-    'A'..'F':
-      Result := Ord(AChar) - Ord('A') + 10;
-  else
-    Result := -1;
-  end;
-end;
 
 { Percent-decodes AText into UTF-8 bytes and then text. An encoded `/`,
   `\`, or NUL would change what the path names, so it is refused. }
 function TryPercentDecodePath(const AText: string; out APath: string): Boolean;
 var
   Bytes, Run: TBytes;
-  ErrorOffset, I, High4, Low4, RunStart: Integer;
+  ErrorOffset, I, RunStart: Integer;
   Decoded: Byte;
 
   function FlushRun(const AEnd: Integer): Boolean;
@@ -426,13 +419,11 @@ begin
   begin
     if AText[I] = '%' then
     begin
-      if not FlushRun(I) or (I + 2 > Length(AText)) then
+      if not FlushRun(I) or (I + 2 > Length(AText)) or
+         not IsASCIIHexDigit(AText[I + 1]) or
+         not IsASCIIHexDigit(AText[I + 2]) then
         Exit;
-      High4 := HexValue(AText[I + 1]);
-      Low4 := HexValue(AText[I + 2]);
-      if (High4 < 0) or (Low4 < 0) then
-        Exit;
-      Decoded := (High4 shl 4) or Low4;
+      Decoded := (HexVal(AText[I + 1]) shl 4) or HexVal(AText[I + 2]);
       if (Decoded = 0) or (Decoded = Ord('/')) or (Decoded = Ord('\')) then
         Exit;
       SetLength(Bytes, Length(Bytes) + 1);
@@ -455,7 +446,7 @@ var
 begin
   Result := False;
   APath := '';
-  if not SameText(Copy(AURL, 1, Length(FILE_URL_SCHEME)), FILE_URL_SCHEME) then
+  if not IsFileURL(AURL) then
     Exit;
   Rest := Copy(AURL, Length(FILE_URL_SCHEME) + 1, MaxInt);
   if (Copy(Rest, 1, Length(FILE_URL_AUTHORITY_PREFIX)) <>
@@ -489,6 +480,12 @@ begin
     Exit;
   Result := (APath <> '') and (APath[1] = '/');
   {$ENDIF}
+end;
+
+function IsFileURL(const AText: string): Boolean;
+begin
+  Result := SameText(Copy(AText, 1, Length(FILE_URL_SCHEME)),
+    FILE_URL_SCHEME);
 end;
 
 end.

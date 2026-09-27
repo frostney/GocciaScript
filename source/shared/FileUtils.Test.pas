@@ -39,6 +39,8 @@ type
     procedure TestCanonicalHostPathFollowsASymlink;
     procedure TestReplaceHostFileCreatesWithPermissions;
     procedure TestReadSharedHostFileBytes;
+    procedure TestHostPathIsRegularFile;
+    procedure TestReadHostHandleBytesReadsFromTheStart;
     procedure TestReplaceWhileASharedReaderHoldsTheFile;
   public
     procedure SetupTests; override;
@@ -89,6 +91,10 @@ begin
   {$ENDIF}
   Test('ReadSharedHostFileBytes reads the whole file',
     TestReadSharedHostFileBytes);
+  Test('HostPathIsRegularFile is true only for a regular file itself',
+    TestHostPathIsRegularFile);
+  Test('ReadHostHandleBytes reads the whole file through its handle',
+    TestReadHostHandleBytesReadsFromTheStart);
   { Share modes exist only on Windows; POSIX renames over open files. }
   {$IFDEF MSWINDOWS}
   Test('ReplaceHostFile replaces a file a shared reader holds open',
@@ -476,6 +482,46 @@ begin
     .ToBe(True);
   Expect<Integer>(Length(ReadSharedHostFileBytes(Target))).ToBe(Length(Bytes));
   Expect<Integer>(ReadSharedHostFileBytes(Target)[0]).ToBe(Ord('{'));
+end;
+
+procedure TFileUtilsTests.TestHostPathIsRegularFile;
+var
+  Target: string;
+begin
+  Target := FTempDir + PathDelim + 'regular.txt';
+  CreateTempFile('regular.txt');
+  Expect<Boolean>(HostPathIsRegularFile(Target)).ToBe(True);
+  Expect<Boolean>(HostPathIsRegularFile(FTempDir)).ToBe(False);
+  Expect<Boolean>(HostPathIsRegularFile(FTempDir + PathDelim + 'missing'))
+    .ToBe(False);
+  {$IFDEF UNIX}
+  { A link to a regular file is not one. }
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Target)),
+    PAnsiChar(AnsiString(FTempDir + PathDelim + 'link.txt')))).ToBe(0);
+  Expect<Boolean>(HostPathIsRegularFile(FTempDir + PathDelim + 'link.txt'))
+    .ToBe(False);
+  {$ENDIF}
+end;
+
+procedure TFileUtilsTests.TestReadHostHandleBytesReadsFromTheStart;
+var
+  Target, Error: string;
+  Handle: THandle;
+  Bytes: TBytes;
+begin
+  Target := FTempDir + PathDelim + 'handle.bin';
+  Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+    TEncoding.UTF8.GetBytes('0123456789'), Error)).ToBe(True);
+  Handle := FileOpen(Target, fmOpenRead);
+  Expect<Boolean>(Handle <> THandle(-1)).ToBe(True);
+  try
+    { A handle already read part way is read again from its start. }
+    FileSeek(Handle, Int64(4), fsFromBeginning);
+    Expect<Boolean>(ReadHostHandleBytes(Handle, Bytes, Error)).ToBe(True);
+    Expect<string>(TEncoding.UTF8.GetString(Bytes)).ToBe('0123456789');
+  finally
+    FileClose(Handle);
+  end;
 end;
 
 { A run reads the trust store while another process's --trust replaces it.

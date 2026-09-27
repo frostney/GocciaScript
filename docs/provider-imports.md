@@ -36,7 +36,7 @@ The address is `github:<owner>/<repo>@<ref>[/<path>]`:
 | Part | Rule |
 |---|---|
 | `<owner>`, `<repo>` | GitHub names: letters, digits, `-` (and `_`, `.` in a repository). Compared case-insensitively. |
-| `<ref>` | A tag, or a 40-character lowercase commit. Letters, digits, `.`, `_`, `-`, `+`; no `/`, so the path starts at the first `/`. Branches are not accepted: nothing can later prove which commit a moved branch named. |
+| `<ref>` | A tag, or a 40-character lowercase commit. Letters, digits, `.`, `_`, `-`, `+`; no `/`, so the path starts at the first `/`, and a tag such as `release/1.0` cannot be pinned. Branches are not accepted: nothing can later prove which commit a moved branch named. |
 | `<path>` | Empty for the repository root, a file for an exact entry, or a directory ending in `/` for a prefix entry. A relative path with no `..`, `.`, or empty segment. |
 
 An exact entry resolves to its file with the usual
@@ -50,13 +50,18 @@ anything else in the cache does not exist for resolution.
 
 A provider entry is recorded when the import map loads and resolved when an
 import first goes through it, so a run that never imports the package needs no
-grant for it.
+grant for it. `import.meta.resolve` of a specifier an entry maps answers with
+the provider address itself (`github:acme/lib@v1.0.0/index.js`), without a
+grant, a fetch, or an audit event, as any resolve the engine would refuse
+answers lexically.
 
 ## The lockfile
 
 `goccia.lock.json` sits beside the file that declares the entry. It pins each
-package, keyed by `github:<owner>/<repo>@<ref>` exactly as the import map
-writes it:
+package, keyed by `github:<owner>/<repo>@<ref>` as the import map writes it.
+A lookup compares owner and repository case-insensitively and the ref
+exactly, so two keys that differ only in the case of a name pin one package
+twice and are refused:
 
 ```json
 {
@@ -109,8 +114,18 @@ grant it, or the deny that refused it. The grant is checked before the
 lockfile is read or anything is fetched. The same scopes work in a config's
 `permissions` block, where `allow-import` is a request that needs trust. There
 is no separate network grant: the provider's hosts are fixed by the
-implementation, and `net` scopes are never consulted. Sandbox mode grants no
-`import` capability, so a provider import there is refused.
+implementation, and `net` scopes are never consulted. The grant covers every
+file resolution reaches through the package's entry, and every import a
+package file makes of its own files, whether the specifier is literal or
+computed: resolution there is confined to pinned files, each verified when it
+loads, so no `read` grant is involved.
+
+Sandbox mode resolves only an `--import-map` given on its command line, and
+never the root config's import map; when that map has provider entries it
+warns once, `<config> sets provider imports, which GocciaRunner sandbox mode
+does not apply; ignoring them`. A provider entry of an explicit
+`--import-map` is refused with `PermissionDenied`, since sandbox mode grants
+no `import` capability.
 
 Importing never implies FFI. A package that ships native libraries still needs
 `--allow-ffi` for the cache path, such as
@@ -161,9 +176,14 @@ Provider package file github:frostney/raylib@v1.0.0/bindings/late.ts changed aft
 
 A file inside the package that the lockfile does not pin is refused the same
 way. `FFI.open` hashes a package library through the descriptor it loads on
-Linux and the pinned handle on Windows; on macOS and other Unix systems the
-path is hashed just before the load, which leaves the window described in
-[Permissions](permissions.md#read-and-ffi-paths).
+Linux and the pinned handle on Windows, and from its path just before the
+load on macOS and other Unix systems. The descriptor or handle fixes which
+file is loaded, not its contents, so everywhere a library rewritten in place
+between the hash and the load is not detected (see
+[Permissions](permissions.md#read-and-ffi-paths)). A package's native library
+must not load sibling libraries through `$ORIGIN` or `@loader_path`: on Linux
+the library is loaded through `/proc/self/fd`, so such a lookup fails, and on
+macOS a sibling would load without a pin check.
 
 ## Package files
 
