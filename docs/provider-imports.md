@@ -10,6 +10,7 @@
 - **Materialized, then verified on load** — every pinned file lands in `.goccia/packages/…` from `raw.githubusercontent.com` (GET only, host-pinned, private ranges refused), and each file's bytes are hashed again when a module, data file, or native library is loaded
 - **Not part of the module graph by location** — `.goccia` is excluded from the [module-graph exemption](permissions.md#the-module-graph-exemption); package files load only as a resolved package, and a package imports only its own files
 - **Offline by default once cached** — a complete cache needs no network, and `--cached-only` turns a missing or changed file into an error instead of a fetch
+- **Pins come from install mode** — `GocciaRunner --add`, `--remove`, `--install`, and `--update` resolve tags and commits over `info/refs`, crawl each package's literal imports, and write the lockfile and then the import map; a run never does
 
 The decision is recorded in
 [ADR 0122](adr/0122-unified-capability-model.md). The capability grammar is in
@@ -91,7 +92,7 @@ the import map nor the lockfile can point a run at another host.
 
 A run never resolves a ref and never writes the lockfile. A package the import
 map names but the lockfile does not pin fails with
-`<package> is not pinned in goccia.lock.json`.
+`<package> is not pinned in goccia.lock.json; run GocciaRunner --install`.
 
 ## Authorization
 
@@ -187,6 +188,71 @@ as the path it names, so a package can open a library beside itself:
 const lib = FFI.open(new URL("../native/linux-x86_64/libraylib.so", import.meta.url));
 ```
 
+## Install mode
+
+`GocciaRunner` maintains the pins in a mode of its own, like `--trust`: it
+runs no code, takes no input files, and cannot be combined with sandbox mode
+or `--cached-only` (exit 2).
+
+```sh
+GocciaRunner --add raylib=github:frostney/GocciaScript-Raylib@v0.10.0/bindings/raylib.ts
+GocciaRunner --remove raylib
+GocciaRunner --install --allow-import=github:frostney
+GocciaRunner --install --frozen --check-refs --allow-import=github:frostney   # CI
+GocciaRunner --update --allow-import=github:frostney
+GocciaRunner --update=raylib --accept-moved-tags --allow-import=github:frostney
+```
+
+| Option | What it does |
+|---|---|
+| `--add <key>=github:<owner>/<repo>@<ref>[/<path>]` | Pins the package and adds the entry. Repeatable. The typed spec is the `import` grant for that package, for this invocation. |
+| `--remove <key>` | Removes a provider entry, re-pins what the package's other entries reach, and drops pins no entry names. Repeatable. |
+| `--install` | Pins every entry the lockfile lacks, re-crawls every locked package at its locked commit, and fetches what the cache lacks. A locked ref is never re-resolved. |
+| `--frozen` | With `--install`: a lockfile that would change is an error listing each `+`, `-`, or `~` package, and nothing is written. |
+| `--check-refs` | With `--install`: each tag pin must still be its tag's commit, and each commit pin an advertised tip. |
+| `--update[=<key>,…]` | Re-resolves the refs of every provider entry, or of the keys given. |
+| `--accept-moved-tags` | With `--update`: re-pins a tag that now names another commit. |
+
+The import map edited is the `goccia.json` found walking up from the working
+directory, created by `--add` when there is none. Only its `imports` member
+changes; every other byte stays. An `--import-map` file, or a root config in
+another format, is never edited: `--add` and `--remove` print the line to
+change and write nothing.
+
+**Refs.** A ref is resolved with one GET of
+`https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`,
+host-pinned and GET-only like every provider request. Only `refs/tags/*` and
+`refs/heads/*` count; an annotated tag resolves to the commit it names. A tag
+pins `ref: "tag"`. A 40-character commit pins `ref: "commit"`, and only when
+it is the tip of an advertised tag or branch: the raw host serves a commit
+that exists only in a fork under the upstream repository's name, and such a
+commit is advertised only through `refs/pull/*`. A branch name is refused.
+A tag that moved is an error until `--update --accept-moved-tags` re-pins it.
+
+**The file set.** There is no package manifest. The crawl starts at each exact
+entry's path (the `index` file for a directory or the repository root) and,
+for a prefix entry, at every specifier the project's own modules import
+through it. It follows literal `import` and `export … from` specifiers and
+`import("…")`, fetches `json`, `text`, and `bytes` attribute imports as data,
+and fetches the literal first argument of `new URL("./x", import.meta.url)`
+and `import.meta.resolve("./x")` as assets. Computed specifiers are not
+followed, so a package names every file it needs literally somewhere. A bare,
+absolute, URL, or `github:` import inside a package, a path that leaves the
+repository, and a `goccia.*` file are refused. Modules are tokenized by the
+engine's parser with every compatibility flag on. A crawl stops at 2,000
+files or 256 MiB.
+
+**Order.** Every file is fetched and hashed in memory, then written to the
+cache, then the lockfile is written, and the import map is edited last, so a
+failure leaves the import map naming only what the lockfile pins. Cache
+directories of pins the new lockfile dropped are then deleted, without
+following links.
+
+Exit status is 0 on success; 1 for an out-of-date lockfile under `--frozen`,
+a network or integrity failure, a moved tag, an unadvertised commit, or a
+deny; and 2 for a usage error or a malformed import map or lockfile. Each
+change to a pin emits an `import.provider.install` audit event.
+
 ## Audit events
 
 Every decision emits an `import.provider`
@@ -197,6 +263,12 @@ Every decision emits an `import.provider`
 | `github:<owner>/<repo>@<ref>` | `the import capability covers github:<owner>/<repo>`, `the import capability does not cover …`, `refused by the import deny …` |
 | a derived file URL | `sha256 ok`, `sha256 mismatch`, `HTTP <status>`, or a transport error |
 | `<package key>/<path>` | `the cached file matches its pin`, `the cached file does not match its pin`, `the loaded bytes match the pin`, `the loaded bytes do not match the pin`, `the file is not pinned in goccia.lock.json` |
+
+Install mode emits `import.provider` for each `info/refs` and file request,
+and `import.provider.install` with the package key as the subject and
+`added: <ref kind> -> <commit>`, `updated: <old> -> <new>`, `removed`,
+`refused by …`, `tag moved …`, or
+`the commit is not the tip of an advertised tag or branch` as the reason.
 
 ## Related documents
 

@@ -131,6 +131,31 @@ type
 { Runs of `/` in APath as the host's separator. }
 function ToHostRelativePath(const APath: string): string;
 
+{ `<import map directory>/.goccia`. }
+function PackageCacheDirectory(const AImportMapPath: string): string;
+
+{ The cached file AHostRelative (host separators) below ACacheDirectory:
+  True with its bytes when it exists. Raises EGocciaProviderPackageError
+  when the cache directory or any component below it is a symbolic link, or
+  the file is not a regular file. AKey names the package in messages. }
+function ReadCacheFile(const ACacheDirectory, AHostRelative, AKey: string;
+  out ABytes: TBytes): Boolean;
+
+{ Commits ABytes as AHostRelative below ACacheDirectory: every directory on
+  the way is opened without following a link, and the file is written to an
+  exclusive temporary beside it and renamed into place. }
+procedure WriteCacheFile(const ACacheDirectory, AHostRelative, AKey,
+  ADisplayPath: string; const ABytes: TBytes);
+
+{ Raises EGocciaProviderPackageError when ACacheDirectory, or any existing
+  component of AHostRelative below it, is a symbolic link. }
+procedure RefuseCacheLinks(const ACacheDirectory, AHostRelative,
+  AKey: string);
+
+{ Deletes APath and everything below it; a symbolic link is removed, never
+  followed. }
+procedure RemoveCacheTree(const APath: string);
+
 implementation
 
 uses
@@ -184,6 +209,121 @@ function PathEntryExists(const APath: string): Boolean;
 begin
   Result := HostPathIsSymlink(APath) or HostFileExists(APath) or
     HostDirectoryExists(APath);
+end;
+
+{ ── the cache on disk ─────────────────────────────────────────── }
+
+function PackageCacheDirectory(const AImportMapPath: string): string;
+begin
+  Result := IncludeTrailingPathDelimiter(ExtractFilePath(
+    ExpandHostFileName(AImportMapPath))) + PACKAGE_CACHE_DIRECTORY_NAME;
+end;
+
+{ No component below the cache directory may be a link: a link would let
+  the cache reach outside it, or a planted one hand a run bytes it never
+  fetched. Walks AHostRelative until a component does not exist. }
+procedure RefuseCacheLinks(const ACacheDirectory, AHostRelative,
+  AKey: string);
+var
+  Candidate, Segment: string;
+  I, SegmentStart: Integer;
+begin
+  Candidate := ExcludeTrailingPathDelimiter(ACacheDirectory);
+  if HostPathIsSymlink(Candidate) then
+    raise EGocciaProviderPackageError.CreateDetailed(Format(
+      '%s: the package cache directory must not be a symbolic link',
+      [AKey]), Candidate);
+  SegmentStart := 1;
+  for I := 1 to Length(AHostRelative) + 1 do
+    if (I > Length(AHostRelative)) or (AHostRelative[I] = PathDelim) then
+    begin
+      Segment := Copy(AHostRelative, SegmentStart, I - SegmentStart);
+      SegmentStart := I + 1;
+      Candidate := Candidate + PathDelim + Segment;
+      if HostPathIsSymlink(Candidate) then
+        raise EGocciaProviderPackageError.CreateDetailed(Format(
+          '%s: the package cache must not contain symbolic links', [AKey]),
+          Candidate);
+      if not PathEntryExists(Candidate) then
+        Break;
+    end;
+end;
+
+function ReadCacheFile(const ACacheDirectory, AHostRelative, AKey: string;
+  out ABytes: TBytes): Boolean;
+var
+  Candidate: string;
+begin
+  ABytes := nil;
+  RefuseCacheLinks(ACacheDirectory, AHostRelative, AKey);
+  Candidate := IncludeTrailingPathDelimiter(ACacheDirectory) + AHostRelative;
+  Result := PathEntryExists(Candidate);
+  if not Result then
+    Exit;
+  if not IsRegularCacheFile(Candidate) then
+    raise EGocciaProviderPackageError.CreateDetailed(Format(
+      '%s: %s in the package cache is not a regular file',
+      [AKey, FromHostRelativePath(AHostRelative)]), Candidate);
+  ABytes := ReadFileBytes(Candidate);
+end;
+
+procedure WriteCacheFile(const ACacheDirectory, AHostRelative, AKey,
+  ADisplayPath: string; const ABytes: TBytes);
+var
+  CacheIdentity: THostDirectoryIdentity;
+  ErrorMessage: string;
+begin
+  RefuseCacheLinks(ACacheDirectory, AHostRelative, AKey);
+  if not HostDirectoryExists(ACacheDirectory) and
+     not ForceDirectories(ACacheDirectory) then
+    raise EGocciaProviderPackageError.CreateDetailed(Format(
+      '%s: the package cache directory could not be created', [AKey]),
+      ACacheDirectory);
+  if not TryHostDirectoryIdentity(ACacheDirectory, CacheIdentity) then
+    raise EGocciaProviderPackageError.CreateDetailed(Format(
+      '%s: the package cache directory is unavailable', [AKey]),
+      ACacheDirectory);
+  { The temporary is named for this process and thread, so engines
+    resolving one package in parallel never share one. The walk from the
+    cache directory opens each directory without following a link. }
+  if not ReplaceHostFileBeneath(ACacheDirectory, CacheIdentity, AHostRelative,
+     TEMPORARY_ARTIFACT_INFIX + IntToStr(GetProcessID) + '-' +
+     IntToStr(PtrUInt(GetCurrentThreadId)), ABytes, ErrorMessage) then
+    raise EGocciaProviderPackageError.CreateDetailed(Format(
+      '%s: %s could not be written to the package cache',
+      [AKey, ADisplayPath]), ErrorMessage);
+end;
+
+procedure RemoveCacheTree(const APath: string);
+var
+  EntryPath: string;
+  SearchRecord: TSearchRec;
+begin
+  { A link is removed itself and never followed. }
+  if HostPathIsSymlink(APath) then
+  begin
+    if not DeleteFile(APath) then
+      RemoveDir(APath);
+    Exit;
+  end;
+  if not HostDirectoryExists(APath) then
+  begin
+    if HostFileExists(APath) then
+      DeleteFile(APath);
+    Exit;
+  end;
+  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile or
+     faSymLink, SearchRecord) = 0 then
+  begin
+    repeat
+      if (SearchRecord.Name = '.') or (SearchRecord.Name = '..') then
+        Continue;
+      EntryPath := IncludeTrailingPathDelimiter(APath) + SearchRecord.Name;
+      RemoveCacheTree(EntryPath);
+    until FindNext(SearchRecord) <> 0;
+    FindClose(SearchRecord);
+  end;
+  RemoveDir(APath);
 end;
 
 { EGocciaProviderPackageError }
@@ -328,42 +468,15 @@ procedure TGocciaProviderPackageStore.MaterializeArtifact(
   const AArtifact: TGocciaLockedArtifact);
 var
   Bytes: TBytes;
-  CacheIdentity: THostDirectoryIdentity;
-  Candidate, ErrorMessage, HostRelative, Segment, Subject: string;
-  I, SegmentStart: Integer;
+  HostRelative, Subject: string;
   Mismatched: Boolean;
 begin
   Mismatched := False;
   Subject := ALocked.Key + '/' + AArtifact.Path;
   HostRelative := ToHostRelativePath(ARelativeDirectory + '/' +
     AArtifact.Path);
-
-  { No component below .goccia may be a link: a link would let the cache
-    reach outside it, or a planted one hand a run bytes it never fetched. }
-  Candidate := ExcludeTrailingPathDelimiter(ACacheDirectory);
-  SegmentStart := 1;
-  for I := 1 to Length(HostRelative) + 1 do
-    if (I > Length(HostRelative)) or (HostRelative[I] = PathDelim) then
-    begin
-      Segment := Copy(HostRelative, SegmentStart, I - SegmentStart);
-      SegmentStart := I + 1;
-      Candidate := Candidate + PathDelim + Segment;
-      if HostPathIsSymlink(Candidate) then
-        raise EGocciaProviderPackageError.CreateDetailed(Format(
-          '%s: the package cache must not contain symbolic links',
-          [ALocked.Key]), Candidate);
-      if not PathEntryExists(Candidate) then
-        Break;
-    end;
-
-  Candidate := IncludeTrailingPathDelimiter(ACacheDirectory) + HostRelative;
-  if PathEntryExists(Candidate) then
+  if ReadCacheFile(ACacheDirectory, HostRelative, ALocked.Key, Bytes) then
   begin
-    if not IsRegularCacheFile(Candidate) then
-      raise EGocciaProviderPackageError.CreateDetailed(Format(
-        '%s: %s in the package cache is not a regular file',
-        [ALocked.Key, AArtifact.Path]), Candidate);
-    Bytes := ReadFileBytes(Candidate);
     if SHA256Hex(Bytes) = AArtifact.SHA256 then
     begin
       Audit(True, Subject, 'the cached file matches its pin');
@@ -376,26 +489,16 @@ begin
   if FCachedOnly and Mismatched then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s: the cached %s does not match its pin, and --cached-only ' +
-      'refuses the network', [ALocked.Key, AArtifact.Path]), Candidate);
+      'refuses the network', [ALocked.Key, AArtifact.Path]),
+      IncludeTrailingPathDelimiter(ACacheDirectory) + HostRelative);
   if FCachedOnly then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s is not cached (%s), and --cached-only refuses the network',
-      [ALocked.Key, AArtifact.Path]), Candidate);
+      [ALocked.Key, AArtifact.Path]),
+      IncludeTrailingPathDelimiter(ACacheDirectory) + HostRelative);
 
-  Bytes := FetchArtifact(ALocked, AArtifact);
-  if not TryHostDirectoryIdentity(ACacheDirectory, CacheIdentity) then
-    raise EGocciaProviderPackageError.CreateDetailed(Format(
-      '%s: the package cache directory is unavailable', [ALocked.Key]),
-      ACacheDirectory);
-  { The temporary is named for this process and thread, so engines
-    resolving one package in parallel never share one. The walk from the
-    cache directory opens each directory without following a link. }
-  if not ReplaceHostFileBeneath(ACacheDirectory, CacheIdentity, HostRelative,
-     TEMPORARY_ARTIFACT_INFIX + IntToStr(GetProcessID) + '-' +
-     IntToStr(PtrUInt(GetCurrentThreadId)), Bytes, ErrorMessage) then
-    raise EGocciaProviderPackageError.CreateDetailed(Format(
-      '%s: %s could not be written to the package cache',
-      [ALocked.Key, AArtifact.Path]), ErrorMessage);
+  WriteCacheFile(ACacheDirectory, HostRelative, ALocked.Key, AArtifact.Path,
+    FetchArtifact(ALocked, AArtifact));
 end;
 
 function TGocciaProviderPackageStore.Materialize(
@@ -416,11 +519,11 @@ begin
   Locked := Lockfile(LockPath).FindPackage(AAddress.PackageKey);
   if not Assigned(Locked) then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
-      '%s is not pinned in %s', [AAddress.PackageKey, LOCKFILE_NAME]),
+      '%s is not pinned in %s; run GocciaRunner --install',
+      [AAddress.PackageKey, LOCKFILE_NAME]),
       LockPath);
 
-  CacheDirectory := IncludeTrailingPathDelimiter(ImportMapDirectory) +
-    PACKAGE_CACHE_DIRECTORY_NAME;
+  CacheDirectory := PackageCacheDirectory(AImportMapPath);
   if HostPathIsSymlink(CacheDirectory) then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s: the package cache directory must not be a symbolic link',

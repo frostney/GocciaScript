@@ -2030,6 +2030,133 @@ console.log("Provider imports: import scopes, the lockfile, the cache, and --cac
   }
 }
 
+console.log("Install mode: --install, --frozen, --remove, and its usage rules...");
+{
+  // Every path here is offline: the lockfile pins what the cache holds, so
+  // nothing needs the network, and the refusals happen before any request.
+  const COMMIT = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const KEY = "github:frostney/raylib@v1.0.0";
+  const FILES: Record<string, string> = {
+    "bindings/raylib.ts": 'import { detail } from "./lib/detail.ts";\nexport const value = "pkg:" + detail;\n',
+    "bindings/lib/detail.ts": 'export const detail = "detail";\n',
+  };
+  const cache = (project: string) => join(project, ".goccia", "packages", "github", "frostney", "raylib", COMMIT);
+  const seed = (project: string) => {
+    rmSync(project, { recursive: true, force: true });
+    mkdirSync(project, { recursive: true });
+    const artifacts: Record<string, { sha256: string }> = {};
+    for (const [path, text] of Object.entries(FILES)) {
+      const full = join(cache(project), ...path.split("/"));
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, text);
+      artifacts[path] = { sha256: createHash("sha256").update(text).digest("hex") };
+    }
+    writeFileSync(join(project, "goccia.json"),
+      `{\n  "imports": {\n    "@/": "./src/",\n    "raylib": "${KEY}/bindings/raylib.ts"\n  }\n}\n`);
+    writeFileSync(join(project, "goccia.lock.json"), JSON.stringify({
+      version: 1, packages: { [KEY]: { ref: "tag", commit: COMMIT, artifacts } },
+    }));
+  };
+
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    seed(project);
+
+    // A complete cache installs without a grant: nothing is fetched.
+    const installed = run(RUNNER, ["--install", "--audit-log=../install.jsonl"], { cwd: project });
+    expectExit(installed, 0, "--install from the cache");
+    expectIncludes(installed.stdout, `Pinned  ${KEY}: 2 files (0 fetched, 2 verified in the cache)`, "--install from the cache");
+    const deterministic = readFileSync(join(project, "goccia.lock.json"), "utf8");
+    run(RUNNER, ["--install"], { cwd: project });
+    if (readFileSync(join(project, "goccia.lock.json"), "utf8") !== deterministic)
+      throw new Error("--install rewrote an unchanged lockfile");
+    const frozen = run(RUNNER, ["--install", "--frozen"], { cwd: project });
+    expectExit(frozen, 0, "--install --frozen with a current lock");
+
+    // --frozen refuses a lockfile the import map has moved past.
+    writeFileSync(join(project, "goccia.json"), `{"imports": {"other": "github:frostney/other@v2/x.ts"}}`);
+    const stale = run(RUNNER, ["--install", "--frozen"], { cwd: project });
+    expectExit(stale, 1, "--install --frozen with a stale lock");
+    expectIncludes(stale.stderr, "goccia.lock.json is out of date; --frozen does not write it.", "--install --frozen with a stale lock");
+    expectIncludes(stale.stderr, "+ github:frostney/other@v2", "--install --frozen with a stale lock");
+    expectIncludes(stale.stderr, `- ${KEY}`, "--install --frozen with a stale lock");
+    if (readFileSync(join(project, "goccia.lock.json"), "utf8") !== deterministic)
+      throw new Error("--frozen wrote the lockfile");
+    // Without a grant, an unlocked package cannot be resolved.
+    const ungranted = run(RUNNER, ["--install"], { cwd: project });
+    expectExit(ungranted, 1, "--install of an unlocked package without a grant");
+    expectIncludes(ungranted.stderr, "import: github:frostney/other@v2", "--install of an unlocked package without a grant");
+
+    // A deny wins over a typed spec, before any request is made.
+    seed(project);
+    const before = readFileSync(join(project, "goccia.json"), "utf8");
+    const denied = run(RUNNER, ["--add", "x=github:evil/pkg@v1/x.ts", "--deny-import=github:evil"], { cwd: project });
+    expectExit(denied, 1, "a deny beats --add");
+    expectIncludes(denied.stderr, "import: github:evil/pkg@v1 (refused by the import deny github:evil)", "a deny beats --add");
+    if (readFileSync(join(project, "goccia.json"), "utf8") !== before) throw new Error("a refused --add edited goccia.json");
+
+    // A symbolic link planted in the cache fails the install.
+    if (!isWindows) {
+      const detail = join(cache(project), "bindings", "lib", "detail.ts");
+      rmSync(detail);
+      const outside = join(tmp, "detail.ts");
+      writeFileSync(outside, FILES["bindings/lib/detail.ts"]);
+      symlinkSync(outside, detail);
+      const planted = run(RUNNER, ["--install"], { cwd: project });
+      expectExit(planted, 1, "--install with a planted symlink");
+      expectIncludes(planted.stderr, "the package cache must not contain symbolic links", "--install with a planted symlink");
+      seed(project);
+    }
+
+    // --remove edits the import map last, prunes the pin, and the cache.
+    const removed = run(RUNNER, ["--remove", "raylib", "--audit-log=../remove.jsonl"], { cwd: project });
+    expectExit(removed, 0, "--remove");
+    if (readFileSync(join(project, "goccia.json"), "utf8") !== `{\n  "imports": {\n    "@/": "./src/"\n  }\n}\n`)
+      throw new Error(`--remove left goccia.json as ${readFileSync(join(project, "goccia.json"), "utf8")}`);
+    if (readFileSync(join(project, "goccia.lock.json"), "utf8").includes(KEY)) throw new Error("--remove kept the pin");
+    if (existsSync(cache(project))) throw new Error("--remove kept the cache directory");
+    const events = readFileSync(join(tmp, "remove.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    if (!events.some((event) => event.kind === "import.provider.install" && event.subject === KEY && event.reason === "removed"))
+      throw new Error(`import.provider.install event: ${JSON.stringify(events)}`);
+    const missing = run(RUNNER, ["--remove", "raylib"], { cwd: project });
+    expectExit(missing, 1, "--remove of a missing entry");
+
+    // An explicit --import-map is never edited.
+    seed(project);
+    writeFileSync(join(project, "imports.json"), readFileSync(join(project, "goccia.json"), "utf8"));
+    const explicit = run(RUNNER, [`--import-map=${join(project, "imports.json")}`, "--remove", "raylib"], { cwd: project });
+    expectExit(explicit, 0, "--remove with --import-map");
+    expectIncludes(explicit.stdout, "Nothing was written.", "--remove with --import-map");
+    if (!readFileSync(join(project, "imports.json"), "utf8").includes(KEY)) throw new Error("--import-map was edited");
+
+    // Install mode runs on its own.
+    const usage: [string[], string][] = [
+      [["--install", "app.js"], "--install cannot be combined with input files"],
+      [["--frozen"], "--frozen goes with --install"],
+      [["--check-refs"], "--check-refs goes with --install"],
+      [["--accept-moved-tags", "--install"], "--accept-moved-tags goes with --update"],
+      [["--install", "--update"], "--add/--remove, --install, and --update cannot be combined"],
+      [["--install", "--cached-only"], "--install cannot be combined with --cached-only"],
+      [["--install", "--sandbox"], "--install cannot be combined with sandbox mode"],
+      [["--install", "--trust", "."], "--trust cannot be combined with --install"],
+      [["--add", "nope"], "--add needs <key>=github:<owner>/<repo>@<ref>"],
+      [["--add", "x/=github:o/r@v1/file.ts"], "the key ends with \"/\""],
+      [["--add", "x=https://example.com/x.js"], "the only provider is github:"],
+    ];
+    for (const [args, message] of usage) {
+      const result = run(RUNNER, args, { cwd: project });
+      expectExit(result, 2, args.join(" "));
+      expectIncludes(result.stderr, message, args.join(" "));
+    }
+    writeFileSync(join(project, "goccia.json"), '{"install": true}');
+    const fromConfig = run(RUNNER, [join(project, "app.js")], { cwd: project });
+    expectExit(fromConfig, 2, "install mode from config");
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("GocciaWasmTestRunner takes -P instead of a trust store...");
 if (existsSync(resolve(WASMTESTRUNNER))) {
   const tmp = makeTmp();

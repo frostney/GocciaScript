@@ -20,6 +20,9 @@ type
     gckFFIOpen,
     gckImportNodeModules,
     gckImportProvider,
+    { An install-mode change to a provider package's pin (ADR 0122): added,
+      updated, removed, or refused. }
+    gckImportProviderInstall,
     gckFunctionConstructor,
     gckShadowRealm,
     gckSandboxFileSystem,
@@ -91,6 +94,8 @@ begin
       Result := 'import.node-modules';
     gckImportProvider:
       Result := 'import.provider';
+    gckImportProviderInstall:
+      Result := 'import.provider.install';
     gckFunctionConstructor:
       Result := 'function.constructor';
     gckShadowRealm:

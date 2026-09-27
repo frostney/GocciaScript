@@ -101,6 +101,10 @@ type
       path, so no path is not "no input" and the no-argument rule does not
       apply (GocciaRunner's --entry and sandbox options). Default: False. }
     function HasNonPathInput: Boolean; virtual;
+    { The flag of a mode of this binary that runs on its own, as the trust
+      modes do (GocciaRunner's install mode), when the command line selects
+      it; '' otherwise. Combining it with a trust mode is a usage error. }
+    function ExclusiveModeName: string; virtual;
     { Help text appended after the options and the Input: section. }
     function ExtraHelpText: string; virtual;
     { Checks the parsed command line before the shared capability and limit
@@ -718,6 +722,9 @@ begin
   if APaths.Count > 0 then
     raise TCLIUsageError.CreateFmt('%s cannot be combined with input files; ' +
       'run it on its own', [ModeName]);
+  if ExclusiveModeName <> '' then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with %s; run each ' +
+      'on its own', [ModeName, ExclusiveModeName]);
   if FAcceptConfigPermissions.Present or FIgnoreConfigPermissions.Present then
     raise TCLIUsageError.CreateFmt('%s cannot be combined with -P or ' +
       '--ignore-config-permissions', [ModeName]);
@@ -726,6 +733,11 @@ end;
 function GetEnvironmentValue(const AName: string): string;
 begin
   Result := GetEnvironmentVariable(AName);
+end;
+
+function TGocciaCLIApplication.ExclusiveModeName: string;
+begin
+  Result := '';
 end;
 
 function TGocciaCLIApplication.ResolveTrustStorePath(

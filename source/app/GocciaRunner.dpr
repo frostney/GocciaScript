@@ -29,6 +29,7 @@ uses
   CLI.Parser,
   CLI.Options,
   Goccia.Capabilities,
+  Goccia.CapabilityAudit,
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Coverage.Report,
@@ -44,6 +45,8 @@ uses
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
   Goccia.Modules.Resolver,
+  Goccia.Packages.Install,
+  Goccia.Packages.Transport,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -73,7 +76,14 @@ uses
   FileUtils,
   SandboxHostInputs;
 
+const
+  PACKAGES_GROUP = 'Packages';
+  PROJECT_IMPORT_MAP_NAME = 'goccia.json';
+
 type
+  { An install-mode failure (exit status 1), reported on stderr. }
+  EGocciaInstallModeFailure = class(Exception);
+
   TScriptLoaderConsoleCapture = class
   private
     FOutputLines: TStringList;
@@ -130,8 +140,25 @@ type
       for the guest's output and the diff. }
     FSandboxRequestedByArguments: Boolean;
     FSandboxHost: TGocciaSandboxHost;
+    { Install mode (ADR 0122): maintains goccia.lock.json and the import
+      map instead of running anything. }
+    FAddPackages: TRepeatableOption;
+    FRemovePackages: TRepeatableOption;
+    FInstallPackages: TFlagOption;
+    FUpdatePackages: TOptionalStringOption;
+    FFrozen: TFlagOption;
+    FCheckRefs: TFlagOption;
+    FAcceptMovedTags: TFlagOption;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
+    function InstallModeActive: Boolean;
+    procedure ValidateInstallMode(const APaths: TStringList);
+    procedure RunInstallMode;
+    procedure WriteInstallLine(const ALine: string);
+    procedure AuditProviderFetch(const AAllowed: Boolean;
+      const ASubject, AReason: string);
+    procedure AuditProviderInstall(const AAllowed: Boolean;
+      const ASubject, AReason: string);
     function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
     function HostOnlyCommandLineOptions(
       const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
@@ -193,6 +220,7 @@ type
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
     function HasNonPathInput: Boolean; override;
+    function ExclusiveModeName: string; override;
     function ExtraHelpText: string; override;
     procedure ValidateCommandLine(const APaths: TStringList); override;
     procedure Validate; override;
@@ -326,7 +354,59 @@ end;
 function TRunnerApp.HasNonPathInput: Boolean;
 begin
   Result := (SandboxOptions.CommandLineActivation <> '') or
-    SandboxOptions.Entry.Present;
+    SandboxOptions.Entry.Present or InstallModeActive;
+end;
+
+function TRunnerApp.InstallModeActive: Boolean;
+begin
+  Result := FAddPackages.Present or FRemovePackages.Present or
+    FInstallPackages.Present or FUpdatePackages.Present;
+end;
+
+function TRunnerApp.ExclusiveModeName: string;
+begin
+  if FAddPackages.Present then
+    Result := '--add'
+  else if FRemovePackages.Present then
+    Result := '--remove'
+  else if FInstallPackages.Present then
+    Result := '--install'
+  else if FUpdatePackages.Present then
+    Result := '--update'
+  else
+    Result := '';
+end;
+
+{ Install mode runs on its own, like the trust modes: no input files, no
+  sandbox, and one of --add/--remove, --install, or --update. Its modifiers
+  belong to one mode each. }
+procedure TRunnerApp.ValidateInstallMode(const APaths: TStringList);
+var
+  Modes: Integer;
+begin
+  if FFrozen.Present and not FInstallPackages.Present then
+    raise TCLIUsageError.Create('--frozen goes with --install');
+  if FCheckRefs.Present and not FInstallPackages.Present then
+    raise TCLIUsageError.Create('--check-refs goes with --install');
+  if FAcceptMovedTags.Present and not FUpdatePackages.Present then
+    raise TCLIUsageError.Create('--accept-moved-tags goes with --update');
+  if not InstallModeActive then
+    Exit;
+  Modes := Ord(FAddPackages.Present or FRemovePackages.Present) +
+    Ord(FInstallPackages.Present) + Ord(FUpdatePackages.Present);
+  if Modes > 1 then
+    raise TCLIUsageError.Create('--add/--remove, --install, and --update ' +
+      'cannot be combined; run each on its own');
+  if APaths.Count > 0 then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with input files; ' +
+      'run it on its own', [ExclusiveModeName]);
+  if SandboxOptions.CommandLineActivation <> '' then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with sandbox mode ' +
+      '(enabled by %s)', [ExclusiveModeName,
+      SandboxOptions.CommandLineActivation]);
+  if EngineOptions.CachedOnly.Present then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with --cached-only, ' +
+      'which is for runs', [ExclusiveModeName]);
 end;
 
 function TRunnerApp.ExtraHelpText: string;
@@ -375,6 +455,36 @@ begin
     'Inject globals from a JSON/JSON5/TOML/YAML file or a module with named exports');
   FInlineGlobals := AddRepeatable('global',
     'Inject a single global; value is parsed as JSON or kept as a string');
+
+  FAddPackages := TRepeatableOption(Add(TRepeatableOption.Create('add',
+    'Add an import-map entry <key>=github:<owner>/<repo>@<tag|commit>[/<path>] ' +
+    'and pin its package in goccia.lock.json', PACKAGES_GROUP)));
+  FRemovePackages := TRepeatableOption(Add(TRepeatableOption.Create('remove',
+    'Remove the provider import-map entry <key> and prune its pins',
+    PACKAGES_GROUP)));
+  FInstallPackages := TFlagOption(Add(TFlagOption.Create('install',
+    'Pin every provider entry the lockfile lacks and fetch every pinned file',
+    PACKAGES_GROUP)));
+  FUpdatePackages := TOptionalStringOption(Add(TOptionalStringOption.Create(
+    'update', 'Re-resolve the refs of every provider entry, or of the ' +
+    'comma-separated keys given', PACKAGES_GROUP)));
+  FFrozen := TFlagOption(Add(TFlagOption.Create('frozen',
+    'With --install: fail instead of changing goccia.lock.json',
+    PACKAGES_GROUP)));
+  FCheckRefs := TFlagOption(Add(TFlagOption.Create('check-refs',
+    'With --install: check each pin is still its tag''s commit, or an ' +
+    'advertised tip', PACKAGES_GROUP)));
+  FAcceptMovedTags := TFlagOption(Add(TFlagOption.Create('accept-moved-tags',
+    'With --update: re-pin a tag that now names another commit',
+    PACKAGES_GROUP)));
+  { A config cannot put a run into install mode. }
+  FAddPackages.CommandLineOnly := True;
+  FRemovePackages.CommandLineOnly := True;
+  FInstallPackages.CommandLineOnly := True;
+  FUpdatePackages.CommandLineOnly := True;
+  FFrozen.CommandLineOnly := True;
+  FCheckRefs.CommandLineOnly := True;
+  FAcceptMovedTags.CommandLineOnly := True;
 end;
 
 procedure TRunnerApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -520,6 +630,7 @@ end;
   and a host-filesystem grant gets an error that says why. }
 procedure TRunnerApp.ValidateCommandLine(const APaths: TStringList);
 begin
+  ValidateInstallMode(APaths);
   if SandboxOptions.CommandLineActivation = '' then
     Exit;
   RejectHostCapabilityFlags(HostCapabilityAllowFlags,
@@ -548,7 +659,7 @@ begin
     so a host-mode option gets the sandbox-mode error rather than a host-mode
     check's. Its trust is checked in ExecuteWithPaths, once the audit log is
     open. --ignore-config-permissions ignores the section. }
-  if not FSandboxActive then
+  if not FSandboxActive and not InstallModeActive then
   begin
     Verdict := RootConfigVerdict;
     if Verdict.Request.Sandbox.Declared and
@@ -1808,6 +1919,12 @@ var
 begin
   FLastPaths := APaths;
 
+  if InstallModeActive then
+  begin
+    RunInstallMode;
+    Exit;
+  end;
+
   { A trusted sandbox section in the root config switches sandbox mode on
     too; an untrusted one stops the run here, before anything is read from
     it. The mode is set before the config's requests are checked, so the
@@ -2060,8 +2177,136 @@ begin
   end;
 end;
 
+procedure TRunnerApp.WriteInstallLine(const ALine: string);
+begin
+  WriteLn(ALine);
+end;
+
+procedure TRunnerApp.AuditProviderFetch(const AAllowed: Boolean;
+  const ASubject, AReason: string);
+begin
+  if AAllowed then
+    EmitApplicationAudit(gckImportProvider, gcdAllow, ASubject, AReason)
+  else
+    EmitApplicationAudit(gckImportProvider, gcdDeny, ASubject, AReason);
+end;
+
+procedure TRunnerApp.AuditProviderInstall(const AAllowed: Boolean;
+  const ASubject, AReason: string);
+begin
+  if AAllowed then
+    EmitApplicationAudit(gckImportProviderInstall, gcdAllow, ASubject, AReason)
+  else
+    EmitApplicationAudit(gckImportProviderInstall, gcdDeny, ASubject,
+      AReason);
+end;
+
+{ The import map is --import-map when given, which install mode never
+  edits, else the goccia.json found walking up from the working directory
+  (created by --add when there is none). A root config in another format
+  keeps the import map from being edited too. The capability set is the
+  command line's plus the trusted requests of the config governing the
+  import map, as for a run. }
+procedure TRunnerApp.RunInstallMode;
+var
+  Capabilities: TGocciaCapabilities;
+  Editable: Boolean;
+  ImportMapPath, Key, Spec, Error: string;
+  Installer: TGocciaPackageInstaller;
+  Request: TGocciaInstallRequest;
+  Transport: TGocciaHTTPProviderTransport;
+  Keys: TStringList;
+  I: Integer;
+begin
+  if EngineOptions.ImportMap.Present then
+  begin
+    ImportMapPath := ExpandFileName(EngineOptions.ImportMap.Value);
+    Editable := False;
+  end
+  else
+  begin
+    ImportMapPath := TGocciaModuleResolver.DiscoverProjectConfig(
+      GetCurrentDir);
+    if ImportMapPath = '' then
+      ImportMapPath := IncludeTrailingPathDelimiter(GetCurrentDir) +
+        PROJECT_IMPORT_MAP_NAME;
+    Editable := (RootConfigPath = '') or
+      SameFileName(ExpandFileName(RootConfigPath), ImportMapPath);
+  end;
+
+  Request := Default(TGocciaInstallRequest);
+  for I := 0 to FAddPackages.Values.Count - 1 do
+  begin
+    if not TryParseAddArgument(FAddPackages.Values[I], Key, Spec, Error) then
+      raise TCLIUsageError.Create(Error);
+    SetLength(Request.Adds, Length(Request.Adds) + 1);
+    Request.Adds[High(Request.Adds)].Key := Key;
+    Request.Adds[High(Request.Adds)].Spec := Spec;
+  end;
+  for I := 0 to FRemovePackages.Values.Count - 1 do
+  begin
+    SetLength(Request.Removes, Length(Request.Removes) + 1);
+    Request.Removes[High(Request.Removes)] := FRemovePackages.Values[I];
+  end;
+  Request.Install := FInstallPackages.Present;
+  Request.Update := FUpdatePackages.Present;
+  if FUpdatePackages.ValueOr('') <> '' then
+  begin
+    Keys := TStringList.Create;
+    try
+      Keys.StrictDelimiter := True;
+      Keys.Delimiter := ',';
+      Keys.DelimitedText := FUpdatePackages.Value;
+      for I := 0 to Keys.Count - 1 do
+        if Trim(Keys[I]) <> '' then
+        begin
+          SetLength(Request.UpdateKeys, Length(Request.UpdateKeys) + 1);
+          Request.UpdateKeys[High(Request.UpdateKeys)] := Trim(Keys[I]);
+        end;
+    finally
+      Keys.Free;
+    end;
+  end;
+  Request.Frozen := FFrozen.Present;
+  Request.CheckRefs := FCheckRefs.Present;
+  Request.AcceptMovedTags := FAcceptMovedTags.Present;
+
+  ValidateFileConfig(ImportMapPath);
+  Capabilities := ResolveEngineCapabilities(
+    DiscoverFileConfigPath(ImportMapPath), ImportMapPath);
+
+  Transport := TGocciaHTTPProviderTransport.Create;
+  try
+    Installer := TGocciaPackageInstaller.Create(ImportMapPath, Editable,
+      Capabilities, Transport);
+    try
+      Installer.OnLog := WriteInstallLine;
+      Installer.OnAudit := AuditProviderFetch;
+      Installer.OnInstallAudit := AuditProviderInstall;
+      try
+        Installer.Run(Request);
+      except
+        on E: EGocciaInstallError do
+          if E.ExitCode = INSTALL_EXIT_USAGE then
+            raise TCLIUsageError.Create(E.Message)
+          else
+            raise EGocciaInstallModeFailure.Create(E.Message);
+      end;
+    finally
+      Installer.Free;
+    end;
+  finally
+    Transport.Free;
+  end;
+end;
+
 procedure TRunnerApp.HandleError(const AException: Exception);
 begin
+  if AException is EGocciaInstallModeFailure then
+  begin
+    WriteLn(ErrOutput, 'Error: ', AException.Message);
+    Exit;
+  end;
   { In sandbox mode stdout carries only the guest's output and the diff; the
     guest's own failures are reported by RunSandbox, so what reaches here is
     the host's (a copy that failed, an invalid value) and goes to stderr. }
