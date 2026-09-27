@@ -711,9 +711,9 @@ The guest reaches files only through the virtual filesystem, so `net` is the
 one capability sandbox mode grants. `--allow-net` and `--deny-net` apply as in
 host mode. `--allow-read`, `--allow-import`, and `--allow-ffi` are usage errors
 (exit 2); `--deny-read`, `--deny-import`, and `--deny-ffi` are accepted and
-change nothing. A [provider import](provider-imports.md) is therefore refused
-with `PermissionDenied`. A config that requests `read`, `import`, or `ffi`
-gets a warning instead:
+change nothing. Sandbox mode does not apply the root config's import map, and
+warns once when it has [provider entries](provider-imports.md#authorization).
+A config that requests `read`, `import`, or `ffi` gets a warning instead:
 
 ```text
 Error: --allow-read cannot be used in sandbox mode (enabled by --copy): the sandbox has no host filesystem; copy inputs with --copy

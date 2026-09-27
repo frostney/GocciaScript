@@ -2003,8 +2003,14 @@ console.log("Provider imports: import scopes, the lockfile, the cache, and --cac
       rmSync(detail);
     }
 
-    // Sandbox mode has no host filesystem to materialize a package into.
+    // Sandbox mode has no host filesystem to materialize a package into. It
+    // ignores the root config's import map, saying so once for its provider
+    // entries, and refuses a provider entry of an explicit --import-map.
     seed(project);
+    const ignored = run(RUNNER, ["--sandbox", app]);
+    expectExit(ignored, 1, "sandbox mode ignores the root config's provider imports");
+    expectIncludes(ignored.stderr, `Warning: ${join(project, "goccia.json")} sets provider imports, which GocciaRunner sandbox mode does not apply; ignoring them`, "sandbox mode ignores the root config's provider imports");
+    expectIncludes(ignored.combined, 'Cannot resolve bare module specifier "raylib"', "sandbox mode ignores the root config's provider imports");
     const sandboxed = run(RUNNER, ["--sandbox", `--import-map=${join(project, "goccia.json")}`, app]);
     expectExit(sandboxed, 1, "sandbox mode refuses provider imports");
     expectIncludes(sandboxed.combined, `PermissionDenied: import: ${KEY}`, "sandbox mode refuses provider imports");
