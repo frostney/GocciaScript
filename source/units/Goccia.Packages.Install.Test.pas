@@ -86,8 +86,12 @@ type
     procedure TestFrozenListsOnlyRealChanges;
     procedure TestReplacingAnAddKeyRepinsAndPrunes;
     procedure TestFileSetChangesAreCountedAndAudited;
+    {$IFDEF UNIX}
     procedure TestSymlinkedImportMapIsNotEdited;
+    {$ENDIF}
+    {$IFDEF UNIX}
     procedure TestImportMapKeepsItsMode;
+    {$ENDIF}
     procedure TestRemoveEditsTheImportMapFirst;
     procedure TestCaseCollisionsWriteNothing;
     procedure TestHeldInstallLockFails;
@@ -95,7 +99,9 @@ type
     procedure TestPrintedLinesAreJSON;
     procedure TestCommitPinsAndBranchMovement;
     procedure TestTypedSpecGrantIsAudited;
+    {$IFDEF UNIX}
     procedure TestPruneDoesNotFollowLinks;
+    {$ENDIF}
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
