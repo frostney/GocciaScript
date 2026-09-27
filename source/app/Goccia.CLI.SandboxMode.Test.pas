@@ -289,6 +289,12 @@ begin
     '../dup/x', '--copy-rw', '../dup/x'], Default(TGocciaSandboxRequest),
     CommandLine)).ToBe('TCLIUsageError: --copy ../dup/x and --copy-rw ' +
     '../dup/x both copy to /x; give one of them an explicit =<sandbox> path');
+  { Both named their path already: the advice is to change one. }
+  Expect<string>(ResolveError(['--sandbox', '--entry=/x.txt', '--copy',
+    '../dup/a.txt=/x.txt', '--copy', '../dup/b/a.txt=/x.txt'],
+    Default(TGocciaSandboxRequest), CommandLine)).ToBe('TCLIUsageError: ' +
+    '--copy ../dup/a.txt=/x.txt and --copy ../dup/b/a.txt=/x.txt both copy ' +
+    'to /x.txt; give them different sandbox paths');
   { Files into one directory land on different paths. }
   Expect<string>(ResolveError(['--sandbox', '--entry=/in/a.txt', '--copy',
     '../dup/a.txt=/in/', '--copy', '../dup/x/y.txt=/in/'],
@@ -694,6 +700,18 @@ begin
   finally
     Options.Free;
   end;
+  { --entry beats the config's entry too, with the same note. }
+  Options := ParseSandboxOptions(['--sandbox', '--entry=/other.js']);
+  try
+    Request := ResolveSandboxMode(Options, Config, True, CommandLine);
+    Expect<string>(Request.EntrySandbox).ToBe('/other.js');
+    Expect<Integer>(Length(Request.Notes)).ToBe(1);
+    Expect<string>(Request.Notes[0]).ToBe('Note: ' + FRoot + PathDelim +
+      'entry-note' + PathDelim + 'goccia.json: "sandbox.entry" /app/main.js ' +
+      'is not used; the command line names the entry (--entry /other.js)');
+  finally
+    Options.Free;
+  end;
 end;
 
 
@@ -709,7 +727,7 @@ begin
     '{"sandbox": {"copy": ["a.txt"], "copy-rw": ["b/a.txt"]}}');
   Expect<string>(ResolveError(['--entry=/a.txt'], Config, CommandLine)).ToBe(
     'TCLIUsageError: ' + ConfigPath + ': "sandbox.copy" entry "a.txt" and ' +
-    ConfigPath + ': "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; ' +
+    '"sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; ' +
     'give one of them an explicit =<sandbox> path');
   { The command line replacing a config entry for its target is not a
     duplicate. }

@@ -134,5 +134,7 @@ longer act on it.
 `--copy-rw <host>[=<sandbox>]` on `GocciaRunner`'s sandbox mode, so only inputs
 copied that way are written and other changes are reported as skipped. The
 `write-back:` report goes to standard error, keeping standard output for the
-guest. The rest of this decision — successful runs only, no deletions, symlink
-targets skipped, one atomic rename per file — is unchanged.
+guest. A symbolic link met at write-back is refused, with exit 1: copy-in
+already refuses links, so one found then was planted during the run. The rest
+of this decision — successful runs only, no deletions, one atomic rename per
+file — is unchanged.

@@ -42,6 +42,8 @@ type
     procedure TestPinnedInputRefusesAncestorSwappedBeforeCopy;
     procedure TestPinnedInputWritesAlongItsRoute;
     procedure TestCommandLineOutputWritesAsNamed;
+    procedure TestCommandLineOutputNeverWaitsOnAFifo;
+    procedure TestPinnedInputReplacedByADirectoryWritesNothing;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -85,6 +87,10 @@ begin
     TestPinnedInputWritesAlongItsRoute);
   Test('A command-line output is written as the user named it',
     TestCommandLineOutputWritesAsNamed);
+  Test('A command-line output never waits on a FIFO',
+    TestCommandLineOutputNeverWaitsOnAFifo);
+  Test('A config input replaced by another directory gets nothing written',
+    TestPinnedInputReplacedByADirectoryWritesNothing);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -368,7 +374,11 @@ begin
     Plan := FInputs.PlanWriteBack(Baseline);
     Expect<Integer>(Length(Plan)).ToBe(1);
     Expect<Boolean>(Plan[0].Action = swaSkipOutside).ToBe(True);
-    FInputs.ApplyWriteBack(Plan, Report);
+    { Copy-in refuses links, so this one was planted during the run: the
+      write is refused and the write-back fails. }
+    Expect<Boolean>(FInputs.ApplyWriteBack(Plan, Report)).ToBe(False);
+    Expect<string>(Report[0]).ToBe('write-back: ' + HostPath('out/sub/file.txt') +
+      ' is a symlink or resolves outside its input; refused');
     Expect<string>(ReadHostText('elsewhere/file.txt')).ToBe('untouched');
   finally
     Report.Free;
@@ -681,6 +691,66 @@ begin
   Expect<string>(ReadHostText('real.json')).ToBe('through');
   Expect<Boolean>(HostPathIsSymlink(HostPath('link.json'))).ToBe(True);
   {$ENDIF}
+end;
+
+
+procedure TSandboxHostInputsTests.TestCommandLineOutputNeverWaitsOnAFifo;
+{$IFDEF UNIX}
+var
+  Message: string;
+{$ENDIF}
+begin
+  {$IFDEF UNIX}
+  { Opened for reading, a FIFO would wait for a writer; opened to write,
+    for a reader. Nobody reads this one, so the write fails at once. }
+  Expect<Integer>(FpMkfifo(PAnsiChar(AnsiString(HostPath('fifo'))), $1B6))
+    .ToBe(0);
+  Message := '';
+  try
+    WriteCommandLineOutputFile(HostPath('fifo'), TEncoding.UTF8.GetBytes('x'));
+  except
+    on E: EInOutError do
+      Message := E.Message;
+  end;
+  Expect<string>(Message).ToBe(HostPath('fifo') +
+    ': no process is reading this FIFO');
+  {$ELSE}
+  { Windows has no FIFOs in the filesystem. }
+  Expect<Boolean>(True).ToBe(True);
+  {$ENDIF}
+end;
+
+procedure TSandboxHostInputsTests.TestPinnedInputReplacedByADirectoryWritesNothing;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+begin
+  WriteHostFile('project/out/f.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/out'),
+    Pin, Problem)).ToBe(True);
+  FInputs.CopyIn(HostPath('project/out'), '/out', True, Pin);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'NEW');
+    { During the run the input is moved away and a new, real directory takes
+      its name: the route still leads to a directory, but not the one that
+      was copied. }
+    Expect<Boolean>(RenameFile(HostPath('project/out'),
+      HostPath('project/out.real'))).ToBe(True);
+    ForceDirectories(HostPath('project/out'));
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    Expect<Boolean>(FileExists(HostPath('project/out/f.txt'))).ToBe(False);
+    Expect<string>(ReadHostText('project/out.real/f.txt')).ToBe('orig');
+    Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/out') +
+      ' was replaced during the run; nothing written') >= 0).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
 end;
 
 begin

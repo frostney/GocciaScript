@@ -49,6 +49,9 @@ type
       command-line input, which is pinned at itself; the route from the
       config's directory for a config-named one (TSandboxHostPin). }
     WriteRoute: string;
+    { For a pinned input, which directory the route led to when the input
+      was copied: a directory put in its place later is a different one. }
+    WriteRouteIdentity: THostDirectoryIdentity;
   end;
   TSandboxHostOriginArray = array of TSandboxHostOrigin;
 
@@ -59,7 +62,9 @@ type
     swaSkipReadOnly,
     { Nothing was copied to this sandbox path, so it has no host path. }
     swaSkipNoOrigin,
-    { The host path is a symbolic link, or resolves outside its input. }
+    { The host path is a symbolic link, or resolves outside its input. Copy-in
+      refuses links, so one met here was planted during the run: refused,
+      and the run fails. }
     swaSkipOutside
   );
 
@@ -339,22 +344,84 @@ begin
 end;
 {$ENDIF}
 
+{ Writes ABytes to what APath names, as it is: opened write-only, never for
+  reading. The open does not wait: a FIFO nobody is reading fails at once
+  instead of hanging; once open, writes block as usual. }
+procedure WriteHostPathDirectly(const APath: string; const ABytes: TBytes);
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  OUTPUT_FILE_MODE = $1B6;
+var
+  Handle: cint;
+  Offset: SizeInt;
+  Written: TSsize;
+begin
+  Handle := fpOpen(APath, O_WRONLY or O_CREAT or O_TRUNC or O_NONBLOCK,
+    OUTPUT_FILE_MODE);
+  if Handle < 0 then
+  begin
+    if fpgeterrno = ESysENXIO then
+      raise EInOutError.Create(APath + ': no process is reading this FIFO');
+    raise EInOutError.Create(APath + ': ' + SysErrorMessage(fpgeterrno));
+  end;
+  fpFcntl(Handle, F_SETFL, fpFcntl(Handle, F_GETFL) and not O_NONBLOCK);
+  try
+    Offset := 0;
+    while Offset < Length(ABytes) do
+    begin
+      Written := fpWrite(Handle, ABytes[Offset], Length(ABytes) - Offset);
+      if Written < 0 then
+      begin
+        if fpgeterrno = ESysEINTR then
+          Continue;
+        raise EInOutError.Create(APath + ': ' + SysErrorMessage(fpgeterrno));
+      end;
+      Inc(Offset, Written);
+    end;
+  finally
+    fpClose(Handle);
+  end;
+end;
+{$ELSE}
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    if Length(ABytes) > 0 then
+      Stream.WriteBuffer(ABytes[0], Length(ABytes));
+  finally
+    Stream.Free;
+  end;
+end;
+{$ENDIF}
+
+{ The name exists and is not a regular file, or is a link: judged without
+  opening it. }
+function IsLinkOrSpecialFile(const APath: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+begin
+  if fpLStat(APath, Info) <> 0 then
+    Exit(False);
+  Result := fpS_ISLNK(Info.st_mode) or not fpS_ISREG(Info.st_mode);
+end;
+{$ELSE}
+begin
+  Result := HostPathIsSymlink(ExcludeTrailingPathDelimiter(APath)) or
+    (HostFileExists(APath) and not HostPathIsRegularFile(APath));
+end;
+{$ENDIF}
+
 procedure WriteCommandLineOutputFile(const APath: string;
   const ABytes: TBytes);
 var
-  Stream: TFileStream;
   ErrorMessage: string;
 begin
-  if HostPathIsSymlink(ExcludeTrailingPathDelimiter(APath)) or
-     (HostFileExists(APath) and not HostPathIsRegularFile(APath)) then
+  if IsLinkOrSpecialFile(APath) then
   begin
-    Stream := TFileStream.Create(APath, fmCreate);
-    try
-      if Length(ABytes) > 0 then
-        Stream.WriteBuffer(ABytes[0], Length(ABytes));
-    finally
-      Stream.Free;
-    end;
+    WriteHostPathDirectly(APath, ABytes);
     Exit;
   end;
   if not ReplaceHostFile(APath, APath + OUTPUT_TEMPORARY_SUFFIX, ABytes,
@@ -396,6 +463,17 @@ begin
   FOrigins := nil;
 end;
 
+{ The canonical directory of an input as pinned: its WriteRoot, or for a
+  config input the route's end below the config's directory. }
+function OriginWriteDirectory(const AOrigin: TSandboxHostOrigin): string;
+begin
+  if AOrigin.WriteRoute = '' then
+    Result := AOrigin.WriteRoot
+  else
+    Result := IncludeTrailingPathDelimiter(AOrigin.WriteRoot) +
+      AOrigin.WriteRoute;
+end;
+
 { The directory write-back writes an origin's files under, as a path: the
   input itself, or a file input's directory. }
 function OriginRootPath(const AOrigin: TSandboxHostOrigin): string;
@@ -411,6 +489,7 @@ procedure TSandboxHostInputs.RecordOrigin(const AHostPath,
   const APin: TSandboxHostPin);
 var
   Index: Integer;
+  Problem: string;
 begin
   Index := Length(FOrigins);
   SetLength(FOrigins, Index + 1);
@@ -423,6 +502,9 @@ begin
     FOrigins[Index].WriteRoot := APin.Root;
     FOrigins[Index].WriteRootIdentity := APin.RootIdentity;
     FOrigins[Index].WriteRoute := APin.Route;
+    if not TryHostDirectoryIdentityBeneath(APin.Root, APin.RootIdentity,
+       APin.Route, FOrigins[Index].WriteRouteIdentity, Problem) then
+      FOrigins[Index].WriteRouteIdentity := Default(THostDirectoryIdentity);
     Exit;
   end;
   FOrigins[Index].WriteRoot := CanonicalOrExpanded(OriginRootPath(
@@ -444,7 +526,10 @@ begin
     link-free, to a directory. }
   if AOrigin.WriteRoute <> '' then
     Exit(TryHostDirectoryIdentityBeneath(AOrigin.WriteRoot,
-      AOrigin.WriteRootIdentity, AOrigin.WriteRoute, Identity, Problem));
+      AOrigin.WriteRootIdentity, AOrigin.WriteRoute, Identity, Problem) and
+      ((not AOrigin.WriteRouteIdentity.Known) or
+       ((Identity.Device = AOrigin.WriteRouteIdentity.Device) and
+        (Identity.Inode = AOrigin.WriteRouteIdentity.Inode))));
   if CanonicalOrExpanded(OriginRootPath(AOrigin)) <> AOrigin.WriteRoot then
     Exit(False);
   if not TryHostDirectoryIdentity(AOrigin.WriteRoot, Identity) then
@@ -739,7 +824,7 @@ begin
             Result[Count].RelativePath;
         if not Origin.ReadWrite then
           Result[Count].Action := swaSkipReadOnly
-        else if not WriteStaysInside(HostPath, Origin.WriteRoot) then
+        else if not WriteStaysInside(HostPath, OriginWriteDirectory(Origin)) then
           Result[Count].Action := swaSkipOutside
         else
           Result[Count].Action := swaWrite;
@@ -780,8 +865,9 @@ begin
       swaSkipOutside:
       begin
         AReport.Add(WRITE_BACK_REPORT_PREFIX + APlan[I].HostPath +
-          ' is a symlink or resolves outside its input, skipped');
+          ' is a symlink or resolves outside its input; refused');
         Inc(Skipped);
+        Result := False;
       end;
     end;
 
@@ -819,7 +905,15 @@ begin
       Continue;
     Origin := FOrigins[APlan[I].OriginIndex];
     try
-      Ok := ReplaceHostFileBeneath(Origin.WriteRoot, Origin.WriteRootIdentity,
+      { A pinned input's directory is checked again just before each write,
+        as a command-line input's is by the write itself. }
+      if (Origin.WriteRoute <> '') and not OriginRootUnchanged(Origin) then
+      begin
+        Ok := False;
+        ErrorMessage := OriginRootPath(Origin) + ' was replaced during the run';
+      end
+      else
+        Ok := ReplaceHostFileBeneath(Origin.WriteRoot, Origin.WriteRootIdentity,
         APlan[I].RelativePath, WRITE_BACK_TEMPORARY_SUFFIX,
         FFs.SnapshotReadAllBytes(APlan[I].SandboxPath), ErrorMessage);
     except

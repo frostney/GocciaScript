@@ -40,9 +40,13 @@ type
     SandboxPath: string;
     ReadWrite: Boolean;
     FromConfig: Boolean;
-    { How messages name the input: `--copy src`, or `<config>:
-      "sandbox.copy" entry "src"`. }
+    { How messages name the input: `--copy src`, or `"sandbox.copy" entry
+      "src"` (ConfigPath names the file). }
     Description: string;
+    { The declaring config for a config input; '' for the command line. }
+    ConfigPath: string;
+    { The input gave its own =<sandbox> path. }
+    ExplicitTarget: Boolean;
     { For a config-named read-write input, where write-back may reach it
       (TSandboxHostPin), pinned when the config is checked. Unset for the
       command line's inputs, which are the user's own choice. }
@@ -253,6 +257,8 @@ begin
   Result.ReadWrite := AReadWrite;
   Result.FromConfig := False;
   Result.Description := AOrigin + ' ' + ASpec;
+  Result.ConfigPath := '';
+  Result.ExplicitTarget := Separator > 0;
   Result.Pin := Default(TSandboxHostPin);
 end;
 
@@ -407,8 +413,10 @@ begin
         '"');
     Input.ReadWrite := AConfig.Inputs[I].ReadWrite;
     Input.FromConfig := True;
-    Input.Description := Format('%s: "%s" entry "%s"',
-      [AConfig.Inputs[I].SourcePath, Key, AConfig.Inputs[I].Spec]);
+    Input.Description := Format('"%s" entry "%s"',
+      [Key, AConfig.Inputs[I].Spec]);
+    Input.ConfigPath := AConfig.Inputs[I].SourcePath;
+    Input.ExplicitTarget := AConfig.Inputs[I].SandboxPath <> '';
     Input.Pin := Default(TSandboxHostPin);
     { Write-back writes under the input's directory: the input itself, or
       a file input's directory. }
@@ -437,6 +445,33 @@ begin
   Result := SandboxTargetKey(Target);
 end;
 
+function QualifiedDescription(const AInput: TGocciaSandboxInput): string;
+begin
+  if AInput.ConfigPath <> '' then
+    Result := AInput.ConfigPath + ': ' + AInput.Description
+  else
+    Result := AInput.Description;
+end;
+
+procedure RaiseDuplicateTarget(const AFirst, ASecond: TGocciaSandboxInput;
+  const ATarget: string);
+var
+  Message, Advice: string;
+begin
+  { One config names its path once. }
+  if (AFirst.ConfigPath <> '') and (AFirst.ConfigPath = ASecond.ConfigPath) then
+    Message := Format('%s: %s and %s both copy to %s', [AFirst.ConfigPath,
+      AFirst.Description, ASecond.Description, ATarget])
+  else
+    Message := Format('%s and %s both copy to %s',
+      [QualifiedDescription(AFirst), QualifiedDescription(ASecond), ATarget]);
+  if AFirst.ExplicitTarget and ASecond.ExplicitTarget then
+    Advice := 'give them different sandbox paths'
+  else
+    Advice := 'give one of them an explicit =<sandbox> path';
+  raise TCLIUsageError.Create(Message + '; ' + Advice);
+end;
+
 { Two inputs from one source (the command line, or config) that land on the
   same sandbox path would leave the run with whichever was copied last, so
   they are refused. }
@@ -451,10 +486,8 @@ begin
       if (EffectiveTargetKey(AInputs[I]) = EffectiveTargetKey(AInputs[J])) and
          not (HostDirectoryExists(AInputs[I].HostPath) and
               not HostDirectoryExists(AInputs[J].HostPath)) then
-        raise TCLIUsageError.CreateFmt('%s and %s both copy to %s; give ' +
-          'one of them an explicit =<sandbox> path',
-          [AInputs[I].Description, AInputs[J].Description,
-           EffectiveTargetKey(AInputs[I])]);
+        RaiseDuplicateTarget(AInputs[I], AInputs[J],
+          EffectiveTargetKey(AInputs[I]));
 end;
 
 function CommandLineInputs(const AOptions: TGocciaSandboxOptions;
@@ -596,6 +629,15 @@ begin
         'too; drop %s or --entry', [ACommandLine.Paths[0]]);
     Result.EntrySandbox := CheckedSandboxPath(AOptions.Entry.Value,
       '--entry');
+    { The command line beats config. }
+    if ConfigEntry <> '' then
+    begin
+      SetLength(Result.Notes, Length(Result.Notes) + 1);
+      Result.Notes[High(Result.Notes)] := Format('Note: %s: "%s.entry" %s ' +
+        'is not used; the command line names the entry (--entry %s)',
+        [AConfig.SourcePath, SANDBOX_CONFIG_KEY, AConfig.Entry,
+         AOptions.Entry.Value]);
+    end;
   end
   else if ACommandLine.Paths.Count > 1 then
     raise TCLIUsageError.CreateFmt(

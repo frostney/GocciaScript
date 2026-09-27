@@ -24,6 +24,7 @@ import {
   symlinkSync,
   readdirSync,
   renameSync,
+  unlinkSync,
 } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -7888,7 +7889,100 @@ await section("Runner sandbox mode: two config inputs with one target are refuse
     const configPath = join(tmp, "goccia.json");
     writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["a.txt"], "copy-rw": ["b/a.txt"] } }));
     expectSandboxUsageError("Duplicate config targets", runSandboxCli(["main.js", "-P"], { cwd: tmp }),
-      `${configPath}: "sandbox.copy" entry "a.txt" and ${configPath}: "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; give one of them an explicit =<sandbox> path`);
+      `${configPath}: "sandbox.copy" entry "a.txt" and "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; give one of them an explicit =<sandbox> path`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a command-line --diff-file may be a FIFO...", async () => {
+  if (process.platform === "win32") return;
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'import fs from "fs"; fs.writeFileSync("/made.txt", "m");');
+    const fifo = join(tmp, "diff.fifo");
+    if (Bun.spawnSync(["mkfifo", fifo]).exitCode !== 0) throw new Error("mkfifo failed");
+    const reader = Bun.spawn(["cat", fifo], { stdout: "pipe" });
+    const proc = Bun.spawn([resolve(RUNNER), "main.js", "--sandbox", "--source-type=module", "--diff=unified", `--diff-file=${fifo}`],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => { proc.kill(); reader.kill(); }, 10000);
+    const exitCode = await proc.exited;
+    const received = await new Response(reader.stdout).text();
+    clearTimeout(timer);
+    if (exitCode !== 0 || !received.includes("+++ /made.txt"))
+      throw new Error(`A FIFO --diff-file should receive the diff without hanging, got (exit ${exitCode}):\n${received}${await new Response(proc.stderr).text()}`);
+    // Nobody reading: an error at once, not a hang.
+    const lonely = join(tmp, "lonely.fifo");
+    if (Bun.spawnSync(["mkfifo", lonely]).exitCode !== 0) throw new Error("mkfifo failed");
+    const alone = Bun.spawnSync([resolve(RUNNER), "main.js", "--sandbox", "--source-type=module", "--diff=unified", `--diff-file=${lonely}`],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+    if (alone.exitCode !== 1 || !alone.stderr.toString().includes("no process is reading this FIFO"))
+      throw new Error(`A FIFO nobody reads should fail at once, got (exit ${alone.exitCode}):\n${alone.stdout.toString()}${alone.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a link or replaced input met at write-back fails the run...", async () => {
+  if (process.platform === "win32") return;
+  for (const fromConfig of [false, true]) {
+    const tmp = makeNativeTmp();
+    try {
+      mkdirSync(join(tmp, "out", "sub"), { recursive: true });
+      mkdirSync(join(tmp, "elsewhere"));
+      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+      writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
+      writeFileSync(join(tmp, "w.js"), [
+        'import fs from "fs";',
+        'const start = Date.now(); while (Date.now() - start < 1500) {}',
+        'fs.writeFileSync("/out/keep.txt", "NEW");',
+        'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
+      ].join("\n"));
+      if (fromConfig)
+        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
+      const args = ["w.js", "--compat-while-loops", "--source-type=module", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
+      // A subdirectory swapped for a link mid-run: that file is refused, the
+      // rest is written, and the run fails.
+      let proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
+      symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
+      let exitCode = await proc.exited;
+      let stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+      if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
+          readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
+          !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
+        throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+
+      // The whole input moved away and replaced by a real directory: nothing
+      // is written into the new one.
+      unlinkSync(join(tmp, "out", "sub"));
+      renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
+      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+      proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out"), join(tmp, "out.real"));
+      mkdirSync(join(tmp, "out"));
+      exitCode = await proc.exited;
+      stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+      if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
+          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
+        throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+});
+
+await section("Runner sandbox mode: --entry beats the section's entry, with a note...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('cli entry');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { entry: "/other.js", copy: ["main.js"] } }));
+    const run = runSandboxCli(["-P", "--entry=/main.js"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "cli entry" ||
+        !run.stderr.includes(`Note: ${join(tmp, "goccia.json")}: "sandbox.entry" /other.js is not used; the command line names the entry (--entry /main.js)`))
+      throw new Error(`--entry should win with a note, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
   } finally {
     clean(tmp);
   }

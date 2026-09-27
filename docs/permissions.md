@@ -768,23 +768,29 @@ the host paths they were copied from, including new files created inside a
 - changes under a read-only `--copy` input, or outside every input, are
   reported as skipped;
 - a deletion is never applied;
-- a host target that is a symbolic link is skipped;
+- a symbolic link met at write-back, at the file or on its way, is refused
+  and the run exits 1 (other files are still written): copy-in already
+  refuses links, so one found then was planted during the run;
 - each file is written to an exclusively created temporary beside it and then
   replaces it in one rename, so a failed write leaves the original intact.
 
 Each input's directory is pinned: a command-line input when it is copied (its
 canonical path and, on POSIX, its device and inode), and a config-named one
-when the config is checked, as the config's directory plus the route from it.
-Before anything is written, every read-write input must still be reachable as
-pinned; one that was moved, or swapped for a symbolic link (an ancestor on a
-config input's route included), means nothing is written. Each write then
+when the config is checked, as the config's directory plus the route from it,
+and again when it is copied, as the directory that route led to. Before
+anything is written, every read-write input must still be the directory that
+was copied; one that was moved, swapped for a symbolic link (an ancestor on a
+config input's route included), or replaced by another directory means nothing
+is written and the run exits 1. Each write then
 walks down from the pinned directory without following a link (on POSIX
 through directory descriptors opened with `O_NOFOLLOW`), creating missing
 directories, so a link planted at any point after the check cannot carry a
 write out. A config's `diff-file` is pinned the same way, from the config's
 directory, and a link at its own name is refused. A `--diff-file` on the
 command line is the user's own choice and is written as named — `/dev/null`, a
-FIFO, or a link the user chose — replacing a regular file atomically. A write
+FIFO, or a link the user chose — replacing a regular file atomically; it is
+never opened for reading, and a FIFO nobody reads fails at once instead of
+waiting. A write
 that fails or is refused makes the run exit 1.
 
 The report, one `write-back:` line per path, goes to standard error so the
@@ -815,7 +821,7 @@ copy-rw = ["out"]
 | Key | Value |
 |---|---|
 | `copy`, `copy-rw` | Arrays of `<host>[=<sandbox>]` strings, as on the command line, relative to the declaring config file; a single string is an error |
-| `entry` | An absolute sandbox path, as `--entry`; a positional entry on the command line wins, with a note on stderr |
+| `entry` | An absolute sandbox path, as `--entry`; a positional entry or `--entry` on the command line wins, with a note on stderr |
 | `diff` | `true`, `"json"`, or `"unified"` |
 | `diff-file` | A host path, as `--diff-file`, relative to the declaring config file |
 
