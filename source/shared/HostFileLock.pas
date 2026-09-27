@@ -37,6 +37,16 @@ function TryAcquireHostFileLock(const ALockPath: string;
 
 procedure ReleaseHostFileLock(var ALock: THostFileLock);
 
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+type
+  THostFlock = function(AHandle, AOperation: cint): cint;
+
+var
+  { Test seam: the flock(2) call, so a test can make it fail the way a
+    filesystem without flock does. nil selects fpFlock. }
+  HostFileLockFlock: THostFlock = nil;
+{$IFEND}
+
 implementation
 
 uses
@@ -57,32 +67,45 @@ function TryAcquireHostFileLock(const ALockPath: string;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   PathBytes: TBytes;
-  ErrorOffset: Integer;
+  Error, ErrorOffset: Integer;
+  Status: cint;
 begin
   ALock := Default(THostFileLock);
   AError := '';
-  { A link planted at the lock's name would make the open touch its target. }
-  if HostPathIsSymlink(ALockPath) then
-  begin
-    AError := ALockPath + ' is a symbolic link';
-    Exit(hflFailed);
-  end;
   if not TryEncodeUTF8NullTerminated(ALockPath, PathBytes, ErrorOffset) then
   begin
     AError := 'cannot encode the lock file path ' + ALockPath;
     Exit(hflFailed);
   end;
-  ALock.Handle := fpOpen(PAnsiChar(@PathBytes[0]), O_RDWR or O_CREAT, AMode);
+  { O_NOFOLLOW in the open itself: a link planted at the lock's name, before
+    or during the call, fails the open instead of touching its target. }
+  ALock.Handle := fpOpen(PAnsiChar(@PathBytes[0]), O_RDWR or O_CREAT or
+    HOST_O_NOFOLLOW or HOST_O_CLOEXEC, AMode);
   if ALock.Handle < 0 then
   begin
-    AError := Format('cannot open %s: %s', [ALockPath,
-      SysErrorMessage(fpgeterrno)]);
+    Error := fpgeterrno;
+    if HostPathIsSymlink(ALockPath) then
+      AError := ALockPath + ' is a symbolic link'
+    else
+      AError := Format('cannot open %s: %s', [ALockPath,
+        SysErrorMessage(Error)]);
     Exit(hflFailed);
   end;
-  if fpFlock(ALock.Handle, LOCK_EX or LOCK_NB) <> 0 then
+  if Assigned(HostFileLockFlock) then
+    Status := HostFileLockFlock(ALock.Handle, LOCK_EX or LOCK_NB)
+  else
+    Status := fpFlock(ALock.Handle, LOCK_EX or LOCK_NB);
+  if Status <> 0 then
   begin
+    Error := fpgeterrno;
     fpClose(ALock.Handle);
-    Exit(hflHeld);
+    { Only another holder is "held"; any other failure, such as a
+      filesystem without flock, fails straight away. }
+    if (Error = ESysEWOULDBLOCK) or (Error = ESysEAGAIN) then
+      Exit(hflHeld);
+    AError := Format('cannot lock %s: %s', [ALockPath,
+      SysErrorMessage(Error)]);
+    Exit(hflFailed);
   end;
   ALock.Held := True;
   Result := hflAcquired;
