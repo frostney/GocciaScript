@@ -85,6 +85,9 @@ type
     FKey: string;
     FKnownFiles: TDictionary<string, Boolean>;
     FNext: Integer;
+    { Files already parsed as modules; a file first reached as data or an
+      asset is parsed when a module reference reaches it later. }
+    FParsed: TDictionary<string, Boolean>;
     FPending: TGocciaPendingReferenceList;
     FQueued: TDictionary<string, Boolean>;
     FRequests: Integer;
@@ -415,11 +418,13 @@ begin
   FPending := TGocciaPendingReferenceList.Create;
   FQueued := TDictionary<string, Boolean>.Create;
   FAbsent := TDictionary<string, Boolean>.Create;
+  FParsed := TDictionary<string, Boolean>.Create;
 end;
 
 destructor TGocciaPackageCrawl.Destroy;
 begin
   FKnownFiles.Free;
+  FParsed.Free;
   FAbsent.Free;
   FQueued.Free;
   FPending.Free;
@@ -512,6 +517,9 @@ var
   References: TGocciaLiteralReferences;
   Path, Source: string;
 begin
+  if FParsed.ContainsKey(APath) then
+    Exit;
+  FParsed.Add(APath, True);
   if not IsScriptExtension(ExtractFileExt(APath)) then
     Exit;
   if not TryDecodeUTF8(ABytes, Source, ErrorOffset) then
@@ -544,7 +552,7 @@ procedure TGocciaPackageCrawl.Follow(
 var
   Bytes: TBytes;
   Candidates: TGocciaPackagePathArray;
-  I: Integer;
+  I, Index: Integer;
 begin
   if AReference.Kind = crkModule then
     Candidates := PackageModuleCandidates(AReference.Path,
@@ -561,8 +569,14 @@ begin
       raise EGocciaCrawlError.CreateFmt(
         '%s: "%s" is not a file a package may contain (a goccia.* file, ' +
         'a .goccia directory, or an unsafe name)', [FKey, Candidates[I]]);
-    if FFileIndex.ContainsKey(Candidates[I]) then
+    if FFileIndex.TryGetValue(Candidates[I], Index) then
+    begin
+      { Deduplicated by path, but a module reference still parses a file
+        first reached only as data or an asset. }
+      if AReference.Kind = crkModule then
+        FollowReferences(Candidates[I], FFiles[Index].Bytes);
       Exit;
+    end;
     if Fetch(Candidates[I], Bytes) then
     begin
       AddFile(Candidates[I], Bytes);

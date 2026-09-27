@@ -36,6 +36,7 @@ type
     procedure TestRequestsAreCapped;
     procedure TestAssetsAndDataAreNotParsed;
     procedure TestKnownFilesSettleCandidates;
+    procedure TestAModuleFirstSeenAsAnAssetIsFollowed;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -68,6 +69,8 @@ begin
     TestAssetsAndDataAreNotParsed);
   Test('A known file set settles candidates without requests',
     TestKnownFilesSettleCandidates);
+  Test('A file first reached as an asset is followed when imported',
+    TestAModuleFirstSeenAsAnAssetIsFollowed);
 end;
 
 procedure TCrawlTests.BeforeEach;
@@ -387,6 +390,24 @@ begin
   finally
     Crawler.Free;
   end;
+end;
+
+procedure TCrawlTests.TestAModuleFirstSeenAsAnAssetIsFollowed;
+begin
+  FFiles.Values['amp.js'] :=
+    'export const u = new URL("./h.js", import.meta.url);' + sLineBreak +
+    'import { d } from "./h.js";';
+  FFiles.Values['h.js'] := 'export { d } from "./dep.js";';
+  FFiles.Values['dep.js'] := 'export const d = 1;';
+  Expect<string>(Crawl(['amp.js'])).ToBe('amp.js dep.js h.js');
+  { Data first, then a module import, works the same way. }
+  FFiles.Clear;
+  FFiles.Values['m.js'] :=
+    'import t from "./h.js" with { type: "text" };' + sLineBreak +
+    'import "./h.js";';
+  FFiles.Values['h.js'] := 'export { d } from "./dep.js";';
+  FFiles.Values['dep.js'] := 'export const d = 1;';
+  Expect<string>(Crawl(['m.js'])).ToBe('dep.js h.js m.js');
 end;
 
 begin
