@@ -775,7 +775,8 @@ the host paths they were copied from, including new files created inside a
   replaces it in one rename, so a failed write leaves the original intact.
 
 Each input's directory is pinned: a command-line input when it is copied (its
-canonical path and, on POSIX, its device and inode), and a config-named one
+canonical path and which directory it is — device and inode on POSIX, volume
+serial number and file index on Windows), and a config-named one
 when the config is checked, as the config's directory plus the route from it,
 and again when it is copied, as the directory that route led to. Before
 anything is written, every read-write input must still be the directory that

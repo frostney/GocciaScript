@@ -154,7 +154,8 @@ function ReplaceHostFile(const APath, ATemporaryPath: string;
 
 type
   { Which directory a path named when it was recorded: POSIX device and inode.
-    Known is False where the host cannot say (Windows, Lakon/WASI). }
+    On Windows, the volume serial number and file index. Known is False
+    where the host cannot say (Lakon/WASI). }
   THostDirectoryIdentity = record
     Known: Boolean;
     Device: QWord;
@@ -910,12 +911,49 @@ begin
   AIdentity.Inode := QWord(Info.st_ino);
   Result := True;
 end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+var
+  Handle: THandle;
+  Information: BY_HANDLE_FILE_INFORMATION;
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+  if not DirectoryExists(APath) then
+    Exit;
+  { Opened for no access at all, only to ask which file it is; backup
+    semantics lets a directory be opened. }
+  Handle := CreateFileW(PWideChar(UnicodeString(APath)), 0,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    if not GetFileInformationByHandle(Handle, Information) then
+      Exit;
+    AIdentity.Known := True;
+    AIdentity.Device := QWord(Information.dwVolumeSerialNumber);
+    AIdentity.Inode := (QWord(Information.nFileIndexHigh) shl 32) or
+      QWord(Information.nFileIndexLow);
+    Result := True;
+  finally
+    CloseHandle(Handle);
+  end;
+end;
 {$ELSE}
 begin
   AIdentity := Default(THostDirectoryIdentity);
   Result := DirectoryExists(APath);
 end;
 {$ENDIF}
+
+{ AIdentity is AExpected, or AExpected is not known. }
+function SameDirectoryIdentity(const AIdentity,
+  AExpected: THostDirectoryIdentity): Boolean;
+begin
+  Result := (not AExpected.Known) or (AIdentity.Known and
+    (AIdentity.Device = AExpected.Device) and
+    (AIdentity.Inode = AExpected.Inode));
+end;
 
 function SplitRelativeHostPath(const APath: string): TStringList;
 var
@@ -1103,6 +1141,7 @@ var
   Parts: TStringList;
   Path: string;
   I: Integer;
+  Identity: THostDirectoryIdentity;
 begin
   Result := False;
   AError := '';
@@ -1117,6 +1156,12 @@ begin
     if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
     begin
       AError := ARoot + ' is no longer the copied directory';
+      Exit;
+    end;
+    if not TryHostDirectoryIdentity(Path, Identity) or
+       not SameDirectoryIdentity(Identity, ARootIdentity) then
+    begin
+      AError := ARoot + ' was replaced after it was copied';
       Exit;
     end;
     for I := 0 to Parts.Count - 1 do
@@ -1231,7 +1276,9 @@ begin
   Parts := SplitRelativeHostPath(ARoute);
   try
     Path := ExcludeTrailingPathDelimiter(ARoot);
-    if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
+    if HostPathIsSymlink(Path) or
+       not TryHostDirectoryIdentity(Path, AIdentity) or
+       not SameDirectoryIdentity(AIdentity, ARootIdentity) then
     begin
       AError := ARoot + ' was replaced';
       Exit;
@@ -1246,7 +1293,7 @@ begin
         Exit;
       end;
     end;
-    Result := True;
+    Result := TryHostDirectoryIdentity(Path, AIdentity);
   finally
     Parts.Free;
   end;
