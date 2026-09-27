@@ -115,6 +115,7 @@ type
     procedure TestImportMetaResolveOfAProviderKeyIsLexical;
     procedure TestComputedImportsThroughAProviderNeedOnlyImport;
     procedure TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
+    procedure TestImportMapAliasesDoNotApplyInsidePackages;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -240,6 +241,8 @@ begin
     TestComputedImportsThroughAProviderNeedOnlyImport);
   Test('Lock keys compare owner and repository case-insensitively',
     TestLockKeysCompareOwnerAndRepositoryCaseInsensitively);
+  Test('Import-map aliases do not apply to a package''s imports',
+    TestImportMapAliasesDoNotApplyInsidePackages);
 end;
 
 procedure TProviderImportTests.BeforeAll;
@@ -316,6 +319,13 @@ begin
   AddFile('index.ts', 'export const root = "root";');
   AddFile('bindings/dyn.ts',
     'export const load = (name) => import("./" + name);');
+  { Relative specifiers that leave the package and land where a path key of
+    the project's import map would catch them. }
+  AddFile('bindings/viaalias.ts',
+    'import { value } from "../../../../../../../src/x.js";' + sLineBreak +
+    'export const viaAlias = value;');
+  AddFile('bindings/viagithub.ts',
+    'export * from "../../../../../../../other/x.ts";');
   if FileExists(FFixtureLibrary) then
     AddBinary('native/libfixture' + LIBRARY_SUFFIX, FFixtureLibrary);
 
@@ -325,6 +335,8 @@ begin
     '"ray/": "github:frostney/raylib@v1.0.0/bindings/", ' +
     '"rayroot": "github:frostney/raylib@v1.0.0", ' +
     '"raypkg/": "github:frostney/raylib@v1.0.0/", ' +
+    '"./src/": "./src/", ' +
+    '"./other/": "github:someone/other@v2/", ' +
     '"other": "github:someone/other@v2/x.ts"}}');
   WriteFile(ProjectPath('goccia.lock.json'),
     '{"version": 1, "packages": {' +
@@ -334,6 +346,7 @@ begin
     '", "artifacts": {"x.ts": {"sha256": "' +
     SHA256Hex(TextBytes('export {};')) + '"}}}}}');
   WriteFile(ProjectPath('lib.js'), 'export const value = "inside";');
+  WriteFile(ProjectPath('src/x.js'), 'export const value = "project";');
   WriteFile(ProjectPath('.goccia/stray.js'), 'export const value = "stray";');
 end;
 
@@ -810,6 +823,31 @@ begin
       .ToBe(True);
   finally
     WriteFile(ProjectPath('goccia.lock.json'), Lock);
+  end;
+end;
+
+procedure TProviderImportTests.TestImportMapAliasesDoNotApplyInsidePackages;
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  for Bytecode := False to True do
+  begin
+    Outcome := Run('import { viaAlias } from "ray/viaalias.ts";' +
+      sLineBreak + 'globalThis.result = viaAlias;',
+      TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+    Expect<Boolean>(Pos('imports only its own files', Outcome.ErrorMessage) >
+      0).ToBe(True);
+    Expect<string>(Outcome.Result).ToBe('undefined');
+
+    FEvents.Clear;
+    Outcome := Run('import * as other from "ray/viagithub.ts";' +
+      sLineBreak + 'globalThis.result = "loaded";',
+      TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+    Expect<Boolean>(Pos('imports only its own files', Outcome.ErrorMessage) >
+      0).ToBe(True);
+    { The second package was never granted, fetched, or loaded. }
+    Expect<Boolean>(Pos(OTHER_KEY, FEvents.Text) = 0).ToBe(True);
   end;
 end;
 
