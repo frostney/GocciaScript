@@ -299,21 +299,34 @@ end;
 function TGocciaModuleResolver.Resolve(const AModulePath,
   AImportingFilePath: string): string;
 var
+  CandidatePath: string;
   Package: TGocciaMaterializedPackage;
 begin
   { A package names its own files by relative specifier. An absolute path
     is let through to CheckPathCandidate, which keeps it inside the package:
     the loader reloads a changed module by its own resolved path. }
   Package := ProviderPackageOf(AImportingFilePath);
-  if Assigned(Package) and
-     (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) <>
+  if not Assigned(Package) then
+    Exit(inherited Resolve(AModulePath, AImportingFilePath));
+  if (Copy(AModulePath, 1, Length(CURRENT_DIRECTORY_PREFIX)) <>
       CURRENT_DIRECTORY_PREFIX) and
      (Copy(AModulePath, 1, Length(PARENT_DIRECTORY_PREFIX)) <>
       PARENT_DIRECTORY_PREFIX) and not IsAbsoluteHostPath(AModulePath) then
     raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
       'Provider package %s cannot import "%s": a package imports only its ' +
       'own files, by relative specifier', [Package.Key, AModulePath]), '');
-  Result := inherited Resolve(AModulePath, AImportingFilePath);
+  { No import-map entry or alias applies to a package's imports: a path
+    key would otherwise carry a relative specifier out of the package, to a
+    project file or another provider package, past the check below. }
+  SetLastPackageDirectory('');
+  if IsAbsoluteHostPath(AModulePath) then
+    CandidatePath := ExpandHostFileName(AModulePath)
+  else
+    CandidatePath := ExpandHostFileName(ExtractFilePath(AImportingFilePath) +
+      AModulePath);
+  CheckPathCandidate(AModulePath, AImportingFilePath, CandidatePath);
+  if not TryResolveWithExtensions(CandidatePath, Result) then
+    raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
 end;
 
 { The import-map entry mapped AModulePath to ATarget, a provider address

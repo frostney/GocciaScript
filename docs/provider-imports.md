@@ -197,9 +197,11 @@ package was materialized in the same run.
 
 A package imports only its own files, by relative specifier. A bare, absolute,
 or `github:` specifier, or a relative one that leaves the package root, fails
-with `Provider package <key> cannot import "<specifier>"`. There are no
-transitive provider dependencies. Package files run with the project's
-capabilities and configuration, like any project file.
+with `Provider package <key> cannot import "<specifier>"`. No import-map
+entry or alias applies to a package's imports, so a path key of the project's
+map cannot carry one out of the package either. There are no transitive
+provider dependencies. Package files run with the project's capabilities,
+like any project file.
 
 `FFI.open` accepts a `file:` URL, as a `URL` object or a string, and judges it
 as the path it names, so a package can open a library beside itself:
