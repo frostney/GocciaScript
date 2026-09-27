@@ -407,6 +407,7 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Adding Built-in Types](docs/adding-built-in-types.md) | Step-by-step guide for adding new built-in types |
 | [Embedding the Engine](docs/embedding.md) | Embedding GocciaScript in FreePascal applications |
 | [Module Resolution](docs/module-resolution.md) | Resolution order, opt-in `node_modules` lookup, and the deviations from Node |
+| [Provider Imports](docs/provider-imports.md) | `github:` import-map entries, `goccia.lock.json`, the `.goccia` cache, and verify on load |
 | [Virtual Module Configuration](docs/virtual-modules.md) | CLI, config-file, and embedding reference for host-supplied modules |
 | [Host Environment](docs/host-environment.md) | Injecting JavaScript-visible clock, time-zone, and random providers |
 | [Permissions](docs/permissions.md) | The capability model: `read`, `net`, `ffi`, `import`, deny-wins, the module-graph exemption, `PermissionDenied` |

@@ -26,6 +26,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "fs";
+import { createHash } from "crypto";
 import { join, resolve } from "path";
 import {
   BARE,
@@ -336,7 +337,7 @@ console.log("Boolean flags reject values; scope lists validate...");
   const cases: [string[], string][] = [
     [["--allow-net="], '--allow-net= has an empty scope list; omit "=" to allow every public host'],
     [["--allow-read=a,,b"], "Empty scope in --allow-read=a,,b"],
-    [["--allow-import"], "--allow-import needs a scope: node_modules[=<dir>] or a provider such as github"],
+    [["--allow-import"], "--allow-import needs a scope: node_modules[=<dir>], github, github:<owner>, or github:<owner>/<repo>"],
     [["--allow-net=http://x"], 'Invalid scope for --allow-net: "http://x" (use host, host:port, *.domain, an IP, a CIDR range, or private)'],
     [["--timeout=5h"], "Invalid value for --timeout: 5h (use a duration such as 500ms, 5s, or 2m, or plain milliseconds)"],
     [["--max-memory=64MB"], 'Invalid value for --max-memory: 64MB ("MB" is ambiguous; use KiB, MiB, or GiB, or a plain byte count)'],
@@ -401,7 +402,7 @@ console.log("Binaries with their own parser follow the same grammar...");
     writeFileSync(join(tmp, "main.js"), "print(1);\n");
     // Malformed deny flags fail exactly as on the shared-application binaries.
     const malformed: [string, string, number][] = [
-      ["--deny-import", "--deny-import needs a scope: node_modules[=<dir>] or a provider such as github", 1],
+      ["--deny-import", "--deny-import needs a scope: node_modules[=<dir>], github, github:<owner>, or github:<owner>/<repo>", 1],
       ["--deny-net=", "--deny-net= has an empty scope list", 1],
       ["--deny-read=a,,b", "Empty scope in --deny-read=a,,b", 1],
       ["--deny-net=http://x", 'Invalid scope for --deny-net: "http://x"', 1],
@@ -1872,6 +1873,158 @@ console.log("Audit records config trust and where capabilities came from...");
     const denied = readFileSync(join(tmp, "denied.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     if (!denied.some((event) => event.kind === "config.permissions" && event.decision === "deny" && event.reason === "not trusted"))
       throw new Error(`denied config.permissions event: ${JSON.stringify(denied)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("Provider imports: import scopes, the lockfile, the cache, and --cached-only...");
+{
+  // Every run here finds its package already in .goccia, so none needs the
+  // network: a complete cache is reused as it is, and --cached-only turns a
+  // missing or tampered file into an error instead of a fetch.
+  const COMMIT = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+  const KEY = "github:frostney/raylib@v1.0.0";
+  const PACKAGE_FILES: Record<string, string> = {
+    "bindings/raylib.ts": 'import { detail } from "./lib/detail.ts";\nexport const value = "pkg:" + detail;\n',
+    "bindings/lib/detail.ts": 'export const detail = "detail";\n',
+  };
+  const cacheDirectory = (project: string) =>
+    join(project, ".goccia", "packages", "github", "frostney", "raylib", COMMIT);
+  const seed = (project: string, config: Record<string, unknown> = {}) => {
+    const artifacts: Record<string, { sha256: string }> = {};
+    for (const [path, text] of Object.entries(PACKAGE_FILES)) {
+      const full = join(cacheDirectory(project), ...path.split("/"));
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, text);
+      artifacts[path] = { sha256: createHash("sha256").update(text).digest("hex") };
+    }
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      imports: { raylib: `${KEY}/bindings/raylib.ts`, "ray/": `${KEY}/bindings/` },
+      ...config,
+    }));
+    writeFileSync(join(project, "goccia.lock.json"), JSON.stringify({
+      version: 1,
+      packages: { [KEY]: { ref: "tag", commit: COMMIT, artifacts } },
+    }));
+    writeFileSync(join(project, "app.js"), 'import { value } from "raylib";\nconsole.log(value);\n');
+  };
+
+  const tmp = makeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(project);
+    seed(project);
+    const app = join(project, "app.js");
+
+    const refused = run(RUNNER, [app]);
+    expectExit(refused, 1, "provider import without a grant");
+    expectIncludes(refused.combined, `PermissionDenied: import: ${KEY}`, "provider import without a grant");
+    expectIncludes(refused.combined, "--allow-import=github:frostney/raylib (or github:frostney, or github)", "provider import suggestion");
+
+    for (const scope of ["github", "github:frostney", "github:Frostney/Raylib"]) {
+      for (const mode of ["interpreted", "bytecode"]) {
+        const granted = run(RUNNER, [`--allow-import=${scope}`, `--mode=${mode}`, app]);
+        expectExit(granted, 0, `--allow-import=${scope} (${mode})`);
+        expectIncludes(granted.stdout, "pkg:detail", `--allow-import=${scope} (${mode})`);
+      }
+    }
+
+    const other = run(RUNNER, ["--allow-import=github:someone", app]);
+    expectExit(other, 1, "another owner's scope");
+    expectIncludes(other.combined, `PermissionDenied: import: ${KEY}`, "another owner's scope");
+
+    const denied = run(RUNNER, ["--allow-import=github", "--deny-import=github:frostney", app]);
+    expectExit(denied, 1, "a provider deny wins");
+    expectIncludes(denied.combined, "refused by the import deny github:frostney", "a provider deny wins");
+
+    for (const scope of ["gitlab", "github:", "github:owner/repo/x", "github:owner/repo@v1"]) {
+      const invalid = run(RUNNER, [`--allow-import=${scope}`, app]);
+      expectExit(invalid, 1, `invalid import scope ${scope}`);
+      expectIncludes(invalid.combined, "Invalid scope for --allow-import", `invalid import scope ${scope}`);
+    }
+
+    // The test runner resolves provider imports the same way.
+    writeFileSync(join(project, "pkg.test.js"),
+      'import { value } from "raylib";\ntest("pkg", () => { expect(value).toBe("pkg:detail"); });\n');
+    const tested = run(TESTRUNNER, ["--allow-import=github:frostney", join(project, "pkg.test.js")]);
+    expectExit(tested, 0, "GocciaTestRunner provider import");
+
+    // The cache is not part of the module graph: reaching it directly is an
+    // ordinary read.
+    writeFileSync(join(project, "direct.js"),
+      `import { detail } from "./.goccia/packages/github/frostney/raylib/${COMMIT}/bindings/lib/detail.ts";\nconsole.log(detail);\n`);
+    const direct = run(RUNNER, [join(project, "direct.js")]);
+    expectExit(direct, 1, "direct .goccia import");
+    expectIncludes(direct.combined, "PermissionDenied: read: ./.goccia/packages/", "direct .goccia import");
+    const directRead = run(RUNNER, [`--allow-read=${join(project, ".goccia")}`, join(project, "direct.js")]);
+    expectExit(directRead, 0, "direct .goccia import with a read grant");
+
+    // --cached-only runs from a complete cache and refuses a missing or
+    // tampered file rather than fetching it.
+    const cachedOnly = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
+    expectExit(cachedOnly, 0, "--cached-only with a complete cache");
+    const detail = join(cacheDirectory(project), "bindings", "lib", "detail.ts");
+    writeFileSync(detail, 'export const detail = "evil";\n');
+    const tampered = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
+    expectExit(tampered, 1, "--cached-only with a tampered cache");
+    expectIncludes(tampered.combined, `${KEY}: the cached bindings/lib/detail.ts does not match its pin, and --cached-only refuses the network`, "--cached-only with a tampered cache");
+    expectExcludes(tampered.stdout, "evil", "--cached-only with a tampered cache");
+    rmSync(detail);
+    const missing = run(RUNNER, ["--allow-import=github", "--cached-only", "--mode=bytecode", app]);
+    expectExit(missing, 1, "--cached-only with a missing file");
+    expectIncludes(missing.combined, `${KEY} is not cached (bindings/lib/detail.ts), and --cached-only refuses the network`, "--cached-only with a missing file");
+    rmSync(join(project, ".goccia"), { recursive: true });
+    const empty = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
+    expectExit(empty, 1, "--cached-only without a cache");
+    if (existsSync(join(project, ".goccia"))) throw new Error("--cached-only must not create .goccia");
+
+    // A lockfile that does not pin the package, or is malformed, fails the
+    // import; the run never writes it.
+    seed(project);
+    const lockPath = join(project, "goccia.lock.json");
+    writeFileSync(lockPath, '{"version": 1, "packages": {}}');
+    const unpinned = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
+    expectExit(unpinned, 1, "an unpinned package");
+    expectIncludes(unpinned.combined, `${KEY} is not pinned in goccia.lock.json`, "an unpinned package");
+    if (readFileSync(lockPath, "utf8") !== '{"version": 1, "packages": {}}') throw new Error("a run rewrote goccia.lock.json");
+
+    // A symbolic link planted in the cache is refused, even one that points
+    // at the pinned bytes.
+    if (!isWindows) {
+      seed(project);
+      const outside = join(tmp, "outside-detail.ts");
+      writeFileSync(outside, PACKAGE_FILES["bindings/lib/detail.ts"]);
+      rmSync(detail);
+      symlinkSync(outside, detail);
+      const planted = run(RUNNER, ["--allow-import=github", "--cached-only", app]);
+      expectExit(planted, 1, "a planted symlink in the cache");
+      expectIncludes(planted.combined, "the package cache must not contain symbolic links", "a planted symlink in the cache");
+      rmSync(detail);
+    }
+
+    // Sandbox mode has no host filesystem to materialize a package into.
+    seed(project);
+    const sandboxed = run(RUNNER, ["--sandbox", `--import-map=${join(project, "goccia.json")}`, app]);
+    expectExit(sandboxed, 1, "sandbox mode refuses provider imports");
+    expectIncludes(sandboxed.combined, `PermissionDenied: import: ${KEY}`, "sandbox mode refuses provider imports");
+    expectExcludes(sandboxed.stdout, "pkg:detail", "sandbox mode refuses provider imports");
+
+    // A config's allow-import is a request that needs trust, like any grant.
+    seed(project, { permissions: { "allow-import": ["github:frostney"] } });
+    const untrusted = run(RUNNER, ["--trust-store=providers.json", app], { cwd: tmp });
+    expectExit(untrusted, 2, "a config's import request is untrusted");
+    expectIncludes(untrusted.combined, "allow-import: github:frostney", "a config's import request is untrusted");
+    const accepted = run(RUNNER, ["-P", "--audit-log=providers.jsonl", app], { cwd: tmp });
+    expectExit(accepted, 0, "a config's import request accepted with -P");
+    expectIncludes(accepted.stdout, "pkg:detail", "a config's import request accepted with -P");
+    const events = readFileSync(join(tmp, "providers.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    const grant = events.find((event) => event.kind === "import.provider" && event.subject === KEY);
+    if (!grant || grant.decision !== "allow" || grant.reason !== "the import capability covers github:frostney/raylib")
+      throw new Error(`import.provider resolve event: ${JSON.stringify(events)}`);
+    const verified = events.filter((event) => event.kind === "import.provider" && event.subject === `${KEY}/bindings/lib/detail.ts`);
+    if (!verified.some((event) => event.decision === "allow" && event.reason === "the loaded bytes match the pin"))
+      throw new Error(`import.provider verify event: ${JSON.stringify(verified)}`);
   } finally {
     clean(tmp);
   }

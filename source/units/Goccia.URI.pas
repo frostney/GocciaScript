@@ -24,12 +24,21 @@ function DecodeURIComponent(const AString: string): string;
   Preserves unreserved characters plus sub-delims and '/', ':', '@'. }
 function PercentEncodePath(const APath: string): string;
 
+{ RFC 8089 — the host path a `file:` URL names, the inverse of the URLs
+  import.meta.url carries: `file:///<path>` or `file://localhost/<path>`,
+  percent-decoded as UTF-8. On Windows `file:///C:/x` names `C:\x`, and
+  `file://server/share/x` the UNC path `\\server\share\x`. False for any
+  other form, for a query or fragment, for an encoded separator or NUL, and
+  for bytes that are not UTF-8. }
+function TryFileURLToHostPath(const AURL: string; out APath: string): Boolean;
+
 implementation
 
 uses
   SysUtils,
 
   StringBuffer,
+  TextEncoding,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -362,6 +371,124 @@ begin
       Buffer.Append(PercentEncodeByte(Ord(Ch)));
   end;
   Result := Buffer.ToString;
+end;
+
+const
+  FILE_URL_SCHEME = 'file:';
+  FILE_URL_AUTHORITY_PREFIX = '//';
+  FILE_URL_LOCALHOST = 'localhost';
+
+function HexValue(const AChar: Char): Integer;
+begin
+  case AChar of
+    '0'..'9':
+      Result := Ord(AChar) - Ord('0');
+    'a'..'f':
+      Result := Ord(AChar) - Ord('a') + 10;
+    'A'..'F':
+      Result := Ord(AChar) - Ord('A') + 10;
+  else
+    Result := -1;
+  end;
+end;
+
+{ Percent-decodes AText into UTF-8 bytes and then text. An encoded `/`,
+  `\`, or NUL would change what the path names, so it is refused. }
+function TryPercentDecodePath(const AText: string; out APath: string): Boolean;
+var
+  Bytes, Run: TBytes;
+  ErrorOffset, I, High4, Low4, RunStart: Integer;
+  Decoded: Byte;
+
+  function FlushRun(const AEnd: Integer): Boolean;
+  var
+    J: Integer;
+  begin
+    Result := True;
+    if AEnd <= RunStart then
+      Exit;
+    if not TryEncodeUTF8(Copy(AText, RunStart, AEnd - RunStart), Run,
+       ErrorOffset) then
+      Exit(False);
+    J := Length(Bytes);
+    SetLength(Bytes, J + Length(Run));
+    if Length(Run) > 0 then
+      Move(Run[0], Bytes[J], Length(Run));
+  end;
+
+begin
+  Result := False;
+  APath := '';
+  Bytes := nil;
+  RunStart := 1;
+  I := 1;
+  while I <= Length(AText) do
+  begin
+    if AText[I] = '%' then
+    begin
+      if not FlushRun(I) or (I + 2 > Length(AText)) then
+        Exit;
+      High4 := HexValue(AText[I + 1]);
+      Low4 := HexValue(AText[I + 2]);
+      if (High4 < 0) or (Low4 < 0) then
+        Exit;
+      Decoded := (High4 shl 4) or Low4;
+      if (Decoded = 0) or (Decoded = Ord('/')) or (Decoded = Ord('\')) then
+        Exit;
+      SetLength(Bytes, Length(Bytes) + 1);
+      Bytes[High(Bytes)] := Decoded;
+      Inc(I, 3);
+      RunStart := I;
+    end
+    else
+      Inc(I);
+  end;
+  if not FlushRun(Length(AText) + 1) then
+    Exit;
+  Result := TryDecodeUTF8(Bytes, APath, ErrorOffset);
+end;
+
+function TryFileURLToHostPath(const AURL: string; out APath: string): Boolean;
+var
+  Rest, Authority, EncodedPath: string;
+  SlashIndex: Integer;
+begin
+  Result := False;
+  APath := '';
+  if not SameText(Copy(AURL, 1, Length(FILE_URL_SCHEME)), FILE_URL_SCHEME) then
+    Exit;
+  Rest := Copy(AURL, Length(FILE_URL_SCHEME) + 1, MaxInt);
+  if (Copy(Rest, 1, Length(FILE_URL_AUTHORITY_PREFIX)) <>
+      FILE_URL_AUTHORITY_PREFIX) or (Pos('?', Rest) > 0) or
+     (Pos('#', Rest) > 0) or (Pos('\', Rest) > 0) then
+    Exit;
+  Rest := Copy(Rest, Length(FILE_URL_AUTHORITY_PREFIX) + 1, MaxInt);
+  SlashIndex := Pos('/', Rest);
+  if SlashIndex = 0 then
+    Exit;
+  Authority := Copy(Rest, 1, SlashIndex - 1);
+  EncodedPath := Copy(Rest, SlashIndex, MaxInt);
+  if not TryPercentDecodePath(EncodedPath, APath) then
+    Exit;
+  {$IFDEF MSWINDOWS}
+  if (Authority <> '') and not SameText(Authority, FILE_URL_LOCALHOST) then
+  begin
+    { A UNC path, as FilePathToUrl writes one. }
+    APath := '\\' + Authority + StringReplace(APath, '/', '\',
+      [rfReplaceAll]);
+    Exit(True);
+  end;
+  { `/C:/dir/file` names `C:\dir\file`. }
+  if (Length(APath) < 3) or (APath[1] <> '/') or (APath[3] <> ':') or
+     not CharInSet(APath[2], ['A'..'Z', 'a'..'z']) then
+    Exit;
+  APath := StringReplace(Copy(APath, 2, MaxInt), '/', '\', [rfReplaceAll]);
+  Result := True;
+  {$ELSE}
+  if (Authority <> '') and not SameText(Authority, FILE_URL_LOCALHOST) then
+    Exit;
+  Result := (APath <> '') and (APath[1] = '/');
+  {$ENDIF}
 end;
 
 end.

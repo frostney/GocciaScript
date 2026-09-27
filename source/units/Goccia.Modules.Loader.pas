@@ -122,6 +122,7 @@ type
     FLastPackageRoot: string;
 
     function EnforcesHostReads: Boolean;
+    function IsProjectGraphPath(const ACanonicalPath: string): Boolean;
     function HostReadVerdict(const ACanonicalPath, AImportingFilePath: string;
       const AIsLiteral: Boolean; out ADenial: TGocciaReadDenial): Boolean;
     procedure DenyHostRead(const ASpecifier, ACanonicalPath: string;
@@ -328,6 +329,8 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.ModuleResolver,
+  Goccia.Packages.Address,
+  Goccia.Packages.Store,
   Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
@@ -806,11 +809,38 @@ begin
     FContentProvider.ReadsHostFileSystem;
 end;
 
+{ Whether ACanonicalPath is inside the project and outside every `.goccia`
+  directory in it. The provider package cache is not part of the module
+  graph: its files load only as a resolved provider package, whose bytes are
+  checked against the lockfile, and reaching them any other way is an
+  ordinary read (ADR 0122). }
+function TGocciaModuleLoader.IsProjectGraphPath(
+  const ACanonicalPath: string): Boolean;
+var
+  RelativePath, Segment: string;
+  SegmentStart, I: Integer;
+begin
+  if (FProjectRoot = '') or
+     not IsPathWithinScope(ACanonicalPath, FProjectRoot) then
+    Exit(False);
+  RelativePath := Copy(ACanonicalPath, Length(FProjectRoot) + 1, MaxInt);
+  SegmentStart := 1;
+  for I := 1 to Length(RelativePath) + 1 do
+    if (I > Length(RelativePath)) or (RelativePath[I] = PathDelim) then
+    begin
+      Segment := Copy(RelativePath, SegmentStart, I - SegmentStart);
+      if SameText(Segment, PACKAGE_CACHE_DIRECTORY_NAME) then
+        Exit(False);
+      SegmentStart := I + 1;
+    end;
+  Result := True;
+end;
+
 { ADR 0122 read judgment for one canonical path. AIsLiteral is False for a
   dynamic import whose specifier was computed at run time. A deny wins over
-  every exemption; a literal import inside the project, or inside a package
-  its importer belongs to, is part of the module graph; anything else needs
-  a read grant. }
+  every exemption; a literal import inside the project (outside its
+  `.goccia` cache), or inside a package its importer belongs to, is part of
+  the module graph; anything else needs a read grant. }
 function TGocciaModuleLoader.HostReadVerdict(const ACanonicalPath,
   AImportingFilePath: string; const AIsLiteral: Boolean;
   out ADenial: TGocciaReadDenial): Boolean;
@@ -818,8 +848,7 @@ begin
   ADenial := rdDenied;
   if FCapabilities.DeniesPath(gcRead, ACanonicalPath) then
     Exit(False);
-  if AIsLiteral and (FProjectRoot <> '') and
-     IsPathWithinScope(ACanonicalPath, FProjectRoot) then
+  if AIsLiteral and IsProjectGraphPath(ACanonicalPath) then
     Exit(True);
   if AIsLiteral and IsInGraphPackage(ACanonicalPath, AImportingFilePath) then
     Exit(True);
@@ -1030,8 +1059,7 @@ begin
      Denial) then
     DenyHostRead(ASpecifier, CanonicalPath, Denial);
   if Assigned(FCapabilityAuditEmitter) and
-     not (AIsLiteral and (((FProjectRoot <> '') and
-     IsPathWithinScope(CanonicalPath, FProjectRoot)) or
+     not (AIsLiteral and (IsProjectGraphPath(CanonicalPath) or
      IsInGraphPackage(CanonicalPath, AImportingFilePath))) then
     FCapabilityAuditEmitter(gckReadFile, gcdAllow, CanonicalPath,
       'a read grant covers the path');
@@ -1073,6 +1101,7 @@ var
   var
     Definition: TGocciaVirtualModuleDefinition;
     SavedGrant: TModuleResolverNodeModulesGrant;
+    SavedProviderGrant: TGocciaProviderGrant;
   begin
     if not Assigned(FResolver) or
        FWarnedVirtualCollisions.ContainsKey(AVirtualAddress) then
@@ -1089,6 +1118,10 @@ var
     SavedGrant := FResolver.NodeModulesGrant;
     if Assigned(SavedGrant) and FCapabilityPolicyConfigured then
       FResolver.NodeModulesGrant := QuietNodeModulesGrant;
+    { Nor a provider import: without a grant callback the resolver refuses
+      it before anything is materialized or fetched. }
+    SavedProviderGrant := FResolver.ProviderGrant;
+    FResolver.ProviderGrant := nil;
     try
       try
         FileSystemAddress := FResolver.Resolve(AModulePath,
@@ -1102,6 +1135,7 @@ var
       end;
     finally
       FResolver.NodeModulesGrant := SavedGrant;
+      FResolver.ProviderGrant := SavedProviderGrant;
     end;
   end;
 
@@ -1144,10 +1178,17 @@ begin
   try
     if FVirtualModules.Contains(AResolvedPath) then
       Result := FVirtualModules.LoadContent(AResolvedPath)
+    else if Assigned(FResolver) and
+       FResolver.IsProviderPackagePath(AResolvedPath) then
+      { Verify on load: the bytes compiled are the bytes hashed. }
+      Result := FContentProvider.LoadVerifiedContent(AResolvedPath,
+        FResolver.VerifyProviderContent)
     else
       Result := FContentProvider.LoadContent(AResolvedPath);
   except
     on E: EConvertError do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+    on E: EGocciaProviderVerificationError do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
   end;
   if Assigned(Result) and (Result.CanonicalIdentity <> '') then
@@ -1178,6 +1219,17 @@ function TGocciaModuleLoader.LoadResolvedContentBytes(
 begin
   if FVirtualModules.Contains(AResolvedPath) then
     Exit(FVirtualModules.LoadContentBytes(AResolvedPath));
+  if Assigned(FResolver) and
+     FResolver.IsProviderPackagePath(AResolvedPath) then
+  begin
+    try
+      Exit(FContentProvider.LoadVerifiedContentBytes(AResolvedPath,
+        FResolver.VerifyProviderContent));
+    except
+      on E: EGocciaProviderVerificationError do
+        raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+    end;
+  end;
   Result := FContentProvider.LoadContentBytes(AResolvedPath);
 end;
 

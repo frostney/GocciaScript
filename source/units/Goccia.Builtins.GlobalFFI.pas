@@ -5,6 +5,8 @@ unit Goccia.Builtins.GlobalFFI;
 interface
 
 uses
+  SysUtils,
+
   Goccia.Arguments.Collection,
   Goccia.Builtins.Base,
   Goccia.Capabilities,
@@ -21,10 +23,20 @@ var
   GocciaFFIAfterOpenCheck: procedure = nil;
 
 type
+  { Whether a library path lies inside a materialized provider package. }
+  TGocciaFFIProviderPathQuery = function(const APath: string): Boolean
+    of object;
+  { Raises when ABytes are not the bytes the provider lockfile pins for
+    APath. }
+  TGocciaFFIProviderVerifier = procedure(const APath: string;
+    const ABytes: TBytes) of object;
+
   TGocciaGlobalFFI = class(TGocciaBuiltin)
   private
     FCapabilities: TGocciaCapabilities;
     FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
+    FIsProviderPath: TGocciaFFIProviderPathQuery;
+    FVerifyProviderBytes: TGocciaFFIProviderVerifier;
   published
     function FFIOpen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function FFIStruct(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -43,6 +55,13 @@ type
       const AThrowError: TGocciaThrowErrorCallback;
       const ACapabilities: TGocciaCapabilities;
       const ACapabilityAuditEmitter: TGocciaCapabilityAuditEmitter);
+
+    { A library inside a provider package is hashed against its pin before
+      it is loaded (ADR 0122). Unset, no library is treated as one. }
+    property IsProviderPath: TGocciaFFIProviderPathQuery
+      read FIsProviderPath write FIsProviderPath;
+    property VerifyProviderBytes: TGocciaFFIProviderVerifier
+      read FVerifyProviderBytes write FVerifyProviderBytes;
   end;
 
 implementation
@@ -51,11 +70,9 @@ uses
   {$IFDEF FPC}{$IFDEF LINUX}
   BaseUnix,
   {$ENDIF}{$ENDIF}
-  SysUtils,
+  Classes,
 
-  {$IFDEF MSWINDOWS}
   FileUtils,
-  {$ENDIF}
 
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -66,10 +83,12 @@ uses
   Goccia.Values.FFILibrary,
   Goccia.Values.FFIPointer,
   Goccia.Values.FFIType,
+  Goccia.URI,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue;
 
 const
+  FILE_URL_SCHEME_PREFIX = 'file:';
   {$IFDEF DARWIN}
   SHARED_LIBRARY_SUFFIX = '.dylib';
   {$ELSE}
@@ -190,6 +209,57 @@ begin
   Result := Metadata;
 end;
 
+{$IFDEF FPC}{$IFDEF LINUX}
+{ Every byte of the file ADescriptor names, read from the descriptor itself
+  so the bytes hashed are the bytes the loader maps. }
+function ReadDescriptorBytes(const ADescriptor: LongInt;
+  out ABytes: TBytes): Boolean;
+var
+  Info: Stat;
+  Offset: Int64;
+  Count: TSsize;
+begin
+  ABytes := nil;
+  if (fpFStat(ADescriptor, Info) <> 0) or
+     (fpLseek(ADescriptor, 0, SEEK_SET) <> 0) then
+    Exit(False);
+  SetLength(ABytes, Info.st_size);
+  Offset := 0;
+  while Offset < Length(ABytes) do
+  begin
+    Count := fpRead(ADescriptor, ABytes[Offset], Length(ABytes) - Offset);
+    if Count <= 0 then
+      Exit(False);
+    Inc(Offset, Count);
+  end;
+  Result := True;
+end;
+{$ENDIF}{$ENDIF}
+
+{$IFDEF MSWINDOWS}
+{ Every byte of the file AHandle pins, read through that handle. }
+function ReadHandleBytes(const AHandle: THandle; out ABytes: TBytes): Boolean;
+var
+  Size: Int64;
+  Offset, Count: LongInt;
+begin
+  ABytes := nil;
+  Size := FileSeek(AHandle, Int64(0), 2);
+  if (Size < 0) or (FileSeek(AHandle, Int64(0), 0) <> 0) then
+    Exit(False);
+  SetLength(ABytes, Size);
+  Offset := 0;
+  while Offset < Length(ABytes) do
+  begin
+    Count := FileRead(AHandle, ABytes[Offset], Length(ABytes) - Offset);
+    if Count <= 0 then
+      Exit(False);
+    Inc(Offset, Count);
+  end;
+  Result := True;
+end;
+{$ENDIF}
+
 { True when APath names a library without any directory part. }
 function IsBareLibraryName(const APath: string): Boolean;
 begin
@@ -220,8 +290,10 @@ const
   NOT_COVERED_REASON = 'the ffi capability does not cover this library';
   CHANGED_REASON = 'the library changed between the ffi check and the load';
 var
-  LibPath, LoadPath, DenialDetail, PinnedLoadPath, PinnedPath: string;
-  Allowed, IsBareName: Boolean;
+  LibPath, LoadPath, DenialDetail, PinnedLoadPath, PinnedPath,
+    RequestedPath, URLPath: string;
+  Allowed, IsBareName, IsProviderLibrary: Boolean;
+  LibraryBytes: TBytes;
   Handle: TGocciaFFILibraryHandle;
   {$IFDEF FPC}{$IFDEF LINUX}
   PinnedDescriptor: LongInt;
@@ -230,6 +302,27 @@ var
   PinnedHandle: THandle;
   HoldingPin: Boolean;
   {$ENDIF}
+
+  { Verify on load: a library inside a provider package must be the bytes
+    its lockfile pins. The bytes come from the pinned descriptor or handle
+    where the platform has one, so the file hashed is the file loaded. }
+  procedure VerifyProviderLibrary(const ABytesRead: Boolean;
+    const ABytes: TBytes);
+  begin
+    if not ABytesRead then
+      ThrowTypeError('Failed to load library: ' + LibPath,
+        SSuggestFFILibraryOpen);
+    try
+      FVerifyProviderBytes(LoadPath, ABytes);
+    except
+      on E: Exception do
+      begin
+        if Assigned(FCapabilityAuditEmitter) then
+          FCapabilityAuditEmitter(gckFFIOpen, gcdDeny, LibPath, E.Message);
+        ThrowTypeError(E.Message, SSuggestFFILibraryOpen);
+      end;
+    end;
+  end;
 
   procedure Deny(const ADetail, AReason: string);
   begin
@@ -251,7 +344,7 @@ var
     Reported := '';
     Result := False;
       {$ELSE}
-    Reported := CanonicalCapabilityPath(LibPath);
+    Reported := CanonicalCapabilityPath(RequestedPath);
     Result := Reported <> LoadPath;
       {$ENDIF}
     {$ENDIF}
@@ -262,14 +355,26 @@ begin
     ThrowTypeError(SErrorFFIOpenRequiresPath, SSuggestFFILibraryOpen);
 
   LibPath := AArgs.GetElement(0).ToStringLiteral.Value;
-  IsBareName := IsBareLibraryName(LibPath);
+  { A `file:` URL (a URL object or its string) names the host path it
+    encodes, so package code can open a library beside itself with
+    `new URL("./lib.so", import.meta.url)`. It is judged like that path. }
+  LoadPath := LibPath;
+  if SameText(Copy(LibPath, 1, Length(FILE_URL_SCHEME_PREFIX)),
+     FILE_URL_SCHEME_PREFIX) then
+  begin
+    if not TryFileURLToHostPath(LibPath, URLPath) then
+      ThrowTypeError('FFI.open cannot use this file URL: ' + LibPath,
+        SSuggestFFILibraryOpen);
+    LoadPath := URLPath;
+  end;
+  RequestedPath := LoadPath;
+  IsBareName := IsBareLibraryName(LoadPath);
   { A name with no directory part is found by the platform loader's search
     path, which no path scope describes, so only an unscoped grant with no
     deny scope covers it. Anything else is judged, and then loaded, at its
     canonical path, so the file checked is the file opened. }
   if IsBareName then
   begin
-    LoadPath := LibPath;
     Allowed := FCapabilities.AllowsUnscoped(gcFFI);
     { With a deny scope in force, asking for the unscoped grant would not
       help. (An unscoped deny never gets here: FFI is not installed.) }
@@ -280,7 +385,7 @@ begin
   end
   else
   begin
-    LoadPath := CanonicalCapabilityPath(LibPath);
+    LoadPath := CanonicalCapabilityPath(LoadPath);
     Allowed := FCapabilities.AllowsPath(gcFFI, LoadPath);
     if FCapabilities.DeniesPath(gcFFI, LoadPath) then
       DenialDetail := Format(SSuggestFFIDenied, [LoadPath])
@@ -294,6 +399,8 @@ begin
     FCapabilityAuditEmitter(gckFFIOpen, gcdAllow, LibPath,
       'the ffi capability covers this library');
 
+  IsProviderLibrary := (not IsBareName) and Assigned(FIsProviderPath) and
+    Assigned(FVerifyProviderBytes) and FIsProviderPath(LoadPath);
   PinnedLoadPath := LoadPath;
   PinnedPath := '';
   {$IFDEF FPC}{$IFDEF LINUX}
@@ -313,6 +420,14 @@ begin
       Deny(Format('the ffi capability does not cover %s', [PinnedPath]),
         CHANGED_REASON);
     end;
+    if IsProviderLibrary then
+      try
+        VerifyProviderLibrary(ReadDescriptorBytes(PinnedDescriptor,
+          LibraryBytes), LibraryBytes);
+      except
+        FpClose(PinnedDescriptor);
+        raise;
+      end;
   end;
   {$ENDIF}{$ENDIF}
   {$IFDEF MSWINDOWS}
@@ -330,11 +445,34 @@ begin
       Deny(Format('the ffi capability does not cover %s', [PinnedPath]),
         CHANGED_REASON);
     end;
+    if IsProviderLibrary then
+      try
+        VerifyProviderLibrary(ReadHandleBytes(PinnedHandle, LibraryBytes),
+          LibraryBytes);
+      except
+        ClosePinnedHostFile(PinnedHandle);
+        raise;
+      end;
     { Load the pinned file by its own final path: fully resolved (no
       junction or symlink left in it) and exactly the string just judged. }
     PinnedLoadPath := PinnedPath;
   end;
   {$ENDIF}
+  {$IF NOT DEFINED(LINUX) AND NOT DEFINED(MSWINDOWS)}
+  { No descriptor the loader can take: the path's bytes are hashed just
+    before the load, which leaves the window the post-load path check
+    describes. }
+  if IsProviderLibrary then
+  begin
+    try
+      LibraryBytes := ReadFileBytes(LoadPath);
+    except
+      on E: EStreamError do
+        VerifyProviderLibrary(False, nil);
+    end;
+    VerifyProviderLibrary(True, LibraryBytes);
+  end;
+  {$IFEND}
   try
     if Assigned(GocciaFFIAfterOpenCheck) then
       GocciaFFIAfterOpenCheck;

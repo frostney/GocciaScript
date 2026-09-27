@@ -41,6 +41,10 @@ type
       const AImportMapDirectory: string): string; override;
     function NormalizeImportMapPath(const APath, ABaseDirectory: string): string;
       override;
+    { Sandbox mode has no host filesystem to materialize a provider package
+      into, so a provider import is refused (ADR 0122). }
+    function ResolveExternalAliasTarget(const AModulePath, ATarget,
+      AImportingFilePath: string): string; override;
   public
     constructor Create(const AFs: TSandboxVirtualFileSystem;
       const ABaseDirectory: string = '/');
@@ -51,7 +55,8 @@ type
 implementation
 
 uses
-  Goccia.FileExtensions;
+  Goccia.FileExtensions,
+  Goccia.Packages.Address;
 
 const
   CURRENT_DIRECTORY_PREFIX = './';
@@ -158,6 +163,21 @@ begin
 end;
 
 { TGocciaSandboxModuleResolver }
+
+function TGocciaSandboxModuleResolver.ResolveExternalAliasTarget(
+  const AModulePath, ATarget, AImportingFilePath: string): string;
+var
+  Address: TGocciaProviderAddress;
+  Error: string;
+begin
+  { The grant decides first, so the refusal is the audited PermissionDenied
+    a missing import capability always is; sandbox mode never grants one. }
+  if TryParseProviderAddress(ATarget, Address, Error) then
+    RequireProviderGrant(AModulePath, Address);
+  raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
+    'Provider imports are not available in sandbox mode: "%s"',
+    [AModulePath]), '');
+end;
 
 constructor TGocciaSandboxModuleResolver.Create(
   const AFs: TSandboxVirtualFileSystem; const ABaseDirectory: string);
@@ -285,6 +305,9 @@ begin
   AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
   if AliasApplied <> AModulePath then
   begin
+    if IsExternalAliasTarget(AliasApplied) then
+      Exit(ResolveExternalAliasTarget(AModulePath, AliasApplied,
+        AImportingFilePath));
     Candidate := StringReplace(AliasApplied, '\', '/', [rfReplaceAll]);
     if not IsAbsoluteSandboxPath(Candidate) then
       Candidate := JoinSandboxPath(BaseDirectory, Candidate);

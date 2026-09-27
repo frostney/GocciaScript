@@ -59,7 +59,7 @@ The engine-owned, immutable `TGocciaCapabilities` value that decides what source
 _Avoid_: Permissions object, runtime surface, allowlist, sandbox policy.
 
 **Capability scope**:
-One allow or deny entry of a capability: an absolute path for `read` and `ffi`; a host, `host:port`, `*.domain`, IP, CIDR range, or `private` for `net`; `node_modules[=<dir>]` or a provider host for `import`. An entry with no scope covers every scope of its capability.
+One allow or deny entry of a capability: an absolute path for `read` and `ffi`; a host, `host:port`, `*.domain`, IP, CIDR range, or `private` for `net`; `node_modules[=<dir>]`, `github`, `github:<owner>`, or `github:<owner>/<repo>` for `import`. An entry with no scope covers every scope of its capability.
 _Avoid_: Rule, pattern, allowed host when the capability is not `net`.
 
 **Narrowing**:

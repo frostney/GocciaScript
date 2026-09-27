@@ -111,7 +111,7 @@ const
   SANDBOX_DIFF_DEFAULT = 'true';
   { What an import scope must name, for the missing-scope errors. }
   IMPORT_SCOPE_REQUIREMENT =
-    'node_modules[=<dir>] or a provider such as github';
+    'node_modules[=<dir>], github, github:<owner>, or github:<owner>/<repo>';
   ALL_CAPABILITIES: TGocciaHonoredCapabilities = [gcRead, gcNet, gcFFI,
     gcImport];
   { The config keys, which are also the command-line flag names. }
@@ -212,7 +212,8 @@ const
   NET_SCOPE_HINT =
     'use host, host:port, *.domain, an IP, a CIDR range, or private';
   IMPORT_SCOPE_HINT =
-    'use node_modules, node_modules=<dir>, or a provider such as github';
+    'use node_modules, node_modules=<dir>, github, github:<owner>, or ' +
+    'github:<owner>/<repo>';
 
 function PermissionKeyName(const AAllow: Boolean;
   const ACapability: TGocciaCapability): string;

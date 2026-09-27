@@ -62,6 +62,7 @@ type
     FCompatibilityFlags: array[TGocciaCompatibility] of TFlagOption;
     FImportMap: TStringOption;
     FAliases: TRepeatableOption;
+    FCachedOnly: TFlagOption;
     FCapabilities: TGocciaCapabilityOptions;
     FTimeout: TDurationOption;
     FMaxMemory: TByteSizeOption;
@@ -94,6 +95,7 @@ type
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
     property ImportMap: TStringOption read FImportMap;
     property Aliases: TRepeatableOption read FAliases;
+    property CachedOnly: TFlagOption read FCachedOnly;
     property Capabilities: TGocciaCapabilityOptions read FCapabilities;
     property Timeout: TDurationOption read FTimeout;
     property MaxMemory: TByteSizeOption read FMaxMemory;
@@ -289,7 +291,8 @@ const
      RequiresScope: False),
     (Placeholder: '<source>';
      AllowHelp: 'Allow module sources outside the project: ' +
-       'node_modules[=<dir>] or a provider such as github';
+       'node_modules[=<dir>], or a provider package scope: github, ' +
+       'github:<owner>, or github:<owner>/<repo>';
      AllowUnscopedMeaning: '';
      DenyHelp: 'Deny these module sources (deny always wins)';
      DenyUnscopedMeaning: '';
@@ -727,6 +730,9 @@ begin
     'Path to import map JSON file', 'Engine');
   FAliases := TRepeatableOption.Create('alias',
     'Import alias (e.g. @/=./src/)', 'Engine');
+  FCachedOnly := TFlagOption.Create('cached-only',
+    'Refuse the network for provider packages: every pinned file must ' +
+    'already be in .goccia', 'Engine');
   FCapabilities := TGocciaCapabilityOptions.Create;
   FTimeout := TDurationOption.Create('timeout',
     'Per-file timeout: 500ms, 5s, 2m, or plain milliseconds (0 = none)',
@@ -785,6 +791,7 @@ begin
     FCompatibilityFlags[Flag].Free;
   FImportMap.Free;
   FAliases.Free;
+  FCachedOnly.Free;
   FCapabilities.Free;
   FTimeout.Free;
   FMaxMemory.Free;
@@ -826,6 +833,8 @@ begin
   Leading[Index] := FImportMap;
   Inc(Index);
   Leading[Index] := FAliases;
+  Inc(Index);
+  Leading[Index] := FCachedOnly;
   Inc(Index);
   SetLength(Leading, Index);
 

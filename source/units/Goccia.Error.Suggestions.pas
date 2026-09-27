@@ -409,6 +409,7 @@ resourcestring
   SSuggestReadComputed = 'a computed import() specifier is not part of the module graph, so %s needs a read grant: --allow-read=%s, or "allow-read" in the "permissions" block of goccia.json';
   SSuggestReadDenied = 'a read deny (--deny-read or "deny-read" in goccia.json) covers %s';
   SSuggestFFINotGranted = 'the ffi capability does not cover %s; grant it with --allow-ffi=%s, or "allow-ffi" in the "permissions" block of goccia.json';
+  SSuggestProviderImportNotGranted = 'the import capability does not cover %s; grant it with --allow-import=%s (or %s, or github), or "allow-import" in the "permissions" block of goccia.json';
   SSuggestFFIDenied = 'an ffi deny (--deny-ffi or "deny-ffi" in goccia.json) covers %s';
   SSuggestFFIBareName = 'a library name searched for by the platform loader needs an unscoped ffi grant: --allow-ffi, or "allow-ffi": true in the "permissions" block of goccia.json';
   SSuggestFFIBareNameDenyScope = 'an ffi deny scope is in force, so a library name searched for by the platform loader cannot be judged against it; open the library by a path outside the deny instead';
