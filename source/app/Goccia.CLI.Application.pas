@@ -1861,20 +1861,29 @@ begin
           TGarbageCollector.Instance.AddTempRoot(NamedExports);
         Visiting := TList<TGocciaObjectValue>.Create;
         try
-          for ExportName in Module.GetExportNames do
-            if Module.TryGetExportValue(ExportName, ExportedValue) then
-            begin
-              { Only data crosses into the script's engine, and all of it:
-                JSON would drop a nested function or rewrite NaN silently. }
-              Reason := NonDataReason(ExportedValue, ExportName, Visiting,
-                ReasonPath);
-              if Reason <> '' then
-                raise EArgumentException.CreateFmt(
-                  '%s: export "%s" is %s; a config''s globals module may ' +
-                  'export data only (pass it with --globals on the command ' +
-                  'line to inject code)', [APath, ReasonPath, Reason]);
-              NamedExports.SetProperty(ExportName, ExportedValue);
-            end;
+          try
+            for ExportName in Module.GetExportNames do
+              if Module.TryGetExportValue(ExportName, ExportedValue) then
+              begin
+                { Only data crosses into the script's engine, and all of it:
+                  JSON would drop a nested function or rewrite NaN silently. }
+                Reason := NonDataReason(ExportedValue, ExportName, Visiting,
+                  ReasonPath);
+                if Reason <> '' then
+                  raise EArgumentException.CreateFmt(
+                    '%s: export "%s" is %s; a config''s globals module may ' +
+                    'export data only (pass it with --globals on the ' +
+                    'command line to inject code)',
+                    [APath, ReasonPath, Reason]);
+                NamedExports.SetProperty(ExportName, ExportedValue);
+              end;
+          except
+            { The stringify step's finally removes the root on success; a
+              refused export must not leave it pinning the copied values. }
+            if TGarbageCollector.Instance <> nil then
+              TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+            raise;
+          end;
         finally
           Visiting.Free;
         end;
