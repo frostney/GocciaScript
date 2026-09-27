@@ -114,6 +114,13 @@ procedure WriteUTF8FileText(const APath, AText: string);
 { Read an entire file as raw bytes, preserving every byte exactly
   (NUL bytes, non-UTF-8 sequences, and original newlines). }
 function ReadFileBytes(const APath: string): TBytes;
+{ As ReadFileBytes, for a file other processes replace while it is read (the
+  trust store). On Windows the file is opened sharing read, write, and
+  delete, so a concurrent ReplaceHostFile can rename over it while it is open,
+  and a sharing violation from some other tool holding it is retried briefly.
+  Elsewhere this is ReadFileBytes: POSIX has no share modes, and a rename
+  over an open file leaves the reader with the file it opened. }
+function ReadSharedHostFileBytes(const APath: string): TBytes;
 
 { Replace APath's contents with ABytes so that APath afterwards holds either
   the new bytes or exactly what it held before, never neither.
@@ -126,7 +133,9 @@ function ReadFileBytes(const APath: string): TBytes;
   On POSIX and Windows the temporary is flushed to disk and then replaces
   APath in one step — rename(2) on POSIX, MoveFileExW with
   MOVEFILE_REPLACE_EXISTING on Windows — without the original being deleted
-  beforehand. The Lakon/WASI lane writes its in-memory filesystem, which has
+  beforehand. On Windows a replace refused with a sharing violation or access
+  denied (a reader without delete sharing, an antivirus scan, an indexer) is
+  retried in short steps for up to two seconds. The Lakon/WASI lane writes its in-memory filesystem, which has
   nothing to flush, and replaces with a rename.
 
   Returns False with AError describing the failure; the temporary is removed
@@ -186,6 +195,20 @@ implementation
 uses
   {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}InitC,{$ENDIF}
   TextEncoding;
+
+{$IFDEF MSWINDOWS}
+const
+  { A transient hold on a file by another process (a reader, antivirus, an
+    indexer) is waited out in these steps, for at most this many. }
+  SHARING_RETRY_MILLISECONDS = 50;
+  SHARING_RETRY_ATTEMPTS = 40;
+
+function IsTransientSharingError(const AError: DWORD): Boolean;
+begin
+  Result := (AError = ERROR_SHARING_VIOLATION) or
+    (AError = ERROR_ACCESS_DENIED);
+end;
+{$ENDIF}
 
 function IsAbsoluteHostPath(const APath: string): Boolean;
 {$IFDEF UNIX}
@@ -562,7 +585,8 @@ end;
 var
   Handle: THandle;
   Offset: SizeInt;
-  Written: DWORD;
+  Written, LastError: DWORD;
+  Attempt: Integer;
 begin
   Result := False;
   AError := '';
@@ -603,11 +627,24 @@ begin
 
   if AError = '' then
   begin
-    if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
-         MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
-      Result := True
-    else
-      AError := SysErrorMessage(GetLastError);
+    Attempt := 0;
+    repeat
+      if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
+           MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
+      begin
+        Result := True;
+        Break;
+      end;
+      LastError := GetLastError;
+      if not IsTransientSharingError(LastError) or
+         (Attempt >= SHARING_RETRY_ATTEMPTS) then
+      begin
+        AError := SysErrorMessage(LastError);
+        Break;
+      end;
+      Inc(Attempt);
+      SysUtils.Sleep(SHARING_RETRY_MILLISECONDS);
+    until False;
   end;
   if not Result then
     DeleteFile(ATemporaryPath);
@@ -1108,6 +1145,59 @@ begin
   finally
     Parts.Free;
   end;
+end;
+{$ENDIF}
+
+function ReadSharedHostFileBytes(const APath: string): TBytes;
+{$IFDEF MSWINDOWS}
+var
+  Handle: THandle;
+  LastError, BytesRead: DWORD;
+  Attempt: Integer;
+  Size, Offset: Int64;
+begin
+  Attempt := 0;
+  repeat
+    Handle := CreateFileW(PWideChar(UnicodeString(APath)), GENERIC_READ,
+      FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if Handle <> INVALID_HANDLE_VALUE then
+      Break;
+    LastError := GetLastError;
+    if not IsTransientSharingError(LastError) or
+       (Attempt >= SHARING_RETRY_ATTEMPTS) then
+      raise EFOpenError.CreateFmt('Unable to open file "%s": %s',
+        [APath, SysErrorMessage(LastError)]);
+    Inc(Attempt);
+    SysUtils.Sleep(SHARING_RETRY_MILLISECONDS);
+  until False;
+  try
+    Size := FileSeek(Handle, Int64(0), fsFromEnd);
+    if (Size < 0) or (FileSeek(Handle, Int64(0), fsFromBeginning) <> 0) then
+      raise EReadError.CreateFmt('Unable to read file "%s": %s',
+        [APath, SysErrorMessage(GetLastError)]);
+    SetLength(Result, Size);
+    Offset := 0;
+    while Offset < Size do
+    begin
+      if not Windows.ReadFile(Handle, Result[Offset], DWORD(Size - Offset),
+           BytesRead, nil) then
+        raise EReadError.CreateFmt('Unable to read file "%s": %s',
+          [APath, SysErrorMessage(GetLastError)]);
+      if BytesRead = 0 then
+      begin
+        SetLength(Result, Offset);
+        Break;
+      end;
+      Inc(Offset, BytesRead);
+    end;
+  finally
+    CloseHandle(Handle);
+  end;
+end;
+{$ELSE}
+begin
+  Result := ReadFileBytes(APath);
 end;
 {$ENDIF}
 

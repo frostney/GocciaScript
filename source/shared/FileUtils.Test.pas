@@ -4,6 +4,7 @@ program FileUtils.Test;
 
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   Classes,
   SysUtils,
 
@@ -37,6 +38,8 @@ type
     procedure TestCanonicalHostPathIsStableForARealFile;
     procedure TestCanonicalHostPathFollowsASymlink;
     procedure TestReplaceHostFileCreatesWithPermissions;
+    procedure TestReadSharedHostFileBytes;
+    procedure TestReplaceWhileASharedReaderHoldsTheFile;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -83,6 +86,17 @@ begin
   Skip('ReplaceHostFile creates the temporary with the given permissions',
     TestReplaceHostFileCreatesWithPermissions,
     'POSIX modes are not available on this platform');
+  {$ENDIF}
+  Test('ReadSharedHostFileBytes reads the whole file',
+    TestReadSharedHostFileBytes);
+  { Share modes exist only on Windows; POSIX renames over open files. }
+  {$IFDEF MSWINDOWS}
+  Test('ReplaceHostFile replaces a file a shared reader holds open',
+    TestReplaceWhileASharedReaderHoldsTheFile);
+  {$ELSE}
+  Skip('ReplaceHostFile replaces a file a shared reader holds open',
+    TestReplaceWhileASharedReaderHoldsTheFile,
+    'share modes exist only on Windows');
   {$ENDIF}
 end;
 
@@ -450,6 +464,54 @@ begin
     physically. }
   Expect<string>(CanonicalHostPath(LinkPath)).ToBe(TargetCanonical);
 end;
+
+procedure TFileUtilsTests.TestReadSharedHostFileBytes;
+var
+  Target, Error: string;
+  Bytes: TBytes;
+begin
+  Target := FTempDir + PathDelim + 'store.json';
+  Bytes := TEncoding.UTF8.GetBytes('{"version":1}');
+  Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp', Bytes, Error))
+    .ToBe(True);
+  Expect<Integer>(Length(ReadSharedHostFileBytes(Target))).ToBe(Length(Bytes));
+  Expect<Integer>(ReadSharedHostFileBytes(Target)[0]).ToBe(Ord('{'));
+end;
+
+{ A run reads the trust store while another process's --trust replaces it.
+  The reader opens it the way ReadSharedHostFileBytes does, sharing read,
+  write, and delete, and the replace must still rename over it; a second
+  shared reader must still open it meanwhile. }
+procedure TFileUtilsTests.TestReplaceWhileASharedReaderHoldsTheFile;
+{$IFDEF MSWINDOWS}
+var
+  Target, Error: string;
+  Reader: THandle;
+  Bytes: TBytes;
+begin
+  Target := FTempDir + PathDelim + 'store.json';
+  Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+    TEncoding.UTF8.GetBytes('old'), Error)).ToBe(True);
+  Reader := CreateFileW(PWideChar(UnicodeString(Target)), GENERIC_READ,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  Expect<Boolean>(Reader <> INVALID_HANDLE_VALUE).ToBe(True);
+  try
+    Expect<Integer>(Length(ReadSharedHostFileBytes(Target))).ToBe(3);
+    Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+      TEncoding.UTF8.GetBytes('newer'), Error)).ToBe(True);
+    Expect<string>(Error).ToBe('');
+  finally
+    CloseHandle(Reader);
+  end;
+  Bytes := ReadSharedHostFileBytes(Target);
+  Expect<Integer>(Length(Bytes)).ToBe(5);
+  Expect<Integer>(Bytes[0]).ToBe(Ord('n'));
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure TFileUtilsTests.TestReplaceHostFileCreatesWithPermissions;
 {$IFDEF UNIX}
