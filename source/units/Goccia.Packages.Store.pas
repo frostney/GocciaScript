@@ -244,8 +244,11 @@ var
   ErrorMessage: string;
 begin
   RefuseCacheLinks(ACacheDirectory, AHostRelative, AKey);
+  { A concurrent install or engine may create it first. }
   if not HostDirectoryExists(ACacheDirectory) and
-     not ForceDirectories(ACacheDirectory) then
+     not ForceDirectories(ACacheDirectory) and
+     (HostPathIsSymlink(ACacheDirectory) or
+      not HostDirectoryExists(ACacheDirectory)) then
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s: the package cache directory could not be created', [AKey]),
       ACacheDirectory);
