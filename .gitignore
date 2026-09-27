@@ -13,6 +13,7 @@ build/
 
 # Provider package cache (docs/provider-imports.md)
 .goccia/
+goccia.lock.json.lock
 
 # Delphi IDE state and generated project resources
 source/app/*.dproj.local

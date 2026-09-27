@@ -32,6 +32,10 @@ type
     procedure TestCrawlRefusesNonRelativeImports;
     procedure TestCrawlRefusesEscapesAndConfigFiles;
     procedure TestCrawlReportsMissingFiles;
+    procedure TestRepeatedImportsAreFetchedOnce;
+    procedure TestRequestsAreCapped;
+    procedure TestAssetsAndDataAreNotParsed;
+    procedure TestKnownFilesSettleCandidates;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -57,6 +61,13 @@ begin
   Test('Refuses escapes and goccia.* files',
     TestCrawlRefusesEscapesAndConfigFiles);
   Test('Reports a missing file', TestCrawlReportsMissingFiles);
+  Test('Repeated imports are fetched once, and misses asked once',
+    TestRepeatedImportsAreFetchedOnce);
+  Test('A crawl stops at its request cap', TestRequestsAreCapped);
+  Test('Assets and data files are pinned but never parsed',
+    TestAssetsAndDataAreNotParsed);
+  Test('A known file set settles candidates without requests',
+    TestKnownFilesSettleCandidates);
 end;
 
 procedure TCrawlTests.BeforeEach;
@@ -293,6 +304,89 @@ begin
     CrawlError(['m.js'])) > 0).ToBe(True);
   Expect<Boolean>(Pos('has no file for "absent.ts"',
     CrawlError(['absent.ts'])) > 0).ToBe(True);
+end;
+
+procedure TCrawlTests.TestRepeatedImportsAreFetchedOnce;
+var
+  Source: string;
+  I: Integer;
+begin
+  Source := '';
+  for I := 1 to 200 do
+    Source := Source + 'import "./d";' + sLineBreak;
+  FFiles.Values['bindings/amp.js'] := Source;
+  FFiles.Values['bindings/other.js'] := Source;
+  FFiles.Values['bindings/d/index.js'] := 'export {};';
+  Expect<string>(Crawl(['bindings/amp.js', 'bindings/other.js'])).ToBe(
+    'bindings/amp.js bindings/d/index.js bindings/other.js');
+  { The two entries, then ./d once: its path, its nine extensions, and
+    index.js, whatever number of modules import it. }
+  Expect<Integer>(FRequests.Count).ToBe(13);
+end;
+
+procedure TCrawlTests.TestRequestsAreCapped;
+var
+  Source: string;
+  I: Integer;
+begin
+  { Every module is found only at its last candidate, index.md. }
+  Source := '';
+  for I := 1 to 600 do
+  begin
+    Source := Source + 'import "./m' + IntToStr(I) + '";' + sLineBreak;
+    FFiles.Values['bindings/m' + IntToStr(I) + '/index.md'] := '# m';
+  end;
+  FFiles.Values['bindings/many.js'] := Source;
+  Expect<Boolean>(Pos('needs more than 10000 requests',
+    CrawlError(['bindings/many.js'])) > 0).ToBe(True);
+  Expect<Integer>(FRequests.Count).ToBe(MAX_CRAWL_REQUESTS);
+end;
+
+procedure TCrawlTests.TestAssetsAndDataAreNotParsed;
+begin
+  FFiles.Values['m.js'] :=
+    'export const u = new URL("./w.js", import.meta.url);' + sLineBreak +
+    'import d from "./d.js" with { type: "text" };';
+  FFiles.Values['w.js'] := 'import "lodash";';
+  FFiles.Values['d.js'] := 'import "../escape.js";';
+  Expect<string>(Crawl(['m.js'])).ToBe('d.js m.js w.js');
+end;
+
+procedure TCrawlTests.TestKnownFilesSettleCandidates;
+var
+  Crawler: TGocciaPackageCrawl;
+  Refused: Boolean;
+begin
+  FFiles.Values['index.js'] := 'import "./util";';
+  FFiles.Values['util'] := 'a file named like the stem';
+  FFiles.Values['util.ts'] := 'export {};';
+  Crawler := TGocciaPackageCrawl.Create('github:o/r@v1', Fetch);
+  try
+    { As a run resolves: the pinned util.ts, though util exists too. }
+    Crawler.SetKnownFiles(['index.js', 'util.ts']);
+    Crawler.AddModuleEntry('index.js');
+    Crawler.Run;
+    Expect<Integer>(Crawler.Files.Count).ToBe(2);
+    Expect<string>(Crawler.Files[1].Path).ToBe('util.ts');
+    Expect<Integer>(FRequests.Count).ToBe(2);
+  finally
+    Crawler.Free;
+  end;
+  Crawler := TGocciaPackageCrawl.Create('github:o/r@v1', Fetch);
+  try
+    Crawler.SetKnownFiles(['index.js']);
+    Crawler.AddModuleEntry('index.js');
+    Refused := False;
+    try
+      Crawler.Run;
+    except
+      on EGocciaCrawlNeedsFetch do
+        Refused := True;
+    end;
+    Expect<Boolean>(Refused).ToBe(True);
+  finally
+    Crawler.Free;
+  end;
 end;
 
 begin

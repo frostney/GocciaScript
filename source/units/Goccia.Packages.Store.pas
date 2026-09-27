@@ -152,9 +152,6 @@ procedure WriteCacheFile(const ACacheDirectory, AHostRelative, AKey,
 procedure RefuseCacheLinks(const ACacheDirectory, AHostRelative,
   AKey: string);
 
-{ Deletes APath and everything below it; a symbolic link is removed, never
-  followed. }
-procedure RemoveCacheTree(const APath: string);
 
 implementation
 
@@ -265,38 +262,6 @@ begin
     raise EGocciaProviderPackageError.CreateDetailed(Format(
       '%s: %s could not be written to the package cache',
       [AKey, ADisplayPath]), ErrorMessage);
-end;
-
-procedure RemoveCacheTree(const APath: string);
-var
-  EntryPath: string;
-  SearchRecord: TSearchRec;
-begin
-  { A link is removed itself and never followed. }
-  if HostPathIsSymlink(APath) then
-  begin
-    if not DeleteFile(APath) then
-      RemoveDir(APath);
-    Exit;
-  end;
-  if not HostDirectoryExists(APath) then
-  begin
-    if HostFileExists(APath) then
-      DeleteFile(APath);
-    Exit;
-  end;
-  if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile or
-     faSymLink, SearchRecord) = 0 then
-  begin
-    repeat
-      if (SearchRecord.Name = '.') or (SearchRecord.Name = '..') then
-        Continue;
-      EntryPath := IncludeTrailingPathDelimiter(APath) + SearchRecord.Name;
-      RemoveCacheTree(EntryPath);
-    until FindNext(SearchRecord) <> 0;
-    FindClose(SearchRecord);
-  end;
-  RemoveDir(APath);
 end;
 
 { EGocciaProviderPackageError }

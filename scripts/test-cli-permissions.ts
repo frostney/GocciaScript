@@ -2123,10 +2123,10 @@ console.log("Install mode: --install, --frozen, --remove, and its usage rules...
     if (readFileSync(join(project, "goccia.lock.json"), "utf8").includes(KEY)) throw new Error("--remove kept the pin");
     if (existsSync(cache(project))) throw new Error("--remove kept the cache directory");
     const events = readFileSync(join(tmp, "remove.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    if (!events.some((event) => event.kind === "import.provider.install" && event.subject === KEY && event.reason === "removed"))
+    if (!events.some((event) => event.kind === "import.provider.install" && event.subject === KEY && event.reason === "removed; 2 files"))
       throw new Error(`import.provider.install event: ${JSON.stringify(events)}`);
     const missing = run(RUNNER, ["--remove", "raylib"], { cwd: project });
-    expectExit(missing, 1, "--remove of a missing entry");
+    expectExit(missing, 2, "--remove of a missing entry");
 
     // An explicit --import-map is never edited.
     seed(project);
@@ -2155,6 +2155,19 @@ console.log("Install mode: --install, --frozen, --remove, and its usage rules...
       expectExit(result, 2, args.join(" "));
       expectIncludes(result.stderr, message, args.join(" "));
     }
+    // Runs read imports only from goccia.json or --import-map, so a TOML or
+    // JSON5 root config is a usage error, named, and nothing is verified.
+    for (const name of ["goccia.toml", "goccia.json5"]) {
+      const other = join(tmp, name.replace(".", "-"));
+      mkdirSync(other, { recursive: true });
+      writeFileSync(join(other, name), name.endsWith("toml") ? "compat-asi = true\n" : '{"compat-asi": true}\n');
+      const refused = run(RUNNER, ["--install"], { cwd: other });
+      expectExit(refused, 2, `--install with a ${name} root`);
+      expectIncludes(refused.stderr, `${join(other, name)} is the root config, but imports are read only from goccia.json or --import-map`, `--install with a ${name} root`);
+      expectExcludes(refused.combined, "Verified", `--install with a ${name} root`);
+      if (existsSync(join(other, "goccia.json"))) throw new Error(`--install created goccia.json beside ${name}`);
+    }
+
     writeFileSync(join(project, "goccia.json"), '{"install": true}');
     const fromConfig = run(RUNNER, [join(project, "app.js")], { cwd: project });
     expectExit(fromConfig, 2, "install mode from config");

@@ -34,11 +34,16 @@ const
   { Ceilings on what one package's crawl may fetch. }
   MAX_PACKAGE_FILES = 2000;
   MAX_PACKAGE_BYTES = 256 * 1024 * 1024;
+  MAX_CRAWL_REQUESTS = 10000;
 
 type
   EGocciaCrawlError = class(Exception);
 
-  TGocciaReferenceKind = (grkModule, grkData, grkAsset);
+  TGocciaReferenceKind = (crkModule, crkData, crkAsset);
+
+  { The crawl needs a file its known file set does not settle: the caller
+    must fetch it (see TGocciaPackageCrawl.KnownFiles). }
+  EGocciaCrawlNeedsFetch = class(EGocciaCrawlError);
 
   TGocciaLiteralReference = record
     Specifier: string;
@@ -60,18 +65,35 @@ type
 
   TGocciaCrawledFileList = TObjectList<TGocciaCrawledFile>;
 
+  { A file waiting to be fetched: a package path, how it was named, and the
+    file that named it ('' for an entry point). }
+  TGocciaPendingReference = record
+    Path: string;
+    Specifier: string;
+    Kind: TGocciaReferenceKind;
+    FromFile: string;
+  end;
+
+  TGocciaPendingReferenceList = TList<TGocciaPendingReference>;
+
   TGocciaPackageCrawl = class
   private
+    FAbsent: TDictionary<string, Boolean>;
     FFetcher: TGocciaPackageFileFetcher;
+    FFileIndex: TDictionary<string, Integer>;
     FFiles: TGocciaCrawledFileList;
     FKey: string;
-    FPending: TList<TGocciaLiteralReference>;
-    FPendingFrom: TStringList;
+    FKnownFiles: TDictionary<string, Boolean>;
+    FNext: Integer;
+    FPending: TGocciaPendingReferenceList;
+    FQueued: TDictionary<string, Boolean>;
+    FRequests: Integer;
     FTotalBytes: Int64;
-    function IndexOfFile(const APath: string): Integer;
-    function AddFile(const APath: string; const ABytes: TBytes): Boolean;
-    procedure Follow(const AReference: TGocciaLiteralReference;
-      const AFromFile: string);
+    procedure Enqueue(const APath, ASpecifier: string;
+      const AKind: TGocciaReferenceKind; const AFromFile: string);
+    procedure AddFile(const APath: string; const ABytes: TBytes);
+    function Fetch(const APath: string; out ABytes: TBytes): Boolean;
+    procedure Follow(const AReference: TGocciaPendingReference);
     procedure FollowReferences(const APath: string; const ABytes: TBytes);
   public
     constructor Create(const APackageKey: string;
@@ -80,9 +102,16 @@ type
     { An entry point: a module path (probed in the resolver's candidate
       order), a directory ending in `/`, or '' for the repository root. }
     procedure AddModuleEntry(const APath: string);
+    { Settles candidates from a known file set instead of probing: the first
+      candidate in the set is the file, as run-time resolution picks among
+      pinned files, and the others are absent without a request. A reference
+      no known file answers raises EGocciaCrawlNeedsFetch. }
+    procedure SetKnownFiles(const APaths: array of string);
     procedure Run;
     { The files reached, sorted by path in byte order. }
     property Files: TGocciaCrawledFileList read FFiles;
+    { Fetcher calls so far, including those answered as absent. }
+    property Requests: Integer read FRequests;
   end;
 
 { The literal references in module source ASource (AFileName picks the
@@ -103,20 +132,20 @@ uses
   TextEncoding,
   TextSemantics,
 
+  Goccia.Constants.ConstructorNames,
+  Goccia.Constants.PropertyNames,
   Goccia.Error,
   Goccia.FileExtensions,
+  Goccia.Keywords.Contextual,
+  Goccia.Keywords.Reserved,
   Goccia.Packages.Address,
   Goccia.SourcePipeline,
   Goccia.Token;
 
 const
-  IDENTIFIER_URL = 'URL';
-  IDENTIFIER_META = 'meta';
-  IDENTIFIER_RESOLVE = 'resolve';
-  IDENTIFIER_TYPE = 'type';
+  { The legacy import-assertion keyword; not a reserved word anywhere else. }
   IDENTIFIER_ASSERT = 'assert';
-  IDENTIFIER_WITH = 'with';
-  IDENTIFIER_URL_PROPERTY = 'url';
+  PENDING_KEY_SEPARATOR = #0;
 
 function IsRelativeSpecifier(const ASpecifier: string): Boolean;
 begin
@@ -217,9 +246,9 @@ begin
   Result := (ACursor.IsType(AIndex, gttWith) or
     ACursor.IsIdentifier(AIndex, IDENTIFIER_ASSERT)) and
     ACursor.IsType(AIndex + 1, gttLeftBrace) and
-    (ACursor.IsIdentifier(AIndex + 2, IDENTIFIER_TYPE) or
+    (ACursor.IsIdentifier(AIndex + 2, KEYWORD_TYPE) or
      (ACursor.IsType(AIndex + 2, gttString) and
-      (ACursor.Tokens[AIndex + 2].Lexeme = IDENTIFIER_TYPE)));
+      (ACursor.Tokens[AIndex + 2].Lexeme = KEYWORD_TYPE)));
 end;
 
 { The index of the `from` that ends the clause starting at AIndex, at brace
@@ -265,9 +294,9 @@ var
   procedure AddStatic(const ASpecifierIndex: Integer);
   begin
     if HasImportAttributes(Cursor, ASpecifierIndex + 1) then
-      AddReference(Result, Cursor.Tokens[ASpecifierIndex].Lexeme, grkData)
+      AddReference(Result, Cursor.Tokens[ASpecifierIndex].Lexeme, crkData)
     else
-      AddReference(Result, Cursor.Tokens[ASpecifierIndex].Lexeme, grkModule);
+      AddReference(Result, Cursor.Tokens[ASpecifierIndex].Lexeme, crkModule);
   end;
 
 begin
@@ -318,28 +347,28 @@ begin
             if Cursor.IsType(I + 3, gttComma) and
                Cursor.IsType(I + 4, gttLeftBrace) and
                (Cursor.IsType(I + 5, gttWith) or
-                Cursor.IsIdentifier(I + 5, IDENTIFIER_WITH)) and
+                Cursor.IsIdentifier(I + 5, KEYWORD_WITH)) and
                Cursor.IsType(I + 6, gttColon) and
                Cursor.IsType(I + 7, gttLeftBrace) then
-              AddReference(Result, Cursor.Tokens[I + 2].Lexeme, grkData)
+              AddReference(Result, Cursor.Tokens[I + 2].Lexeme, crkData)
             else
-              AddReference(Result, Cursor.Tokens[I + 2].Lexeme, grkModule);
+              AddReference(Result, Cursor.Tokens[I + 2].Lexeme, crkModule);
           end;
         end
         else if Cursor.IsType(I + 1, gttDot) then
         begin
           { import.meta.resolve("./x") }
-          if Cursor.IsIdentifier(I + 2, IDENTIFIER_META) and
+          if Cursor.IsIdentifier(I + 2, KEYWORD_META) and
              Cursor.IsType(I + 3, gttDot) and
-             Cursor.IsIdentifier(I + 4, IDENTIFIER_RESOLVE) and
+             Cursor.IsIdentifier(I + 4, PROP_RESOLVE) and
              Cursor.IsType(I + 5, gttLeftParen) and
              Cursor.IsType(I + 6, gttString) and
              Cursor.IsType(I + 7, gttRightParen) then
-            AddReference(Result, Cursor.Tokens[I + 6].Lexeme, grkAsset);
+            AddReference(Result, Cursor.Tokens[I + 6].Lexeme, crkAsset);
         end
         else if Cursor.IsType(I + 1, gttString) then
           AddStatic(I + 1)
-        else if not Cursor.IsIdentifier(I + 1, IDENTIFIER_TYPE) or
+        else if not Cursor.IsIdentifier(I + 1, KEYWORD_TYPE) or
           Cursor.IsType(I + 2, gttFrom) or Cursor.IsType(I + 2, gttComma) then
         begin
           { `import type … from` loads nothing; `import type from "x"`
@@ -357,17 +386,17 @@ begin
         end;
       gttNew:
         { new URL("./x", import.meta.url) }
-        if Cursor.IsIdentifier(I + 1, IDENTIFIER_URL) and
+        if Cursor.IsIdentifier(I + 1, CONSTRUCTOR_URL) and
            Cursor.IsType(I + 2, gttLeftParen) and
            Cursor.IsType(I + 3, gttString) and Cursor.IsType(I + 4, gttComma) and
            Cursor.IsType(I + 5, gttImport) and Cursor.IsType(I + 6, gttDot) and
-           Cursor.IsIdentifier(I + 7, IDENTIFIER_META) and
+           Cursor.IsIdentifier(I + 7, KEYWORD_META) and
            Cursor.IsType(I + 8, gttDot) and
-           Cursor.IsIdentifier(I + 9, IDENTIFIER_URL_PROPERTY) and
+           Cursor.IsIdentifier(I + 9, PROP_URL) and
            (Cursor.IsType(I + 10, gttRightParen) or
             (Cursor.IsType(I + 10, gttComma) and
              Cursor.IsType(I + 11, gttRightParen))) then
-          AddReference(Result, Cursor.Tokens[I + 3].Lexeme, grkAsset);
+          AddReference(Result, Cursor.Tokens[I + 3].Lexeme, crkAsset);
     end;
     Inc(I);
   end;
@@ -382,36 +411,38 @@ begin
   FKey := APackageKey;
   FFetcher := AFetcher;
   FFiles := TGocciaCrawledFileList.Create(True);
-  FPending := TList<TGocciaLiteralReference>.Create;
-  FPendingFrom := TStringList.Create;
+  FFileIndex := TDictionary<string, Integer>.Create;
+  FPending := TGocciaPendingReferenceList.Create;
+  FQueued := TDictionary<string, Boolean>.Create;
+  FAbsent := TDictionary<string, Boolean>.Create;
 end;
 
 destructor TGocciaPackageCrawl.Destroy;
 begin
-  FPendingFrom.Free;
+  FKnownFiles.Free;
+  FAbsent.Free;
+  FQueued.Free;
   FPending.Free;
+  FFileIndex.Free;
   FFiles.Free;
   inherited;
 end;
 
-function TGocciaPackageCrawl.IndexOfFile(const APath: string): Integer;
+procedure TGocciaPackageCrawl.SetKnownFiles(const APaths: array of string);
 var
   I: Integer;
 begin
-  for I := 0 to FFiles.Count - 1 do
-    if FFiles[I].Path = APath then
-      Exit(I);
-  Result := -1;
+  FreeAndNil(FKnownFiles);
+  FKnownFiles := TDictionary<string, Boolean>.Create;
+  for I := Low(APaths) to High(APaths) do
+    FKnownFiles.AddOrSetValue(APaths[I], True);
 end;
 
-function TGocciaPackageCrawl.AddFile(const APath: string;
-  const ABytes: TBytes): Boolean;
+procedure TGocciaPackageCrawl.AddFile(const APath: string;
+  const ABytes: TBytes);
 var
   Crawled: TGocciaCrawledFile;
 begin
-  Result := IndexOfFile(APath) < 0;
-  if not Result then
-    Exit;
   if FFiles.Count >= MAX_PACKAGE_FILES then
     raise EGocciaCrawlError.CreateFmt('%s reaches more than %d files',
       [FKey, MAX_PACKAGE_FILES]);
@@ -422,26 +453,64 @@ begin
   Crawled := TGocciaCrawledFile.Create;
   Crawled.Path := APath;
   Crawled.Bytes := ABytes;
-  FFiles.Add(Crawled);
+  FFileIndex.Add(APath, FFiles.Add(Crawled));
+end;
+
+{ Each path and kind is queued once: repeating an import in many modules
+  costs nothing more. }
+procedure TGocciaPackageCrawl.Enqueue(const APath, ASpecifier: string;
+  const AKind: TGocciaReferenceKind; const AFromFile: string);
+var
+  Key: string;
+  Reference: TGocciaPendingReference;
+begin
+  Key := IntToStr(Ord(AKind)) + PENDING_KEY_SEPARATOR + APath;
+  if FQueued.ContainsKey(Key) then
+    Exit;
+  FQueued.Add(Key, True);
+  Reference.Path := APath;
+  Reference.Specifier := ASpecifier;
+  Reference.Kind := AKind;
+  Reference.FromFile := AFromFile;
+  FPending.Add(Reference);
 end;
 
 procedure TGocciaPackageCrawl.AddModuleEntry(const APath: string);
-var
-  Reference: TGocciaLiteralReference;
 begin
-  Reference.Specifier := APath;
-  Reference.Kind := grkModule;
-  FPending.Add(Reference);
-  { An entry is a path in the package, not relative to a file. }
-  FPendingFrom.Add('');
+  Enqueue(APath, APath, crkModule, '');
 end;
 
+{ One candidate: a fetch, unless the candidate is already known absent, or
+  the known file set settles it. }
+function TGocciaPackageCrawl.Fetch(const APath: string;
+  out ABytes: TBytes): Boolean;
+begin
+  ABytes := nil;
+  if FAbsent.ContainsKey(APath) then
+    Exit(False);
+  if Assigned(FKnownFiles) and not FKnownFiles.ContainsKey(APath) then
+  begin
+    FAbsent.Add(APath, True);
+    Exit(False);
+  end;
+  Inc(FRequests);
+  if FRequests > MAX_CRAWL_REQUESTS then
+    raise EGocciaCrawlError.CreateFmt('%s needs more than %d requests to ' +
+      'find its files; name them with extensions', [FKey,
+      MAX_CRAWL_REQUESTS]);
+  Result := FFetcher(APath, ABytes);
+  if not Result then
+    FAbsent.Add(APath, True);
+end;
+
+{ Only modules are parsed: a data file or an asset is fetched and pinned,
+  whatever its extension, and names nothing. }
 procedure TGocciaPackageCrawl.FollowReferences(const APath: string;
   const ABytes: TBytes);
 var
   ErrorOffset, I: Integer;
   References: TGocciaLiteralReferences;
-  Source: string;
+  Path, Source: string;
 begin
   if not IsScriptExtension(ExtractFileExt(APath)) then
     Exit;
@@ -455,39 +524,35 @@ begin
     begin
       { Assets name files only when relative; anything else (a remote URL,
         say) is not a package file. Imports must be relative. }
-      if References[I].Kind = grkAsset then
+      if References[I].Kind = crkAsset then
         Continue;
       raise EGocciaCrawlError.CreateFmt(
         '%s/%s imports "%s": a package may import only its own files, by ' +
         'relative specifier (no bare, absolute, URL, or github: specifiers)',
         [FKey, APath, References[I].Specifier]);
     end;
-    FPending.Add(References[I]);
-    FPendingFrom.Add(APath);
+    if not TryJoinPackagePath(APath, References[I].Specifier, Path) then
+      raise EGocciaCrawlError.CreateFmt(
+        '%s/%s names "%s", which leaves the repository',
+        [FKey, APath, References[I].Specifier]);
+    Enqueue(Path, References[I].Specifier, References[I].Kind, APath);
   end;
 end;
 
 procedure TGocciaPackageCrawl.Follow(
-  const AReference: TGocciaLiteralReference; const AFromFile: string);
+  const AReference: TGocciaPendingReference);
 var
   Bytes: TBytes;
   Candidates: TGocciaPackagePathArray;
-  Path: string;
   I: Integer;
 begin
-  if AFromFile = '' then
-    Path := AReference.Specifier
-  else if not TryJoinPackagePath(AFromFile, AReference.Specifier, Path) then
-    raise EGocciaCrawlError.CreateFmt(
-      '%s/%s names "%s", which leaves the repository',
-      [FKey, AFromFile, AReference.Specifier]);
-
-  if AReference.Kind = grkModule then
-    Candidates := PackageModuleCandidates(Path, EngineModuleImportExtensions)
+  if AReference.Kind = crkModule then
+    Candidates := PackageModuleCandidates(AReference.Path,
+      EngineModuleImportExtensions)
   else
   begin
     SetLength(Candidates, 1);
-    Candidates[0] := Path;
+    Candidates[0] := AReference.Path;
   end;
 
   for I := 0 to High(Candidates) do
@@ -496,37 +561,36 @@ begin
       raise EGocciaCrawlError.CreateFmt(
         '%s: "%s" is not a file a package may contain (a goccia.* file, ' +
         'a .goccia directory, or an unsafe name)', [FKey, Candidates[I]]);
-    if IndexOfFile(Candidates[I]) >= 0 then
+    if FFileIndex.ContainsKey(Candidates[I]) then
       Exit;
-    if FFetcher(Candidates[I], Bytes) then
+    if Fetch(Candidates[I], Bytes) then
     begin
       AddFile(Candidates[I], Bytes);
-      FollowReferences(Candidates[I], Bytes);
+      if AReference.Kind = crkModule then
+        FollowReferences(Candidates[I], Bytes);
       Exit;
     end;
   end;
-  if AFromFile = '' then
+  if Assigned(FKnownFiles) then
+    raise EGocciaCrawlNeedsFetch.CreateFmt('%s: "%s" is not a known file',
+      [FKey, AReference.Path]);
+  if AReference.FromFile = '' then
     raise EGocciaCrawlError.CreateFmt('%s has no file for "%s"',
       [FKey, AReference.Specifier])
   else
     raise EGocciaCrawlError.CreateFmt('%s/%s names "%s", which does not ' +
-      'exist', [FKey, AFromFile, AReference.Specifier]);
+      'exist', [FKey, AReference.FromFile, AReference.Specifier]);
 end;
 
 procedure TGocciaPackageCrawl.Run;
 var
-  Reference: TGocciaLiteralReference;
-  From: string;
-  I, J: Integer;
   Swap: TGocciaCrawledFile;
+  I, J: Integer;
 begin
-  while FPending.Count > 0 do
+  while FNext < FPending.Count do
   begin
-    Reference := FPending[0];
-    From := FPendingFrom[0];
-    FPending.Delete(0);
-    FPendingFrom.Delete(0);
-    Follow(Reference, From);
+    Inc(FNext);
+    Follow(FPending[FNext - 1]);
   end;
   { Byte order, so the lockfile is the same whatever order files were
     reached in. }
@@ -540,6 +604,9 @@ begin
       Dec(J);
     end;
   end;
+  FFileIndex.Clear;
+  for I := 0 to FFiles.Count - 1 do
+    FFileIndex.Add(FFiles[I].Path, I);
 end;
 
 end.

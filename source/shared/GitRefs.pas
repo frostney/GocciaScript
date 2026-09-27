@@ -140,7 +140,7 @@ end;
 
 constructor TGitRefAdvertisement.CreateFromBytes(const ABody: TBytes);
 var
-  Position, Length4, Digit, I, SpaceIndex, NulIndex, Index: Integer;
+  Position, PacketLength, Digit, I, SpaceIndex, NulIndex, Index: Integer;
   Line, ObjectId, Name, BaseName: string;
   Peeled: array of TGitRef;
   Ref: TGitRef;
@@ -153,25 +153,25 @@ begin
   begin
     if Position + PKT_LENGTH_DIGITS > Length(ABody) then
       raise EGitRefsError.Create('truncated pkt-line length');
-    Length4 := 0;
+    PacketLength := 0;
     for I := 0 to PKT_LENGTH_DIGITS - 1 do
     begin
       Digit := HexDigit(ABody[Position + I]);
       if Digit < 0 then
         raise EGitRefsError.Create('malformed pkt-line length');
-      Length4 := Length4 * 16 + Digit;
+      PacketLength := PacketLength * 16 + Digit;
     end;
-    if Length4 = PKT_FLUSH then
+    if PacketLength = PKT_FLUSH then
     begin
       Inc(Position, PKT_LENGTH_DIGITS);
       Continue;
     end;
-    if (Length4 < PKT_LENGTH_DIGITS) or
-       (Position + Length4 > Length(ABody)) then
+    if (PacketLength < PKT_LENGTH_DIGITS) or
+       (Position + PacketLength > Length(ABody)) then
       raise EGitRefsError.Create('malformed pkt-line length');
     Line := BytesToText(ABody, Position + PKT_LENGTH_DIGITS,
-      Length4 - PKT_LENGTH_DIGITS);
-    Inc(Position, Length4);
+      PacketLength - PKT_LENGTH_DIGITS);
+    Inc(Position, PacketLength);
 
     if (Line <> '') and (Line[Length(Line)] = #10) then
       SetLength(Line, Length(Line) - 1);

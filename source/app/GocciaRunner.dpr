@@ -2240,11 +2240,18 @@ begin
   begin
     ImportMapPath := TGocciaModuleResolver.DiscoverProjectConfig(
       GetCurrentDir);
+    { Runs read imports only from goccia.json or --import-map, so a root
+      config in another format holds no import map install mode could
+      maintain. }
+    if (RootConfigPath <> '') and ((ImportMapPath = '') or
+       not SameFileName(ExpandFileName(RootConfigPath), ImportMapPath)) then
+      raise TCLIUsageError.CreateFmt('%s is the root config, but imports ' +
+        'are read only from goccia.json or --import-map; put them in a ' +
+        'goccia.json, or pass --import-map', [RootConfigPath]);
     if ImportMapPath = '' then
       ImportMapPath := IncludeTrailingPathDelimiter(GetCurrentDir) +
         PROJECT_IMPORT_MAP_NAME;
-    Editable := (RootConfigPath = '') or
-      SameFileName(ExpandFileName(RootConfigPath), ImportMapPath);
+    Editable := True;
   end;
 
   Request := Default(TGocciaInstallRequest);

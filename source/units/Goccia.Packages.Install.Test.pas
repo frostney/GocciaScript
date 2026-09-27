@@ -5,11 +5,16 @@ program Goccia.Packages.Install.Test;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}
+  BaseUnix,
+  {$ENDIF}
   Classes,
   Generics.Collections,
   SysUtils,
 
   FileUtils,
+  HostFileLock,
+  SHA256,
   TestingPascalLibrary,
   TextEncoding,
 
@@ -74,12 +79,32 @@ type
     procedure TestFailedCrawlLeavesTheImportMapAlone;
     procedure TestPrefixEntriesPinWhatTheProjectImports;
     procedure TestExplicitImportMapIsNotEdited;
+    procedure TestInstallRefusesBytesThatDifferFromThePin;
+    procedure TestAddOfALockedForkCommitIsCaught;
+    procedure TestInstallOfALockedForkCommitIsCaughtOnFetch;
+    procedure TestUnusedPrefixEntryIsSatisfied;
+    procedure TestFrozenListsOnlyRealChanges;
+    procedure TestReplacingAnAddKeyRepinsAndPrunes;
+    procedure TestFileSetChangesAreCountedAndAudited;
+    procedure TestSymlinkedImportMapIsNotEdited;
+    procedure TestImportMapKeepsItsMode;
+    procedure TestRemoveEditsTheImportMapFirst;
+    procedure TestCaseCollisionsWriteNothing;
+    procedure TestHeldInstallLockFails;
+    procedure TestUsageErrorsExitTwo;
+    procedure TestPrintedLinesAreJSON;
+    procedure TestCommitPinsAndBranchMovement;
+    procedure TestTypedSpecGrantIsAudited;
+    procedure TestPruneDoesNotFollowLinks;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
   public
     procedure SetupTests; override;
   end;
+
+var
+  ProjectCounter: Integer = 0;
 
 function Pkt(const ALine: string): string;
 begin
@@ -173,14 +198,48 @@ begin
     TestPrefixEntriesPinWhatTheProjectImports);
   Test('An explicit import map is not edited',
     TestExplicitImportMapIsNotEdited);
+  Test('--install refuses fetched bytes that differ from the pin',
+    TestInstallRefusesBytesThatDifferFromThePin);
+  Test('--add of a key the lockfile pins to a fork commit is caught',
+    TestAddOfALockedForkCommitIsCaught);
+  Test('--install of a locked fork commit is caught when it must fetch',
+    TestInstallOfALockedForkCommitIsCaughtOnFetch);
+  Test('An unused prefix entry needs nothing and satisfies --frozen',
+    TestUnusedPrefixEntryIsSatisfied);
+  Test('--frozen lists only the packages that change',
+    TestFrozenListsOnlyRealChanges);
+  Test('Re-using an --add key re-pins the package and prunes the old one',
+    TestReplacingAnAddKeyRepinsAndPrunes);
+  Test('File-set changes are counted and audited',
+    TestFileSetChangesAreCountedAndAudited);
+  {$IFDEF UNIX}
+  Test('An import map that is a symbolic link is not edited',
+    TestSymlinkedImportMapIsNotEdited);
+  Test('Editing the import map keeps its mode', TestImportMapKeepsItsMode);
+  Test('Pruning does not follow a link planted in the cache',
+    TestPruneDoesNotFollowLinks);
+  {$ENDIF}
+  Test('--remove edits the import map before the lockfile',
+    TestRemoveEditsTheImportMapFirst);
+  Test('Case-colliding files are refused before the cache is written',
+    TestCaseCollisionsWriteNothing);
+  Test('An install lock another install holds fails the run',
+    TestHeldInstallLockFails);
+  Test('Malformed input and unknown keys exit with status 2',
+    TestUsageErrorsExitTwo);
+  Test('Printed import-map lines are JSON', TestPrintedLinesAreJSON);
+  Test('Commit pins are not re-resolved, and --check-refs only warns',
+    TestCommitPinsAndBranchMovement);
+  Test('A typed spec''s grant is audited', TestTypedSpecGrantIsAudited);
 end;
 
 procedure TInstallTests.BeforeEach;
 begin
   inherited BeforeEach;
-  Randomize;
+  Inc(ProjectCounter);
   FProject := IncludeTrailingPathDelimiter(GetTempDir(False)) +
-    'goccia-install-' + IntToStr(Random(MaxInt));
+    'goccia-install-' + IntToStr(GetProcessID) + '-' +
+    IntToStr(ProjectCounter);
   ForceDirectories(FProject);
   FTransport := TFixtureTransport.Create;
   FLog := TStringList.Create;
@@ -336,7 +395,7 @@ begin
   Expect<Boolean>(Pos('github.com ' + REFS_URL, FTransport.Requests.Text) > 0)
     .ToBe(True);
   Expect<Boolean>(FAudit.IndexOf('allow ' + KEY_V1 + ' added: tag -> ' +
-    TAG_COMMIT) >= 0).ToBe(True);
+    TAG_COMMIT + '; 3 files') >= 0).ToBe(True);
 end;
 
 procedure TInstallTests.TestInstallReusesTheCacheOffline;
@@ -511,9 +570,10 @@ begin
   Expect<Boolean>(Pos(KEY_V1, ReadFile('goccia.lock.json')) = 0).ToBe(True);
   Expect<Boolean>(DirectoryExists(Path(CacheFile(TAG_COMMIT, ''))))
     .ToBe(False);
-  Expect<Boolean>(FAudit.IndexOf('allow ' + KEY_V1 + ' removed') >= 0)
-    .ToBe(True);
-  Expect<Boolean>(Pos('1: ', Run(Request, TGocciaCapabilities.None)) = 1)
+  Expect<Boolean>(FAudit.IndexOf('allow ' + KEY_V1 + ' removed; 3 files') >=
+    0).ToBe(True);
+  { An entry the import map does not have is a usage error. }
+  Expect<Boolean>(Pos('2: ', Run(Request, TGocciaCapabilities.None)) = 1)
     .ToBe(True);
 end;
 
@@ -561,6 +621,360 @@ begin
   Expect<string>(ReadFile('goccia.lock.json')).ToBe('<missing>');
   Expect<Integer>(FTransport.Requests.Count).ToBe(0);
   Expect<Boolean>(Pos('Nothing was written', FLog.Text) > 0).ToBe(True);
+end;
+
+function HashText(const AText: string): string;
+var
+  Bytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  TryEncodeUTF8(AText, Bytes, ErrorOffset);
+  Result := SHA256Hex(Bytes);
+end;
+
+{ A lockfile pinning KEY_V1 at ACommit with bindings/raylib.ts only. }
+function LockText(const AKey, ACommit, AText: string): string;
+begin
+  Result := '{"version": 1, "packages": {"' + AKey + '": {"ref": "tag", ' +
+    '"commit": "' + ACommit + '", "artifacts": {"index.js": {"sha256": "' +
+    HashText(AText) + '"}}}}}';
+end;
+
+procedure TInstallTests.TestInstallRefusesBytesThatDifferFromThePin;
+var
+  Lock, Outcome: string;
+begin
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    TAG_COMMIT, 'index.js'), 'export const v = "served";');
+  WriteFile('goccia.json', '{"imports": {"raylib": "' + KEY_V1 +
+    '/index.js"}}');
+  Lock := LockText(KEY_V1, TAG_COMMIT, 'export const v = "reviewed";');
+  WriteFile('goccia.lock.json', Lock);
+  Outcome := Run(InstallRequest,
+    TGocciaCapabilities.None.Allow(gcImport, 'github'));
+  Expect<string>(Outcome).ToBe('1: ' + KEY_V1 + ': index.js does not match ' +
+    'its pin in goccia.lock.json; the lockfile and the cache are unchanged');
+  Expect<string>(ReadFile('goccia.lock.json')).ToBe(Lock);
+  Expect<Boolean>(FileExists(Path(CacheFile(TAG_COMMIT, 'index.js'))))
+    .ToBe(False);
+end;
+
+procedure TInstallTests.TestAddOfALockedForkCommitIsCaught;
+var
+  Outcome: string;
+begin
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    FORK_COMMIT, 'index.js'), 'export const v = "fork";');
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    TAG_COMMIT, 'index.js'), 'export const v = "genuine";');
+  WriteFile('goccia.json', '{}');
+  WriteFile('goccia.lock.json', LockText(KEY_V1, FORK_COMMIT,
+    'export const v = "fork";'));
+  { The cache holds the fork's bytes too, so nothing needs fetching. }
+  WriteFile(CacheFile(FORK_COMMIT, 'index.js'), 'export const v = "fork";');
+  Outcome := Run(AddRequest('raylib', KEY_V1 + '/index.js'),
+    TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('tag v1.0.0 of frostney/raylib moved: locked ' +
+    Copy(FORK_COMMIT, 1, 12), Outcome) > 0).ToBe(True);
+  Expect<Boolean>(Pos('github.com ' + REFS_URL, FTransport.Requests.Text) > 0)
+    .ToBe(True);
+  Expect<string>(ReadFile('goccia.json')).ToBe('{}');
+end;
+
+procedure TInstallTests.TestInstallOfALockedForkCommitIsCaughtOnFetch;
+var
+  Outcome: string;
+begin
+  { A commit pin of a fork's commit: fine while cached, refused as soon as
+    its files must be fetched. }
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    FORK_COMMIT, 'index.js'), 'export const v = "fork";');
+  WriteFile('goccia.json', '{"imports": {"f": "github:frostney/raylib@' +
+    FORK_COMMIT + '/index.js"}}');
+  WriteFile('goccia.lock.json', '{"version": 1, "packages": {' +
+    '"github:frostney/raylib@' + FORK_COMMIT + '": {"ref": "commit", ' +
+    '"commit": "' + FORK_COMMIT + '", "artifacts": {"index.js": {' +
+    '"sha256": "' + HashText('export const v = "fork";') + '"}}}}}');
+  Outcome := Run(InstallRequest,
+    TGocciaCapabilities.None.Allow(gcImport, 'github'));
+  Expect<Boolean>(Pos('is not the tip of any tag or branch', Outcome) > 0)
+    .ToBe(True);
+  Expect<Boolean>(FileExists(Path(CacheFile(FORK_COMMIT, 'index.js'))))
+    .ToBe(False);
+end;
+
+procedure TInstallTests.TestUnusedPrefixEntryIsSatisfied;
+var
+  Request: TGocciaInstallRequest;
+begin
+  WriteFile('goccia.json', '{"imports": {"ray/": "' + KEY_V1 +
+    '/bindings/"}}');
+  FTransport.FailOnFetch := True;
+  Expect<string>(Run(InstallRequest, TGocciaCapabilities.None)).ToBe('');
+  Expect<Integer>(FTransport.Requests.Count).ToBe(0);
+  Request := InstallRequest;
+  Request.Frozen := True;
+  Expect<string>(Run(Request, TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(Pos(KEY_V1, ReadFile('goccia.lock.json')) = 0).ToBe(True);
+end;
+
+procedure TInstallTests.TestFrozenListsOnlyRealChanges;
+var
+  Outcome: string;
+  Request: TGocciaInstallRequest;
+begin
+  Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None);
+  WriteFile('goccia.json', '{"imports": {"raylib": "' + KEY_V1 +
+    '/bindings/raylib.ts", "other": "github:frostney/other@v2/x.ts"}}');
+  Request := InstallRequest;
+  Request.Frozen := True;
+  Outcome := Run(Request, TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('+ github:frostney/other@v2', Outcome) > 0).ToBe(True);
+  Expect<Boolean>(Pos('~ ' + KEY_V1, Outcome) = 0).ToBe(True);
+end;
+
+procedure TInstallTests.TestReplacingAnAddKeyRepinsAndPrunes;
+begin
+  Run(AddRequest('a', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None);
+  Run(AddRequest('b', KEY_V1 + '/bindings/extra.ts'), TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('bindings/extra.ts', ReadFile('goccia.lock.json')) > 0)
+    .ToBe(True);
+  { b now names a commit pin; v1.0.0 keeps only what a still reaches. }
+  Expect<string>(Run(AddRequest('b', 'github:frostney/raylib@' + MAIN_COMMIT +
+    '/bindings/extra.ts'), TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(FLog.IndexOf('Replace "b": ' + KEY_V1 +
+    '/bindings/extra.ts -> github:frostney/raylib@' + MAIN_COMMIT +
+    '/bindings/extra.ts') >= 0).ToBe(True);
+  Expect<Boolean>(Pos('"' + KEY_V1 + '"', ReadFile('goccia.lock.json')) > 0)
+    .ToBe(True);
+  Expect<Boolean>(FileExists(Path(CacheFile(TAG_COMMIT, 'bindings/extra.ts'))))
+    .ToBe(True);
+  { a replaced too: the tag package is no longer named, and is pruned. }
+  Expect<string>(Run(AddRequest('a', 'github:frostney/raylib@' + MAIN_COMMIT +
+    '/bindings/raylib.ts'), TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(Pos('"' + KEY_V1 + '"', ReadFile('goccia.lock.json')) = 0)
+    .ToBe(True);
+  Expect<Boolean>(DirectoryExists(Path(CacheFile(TAG_COMMIT, ''))))
+    .ToBe(False);
+end;
+
+procedure TInstallTests.TestFileSetChangesAreCountedAndAudited;
+begin
+  Run(AddRequest('a', KEY_V1 + '/bindings/extra.ts'), TGocciaCapabilities.None);
+  FAudit.Clear;
+  FLog.Clear;
+  { A second entry of the same package adds files to its pin. }
+  Expect<string>(Run(AddRequest('b', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(FLog.IndexOf('Wrote   goccia.lock.json (0 packages added, ' +
+    '0 removed, 1 updated; 3 files added, 0 removed, 0 changed)') >= 0)
+    .ToBe(True);
+  Expect<Boolean>(FAudit.IndexOf('allow ' + KEY_V1 + ' updated: ' +
+    TAG_COMMIT + ' -> ' + TAG_COMMIT + '; 3 files added, 0 removed, ' +
+    '0 changed') >= 0).ToBe(True);
+end;
+
+{$IFDEF UNIX}
+procedure TInstallTests.TestSymlinkedImportMapIsNotEdited;
+begin
+  WriteFile('real.json', '{"imports": {}}');
+  fpSymlink(PAnsiChar(AnsiString(Path('real.json'))),
+    PAnsiChar(AnsiString(Path('goccia.json'))));
+  Expect<string>(Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(HostPathIsSymlink(Path('goccia.json'))).ToBe(True);
+  Expect<string>(ReadFile('real.json')).ToBe('{"imports": {}}');
+  Expect<Boolean>(Pos('Nothing was written', FLog.Text) > 0).ToBe(True);
+end;
+
+procedure TInstallTests.TestImportMapKeepsItsMode;
+var
+  Mode: Cardinal;
+begin
+  WriteFile('goccia.json', '{"imports": {}}');
+  fpChmod(PAnsiChar(AnsiString(Path('goccia.json'))), &600);
+  Expect<string>(Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(TryHostFileMode(Path('goccia.json'), Mode)).ToBe(True);
+  Expect<Integer>(Mode).ToBe(&600);
+end;
+
+procedure TInstallTests.TestPruneDoesNotFollowLinks;
+var
+  Outside: string;
+  Request: TGocciaInstallRequest;
+begin
+  Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None);
+  Outside := FProject + '-outside';
+  ForceDirectories(Outside);
+  WriteUTF8FileText(Outside + PathDelim + 'keep.txt', 'keep');
+  fpSymlink(PAnsiChar(AnsiString(Outside)),
+    PAnsiChar(AnsiString(Path(CacheFile(TAG_COMMIT, 'bindings/planted')))));
+  Request := Default(TGocciaInstallRequest);
+  SetLength(Request.Removes, 1);
+  Request.Removes[0] := 'raylib';
+  Expect<string>(Run(Request, TGocciaCapabilities.None)).ToBe('');
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'keep.txt')).ToBe(True);
+  Expect<Boolean>(DirectoryExists(Path(CacheFile(TAG_COMMIT, ''))))
+    .ToBe(False);
+  DeleteFile(Outside + PathDelim + 'keep.txt');
+  RemoveDir(Outside);
+end;
+{$ENDIF}
+
+procedure TInstallTests.TestRemoveEditsTheImportMapFirst;
+var
+  Request: TGocciaInstallRequest;
+  MapLine, LockLine: Integer;
+begin
+  Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('Wrote', FLog[FLog.Count - 2]) = 1).ToBe(True);
+  FLog.Clear;
+  Request := Default(TGocciaInstallRequest);
+  SetLength(Request.Removes, 1);
+  Request.Removes[0] := 'raylib';
+  Run(Request, TGocciaCapabilities.None);
+  MapLine := -1;
+  LockLine := -1;
+  for MapLine := 0 to FLog.Count - 1 do
+    if Pos('Remove  "raylib"', FLog[MapLine]) = 1 then
+      Break;
+  for LockLine := 0 to FLog.Count - 1 do
+    if Pos('Wrote', FLog[LockLine]) = 1 then
+      Break;
+  Expect<Boolean>(MapLine < LockLine).ToBe(True);
+end;
+
+procedure TInstallTests.TestCaseCollisionsWriteNothing;
+var
+  Outcome: string;
+begin
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    TAG_COMMIT, 'bindings/cc.js'), 'import "./A.js"; import "./a.js";');
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    TAG_COMMIT, 'bindings/A.js'), 'export const A = 1;');
+  FTransport.Responses.AddOrSetValue(PackageArtifactURL('frostney', 'raylib',
+    TAG_COMMIT, 'bindings/a.js'), 'export const a = 2;');
+  Outcome := Run(AddRequest('cc', KEY_V1 + '/bindings/cc.js'),
+    TGocciaCapabilities.None);
+  Expect<Boolean>(Pos('differ only in case', Outcome) > 0).ToBe(True);
+  Expect<Boolean>(DirectoryExists(Path('.goccia'))).ToBe(False);
+  Expect<string>(ReadFile('goccia.lock.json')).ToBe('<missing>');
+end;
+
+procedure TInstallTests.TestHeldInstallLockFails;
+var
+  Error: string;
+  Held: THostFileLock;
+  Installer: TGocciaPackageInstaller;
+  Outcome: string;
+begin
+  WriteFile('goccia.json', '{}');
+  Expect<Boolean>(TryAcquireHostFileLock(Path('goccia.lock.json.lock'), &644,
+    Held, Error) = hflAcquired).ToBe(True);
+  try
+    Installer := TGocciaPackageInstaller.Create(Path('goccia.json'), True,
+      TGocciaCapabilities.None, FTransport);
+    try
+      Installer.LockTimeoutMilliseconds := 100;
+      Outcome := '';
+      try
+        Installer.Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'));
+      except
+        on E: EGocciaInstallError do
+          Outcome := IntToStr(E.ExitCode) + ': ' + E.Message;
+      end;
+    finally
+      Installer.Free;
+    end;
+  finally
+    ReleaseHostFileLock(Held);
+  end;
+  Expect<Boolean>(Pos('1: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('is locked by another GocciaScript install', Outcome) >
+    0).ToBe(True);
+  Expect<Integer>(FTransport.Requests.Count).ToBe(0);
+end;
+
+procedure TInstallTests.TestUsageErrorsExitTwo;
+var
+  Request: TGocciaInstallRequest;
+begin
+  WriteFile('goccia.json', '{"imports": ');
+  Expect<Boolean>(Pos('2: ', Run(InstallRequest, TGocciaCapabilities.None)) =
+    1).ToBe(True);
+  WriteFile('goccia.json', '{"imports": {"": "' + KEY_V1 + '/x.ts"}}');
+  Expect<Boolean>(Pos('2: ', Run(InstallRequest, TGocciaCapabilities.None)) =
+    1).ToBe(True);
+  WriteFile('goccia.json', '{"imports": {"x": "github:frostney/raylib"}}');
+  Expect<Boolean>(Pos('2: ', Run(InstallRequest, TGocciaCapabilities.None)) =
+    1).ToBe(True);
+  WriteFile('goccia.json', '{"imports": {}}');
+  Request := Default(TGocciaInstallRequest);
+  SetLength(Request.Removes, 1);
+  Request.Removes[0] := 'nosuch';
+  Expect<Boolean>(Pos('2: ', Run(Request, TGocciaCapabilities.None)) = 1)
+    .ToBe(True);
+  Request := Default(TGocciaInstallRequest);
+  Request.Update := True;
+  SetLength(Request.UpdateKeys, 1);
+  Request.UpdateKeys[0] := 'nosuch';
+  Expect<Boolean>(Pos('2: ', Run(Request, TGocciaCapabilities.None)) = 1)
+    .ToBe(True);
+end;
+
+procedure TInstallTests.TestPrintedLinesAreJSON;
+begin
+  WriteFile('goccia.json', '{}');
+  Run(AddRequest('we"ird\key', KEY_V1 + '/bindings/raylib.ts'),
+    TGocciaCapabilities.None, False);
+  Expect<Boolean>(Pos('"we\"ird\\key": "' + KEY_V1 + '/bindings/raylib.ts"',
+    FLog.Text) > 0).ToBe(True);
+end;
+
+procedure TInstallTests.TestCommitPinsAndBranchMovement;
+var
+  Request: TGocciaInstallRequest;
+begin
+  Expect<string>(Run(AddRequest('m', 'github:frostney/raylib@' + MAIN_COMMIT +
+    '/bindings/raylib.ts'), TGocciaCapabilities.None)).ToBe('');
+  { The branch advances. }
+  FTransport.Responses.AddOrSetValue(REFS_URL,
+    Pkt(MOVED_COMMIT + ' refs/heads/main'#10) +
+    Pkt(TAG_COMMIT + ' refs/tags/v1.0.0'#10));
+  Request := Default(TGocciaInstallRequest);
+  Request.Update := True;
+  Expect<string>(Run(Request, TGocciaCapabilities.None.Allow(gcImport,
+    'github'))).ToBe('');
+  FLog.Clear;
+  Request := InstallRequest;
+  Request.CheckRefs := True;
+  Expect<string>(Run(Request, TGocciaCapabilities.None.Allow(gcImport,
+    'github'))).ToBe('');
+  Expect<Boolean>(Pos('Warning: github:frostney/raylib@' + MAIN_COMMIT +
+    ': commit ' + Copy(MAIN_COMMIT, 1, 12) + ' is no longer the tip',
+    FLog.Text) > 0).ToBe(True);
+end;
+
+procedure TInstallTests.TestTypedSpecGrantIsAudited;
+var
+  Installer: TGocciaPackageInstaller;
+begin
+  Installer := TGocciaPackageInstaller.Create(Path('goccia.json'), True,
+    TGocciaCapabilities.None, FTransport);
+  try
+    Installer.OnLog := RecordLog;
+    Installer.OnAudit := RecordAudit;
+    Installer.Run(AddRequest('raylib', KEY_V1 + '/bindings/raylib.ts'));
+  finally
+    Installer.Free;
+  end;
+  Expect<Boolean>(FAudit.IndexOf('allow ' + KEY_V1 + ' the --add spec ' +
+    'grants github:frostney/raylib for this invocation') >= 0).ToBe(True);
 end;
 
 begin
