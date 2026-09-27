@@ -133,9 +133,11 @@ function ReadSharedHostFileBytes(const APath: string): TBytes;
   On POSIX and Windows the temporary is flushed to disk and then replaces
   APath in one step — rename(2) on POSIX, MoveFileExW with
   MOVEFILE_REPLACE_EXISTING on Windows — without the original being deleted
-  beforehand. On Windows a replace refused with a sharing violation or access
-  denied (a reader without delete sharing, an antivirus scan, an indexer) is
-  retried in short steps for up to two seconds. The Lakon/WASI lane writes its in-memory filesystem, which has
+  beforehand. On Windows the rename uses POSIX semantics where the system
+  has them (Windows 10 1607 and later, NTFS), so it succeeds while readers
+  that share delete have the old file open; a replace refused with a sharing
+  violation or access denied (a reader without delete sharing, an antivirus
+  scan, an indexer) is retried in short steps for up to two seconds. The Lakon/WASI lane writes its in-memory filesystem, which has
   nothing to flush, and replaces with a rename.
 
   Returns False with AError describing the failure; the temporary is removed
@@ -166,6 +168,87 @@ function IsTransientSharingError(const AError: DWORD): Boolean;
 begin
   Result := (AError = ERROR_SHARING_VIOLATION) or
     (AError = ERROR_ACCESS_DENIED);
+end;
+
+const
+  { FILE_INFO_BY_HANDLE_CLASS FileRenameInfoEx and its flags (winbase.h,
+    Windows 10 1607 and later), missing from FPC 3.2.2's Windows unit. }
+  FILE_RENAME_INFO_EX_CLASS = 22;
+  FILE_RENAME_FLAG_REPLACE_IF_EXISTS = $00000001;
+  FILE_RENAME_FLAG_POSIX_SEMANTICS = $00000002;
+  DELETE_ACCESS = $00010000;
+
+type
+  {$PUSH}{$PACKRECORDS C}
+  { FILE_RENAME_INFO with its Flags member (winbase.h). }
+  TFileRenameInfoEx = record
+    Flags: DWORD;
+    RootDirectory: THandle;
+    FileNameLength: DWORD;
+    FileName: array[0..0] of WideChar;
+  end;
+  {$POP}
+  PFileRenameInfoEx = ^TFileRenameInfoEx;
+
+function SetFileInformationByHandle(AFile: THandle; AInformationClass: DWORD;
+  AInformation: Pointer; ABufferSize: DWORD): BOOL;
+  stdcall; external 'kernel32.dll' name 'SetFileInformationByHandle';
+
+{ Renames ASource over ATarget with POSIX semantics: the name is replaced
+  even while other handles have the old file open, as long as they share
+  delete, which is how every reader of a replaced file opens it. Plain
+  MoveFileExW refuses that with access denied until the last handle closes.
+  The path is given in its verbatim \\?\ form, as the call requires a
+  full path. Returns False with GetLastError set; ERROR_INVALID_PARAMETER,
+  ERROR_NOT_SUPPORTED, or ERROR_INVALID_FUNCTION means the system or file
+  system cannot do it (before Windows 10 1607, FAT). }
+function PosixRenameReplacing(const ASource, ATarget: string): Boolean;
+var
+  Handle: THandle;
+  Target: UnicodeString;
+  Info: PFileRenameInfoEx;
+  Size: SizeInt;
+  LastError: DWORD;
+begin
+  Target := UnicodeString(StringReplace(ExpandFileName(ATarget), '/', '\',
+    [rfReplaceAll]));
+  if Copy(Target, 1, 4) <> '\\?\' then
+  begin
+    if Copy(Target, 1, 2) = '\\' then
+      Target := '\\?\UNC\' + Copy(Target, 3, MaxInt)
+    else
+      Target := '\\?\' + Target;
+  end;
+  Handle := CreateFileW(PWideChar(UnicodeString(ASource)), DELETE_ACCESS,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit(False);
+  Size := SizeOf(TFileRenameInfoEx) + Length(Target) * SizeOf(WideChar);
+  GetMem(Info, Size);
+  try
+    FillChar(Info^, Size, 0);
+    Info^.Flags := FILE_RENAME_FLAG_REPLACE_IF_EXISTS or
+      FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    Info^.RootDirectory := 0;
+    Info^.FileNameLength := Length(Target) * SizeOf(WideChar);
+    Move(PWideChar(Target)^, Info^.FileName[0],
+      Length(Target) * SizeOf(WideChar));
+    Result := SetFileInformationByHandle(Handle, FILE_RENAME_INFO_EX_CLASS,
+      Info, DWORD(Size));
+    LastError := GetLastError;
+  finally
+    FreeMem(Info);
+    CloseHandle(Handle);
+  end;
+  if not Result then
+    SetLastError(LastError);
+end;
+
+function IsRenameUnsupported(const AError: DWORD): Boolean;
+begin
+  Result := (AError = ERROR_INVALID_PARAMETER) or
+    (AError = ERROR_NOT_SUPPORTED) or (AError = ERROR_INVALID_FUNCTION);
 end;
 {$ENDIF}
 
@@ -546,6 +629,7 @@ var
   Offset: SizeInt;
   Written, LastError: DWORD;
   Attempt: Integer;
+  PosixRename: Boolean;
 begin
   Result := False;
   AError := '';
@@ -586,15 +670,36 @@ begin
 
   if AError = '' then
   begin
+    { A POSIX-semantics rename replaces the name even while readers have
+      the old file open (they share delete); where the system cannot do
+      that, MoveFileExW. Either is retried briefly on a transient hold. }
+    PosixRename := True;
     Attempt := 0;
     repeat
-      if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
-           MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
+      if PosixRename then
       begin
-        Result := True;
-        Break;
+        if PosixRenameReplacing(ATemporaryPath, APath) then
+        begin
+          Result := True;
+          Break;
+        end;
+        LastError := GetLastError;
+        if IsRenameUnsupported(LastError) then
+        begin
+          PosixRename := False;
+          Continue;
+        end;
+      end
+      else
+      begin
+        if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
+             MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
+        begin
+          Result := True;
+          Break;
+        end;
+        LastError := GetLastError;
       end;
-      LastError := GetLastError;
       if not IsTransientSharingError(LastError) or
          (Attempt >= SHARING_RETRY_ATTEMPTS) then
       begin
