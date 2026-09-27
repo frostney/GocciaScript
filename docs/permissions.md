@@ -775,10 +775,14 @@ the host paths they were copied from, including new files created inside a
   replaces it in one rename, so a failed write leaves the original intact.
 
 Each input's directory is pinned: a command-line input when it is copied (its
-canonical path and which directory it is — device and inode on POSIX, volume
-serial number and file index on Windows), and a config-named one
+canonical path and which directory it is — device and inode on POSIX, the
+64-bit volume serial number and 128-bit file ID from
+`GetFileInformationByHandleEx(FileIdInfo)` on Windows), and a config-named one
 when the config is checked, as the config's directory plus the route from it,
-and again when it is copied, as the directory that route led to. Before
+and again when it is copied, as the directory that route led to. A Windows
+directory that call cannot identify gets nothing written back — each of its
+files is refused with that reason and the run exits 1 — rather than falling
+back to the 64-bit file index, which ReFS does not keep unique. Before
 anything is written, every read-write input must still be the directory that
 was copied; one that was moved, swapped for a symbolic link (an ancestor on a
 config input's route included), or replaced by another directory means nothing

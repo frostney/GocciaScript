@@ -44,6 +44,10 @@ type
     procedure TestCommandLineOutputWritesAsNamed;
     procedure TestCommandLineOutputNeverWaitsOnAFifo;
     procedure TestPinnedInputReplacedByADirectoryWritesNothing;
+    procedure TestDirectoryIdentityTellsDirectoriesApart;
+    procedure TestUnavailableIdentityMatchesNothing;
+    procedure TestOutputFileRefusesUnidentifiedDirectory;
+    procedure TestUnidentifiedInputGetsNothingWritten;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -91,6 +95,14 @@ begin
     TestCommandLineOutputNeverWaitsOnAFifo);
   Test('A config input replaced by another directory gets nothing written',
     TestPinnedInputReplacedByADirectoryWritesNothing);
+  Test('A directory identity tells two directories apart',
+    TestDirectoryIdentityTellsDirectoriesApart);
+  Test('An unavailable directory identity matches nothing',
+    TestUnavailableIdentityMatchesNothing);
+  Test('An output file refuses a directory that could not be identified',
+    TestOutputFileRefusesUnidentifiedDirectory);
+  Test('An input that could not be identified gets nothing written back',
+    TestUnidentifiedInputGetsNothingWritten);
 end;
 
 procedure DeleteDirectoryTree(const APath: string);
@@ -747,6 +759,104 @@ begin
     Expect<string>(ReadHostText('project/out.real/f.txt')).ToBe('orig');
     Expect<Boolean>(Report.IndexOf('write-back: ' + HostPath('project/out') +
       ' was replaced during the run; nothing written') >= 0).ToBe(True);
+  finally
+    Report.Free;
+    Baseline.Free;
+  end;
+end;
+
+
+procedure TSandboxHostInputsTests.TestDirectoryIdentityTellsDirectoriesApart;
+var
+  First, Again, Other: THostDirectoryIdentity;
+begin
+  ForceDirectories(HostPath('one'));
+  ForceDirectories(HostPath('two'));
+  Expect<Boolean>(TryHostDirectoryIdentity(HostPath('one'), First)).ToBe(True);
+  Expect<Boolean>(TryHostDirectoryIdentity(HostPath('one'), Again)).ToBe(True);
+  Expect<Boolean>(TryHostDirectoryIdentity(HostPath('two'), Other)).ToBe(True);
+  { POSIX stat and Windows FileIdInfo both answer on the test hosts. }
+  Expect<Boolean>(First.Known).ToBe(True);
+  Expect<Boolean>(First.Unavailable).ToBe(False);
+  Expect<Boolean>(SameDirectoryIdentity(Again, First)).ToBe(True);
+  Expect<Boolean>(SameDirectoryIdentity(Other, First)).ToBe(False);
+  Expect<string>(HostDirectoryIdentityProblem(HostPath('one'), First)).ToBe('');
+end;
+
+procedure TSandboxHostInputsTests.TestUnavailableIdentityMatchesNothing;
+var
+  Unidentified, Known, Unknown: THostDirectoryIdentity;
+begin
+  ForceDirectories(HostPath('one'));
+  Expect<Boolean>(TryHostDirectoryIdentity(HostPath('one'), Known)).ToBe(True);
+  Unidentified := Default(THostDirectoryIdentity);
+  Unidentified.Unavailable := True;
+  Unknown := Default(THostDirectoryIdentity);
+  { Unlike an identity the host cannot give at all (Known False), which
+    matches anything, an unavailable one matches nothing, even itself. }
+  Expect<Boolean>(SameDirectoryIdentity(Known, Unknown)).ToBe(True);
+  Expect<Boolean>(SameDirectoryIdentity(Known, Unidentified)).ToBe(False);
+  Expect<Boolean>(SameDirectoryIdentity(Unidentified, Known)).ToBe(False);
+  Expect<Boolean>(SameDirectoryIdentity(Unidentified, Unidentified))
+    .ToBe(False);
+  Expect<Boolean>(Pos('Windows gives no file ID for ' + HostPath('one'),
+    HostDirectoryIdentityProblem(HostPath('one'), Unidentified)) = 1)
+    .ToBe(True);
+end;
+
+procedure TSandboxHostInputsTests.TestOutputFileRefusesUnidentifiedDirectory;
+var
+  Pin: TSandboxHostPin;
+  Output: TSandboxHostOutputFile;
+  Problem: string;
+begin
+  ForceDirectories(HostPath('dd'));
+  Pin := PinUnderRoot('dd/diff.json');
+  { As when GetFileInformationByHandleEx(FileIdInfo) fails for the root. }
+  Pin.RootIdentity := Default(THostDirectoryIdentity);
+  Pin.RootIdentity.Unavailable := True;
+  Output := TSandboxHostOutputFile.Create(HostPath('dd/diff.json'), Pin);
+  Expect<Boolean>(Output.Write(TEncoding.UTF8.GetBytes('{}'), Problem))
+    .ToBe(False);
+  Expect<Boolean>(Pos('GetFileInformationByHandleEx FileIdInfo failed',
+    Problem) > 0).ToBe(True);
+  Expect<Boolean>(FileExists(HostPath('dd/diff.json'))).ToBe(False);
+end;
+
+procedure TSandboxHostInputsTests.TestUnidentifiedInputGetsNothingWritten;
+var
+  Pin: TSandboxHostPin;
+  Problem: string;
+  Baseline: TSandboxVirtualFileSystem;
+  Report: TStringList;
+  I: Integer;
+  Refused: Boolean;
+begin
+  WriteHostFile('project/out/f.txt', 'orig');
+  WriteHostFile('other/g.txt', 'orig');
+  Expect<Boolean>(TryPinBeneath(HostPath('project'), HostPath('project/out'),
+    Pin, Problem)).ToBe(True);
+  Pin.RootIdentity := Default(THostDirectoryIdentity);
+  Pin.RootIdentity.Unavailable := True;
+  FInputs.CopyIn(HostPath('project/out'), '/out', True, Pin);
+  FInputs.CopyIn(HostPath('other'), '/other', True);
+  Baseline := FFs.Fork;
+  Report := TStringList.Create;
+  try
+    FFs.WriteAllText('/out/f.txt', 'NEW');
+    FFs.WriteAllText('/other/g.txt', 'NEW');
+    Expect<Boolean>(FInputs.ApplyWriteBack(FInputs.PlanWriteBack(Baseline),
+      Report)).ToBe(False);
+    { The unidentified input is refused with the reason; the other input is
+      still written. }
+    Expect<string>(ReadHostText('project/out/f.txt')).ToBe('orig');
+    Expect<string>(ReadHostText('other/g.txt')).ToBe('NEW');
+    Refused := False;
+    for I := 0 to Report.Count - 1 do
+      if (Pos('write-back: ' + HostPath('project/out/f.txt') + ': Windows ' +
+         'gives no file ID for ', Report[I]) = 1) then
+        Refused := True;
+    Expect<Boolean>(Refused).ToBe(True);
   finally
     Report.Free;
     Baseline.Free;

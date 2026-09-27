@@ -527,16 +527,24 @@ begin
   if AOrigin.WriteRoute <> '' then
     Exit(TryHostDirectoryIdentityBeneath(AOrigin.WriteRoot,
       AOrigin.WriteRootIdentity, AOrigin.WriteRoute, Identity, Problem) and
-      ((not AOrigin.WriteRouteIdentity.Known) or
-       ((Identity.Device = AOrigin.WriteRouteIdentity.Device) and
-        (Identity.Inode = AOrigin.WriteRouteIdentity.Inode))));
+      SameDirectoryIdentity(Identity, AOrigin.WriteRouteIdentity));
   if CanonicalOrExpanded(OriginRootPath(AOrigin)) <> AOrigin.WriteRoot then
     Exit(False);
   if not TryHostDirectoryIdentity(AOrigin.WriteRoot, Identity) then
     Exit(False);
-  Result := (not AOrigin.WriteRootIdentity.Known) or
-    ((Identity.Device = AOrigin.WriteRootIdentity.Device) and
-     (Identity.Inode = AOrigin.WriteRootIdentity.Inode));
+  Result := SameDirectoryIdentity(Identity, AOrigin.WriteRootIdentity);
+end;
+
+{ Why nothing is written back under AOrigin whatever the run did, or '':
+  Windows would not identify its directory when it was copied, so a
+  replacement could not be noticed. }
+function OriginIdentityProblem(const AOrigin: TSandboxHostOrigin): string;
+begin
+  Result := HostDirectoryIdentityProblem(OriginWriteDirectory(AOrigin),
+    AOrigin.WriteRootIdentity);
+  if Result = '' then
+    Result := HostDirectoryIdentityProblem(OriginWriteDirectory(AOrigin),
+      AOrigin.WriteRouteIdentity);
 end;
 
 procedure TSandboxHostInputs.CopyFile(const AHostPath, ASandboxPath: string);
@@ -880,6 +888,7 @@ begin
     if (APlan[I].Action in [swaWrite, swaSkipOutside]) and
        (APlan[I].OriginIndex >= 0) and
        FOrigins[APlan[I].OriginIndex].ReadWrite and
+       (OriginIdentityProblem(FOrigins[APlan[I].OriginIndex]) = '') and
        not OriginRootUnchanged(FOrigins[APlan[I].OriginIndex]) then
     begin
       Origin := FOrigins[APlan[I].OriginIndex];
@@ -905,9 +914,13 @@ begin
       Continue;
     Origin := FOrigins[APlan[I].OriginIndex];
     try
-      { A pinned input's directory is checked again just before each write,
-        as a command-line input's is by the write itself. }
-      if (Origin.WriteRoute <> '') and not OriginRootUnchanged(Origin) then
+      { An input Windows would not identify gets nothing written. A pinned
+        input's directory is checked again just before each write, as a
+        command-line input's is by the write itself. }
+      ErrorMessage := OriginIdentityProblem(Origin);
+      if ErrorMessage <> '' then
+        Ok := False
+      else if (Origin.WriteRoute <> '') and not OriginRootUnchanged(Origin) then
       begin
         Ok := False;
         ErrorMessage := OriginRootPath(Origin) + ' was replaced during the run';

@@ -153,19 +153,36 @@ function ReplaceHostFile(const APath, ATemporaryPath: string;
   out AError: string): Boolean; overload;
 
 type
-  { Which directory a path named when it was recorded: POSIX device and inode.
-    On Windows, the volume serial number and file index. Known is False
-    where the host cannot say (Lakon/WASI). }
+  { Which directory a path named when it was recorded: POSIX device and inode
+    (InodeHigh is 0). On Windows, the 64-bit volume serial number and the
+    128-bit file ID from GetFileInformationByHandleEx(FileIdInfo), its low
+    half in Inode and its high half in InodeHigh. Known is False where the
+    host cannot say (Lakon/WASI). Unavailable is True for a Windows directory
+    whose file ID the call would not give: such a directory matches no
+    identity, and nothing is written under it. }
   THostDirectoryIdentity = record
     Known: Boolean;
+    Unavailable: Boolean;
     Device: QWord;
     Inode: QWord;
+    InodeHigh: QWord;
   end;
 
 { The identity of the directory at APath, following links along it. False
-  when APath is not a directory. }
+  when APath is not a directory. A Windows directory whose file ID cannot be
+  read is still a directory: the answer is True with AIdentity.Unavailable. }
 function TryHostDirectoryIdentity(const APath: string;
   out AIdentity: THostDirectoryIdentity): Boolean;
+
+{ AIdentity is AExpected, or AExpected is not known. An Unavailable identity
+  on either side is never the same. }
+function SameDirectoryIdentity(const AIdentity,
+  AExpected: THostDirectoryIdentity): Boolean;
+
+{ Why nothing may be written under ADirectory, recorded as AIdentity, or ''
+  when its identity does not stand in the way. }
+function HostDirectoryIdentityProblem(const ADirectory: string;
+  const AIdentity: THostDirectoryIdentity): string;
 
 { The identity of the directory ARoute leads to under ARoot, which must still
   be the directory recorded as ARootIdentity. ARoute ('' for ARoot itself) is
@@ -891,6 +908,24 @@ function HostUnlinkAt(ADirectory: cint; APath: PAnsiChar;
   AFlags: cint): cint; cdecl; external 'c' name 'unlinkat';
 {$ENDIF}
 
+{$IFDEF MSWINDOWS}
+type
+  { FILE_ID_INFO: a 64-bit volume serial number and a 128-bit file ID. }
+  THostFileIdInfo = record
+    VolumeSerialNumber: QWord;
+    FileId: array[0..15] of Byte;
+  end;
+
+const
+  { FileIdInfo in FILE_INFO_BY_HANDLE_CLASS. }
+  HOST_FILE_ID_INFO_CLASS = 18;
+
+function HostGetFileInformationByHandleEx(AFile: THandle;
+  AInformationClass: DWORD; AInformation: Pointer;
+  ABufferSize: DWORD): BOOL; stdcall;
+  external 'kernel32.dll' name 'GetFileInformationByHandleEx';
+{$ENDIF}
+
 function TryHostDirectoryIdentity(const APath: string;
   out AIdentity: THostDirectoryIdentity): Boolean;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
@@ -914,7 +949,7 @@ end;
 {$ELSEIF DEFINED(MSWINDOWS)}
 var
   Handle: THandle;
-  Information: BY_HANDLE_FILE_INFORMATION;
+  Information: THostFileIdInfo;
 begin
   AIdentity := Default(THostDirectoryIdentity);
   Result := False;
@@ -928,13 +963,23 @@ begin
   if Handle = INVALID_HANDLE_VALUE then
     Exit;
   try
-    if not GetFileInformationByHandle(Handle, Information) then
-      Exit;
-    AIdentity.Known := True;
-    AIdentity.Device := QWord(Information.dwVolumeSerialNumber);
-    AIdentity.Inode := (QWord(Information.nFileIndexHigh) shl 32) or
-      QWord(Information.nFileIndexLow);
     Result := True;
+    { The 64-bit file index BY_HANDLE_FILE_INFORMATION gives is not unique
+      on ReFS, so there is no falling back to it: a directory without a
+      FileIdInfo answer is marked Unavailable and nothing is written under
+      it. }
+    Information := Default(THostFileIdInfo);
+    if not HostGetFileInformationByHandleEx(Handle, HOST_FILE_ID_INFO_CLASS,
+       @Information, SizeOf(Information)) then
+    begin
+      AIdentity.Unavailable := True;
+      Exit;
+    end;
+    AIdentity.Known := True;
+    AIdentity.Device := Information.VolumeSerialNumber;
+    Move(Information.FileId[0], AIdentity.Inode, SizeOf(AIdentity.Inode));
+    Move(Information.FileId[8], AIdentity.InodeHigh,
+      SizeOf(AIdentity.InodeHigh));
   finally
     CloseHandle(Handle);
   end;
@@ -946,13 +991,26 @@ begin
 end;
 {$ENDIF}
 
-{ AIdentity is AExpected, or AExpected is not known. }
 function SameDirectoryIdentity(const AIdentity,
   AExpected: THostDirectoryIdentity): Boolean;
 begin
+  if AIdentity.Unavailable or AExpected.Unavailable then
+    Exit(False);
   Result := (not AExpected.Known) or (AIdentity.Known and
     (AIdentity.Device = AExpected.Device) and
-    (AIdentity.Inode = AExpected.Inode));
+    (AIdentity.Inode = AExpected.Inode) and
+    (AIdentity.InodeHigh = AExpected.InodeHigh));
+end;
+
+function HostDirectoryIdentityProblem(const ADirectory: string;
+  const AIdentity: THostDirectoryIdentity): string;
+begin
+  if AIdentity.Unavailable then
+    Result := 'Windows gives no file ID for ' + ADirectory +
+      ' (GetFileInformationByHandleEx FileIdInfo failed), so it cannot be ' +
+      'checked for replacement; refusing to write under it'
+  else
+    Result := '';
 end;
 
 function SplitRelativeHostPath(const APath: string): TStringList;
@@ -1014,6 +1072,9 @@ begin
       AError := 'no file name';
       Exit;
     end;
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
     if not Encode(ARoot, NameBytes) then
       Exit;
     Directory := fpOpen(PAnsiChar(@NameBytes[0]),
@@ -1152,14 +1213,24 @@ begin
       AError := 'no file name';
       Exit;
     end;
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
     Path := ExcludeTrailingPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
     begin
       AError := ARoot + ' is no longer the copied directory';
       Exit;
     end;
-    if not TryHostDirectoryIdentity(Path, Identity) or
-       not SameDirectoryIdentity(Identity, ARootIdentity) then
+    if not TryHostDirectoryIdentity(Path, Identity) then
+    begin
+      AError := ARoot + ' was replaced after it was copied';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, Identity);
+    if AError <> '' then
+      Exit;
+    if not SameDirectoryIdentity(Identity, ARootIdentity) then
     begin
       AError := ARoot + ' was replaced after it was copied';
       Exit;
@@ -1216,6 +1287,9 @@ begin
   Parts := SplitRelativeHostPath(ARoute);
   Directory := -1;
   try
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
     if not TryEncodeUTF8NullTerminated(ARoot, NameBytes, ErrorOffset) then
     begin
       AError := 'path cannot be encoded for the host';
@@ -1275,10 +1349,20 @@ begin
   AIdentity := Default(THostDirectoryIdentity);
   Parts := SplitRelativeHostPath(ARoute);
   try
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
     Path := ExcludeTrailingPathDelimiter(ARoot);
     if HostPathIsSymlink(Path) or
-       not TryHostDirectoryIdentity(Path, AIdentity) or
-       not SameDirectoryIdentity(AIdentity, ARootIdentity) then
+       not TryHostDirectoryIdentity(Path, AIdentity) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, AIdentity);
+    if AError <> '' then
+      Exit;
+    if not SameDirectoryIdentity(AIdentity, ARootIdentity) then
     begin
       AError := ARoot + ' was replaced';
       Exit;
