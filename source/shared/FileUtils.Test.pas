@@ -44,6 +44,8 @@ type
     procedure TestRemoveHostTreeBeneathRemovesATree;
     procedure TestRemoveHostTreeBeneathDoesNotFollowLinks;
     procedure TestTryHostFileMode;
+    procedure TestRemoveHostTreeBeneathRefusesALastDotDot;
+    procedure TestRemoveHostTreeBeneathRemovesJunctionsItself;
     procedure TestReplaceWhileASharedReaderHoldsTheFile;
   public
     procedure SetupTests; override;
@@ -100,6 +102,12 @@ begin
     TestReadHostHandleBytesReadsFromTheStart);
   Test('RemoveHostTreeBeneath removes a tree and refuses to climb',
     TestRemoveHostTreeBeneathRemovesATree);
+  Test('RemoveHostTreeBeneath refuses a path ending in ..',
+    TestRemoveHostTreeBeneathRefusesALastDotDot);
+  {$IFDEF MSWINDOWS}
+  Test('RemoveHostTreeBeneath removes junctions without entering them',
+    TestRemoveHostTreeBeneathRemovesJunctionsItself);
+  {$ENDIF}
   {$IFDEF UNIX}
   Test('RemoveHostTreeBeneath removes links without following them',
     TestRemoveHostTreeBeneathDoesNotFollowLinks);
@@ -557,6 +565,54 @@ begin
   Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', '',
     Error)).ToBe(False);
 end;
+
+{ `a\..` names the root itself; removing it would delete everything. }
+procedure TFileUtilsTests.TestRemoveHostTreeBeneathRefusesALastDotDot;
+var
+  Error: string;
+begin
+  CreateTempFile('cache' + PathDelim + 'a' + PathDelim + 'x.txt');
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    'a' + PathDelim + '..', Error)).ToBe(False);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    'a' + PathDelim + '.', Error)).ToBe(False);
+  Expect<Boolean>(FileExists(FTempDir + PathDelim + 'cache' + PathDelim +
+    'a' + PathDelim + 'x.txt')).ToBe(True);
+end;
+
+procedure TFileUtilsTests.TestRemoveHostTreeBeneathRemovesJunctionsItself;
+{$IFDEF MSWINDOWS}
+var
+  Error, Outside: string;
+begin
+  CreateTempFile('outside' + PathDelim + 'secret.txt');
+  CreateTempFile('cache' + PathDelim + 'pkg' + PathDelim + 'file.txt');
+  Outside := FTempDir + PathDelim + 'outside';
+  { A junction inside the tree, and one on the way to it. }
+  Expect<Integer>(ExecuteProcess(GetEnvironmentVariable('ComSpec'),
+    '/c mklink /J "' + FTempDir + PathDelim + 'cache' + PathDelim + 'pkg' +
+    PathDelim + 'link" "' + Outside + '" >NUL')).ToBe(0);
+  Expect<Integer>(ExecuteProcess(GetEnvironmentVariable('ComSpec'),
+    '/c mklink /J "' + FTempDir + PathDelim + 'cache' + PathDelim + 'hop" "' +
+    Outside + '" >NUL')).ToBe(0);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache',
+    'hop' + PathDelim + 'secret.txt', Error)).ToBe(False);
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', 'pkg',
+    Error)).ToBe(True);
+  Expect<string>(Error).ToBe('');
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+  Expect<Boolean>(DirectoryExists(FTempDir + PathDelim + 'cache' + PathDelim +
+    'pkg')).ToBe(False);
+  { The junction removed as itself too. }
+  Expect<Boolean>(RemoveHostTreeBeneath(FTempDir + PathDelim + 'cache', 'hop',
+    Error)).ToBe(True);
+  Expect<Boolean>(FileExists(Outside + PathDelim + 'secret.txt')).ToBe(True);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure TFileUtilsTests.TestRemoveHostTreeBeneathDoesNotFollowLinks;
 {$IFDEF UNIX}
