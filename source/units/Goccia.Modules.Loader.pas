@@ -123,6 +123,8 @@ type
 
     function EnforcesHostReads: Boolean;
     function IsProjectGraphPath(const ACanonicalPath: string): Boolean;
+    function IsProviderGraphPath(const APath, AImportingFilePath,
+      APackageRoot: string): Boolean;
     function HostReadVerdict(const ACanonicalPath, AImportingFilePath: string;
       const AIsLiteral: Boolean; out ADenial: TGocciaReadDenial): Boolean;
     procedure DenyHostRead(const ASpecifier, ACanonicalPath: string;
@@ -836,6 +838,32 @@ begin
   Result := True;
 end;
 
+{ Whether APath is a file of a materialized provider package reached as
+  that package: resolved through the package's import-map entry
+  (APackageRoot is its root) or imported by one of its own files. Such a
+  path can only be a pinned file, verified when it is loaded, so the import
+  grant that materialized the package covers it whether the specifier was
+  literal or computed (ADR 0122). }
+function TGocciaModuleLoader.IsProviderGraphPath(const APath,
+  AImportingFilePath, APackageRoot: string): Boolean;
+var
+  Package: TGocciaMaterializedPackage;
+  RelativePath: string;
+begin
+  Result := False;
+  if (APath = '') or not Assigned(FResolver) or
+     not Assigned(FResolver.ProviderPackages) then
+    Exit;
+  Package := FResolver.ProviderPackages.FindPackage(APath, RelativePath);
+  if not Assigned(Package) then
+    Exit;
+  Result := ((APackageRoot <> '') and
+    (ExcludeTrailingPathDelimiter(APackageRoot) = Package.Root)) or
+    ((AImportingFilePath <> '') and
+     (FResolver.ProviderPackages.FindPackage(AImportingFilePath,
+       RelativePath) = Package));
+end;
+
 { ADR 0122 read judgment for one canonical path. AIsLiteral is False for a
   dynamic import whose specifier was computed at run time. A deny wins over
   every exemption; a literal import inside the project (outside its
@@ -914,6 +942,10 @@ begin
   if not FProbeActive then
     Exit;
   CanonicalPath := CanonicalCapabilityPath(ACandidatePath);
+  if IsProviderGraphPath(ACandidatePath, FProbeImporter,
+     FResolver.ProbePackageDirectory) and
+     not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
+    Exit;
   { A file probe inside the package a literal bare specifier is being
     resolved in belongs to the module graph, as the resolved file will. }
   if FProbeLiteral and (FResolver.ProbePackageDirectory <> '') and
@@ -1044,6 +1076,12 @@ begin
     Exit;
 
   CanonicalPath := CanonicalCapabilityPath(APath);
+  { The package's files are already confined and verified; recording its
+    root is not needed for them, and the read exemption for its literal
+    relative imports follows from the same check. }
+  if IsProviderGraphPath(APath, AImportingFilePath, APackageRoot) and
+     not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
+    Exit;
   if AIsLiteral and (APackageRoot <> '') and
      not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
   begin
@@ -1328,6 +1366,11 @@ begin
        FVirtualModules.Resolve(AliasCandidate, AImportingFilePath,
        VirtualCandidate) then
       Exit(VirtualCandidate);
+    { A provider entry answers lexically with the provider address it maps
+      to: resolving it for real would grant, materialize, and audit a
+      package the guest only asked the name of. }
+    if IsProviderAddress(AliasCandidate) then
+      Exit(AliasCandidate);
   end;
 
   { Resolution probes the host for extensions and index files. A candidate

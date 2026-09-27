@@ -36,6 +36,9 @@ type
     Path: string;
     { `github:<owner>/<repo>@<ref>`, as written: the lockfile key. }
     function PackageKey: string;
+    { PackageKey with owner and repository lowercased and the ref as
+      written: GitHub names compare case-insensitively, refs do not. }
+    function NormalizedPackageKey: string;
     { `github:<owner>/<repo>`, lowercased: the import scope it needs. }
     function ScopeText: string;
     function IsPrefix: Boolean;
@@ -320,6 +323,12 @@ end;
 function TGocciaProviderAddress.PackageKey: string;
 begin
   Result := GITHUB_PROVIDER_PREFIX + Owner + '/' + Repository + '@' + Ref;
+end;
+
+function TGocciaProviderAddress.NormalizedPackageKey: string;
+begin
+  Result := GITHUB_PROVIDER_PREFIX + LowerCase(Owner) + '/' +
+    LowerCase(Repository) + '@' + Ref;
 end;
 
 function TGocciaProviderAddress.ScopeText: string;

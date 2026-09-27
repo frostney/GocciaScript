@@ -111,6 +111,10 @@ type
     procedure TestCachedOnlyRefusesTheNetwork;
     procedure TestFFIOpensAVerifiedPackageLibraryByURL;
     procedure TestFFIRefusesATamperedPackageLibrary;
+    procedure TestReloadOfATamperedFileReportsTheChange;
+    procedure TestImportMetaResolveOfAProviderKeyIsLexical;
+    procedure TestComputedImportsThroughAProviderNeedOnlyImport;
+    procedure TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -228,6 +232,14 @@ begin
     TestFFIOpensAVerifiedPackageLibraryByURL);
   Test('FFI.open refuses a tampered package library',
     TestFFIRefusesATamperedPackageLibrary);
+  Test('Reloading a file tampered after it was loaded reports the change',
+    TestReloadOfATamperedFileReportsTheChange);
+  Test('import.meta.resolve of a provider key answers with its address',
+    TestImportMetaResolveOfAProviderKeyIsLexical);
+  Test('A computed import through a provider needs only the import grant',
+    TestComputedImportsThroughAProviderNeedOnlyImport);
+  Test('Lock keys compare owner and repository case-insensitively',
+    TestLockKeysCompareOwnerAndRepositoryCaseInsensitively);
 end;
 
 procedure TProviderImportTests.BeforeAll;
@@ -302,6 +314,8 @@ begin
     'export const open = () => FFI.open(new URL("../native/libfixture" + ' +
     'FFI.suffix, import.meta.url));');
   AddFile('index.ts', 'export const root = "root";');
+  AddFile('bindings/dyn.ts',
+    'export const load = (name) => import("./" + name);');
   if FileExists(FFixtureLibrary) then
     AddBinary('native/libfixture' + LIBRARY_SUFFIX, FFixtureLibrary);
 
@@ -310,6 +324,7 @@ begin
     '"raylib": "github:frostney/raylib@v1.0.0/bindings/raylib.ts", ' +
     '"ray/": "github:frostney/raylib@v1.0.0/bindings/", ' +
     '"rayroot": "github:frostney/raylib@v1.0.0", ' +
+    '"raypkg/": "github:frostney/raylib@v1.0.0/", ' +
     '"other": "github:someone/other@v2/x.ts"}}');
   WriteFile(ProjectPath('goccia.lock.json'),
     '{"version": 1, "packages": {' +
@@ -350,7 +365,12 @@ function TProviderImportTests.Swap(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if FSwapPath <> '' then
+  begin
     WriteFile(FSwapPath, FSwapText);
+    { Later than anything the loader recorded, whatever the filesystem's
+      timestamp resolution. }
+    FileSetDate(FSwapPath, DateTimeToFileDate(Now + 1));
+  end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -685,6 +705,111 @@ begin
         .Allow(gcFFI, ProjectPath('.goccia')), Bytecode);
     Expect<Boolean>(Pos('changed after it was verified', Outcome.Result) > 0)
       .ToBe(True);
+  end;
+end;
+
+{ A module already loaded, tampered with, and imported again is reloaded by
+  its own resolved path; the reload must report the change, not blame the
+  package for importing a host path. }
+procedure TProviderImportTests.TestReloadOfATamperedFileReportsTheChange;
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  for Bytecode := False to True do
+  begin
+    FSwapPath := CachePath('vendor/data.json');
+    FSwapText := '{"name": "evil"}';
+    Outcome := Run('import { value } from "raylib";' + sLineBreak +
+      'swap();' + sLineBreak +
+      'try { const m = await import("raypkg/vendor/data.json", ' +
+      '{ with: { type: "json" } }); globalThis.result = m.default.name; }' +
+      sLineBreak + 'catch (error) { globalThis.result = error.message; }',
+      TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+    Expect<string>(Outcome.Result).ToBe('Provider package file ' +
+      PACKAGE_KEY + '/vendor/data.json changed after it was verified');
+    WriteFile(CachePath('vendor/data.json'), '{"name": "data"}');
+  end;
+end;
+
+procedure TProviderImportTests.TestImportMetaResolveOfAProviderKeyIsLexical;
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  DeleteTree(ProjectPath('.goccia/packages'));
+  for Bytecode := False to True do
+  begin
+    FEvents.Clear;
+    Outcome := Run('globalThis.result = import.meta.resolve("raylib") + ' +
+      '"|" + import.meta.resolve("ray/lib/detail.ts");',
+      TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe(
+      'github:frostney/raylib@v1.0.0/bindings/raylib.ts|' +
+      'github:frostney/raylib@v1.0.0/bindings/lib/detail.ts');
+    Expect<Boolean>(Pos('import.provider', FEvents.Text) = 0).ToBe(True);
+  end;
+  Expect<Integer>(FTransport.Requests).ToBe(0);
+end;
+
+procedure TProviderImportTests.TestComputedImportsThroughAProviderNeedOnlyImport;
+const
+  SOURCE_TEXT =
+    'const key = "ray" + "/late.ts";' + sLineBreak +
+    'const { late } = await import(key);' + sLineBreak +
+    'const { load } = await import("ray/" + "dyn.ts");' + sLineBreak +
+    'const again = await load("late" + ".ts");' + sLineBreak +
+    'globalThis.result = late + ":" + again.late;';
+var
+  Bytecode: Boolean;
+  Outcome: TRunOutcome;
+begin
+  for Bytecode := False to True do
+  begin
+    FEvents.Clear;
+    Outcome := Run(SOURCE_TEXT,
+      TGocciaCapabilities.None.Allow(gcImport, 'github:frostney'), Bytecode);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('late:late');
+    Expect<Boolean>(Pos('read.file', FEvents.Text) = 0).ToBe(True);
+
+    Outcome := Run('try { await import("ray" + "/late.ts"); }' + sLineBreak +
+      'catch (error) { globalThis.result = error.name + " " + ' +
+      'error.message; }', TGocciaCapabilities.None, Bytecode);
+    Expect<string>(Outcome.Result).ToBe('PermissionDenied import: ' +
+      PACKAGE_KEY);
+  end;
+  { A computed path into the cache from project code is still a read. }
+  Outcome := Run('try { await import("./.goccia/packages/github/frostney/' +
+    'raylib/" + "' + COMMIT + '/bindings/late.ts"); }' + sLineBreak +
+    'catch (error) { globalThis.result = error.name; }',
+    TGocciaCapabilities.None.Allow(gcImport, 'github'), False);
+  Expect<string>(Outcome.Result).ToBe('PermissionDenied');
+end;
+
+procedure TProviderImportTests.TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
+var
+  Lock: string;
+  Outcome: TRunOutcome;
+begin
+  Lock := ReadUTF8FileText(ProjectPath('goccia.lock.json'));
+  try
+    WriteFile(ProjectPath('goccia.lock.json'), StringReplace(Lock,
+      '"' + PACKAGE_KEY + '"', '"github:Frostney/RayLib@v1.0.0"', []));
+    Outcome := Run('import { value } from "raylib"; globalThis.result = value;',
+      TGocciaCapabilities.None.Allow(gcImport, 'github'), False);
+    Expect<string>(Outcome.ErrorMessage).ToBe('');
+    Expect<string>(Outcome.Result).ToBe('pkg:data');
+    { The ref still compares exactly. }
+    WriteFile(ProjectPath('goccia.lock.json'), StringReplace(Lock,
+      '"' + PACKAGE_KEY + '"', '"github:frostney/raylib@V1.0.0"', []));
+    Outcome := Run('import { value } from "raylib";',
+      TGocciaCapabilities.None.Allow(gcImport, 'github'), False);
+    Expect<Boolean>(Pos('is not pinned', Outcome.ErrorMessage) > 0)
+      .ToBe(True);
+  finally
+    WriteFile(ProjectPath('goccia.lock.json'), Lock);
   end;
 end;
 

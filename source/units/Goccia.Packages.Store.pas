@@ -410,7 +410,8 @@ begin
   ImportMapDirectory := ExtractFilePath(ExpandHostFileName(AImportMapPath));
   LockPath := IncludeTrailingPathDelimiter(ImportMapDirectory) + LOCKFILE_NAME;
   for Known in FPackages do
-    if (Known.Key = AAddress.PackageKey) and (Known.LockPath = LockPath) then
+    if (Known.Address.NormalizedPackageKey = AAddress.NormalizedPackageKey) and
+       (Known.LockPath = LockPath) then
       Exit(Known);
 
   Locked := Lockfile(LockPath).FindPackage(AAddress.PackageKey);

@@ -106,6 +106,10 @@ begin
     Expect<Boolean>(Locked.FindArtifact('Z.ts', Hash)).ToBe(False);
     Expect<Boolean>(Assigned(Lockfile.FindPackage('github:o/r@v2')))
       .ToBe(False);
+    Expect<Boolean>(Lockfile.FindPackage('github:O/R@v1') = Locked)
+      .ToBe(True);
+    Expect<Boolean>(Assigned(Lockfile.FindPackage('github:o/r@V1')))
+      .ToBe(False);
   finally
     Lockfile.Free;
   end;
@@ -188,6 +192,14 @@ begin
   Expect<Boolean>(Rejects(Lock(Package('github:o/r@v1', 'tag', COMMIT,
     '"x.ts": {"sha256": "' + HASH_A + '"}') + ', ' + Package('github:o/r@v1',
     'tag', COMMIT, '"x.ts": {"sha256": "' + HASH_A + '"}')))).ToBe(True);
+  { GitHub names compare case-insensitively, so these pin one package
+    twice. }
+  Expect<Boolean>(Rejects(Lock(Package('github:o/r@v1', 'tag', COMMIT,
+    '"x.ts": {"sha256": "' + HASH_A + '"}') + ', ' + Package('github:O/R@v1',
+    'tag', COMMIT, '"x.ts": {"sha256": "' + HASH_A + '"}')))).ToBe(True);
+  Expect<Boolean>(Rejects(Lock(Package('github:o/r@v1', 'tag', COMMIT,
+    '"x.ts": {"sha256": "' + HASH_A + '"}') + ', ' + Package('github:o/r@V1',
+    'tag', COMMIT, '"x.ts": {"sha256": "' + HASH_A + '"}')))).ToBe(False);
 end;
 
 procedure TLockfileTests.TestRejectsUnsafeArtifactPaths;
