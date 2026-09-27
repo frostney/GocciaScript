@@ -1033,22 +1033,22 @@ begin
   end;
 end;
 
+{ Every read of the store — a run's, the one --trust, --untrust, and
+  --list-trusted start from, and the one under the lock before a write —
+  comes through here, and opens the file so that another process's replace
+  can rename over it meanwhile (ReadSharedHostFileBytes). }
 procedure TGocciaTrustStore.ReadFile;
 var
   Reader: TTrustStoreReader;
   Text: string;
-  I: Integer;
+  ErrorOffset, I: Integer;
 begin
   FEntries := nil;
   if not FileExists(FPath) then
     Exit;
-  try
-    Text := ReadUTF8FileText(FPath);
-  except
-    on E: EConvertError do
-      raise EGocciaTrustStoreError.CreateFmt(
-        'trust store %s is not valid JSON; fix or delete it', [FPath]);
-  end;
+  if not TryDecodeUTF8(ReadSharedHostFileBytes(FPath), Text, ErrorOffset) then
+    raise EGocciaTrustStoreError.CreateFmt(
+      'trust store %s is not valid JSON; fix or delete it', [FPath]);
   Reader := TTrustStoreReader.Create;
   try
     try
@@ -1330,7 +1330,8 @@ var
 begin
   ALock := Default(TStoreLock);
   ALock.Handle := CreateFileW(PWideChar(UnicodeString(ALockPath)),
-    GENERIC_READ or GENERIC_WRITE, FILE_SHARE_READ or FILE_SHARE_WRITE, nil,
+    GENERIC_READ or GENERIC_WRITE,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
     OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
   if ALock.Handle = INVALID_HANDLE_VALUE then
     raise EGocciaTrustStoreError.CreateFmt('cannot open %s: %s',
