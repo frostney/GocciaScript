@@ -405,7 +405,11 @@ begin
       raise EGocciaProviderPackageError.CreateDetailed(Format(
         '%s is not cached, and --cached-only refuses the network',
         [Locked.Key]), CacheDirectory);
-    if not CreateDir(CacheDirectory) then
+    { Another engine may create it first; that is fine as long as what is
+      there now is a directory and not a link. }
+    if not CreateDir(CacheDirectory) and
+       (HostPathIsSymlink(CacheDirectory) or
+        not HostDirectoryExists(CacheDirectory)) then
       raise EGocciaProviderPackageError.CreateDetailed(Format(
         '%s: the package cache directory could not be created',
         [Locked.Key]), CacheDirectory);
