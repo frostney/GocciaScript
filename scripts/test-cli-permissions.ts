@@ -387,12 +387,11 @@ console.log("Unsupported capabilities and limits are rejected on the command lin
   const runnerHelp = run(RUNNER, ["--help"]).stdout;
   expectIncludes(runnerHelp, "--max-fs-bytes", "Runner --help");
   expectIncludes(runnerHelp, "Only --allow-net applies; --allow-read, --allow-import and --allow-ffi are errors.", "Runner --help sandbox note");
+  for (const flag of ["--allow-read", "--allow-net", "--allow-ffi", "--allow-import", "--deny-read", "--max-stack", "--max-fetch-bytes"])
+    expectIncludes(runnerHelp, flag, "Runner --help");
   const bundlerHelp = run(BUNDLER, ["--help"]).stdout;
   expectExcludes(bundlerHelp, "--allow-", "Bundler --help");
   expectExcludes(bundlerHelp, "--timeout", "Bundler --help");
-  const loaderHelp = run(RUNNER, ["--help"]).stdout;
-  for (const flag of ["--allow-read", "--allow-net", "--allow-ffi", "--allow-import", "--deny-read", "--max-stack", "--max-fetch-bytes"])
-    expectIncludes(loaderHelp, flag, "Loader --help");
 }
 
 console.log("Binaries with their own parser follow the same grammar...");
