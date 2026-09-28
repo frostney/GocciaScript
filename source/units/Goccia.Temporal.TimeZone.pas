@@ -9,6 +9,13 @@ type
   TTemporalTimeZoneIdentifierArray = array of string;
 
 function GetSystemTimeZoneId: string;
+{$IFNDEF LAKON}
+{ Maps the target of the /etc/localtime symlink to the zone identifier it
+  names, or UTC when the target is not inside a known zoneinfo directory. A
+  relative target is resolved against /etc. Pure string logic, so it behaves
+  the same whatever the machine's own zone is. }
+function TimeZoneIdFromLocalTimeLink(const ALinkTarget: string): string;
+{$ENDIF}
 function IsValidTimeZone(const ATimeZone: string): Boolean;
 function IsSupportedCanonicalTimeZoneIdentifier(const ATimeZone: string): Boolean;
 function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArray;
@@ -167,8 +174,13 @@ const
   GOCCIA_TZDIR_ENV = 'GOCCIA_TZDIR';
   UNIX_ZONEINFO_PATH = '/usr/share/zoneinfo';
   MACOS_DEFAULT_ZONEINFO_PATH = '/usr/share/zoneinfo.default';
+  { macOS 10.13 and later point /etc/localtime here. }
+  MACOS_TIMEZONE_DATABASE_ZONEINFO_PATH = '/var/db/timezone/zoneinfo';
+  { The /etc/localtime link target is a POSIX path on every host. }
+  POSIX_PATH_DELIMITER = '/';
+  LOCALTIME_DIRECTORY = '/etc';
   {$IFDEF UNIX}
-  LOCALTIME_PATH = '/etc/localtime';
+  LOCALTIME_PATH = LOCALTIME_DIRECTORY + POSIX_PATH_DELIMITER + 'localtime';
   {$ENDIF}
   MINUTES_PER_HOUR = 60;
   SECONDS_PER_MINUTE = 60;
@@ -1463,44 +1475,101 @@ begin
   end;
 end;
 
+{ Resolves the "." and ".." segments of an absolute POSIX path without
+  touching the filesystem or using the host's own path rules. }
+function NormalizePOSIXPath(const APath: string): string;
+var
+  Count, I, Start: Integer;
+  Segment: string;
+  Segments: array of string;
+begin
+  Count := 0;
+  Start := 1;
+  SetLength(Segments, 0);
+  for I := 1 to Length(APath) + 1 do
+  begin
+    if (I <= Length(APath)) and (APath[I] <> POSIX_PATH_DELIMITER) then
+      Continue;
+    Segment := Copy(APath, Start, I - Start);
+    Start := I + 1;
+    if (Segment = '') or (Segment = '.') then
+      Continue;
+    if Segment = '..' then
+    begin
+      if Count > 0 then
+        Dec(Count);
+      Continue;
+    end;
+    if Count = Length(Segments) then
+      SetLength(Segments, Count * 2 + 1);
+    Segments[Count] := Segment;
+    Inc(Count);
+  end;
+
+  Result := '';
+  for I := 0 to Count - 1 do
+    Result := Result + POSIX_PATH_DELIMITER + Segments[I];
+  if Result = '' then
+    Result := POSIX_PATH_DELIMITER;
+end;
+
+function TryStripZoneInfoDirectory(const APath, ADirectory: string;
+  out ATimeZone: string): Boolean;
+var
+  Prefix: string;
+begin
+  Prefix := ADirectory + POSIX_PATH_DELIMITER;
+  Result := (Length(APath) > Length(Prefix)) and
+    (Copy(APath, 1, Length(Prefix)) = Prefix);
+  if Result then
+    ATimeZone := Copy(APath, Length(Prefix) + 1, MaxInt)
+  else
+    ATimeZone := '';
+end;
+
+function TimeZoneIdFromLocalTimeLink(const ALinkTarget: string): string;
+var
+  Target: string;
+begin
+  if ALinkTarget = '' then
+    Exit(UTC_TIMEZONE_ID);
+
+  if ALinkTarget[1] = POSIX_PATH_DELIMITER then
+    Target := NormalizePOSIXPath(ALinkTarget)
+  else
+    Target := NormalizePOSIXPath(LOCALTIME_DIRECTORY + POSIX_PATH_DELIMITER +
+      ALinkTarget);
+
+  if TryStripZoneInfoDirectory(Target, UNIX_ZONEINFO_PATH, Result) or
+     TryStripZoneInfoDirectory(Target, MACOS_DEFAULT_ZONEINFO_PATH, Result) or
+     TryStripZoneInfoDirectory(Target, MACOS_TIMEZONE_DATABASE_ZONEINFO_PATH,
+       Result) then
+    Exit;
+  Result := UTC_TIMEZONE_ID;
+end;
+
 function GetSystemTimeZoneId: string;
 {$IFDEF UNIX}
 var
+  LinkBytes: TBytes;
+  LinkLength: Integer;
   LinkTarget: string;
-  PrefixPos: Integer;
-  Prefix: string;
-  LocalTimeDirectory: string;
+  UTF8ErrorOffset: Integer;
 begin
-  // Read the symlink target of /etc/localtime
-  SetLength(LinkTarget, MAX_SYMLINK_LENGTH);
-  PrefixPos := fpReadLink(LOCALTIME_PATH, @LinkTarget[1], MAX_SYMLINK_LENGTH);
-  if PrefixPos > 0 then
+  { The link target is raw bytes: read it into a byte buffer and decode it
+    as UTF-8. A UnicodeString buffer would receive the bytes packed into
+    UTF-16 code units and never match a zoneinfo prefix. }
+  SetLength(LinkBytes, MAX_SYMLINK_LENGTH);
+  LinkLength := fpReadLink(LOCALTIME_PATH, PAnsiChar(@LinkBytes[0]),
+    MAX_SYMLINK_LENGTH);
+  if (LinkLength > 0) and (LinkLength < MAX_SYMLINK_LENGTH) then
   begin
-    SetLength(LinkTarget, PrefixPos);
-    if (Length(LinkTarget) > 0) and (LinkTarget[1] <> PathDelim) then
+    SetLength(LinkBytes, LinkLength);
+    if TryDecodeUTF8(LinkBytes, LinkTarget, UTF8ErrorOffset) then
     begin
-      LocalTimeDirectory := IncludeTrailingPathDelimiter(ExtractFileDir(LOCALTIME_PATH));
-      LinkTarget := ExpandFileName(LocalTimeDirectory + LinkTarget);
-    end
-    else
-      LinkTarget := ExpandFileName(LinkTarget);
-
-    Prefix := IncludeTrailingPathDelimiter(UNIX_ZONEINFO_PATH);
-    PrefixPos := Pos(Prefix, LinkTarget);
-    if PrefixPos = 1 then
-    begin
-      Result := Copy(LinkTarget, Length(Prefix) + 1, Length(LinkTarget) -
-        Length(Prefix));
-      Exit;
-    end;
-
-    Prefix := IncludeTrailingPathDelimiter(MACOS_DEFAULT_ZONEINFO_PATH);
-    PrefixPos := Pos(Prefix, LinkTarget);
-    if PrefixPos = 1 then
-    begin
-      Result := Copy(LinkTarget, Length(Prefix) + 1, Length(LinkTarget) -
-        Length(Prefix));
-      Exit;
+      Result := TimeZoneIdFromLocalTimeLink(LinkTarget);
+      if IsValidTimeZone(Result) then
+        Exit;
     end;
   end;
   Result := UTC_TIMEZONE_ID;
