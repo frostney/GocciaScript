@@ -214,7 +214,7 @@ Represents a year and month without a day, time, or timezone.
 | Getter | Description |
 |--------|-------------|
 | `calendarId` | Calendar identifier (`"iso8601"` by default) |
-| `era`, `eraYear` | Era and year of era for calendars with eras (e.g. `"reiwa"`, `6` in `japanese`); `undefined` for ISO 8601 |
+| `era`, `eraYear` | As on [PlainDate](#temporalplaindate) |
 | `year`, `month` | Date components |
 | `monthCode` | `"M01"` through `"M12"` |
 | `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
@@ -269,7 +269,7 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | Getter | Description |
 |--------|-------------|
 | `calendarId` | Calendar identifier (`"iso8601"` by default) |
-| `era`, `eraYear` | Era and year of era for calendars with eras (e.g. `"reiwa"`, `6` in `japanese`); `undefined` for ISO 8601 |
+| `era`, `eraYear` | As on [PlainDate](#temporalplaindate) |
 | `timeZoneId` | IANA timezone identifier (e.g., `"America/New_York"`) |
 | `year`, `month`, `monthCode`, `day` | Date components (wall-clock, timezone-adjusted) |
 | `dayOfWeek`, `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
