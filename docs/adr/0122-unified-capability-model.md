@@ -48,6 +48,15 @@ code and data modules inside the project. The project is the directory of the
 nearest `goccia.json`, or the entry file's directory when there is none. There
 are no interactive prompts; a missing capability is an error.
 
+The exemption judges a file by where it lives, not by how a specifier finds
+it, so it does not cover `node_modules` resolution. A bare specifier resolves
+through `node_modules` only with an explicit `import` grant, even when the
+`node_modules` directory is inside the project. Once granted, the resolved
+package's canonical root (symlinks resolved) joins the module graph, and the
+package's own literal imports inside that root need no `read` grant. A
+relative or absolute import of a file under `node_modules` is judged like any
+other path.
+
 **One grammar.** `--allow-<cap>[=scope,…]` and `--deny-<cap>[=scope,…]`. A deny
 always wins over an allow, regardless of order, so a deny can carve an
 exception out of a broad allow. There is no `--allow-all` and no
