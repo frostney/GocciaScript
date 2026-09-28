@@ -192,6 +192,11 @@ type
     // release entirely. Per the GC lifecycle invariant an object is freed before
     // its collector shuts down, so this pointer stays valid until release.
     FErrorSourceExcerptCollector: TGarbageCollector;
+    // Host-side advice for this error (for example which grant a
+    // PermissionDenied lacks). Never exposed as a property to the guest; it
+    // travels on the error so a host reporter can show it however the error
+    // reaches it, even through a rejected promise.
+    FErrorHostSuggestion: string;
   public
     destructor Destroy; override;
     property HasErrorSourceLocation: Boolean read FHasErrorSourceLocation
@@ -212,6 +217,8 @@ type
       write FErrorSourceExcerptCharged;
     property ErrorSourceExcerptCollector: TGarbageCollector
       read FErrorSourceExcerptCollector write FErrorSourceExcerptCollector;
+    property ErrorHostSuggestion: string read FErrorHostSuggestion
+      write FErrorHostSuggestion;
   end;
 
 

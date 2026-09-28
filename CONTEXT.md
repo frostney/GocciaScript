@@ -51,8 +51,24 @@ A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
 
 **Runtime surface**:
-The aggregate JavaScript-visible capability set installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism.
-_Avoid_: Runtime, built-in surface, host surface.
+The aggregate set of JavaScript-visible APIs installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism. What those APIs may reach outside the process is the capability set, not the runtime surface.
+_Avoid_: Runtime, built-in surface, host surface, capability set.
+
+**Capability set**:
+The engine-owned, immutable `TGocciaCapabilities` value that decides what source may reach outside the process: host reads (`read`), the network (`net`), native libraries (`ffi`), and non-local module sources (`import`). Fixed when the engine is created — `None` when the host passes none — and consulted by every capability-gated operation. A deny always wins over an allow. See `docs/permissions.md`.
+_Avoid_: Permissions object, runtime surface, allowlist, sandbox policy.
+
+**Capability scope**:
+One allow or deny entry of a capability: an absolute path for `read` and `ffi`; a host, `host:port`, `*.domain`, IP, CIDR range, or `private` for `net`; `node_modules[=<dir>]` or a provider host for `import`. An entry with no scope covers every scope of its capability.
+_Avoid_: Rule, pattern, allowed host when the capability is not `net`.
+
+**Narrowing**:
+Deriving a nested context's capability set from its parent's by appending a layer; a request is allowed only when every layer allows it, so a narrowed set never allows more than its parent. ShadowRealm children, sandbox `runScript` children, and test262 realms inherit their parent's set.
+_Avoid_: Widening, override, child permissions.
+
+**Module-graph exemption**:
+The one kind of host read that needs no `read` grant: a static import with a literal specifier (including `json`, `text`, and `bytes` imports and a literal `import()`) of a file inside the project, the directory of the nearest goccia config above the entry. A deny removes it.
+_Avoid_: Trusted imports, implicit read.
 
 **Host environment**:
 The engine-owned module that supplies JavaScript-observable time, time zone, and randomness. Hosts may inject its clock and RNG adapters; infrastructure timing is not part of the host environment.
@@ -521,8 +537,8 @@ Use **source type** for script-vs-module entry semantics. Use **execution mode**
 **Native vs built-in**:
 Use **native function** for Pascal-backed callables. Use **built-in** for APIs supplied by GocciaScript. Use **core language built-in** or **runtime global** when availability matters.
 
-**Runtime surface vs runtime global**:
-Use **runtime surface** for the aggregate host-exposed capability set. Use **runtime global** for one JS-visible global installed by a runtime extension.
+**Runtime surface vs runtime global vs capability set**:
+Use **runtime surface** for the aggregate host-exposed set of APIs. Use **runtime global** for one JS-visible global installed by a runtime extension. Use **capability set** for what those APIs may reach outside the process.
 
 **Function vocabulary**:
 Use **user-defined function** for source-defined functions in general. Use **arrow function**, **ordinary function**, or **method** only when that semantic distinction matters.

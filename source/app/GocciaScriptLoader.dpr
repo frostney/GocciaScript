@@ -113,7 +113,6 @@ type
     FLastDiagnosticPrincipal: Int64;
 
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
-    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
@@ -262,16 +261,9 @@ procedure TScriptLoaderApp.InitializeRuntime(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine,
-    not EngineOptions.NoHostFilesystem.Present);
+  Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
-end;
-
-procedure TScriptLoaderApp.InitializeRuntimeWithUnsafeFFI(
-  const AEngine: TGocciaEngine);
-begin
-  InitializeRuntime(AEngine);
-  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
+  InstallFFIIfGranted(Runtime);
 end;
 
 function TScriptLoaderApp.UsageLine: string;
@@ -312,8 +304,7 @@ var
   HostEnvironmentModulePath: string;
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine,
-    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
+  Runtime := AttachRuntime(AEngine);
 
   if FHostEnvironmentModule.FromCommandLine then
     HostEnvironmentModulePath := FHostEnvironmentModule.Value
@@ -332,9 +323,7 @@ begin
   end;
 
   ApplyLoaderRuntimeProfile(Runtime);
-  if Assigned(EngineOptions) and
-     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  InstallFFIIfGranted(Runtime);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
@@ -1045,10 +1034,8 @@ begin
       CoverageTracker.Enabled := False;
     end;
     try
-      if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-        EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
-      else
-        EnsureSharedPrototypesInitialized(InitializeRuntime);
+      EnsureSharedPrototypesInitialized(WarmUpCapabilities(AFiles),
+        InitializeRuntime);
     finally
       if Assigned(CoverageTracker) then
         CoverageTracker.Enabled := CoverageWasEnabled;
@@ -1201,10 +1188,8 @@ begin
     CoverageTracker.Enabled := False;
   end;
   try
-    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-      EnsureSharedPrototypesInitialized(InitializeRuntimeWithUnsafeFFI)
-    else
-      EnsureSharedPrototypesInitialized(InitializeRuntime);
+    EnsureSharedPrototypesInitialized(WarmUpCapabilities(AFiles),
+      InitializeRuntime);
   finally
     if Assigned(CoverageTracker) then
       CoverageTracker.Enabled := CoverageWasEnabled;

@@ -15,6 +15,7 @@ uses
   Goccia.Application,
   Goccia.Base64,
   Goccia.Builtins.Console,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.CLI.Application,
   Goccia.CLI.Options,
@@ -86,6 +87,14 @@ type
     FRunScriptDepth: Integer;
     FCurrentOutputLines: TStrings;
     FCurrentHostEnvironment: TGocciaHostEnvironment;
+    { The running sandbox engine's capability set. A nested runScript child
+      inherits it, so a child never reaches more than its parent (ADR 0122). }
+    FCurrentCapabilities: TGocciaCapabilities;
+    FHasCurrentCapabilities: Boolean;
+    { The running sandbox engine; a nested runScript child is its audit
+      child, reporting through the same sink without repeating the
+      inherited capabilities.effective event. }
+    FCurrentEngine: TGocciaEngine;
 
     procedure SeedHostPathSpec(const ASpec, ABaseDirectory: string);
     procedure SeedHostPath(const AHostPath, ASandboxPath: string);
@@ -142,6 +151,7 @@ type
       const ASeen: TList): TGocciaValue;
     procedure WriteDiffIfRequested;
   protected
+    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
     procedure Configure; override;
     function UsageLine: string; override;
     function ShouldApplyRootConfig(const APaths: TStringList;
@@ -257,6 +267,13 @@ begin
   Add(FFsQuotaBytes);
   FFsNodeLimit := AddInteger('fs-node-limit',
     'Maximum files and directories in the sandbox filesystem (default: 4096)');
+end;
+
+{ The sandbox runner loads no host files and has no node_modules lookup; it
+  has always honored the net and ffi options. }
+function TSandboxRunnerApp.HonoredCapabilityOptions: TGocciaCapabilityOptions;
+begin
+  Result := [gcoAllowedHosts, gcoFetchDenyPrivateRanges, gcoUnsafeFFI];
 end;
 
 function TSandboxRunnerApp.UsageLine: string;
@@ -679,7 +696,10 @@ var
   EmptyConfig: TConfigEntryArray;
 begin
   EmptyConfig := EmptyConfigEntries;
-  ConfigureCapabilityAudit(AEngine);
+  if Assigned(FCurrentEngine) then
+    AEngine.ConfigureCapabilityAuditAsChildOf(FCurrentEngine)
+  else
+    ConfigureCapabilityAudit(AEngine);
   if Assigned(AParentHostEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentHostEnvironment)
   else if ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig) then
@@ -688,15 +708,12 @@ begin
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
   Runtime.Install(TGocciaSandboxRuntimeExtension.Create(AContext));
-  if ResolveFlagOption(EngineOptions.UnsafeFFI, EmptyConfig) then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
+  InstallFFIIfGranted(Runtime);
   if ResolveFlagOption(EngineOptions.ExperimentalAST, EmptyConfig) then
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
 
   { Same option application every other binary gets from CreateEngine, in the
-    same position relative to runtime attachment — SetAllowedFetchHosts fans
-    out to engine extensions, so it has to run after the runtime is installed.
-    The per-file config is empty because AFileName is a sandbox path, not a
+    same position relative to runtime attachment. The per-file config is empty because AFileName is a sandbox path, not a
     host path: a per-file walk upwards from it would leave the sandbox
     namespace entirely and climb the host filesystem from its root, so it
     could only ever find a config that has nothing to do with this run.
@@ -832,6 +849,10 @@ var
   CloneRealm, ExecutionRealm: TGocciaRealm;
   PreviousOutputLines: TStrings;
   PreviousHostEnvironment: TGocciaHostEnvironment;
+  PreviousCapabilities: TGocciaCapabilities;
+  PreviousHasCapabilities: Boolean;
+  PreviousEngine: TGocciaEngine;
+  EngineCapabilities: TGocciaCapabilities;
   RenderScope: TGocciaDiagnosticSourceScope;
   ExpectedPrincipal: Int64;
 begin
@@ -862,10 +883,22 @@ begin
   CloneRealm := CurrentRealm;
   PreviousOutputLines := FCurrentOutputLines;
   PreviousHostEnvironment := FCurrentHostEnvironment;
+  PreviousCapabilities := FCurrentCapabilities;
+  PreviousHasCapabilities := FHasCurrentCapabilities;
+  PreviousEngine := FCurrentEngine;
   FCurrentOutputLines := OutputLines;
   try
     try
       ConfigureSandboxResolver(Resolver);
+
+      { The root run's set comes from the options the sandbox runner has
+        always honored: net and ffi. It loads no host files and has no
+        node_modules lookup. A nested run inherits its parent's set. }
+      if FHasCurrentCapabilities then
+        EngineCapabilities := FCurrentCapabilities
+      else
+        EngineCapabilities := ResolveEngineCapabilities(
+          EmptyConfigEntries, '');
 
       if EngineOptions.Mode.Matches(emBytecode) then
       begin
@@ -879,13 +912,17 @@ begin
         Executor := InterpreterExecutor;
       end;
 
-      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor);
+      Engine := TGocciaEngine.Create(AEntryPath, Source, Resolver, Executor,
+        EngineCapabilities);
+      FCurrentCapabilities := Engine.Capabilities;
+      FHasCurrentCapabilities := True;
       Engine.ModuleLoader.SetContentProvider(Provider, True);
       Provider := nil;
       ConfigureEngineForSandbox(Engine, AContext, AEntryPath,
         PreviousHostEnvironment);
       ApplyVirtualModulesToEngine(Engine, '');
       FCurrentHostEnvironment := Engine.HostEnvironment;
+      FCurrentEngine := Engine;
 
       { The recipient owns render authorization. A top-level runner invocation
         explicitly authorizes the engine it just created. During nested
@@ -962,7 +999,7 @@ begin
       on E: TGocciaThrowValue do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.Value, AEntryPath, Source,
-          False, ExpectedPrincipal, E.Suggestion);
+          False, ExpectedPrincipal, E.Suggestion, True, E.SuggestionIsHostOnly);
         Result.FailureKind := sfkScriptError;
       end;
       { The same guest throw, as the bytecode VM delivers it.  Without this
@@ -972,7 +1009,8 @@ begin
       on E: EGocciaBytecodeThrow do
       begin
         Result.ErrorMessage := FormatThrowDetail(E.ThrownValue, AEntryPath,
-          Source, False, ExpectedPrincipal, E.Suggestion);
+          Source, False, ExpectedPrincipal, E.Suggestion, True,
+          E.SuggestionIsHostOnly);
         Result.FailureKind := sfkScriptError;
       end;
       { Whatever is left is a native error the engine does not model.
@@ -996,6 +1034,9 @@ begin
     Resolver.Free;
     Provider.Free;
     FCurrentHostEnvironment := PreviousHostEnvironment;
+    FCurrentCapabilities := PreviousCapabilities;
+    FHasCurrentCapabilities := PreviousHasCapabilities;
+    FCurrentEngine := PreviousEngine;
     FCurrentOutputLines := PreviousOutputLines;
     OutputLines.Free;
     Source.Free;

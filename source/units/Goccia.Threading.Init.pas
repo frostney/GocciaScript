@@ -14,6 +14,7 @@ unit Goccia.Threading.Init;
 interface
 
 uses
+  Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Executor.Interpreter;
 
@@ -24,7 +25,13 @@ type
   initialisation for every built-in type. Safe to call multiple times
   (subsequent calls are no-ops once prototypes are populated). }
 procedure EnsureSharedPrototypesInitialized(
-  const AInitializer: TGocciaEngineInitializer = nil);
+  const AInitializer: TGocciaEngineInitializer = nil); overload;
+{ As above, with the throwaway engine created under ACapabilities, so an
+  initializer can install capability-gated extensions such as FFI and warm
+  their shared prototypes too. }
+procedure EnsureSharedPrototypesInitialized(
+  const ACapabilities: TGocciaCapabilities;
+  const AInitializer: TGocciaEngineInitializer = nil); overload;
 
 { Materialises the lazy heavyweight globals (#747/#790) on the given engine so
   that their process-global initialisation — Intl loads ICU/CLDR data, Temporal
@@ -48,6 +55,13 @@ uses
 
 procedure EnsureSharedPrototypesInitialized(
   const AInitializer: TGocciaEngineInitializer);
+begin
+  EnsureSharedPrototypesInitialized(TGocciaCapabilities.None, AInitializer);
+end;
+
+procedure EnsureSharedPrototypesInitialized(
+  const ACapabilities: TGocciaCapabilities;
+  const AInitializer: TGocciaEngineInitializer);
 var
   Source: TStringList;
   Engine: TGocciaEngine;
@@ -60,7 +74,8 @@ begin
     // every value type (Array, Object, Map, Set, Promise, etc.).
     Executor := TGocciaInterpreterExecutor.Create;
     try
-      Engine := TGocciaEngine.Create('<thread-init>', Source, Executor);
+      Engine := TGocciaEngine.Create('<thread-init>', Source, Executor,
+        ACapabilities);
       try
         if Assigned(AInitializer) then
           AInitializer(Engine);

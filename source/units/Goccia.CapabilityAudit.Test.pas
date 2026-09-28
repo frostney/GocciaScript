@@ -9,6 +9,7 @@ uses
   SandboxVirtualFileSystem,
   TestingPascalLibrary,
 
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Executor,
@@ -51,7 +52,11 @@ type
     procedure TestVMAsyncIteratorCannotCatchSinkFailure;
     procedure TestFailedRuntimeInstallRestoresRootClampCallback;
     procedure TestSandboxDetachRestoresExistingModules;
-    procedure TestEmbeddedNodeModulesGrantEmitsAudit;
+    procedure TestEffectiveCapabilitiesEmittedOnce;
+    procedure TestEffectiveCapabilitiesPrecedeFirstEvent;
+    procedure TestChildContextDoesNotRepeatEffectiveSet;
+    procedure TestNodeModulesResolutionEmitsImportAudit;
+    procedure TestUngrantedNodeModulesEmitsDeny;
   public
     procedure SetupTests; override;
   end;
@@ -71,8 +76,16 @@ begin
     TestFailedRuntimeInstallRestoresRootClampCallback);
   Test('Sandbox detach restores existing runtime modules',
     TestSandboxDetachRestoresExistingModules);
-  Test('An embedded node_modules grant emits the capability audit event',
-    TestEmbeddedNodeModulesGrantEmitsAudit);
+  Test('capabilities.effective is emitted once per engine',
+    TestEffectiveCapabilitiesEmittedOnce);
+  Test('capabilities.effective precedes the first other event',
+    TestEffectiveCapabilitiesPrecedeFirstEvent);
+  Test('A child context does not repeat capabilities.effective',
+    TestChildContextDoesNotRepeatEffectiveSet);
+  Test('Each granted node_modules resolution emits import.node-modules',
+    TestNodeModulesResolutionEmitsImportAudit);
+  Test('A bare specifier without the import grant emits a deny',
+    TestUngrantedNodeModulesEmitsDeny);
 end;
 
 constructor TFailingRootClampRuntimeExtension.Create(
@@ -127,7 +140,7 @@ procedure TCapabilityAuditTests.TestSerializesStructuredEvent;
 var
   AuditEvent: TGocciaCapabilityAuditEvent;
 begin
-  AuditEvent.Kind := gckFetchHost;
+  AuditEvent.Kind := gckNetFetch;
   AuditEvent.Decision := gcdDeny;
   AuditEvent.Subject := 'https://blocked.test/"quoted"';
   AuditEvent.Reason := 'host is not allowed';
@@ -136,7 +149,7 @@ begin
   AuditEvent.Source.Column := 3;
 
   Expect<string>(AuditEvent.ToJSON).ToBe(
-    '{"schemaVersion":1,"kind":"fetch.host","decision":"deny",' +
+    '{"schemaVersion":1,"kind":"net.fetch","decision":"deny",' +
     '"subject":"https://blocked.test/\"quoted\"",' +
     '"reason":"host is not allowed",' +
     '"source":{"file":"app.js","line":7,"column":3}}');
@@ -177,6 +190,8 @@ begin
     ErrorMessage := '';
     Raised := False;
     try
+      { The first delivery is the engine's capabilities.effective event,
+        emitted ahead of the event being reported. }
       Engine.EmitCapabilityAudit(gckFFIOpen, gcdAllow, 'library',
         'enabled');
     except
@@ -188,7 +203,7 @@ begin
     end;
     Expect<Integer>(FSinkInvocationCount).ToBe(1);
     Expect<Boolean>(Raised).ToBe(True);
-    Expect<Boolean>(Pos('library', ErrorMessage) > 0).ToBe(True);
+    Expect<Boolean>(Pos('"layers"', ErrorMessage) > 0).ToBe(True);
   finally
     Engine.Free;
     Executor.Free;
@@ -367,11 +382,36 @@ begin
   end;
 end;
 
-{ TGocciaEngine.AllowNodeModules is the embedding host's entry point for the
-  capability. The CLI emits its own event around its direct resolver call, so
-  an embedder that never touches the CLI has to get one from here or the grant
-  is invisible to an auditor. }
-procedure TCapabilityAuditTests.TestEmbeddedNodeModulesGrantEmitsAudit;
+procedure TCapabilityAuditTests.TestEffectiveCapabilitiesEmittedOnce;
+var
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+  Capabilities: TGocciaCapabilities;
+begin
+  FRecordedEvents := TStringList.Create;
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, 'example.com');
+  Engine := TGocciaEngine.Create('audit-effective.js', Source, Executor,
+    Capabilities);
+  try
+    Engine.CapabilityAuditSink := RecordingSink;
+    Engine.AuditEffectiveCapabilities;
+    Engine.AuditEffectiveCapabilities;
+    Expect<Integer>(FRecordedEvents.Count).ToBe(1);
+    Expect<string>(FRecordedEvents[0]).ToBe('capabilities.effective|allow|' +
+      Capabilities.ToJSON);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    FRecordedEvents.Free;
+    FRecordedEvents := nil;
+  end;
+end;
+
+procedure TCapabilityAuditTests.TestEffectiveCapabilitiesPrecedeFirstEvent;
 var
   Source: TStringList;
   Executor: TGocciaInterpreterExecutor;
@@ -380,18 +420,167 @@ begin
   FRecordedEvents := TStringList.Create;
   Source := TStringList.Create;
   Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create('audit-node-modules.js', Source, Executor);
+  Engine := TGocciaEngine.Create('audit-effective-first.js', Source, Executor);
   try
     Engine.CapabilityAuditSink := RecordingSink;
-    Engine.AllowNodeModules;
-    Expect<Integer>(FRecordedEvents.Count).ToBe(1);
-    Expect<string>(FRecordedEvents[0]).ToBe('modules.node-modules|allow|');
+    Engine.EmitCapabilityAudit(gckFFIOpen, gcdDeny, 'lib', 'no grant');
+    Engine.EmitCapabilityAudit(gckFFIOpen, gcdDeny, 'lib', 'no grant');
+    Expect<Integer>(FRecordedEvents.Count).ToBe(3);
+    Expect<string>(FRecordedEvents[0]).ToBe('capabilities.effective|allow|' +
+      TGocciaCapabilities.None.ToJSON);
+    Expect<string>(FRecordedEvents[1]).ToBe('ffi.open|deny|lib');
   finally
     Engine.Free;
     Executor.Free;
     Source.Free;
     FRecordedEvents.Free;
     FRecordedEvents := nil;
+  end;
+end;
+
+procedure TCapabilityAuditTests.TestChildContextDoesNotRepeatEffectiveSet;
+var
+  Source, ChildSource: TStringList;
+  Executor, ChildExecutor: TGocciaInterpreterExecutor;
+  Engine, Child: TGocciaEngine;
+begin
+  FRecordedEvents := TStringList.Create;
+  Source := TStringList.Create;
+  ChildSource := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  ChildExecutor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create('audit-parent.js', Source, Executor);
+  Child := nil;
+  try
+    Engine.CapabilityAuditSink := RecordingSink;
+    Engine.AuditEffectiveCapabilities;
+    Child := TGocciaEngine.Create('audit-child.js', ChildSource,
+      ChildExecutor, Engine.Capabilities);
+    Child.ConfigureCapabilityAuditAsChildOf(Engine);
+    Child.AuditEffectiveCapabilities;
+    Child.EmitCapabilityAudit(gckFFIOpen, gcdDeny, 'lib', 'no grant');
+    Expect<Integer>(FRecordedEvents.Count).ToBe(2);
+    Expect<string>(FRecordedEvents[1]).ToBe('ffi.open|deny|lib');
+  finally
+    Child.Free;
+    Engine.Free;
+    ChildExecutor.Free;
+    Executor.Free;
+    ChildSource.Free;
+    Source.Free;
+    FRecordedEvents.Free;
+    FRecordedEvents := nil;
+  end;
+end;
+
+{ Writes a package.json and index.js for "pkg" under <root>/node_modules and
+  returns the path of <root>/app.js. }
+function WriteNodeModulesProject(const ARoot: string): string;
+var
+  PackageDirectory: string;
+begin
+  PackageDirectory := IncludeTrailingPathDelimiter(ARoot) + 'node_modules' +
+    PathDelim + 'pkg';
+  ForceDirectories(PackageDirectory);
+  with TStringList.Create do
+  try
+    Text := '{"name":"pkg","type":"module","exports":"./index.js"}';
+    SaveToFile(PackageDirectory + PathDelim + 'package.json');
+    Text := 'export const value = 42;';
+    SaveToFile(PackageDirectory + PathDelim + 'index.js');
+  finally
+    Free;
+  end;
+  Result := IncludeTrailingPathDelimiter(ARoot) + 'app.js';
+end;
+
+procedure RemoveNodeModulesProject(const ARoot: string);
+var
+  PackageDirectory: string;
+begin
+  PackageDirectory := IncludeTrailingPathDelimiter(ARoot) + 'node_modules' +
+    PathDelim + 'pkg';
+  DeleteFile(PackageDirectory + PathDelim + 'package.json');
+  DeleteFile(PackageDirectory + PathDelim + 'index.js');
+  RemoveDir(PackageDirectory);
+  RemoveDir(IncludeTrailingPathDelimiter(ARoot) + 'node_modules');
+  RemoveDir(ARoot);
+end;
+
+function TestProjectRoot(const AName: string): string;
+begin
+  Result := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-audit-' + AName + '-' + IntToStr(GetProcessID);
+end;
+
+procedure TCapabilityAuditTests.TestNodeModulesResolutionEmitsImportAudit;
+var
+  Root, EntryPath: string;
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Root := TestProjectRoot('node-modules');
+  EntryPath := WriteNodeModulesProject(Root);
+  FRecordedEvents := TStringList.Create;
+  Source := TStringList.Create;
+  Source.Text := 'import { value } from "pkg"; value;';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(EntryPath, Source, Executor,
+    TGocciaCapabilities.None.Allow(gcImport, IMPORT_NODE_MODULES_SCOPE));
+  try
+    Engine.SourceType := stModule;
+    AttachRuntime(Engine);
+    Engine.CapabilityAuditSink := RecordingSink;
+    Engine.Execute;
+    Expect<Boolean>(FRecordedEvents.IndexOf(
+      'import.node-modules|allow|pkg') >= 0).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    FRecordedEvents.Free;
+    FRecordedEvents := nil;
+    RemoveNodeModulesProject(Root);
+  end;
+end;
+
+procedure TCapabilityAuditTests.TestUngrantedNodeModulesEmitsDeny;
+var
+  Root, EntryPath, ErrorMessage: string;
+  Source: TStringList;
+  Executor: TGocciaInterpreterExecutor;
+  Engine: TGocciaEngine;
+begin
+  Root := TestProjectRoot('node-modules-denied');
+  EntryPath := WriteNodeModulesProject(Root);
+  FRecordedEvents := TStringList.Create;
+  Source := TStringList.Create;
+  Source.Text := 'import { value } from "pkg"; value;';
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(EntryPath, Source, Executor);
+  try
+    Engine.SourceType := stModule;
+    AttachRuntime(Engine);
+    Engine.CapabilityAuditSink := RecordingSink;
+    ErrorMessage := '';
+    try
+      Engine.Execute;
+    except
+      on E: Exception do
+        ErrorMessage := E.Message;
+    end;
+    Expect<Boolean>(Pos('Cannot resolve bare module specifier "pkg"',
+      ErrorMessage) > 0).ToBe(True);
+    Expect<Boolean>(FRecordedEvents.IndexOf(
+      'import.node-modules|deny|pkg') >= 0).ToBe(True);
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    FRecordedEvents.Free;
+    FRecordedEvents := nil;
+    RemoveNodeModulesProject(Root);
   end;
 end;
 

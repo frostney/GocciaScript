@@ -75,6 +75,20 @@ procedure ThrowURIError(const AMessage, ASuggestion: string); overload;
 procedure ThrowError(const AMessage: string); overload;
 procedure ThrowError(const AMessage, ASuggestion: string); overload;
 
+{ The capability-denial error (ADR 0122): a PermissionDenied whose message is
+  `<capability>: <scope>` and which carries both as own `capability` and
+  `scope` properties. AScope is guest-visible, so callers pass what the guest
+  asked for (a specifier, a host name) and never an expanded host path
+  (ADR 0108). }
+function CreatePermissionDeniedError(const ACapability,
+  AScope: string): TGocciaObjectValue;
+
+{ Raises CreatePermissionDeniedError. ASuggestion is host-side only: it reaches
+  CLI error output but never the guest, so it may name paths and flags. The
+  throw marks it SuggestionIsHostOnly, whatever the created value is. }
+procedure ThrowPermissionDenied(const ACapability, AScope,
+  ASuggestion: string);
+
 implementation
 
 uses
@@ -85,6 +99,7 @@ uses
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Diagnostics.SourceRegistry,
+  Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
   Goccia.Values.Error,
   Goccia.Values.ObjectPropertyDescriptor;
@@ -101,8 +116,27 @@ const
     (ERROR_SOURCE_CONTEXT_BEFORE + 1 + ERROR_SOURCE_CONTEXT_AFTER) *
     GOCCIA_DIAGNOSTIC_EXCERPT_MAX_LINE_BYTES;
 
-procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
-  const ASkipTop: Integer);
+{ Drops recorded provenance, returning any excerpt bytes to the collector
+  they were charged against. }
+procedure ClearErrorSourceLocation(const AErrorObject: TGocciaErrorObjectValue);
+begin
+  if (AErrorObject.ErrorSourceExcerptCharged > 0) and
+     Assigned(AErrorObject.ErrorSourceExcerptCollector) then
+    AErrorObject.ErrorSourceExcerptCollector.ReleaseExternalBytes(
+      AErrorObject.ErrorSourceExcerptCharged);
+  AErrorObject.ErrorSourceExcerptCharged := 0;
+  AErrorObject.ErrorSourceExcerptCollector := nil;
+  AErrorObject.HasErrorSourceLocation := False;
+  AErrorObject.ErrorSourcePath := '';
+  AErrorObject.ErrorSourceLine := 0;
+  AErrorObject.ErrorSourceColumn := 0;
+  AErrorObject.ErrorSourceExcerpt := '';
+  AErrorObject.ErrorSourceExcerptFirstLine := 0;
+  AErrorObject.ErrorSourcePrincipal := 0;
+end;
+
+procedure AttachErrorSourceLocation(const AErrorObject: TGocciaErrorObjectValue;
+  const APath: string; const ALine, AColumn: Integer);
 var
   ErrorObject: TGocciaErrorObjectValue;
   Path, ExcerptText: string;
@@ -113,16 +147,11 @@ var
   ExcerptBytes: Int64;
   Reserved: Boolean;
 begin
-  // Provenance lives only on the error subclass; a factory that builds a plain
-  // object simply carries none (and renders no frame).
-  if not (AError is TGocciaErrorObjectValue) then
-    Exit;
-  ErrorObject := TGocciaErrorObjectValue(AError);
-  if TGocciaCallStack.Instance = nil then
-    Exit;
-  if not TGocciaCallStack.Instance.TryGetTopThrowLocation(ASkipTop, Path,
-    Line, Col) then
-    Exit;
+  ErrorObject := AErrorObject;
+  ClearErrorSourceLocation(ErrorObject);
+  Path := APath;
+  Line := ALine;
+  Col := AColumn;
   ErrorObject.HasErrorSourceLocation := True;
   ErrorObject.ErrorSourcePath := Path;
   ErrorObject.ErrorSourceLine := Line;
@@ -185,6 +214,24 @@ begin
   end;
 end;
 
+procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
+  const ASkipTop: Integer);
+var
+  Path: string;
+  Line, Col: Integer;
+begin
+  // Provenance lives only on the error subclass; a factory that builds a plain
+  // object simply carries none (and renders no frame).
+  if not (AError is TGocciaErrorObjectValue) then
+    Exit;
+  if TGocciaCallStack.Instance = nil then
+    Exit;
+  if not TGocciaCallStack.Instance.TryGetTopThrowLocation(ASkipTop, Path,
+    Line, Col) then
+    Exit;
+  AttachErrorSourceLocation(TGocciaErrorObjectValue(AError), Path, Line, Col);
+end;
+
 function DOMExceptionLegacyCode(const AName: string): Integer;
 begin
   if AName = DATA_CLONE_ERROR_NAME then
@@ -219,6 +266,8 @@ begin
     Result := GetAggregateErrorProto
   else if AName = SUPPRESSED_ERROR_NAME then
     Result := GetSuppressedErrorProto
+  else if AName = PERMISSION_DENIED_NAME then
+    Result := GetPermissionDeniedProto
   else if AName = ERROR_NAME then
     Result := GetErrorProto
   else
@@ -397,6 +446,44 @@ end;
 procedure ThrowError(const AMessage, ASuggestion: string);
 begin
   RaiseNativeError(ERROR_NAME, AMessage, ASuggestion);
+end;
+
+function CreatePermissionDeniedError(const ACapability,
+  AScope: string): TGocciaObjectValue;
+begin
+  Result := CreateErrorObject(PERMISSION_DENIED_NAME,
+    ACapability + ': ' + AScope);
+  Result.AssignProperty(PROP_CAPABILITY,
+    TGocciaStringLiteralValue.Create(ACapability));
+  Result.AssignProperty(PROP_SCOPE, TGocciaStringLiteralValue.Create(AScope));
+end;
+
+procedure ThrowPermissionDenied(const ACapability, AScope,
+  ASuggestion: string);
+var
+  CallSite: TGocciaCallSite;
+  ErrorValue: TGocciaObjectValue;
+  ErrorObject: TGocciaErrorObjectValue;
+begin
+  ErrorValue := CreatePermissionDeniedError(ACapability, AScope);
+  if ErrorValue is TGocciaErrorObjectValue then
+  begin
+    ErrorObject := TGocciaErrorObjectValue(ErrorValue);
+    { The suggestion rides on the error so it still reaches the host when the
+      denial surfaces through a rejected import() or fetch() promise. }
+    ErrorObject.ErrorHostSuggestion := ASuggestion;
+    { A denial is located at the guest call that asked for the resource —
+      fetch(), FFI.open(), import() — which both executors record the same
+      way. Without one (a static import being linked) it carries no location
+      rather than whatever frame an executor happens to have on its stack. }
+    if CurrentGocciaCallSite(CallSite) and (CallSite.FilePath <> '') and
+       (CallSite.Line > 0) then
+      AttachErrorSourceLocation(ErrorObject, CallSite.FilePath, CallSite.Line,
+        CallSite.Column)
+    else
+      ClearErrorSourceLocation(ErrorObject);
+  end;
+  raise TGocciaThrowValue.Create(ErrorValue, ASuggestion, True);
 end;
 
 end.

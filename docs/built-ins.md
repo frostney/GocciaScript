@@ -27,7 +27,7 @@ Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtensi
 
 `GocciaSandboxRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
-FFI is not part of the loader runtime profile. CLI tools install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config.
+FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` when `--unsafe-ffi` is passed or `"unsafe-ffi": true` is set in config. See [Permissions](permissions.md).
 
 `ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is installed only on demand. The engine registers `globalThis.ShadowRealm` (`Goccia.Builtins.GlobalShadowRealm.pas`) when `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation and `ShadowRealm.prototype.importValue` imports modules into the child realm. See [ADR 0073](adr/0073-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
 

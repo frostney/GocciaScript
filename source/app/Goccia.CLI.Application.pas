@@ -14,6 +14,7 @@ uses
 
   Goccia.Application,
   Goccia.Builtins.GlobalShadowRealm,
+  Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.CLI.Options,
   Goccia.CLI.Stdin,
@@ -79,12 +80,17 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure ConfigureCapabilityAudit(const AEngine: TGocciaEngine);
-    { Grants the node_modules capability when --allow-node-modules was given on
-      the command line, in the per-file config, or in the root config, in that
-      precedence order. Without it the resolver stays sealed against bare
-      specifiers. }
-    procedure ApplyNodeModulesResolution(const AEngine: TGocciaEngine;
-      const AFileConfig: TConfigEntryArray; const AFileConfigPath: string);
+    { The capability-bearing options this binary honors today (ADR 0122
+      layer 1). Binaries that ignore an option override this to leave it out,
+      so the engine set reproduces exactly what the binary does now. }
+    function HonoredCapabilityOptions: TGocciaCapabilityOptions; virtual;
+    { The engine capability set for a file, from the command line, its
+      per-file config, and the root config. }
+    function ResolveEngineCapabilities(const AFileConfig: TConfigEntryArray;
+      const AFileConfigPath: string): TGocciaCapabilities;
+    { The set for a main-thread warm-up engine: it grants ffi when any of
+      AFiles would, so the FFI prototypes are warmed before workers start. }
+    function WarmUpCapabilities(const AFiles: TStrings): TGocciaCapabilities;
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -163,7 +169,6 @@ uses
   Math,
 
   CLI.Parser,
-  HTTPTypes,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
@@ -613,11 +618,7 @@ var
   ValueStr: string;
   MemoryLimit: Int64;
   ResponseLimit: Integer;
-  FetchPolicy: THTTPRequestPolicy;
   GC: TGarbageCollector;
-  FileHosts: TStringList;
-  HasFileHosts: Boolean;
-  I: Integer;
 begin
   if not Assigned(AEngineOptions) then
     Exit;
@@ -662,70 +663,30 @@ begin
       GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
 
-  { allowed-host: CLI option > per-file config > root config > empty (fetch blocked).
-    CLI wins outright; otherwise per-file config overrides root config. }
-  if AEngineOptions.AllowedHosts.FromCommandLine then
-    AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values)
-  else
-  begin
-    HasFileHosts := False;
-    for I := 0 to High(AFileConfig) do
-      if AFileConfig[I].Key = 'allowed-hosts' then
-      begin
-        HasFileHosts := True;
-        Break;
-      end;
+  { allowed-host, fetch-deny-private-ranges, and the other capability-bearing
+    options were resolved into the engine's capability set before the engine
+    was created. }
 
-    if HasFileHosts then
-    begin
-      FileHosts := TStringList.Create;
-      try
-        for I := 0 to High(AFileConfig) do
-          if AFileConfig[I].Key = 'allowed-hosts' then
-          begin
-            { Empty-value sentinel marks an explicit empty array.
-              In a merged extends chain child entries come first,
-              so a sentinel stops accumulation of base values. }
-            if AFileConfig[I].Value = '' then
-              Break;
-            FileHosts.Add(AFileConfig[I].Value);
-          end;
-        AEngine.SetAllowedFetchHosts(FileHosts);
-      finally
-        FileHosts.Free;
-      end;
-    end
-    else if AEngineOptions.AllowedHosts.Present then
-      AEngine.SetAllowedFetchHosts(AEngineOptions.AllowedHosts.Values);
-  end;
-
-  { fetch-deny-private-ranges / fetch-max-response-bytes: CLI flag > per-file
-    config > root config > defaults. Applied to this engine's fetch only, so
-    a nested engine (a sandbox runScript child) configured here cannot change
-    the policy its parent's requests run under. }
-  FetchPolicy := DefaultHTTPPolicy;
-  FetchPolicy.DenyPrivateRanges := ResolveFlagOption(
-    AEngineOptions.FetchDenyPrivateRanges, AFileConfig);
-
+  { fetch-max-response-bytes: CLI flag > per-file config > root config >
+    default. An engine setting, not a capability; each request carries its
+    engine's value. }
+  ResponseLimit := 0;
   if AEngineOptions.FetchMaxResponseBytes.FromCommandLine then
-    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value
+    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value
   else if FindConfigEntry(AFileConfig, 'fetch-max-response-bytes',
     ValueStr) then
   begin
     if not TryStrToInt(ValueStr, ResponseLimit) then
       raise Exception.CreateFmt(
         'Invalid fetch-max-response-bytes value in config: %s', [ValueStr]);
-    FetchPolicy.MaxResponseBytes := ResponseLimit;
   end
   else if AEngineOptions.FetchMaxResponseBytes.Present then
-    FetchPolicy.MaxResponseBytes := AEngineOptions.FetchMaxResponseBytes.Value;
+    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value;
 
-  if FetchPolicy.MaxResponseBytes < 0 then
+  if ResponseLimit < 0 then
     raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
 
-  { False only for an engine without the fetch runtime extension, which has
-    no fetch() for the policy to govern. }
-  SetFetchRequestPolicy(AEngine, FetchPolicy);
+  AEngine.FetchMaxResponseBytes := ResponseLimit;
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
@@ -733,60 +694,42 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
-procedure TGocciaCLIApplication.ApplyNodeModulesResolution(
-  const AEngine: TGocciaEngine; const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath: string);
-var
-  BaseDirectory, Setting: string;
-  Option: TOptionalStringOption;
+function TGocciaCLIApplication.HonoredCapabilityOptions:
+  TGocciaCapabilityOptions;
 begin
-  if not Assigned(FEngineOptions) then
-    Exit;
+  Result := AllCapabilityOptions;
+end;
 
-  { A relative ceiling is anchored to whichever source supplied it: the
-    invocation directory for the flag, and the configuration file's own
-    directory for a config key — the same rule relative --alias targets
-    follow. Without it, a relative ceiling written in a config file would name
-    a different directory for every working directory the command runs from. }
-  Option := FEngineOptions.AllowNodeModules;
-  if Option.FromCommandLine then
-  begin
-    Setting := Option.Value;
-    BaseDirectory := GetCurrentDir;
-  end
-  else if FindConfigEntry(AFileConfig, Option.LongName, Setting) then
-    BaseDirectory := ExtractFilePath(AFileConfigPath)
-  else
-  begin
-    if not Option.Present then
-      Exit;
-    Setting := Option.Value;
-    if FRootConfigPath <> '' then
-      BaseDirectory := ExtractFilePath(FRootConfigPath)
-    else
-      BaseDirectory := GetCurrentDir;
+function TGocciaCLIApplication.WarmUpCapabilities(
+  const AFiles: TStrings): TGocciaCapabilities;
+begin
+  Result := TGocciaCapabilities.None;
+  if Assigned(FEngineOptions) and
+     AnyFileConfigEnablesFlag(AFiles, FEngineOptions.UnsafeFFI) then
+    Result := Result.Allow(gcFFI);
+end;
+
+function TGocciaCLIApplication.ResolveEngineCapabilities(
+  const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath: string): TGocciaCapabilities;
+begin
+  try
+    Result := ResolveCapabilities(FEngineOptions, AFileConfig,
+      AFileConfigPath, FRootConfigPath, HonoredCapabilityOptions);
+  except
+    on E: EGocciaCapabilityScopeError do
+      raise TParseError.Create(E.Message);
   end;
-
-  if BaseDirectory = '' then
-    BaseDirectory := GetCurrentDir;
-
-  ConfigureNodeModulesResolution(AEngine.Resolver, True, Setting,
-    BaseDirectory);
-
-  { The grant is a host decision, not a script action, so it is emitted once at
-    configuration time. The subject is the effective ceiling — empty when the
-    walk is unbounded, which is the part an auditor most needs to see. }
-  if AEngine.Resolver.NodeModulesEnabled then
-    AEngine.EmitCapabilityAudit(gckNodeModulesResolution, gcdAllow,
-      AEngine.Resolver.NodeModulesCeiling,
-      'bare specifiers resolve against node_modules');
 end;
 
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
   const AEngine: TGocciaEngine);
 begin
   if FAuditLogOpen then
+  begin
     AEngine.CapabilityAuditSink := HandleCapabilityAudit;
+    AEngine.AuditEffectiveCapabilities;
+  end;
 end;
 
 procedure InjectModulesFromFileSystemModule(const AEngine: TGocciaEngine;
@@ -856,15 +799,19 @@ begin
      (Extension = '.ts') then
   begin
     { The manifest is a host file named by the host, so it always loads from
-      the filesystem. Only an engine that already has host-filesystem module
-      loading may evaluate it in place; any other engine (for example under
-      --no-host-filesystem) uses an isolated loader so the script's own
-      content provider is never widened. }
-    if AEngine.ContentProvider is
-       TGocciaFileSystemModuleContentProvider then
-      AEngine.InjectModulesFromModule(APath)
+      the host filesystem. An engine whose own provider does not read the
+      host (the sandbox runner) cannot evaluate it in place. Evaluated through
+      the engine's own loader, the manifest and its imports become host-owned
+      there, so anything it leaves behind (a global function that calls
+      import(), say) would import as the host; under an outright read deny
+      (--no-host-filesystem) it is therefore evaluated in an isolated loader
+      too, and a later import made from its code is a guest read the deny
+      refuses. }
+    if AEngine.Capabilities.DeniesAll(gcRead) or
+       not AEngine.ContentProvider.ReadsHostFileSystem then
+      InjectModulesFromFileSystemModule(AEngine, APath)
     else
-      InjectModulesFromFileSystemModule(AEngine, APath);
+      AEngine.InjectModulesFromModule(APath);
     Exit;
   end;
 
@@ -1151,14 +1098,16 @@ var
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
 begin
-  Result := TGocciaEngine.Create(AFileName, ASource, AExecutor);
+  FileConfigPath := DiscoverFileConfigPath(AFileName);
+  if FileConfigPath <> '' then
+    FileConfig := ParseConfigFile(FileConfigPath)
+  else
+    SetLength(FileConfig, 0);
+  { The capability set is fixed when the engine is created (ADR 0122). }
+  Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
+    ResolveEngineCapabilities(FileConfig, FileConfigPath));
   try
     ConfigureCapabilityAudit(Result);
-    FileConfigPath := DiscoverFileConfigPath(AFileName);
-    if FileConfigPath <> '' then
-      FileConfig := ParseConfigFile(FileConfigPath)
-    else
-      SetLength(FileConfig, 0);
     if Assigned(FEngineOptions) then
     begin
       if FEngineOptions.Aliases.FromCommandLine or
@@ -1169,7 +1118,6 @@ begin
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
         AliasBaseDirectory);
-      ApplyNodeModulesResolution(Result, FileConfig, FileConfigPath);
       if ResolveFlagOption(FEngineOptions.Deterministic, FileConfig) then
         Result.HostEnvironment.UseDeterministicProfile;
     end;

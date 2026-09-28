@@ -643,6 +643,7 @@ uses
   Goccia.Constants,
   Goccia.Error,
   Goccia.Evaluator,
+  Goccia.Execution.CallSite,
   Goccia.GarbageCollector,
   Goccia.Generator.Continuation,
   Goccia.Keywords.Reserved,
@@ -1531,6 +1532,7 @@ end;
     Module: TGocciaModule;
     ImportPair: TStringStringMap.TKeyValuePair;
     NamespaceObject: TGocciaValue;
+    PreviousCallSite: TGocciaCallSite;
     SourceLoader: TLoadModuleSourceCallback;
     Value: TGocciaValue;
 
@@ -1541,91 +1543,105 @@ end;
       else
         AContext.Scope.DefineLexicalBinding(AName, AValue, dtConst);
     end;
+
+    function ExecuteImport: TGocciaControlFlow;
+    begin
+      Result := TGocciaControlFlow.Empty;
+
+      if Phase = icpDefer then
+      begin
+        if NamespaceName = '' then
+        begin
+          AContext.OnError('Deferred imports require a namespace binding',
+            Line, Column);
+          Exit;
+        end;
+        DeferredLoader := AContext.LoadDeferredModule;
+        if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
+          DeferredLoader := AContext.Scope.LoadDeferredModule;
+        if not Assigned(DeferredLoader) then
+        begin
+          AContext.OnError('Deferred module loader is not available.',
+            Line, Column);
+          Exit;
+        end;
+
+        NamespaceObject := DeferredLoader(EncodeImportSpecifierAttribute(
+          ModulePath, AttributeType), AContext.CurrentFilePath);
+        if (TGarbageCollector.Instance <> nil) then
+          TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
+        try
+          BindImportValue(NamespaceName, NamespaceObject);
+        finally
+          if (TGarbageCollector.Instance <> nil) then
+            TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
+        end;
+        Exit;
+      end;
+
+      if Phase = icpSource then
+      begin
+        SourceLoader := AContext.LoadModuleSource;
+        if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
+          SourceLoader := AContext.Scope.LoadModuleSource;
+        if not Assigned(SourceLoader) then
+        begin
+          AContext.OnError('Module source loader is not available.',
+            Line, Column);
+          Exit;
+        end;
+
+        Value := SourceLoader(EncodeImportSpecifierAttribute(
+          ModulePath, AttributeType), AContext.CurrentFilePath);
+        if (TGarbageCollector.Instance <> nil) then
+          TGarbageCollector.Instance.AddTempRoot(Value);
+        try
+          for ImportPair in Imports do
+            BindImportValue(ImportPair.Key, Value);
+        finally
+          if (TGarbageCollector.Instance <> nil) then
+            TGarbageCollector.Instance.RemoveTempRoot(Value);
+        end;
+        Exit;
+      end;
+
+      Module := AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
+        AttributeType), AContext.CurrentFilePath);
+      for ImportPair in Imports do
+      begin
+        if Module.CanResolveExport(ImportPair.Value) then
+          AContext.Scope.CreateImportBinding(ImportPair.Key, Module,
+            ImportPair.Value)
+        else
+        begin
+          AContext.OnError(Format('Module "%s" has no export named "%s"',
+            [ModulePath, ImportPair.Value]), Line, Column);
+        end;
+      end;
+
+      if NamespaceName <> '' then
+      begin
+        NamespaceObject := CreateModuleNamespaceObject(Module);
+        if (TGarbageCollector.Instance <> nil) then
+          TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
+        try
+          BindImportValue(NamespaceName, NamespaceObject);
+        finally
+          if (TGarbageCollector.Instance <> nil) then
+            TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
+        end;
+      end;
+    end;
+
   begin
-    Result := TGocciaControlFlow.Empty;
-
-    if Phase = icpDefer then
-    begin
-      if NamespaceName = '' then
-      begin
-        AContext.OnError('Deferred imports require a namespace binding',
-          Line, Column);
-        Exit;
-      end;
-      DeferredLoader := AContext.LoadDeferredModule;
-      if (not Assigned(DeferredLoader)) and Assigned(AContext.Scope) then
-        DeferredLoader := AContext.Scope.LoadDeferredModule;
-      if not Assigned(DeferredLoader) then
-      begin
-        AContext.OnError('Deferred module loader is not available.',
-          Line, Column);
-        Exit;
-      end;
-
-      NamespaceObject := DeferredLoader(EncodeImportSpecifierAttribute(
-        ModulePath, AttributeType), AContext.CurrentFilePath);
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
-      try
-        BindImportValue(NamespaceName, NamespaceObject);
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
-      end;
-      Exit;
-    end;
-
-    if Phase = icpSource then
-    begin
-      SourceLoader := AContext.LoadModuleSource;
-      if (not Assigned(SourceLoader)) and Assigned(AContext.Scope) then
-        SourceLoader := AContext.Scope.LoadModuleSource;
-      if not Assigned(SourceLoader) then
-      begin
-        AContext.OnError('Module source loader is not available.',
-          Line, Column);
-        Exit;
-      end;
-
-      Value := SourceLoader(EncodeImportSpecifierAttribute(
-        ModulePath, AttributeType), AContext.CurrentFilePath);
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(Value);
-      try
-        for ImportPair in Imports do
-          BindImportValue(ImportPair.Key, Value);
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(Value);
-      end;
-      Exit;
-    end;
-
-    Module := AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
-      AttributeType), AContext.CurrentFilePath);
-    for ImportPair in Imports do
-    begin
-      if Module.CanResolveExport(ImportPair.Value) then
-        AContext.Scope.CreateImportBinding(ImportPair.Key, Module,
-          ImportPair.Value)
-      else
-      begin
-        AContext.OnError(Format('Module "%s" has no export named "%s"',
-          [ModulePath, ImportPair.Value]), Line, Column);
-      end;
-    end;
-
-    if NamespaceName <> '' then
-    begin
-      NamespaceObject := CreateModuleNamespaceObject(Module);
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(NamespaceObject);
-      try
-        BindImportValue(NamespaceName, NamespaceObject);
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(NamespaceObject);
-      end;
+    { The declaration is the call site of what loading it decides or refuses,
+      as it is for a module's linked imports and for OP_IMPORT. }
+    EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
+      PreviousCallSite);
+    try
+      Result := ExecuteImport;
+    finally
+      LeaveGocciaCallSite(PreviousCallSite);
     end;
   end;
 
@@ -1702,10 +1718,20 @@ end;
   end;
 
   function TGocciaReExportDeclaration.Execute(const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
+  var
+    PreviousCallSite: TGocciaCallSite;
   begin
     if Assigned(AContext.LoadModule) then
-      AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
-        AttributeType), AContext.CurrentFilePath);
+    begin
+      EnterGocciaCallSite(AContext.CurrentFilePath, Line, Column,
+        PreviousCallSite);
+      try
+        AContext.LoadModule(EncodeImportSpecifierAttribute(ModulePath,
+          AttributeType), AContext.CurrentFilePath);
+      finally
+        LeaveGocciaCallSite(PreviousCallSite);
+      end;
+    end;
     Result := TGocciaControlFlow.Empty;
   end;
 

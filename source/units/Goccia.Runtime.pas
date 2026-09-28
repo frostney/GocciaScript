@@ -9,6 +9,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Interpreter,
@@ -38,7 +39,6 @@ type
       const AContent: string): Boolean; virtual;
     function TryInjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean; virtual;
-    procedure ApplyHostRestrictions(const AAllowedHosts: TStrings); virtual;
     procedure WaitForIdle; virtual;
     procedure DiscardPending; virtual;
   end;
@@ -62,8 +62,11 @@ type
     function InjectModules(const AFormat: string;
       const AContent: string; const ABaseAddress: string): Boolean;
   public
-    constructor Create(const AEngine: TGocciaEngine;
-      const AEnableHostFileLoading: Boolean = True);
+    { Installs the host filesystem content provider. Every read through it is
+      checked against the engine's capability set by the module loader, so an
+      outright read deny refuses each read with an audited PermissionDenied
+      rather than by leaving the engine without a provider. }
+    constructor Create(const AEngine: TGocciaEngine);
     destructor Destroy; override;
 
     function Install(const AExtension: TGocciaRuntimeExtension):
@@ -79,7 +82,6 @@ type
 
     procedure WaitForIdle; override;
     procedure DiscardPending; override;
-    procedure SetAllowedFetchHosts(const AHosts: TStrings); override;
     function InjectGlobalsFromJSON5(
       const AJSON5String: string): Boolean; override;
     function InjectGlobalsFromTOML(
@@ -112,6 +114,12 @@ type
       const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
       const AExecutor: TGocciaExecutor); overload;
+    constructor Create(const AFileName: string;
+      const ASourceLines: TStringList;
+      const ACapabilities: TGocciaCapabilities); overload;
+    constructor Create(const AFileName: string; const ASourceLines: TStringList;
+      const AExecutor: TGocciaExecutor;
+      const ACapabilities: TGocciaCapabilities); overload;
     destructor Destroy; override;
 
     class function AttachToEngine(
@@ -124,21 +132,34 @@ type
     function Execute: TGocciaScriptResult;
     procedure WaitForIdle;
     procedure DiscardPending;
-    procedure SetAllowedFetchHosts(const AHosts: TStrings);
 
+    { One-shot helpers. The overloads without a capability set run with
+      TGocciaCapabilities.None. }
     class function RunScript(const ASource: string;
       const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload; static;
+    class function RunScript(const ASource: string; const AFileName: string;
+      const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
+      overload; static;
     class function RunScriptFromFile(
       const AFileName: string): TGocciaScriptResult; overload; static;
+    class function RunScriptFromFile(const AFileName: string;
+      const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
+      overload; static;
     class function RunScriptFromStringList(const ASource: TStringList;
       const AFileName: string): TGocciaScriptResult; overload; static;
+    class function RunScriptFromStringList(const ASource: TStringList;
+      const AFileName: string;
+      const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
+      overload; static;
 
     property Engine: TGocciaEngine read FEngine;
     property Core: TGocciaRuntimeCore read FCore;
   end;
 
-function AttachRuntime(const AEngine: TGocciaEngine;
-  const AEnableHostFileLoading: Boolean = True): TGocciaRuntimeCore;
+{ Attaches the runtime layer, including the host filesystem content provider
+  whose reads the engine's capability set governs; see
+  TGocciaRuntimeCore.Create. }
+function AttachRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 function GetRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 
 implementation
@@ -156,8 +177,7 @@ uses
   Goccia.TextFiles,
   Goccia.Values.ArrayValue;
 
-function AttachRuntime(const AEngine: TGocciaEngine;
-  const AEnableHostFileLoading: Boolean): TGocciaRuntimeCore;
+function AttachRuntime(const AEngine: TGocciaEngine): TGocciaRuntimeCore;
 begin
   if not Assigned(AEngine) then
     raise Exception.Create('Cannot attach runtime to a nil engine.');
@@ -166,7 +186,7 @@ begin
   if Assigned(Result) then
     Exit;
 
-  Result := TGocciaRuntimeCore.Create(AEngine, AEnableHostFileLoading);
+  Result := TGocciaRuntimeCore.Create(AEngine);
   try
     AEngine.AddExtension(Result);
   except
@@ -221,11 +241,6 @@ begin
   Result := False;
 end;
 
-procedure TGocciaRuntimeExtension.ApplyHostRestrictions(
-  const AAllowedHosts: TStrings);
-begin
-end;
-
 procedure TGocciaRuntimeExtension.WaitForIdle;
 begin
 end;
@@ -236,8 +251,7 @@ end;
 
 { TGocciaRuntimeCore }
 
-constructor TGocciaRuntimeCore.Create(const AEngine: TGocciaEngine;
-  const AEnableHostFileLoading: Boolean);
+constructor TGocciaRuntimeCore.Create(const AEngine: TGocciaEngine);
 begin
   inherited Create;
   if not Assigned(AEngine) then
@@ -245,8 +259,7 @@ begin
 
   FEngine := AEngine;
   FExtensions := TObjectList<TGocciaRuntimeExtension>.Create(True);
-  if AEnableHostFileLoading then
-    ConfigureFileLoading;
+  ConfigureFileLoading;
   CaptureResolverExtensions;
   RefreshModuleExtensions;
   FPrevRuntimeModuleLoader := FEngine.ModuleLoader.RuntimeModuleLoader;
@@ -476,14 +489,6 @@ begin
     FExtensions[I].DiscardPending;
 end;
 
-procedure TGocciaRuntimeCore.SetAllowedFetchHosts(const AHosts: TStrings);
-var
-  I: Integer;
-begin
-  for I := 0 to FExtensions.Count - 1 do
-    FExtensions[I].ApplyHostRestrictions(AHosts);
-end;
-
 function TGocciaRuntimeCore.InjectGlobalsFromJSON5(
   const AJSON5String: string): Boolean;
 begin
@@ -555,10 +560,22 @@ end;
 constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList);
 begin
+  Create(AFileName, ASourceLines, TGocciaCapabilities.None);
+end;
+
+constructor TGocciaRuntime.Create(const AFileName: string;
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
+begin
+  Create(AFileName, ASourceLines, AExecutor, TGocciaCapabilities.None);
+end;
+
+constructor TGocciaRuntime.Create(const AFileName: string;
+  const ASourceLines: TStringList; const ACapabilities: TGocciaCapabilities);
+begin
   FOwnedExecutor := TGocciaInterpreterExecutor.Create;
   try
-    CreateWithEngine(
-      TGocciaEngine.Create(AFileName, ASourceLines, FOwnedExecutor), True);
+    CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines,
+      FOwnedExecutor, ACapabilities), True);
   except
     FreeAndNil(FOwnedExecutor);
     raise;
@@ -566,10 +583,11 @@ begin
 end;
 
 constructor TGocciaRuntime.Create(const AFileName: string;
-  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor);
+  const ASourceLines: TStringList; const AExecutor: TGocciaExecutor;
+  const ACapabilities: TGocciaCapabilities);
 begin
-  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AExecutor),
-    True);
+  CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines, AExecutor,
+    ACapabilities), True);
 end;
 
 destructor TGocciaRuntime.Destroy;
@@ -618,20 +636,21 @@ begin
     FCore.DiscardPending;
 end;
 
-procedure TGocciaRuntime.SetAllowedFetchHosts(const AHosts: TStrings);
+class function TGocciaRuntime.RunScript(const ASource: string;
+  const AFileName: string): TGocciaScriptResult;
 begin
-  if Assigned(FCore) then
-    FCore.SetAllowedFetchHosts(AHosts);
+  Result := RunScript(ASource, AFileName, TGocciaCapabilities.None);
 end;
 
 class function TGocciaRuntime.RunScript(const ASource: string;
-  const AFileName: string): TGocciaScriptResult;
+  const AFileName: string;
+  const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
 var
   SourceList: TStringList;
 begin
   SourceList := CreateTextLines(ASource);
   try
-    Result := RunScriptFromStringList(SourceList, AFileName);
+    Result := RunScriptFromStringList(SourceList, AFileName, ACapabilities);
   finally
     SourceList.Free;
   end;
@@ -639,12 +658,18 @@ end;
 
 class function TGocciaRuntime.RunScriptFromFile(
   const AFileName: string): TGocciaScriptResult;
+begin
+  Result := RunScriptFromFile(AFileName, TGocciaCapabilities.None);
+end;
+
+class function TGocciaRuntime.RunScriptFromFile(const AFileName: string;
+  const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
 var
   Source: TStringList;
 begin
   Source := CreateFileTextLines(ReadUTF8FileText(AFileName));
   try
-    Result := RunScriptFromStringList(Source, AFileName);
+    Result := RunScriptFromStringList(Source, AFileName, ACapabilities);
   finally
     Source.Free;
   end;
@@ -652,10 +677,18 @@ end;
 
 class function TGocciaRuntime.RunScriptFromStringList(
   const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
+begin
+  Result := RunScriptFromStringList(ASource, AFileName,
+    TGocciaCapabilities.None);
+end;
+
+class function TGocciaRuntime.RunScriptFromStringList(
+  const ASource: TStringList; const AFileName: string;
+  const ACapabilities: TGocciaCapabilities): TGocciaScriptResult;
 var
   Runtime: TGocciaRuntime;
 begin
-  Runtime := TGocciaRuntime.Create(AFileName, ASource);
+  Runtime := TGocciaRuntime.Create(AFileName, ASource, ACapabilities);
   try
     Result := Runtime.Execute;
   finally

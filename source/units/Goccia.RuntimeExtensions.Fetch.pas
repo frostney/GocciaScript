@@ -5,10 +5,6 @@ unit Goccia.RuntimeExtensions.Fetch;
 interface
 
 uses
-  Classes,
-
-  HTTPTypes,
-
   Goccia.Builtins.GlobalAbort,
   Goccia.Builtins.GlobalEventTarget,
   Goccia.Builtins.GlobalFetch,
@@ -21,25 +17,15 @@ type
     FBuiltinAbort: TGocciaGlobalAbort;
     FBuiltinEventTarget: TGocciaGlobalEventTarget;
     FBuiltinFetch: TGocciaGlobalFetch;
+    function EngineMaxResponseBytes: Integer;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
-    procedure ApplyHostRestrictions(const AAllowedHosts: TStrings); override;
     procedure WaitForIdle; override;
     procedure DiscardPending; override;
 
     property BuiltinFetch: TGocciaGlobalFetch read FBuiltinFetch;
   end;
-
-{ Sets the network policy AEngine's fetch applies to every request it starts:
-  resolved-address restrictions and the response-body ceiling. The policy
-  belongs to that engine alone, so engines on one thread — a sandbox parent
-  and its runScript child — each keep their own. Call it after the fetch
-  runtime extension is installed. Returns False, changing nothing, when the
-  engine has no fetch runtime extension: a later install starts from
-  DefaultHTTPPolicy, so a host that needs the policy must check the result. }
-function SetFetchRequestPolicy(const AEngine: TGocciaEngine;
-  const APolicy: THTTPRequestPolicy): Boolean;
 
 implementation
 
@@ -84,7 +70,9 @@ begin
   Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_ABORT_SIGNAL);
   FBuiltinFetch := TGocciaGlobalFetch.Create('Fetch',
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
-    Runtime.Engine.EmitCapabilityAudit, Runtime.Engine.Realm);
+    Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit,
+    Runtime.Engine.EmitCapabilityAuditAt, EngineMaxResponseBytes,
+    Runtime.Engine.Realm);
 
   if not Assigned(Runtime.Engine.ObjectConstructor) then
     Exit;
@@ -114,6 +102,14 @@ begin
     Runtime.SpeciesGetter, RuntimeConstructor);
 end;
 
+function TGocciaFetchRuntimeExtension.EngineMaxResponseBytes: Integer;
+begin
+  if Assigned(Runtime) then
+    Result := Runtime.Engine.FetchMaxResponseBytes
+  else
+    Result := 0;
+end;
+
 procedure TGocciaFetchRuntimeExtension.Detach;
 begin
   FBuiltinFetch.Free;
@@ -123,27 +119,6 @@ begin
   FBuiltinEventTarget.Free;
   FBuiltinEventTarget := nil;
   inherited;
-end;
-
-procedure TGocciaFetchRuntimeExtension.ApplyHostRestrictions(
-  const AAllowedHosts: TStrings);
-var
-  EmptyHosts: TStringList;
-begin
-  if not Assigned(FBuiltinFetch) then
-    Exit;
-
-  if Assigned(AAllowedHosts) then
-    FBuiltinFetch.SetAllowedHosts(AAllowedHosts)
-  else
-  begin
-    EmptyHosts := TStringList.Create;
-    try
-      FBuiltinFetch.SetAllowedHosts(EmptyHosts);
-    finally
-      EmptyHosts.Free;
-    end;
-  end;
 end;
 
 procedure TGocciaFetchRuntimeExtension.WaitForIdle;
@@ -156,24 +131,6 @@ procedure TGocciaFetchRuntimeExtension.DiscardPending;
 begin
   if Assigned(FBuiltinFetch) then
     DiscardFetchCompletions(FBuiltinFetch.Realm);
-end;
-
-function SetFetchRequestPolicy(const AEngine: TGocciaEngine;
-  const APolicy: THTTPRequestPolicy): Boolean;
-var
-  Runtime: TGocciaRuntimeCore;
-  Extension: TGocciaFetchRuntimeExtension;
-begin
-  Result := False;
-  Runtime := GetRuntime(AEngine);
-  if not Assigned(Runtime) then
-    Exit;
-  Extension := TGocciaFetchRuntimeExtension(
-    Runtime.FindRuntimeExtension(TGocciaFetchRuntimeExtension));
-  if not Assigned(Extension) or not Assigned(Extension.BuiltinFetch) then
-    Exit;
-  Extension.BuiltinFetch.RequestPolicy := APolicy;
-  Result := True;
 end;
 
 end.

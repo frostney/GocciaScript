@@ -47,6 +47,7 @@ type
     FTiming: TFlagOption;
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
   protected
+    function HonoredCapabilityOptions: TGocciaCapabilityOptions; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
@@ -66,6 +67,13 @@ var
 begin
   Runtime := AttachRuntime(AEngine);
   ApplyLoaderRuntimeProfile(Runtime);
+  InstallFFIIfGranted(Runtime);
+end;
+
+{ The REPL has never honored --no-host-filesystem. }
+function TREPLApp.HonoredCapabilityOptions: TGocciaCapabilityOptions;
+begin
+  Result := AllCapabilityOptions - [gcoNoHostFilesystem];
 end;
 
 procedure TREPLApp.ConfigureCreatedEngine(const AEngine: TGocciaEngine;
@@ -76,9 +84,6 @@ var
 begin
   InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
-  if Assigned(EngineOptions) and
-     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
   if LogFileOpen and Assigned(ConsoleExtension) and

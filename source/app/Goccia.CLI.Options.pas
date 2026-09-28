@@ -8,6 +8,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
 
+  Goccia.Capabilities,
   Goccia.SourcePipeline;
 
 type
@@ -115,6 +116,47 @@ type
     property Format: TEnumOption<TGocciaProfileFormat> read FFormat;
   end;
 
+  { The capability-bearing options a binary honors today. Layer 1 of ADR 0122
+    maps each binary's existing flags onto an engine capability set without
+    changing what each binary does with them; a binary that ignores an option
+    today leaves it out of its set. }
+  TGocciaCapabilityOption = (
+    { The binary loads modules from the host filesystem at all. }
+    gcoHostFileLoading,
+    { The binary honors --no-host-filesystem. }
+    gcoNoHostFilesystem,
+    gcoAllowedHosts,
+    gcoFetchDenyPrivateRanges,
+    gcoUnsafeFFI,
+    gcoNodeModules
+  );
+  TGocciaCapabilityOptions = set of TGocciaCapabilityOption;
+
+const
+  AllCapabilityOptions: TGocciaCapabilityOptions = [gcoHostFileLoading,
+    gcoNoHostFilesystem, gcoAllowedHosts, gcoFetchDenyPrivateRanges,
+    gcoUnsafeFFI, gcoNodeModules];
+
+{ Builds the engine capability set from today's options, with the precedence
+  every option already has: command line, then per-file config, then root
+  config.
+
+  - read: every path for a binary that loads host files, unless
+    --no-host-filesystem (or its config key) is honored and in force, which
+    denies read outright. A binary that never loads host files gets none.
+  - net: each allowed host; private ranges stay reachable for those hosts
+    unless --fetch-deny-private-ranges is in force, which denies them.
+  - ffi: every library, with --unsafe-ffi.
+  - import: node_modules with --allow-node-modules, bounded by its ceiling.
+
+  AFileConfigPath and ARootConfigPath anchor relative node_modules ceilings to
+  the config file that supplied them. Invalid scopes raise
+  EGocciaCapabilityScopeError. }
+function ResolveCapabilities(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath, ARootConfigPath: string;
+  const AHonoredOptions: TGocciaCapabilityOptions): TGocciaCapabilities;
+
 function CompatibilityFlagDescriptor(
   const AFlag: TGocciaCompatibility): TGocciaCompatibilityFlagDescriptor;
 procedure ResolveCompatibilityFlags(const AEngineOptions: TGocciaEngineOptions;
@@ -125,9 +167,143 @@ function TryApplyCompatibilityFlagArg(const AArg: string;
 
 implementation
 
+uses
+  Classes,
+  SysUtils,
+
+  Goccia.Modules.Configuration;
+
 const
   ENGINE_FIXED_OPTION_COUNT = 23;
+  ALLOWED_HOSTS_CONFIG_KEY = 'allowed-hosts';
 
+{ allowed-host: command line wins outright; otherwise per-file config
+  overrides root config. An empty-value config entry marks an explicit empty
+  array, and in a merged extends chain child entries come first, so it stops
+  accumulation of base values. }
+procedure CollectAllowedHosts(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray; const AHosts: TStrings);
+var
+  I: Integer;
+  HasFileHosts: Boolean;
+begin
+  AHosts.Clear;
+  if AEngineOptions.AllowedHosts.FromCommandLine then
+  begin
+    AHosts.AddStrings(AEngineOptions.AllowedHosts.Values);
+    Exit;
+  end;
+  HasFileHosts := False;
+  for I := 0 to High(AFileConfig) do
+    if AFileConfig[I].Key = ALLOWED_HOSTS_CONFIG_KEY then
+    begin
+      HasFileHosts := True;
+      Break;
+    end;
+  if HasFileHosts then
+  begin
+    for I := 0 to High(AFileConfig) do
+      if AFileConfig[I].Key = ALLOWED_HOSTS_CONFIG_KEY then
+      begin
+        if AFileConfig[I].Value = '' then
+          Break;
+        AHosts.Add(AFileConfig[I].Value);
+      end;
+  end
+  else if AEngineOptions.AllowedHosts.Present then
+    AHosts.AddStrings(AEngineOptions.AllowedHosts.Values);
+end;
+
+{ allow-node-modules: a relative ceiling is anchored to whichever source
+  supplied it — the invocation directory for the flag, the configuration
+  file's own directory for a config key. }
+function TryResolveNodeModulesScope(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath, ARootConfigPath: string; out AScope: string): Boolean;
+var
+  BaseDirectory, Setting: string;
+  Option: TOptionalStringOption;
+begin
+  AScope := '';
+  Option := AEngineOptions.AllowNodeModules;
+  if Option.FromCommandLine then
+  begin
+    Setting := Option.Value;
+    BaseDirectory := GetCurrentDir;
+  end
+  else if FindConfigEntry(AFileConfig, Option.LongName, Setting) then
+    BaseDirectory := ExtractFilePath(AFileConfigPath)
+  else
+  begin
+    if not Option.Present then
+      Exit(False);
+    Setting := Option.Value;
+    if ARootConfigPath <> '' then
+      BaseDirectory := ExtractFilePath(ARootConfigPath)
+    else
+      BaseDirectory := GetCurrentDir;
+  end;
+  if BaseDirectory = '' then
+    BaseDirectory := GetCurrentDir;
+  Result := TryNodeModulesImportScope(Setting, BaseDirectory, AScope);
+end;
+
+function ResolveCapabilities(const AEngineOptions: TGocciaEngineOptions;
+  const AFileConfig: TConfigEntryArray;
+  const AFileConfigPath, ARootConfigPath: string;
+  const AHonoredOptions: TGocciaCapabilityOptions): TGocciaCapabilities;
+var
+  Hosts: TStringList;
+  I: Integer;
+  NodeModulesScope: string;
+begin
+  Result := TGocciaCapabilities.None;
+  if not Assigned(AEngineOptions) then
+    Exit;
+
+  { Host-filesystem module loading is on by default today, so the default is a
+    read grant covering everything; the deny-by-default flip is the next
+    layer's CLI change. }
+  if not (gcoHostFileLoading in AHonoredOptions) then
+    { No host files are loaded, so there is nothing to grant. }
+  else if (gcoNoHostFilesystem in AHonoredOptions) and
+     ResolveFlagOption(AEngineOptions.NoHostFilesystem, AFileConfig) then
+    Result := Result.Deny(gcRead)
+  else
+    Result := Result.Allow(gcRead);
+
+  if gcoAllowedHosts in AHonoredOptions then
+  begin
+    Hosts := TStringList.Create;
+    try
+      CollectAllowedHosts(AEngineOptions, AFileConfig, Hosts);
+      for I := 0 to Hosts.Count - 1 do
+        Result := Result.Allow(gcNet, Hosts[I]);
+      if (gcoFetchDenyPrivateRanges in AHonoredOptions) and
+         ResolveFlagOption(AEngineOptions.FetchDenyPrivateRanges,
+           AFileConfig) then
+        Result := Result.Deny(gcNet, NET_PRIVATE_SCOPE)
+      else if Hosts.Count > 0 then
+        { Today an allowed host may resolve anywhere unless private ranges are
+          denied explicitly; `private` lifts the engine's default refusal
+          for exactly the hosts allowed above. }
+        Result := Result.Allow(gcNet, NET_PRIVATE_SCOPE);
+    finally
+      Hosts.Free;
+    end;
+  end;
+
+  if (gcoUnsafeFFI in AHonoredOptions) and
+     ResolveFlagOption(AEngineOptions.UnsafeFFI, AFileConfig) then
+    Result := Result.Allow(gcFFI);
+
+  if (gcoNodeModules in AHonoredOptions) and
+     TryResolveNodeModulesScope(AEngineOptions, AFileConfig, AFileConfigPath,
+       ARootConfigPath, NodeModulesScope) then
+    Result := Result.Allow(gcImport, NodeModulesScope);
+end;
+
+const
   SOURCE_COMPATIBILITY_FLAGS: array[TGocciaCompatibility]
     of TGocciaCompatibilityFlagDescriptor = (
     (OptionName: 'compat-asi';

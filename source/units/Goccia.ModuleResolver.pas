@@ -30,19 +30,36 @@ const
 type
   TModuleResolverExtensionArray = array of string;
 
+  { Asked once per bare specifier before any node_modules directory is
+    probed. Answers whether the walk may run for an importer in
+    AImportingDirectory and, when it may, the highest directory it may reach
+    (ACeiling, empty = unbounded). The engine implements it from its capability
+    set; a resolver with no callback stays sealed. May raise to refuse. }
+  TModuleResolverNodeModulesGrant = function(const ASpecifier,
+    AImportingDirectory: string; out ACeiling: string): Boolean of object;
+
+  { Called with each host path the resolver is about to test for existence,
+    in probe order, before it tests it. May raise to stop resolution; a host
+    uses it to refuse a candidate it may not read without learning whether
+    that file exists. }
+  TModuleResolverProbeGuard = procedure(const ACandidatePath: string) of object;
+
   TModuleResolver = class
   private
     FAliases: TStringStringMap;
     FBaseDirectory: string;
     FExtensions: TModuleResolverExtensionArray;
-    FNodeModulesEnabled: Boolean;
-    FNodeModulesCeiling: string;
+    FNodeModulesGrant: TModuleResolverNodeModulesGrant;
+    FProbeGuard: TModuleResolverProbeGuard;
+    FLastPackageDirectory: string;
+    FProbePackageDirectory: string;
   protected
+    function ProbeHostFile(const APath: string): Boolean;
     function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
     function TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
     { Resolves a bare specifier against node_modules. The base implementation
-      is the host-filesystem one and returns False unless the capability was
-      granted; resolvers over a different filesystem override it. }
+      is the host-filesystem one and returns False unless NodeModulesGrant
+      grants the walk; resolvers over a different filesystem override it. }
     function TryResolveBareSpecifier(const AModulePath, AImportingFilePath: string;
       out AResolvedPath: string): Boolean; virtual;
   public
@@ -52,9 +69,6 @@ type
     procedure AddAlias(const APattern, AReplacement: string);
     function ApplyAlias(const AModulePath,
       AImportingFilePath: string): string;
-    { Grants the node_modules capability. ACeilingDirectory bounds the ancestor
-      walk to that directory and below; empty walks to the filesystem root. }
-    procedure AllowNodeModules(const ACeilingDirectory: string = '');
     function GetExtensions: TModuleResolverExtensionArray;
     function HasAlias(const AModulePath: string): Boolean;
     procedure SetExtensions(const AExtensions: array of string);
@@ -62,8 +76,17 @@ type
 
     property Aliases: TStringStringMap read FAliases;
     property BaseDirectory: string read FBaseDirectory write FBaseDirectory;
-    property NodeModulesEnabled: Boolean read FNodeModulesEnabled;
-    property NodeModulesCeiling: string read FNodeModulesCeiling;
+    property NodeModulesGrant: TModuleResolverNodeModulesGrant
+      read FNodeModulesGrant write FNodeModulesGrant;
+    property ProbeGuard: TModuleResolverProbeGuard
+      read FProbeGuard write FProbeGuard;
+    { The package directory the last Resolve found a bare specifier in, as
+      the node_modules walk spelled it; empty when that resolution did not go
+      through node_modules. }
+    property LastPackageDirectory: string read FLastPackageDirectory;
+    { The package directory whose files a bare-specifier resolution is
+      probing right now, for ProbeGuard; empty otherwise. }
+    property ProbePackageDirectory: string read FProbePackageDirectory;
   end;
 
   { Raised when a specifier cannot be resolved. Message is safe to hand to
@@ -227,16 +250,6 @@ begin
   FAliases.AddOrSetValue(APattern, AReplacement);
 end;
 
-procedure TModuleResolver.AllowNodeModules(const ACeilingDirectory: string);
-begin
-  FNodeModulesEnabled := True;
-  if ACeilingDirectory <> '' then
-    FNodeModulesCeiling := ExcludeTrailingPathDelimiter(
-      ExpandHostFileName(ACeilingDirectory))
-  else
-    FNodeModulesCeiling := '';
-end;
-
 function TModuleResolver.ApplyAlias(const AModulePath,
   AImportingFilePath: string): string;
 begin
@@ -313,12 +326,19 @@ begin
   end;
 end;
 
+function TModuleResolver.ProbeHostFile(const APath: string): Boolean;
+begin
+  if Assigned(FProbeGuard) then
+    FProbeGuard(APath);
+  Result := HostFileExists(APath);
+end;
+
 function TModuleResolver.TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
 var
   I: Integer;
   TypeScriptCandidates: TFileExtensionArray;
 begin
-  if HostFileExists(ABasePath) then
+  if ProbeHostFile(ABasePath) then
   begin
     AResolvedPath := ABasePath;
     Exit(True);
@@ -327,7 +347,7 @@ begin
   TypeScriptCandidates := TypeScriptSourceCandidates(ABasePath);
   for I := 0 to High(TypeScriptCandidates) do
   begin
-    if HostFileExists(TypeScriptCandidates[I]) then
+    if ProbeHostFile(TypeScriptCandidates[I]) then
     begin
       AResolvedPath := TypeScriptCandidates[I];
       Exit(True);
@@ -336,7 +356,7 @@ begin
 
   for I := 0 to High(FExtensions) do
   begin
-    if HostFileExists(ABasePath + FExtensions[I]) then
+    if ProbeHostFile(ABasePath + FExtensions[I]) then
     begin
       AResolvedPath := ABasePath + FExtensions[I];
       Exit(True);
@@ -345,7 +365,7 @@ begin
 
   for I := 0 to High(FExtensions) do
   begin
-    if HostFileExists(ABasePath + PathDelim + 'index' + FExtensions[I]) then
+    if ProbeHostFile(ABasePath + PathDelim + 'index' + FExtensions[I]) then
     begin
       AResolvedPath := ABasePath + PathDelim + 'index' + FExtensions[I];
       Exit(True);
@@ -358,12 +378,13 @@ end;
 function TModuleResolver.TryResolveBareSpecifier(const AModulePath,
   AImportingFilePath: string; out AResolvedPath: string): Boolean;
 var
+  Ceiling: string;
   Manifest: TGocciaPackageManifest;
   ManifestPath, PackageDirectory, PackageName, StartDirectory: string;
   Subpath, Target, TargetCandidate: string;
 begin
   AResolvedPath := '';
-  if not FNodeModulesEnabled then
+  if not Assigned(FNodeModulesGrant) then
     Exit(False);
   if not SplitBareSpecifier(AModulePath, PackageName, Subpath) then
     Exit(False);
@@ -372,7 +393,10 @@ begin
   if StartDirectory = '' then
     StartDirectory := FBaseDirectory;
 
-  if not FindPackageDirectory(StartDirectory, FNodeModulesCeiling, PackageName,
+  if not FNodeModulesGrant(AModulePath, StartDirectory, Ceiling) then
+    Exit(False);
+
+  if not FindPackageDirectory(StartDirectory, Ceiling, PackageName,
     PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath,
       IncludeTrailingPathDelimiter(ExpandHostFileName(StartDirectory)) +
@@ -409,8 +433,13 @@ begin
   if not IsPathInsideDirectory(TargetCandidate, PackageDirectory) then
     raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
 
-  if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
-    raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+  FProbePackageDirectory := PackageDirectory;
+  try
+    if not TryResolveWithExtensions(TargetCandidate, AResolvedPath) then
+      raise EModuleNotFound.CreateNotFound(AModulePath, TargetCandidate);
+  finally
+    FProbePackageDirectory := '';
+  end;
 
   { The post-probe gate is the physical one. The candidate above is a name that
     may not exist yet, so only its spelling can be judged; by here a real file
@@ -423,6 +452,7 @@ begin
     raise EModuleIsCommonJS.CreateCommonJS(PackageName,
       PackageRelativePath(PackageDirectory, AResolvedPath), AResolvedPath);
 
+  FLastPackageDirectory := PackageDirectory;
   Result := True;
 end;
 
@@ -430,6 +460,7 @@ function TModuleResolver.Resolve(const AModulePath, AImportingFilePath: string):
 var
   AliasApplied, BaseDirectory, CandidatePath: string;
 begin
+  FLastPackageDirectory := '';
   AliasApplied := ApplyAliases(AModulePath, AImportingFilePath);
 
   if AliasApplied <> AModulePath then

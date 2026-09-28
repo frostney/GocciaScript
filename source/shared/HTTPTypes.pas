@@ -34,6 +34,24 @@ type
 
   EHTTPError = class(Exception);
 
+  { Raised when THTTPRequestPolicy.HostCheck refuses a destination. Scope is
+    the destination as a request would name it — host, plus a non-default
+    port — never a resolved address. }
+  EHTTPDestinationDenied = class(EHTTPError)
+  private
+    FScope: string;
+  public
+    constructor CreateDenied(const AScope, AReason: string);
+    property Scope: string read FScope;
+  end;
+
+  { Asked for every hop of a request, redirects included: once with
+    AResolvedAddress empty before the name is looked up, and once with the
+    address it resolved to before connecting. Returning False refuses the hop;
+    AReason says why. Runs on the thread performing the request. }
+  THTTPHostCheck = function(const AHost: string; const APort: Integer;
+    const AResolvedAddress: string; out AReason: string): Boolean of object;
+
   { Per-request network policy.
 
     Separate from the allowlist because the allowlist answers "which names may
@@ -52,6 +70,9 @@ type
     { Hard ceiling on the response body, in bytes. Zero selects
       DEFAULT_MAX_RESPONSE_BODY_BYTES. }
     MaxResponseBytes: Integer;
+    { Optional destination policy consulted on every hop; see
+      THTTPHostCheck. }
+    HostCheck: THTTPHostCheck;
   end;
 
   THTTPParsedURL = record
@@ -86,6 +107,14 @@ function DefaultHTTPPolicy: THTTPRequestPolicy;
 begin
   Result.DenyPrivateRanges := False;
   Result.MaxResponseBytes := DEFAULT_MAX_RESPONSE_BODY_BYTES;
+  Result.HostCheck := nil;
+end;
+
+constructor EHTTPDestinationDenied.CreateDenied(const AScope, AReason: string);
+begin
+  inherited Create('fetch destination not allowed: ' + AScope + ' (' +
+    AReason + ')');
+  FScope := AScope;
 end;
 
 { A bracketed authority must hold an IPv6 literal, not an arbitrary name:

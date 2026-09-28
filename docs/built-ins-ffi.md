@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Explicit opt-in** — FFI is available only through `TGocciaFFIRuntimeExtension`; CLI tools install it for `--unsafe-ffi` or `"unsafe-ffi": true`
+- **Explicit opt-in** — FFI needs the engine's `ffi` capability; without it the `FFI` global is absent, and `FFI.open` checks every library path against the granted scopes
 - **Compositional native types** — `FFI.struct`, `FFI.union`, and `FFI.array` describe naturally aligned native layouts that can nest and pass by value
 - **Bidirectional calls** — `library.bind` calls native functions, while `FFI.callback` exposes JavaScript callables to native code through GocciaScript's custom ABI machinery
 - **Runtime-thread callbacks** — callbacks may enter JavaScript only on their owning runtime thread, and failures are deferred until the enclosing native call returns
@@ -13,7 +13,9 @@
 
 ## Runtime Opt-in
 
-The Foreign Function Interface calls native shared libraries. It is available only when `TGocciaFFIRuntimeExtension` is installed. CLI tools install that extension for `--unsafe-ffi` or `"unsafe-ffi": true` in configuration.
+The Foreign Function Interface calls native shared libraries. It is available only when the engine's capability set grants `ffi` and `TGocciaFFIRuntimeExtension` is installed; hosts use `InstallFFIIfGranted`, and the extension refuses to attach without the grant. CLI tools grant `ffi` for `--unsafe-ffi` or `"unsafe-ffi": true` in configuration.
+
+`FFI.open(path)` checks the path against the `ffi` scopes and throws `PermissionDenied` (`ffi: <path>`) for a library outside them; see [Permissions](permissions.md#read-and-ffi-paths).
 
 ## FFI Global Object
 

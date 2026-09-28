@@ -14,11 +14,31 @@ uses
   CriticalSections,
   HTTPTypes,
 
+  Goccia.Capabilities,
+  Goccia.CapabilityAudit,
   Goccia.Realm,
   Goccia.Values.AbortValue,
   Goccia.Values.PromiseValue;
 
 type
+  { The dispatching engine's network policy, carried by every request rather
+    than held by the thread's manager: engines on one thread may hold
+    different sets, and nested engines run inside their parent's call
+    (ADR 0122). Built from host configuration, never from script space. }
+  TGocciaFetchPolicy = record
+    { The engine's capability set; its net rules are re-checked on every hop,
+      redirects included, against the host name and the resolved address. }
+    Capabilities: TGocciaCapabilities;
+    { Response-body ceiling in bytes; zero selects the default. }
+    MaxResponseBytes: Integer;
+    { Receives the per-hop net.fetch decisions made while the request ran,
+      attributed to AuditSource (the fetch() call). They are delivered on the
+      runtime thread when the completion arrives, even after an abort, until
+      the engine discards its requests. }
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
+  end;
+
   { One manager serves every engine on a thread: engines nest there (a sandbox
     runScript child runs inside its parent's call), and they share the worker
     cap. The manager therefore holds no per-engine state of its own. Each
@@ -36,15 +56,14 @@ type
     class procedure AcquireInstance;
     class procedure ReleaseInstance;
 
-    { APolicy is the dispatching engine's network policy: resolved address
-      restrictions and the response-body ceiling. It is passed per request
-      rather than stored here because engines on one thread may hold
-      different policies; the caller reads it from host configuration, never
-      from script space. ARealm is the dispatching engine's realm. }
+    { APolicy is the dispatching engine's network policy (capability set,
+      response ceiling, audit emitter). It is passed per request rather than
+      stored here because engines on one thread may hold different policies;
+      the caller reads it from host configuration, never from script space.
+      ARealm is the dispatching engine's realm. }
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-      const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
-      const APromise: TGocciaPromiseValue;
+      const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
+      const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     { True while any engine on the thread has a request in flight. }
@@ -84,6 +103,7 @@ uses
 
   HTTPClient,
 
+  Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -105,14 +125,30 @@ const
   FETCH_WORKER_STACK_SIZE = 8 * 1024 * 1024;
   MAX_FETCH_WORKERS = 16;
   FETCH_WORKER_LIMIT_ERROR = 'fetch worker limit exceeded';
+  { The decision stays allow — the request was allowed and dispatched — and
+    the `abandoned:` tag tells this event apart from a destination check. }
+  FETCH_ABANDONED_AUDIT_REASON = 'abandoned: the request was aborted; hop ' +
+    'decisions its worker reports after the engine ends are not audited';
 
 type
+  { One net decision a worker made for a hop, replayed to the audit sink on
+    the runtime thread when the request settles. }
+  TGocciaFetchHopDecision = record
+    Allowed: Boolean;
+    Host: string;
+    Reason: string;
+  end;
+
   TGocciaFetchCompletion = class
   public
     RequestID: Integer;
     Success: Boolean;
     Response: THTTPResponse;
     ErrorMessage: string;
+    { Non-empty when the capability refused a hop: the guest-visible net scope
+      for the PermissionDenied the request rejects with. }
+    DeniedScope: string;
+    HopDecisions: array of TGocciaFetchHopDecision;
     constructor Create(const ARequestID: Integer);
   end;
 
@@ -152,6 +188,12 @@ type
 
   TGocciaPendingFetch = record
     RequestID: Integer;
+    AuditEmitter: TGocciaCapabilityAuditSourcedEmitter;
+    AuditSource: TGocciaCapabilityAuditSource;
+    // The request's host, the subject of the abandonment event an abort
+    // records, as it is of every net.fetch event (never the URL's path or
+    // query).
+    AuditSubject: string;
     // Realm of the engine that started the request; see TGocciaFetchManager.
     Realm: TGocciaRealm;
     Promise: TGocciaPromiseValue;
@@ -169,17 +211,24 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
-    FAllowedHosts: TStringList;
+
     FTimeoutMilliseconds: Integer;
-    FPolicy: THTTPRequestPolicy;
+    { The worker's own copy of the dispatching engine's policy. }
+    FPolicy: TGocciaFetchPolicy;
+    FNameChecks: Integer;
+    FHopDecisions: array of TGocciaFetchHopDecision;
+    procedure RecordDecision(const AAllowed: Boolean;
+      const AHost, AReason: string);
+    function CheckDestination(const AHost: string; const APort: Integer;
+      const AResolvedAddress: string; out AReason: string): Boolean;
   protected
     procedure Execute; override;
   public
     constructor Create(const AState: TGocciaFetchState;
       const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
       const AURL, AMethod: string; const AHeaders: THTTPHeaders;
-      const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer;
-      const APolicy: THTTPRequestPolicy);
+      const ATimeoutMilliseconds: Integer;
+      const APolicy: TGocciaFetchPolicy);
     destructor Destroy; override;
   end;
 
@@ -188,7 +237,13 @@ type
     FState: TGocciaFetchState;
     FLimiter: TGocciaFetchLimiter;
     FPending: TList<TGocciaPendingFetch>;
+    { Requests settled early (aborted) whose completion has not arrived yet:
+      kept only so the worker's hop decisions still reach the audit sink. }
+    FAbandoned: TList<TGocciaPendingFetch>;
     FNextRequestID: Integer;
+    procedure ReplayHopDecisions(const APending: TGocciaPendingFetch;
+      const ACompletion: TGocciaFetchCompletion);
+    procedure KeepForAudit(const APending: TGocciaPendingFetch);
     function PopCompletion(out ACompletion: TGocciaFetchCompletion): Boolean;
     function FindPendingIndex(const ARequestID: Integer): Integer;
     function RejectAbortedFetches: Integer;
@@ -200,9 +255,8 @@ type
     destructor Destroy; override;
 
     procedure StartFetch(const AURL, AMethod: string;
-      const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-      const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
-      const APromise: TGocciaPromiseValue;
+      const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
+      const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
       const ASignal: TGocciaAbortSignalValue = nil); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
@@ -370,8 +424,7 @@ end;
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
   const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
   const AURL, AMethod: string; const AHeaders: THTTPHeaders;
-  const AAllowedHosts: TStrings; const ATimeoutMilliseconds: Integer;
-  const APolicy: THTTPRequestPolicy);
+  const ATimeoutMilliseconds: Integer; const APolicy: TGocciaFetchPolicy);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
   FreeOnTerminate := True;
@@ -379,10 +432,6 @@ begin
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
-  FAllowedHosts := TStringList.Create;
-  FAllowedHosts.CaseSensitive := False;
-  if Assigned(AAllowedHosts) then
-    FAllowedHosts.Assign(AAllowedHosts);
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FPolicy := APolicy;
   FState := AState;
@@ -393,7 +442,6 @@ end;
 
 destructor TGocciaFetchWorker.Destroy;
 begin
-  FAllowedHosts.Free;
   if Assigned(FLimiter) then
   begin
     FLimiter.ReleaseWorker;
@@ -404,26 +452,76 @@ begin
   inherited;
 end;
 
+procedure TGocciaFetchWorker.RecordDecision(const AAllowed: Boolean;
+  const AHost, AReason: string);
+begin
+  SetLength(FHopDecisions, Length(FHopDecisions) + 1);
+  FHopDecisions[High(FHopDecisions)].Allowed := AAllowed;
+  FHopDecisions[High(FHopDecisions)].Host := AHost;
+  FHopDecisions[High(FHopDecisions)].Reason := AReason;
+end;
+
+{ THTTPHostCheck for this request: the engine's net rules, applied to every
+  hop before the name is resolved and again to the address it resolved to.
+  The first hop's name was already checked and audited synchronously by
+  fetch() itself, so only later hops record a name decision. }
+function TGocciaFetchWorker.CheckDestination(const AHost: string;
+  const APort: Integer; const AResolvedAddress: string;
+  out AReason: string): Boolean;
+begin
+  if AResolvedAddress = '' then
+  begin
+    Inc(FNameChecks);
+    Result := FPolicy.Capabilities.AllowsNetHost(AHost, APort);
+    if Result then
+      AReason := 'redirect target is allowed by the net capability'
+    else
+      AReason := 'redirect target is not allowed by the net capability';
+    if FNameChecks > 1 then
+      RecordDecision(Result, AHost, AReason);
+    Exit;
+  end;
+
+  Result := FPolicy.Capabilities.AllowsNetAddress(AResolvedAddress);
+  if Result then
+    AReason := 'resolved to ' + AResolvedAddress +
+      ', which the net capability allows'
+  else
+    AReason := 'resolved to ' + AResolvedAddress +
+      ', a private or denied address the net capability does not allow';
+  RecordDecision(Result, AHost, AReason);
+end;
+
 procedure TGocciaFetchWorker.Execute;
 var
   Completion: TGocciaFetchCompletion;
+  RequestPolicy: THTTPRequestPolicy;
 begin
   Completion := TGocciaFetchCompletion.Create(FRequestID);
   try
+    RequestPolicy := DefaultHTTPPolicy;
+    RequestPolicy.MaxResponseBytes := FPolicy.MaxResponseBytes;
+    RequestPolicy.HostCheck := CheckDestination;
     try
       if FMethod = 'HEAD' then
-        Completion.Response := HTTPHead(FURL, FHeaders, FAllowedHosts,
-          FTimeoutMilliseconds, FPolicy)
+        Completion.Response := HTTPHead(FURL, FHeaders, nil,
+          FTimeoutMilliseconds, RequestPolicy)
       else
-        Completion.Response := HTTPGet(FURL, FHeaders, FAllowedHosts,
-          FTimeoutMilliseconds, FPolicy);
+        Completion.Response := HTTPGet(FURL, FHeaders, nil,
+          FTimeoutMilliseconds, RequestPolicy);
       Completion.Success := True;
     except
+      on E: EHTTPDestinationDenied do
+      begin
+        Completion.ErrorMessage := E.Message;
+        Completion.DeniedScope := E.Scope;
+      end;
       on E: EHTTPError do
         Completion.ErrorMessage := E.Message;
       on E: Exception do
         Completion.ErrorMessage := 'fetch failed: ' + E.Message;
     end;
+    Completion.HopDecisions := Copy(FHopDecisions, 0, Length(FHopDecisions));
 
     if FState.PostCompletion(Completion) then
       Completion := nil;
@@ -469,6 +567,7 @@ begin
   FState := TGocciaFetchState.Create;
   FLimiter := TGocciaFetchLimiter.Create;
   FPending := TList<TGocciaPendingFetch>.Create;
+  FAbandoned := TList<TGocciaPendingFetch>.Create;
   FNextRequestID := 1;
 end;
 
@@ -483,13 +582,13 @@ begin
   FState.Release;
   FLimiter.Release;
   FPending.Free;
+  FAbandoned.Free;
   inherited;
 end;
 
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders; const AAllowedHosts: TStrings;
-  const APolicy: THTTPRequestPolicy; const ARealm: TGocciaRealm;
-  const APromise: TGocciaPromiseValue;
+  const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
+  const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
   const ASignal: TGocciaAbortSignalValue);
 var
   Pending: TGocciaPendingFetch;
@@ -521,6 +620,14 @@ begin
   Pending.RequestID := FNextRequestID;
   Inc(FNextRequestID);
   Pending.Realm := ARealm;
+  Pending.AuditEmitter := APolicy.AuditEmitter;
+  Pending.AuditSource := APolicy.AuditSource;
+  try
+    Pending.AuditSubject := HTTPURLAuditHost(AURL);
+  except
+    on EHTTPError do
+      Pending.AuditSubject := '';
+  end;
   Pending.AbortAlgorithmHandle := 0;
   Pending.Promise := APromise;
   Pending.Signal := ASignal;
@@ -570,7 +677,7 @@ begin
     end;
 
     Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-      Pending.RequestID, AURL, AMethod, AHeaders, AAllowedHosts,
+      Pending.RequestID, AURL, AMethod, AHeaders,
       RequestTimeoutMilliseconds, APolicy);
     LimitAcquired := False;
 
@@ -634,11 +741,47 @@ begin
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
+  KeepForAudit(Pending);
   try
     Pending.Promise.Reject(Pending.Signal.Reason);
   finally
     ReleasePendingRoots(Pending);
   end;
+end;
+
+{ An aborted request's worker still checks, and records, its address and
+  redirect decisions; they are replayed if its completion arrives while the
+  engine runs. The engine does not wait for aborted requests, so when it
+  ends first they are never delivered. The abort itself therefore records
+  the abandonment, so the log shows where a request's hop decisions may
+  stop. }
+procedure TGocciaFetchManagerImpl.KeepForAudit(
+  const APending: TGocciaPendingFetch);
+begin
+  if not Assigned(APending.AuditEmitter) then
+    Exit;
+  APending.AuditEmitter(gckNetFetch, gcdAllow, APending.AuditSubject,
+    FETCH_ABANDONED_AUDIT_REASON, APending.AuditSource);
+  FAbandoned.Add(APending);
+end;
+
+procedure TGocciaFetchManagerImpl.ReplayHopDecisions(
+  const APending: TGocciaPendingFetch;
+  const ACompletion: TGocciaFetchCompletion);
+var
+  I: Integer;
+begin
+  if not Assigned(APending.AuditEmitter) then
+    Exit;
+  for I := 0 to High(ACompletion.HopDecisions) do
+    if ACompletion.HopDecisions[I].Allowed then
+      APending.AuditEmitter(gckNetFetch, gcdAllow,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource)
+    else
+      APending.AuditEmitter(gckNetFetch, gcdDeny,
+        ACompletion.HopDecisions[I].Host,
+        ACompletion.HopDecisions[I].Reason, APending.AuditSource);
 end;
 
 // Settles fetches whose signal has aborted. Controller-driven aborts already
@@ -741,7 +884,18 @@ var
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
   if PendingIndex < 0 then
+  begin
+    { Settled early by an abort: only the audit trail is still owed. }
+    for I := FAbandoned.Count - 1 downto 0 do
+      if FAbandoned[I].RequestID = ACompletion.RequestID then
+      begin
+        Pending := FAbandoned[I];
+        FAbandoned.Delete(I);
+        ReplayHopDecisions(Pending, ACompletion);
+        Break;
+      end;
     Exit;
+  end;
 
   Pending := FPending[PendingIndex];
   FPending.Delete(PendingIndex);
@@ -755,6 +909,8 @@ begin
     if Assigned(Pending.Realm) then
       SetCurrentRealm(Pending.Realm);
     try
+      ReplayHopDecisions(Pending, ACompletion);
+
       if ACompletion.Success then
       begin
         RespHeaders := TGocciaHeadersValue.Create;
@@ -774,6 +930,9 @@ begin
 
         Pending.Promise.Resolve(RespValue);
       end
+      else if ACompletion.DeniedScope <> '' then
+        Pending.Promise.Reject(CreatePermissionDeniedError(
+          CapabilityName(gcNet), ACompletion.DeniedScope))
       else
         Pending.Promise.Reject(CreateErrorObject('TypeError',
           ACompletion.ErrorMessage));
@@ -874,11 +1033,16 @@ begin
     ReleasePendingRoots(Pending);
     HadPending := True;
   end;
+  { The engine is discarding its requests, so its audit emitter must not
+    outlive this call. }
+  for I := FAbandoned.Count - 1 downto 0 do
+    if FAbandoned[I].Realm = ARealm then
+      FAbandoned.Delete(I);
 
   { Another engine still has requests in flight, so the completion queue is
     shared with live work. The detached requests' late completions no longer
     match a pending entry and are dropped when popped. }
-  if FPending.Count > 0 then
+  if (FPending.Count > 0) or (FAbandoned.Count > 0) then
     Exit;
 
   if not HadPending then

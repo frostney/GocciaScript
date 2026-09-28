@@ -176,7 +176,10 @@ const
   //               property-read IC.
   //   v79 -> v80: added OP_JUMP_IF_NOT_LT (opcode 232), a fused generic
   //               `<` compare and jump used by for/if/conditional tests.
-  GOCCIA_FORMAT_VERSION = 80;
+  //   v80 -> v81: added OP_COMPUTED_IMPORT_SPECIFIER (opcode 233), which
+  //               marks the next dynamic import as having a computed
+  //               specifier for read-capability enforcement.
+  GOCCIA_FORMAT_VERSION = 81;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -457,7 +460,11 @@ type
     OP_GET_LOCAL_PROP_CONST = 231,
     // A = left register, B = right register, C = signed Int16 jump offset
     // when A < B is false. Generic `<` semantics (Number, BigInt, objects).
-    OP_JUMP_IF_NOT_LT = 232
+    OP_JUMP_IF_NOT_LT = 232,
+    // No operands. Emitted immediately before a dynamic-import opcode whose
+    // specifier is not a string literal, so the module loader treats the
+    // request as outside the static module graph (ADR 0122).
+    OP_COMPUTED_IMPORT_SPECIFIER = 233
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -496,7 +503,7 @@ end;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
-    OP_WIDE, OP_CLOSE_UPVALUE]);
+    OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;

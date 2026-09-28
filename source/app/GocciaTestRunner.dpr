@@ -219,12 +219,9 @@ type
       TGocciaThreadPool.RunAll guards against on its own side. }
     FActiveCancelFlag: TGocciaCancellationFlag;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
-    procedure InitializeRuntime(const AEngine: TGocciaEngine;
-      const AEnableHostFileLoading: Boolean = True);
+    procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
-    procedure InitializeRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
-    procedure WarmUpRuntimeWithUnsafeFFI(const AEngine: TGocciaEngine);
     function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
   protected
     procedure Configure; override;
@@ -613,12 +610,8 @@ var
   Runtime: TGocciaRuntimeCore;
 begin
   ApplyGlobalsToEngine(AEngine);
-  InitializeRuntime(AEngine,
-    not ResolveFlagOption(EngineOptions.NoHostFilesystem, AFileConfig));
+  InitializeRuntime(AEngine);
   Runtime := GetRuntime(AEngine);
-  if Assigned(EngineOptions) and
-     ResolveFlagOption(EngineOptions.UnsafeFFI, AFileConfig) then
-    Runtime.Install(TGocciaFFIRuntimeExtension.Create);
   if Assigned(EngineOptions) and
      ResolveFlagOption(EngineOptions.ExperimentalAST, AFileConfig) then
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
@@ -922,37 +915,21 @@ begin
   end;
 end;
 
-procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine;
-  const AEnableHostFileLoading: Boolean);
+procedure TTestRunnerApp.InitializeRuntime(const AEngine: TGocciaEngine);
 var
   Runtime: TGocciaRuntimeCore;
 begin
-  Runtime := AttachRuntime(AEngine, AEnableHostFileLoading);
+  Runtime := AttachRuntime(AEngine);
   ApplyTestRunnerRuntimeProfile(Runtime,
     TGocciaTestRunnerSnapshotHost.Create(AEngine.SourcePath),
     SnapshotUpdateMode, nil, not FNoVitestCompat.Present);
+  InstallFFIIfGranted(Runtime);
 end;
 
 procedure TTestRunnerApp.WarmUpRuntime(const AEngine: TGocciaEngine);
 begin
-  InitializeRuntime(AEngine,
-    not EngineOptions.NoHostFilesystem.Present);
+  InitializeRuntime(AEngine);
   WarmUpSharedLazyGlobals(AEngine);
-end;
-
-procedure TTestRunnerApp.WarmUpRuntimeWithUnsafeFFI(
-  const AEngine: TGocciaEngine);
-begin
-  InitializeRuntimeWithUnsafeFFI(AEngine);
-  WarmUpSharedLazyGlobals(AEngine);
-end;
-
-procedure TTestRunnerApp.InitializeRuntimeWithUnsafeFFI(
-  const AEngine: TGocciaEngine);
-begin
-  InitializeRuntime(AEngine,
-    not EngineOptions.NoHostFilesystem.Present);
-  GetRuntime(AEngine).Install(TGocciaFFIRuntimeExtension.Create);
 end;
 
 function TTestRunnerApp.RunRegisteredTests(
@@ -1790,10 +1767,8 @@ begin
     CoverageTracker.Enabled := False;
   end;
   try
-    if AnyFileConfigEnablesFlag(AFiles, EngineOptions.UnsafeFFI) then
-      EnsureSharedPrototypesInitialized(WarmUpRuntimeWithUnsafeFFI)
-    else
-      EnsureSharedPrototypesInitialized(WarmUpRuntime);
+    EnsureSharedPrototypesInitialized(WarmUpCapabilities(AFiles),
+      WarmUpRuntime);
   finally
     if Assigned(CoverageTracker) then
       CoverageTracker.Enabled := CoverageWasEnabled;

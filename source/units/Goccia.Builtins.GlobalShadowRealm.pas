@@ -197,7 +197,11 @@ begin
     FExecutor := TGocciaBytecodeExecutor.Create
   else
     FExecutor := TGocciaInterpreterExecutor.Create;
-  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor);
+  { A child realm inherits its creator's capability set and project: it may
+    never reach more of the host than the realm that created it (ADR 0122). }
+  FEngine := TGocciaEngine.Create('<shadow-realm>', FSource, FExecutor,
+    AParentEngine.Capabilities);
+  FEngine.ProjectRoot := AParentEngine.ProjectRoot;
   FEngine.HostEnvironment.ConfigureAsChildOf(
     AParentEngine.HostEnvironment);
   FEngine.ConfigureCapabilityAuditAsChildOf(AParentEngine);
@@ -229,13 +233,9 @@ begin
     AParentEngine.ModuleLoader.Resolver.BaseDirectory;
   for AliasPair in AParentEngine.ModuleLoader.Resolver.Aliases do
     FEngine.ModuleLoader.Resolver.AddAlias(AliasPair.Key, AliasPair.Value);
-  // The node_modules capability travels with the aliases for the same reason:
-  // a child realm that resolved bare specifiers differently from its creator
-  // would make --allow-node-modules silently stop working inside importValue.
-  // It grants the child nothing the creating realm was not already given.
-  if AParentEngine.ModuleLoader.Resolver.NodeModulesEnabled then
-    FEngine.ModuleLoader.Resolver.AllowNodeModules(
-      AParentEngine.ModuleLoader.Resolver.NodeModulesCeiling);
+  // The node_modules grant needs no copying: it comes from the inherited
+  // capability set, so bare specifiers resolve in the child exactly as they
+  // do in its creator, and never more widely.
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
   // keeps eval out of normal realms, so mirror the creating realm: when it
   // exposes `eval`, give the child its own realm-bound eval (which evaluates in
@@ -744,8 +744,10 @@ begin
     ChildScope := ChildEngine.ActivateRealmExecutionContext;
     try
       try
-        Module := ChildEngine.ModuleLoader.LoadModule(Specifier,
-          FEngine.SourcePath);
+        { The specifier is a run-time string, not a literal in the module
+          graph, so any host read it causes needs a read grant. }
+        Module := ChildEngine.ModuleLoader.LoadModule(
+          MarkComputedImportSpecifier(Specifier), FEngine.SourcePath);
         if Assigned(Module) then
           ExportFound := Module.TryGetExportValue(ExportName, ExportValue);
       except

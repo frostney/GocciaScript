@@ -211,6 +211,23 @@ function readJsonLines(path: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
+/**
+ * Reads a capability audit log. Every root engine reports its effective
+ * capability set once, before any other event (ADR 0122); this checks that
+ * event and returns the ones after it.
+ */
+function readCapabilityEvents(path: string): { effective: any[]; events: any[] } {
+  const all = readJsonLines(path);
+  const effective = all.filter((event) => event.kind === "capabilities.effective");
+  if (all.length === 0 || all[0].kind !== "capabilities.effective")
+    throw new Error(`Audit log should open with capabilities.effective: ${JSON.stringify(all)}`);
+  for (const event of effective) {
+    if (event.decision !== "allow" || typeof JSON.parse(event.subject).layers !== "object")
+      throw new Error(`capabilities.effective should carry the set as JSON: ${JSON.stringify(event)}`);
+  }
+  return { effective, events: all.filter((event) => event.kind !== "capabilities.effective") };
+}
+
 function assertCommonJsonReport(json: any, label: string, expectedFileCount: number): void {
   if (json.fileName !== undefined) throw new Error(`${label} top-level fileName should be omitted`);
   if (typeof json.build?.version !== "string") throw new Error(`${label} build.version should be present`);
@@ -904,6 +921,70 @@ await section("Test262 Runner: --eval-host exposes Goccia test262 hooks...", asy
     throw new Error(`Test262 hook probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Test262 runner should expose realm hooks, got: ${proc.stdout.toString()}`);
+});
+
+await section("test262 runner: computed imports and importValue may read the suite...", async () => {
+  // test262 loads its fixtures through computed import() specifiers and
+  // ShadowRealm.prototype.importValue, neither of which is part of the static
+  // module graph; the case engine's capability set has to grant reads of the
+  // suite (ADR 0122).
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), [
+      "function $DONE(error) {",
+      "  if (error) print('Test262:AsyncTestFailure:' + error.name + ': ' + error.message);",
+      "  else print('Test262:AsyncTestComplete');",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "value_FIXTURE.js"), "export const value = 1;\n");
+    writeFileSync(join(tests, "computed-import.js"), [
+      "/*---",
+      "flags: [async]",
+      "---*/",
+      "const name = './value' + '_FIXTURE.js';",
+      "import(name).then((ns) => {",
+      "  if (ns.value !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "import-value.js"), [
+      "/*---",
+      "flags: [async]",
+      "features: [ShadowRealm]",
+      "---*/",
+      "new ShadowRealm().importValue('./value_FIXTURE.js', 'value').then((v) => {",
+      "  if (v !== 1) throw new Error('wrong value');",
+      "}).then($DONE, $DONE);",
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = join(tmp, `computed-${mode}.json`);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "language",
+          `--mode=${mode}`,
+          "--jobs=1",
+          "--output", out,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+      );
+      const report = JSON.parse(readFileSync(out, "utf8"));
+      if (proc.exitCode !== 0 || report.summary.passed !== 2)
+        throw new Error(`${mode}: computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("test262 runner: engine timeout is classified as TIMEOUT...", async () => {
@@ -2131,7 +2212,10 @@ await section("Loader: --audit-log records capability decisions with source loca
       );
       if (proc.exitCode !== 0)
         throw new Error(`Loader audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-      const events = readJsonLines(audit);
+      const { effective, events } = readCapabilityEvents(audit);
+      const ffiLayer = JSON.parse(effective[0].subject).layers[0].ffi;
+      if (effective.length !== 1 || ffiLayer.allowAll !== true)
+        throw new Error(`Loader audit ${mode} effective set mismatch: ${JSON.stringify(effective)}`);
       const expected = [
         ["function.constructor", "deny", "Function", "<stdin>", 1],
         ["function.constructor", "deny", "Function", "<stdin>", 3],
@@ -2169,7 +2253,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       );
       if (allow.exitCode !== 0)
         throw new Error(`Loader Function audit ${mode} exited ${allow.exitCode}: ${allow.stderr.toString()}`);
-      const allowEvents = readJsonLines(allowAudit);
+      const allowEvents = readCapabilityEvents(allowAudit).events;
       if (allowEvents.length !== 1 ||
           allowEvents[0].kind !== "function.constructor" ||
           allowEvents[0].decision !== "allow" ||
@@ -2630,7 +2714,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
   }
 });
 
-await section("Loader: --allow-node-modules emits a capability-audit grant...", async () => {
+await section("Loader: --allow-node-modules audits every node_modules resolution...", async () => {
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
@@ -2647,22 +2731,19 @@ await section("Loader: --allow-node-modules emits a capability-audit grant...", 
     );
     if (proc.exitCode !== 0)
       throw new Error(`Audited run should still resolve: ${proc.stdout}${proc.stderr}`);
-    const events = readJsonLines(audit);
-    // The grant is a host decision made once at configuration time, so there
-    // is exactly one event no matter how many packages the run resolves. The
-    // subject is the *expanded* ceiling, which is why the expectation goes
-    // through realpathSync: the engine reports the path it will actually
-    // compare against, not the spelling the flag was given.
-    if (
-      events.length !== 1 ||
-      events[0].kind !== "modules.node-modules" ||
-      events[0].decision !== "allow" ||
-      events[0].subject !== realpathSync(project)
-    )
-      throw new Error(`node_modules grant audit event mismatch: ${JSON.stringify(events)}`);
+    // The grant is part of the effective set, as an import scope carrying the
+    // *expanded* ceiling — the path the resolver compares against. Each bare
+    // specifier the run resolves is then its own allow decision.
+    const { effective, events } = readCapabilityEvents(audit);
+    const importLayer = JSON.parse(effective[0].subject).layers[0].import;
+    if (JSON.stringify(importLayer.allow) !== JSON.stringify([`node_modules=${realpathSync(project)}`]))
+      throw new Error(`node_modules grant should be in the effective set: ${JSON.stringify(effective)}`);
+    if (events.length === 0 ||
+        events.some((event) => event.kind !== "import.node-modules" || event.decision !== "allow") ||
+        !events.some((event) => event.subject === "pkg-exports"))
+      throw new Error(`node_modules resolutions should each be audited: ${JSON.stringify(events)}`);
 
-    // The unbounded form reports an empty subject, which is how an auditor
-    // tells "walk the whole ancestor chain" from "confined to this tree".
+    // The unbounded form carries no ceiling.
     const unboundedAudit = join(tmp, "unbounded-audit.jsonl");
     const unbounded = Bun.spawnSync(
       [
@@ -2676,15 +2757,24 @@ await section("Loader: --allow-node-modules emits a capability-audit grant...", 
     );
     if (unbounded.exitCode !== 0)
       throw new Error(`Unbounded audited run should resolve: ${unbounded.stderr}`);
-    const unboundedEvents = readJsonLines(unboundedAudit);
-    if (
-      unboundedEvents.length !== 1 ||
-      unboundedEvents[0].kind !== "modules.node-modules" ||
-      unboundedEvents[0].subject !== ""
-    )
-      throw new Error(
-        `Unbounded grant should report an empty subject: ${JSON.stringify(unboundedEvents)}`,
-      );
+    const unboundedEffective = readCapabilityEvents(unboundedAudit).effective;
+    if (JSON.stringify(JSON.parse(unboundedEffective[0].subject).layers[0].import.allow) !==
+        JSON.stringify(["node_modules"]))
+      throw new Error(`Unbounded grant should carry no ceiling: ${JSON.stringify(unboundedEffective)}`);
+
+    // Without the grant a bare specifier stays sealed, and the refusal is
+    // audited as a deny.
+    const sealedAudit = join(tmp, "sealed-audit.jsonl");
+    const sealed = Bun.spawnSync(
+      [resolve(LOADER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
+      { cwd: project, stdout: "pipe", stderr: "pipe" },
+    );
+    if (sealed.exitCode === 0) throw new Error("A bare specifier must fail without the grant");
+    const sealedEvents = readCapabilityEvents(sealedAudit).events;
+    if (sealedEvents.length !== 1 ||
+        sealedEvents[0].kind !== "import.node-modules" ||
+        sealedEvents[0].decision !== "deny")
+      throw new Error(`A sealed bare specifier should audit one deny: ${JSON.stringify(sealedEvents)}`);
   } finally {
     clean(tmp);
   }
@@ -6135,6 +6225,42 @@ await section("SandboxRunner: deterministic nested engines use stable distinct s
   }
 });
 
+await section("SandboxRunner: a runScript child's stderr carries no host-side suggestion...", async () => {
+  const tmp = makeTmp();
+  try {
+    const seed = join(tmp, "suggestion-seed.json");
+    // The child's uncaught PermissionDenied becomes the parent guest's
+    // `stderr` string. Its suggestion names the CLI option that would grant
+    // the host and is meant for the host alone.
+    writeFileSync(seed, JSON.stringify({
+      files: [
+        {
+          path: "/main.js",
+          text: [
+            'import { runScript } from "goccia";',
+            'const child = runScript("/child.js");',
+            "console.log(JSON.stringify(child.stderr));",
+          ].join("\n"),
+        },
+        { path: "/child.js", text: 'fetch("http://example.com/");' },
+      ],
+    }));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
+      if (proc.exitCode !== 0 || !stdout.includes("PermissionDenied: net: example.com"))
+        throw new Error(`SandboxRunner ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
+      if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
+        throw new Error(`SandboxRunner ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("SandboxRunner: inline seeds, fs, $, runScript, and diffs...", async () => {
   const tmp = makeTmp();
   try {
@@ -6978,7 +7104,7 @@ await section("SandboxRunner: --audit-log reports root escapes without changing 
         throw new Error(`Sandbox audit ${mode} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
       if (!containsLine(proc.stdout.toString(), "inside-jail"))
         throw new Error(`Sandbox audit ${mode} changed clamped access: ${proc.stdout.toString()}`);
-      const events = readJsonLines(audit);
+      const { events } = readCapabilityEvents(audit);
       if (events.length !== 1 ||
           events[0].kind !== "sandbox.fs.path" ||
           events[0].decision !== "deny" ||
@@ -7172,9 +7298,9 @@ await section("Loader: --allowed-host blocks unlisted host...", async () => {
     const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allowed-host=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
-    const events = readJsonLines(audit);
+    const { events } = readCapabilityEvents(audit);
     if (events.length !== 1 ||
-        events[0].kind !== "fetch.host" ||
+        events[0].kind !== "net.fetch" ||
         events[0].decision !== "deny" ||
         events[0].subject !== "blocked.test" ||
         JSON.stringify(events).includes("password") ||
@@ -7185,10 +7311,133 @@ await section("Loader: --allowed-host blocks unlisted host...", async () => {
   }
 });
 
+await section("Loader: a denied fetch host is audited with the reason it was refused...", async () => {
+  const tmp = makeTmp();
+  try {
+    const cases: Array<[string, string]> = [
+      ["http://blocked.test/", "the net capability does not allow this host"],
+      ["http://example.com:8080/", "the net capability does not allow port 8080 of this host"],
+    ];
+    for (const [url, reason] of cases) {
+      const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
+      await $`echo ${`fetch("${url}");`} | ${LOADER} --allowed-host=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      const { events } = readCapabilityEvents(audit);
+      if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
+        throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: no --allowed-host blocks all fetch...", async () => {
   const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allowed-host should fail");
-  if (!res.text().includes("allowed hosts")) throw new Error(`Error should mention allowed hosts, got: ${res.text()}`);
+  // The denial names the capability and the host; the host-side suggestion
+  // names the option that grants it.
+  if (!res.text().includes("PermissionDenied: net: example.com"))
+    throw new Error(`Error should be a net PermissionDenied, got: ${res.text()}`);
+  if (!res.text().includes("--allowed-host"))
+    throw new Error(`Suggestion should name --allowed-host, got: ${res.text()}`);
+});
+
+await section("Loader: read denials report one suggestion and location in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const proj = join(tmp, "proj");
+    mkdirSync(proj, { recursive: true });
+    const outside = join(tmp, "outside.js");
+    writeFileSync(outside, 'export const secret = "HOST-FILE-READ";\n');
+    writeFileSync(join(proj, "static.mjs"),
+      'import { secret } from "../outside.js";\nconsole.log(secret);\n');
+    writeFileSync(join(proj, "dynamic.mjs"),
+      'const name = "../outside" + ".js";\nconst m = await import(name);\nconsole.log(m.secret);\n');
+    const suggestion = `Suggestion: the read capability does not cover ${realpathSync(outside)}`;
+    for (const file of ["static.mjs", "dynamic.mjs"]) {
+      const outputs: string[] = [];
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--no-host-filesystem"],
+          { stdout: "pipe", stderr: "pipe", cwd: tmp },
+        );
+        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
+          .split("\n")
+          .filter((line) => !line.includes("Running script") && !line.includes("Lex:"))
+          .join("\n");
+        if (proc.exitCode === 0 || text.includes("HOST-FILE-READ"))
+          throw new Error(`${file} (${mode}) should be refused: ${text}`);
+        // The guest-visible message names only the specifier; the host-side
+        // suggestion names the canonical path.
+        if (!text.includes("PermissionDenied: read: ../outside.js") || !text.includes(suggestion))
+          throw new Error(`${file} (${mode}) should report the denial with its suggestion: ${text}`);
+        outputs.push(text);
+      }
+      if (outputs[0] !== outputs[1])
+        throw new Error(`${file} read denial differs between modes:\n${outputs[0]}\n---\n${outputs[1]}`);
+      // A dynamic import is located at its import() call.
+      if (file === "dynamic.mjs" && !outputs[0].includes(`${join(proj, file)}:2:`))
+        throw new Error(`The dynamic import denial should point at its import() call: ${outputs[0]}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a static-import denial is located alike in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const proj = join(tmp, "proj");
+    mkdirSync(proj, { recursive: true });
+    writeFileSync(join(tmp, "outside.js"), "export const o = 1;\n");
+    // A script entry (.js) and a module entry (.mjs) take different paths
+    // through the interpreter; both must locate the denial at the declaration.
+    for (const name of ["static.js", "static.mjs"]) {
+      const file = join(proj, name);
+      writeFileSync(file, 'const x = 1;\nimport { o } from "../outside.js";\nconsole.log(o);\n');
+      const locations: string[] = [];
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(LOADER), file, `--mode=${mode}`, "--no-host-filesystem"],
+          { stdout: "pipe", stderr: "pipe", cwd: tmp },
+        );
+        const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+        const location = text.split("\n").find((line) => line.includes("--> "));
+        if (proc.exitCode === 0 || !text.includes("PermissionDenied: read: ../outside.js") || !location)
+          throw new Error(`${name} static-import denial (${mode}) should be located: ${text}`);
+        locations.push(location.trim());
+      }
+      if (locations[0] !== `--> ${file}:2:1` || locations[1] !== locations[0])
+        throw new Error(`${name} static-import denial location differs between modes: ${JSON.stringify(locations)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: a fetch() denial is located alike in both modes...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "denied-fetch.js");
+    writeFileSync(file, 'const x = 1;\n  globalThis.result = fetch("http://example.com/");\n');
+    const locations: string[] = [];
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync([resolve(LOADER), file, `--mode=${mode}`], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd: tmp,
+      });
+      const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      const location = text.split("\n").find((line) => line.includes("--> "));
+      if (proc.exitCode === 0 || !text.includes("PermissionDenied: net: example.com") || !location)
+        throw new Error(`fetch denial (${mode}) should be located: ${text}`);
+      locations.push(location.trim());
+    }
+    // ADR 0014: the call expression's own position, as import() uses.
+    if (locations[0] !== `--> ${file}:2:28` || locations[1] !== locations[0])
+      throw new Error(`fetch denial location differs between modes: ${JSON.stringify(locations)}`);
+  } finally {
+    clean(tmp);
+  }
 });
 
 await section("Loader: --allowed-host multiple hosts...", async () => {
@@ -7211,18 +7460,69 @@ await withFetchTestServer(async (baseUrl) => {
     if (exitCode !== 0) throw new Error(`Local fetch should exit 0, got ${exitCode}: ${stderr}`);
     if (json.ok !== true) throw new Error(`Local fetch JSON ok should be true, got ${json.ok}`);
     if (json.files?.[0]?.result !== 200) throw new Error(`Local fetch status should be 200, got ${json.files?.[0]?.result}`);
-    const events = readJsonLines(audit);
-    if (events.length !== 2 ||
-        events[0].kind !== "fetch.host" ||
+    const { events } = readCapabilityEvents(audit);
+    // The name is checked before dispatch; the resolved address is checked
+    // again by the request itself.
+    if (events.length !== 3 ||
+        events[0].kind !== "net.fetch" ||
         events[0].decision !== "allow" ||
         events[0].subject !== "127.0.0.1" ||
-        events[1].kind !== "fetch.dispatch" ||
-        events[1].decision !== "allow")
+        events[1].kind !== "net.dispatch" ||
+        events[1].decision !== "allow" ||
+        events[2].kind !== "net.fetch" ||
+        events[2].decision !== "allow" ||
+        events[2].subject !== "127.0.0.1")
       throw new Error(`Local fetch audit events mismatch: ${JSON.stringify(events)}`);
   } finally {
     clean(tmp);
   }
 });
+
+console.log("Loader: fetch re-checks the net capability on every redirect hop...");
+{
+  // The first hop names an allowed address; the redirect names a host the
+  // capability does not allow, so the request is refused mid-flight.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      if (url.pathname === "/redirect")
+        return new Response(null, {
+          status: 302,
+          headers: { location: `http://localhost:${server.port}/final` },
+        });
+      return new Response("final", { status: 200 });
+    },
+  });
+  const tmp = makeTmp();
+  const audit = join(tmp, "redirect-audit.jsonl");
+  try {
+    const { exitCode, json, stderr } = await runLoaderJsonAsync(
+      [
+        "globalThis.outcome = \"pending\";",
+        `await fetch("http://127.0.0.1:${server.port}/redirect").then(`,
+        "  () => { globalThis.outcome = \"followed\"; },",
+        "  (e) => { globalThis.outcome = e.name + \"|\" + e.message; });",
+        "globalThis.outcome;",
+        "",
+      ].join("\n"),
+      ["--compat-asi", "--allowed-host=127.0.0.1", `--audit-log=${audit}`],
+      { timeout: 10_000 },
+    );
+    if (exitCode !== 0) throw new Error(`Redirect run should exit 0, got ${exitCode}: ${stderr}`);
+    const outcome = json.files?.[0]?.result;
+    if (outcome !== `PermissionDenied|net: localhost:${server.port}`)
+      throw new Error(`Redirect to a denied host should reject with PermissionDenied, got ${outcome}`);
+    const { events } = readCapabilityEvents(audit);
+    if (!events.some((event) =>
+      event.kind === "net.fetch" && event.decision === "deny" && event.subject === "localhost"))
+      throw new Error(`The refused redirect hop should be audited: ${JSON.stringify(events)}`);
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+}
 
 // ============================================================================
 // --multifile (all runners)
@@ -8662,7 +8962,9 @@ await section("SandboxRunner: --fetch-deny-private-ranges reaches the sandboxed 
       stderr: "pipe",
     });
     const deniedOut = denied.stdout.toString() + denied.stderr.toString();
-    if (!deniedOut.includes("resolves to private address 127.0.0.1"))
+    // A private address literal is refused by the net capability before the
+    // request is dispatched, with the guest-visible scope as the message.
+    if (!deniedOut.includes("err:net: 127.0.0.1:1"))
       throw new Error(`Sandbox fetch should be refused by address policy, got:\n${deniedOut}`);
 
     // Asserted positively: the default arm has to prove the request reached
@@ -8707,6 +9009,7 @@ const runNestedFetchSandbox = async (
         "--source-type=module",
         `--mode=${mode}`,
         "--allowed-host=127.0.0.1",
+        "--allowed-host=localhost",
         ...extraArgs,
       ],
       { stdout: "pipe", stderr: "pipe" },
@@ -8737,15 +9040,57 @@ const runNestedFetchSandbox = async (
 };
 
 const NESTED_FETCH_CHILD = "console.log('child ran');\n";
-const PRIVATE_DENIAL = "resolves to private address 127.0.0.1";
+// `localhost` passes the net capability's name check, so the request is
+// dispatched and the private-range refusal happens on the worker, against the
+// address the name resolved to, under the requesting engine's own set.
+const PRIVATE_DENIAL = "net: localhost:1";
 const fetchPort1Lines = (label: string): string[] => [
   "try {",
-  "  await fetch('http://127.0.0.1:1/');",
+  "  await fetch('http://localhost:1/');",
   `  console.log('${label}:no-error');`,
   "} catch (error) {",
   `  console.log('${label}:' + error.message);`,
   "}",
 ];
+
+await section("SandboxRunner: a nested runScript child inherits its set silently and its fetch events name the child...", async () => {
+  // A child inherits its parent's capability set, so like a ShadowRealm child
+  // it reports no capabilities.effective of its own. The worker's address
+  // check for the child's request is pumped by the parent, but belongs to the
+  // child's fetch() call.
+  const tmp = makeTmp();
+  try {
+    const main = [
+      "import { runScript } from 'goccia';",
+      "runScript('/child.js');",
+      "",
+    ].join("\n");
+    const child = [
+      "const pending = fetch('http://localhost:1/');",
+      "pending.catch(() => {});",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `nested-${mode}.jsonl`);
+      const run = await runNestedFetchSandbox(
+        { "/main.js": main, "/child.js": child },
+        mode,
+        [`--audit-log=${audit}`],
+      );
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: nested run should exit 0: ${run.combined}`);
+      const { effective, events } = readCapabilityEvents(audit);
+      if (effective.length !== 1)
+        throw new Error(`${mode}: only the root engine should report its set: ${JSON.stringify(effective)}`);
+      const fetchEvents = events.filter((event) => event.kind.startsWith("net."));
+      if (fetchEvents.length === 0 ||
+          fetchEvents.some((event) => event.source?.file !== "/child.js"))
+        throw new Error(`${mode}: the child's fetch events should name /child.js: ${JSON.stringify(fetchEvents)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
 
 await section("SandboxRunner: a nested runScript leaves the parent's --fetch-deny-private-ranges in place...", async () => {
   const main = [
@@ -8764,7 +9109,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --fetch-den
       throw new Error(`${mode}: runScript then fetch should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
     if (!run.stdout.includes("child ok true"))
       throw new Error(`${mode}: the nested child should run, got:\n${run.combined}`);
-    if (!run.stdout.includes(`after:fetch destination not allowed: 127.0.0.1 ${PRIVATE_DENIAL}`))
+    if (!run.stdout.includes(`after:${PRIVATE_DENIAL}`))
       throw new Error(`SECURITY: ${mode}: the parent's private-range denial was lost after a nested runScript, got:\n${run.combined}`);
   }
 });
@@ -8822,7 +9167,7 @@ await section("SandboxRunner: a fetch followed by a nested runScript completes..
     );
     if (run.timedOut || run.exitCode !== 0)
       throw new Error(`${mode}: fetch then runScript should exit 0 (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
-    for (const expected of [`before:fetch destination not allowed: 127.0.0.1 ${PRIVATE_DENIAL}`, "child ok true", "done"])
+    for (const expected of [`before:${PRIVATE_DENIAL}`, "child ok true", "done"])
       if (!run.stdout.includes(expected))
         throw new Error(`${mode}: fetch then runScript should print ${JSON.stringify(expected)}, got:\n${run.combined}`);
   }
@@ -8838,7 +9183,7 @@ await section("SandboxRunner: fetch, nested runScript, fetch completes without a
   ].join("\n");
   for (const mode of ["interpreted", "bytecode"] as const) {
     for (const [policyArgs, expectedError] of [
-      [["--fetch-deny-private-ranges"], `fetch destination not allowed: 127.0.0.1 ${PRIVATE_DENIAL}`],
+      [["--fetch-deny-private-ranges"], `${PRIVATE_DENIAL}`],
       [[], "Failed to connect to 127.0.0.1:1"],
     ] as const) {
       const run = await runNestedFetchSandbox(
@@ -8867,7 +9212,7 @@ await section("SandboxRunner: a failing nested runScript keeps the parent's in-f
   const child = "throw new Error('child failed');\n";
   const main = [
     "import { runScript } from 'goccia';",
-    "const pending = fetch('http://127.0.0.1:1/parent');",
+    "const pending = fetch('http://localhost:1/parent');",
     "const child = runScript('/child.js');",
     "console.log('child ok ' + child.ok);",
     "try {",
@@ -8887,7 +9232,7 @@ await section("SandboxRunner: a failing nested runScript keeps the parent's in-f
       throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
     if (!run.stdout.includes("child ok false"))
       throw new Error(`${mode}: the nested child should fail, got:\n${run.combined}`);
-    if (!run.stdout.includes(`parent:fetch destination not allowed: 127.0.0.1 ${PRIVATE_DENIAL}`))
+    if (!run.stdout.includes(`parent:${PRIVATE_DENIAL}`))
       throw new Error(`${mode}: the parent's in-flight fetch should settle under its own policy, got:\n${run.combined}`);
   }
 });

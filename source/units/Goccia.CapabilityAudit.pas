@@ -10,14 +10,20 @@ uses
 type
   EGocciaCapabilityAuditDeliveryError = class(Exception);
 
+  { Kinds named after a capability (ADR 0122) report every allow and deny
+    decision of that capability; the rest report engine features that are not
+    capabilities but are still worth auditing. }
   TGocciaCapabilityKind = (
-    gckFetchHost,
-    gckFetchDispatch,
+    gckNetFetch,
+    gckNetDispatch,
+    gckReadFile,
     gckFFIOpen,
+    gckImportNodeModules,
+    gckImportProvider,
     gckFunctionConstructor,
     gckShadowRealm,
     gckSandboxFileSystem,
-    gckNodeModulesResolution
+    gckCapabilitiesEffective
   );
 
   TGocciaCapabilityDecision = (
@@ -48,6 +54,15 @@ type
     const ADecision: TGocciaCapabilityDecision;
     const ASubject, AReason: string) of object;
 
+  { An emitter for decisions reported after the fact — a fetch worker's hop
+    decisions replayed when the request settles — which carry the source
+    location of the call that caused them rather than whatever runs now. }
+  TGocciaCapabilityAuditSourcedEmitter = procedure(
+    const AKind: TGocciaCapabilityKind;
+    const ADecision: TGocciaCapabilityDecision;
+    const ASubject, AReason: string;
+    const ASource: TGocciaCapabilityAuditSource) of object;
+
 function CapabilityKindName(const AKind: TGocciaCapabilityKind): string;
 function CapabilityDecisionName(
   const ADecision: TGocciaCapabilityDecision): string;
@@ -60,20 +75,26 @@ uses
 function CapabilityKindName(const AKind: TGocciaCapabilityKind): string;
 begin
   case AKind of
-    gckFetchHost:
-      Result := 'fetch.host';
-    gckFetchDispatch:
-      Result := 'fetch.dispatch';
+    gckNetFetch:
+      Result := 'net.fetch';
+    gckNetDispatch:
+      Result := 'net.dispatch';
+    gckReadFile:
+      Result := 'read.file';
     gckFFIOpen:
       Result := 'ffi.open';
+    gckImportNodeModules:
+      Result := 'import.node-modules';
+    gckImportProvider:
+      Result := 'import.provider';
     gckFunctionConstructor:
       Result := 'function.constructor';
     gckShadowRealm:
       Result := 'shadow-realm.construct';
     gckSandboxFileSystem:
       Result := 'sandbox.fs.path';
-    gckNodeModulesResolution:
-      Result := 'modules.node-modules';
+    gckCapabilitiesEffective:
+      Result := 'capabilities.effective';
   end;
 end;
 

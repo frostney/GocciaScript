@@ -5,6 +5,7 @@ unit Goccia.Test262.Host;
 interface
 
 uses
+  Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.HostEnvironment,
@@ -24,6 +25,10 @@ type
     MaxMemoryBytes: Int64;
     MaxInstructions: Int64;
     StackSize: Integer;
+    { The case engine's capability set. $262.createRealm() realms and agents
+      are created with the same set, so they never reach more than the case
+      that created them (ADR 0122). The default value grants nothing. }
+    Capabilities: TGocciaCapabilities;
   end;
 
   TGocciaTest262Host = class
@@ -458,7 +463,8 @@ begin
   inherited Create;
   FSource := TStringList.Create;
   FExecutor := CreateTest262Executor(AOptions.Mode);
-  FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor);
+  FEngine := TGocciaEngine.Create('<test262-realm>', FSource, FExecutor,
+    AOptions.Capabilities);
   ChildOptions := AOptions;
   ChildOptions.SourceType := stScript;
   ConfigureTest262Engine(FEngine, FExecutor, ChildOptions,
@@ -858,7 +864,8 @@ begin
     try
       Executor := CreateTest262Executor(FOptions.Mode);
       try
-        Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor);
+        Engine := TGocciaEngine.Create('<test262-agent>', Source, Executor,
+          FOptions.Capabilities);
         try
           AgentOptions := FOptions;
           AgentOptions.SourceType := stScript;
