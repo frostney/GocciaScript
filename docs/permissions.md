@@ -328,7 +328,9 @@ affected by later builder calls on the original.
 
 ## Command line
 
-Every binary fills the set from the same grammar:
+Every binary except `GocciaWasmTestRunner` fills the set from the same
+grammar. `GocciaWasmTestRunner` takes no capability flags; its grants come
+only from config, with `-P`:
 
 ```text
 --allow-<cap>[=<scope>,<scope>...]
@@ -354,11 +356,14 @@ config file. There is no `--allow-all` and no environment-variable form.
 
 `--allow-net=` (an empty list) and `--allow-read=a,,b` (an empty item) are
 invalid values (exit 1), as is a scope the capability does not accept. Every
-binary parses these flags the same way and in the same order, including
-`GocciaScriptLoaderBare` and `GocciaTest262Runner`, which have their own
-argument parsers: a malformed flag is an invalid value (exit 1) even on a
-binary that cannot grant the capability, and a well-formed `--allow-*` the
-binary cannot grant is a usage error (exit 2):
+binary that takes these flags parses them the same way and in the same order,
+including `GocciaScriptLoaderBare` and `GocciaTest262Runner`, which have their
+own argument parsers. A grammar error (an empty list such as `--allow-net=`,
+an empty item such as `--allow-read=a,,b`, or `--allow-import` with no scope)
+is an invalid value (exit 1), even on a binary that cannot grant the
+capability. Next, a well-formed `--allow-*` the binary cannot grant is a
+usage error (exit 2). Only after that is each scope validated (exit 1), as for
+a `--deny-*` flag on any binary:
 
 ```text
 Error: Invalid scope for --allow-net: "http://x" (use host, host:port, *.domain, an IP, a CIDR range, or private)
@@ -517,15 +522,15 @@ with status 2 and nothing runs:
 ```text
 Error: 2 config files request permissions that have not been trusted:
 
-  tests/built-ins/fetch/goccia.json (never trusted)
-    allow-net: 0.0.0.0, 127.0.0.1, example.com
-
   tests/built-ins/FFI/goccia.json (changed since trusted 2026-09-20T10:12:03Z)
     allow-ffi: /home/u/GocciaScript/fixtures/ffi
   + allow-read: /home/u/GocciaScript/fixtures/modules
 
+  tests/built-ins/fetch/goccia.json (never trusted)
+    allow-net: 0.0.0.0, 127.0.0.1, example.com
+
 Nothing was run. To trust these requests (stored in /home/u/.config/goccia/trust.json):
-  GocciaTestRunner --trust tests/built-ins/fetch/goccia.json --trust tests/built-ins/FFI/goccia.json
+  GocciaTestRunner --trust tests/built-ins/FFI/goccia.json --trust tests/built-ins/fetch/goccia.json
 To accept them for this run only:
   GocciaTestRunner -P tests --mode=bytecode
 To run with command-line grants only:
@@ -774,8 +779,9 @@ the host paths they were copied from, including new files created inside a
 [ADR 0119](adr/0119-host-applied-sandbox-write-back.md) hold:
 
 - a failed run writes nothing;
-- changes under a read-only `--copy` input, or outside every input, are
-  reported as skipped;
+- when any input was copied with `--copy-rw`, changes under a read-only
+  `--copy` input, or outside every input, are reported as skipped; a run with
+  no `--copy-rw` input writes nothing and prints no `write-back:` report;
 - a deletion is never applied;
 - a symbolic link met at write-back, at the file or on its way, is refused
   and the run exits 1 (other files are still written): copy-in already
@@ -836,7 +842,7 @@ copy-rw = ["out"]
 |---|---|
 | `copy`, `copy-rw` | Arrays of `<host>[=<sandbox>]` strings, as on the command line, relative to the declaring config file; a single string is an error |
 | `entry` | An absolute sandbox path, as `--entry`; a positional entry or `--entry` on the command line wins, with a note on stderr |
-| `diff` | `true`, `"json"`, or `"unified"` |
+| `diff` | `true`, `false`, `"json"`, or `"unified"` |
 | `diff-file` | A host path, as `--diff-file`, relative to the declaring config file |
 
 - Any other key is an error that lists these; `files`, the old seed-config
