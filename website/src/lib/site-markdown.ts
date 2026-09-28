@@ -409,9 +409,13 @@ function performanceSuiteMarkdown(
     `- Run date: ${compatibilityDate(point.createdAt)}${point.stale ? " (last complete report)" : ""}`,
     ...(degraded.length > 0
       ? [
-          `- Degraded workloads in the latest report: ${degraded
-            .map((target) => target.name)
-            .join(", ")}`,
+          // Targets come from the latest run, which differs from `point`
+          // when that run is incomplete: name the run they belong to.
+          `- Degraded workloads in the latest report${
+            point.stale && data.latest
+              ? ` ([#${data.latest.runNumber}](${data.latest.runUrl}), ${compatibilityDate(data.latest.createdAt)})`
+              : ""
+          }: ${degraded.map((target) => target.name).join(", ")}`,
         ]
       : []),
   ];

@@ -276,6 +276,33 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("No complete report has been retained yet.");
   });
 
+  test("names the run degraded workloads come from when it is incomplete", () => {
+    const incomplete = {
+      ...awfyPoint,
+      runId: 201,
+      runNumber: 913,
+      runUrl: "https://github.com/frostney/GocciaScript/actions/runs/201",
+      createdAt: "2026-09-21T04:00:00.000Z",
+      complete: false,
+    };
+    const markdown = renderPerformanceMarkdown({
+      ...performanceData,
+      awfy: {
+        ...performanceData.awfy,
+        latest: incomplete,
+        latestComplete: { ...awfyPoint, stale: true },
+      },
+    });
+
+    expect(markdown).toContain(
+      "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",
+    );
+    expect(markdown).toContain(
+      "- Degraded workloads in the latest report ([#913](https://github.com/frostney/GocciaScript/actions/runs/201),",
+    );
+    expect(markdown).toContain("): Richards");
+  });
+
   test("keeps the performance alternate when reports are unavailable", () => {
     const markdown = renderPerformanceMarkdown({
       status: "needs-blob-credentials",
