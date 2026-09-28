@@ -74,15 +74,16 @@ Error.isError({ message: "fake" }); // false — plain objects are not errors
 
 ## Parser Error Display
 
-When the parser encounters invalid syntax, it displays a detailed error with source context. The format includes the error name, message, file location, the offending source line, and a caret (`^`) pointing to the exact column:
+When the parser encounters invalid syntax, it displays a detailed error with source context. The format includes the error name, message, an optional suggestion, file location, the offending source line, and a caret (`^`) pointing to the exact column:
 
 ```text
-SyntaxError: Expected ';' after expression
-  --> script.js:3:12
-   1 | const x = 1
-   2 | const y = 2
-   3 | const z = 3 + +
-                     ^
+SyntaxError: Expected ";" after variable declaration
+  Suggestion: Add a ';' at the end of the statement
+  --> script.js:3:13
+   1 | const x = 1;
+   2 | const y = 2;
+   3 | const z = 3 4;
+     |             ^
    4 | console.log(z);
 ```
 
@@ -97,8 +98,12 @@ SyntaxError: 'var' declarations are not supported in GocciaScript
   Suggestion: Use 'let' or 'const' instead
   --> script.js:1:1
    1 | var x = 42;
-     ^
+     | ^
 ```
+
+The `var` and `function` messages still say "not supported" and don't yet name
+the `--compat-var` / `--compat-function` flag that turns the form on
+([#1270](https://github.com/frostney/GocciaScript/issues/1270)).
 
 Other features that produce suggestions include:
 
@@ -118,14 +123,19 @@ When an uncaught runtime error reaches the top level, GocciaScript displays the 
 
 ```text
 TypeError: Cannot read properties of undefined (reading 'x')
-  --> script.js:5:10
-   3 | const getX = (obj) => {
-   4 |   return obj.x;
-   5 |   return obj.nested.x;
-               ^
-   6 | };
-   7 | getX(undefined);
+  Suggestion: check that the value is not null or undefined before accessing properties
+  --> script.js:2:10
+   1 | const getX = (obj) => {
+   2 |   return obj.nested.x;
+     |          ^
+   3 | };
+   4 | getX({});
 ```
+
+Locations are not yet consistent between the two modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)):
+
+- The same error can report a different column: for `return obj.x;` the interpreter points at `obj` and bytecode mode at `.x`.
+- In interpreter mode, some top-level runtime errors lack a location. A top-level `ReferenceError` prints `--> :0:0` with no file name or source excerpt, and a top-level `TypeError` such as `const a = null; a.x;` prints no `-->` line at all. Bytecode mode shows the file, line, and excerpt for both.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
 
@@ -236,9 +246,14 @@ reporters render it through `FormatHostErrorDiagnostic` as its own line:
 
 ```text
 RuntimeError: Module not found: "./missing.js"
-  --> /home/user/project/entry.js:0:0
+  --> entry.js:0:0
   Resolved to: /home/user/project/missing.js
 ```
+
+The `-->` line shows the entry path as it was passed on the command line. This
+is interpreter-mode output; bytecode mode currently prints the same failure as
+`Error: Module not found: "./missing.js"` with no `Resolved to:` line
+([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
 
 `--output=json` and `--output=compact-json` do **not** carry it. The JSON
 envelope's `error` object is the documented set of `type`, `message`, `line`,
@@ -321,16 +336,35 @@ provider.
 
 ### Stack Traces
 
-The `stack` property contains a V8-style formatted string with the error header followed by `at` frames:
+The `stack` property contains a V8-style formatted string with the error header followed by `at` frames. Each frame shows the function name (or `<anonymous>`), the file path, and the line and column number. Frames are listed from innermost (most recent) to outermost.
 
-```text
-TypeError: Cannot read properties of null
-    at inner (script.js:2:10)
-    at middle (script.js:5:3)
-    at outer (script.js:8:3)
+```javascript
+const inner = (obj) => {
+  return obj.x;
+};
+const middle = (obj) => {
+  inner(obj);
+};
+const outer = () => {
+  middle(null);
+};
+try {
+  outer();
+} catch (e) {
+  console.log(e.stack);
+}
 ```
 
-Each frame shows the function name (or `<anonymous>`), the file path, and the line and column number. Frames are listed from innermost (most recent) to outermost.
+In interpreter mode this prints:
+
+```text
+TypeError: Cannot read properties of null (reading 'x')
+    at inner (script.js:2:10)
+    at middle (script.js:8:9)
+    at outer (script.js:11:8)
+```
+
+Frame positions after the first are currently wrong in both modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)). In interpreter mode each outer frame shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame (`5:3`). In bytecode mode the first frame is `inner (script.js:2:13)`, every outer frame shows `0:0`, and a final `at <module> (script.js:0:0)` frame is added.
 
 ## Error.cause
 
@@ -548,7 +582,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
         "exec_ns": 3100000,
         "total_ns": 4800000
       },
-      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
+      "memory": null,
       "result": 42
     }
   ]
@@ -573,8 +607,8 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
   "error": {
     "type": "TypeError",
     "message": "Cannot read properties of null (reading 'x')",
-    "line": 5,
-    "column": 10,
+    "line": null,
+    "column": null,
     "fileName": "script.js"
   },
   "timing": {
@@ -596,8 +630,8 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
       "error": {
         "type": "TypeError",
         "message": "Cannot read properties of null (reading 'x')",
-        "line": 5,
-        "column": 10,
+        "line": null,
+        "column": null,
         "fileName": "script.js"
       },
       "timing": {
@@ -607,7 +641,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
         "exec_ns": 100000,
         "total_ns": 1800000
       },
-      "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
+      "memory": null,
       "result": null
     }
   ]
@@ -624,8 +658,8 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
 | `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
-| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable |
-| `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable |
+| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. Only parse errors carry it today; thrown runtime values report `null` ([#1273](https://github.com/frostney/GocciaScript/issues/1273)) |
+| `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable. Only parse errors carry it today, as for `error.line` |
 | `error.fileName` | `string \| null` | Source file path, or `null` if unavailable |
 | `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |
 | `memory` | `object \| null` | GC and application heap measurements for the run |
@@ -689,10 +723,10 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
   "output": [],
   "error": {
     "type": "TimeoutError",
-    "message": "Execution timed out after 100ms",
+    "message": "file timed out after 100ms",
     "line": null,
     "column": null,
-    "fileName": null
+    "fileName": "<stdin>"
   },
   "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
   "memory": {
@@ -728,13 +762,13 @@ When execution exceeds the `--timeout` limit, the JSON envelope reports a `Timeo
       "output": [],
       "error": {
         "type": "TimeoutError",
-        "message": "Execution timed out after 100ms",
+        "message": "file timed out after 100ms",
         "line": null,
         "column": null,
-        "fileName": null
+        "fileName": "<stdin>"
       },
       "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
-      "memory": { "gc": { "liveBytes": 8192 }, "heap": { "endAllocatedBytes": 32768 } },
+      "memory": null,
       "result": null
     }
   ]

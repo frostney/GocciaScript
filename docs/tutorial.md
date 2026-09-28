@@ -7,7 +7,7 @@
 - **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with sandbox-first recommended defaults; `.js` files, no transpilation needed
 - **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
-- **Next steps** — Links to language restrictions, built-in API reference, and example programs
+- **Next steps** — Links to the recommended profile and its compatibility paths, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
@@ -53,10 +53,12 @@ Run it:
 ./build/GocciaRunner hello.js
 ```
 
-You should see:
+You should see the script's output followed by a short run summary (the timings vary):
 
 ```text
 Hello from GocciaScript!
+Running script (interpreted): hello.js
+  Lex: 31.17µs | Parse: 11.22µs | Execute: 11.17µs | Total: 69.66µs
 ```
 
 That's it — GocciaScript files are plain `.js` files. No special extension, no transpilation step.
@@ -304,7 +306,7 @@ The loose equality operators (`==` and `!=`) are available only in compatibility
 
 ## What's Different from JavaScript
 
-Here's a quick reference of GocciaScript's key restrictions:
+Here's a quick reference of what the recommended profile turns off by default, and how to opt back in:
 
 | JavaScript | GocciaScript | Alternative |
 |------------|-------------|-------------|
@@ -315,7 +317,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |
 | `for (key in object)` | Off by default | `Object.keys()` / `Object.entries()` with `for...of`, or `--compat-for-in-loop` for JavaScript compatibility |
 | `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
-| `eval("code")` | Not supported | No alternative (by design) |
+| `eval("code")` | Not installed by normal hosts | No alternative (by design) |
 | `arguments` | Off by default | Prefer rest parameters (`...args`) or `--compat-arguments-object` |
 | sloppy assignment failures | Strict by default | script source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
 | sloppy function `this` | Strict by default | script source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |
@@ -323,7 +325,7 @@ Here's a quick reference of GocciaScript's key restrictions:
 | `parseInt("10")` | Shimmed legacy global | Prefer `Number.parseInt("10")` in new code |
 | `isNaN(x)` | Shimmed legacy global with coercion | Prefer `Number.isNaN(x)` when you do not want coercion |
 
-These restrictions are intentional — they eliminate common sources of bugs and security issues. See [Language](language.md) for the full rationale.
+These defaults are intentional — they eliminate common sources of bugs and security issues, and each off-by-default form has a compatibility path. See [Language](language.md) for the full rationale.
 
 ## Next Steps
 
