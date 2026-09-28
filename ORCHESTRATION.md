@@ -62,7 +62,10 @@ dependencies, acceptance criteria, and the required gates.
 Record per-lane and per-class usage (inferences; input, cached, output, and
 reasoning tokens; tool calls; wall time) from the host's own usage records,
 such as completion metadata or transcripts. Mark a field unavailable only
-when the host exposes no record of it.
+when the host exposes no record of it. When records cannot be attributed to
+a lane or class, mark that breakdown unavailable rather than apportioning
+totals by estimate; a per-lane threshold then uses the lane's own most
+recent inference size, which every host reports.
 
 ## Waiting
 
@@ -73,6 +76,7 @@ A lane never waits more than five minutes inside its own context. Before a
 longer wait (CI, a queued build or test run, a release workflow, or a
 usage-limit reset), the lane pushes its checkpoint, hands the wait to the
 coordinator or a non-model watcher, and ends its turn. It resumes when the
-result arrives. Lane context caches can expire within minutes, so each
-longer wait rewrites the whole context; in a measured GocciaScript session,
-those rewrites were 89% of all cache writes.
+result arrives. Hosts may expire a lane's context cache within minutes; the
+next turn after an expiry rewrites the whole context. In one measured
+GocciaScript session, rewrites after waits longer than about five minutes
+were 89% of all cache writes.
