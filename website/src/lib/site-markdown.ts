@@ -434,7 +434,11 @@ export function renderPerformanceMarkdown(
       : [
           "## Latest main-branch result",
           "",
-          "The current performance reports are temporarily unavailable. Open the HTML dashboard or CI workflow for status.",
+          // The HTML dashboard shows the loader's diagnosis; carry the same one.
+          data.message ??
+            "The current performance reports are temporarily unavailable.",
+          "",
+          "Open the HTML dashboard or CI workflow for status.",
         ];
 
   return [

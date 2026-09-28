@@ -303,10 +303,31 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("): Richards");
   });
 
-  test("keeps the performance alternate when reports are unavailable", () => {
+  test.each([
+    [
+      "needs-blob-credentials",
+      "Failed to read performance reports: No blob credentials found.",
+    ],
+    ["empty", "No performance barometer reports were found."],
+    ["error", "Failed to read performance reports: fetch failed"],
+  ] as const)("keeps the performance alternate and the dashboard's diagnosis when %s", (status, message) => {
     const markdown = renderPerformanceMarkdown({
-      status: "needs-blob-credentials",
-      message: "missing credentials",
+      status,
+      message,
+      generatedAt: "2026-09-20T05:00:00.000Z",
+      source: performanceSource,
+      awfy: emptyPerformanceSuite,
+      jetstream: emptyPerformanceSuite,
+    });
+
+    // The HTML dashboard shows the loader's message; so does the Markdown.
+    expect(markdown).toContain(message);
+    expect(markdown).toContain("[Open the dashboard](/performance)");
+  });
+
+  test("keeps a generic diagnosis when the unavailable data has no message", () => {
+    const markdown = renderPerformanceMarkdown({
+      status: "error",
       generatedAt: "2026-09-20T05:00:00.000Z",
       source: performanceSource,
       awfy: emptyPerformanceSuite,
@@ -314,6 +335,6 @@ describe("createSiteMarkdown", () => {
     });
 
     expect(markdown).toContain("temporarily unavailable");
-    expect(markdown).toContain("[Open the dashboard](/performance)");
+    expect(markdown).not.toContain("undefined");
   });
 });
