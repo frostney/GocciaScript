@@ -58,8 +58,21 @@ directory through a link. A path that does not exist yet is judged by its
 deepest existing ancestor. Matching stops at a separator: `/a/b` covers
 `/a/b/c.js` but not `/a/bc`.
 
-`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path, so
-the file checked is the file opened. A bare library name such as `libc.so.6`
+`FFI.open("./lib.so")` is judged, and then loaded, at its canonical path. A
+directory on that path could be swapped between the check and the load, so the
+load is pinned to what was judged as far as the platform allows. On Linux the
+file is opened first, the kernel's path for that descriptor is judged, and the
+loader maps the descriptor itself, so the file checked is the file loaded.
+On Windows the file is opened first without write or delete sharing, which
+keeps it and every directory on its path from being renamed or replaced; the
+opened file's path is judged, the library is loaded while that handle is
+held, and the path the loader reports for the module is judged once more. On
+macOS and other Unix systems no pre-load pin is available: the path is
+canonicalized again after the load and must still be the judged one, and a
+library that fails that check is unloaded and refused — but a swapped
+library's initializers have already run by then, and a swap undone again
+within the load window is not detected. A refusal after the check passed is
+audited as `the library changed between the ffi check and the load`. A bare library name such as `libc.so.6`
 has no directory part and is searched for by the platform loader, which no
 path scope can describe: it is allowed only when every layer allows `ffi`
 unscoped and no layer has an `ffi` deny scope.
@@ -93,7 +106,10 @@ Private, loopback, link-local, CGNAT, and similar ranges are denied unless they
 are **named**: either the `private` scope is allowed, or the destination address
 is covered by an explicit IP or CIDR allow. An unscoped allow does not name
 them, but an explicit range does, however broad: `0.0.0.0/0` covers loopback,
-RFC 1918, and the `169.254.169.254` metadata address too. A `private` **deny**
+RFC 1918, and the `169.254.169.254` metadata address too. An address scope with
+a port names the address for that port only: `127.0.0.1:18765` lifts the
+private refusal for port 18765, not for port 22, whether the URL names the
+address or a host name that resolves to it. A `private` **deny**
 wins over every allow, explicit addresses and ranges included. IPv6 forms that
 embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
 6to4 `2002::/16` — are private when the host they embed is.
@@ -155,8 +171,11 @@ denial.
 Only reads through a content provider that reports `ReadsHostFileSystem` are
 checked, so in-memory, archive, and sandbox-filesystem providers are unaffected.
 Modules a host loads itself (`--globals`, `--modules`, `InjectModulesFromModule`
-and their imports) are host requests and never checked; a guest importing the
-same file later is checked like any other guest read, cached or not.
+and the imports they make while the host loads them) are host requests and never
+checked. That exemption ends when the host's load returns: a function such a
+module exports runs later as guest code, so an `import()` it makes then is a
+guest read and is checked, and a guest importing the same file later is checked
+like any other guest read, cached or not.
 
 For a relative or absolute specifier — and for the path an alias or import map
 rewrites a specifier to — the resolver tries candidates in order: the exact

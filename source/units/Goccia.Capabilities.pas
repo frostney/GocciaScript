@@ -56,7 +56,8 @@ type
     FLayers: TGocciaCapabilityLayers;
     function CopyWithScope(const ACapability: TGocciaCapability;
       const AScope: string; const AAllow: Boolean): TGocciaCapabilities;
-    function PrivateAddressNamed(const AAddressText: string): Boolean;
+    function PrivateAddressNamed(const AAddressText: string;
+      const APort: Integer): Boolean;
     function NetHostVerdict(const AHost: string;
       const APort: Integer): TGocciaNetHostVerdict;
   public
@@ -106,6 +107,12 @@ type
     function AllowsPath(const ACapability: TGocciaCapability;
       const APath: string): Boolean;
 
+    { read/ffi: APath is already canonical — for example the path the kernel
+      reports for a file descriptor already opened — and is matched as
+      written, without touching the filesystem again. }
+    function AllowsCanonicalPath(const ACapability: TGocciaCapability;
+      const APath: string): Boolean;
+
     { net, before name resolution. An IP-literal host in a private range also
       needs private ranges to be named (see AllowsNetAddress). }
     function AllowsNetHost(const AHost: string; const APort: Integer): Boolean;
@@ -116,10 +123,14 @@ type
       const APort: Integer): string;
 
     { net, after name resolution: the resolved address of a request whose host
-      already passed AllowsNetHost. Private, loopback, and link-local addresses
-      are denied unless every layer names them, through the `private` scope or
-      an explicit IP/CIDR scope that covers the address. }
-    function AllowsNetAddress(const AAddress: string): Boolean;
+      already passed AllowsNetHost, for its port APort. Private, loopback, and
+      link-local addresses are denied unless every layer names them, through
+      the `private` scope or an explicit IP/CIDR scope that covers the address
+      and, when the scope has a port, names APort. APort of zero means the
+      port is not known: only unported scopes name the address then, and
+      port-scoped denies apply. }
+    function AllowsNetAddress(const AAddress: string;
+      const APort: Integer = 0): Boolean;
 
     { import: whether a bare specifier imported from AImportingDirectory may be
       resolved against node_modules, and the highest directory the ancestor
@@ -812,13 +823,23 @@ end;
 
 function TGocciaCapabilities.AllowsPath(
   const ACapability: TGocciaCapability; const APath: string): Boolean;
+begin
+  Result := AllowsCanonicalPath(ACapability,
+    CanonicalPathRequest(ACapability, APath));
+end;
+
+function TGocciaCapabilities.AllowsCanonicalPath(
+  const ACapability: TGocciaCapability; const APath: string): Boolean;
 var
   I, J: Integer;
   Path: string;
   LayerAllows: Boolean;
   Rule: TGocciaCapabilityRule;
 begin
-  Path := CanonicalPathRequest(ACapability, APath);
+  if not (ACapability in [gcRead, gcFFI]) then
+    raise EGocciaCapabilityScopeError.CreateFmt(
+      '%s is not a path capability', [CapabilityName(ACapability)]);
+  Path := APath;
   if (Length(FLayers) = 0) or (Path = '') then
     Exit(False);
   if LayersDenyCanonicalPath(FLayers, ACapability, Path) then
@@ -840,8 +861,20 @@ begin
   Result := True;
 end;
 
+{ A scope with a port names (or, for a deny, covers) only that port. APort of
+  NET_ANY_PORT asks about any port. }
+function ScopePortMatches(const ANetScope: TGocciaNetScope;
+  const APort: Integer): Boolean;
+begin
+  Result := (ANetScope.Port = 0) or (APort = NET_ANY_PORT) or
+    (ANetScope.Port = APort);
+end;
+
+{ Whether every layer names AAddressText for APort: the `private` scope, or
+  an IP/CIDR allow covering the address whose port, if it has one, is APort.
+  APort of zero (not known) is named only by an unported scope. }
 function TGocciaCapabilities.PrivateAddressNamed(
-  const AAddressText: string): Boolean;
+  const AAddressText: string; const APort: Integer): Boolean;
 var
   Address: TNetworkAddress;
   I, J: Integer;
@@ -859,7 +892,8 @@ begin
     for J := 0 to High(Rule.AllowScopes) do
       if TryParseNetScope(Rule.AllowScopes[J], NetScope) and
          ((NetScope.Kind = nskPrivate) or
-          NetScopeCoversAddress(NetScope, Address, False)) then
+          (ScopePortMatches(NetScope, APort) and
+           NetScopeCoversAddress(NetScope, Address, False))) then
       begin
         LayerNames := True;
         Break;
@@ -924,7 +958,7 @@ begin
       Exit(nhvNotAllowed);
   end;
 
-  if HostIsPrivate and not PrivateAddressNamed(Host) then
+  if HostIsPrivate and not PrivateAddressNamed(Host, APort) then
     Exit(nhvPrivateNotNamed);
   Result := nhvAllowed;
 end;
@@ -955,8 +989,8 @@ begin
   end;
 end;
 
-function TGocciaCapabilities.AllowsNetAddress(
-  const AAddress: string): Boolean;
+function TGocciaCapabilities.AllowsNetAddress(const AAddress: string;
+  const APort: Integer): Boolean;
 var
   Address: TNetworkAddress;
   AddressText: string;
@@ -983,19 +1017,47 @@ begin
       begin
         if (NetScope.Kind = nskPrivate) and IsPrivate then
           Exit(False);
-        if NetScopeCoversAddress(NetScope, Address, True) then
+        { A port-scoped deny covers its port, and any request whose port is
+          not known. }
+        if ((NetScope.Port = 0) or (APort <= 0) or
+            (NetScope.Port = APort)) and
+           NetScopeCoversAddress(NetScope, Address, True) then
           Exit(False);
       end;
   end;
 
   if IsPrivate then
-    Exit(PrivateAddressNamed(AddressText));
+    Exit(PrivateAddressNamed(AddressText, APort));
   Result := True;
+end;
+
+{ Whether ADirectory lies inside the node_modules ceiling ACeiling, and the
+  ceiling spelled the way the ancestor walk will compare it. Both are
+  expanded spellings, and the walk compares expanded spellings, so the
+  expanded ceiling is used when the spellings agree. They can disagree while
+  naming the same place — macOS's /var is /private/var, and the working
+  directory comes back physical — so containment is also asked of the
+  canonical paths; the ceiling is then handed on canonically, which is how a
+  physically spelled importer is compared. }
+function DirectoryWithinCeiling(const ADirectory, ACeiling: string;
+  out AWalkCeiling: string): Boolean;
+var
+  CanonicalCeiling: string;
+begin
+  AWalkCeiling := ACeiling;
+  if IsPathWithinScope(ADirectory, ACeiling) then
+    Exit(True);
+  CanonicalCeiling := CanonicalCapabilityPath(ACeiling);
+  Result := (CanonicalCeiling <> '') and IsPathWithinScope(
+    CanonicalCapabilityPath(ADirectory), CanonicalCeiling);
+  if Result then
+    AWalkCeiling := CanonicalCeiling;
 end;
 
 function TGocciaCapabilities.NodeModulesCeiling(
   const AImportingDirectory: string; out ACeiling: string): Boolean;
 var
+  WalkCeiling: string;
   Directory, LayerCeiling: string;
   I, J: Integer;
   ImportScope: TGocciaImportScope;
@@ -1026,14 +1088,15 @@ begin
           LayerAllows := True;
           LayerUnbounded := True;
         end
-        else if IsPathWithinScope(Directory, ImportScope.Ceiling) then
+        else if DirectoryWithinCeiling(Directory, ImportScope.Ceiling,
+          WalkCeiling) then
         begin
           LayerAllows := True;
           { Within one layer the grants are a union: the highest ceiling that
             still contains the importer is the most the layer allows. }
           if (LayerCeiling = '') or
-             (Length(ImportScope.Ceiling) < Length(LayerCeiling)) then
-            LayerCeiling := ImportScope.Ceiling;
+             (Length(WalkCeiling) < Length(LayerCeiling)) then
+            LayerCeiling := WalkCeiling;
         end;
       end;
     if not LayerAllows then
@@ -1049,7 +1112,7 @@ end;
 function TGocciaCapabilities.DeniesNodeModules(
   const AImportingDirectory: string): Boolean;
 var
-  Directory: string;
+  Directory, WalkCeiling: string;
   I, J: Integer;
   ImportScope: TGocciaImportScope;
   Rule: TGocciaCapabilityRule;
@@ -1068,7 +1131,8 @@ begin
       if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
          (ImportScope.Kind = iskNodeModules) and
          ((ImportScope.Ceiling = '') or
-          IsPathWithinScope(Directory, ImportScope.Ceiling)) then
+          DirectoryWithinCeiling(Directory, ImportScope.Ceiling,
+            WalkCeiling)) then
         Exit(True);
   end;
   Result := False;
