@@ -4,19 +4,19 @@
 
 Implements the [ECMAScript Temporal API](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Temporal). See the [Temporal documentation](https://tc39.es/proposal-temporal/docs/) for the full specification reference.
 
-**GocciaScript differences:** ISO 8601 calendar only. `Duration.total()` and `Duration.round()` do not yet support `relativeTo` for calendar-relative conversions (years/months).
+**Calendars:** ISO 8601 by default. Non-ISO calendars (`buddhist`, `chinese`, `coptic`, `dangi`, `ethioaa`, `ethiopic`, `gregory`, `hebrew`, `indian`, `islamic-civil`, `islamic-tbla`, `islamic-umalqura`, `japanese`, `persian`, `roc`) are selected with a `[u-ca=…]` annotation, a `calendar` constructor argument or property bag field, or `withCalendar()`.
 
 ## Executive Summary
 
 - **Modern date/time API** — Implements the ECMAScript Temporal API, replacing legacy `Date` with immutable, type-safe alternatives
 - **Rich type system** — Provides distinct types for dates, times, date-times, instants, durations, year-months, month-days, and timezone-aware date-times
-- **ISO 8601 only** — All types use the ISO 8601 calendar; operations return new instances (immutability by design)
+- **ISO 8601 by default** — Types use the ISO 8601 calendar unless another calendar is requested; operations return new instances (immutability by design)
 - **Timezone support** — `ZonedDateTime` and `Temporal.Now` handle IANA timezone identifiers and DST transitions
 - **Arithmetic and comparison** — Every type supports `add`, `subtract`, `until`, `since`, `equals`, and static `compare`
 
 ## Overview (`Goccia.Builtins.Temporal.pas`)
 
-An implementation of the ECMAScript Temporal API providing modern date/time handling. ISO 8601 calendar only. All Temporal types are immutable — operations return new instances.
+An implementation of the ECMAScript Temporal API providing modern date/time handling. ISO 8601 calendar by default; non-ISO calendars are supported. All Temporal types are immutable — operations return new instances.
 
 `Goccia.Builtins.Temporal` registers constructors and static methods. Shared
 specification behavior lives behind the Temporal modules:
@@ -76,9 +76,10 @@ Represents a length of time with 10 components (years through nanoseconds).
 | `add(other)` | Add another duration |
 | `subtract(other)` | Subtract another duration |
 | `with(fields)` | Return new duration with overridden fields |
-| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`). Accepts a string or options object `{ unit, relativeTo? }`. Throws `RangeError` if duration has non-zero years/months without `relativeTo`. Calendar-relative conversion (`relativeTo`) is not yet supported. |
-| `round(options)` | Round the duration. Accepts a string (smallestUnit) or options object `{ smallestUnit, largestUnit, roundingMode, roundingIncrement }`. Rebalances components from `largestUnit` down. Throws `RangeError` if duration has years/months (requires `relativeTo`, not yet supported). At least `smallestUnit` or `largestUnit` must be specified. |
+| `total(unit)` | Convert to total of a single unit (e.g., `"hours"`). Accepts a string or options object `{ unit, relativeTo? }`. `relativeTo` (a PlainDate, ZonedDateTime, or string) anchors calendar units; a ZonedDateTime also accounts for DST. Throws `RangeError` if the duration has non-zero years, months, or weeks without `relativeTo`. |
+| `round(options)` | Round the duration. Accepts a string (smallestUnit) or options object `{ smallestUnit, largestUnit, roundingMode, roundingIncrement, relativeTo }`. Rebalances components from `largestUnit` down. Throws `RangeError` if the duration has years, months, or weeks without `relativeTo`. At least `smallestUnit` or `largestUnit` must be specified. |
 | `toString()` / `toJSON()` | ISO 8601 duration string (e.g., `"P1Y2M3DT4H5M6S"`) |
+| `toLocaleString(locales?, options?)` | Locale-formatted duration via `Intl.DurationFormat` (e.g., `"1 hr"`) |
 | `valueOf()` | Throws TypeError (prevents implicit coercion) |
 
 ## Temporal.PlainDate
@@ -87,15 +88,16 @@ Represents a calendar date without time or timezone.
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.PlainDate(year, month, day)` | Create from components |
+| `new Temporal.PlainDate(year, month, day, calendar?)` | Create from ISO components, optionally viewed in `calendar` |
 | `Temporal.PlainDate.from(item [, options])` | Create from string (`"2024-03-15"`), PlainDate, or object. Options: `{ overflow }` where overflow is `"constrain"` (default, clamps out-of-range values) or `"reject"` (throws RangeError). |
 | `Temporal.PlainDate.compare(one, two)` | Compare two dates (-1, 0, 1) |
 
 | Getter | Description |
 |--------|-------------|
-| `calendarId` | Always `"iso8601"` |
+| `calendarId` | Calendar identifier (`"iso8601"` by default) |
+| `era`, `eraYear` | Era and year of era for calendars with eras (e.g. `"reiwa"`, `6` in `japanese`); `undefined` for ISO 8601 |
 | `year`, `month`, `day` | Date components |
-| `monthCode` | `"M01"` through `"M12"` |
+| `monthCode` | `"M01"` through `"M12"`; lunisolar calendars add leap months such as `"M05L"` |
 | `dayOfWeek` | 1 (Monday) through 7 (Sunday) |
 | `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
 | `daysInWeek`, `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
@@ -111,7 +113,9 @@ Represents a calendar date without time or timezone.
 | `toPlainYearMonth()` | Extract year and month as PlainYearMonth |
 | `toPlainMonthDay()` | Extract month and day as PlainMonthDay |
 | `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime at midnight |
+| `withCalendar(calendar)` | Same date in another calendar |
 | `toString()` / `toJSON()` | ISO date string (e.g., `"2024-03-15"`) |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.PlainTime
@@ -137,6 +141,7 @@ Represents a wall-clock time without date or timezone.
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `toString([options])` / `toJSON()` | ISO time string (e.g., `"13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.PlainDateTime
@@ -145,7 +150,7 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.PlainDateTime(y, mo, d, h?, min?, s?, ms?, us?, ns?)` | Create from components |
+| `new Temporal.PlainDateTime(y, mo, d, h?, min?, s?, ms?, us?, ns?, calendar?)` | Create from ISO components |
 | `Temporal.PlainDateTime.from(item)` | Create from string, PlainDateTime, or object |
 | `Temporal.PlainDateTime.compare(one, two)` | Compare two date-times (-1, 0, 1) |
 
@@ -157,6 +162,7 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 |--------|-------------|
 | `with(fields)` | Return new date-time with overridden fields |
 | `withPlainTime(time?)` | Replace time component |
+| `withCalendar(calendar)` | Same date in another calendar |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
 | `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Any unit from `"year"` to `"nanosecond"` (defaults: largest `"day"`, smallest `"nanosecond"`). Mode defaults to `"trunc"`, increment to 1. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
@@ -164,6 +170,7 @@ Represents a date and time without timezone. Combines PlainDate and PlainTime.
 | `toPlainDate()` / `toPlainTime()` | Extract date or time component |
 | `toZonedDateTime(timeZone)` | Combine with a timezone (string or `{ timeZone }` object) to create a ZonedDateTime |
 | `toString([options])` / `toJSON()` | ISO string (e.g., `"2024-03-15T13:45:30"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.Instant
@@ -189,7 +196,9 @@ Represents an absolute point in time (epoch-based), independent of calendar or t
 | `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. `"hour"` through `"nanosecond"` only — calendar units not allowed (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding: mode `"trunc"`, increment 1. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
+| `toZonedDateTimeISO(timeZone)` | The same instant as a ZonedDateTime in `timeZone` (ISO calendar) |
 | `toString([options])` / `toJSON()` | ISO string with UTC (e.g., `"2024-03-15T13:45:30Z"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.PlainYearMonth
@@ -198,13 +207,14 @@ Represents a year and month without a day, time, or timezone.
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.PlainYearMonth(year, month)` | Create from components |
+| `new Temporal.PlainYearMonth(year, month, calendar?, referenceDay?)` | Create from ISO components |
 | `Temporal.PlainYearMonth.from(item)` | Create from string (`"2024-03"`), PlainYearMonth, or object |
 | `Temporal.PlainYearMonth.compare(one, two)` | Compare two year-months (-1, 0, 1) |
 
 | Getter | Description |
 |--------|-------------|
-| `calendarId` | Always `"iso8601"` |
+| `calendarId` | Calendar identifier (`"iso8601"` by default) |
+| `era`, `eraYear` | Era and year of era for calendars with eras (e.g. `"reiwa"`, `6` in `japanese`); `undefined` for ISO 8601 |
 | `year`, `month` | Date components |
 | `monthCode` | `"M01"` through `"M12"` |
 | `daysInMonth`, `daysInYear`, `monthsInYear` | Calendar info |
@@ -218,6 +228,7 @@ Represents a year and month without a day, time, or timezone.
 | `equals(other)` | Equality check |
 | `toPlainDate(item)` | Combine with a day (`{ day }`) to create a PlainDate |
 | `toString()` / `toJSON()` | ISO string (e.g., `"2024-03"`) |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.PlainMonthDay
@@ -226,14 +237,14 @@ Represents a month and day without a year, time, or timezone. Uses a reference y
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.PlainMonthDay(month, day)` | Create from components |
+| `new Temporal.PlainMonthDay(month, day, calendar?, referenceYear?)` | Create from ISO components |
 | `Temporal.PlainMonthDay.from(item)` | Create from string (`"12-25"`), PlainMonthDay, or object with `{ monthCode, day }` |
 | `Temporal.PlainMonthDay.compare(one, two)` | Compare two month-days (-1, 0, 1) |
 
 | Getter | Description |
 |--------|-------------|
-| `calendarId` | Always `"iso8601"` |
-| `monthCode` | `"M01"` through `"M12"` |
+| `calendarId` | Calendar identifier (`"iso8601"` by default) |
+| `monthCode` | `"M01"` through `"M12"` in ISO 8601 |
 | `day` | Day of month |
 
 | Method | Description |
@@ -242,6 +253,7 @@ Represents a month and day without a year, time, or timezone. Uses a reference y
 | `equals(other)` | Equality check |
 | `toPlainDate(item)` | Combine with a year (`{ year }`) to create a PlainDate |
 | `toString()` / `toJSON()` | Month-day string (e.g., `"12-25"`) |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.ZonedDateTime
@@ -250,13 +262,14 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 
 | Constructor / Static | Description |
 |---------------------|-------------|
-| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone)` | Create from epoch nanoseconds (BigInt) and timezone ID |
+| `new Temporal.ZonedDateTime(epochNanoseconds, timeZone, calendar?)` | Create from epoch nanoseconds (BigInt) and timezone ID |
 | `Temporal.ZonedDateTime.from(item)` | Create from ISO string with timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`), ZonedDateTime, or object |
 | `Temporal.ZonedDateTime.compare(one, two)` | Compare two zoned date-times (-1, 0, 1) |
 
 | Getter | Description |
 |--------|-------------|
-| `calendarId` | Always `"iso8601"` |
+| `calendarId` | Calendar identifier (`"iso8601"` by default) |
+| `era`, `eraYear` | Era and year of era for calendars with eras (e.g. `"reiwa"`, `6` in `japanese`); `undefined` for ISO 8601 |
 | `timeZoneId` | IANA timezone identifier (e.g., `"America/New_York"`) |
 | `year`, `month`, `monthCode`, `day` | Date components (wall-clock, timezone-adjusted) |
 | `dayOfWeek`, `dayOfYear`, `weekOfYear`, `yearOfWeek` | ISO week-date components |
@@ -275,15 +288,18 @@ Represents an absolute date and time in a specific timezone. Combines an instant
 | `with(fields)` | Return new ZonedDateTime with overridden fields |
 | `withPlainTime(time?)` | Replace time component |
 | `withTimeZone(timeZone)` | Re-interpret the same instant in a different timezone |
+| `withCalendar(calendar)` | Same date in another calendar |
 | `add(duration)` / `subtract(duration)` | Date-time arithmetic |
 | `until(other [, options])` / `since(other [, options])` | Difference as Duration. Options: `{ largestUnit, smallestUnit, roundingMode, roundingIncrement }`. Accepts any unit from `"year"` to `"nanosecond"` (defaults: largest `"hour"`, smallest `"nanosecond"`). Rounding via mode (`"trunc"` default) and increment (default 1). Calendar-aware for day-or-larger units, including DST-aware rounding across variable-length local days. |
 | `round(options)` | Round to nearest unit. Accepts a string (smallestUnit) or options object `{ smallestUnit, roundingMode, roundingIncrement }`. |
 | `equals(other)` | Equality check |
 | `startOfDay()` | Return ZonedDateTime at the start of the wall-clock day |
+| `getTimeZoneTransition(direction)` | Next or previous UTC-offset transition (`"next"`, `"previous"`, or `{ direction }`) as a ZonedDateTime, or `null` if there is none |
 | `toInstant()` | Extract the underlying Instant |
 | `toPlainDate()` / `toPlainTime()` | Extract date or time component |
 | `toPlainDateTime()` | Extract date-time without timezone |
 | `toString([options])` / `toJSON()` | ISO string with offset and timezone annotation (e.g., `"2024-03-15T13:45:30+05:30[Asia/Kolkata]"`). `toString` accepts `{ fractionalSecondDigits }` (0-9 or `"auto"`). |
+| `toLocaleString(locales?, options?)` | Locale-formatted string via `Intl.DateTimeFormat` |
 | `valueOf()` | Throws TypeError |
 
 ## Temporal.Now

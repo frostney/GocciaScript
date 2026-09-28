@@ -27,7 +27,7 @@ Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtensi
 
 In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
-FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block. See [Permissions](permissions.md).
+FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a trusted config file's `permissions` block ([Config trust](permissions.md#config-trust)). See [Permissions](permissions.md).
 
 `ShadowRealm` is a core language built-in but, like the Function constructor's dynamic-code capability, is installed only on demand. The engine registers `globalThis.ShadowRealm` (`Goccia.Builtins.GlobalShadowRealm.pas`) when `--unsafe-shadowrealm` is passed or `"unsafe-shadowrealm": true` is set in config, because `ShadowRealm.prototype.evaluate` performs dynamic source evaluation and `ShadowRealm.prototype.importValue` imports modules into the child realm; `importValue` counts as a computed import, so it needs a `read` grant even for files inside the project ([Permissions](permissions.md#the-module-graph-exemption)). See [ADR 0073](adr/0073-opt-in-shadowrealm.md) and the [TC39 proposal table](language-tables.md#tc39-proposals).
 
@@ -239,8 +239,8 @@ RegExp is available as both `RegExp()` and `new RegExp()`. Regex literals (`/pat
 - RegExp prototype symbol methods accept RegExp protocol objects with a callable `exec` method, while `exec()` and `test()` still require real RegExp instances.
 - `String.prototype.match`, `matchAll`, `replace`, `replaceAll`, `search`, and `split` dispatch through the corresponding well-known symbol hooks, so custom protocol objects work as expected.
 - `matchAll()` returns a lazy iterator that advances matches on demand per the specification.
-- The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are matched against Unicode code point range tables. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported properties: `L`/`Letter`, `Lu`/`Uppercase_Letter`, `Ll`/`Lowercase_Letter`, `N`/`Number`, `Nd`/`Decimal_Number`, `P`/`Punctuation`, `S`/`Symbol`, `Z`/`Separator`, `Cc`/`Control`, `ASCII`, `ASCII_Hex_Digit`, `White_Space`. Unsupported properties throw `SyntaxError`. With `i`, Unicode-aware matching uses Unicode simple case folding, including single-code-point folds such as `ſ` to `s`, `K` to `k`, and `ẞ` to `ß`; it does not use full multi-code-point expansions such as `ß` to `ss`. The `u` flag enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
-- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Full Unicode set notation and properties of strings in character classes are not yet implemented beyond basic `u` flag behavior.
+- The `u` flag enables Unicode-aware pattern matching. Unicode property escapes (`\p{Letter}`, `\P{ASCII}`, etc.) are matched against Unicode code point range tables. Unicode code point escapes (`\u{41}`, `\u{1F600}`) are converted to UTF-8 byte sequences. Supported: General_Category values by long or short name (`Letter`/`L`, `Nonspacing_Mark`/`Mn`), bare or as `General_Category=`/`gc=`; binary properties such as `ASCII`, `Alphabetic`, `Emoji` and `White_Space`; and `Script=`/`sc=` and `Script_Extensions=`/`scx=` values (`\p{sc=Greek}`). Unknown names throw `SyntaxError`. With `i`, Unicode-aware matching uses Unicode simple case folding, including single-code-point folds such as `ſ` to `s`, `K` to `k`, and `ẞ` to `ß`; it does not use full multi-code-point expansions such as `ß` to `ss`. The `u` flag enables correct `AdvanceStringIndex` for multi-byte UTF-8 sequences.
+- The `v` flag (Unicode sets) is accepted and exposed through `.flags` and `.unicodeSets`. The `u` and `v` flags are mutually exclusive. Under `v`, classes support nesting, difference (`[\p{L}--[a-z]]`), intersection (`&&`), string literals (`\q{abc|d}`), and properties of strings such as `\p{RGI_Emoji}`, which match multi-code-point sequences.
 - The `d` flag (indices) is accepted and exposed through `.flags` and `.hasIndices`. Match arrays include `indices` entries as UTF-16 code unit `[start, end]` pairs, plus `indices.groups` for named captures.
 
 ### Global Constants, Functions, and Error Constructors (`Goccia.Builtins.Globals.pas`)
@@ -260,9 +260,9 @@ A `const` global providing engine metadata and Goccia-owned utility APIs:
 | `version` | `string` | Semver version from the latest git tag (e.g., `"0.2.0"`), or tag + `-dev` suffix if there are commits after the tag (e.g., `"0.2.0-dev"`) |
 | `commit` | `string` | Short git commit hash (e.g., `"a1b2c3d"`) |
 | `build` | `object` | Compile-time platform information (see below) |
-| `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`). Each year maps to an array of `{ name, link }` entries. |
+| `spec` | `object` | ES specification features implemented by GocciaScript, keyed by year (e.g., `"2015"`, `"2025"`), plus a `"whatwg"` key. Each key maps to an array of `{ name, link }` entries. |
 | `proposal` | `object` | Selected TC39 proposals implemented by GocciaScript, keyed by stage (e.g., `"stage-4"`, `"stage-2.7"`, `"stage-1"` — fractional stage keys occur). Each represented stage maps to an array of `{ name, link }` entries; use the language tables for the complete implemented proposal surface. |
-| `runtimeGlobals` | `string[]` | Names of runtime globals installed by the active runtime profile or runtime extensions. Empty in core-language-only engines. Import-only `goccia:` modules are not listed as globals. |
+| `runtimeGlobals` | `string[]` | Names registered by runtime extensions: `EventTarget`, `Event`, `AbortController` and `AbortSignal` under the loader profile, plus `FFI`, the timer functions or `TestAssertions` when those extensions are installed. Not a complete list: `console`, `performance`, `fetch`, `URL` and other runtime globals are missing ([#1277](https://github.com/frostney/GocciaScript/issues/1277)). Empty in core-language-only engines. Import-only `goccia:` modules are not listed as globals. |
 | `shims` | `string[]` | Names of registered ECMAScript shims installed by the engine |
 | `gc` | `function` | Trigger manual garbage collection. Returns `undefined`. Also exposes read-only `gc.bytesAllocated` (approximate GC heap size in bytes) and `gc.maxBytes` (active ceiling; defaults to half of physical memory capped at 8 GB on 64-bit or 700 MB on 32-bit, overridable via `--max-memory`). An allocation exceeding the ceiling is refused one of two ways, both of which collect and re-test first unless no collection could help: a charged allocation (string payload, `ArrayBuffer` backing store) throws a catchable `RangeError`, while a gated growth point (array element storage, object property storage) ends the run with the uncatchable `MemoryLimitError`. See [Garbage Collector](garbage-collector.md#gated-growth-points). |
 
@@ -281,6 +281,7 @@ Current default shims:
 | `isNaN` | `globalThis.isNaN` | `Number.isNaN(Number(value))` coercion wrapper |
 | `isFinite` | `globalThis.isFinite` | `Number.isFinite(Number(value))` coercion wrapper |
 | `Date` | `globalThis.Date` | Temporal-backed legacy Date shim |
+| `numberArrayToLocaleString` | `Number.prototype.toLocaleString`, `Array.prototype.toLocaleString` | `Intl.NumberFormat` |
 | `hasOwnProperty` | `Object.prototype.hasOwnProperty` | `Object.hasOwn` |
 | `__proto__` | `Object.prototype.__proto__` | `Object.getPrototypeOf` / `Object.setPrototypeOf` |
 | `defineGetter` | `Object.prototype.__defineGetter__` | `Object.defineProperty` accessor descriptor |
@@ -353,7 +354,7 @@ The constructor-backed objects mirror the `node-semver` public fields and core i
 
 `atob` decodes a base64 string following the WHATWG forgiving-base64-decode algorithm. ASCII whitespace (U+0009, U+000A, U+000C, U+000D, U+0020) is stripped before decoding. Missing `=` padding is tolerated. Invalid characters or an invalid length (length mod 4 = 1 after cleanup) throw a `DOMException` with name `"InvalidCharacterError"` and legacy code 5. The decoded bytes are returned as a string where each byte becomes a character (Latin-1 interpretation).
 
-`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling specification. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` re-emits reserved characters as uppercase percent-encoded sequences even when the input uses lowercase hex digits (e.g., `%2f` → `%2F`).
+`encodeURI` / `decodeURI` / `encodeURIComponent` / `decodeURIComponent` follow the ECMA-262 URI handling specification. The shared encoding/decoding logic lives in `Goccia.URI.pas` and is also used by `import.meta.url` for file-path percent-encoding. Multi-byte Unicode characters are encoded as UTF-8 octets, each percent-encoded individually (e.g., `encodeURIComponent("中")` → `%E4%B8%AD`). Lone surrogates (U+D800–U+DFFF) throw `URIError`. Decoding validates UTF-8 well-formedness: overlong encodings, truncated sequences, and code points above U+10FFFF all throw `URIError`. `decodeURI` leaves escapes of reserved characters exactly as written, hex-digit case included (`%2f` stays `%2f`).
 
 **Error constructors:** `Error`, `EvalError`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, `DOMException`
 
@@ -465,7 +466,7 @@ obj[sym]; // "value"
 
 `Object.defineProperty` and `Object.getOwnPropertySymbols` also support symbol keys. The `in` operator checks for symbol-keyed properties, including global registry symbols created via `Symbol.for()`.
 
-**Prototype:** `Symbol.prototype` is an object containing `toString()` and a `description` getter, matching ECMAScript semantics. All symbol instances share this prototype.
+**Prototype:** `Symbol.prototype` is an object containing `toString()`, `valueOf()` and a `description` getter, matching ECMAScript semantics. All symbol instances share this prototype.
 
 **Coercion semantics:** Implicit conversion of a symbol to string or number throws `TypeError`. Use `String(symbol)` or `symbol.toString()` for explicit string conversion. See [value-system.md](value-system.md#symbols) for details.
 
@@ -669,7 +670,7 @@ Core High Resolution Time API:
 
 `performance.now()` uses `TimingUtils.GetNanoseconds`, so wall-clock changes do not affect it. `performance.timeOrigin` is captured once from `TimingUtils.GetEpochNanoseconds` when the built-in is created.
 
-`Performance()` and `new Performance()` both throw `TypeError` (`"Illegal constructor"`), matching the web platform's non-constructible interface object behavior.
+`Performance` is not constructible: `Performance()` throws `TypeError` (`"Illegal constructor"`) and `new Performance()` throws `TypeError` (`"Performance is not a constructor"`); the web platform uses `"Illegal constructor"` for both ([#1277](https://github.com/frostney/GocciaScript/issues/1277)).
 
 ### Temporal
 
@@ -835,7 +836,7 @@ const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" 
 |--------|---------|
 | `jsx` | Run the JSX preprocessor before parsing (default `false`) |
 | `module` | Parse as module source rather than script source (default `true`) |
-| `fileName` | Name used in a syntax error's position (default `<source>`) |
+| `fileName` | File name the parser sees; its extension decides JSX handling, so a `.ts` name skips the JSX preprocessor (default `<source>`). A syntax error reports only `(line:column)`, not the file name ([#1277](https://github.com/frostney/GocciaScript/issues/1277)) |
 
 The *language* is the host's, not a second one configured here: the
 compatibility flags in force for the run are the ones `parse` accepts, exactly

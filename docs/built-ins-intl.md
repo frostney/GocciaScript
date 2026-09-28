@@ -67,12 +67,14 @@ Represents a Unicode locale identifier with parsed subtags and extension keys.
 | `calendar` | Calendar type (Unicode `ca` extension) |
 | `caseFirst` | Case-first sort order (`"upper"`, `"lower"`, `"false"`) |
 | `collation` | Collation type (Unicode `co` extension) |
+| `firstDayOfWeek` | First day of the week (Unicode `fw` extension, `"mon"`…`"sun"`). The option accepts weekday names and the numbers `0`–`7`; other values throw `RangeError` rather than being stringified ([#1268](https://github.com/frostney/GocciaScript/issues/1268)) |
 | `hourCycle` | Hour cycle (`"h11"`, `"h12"`, `"h23"`, `"h24"`) |
 | `language` | Language subtag |
 | `numberingSystem` | Numbering system (Unicode `nu` extension) |
 | `numeric` | Whether numeric collation is enabled |
 | `region` | Region subtag |
 | `script` | Script subtag |
+| `variants` | Variant subtags joined with `-` (e.g. `"1996-fonipa"`), or `undefined` |
 
 | Method | Description |
 |--------|-------------|
