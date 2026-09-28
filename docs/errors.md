@@ -228,6 +228,9 @@ path, not resolution alone:
 | YAML module has no document | `YAML module "./empty.yaml" must contain at least one top-level document.` |
 | Named import of a missing export | `Module "./dep.js" has no export named "nope"` |
 
+A cached module that changed on disk is reloaded through the request that
+reached it, so a reload that fails names that request's specifier too.
+
 See [ADR 0108 — Specifier-only module resolution errors](adr/0108-specifier-only-module-resolution-errors.md).
 
 Hosts keep the resolution diagnostic on the **human-readable** output path. The
