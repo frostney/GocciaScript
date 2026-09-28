@@ -380,7 +380,11 @@ console.log("Time to ship:", span.toString());`,
     id: "data",
     label: "Structured data — JSON / TOML / YAML import",
     desc: "Import .json, .toml, .yaml, .csv files directly as ES modules — or parse at runtime.",
-    code: `// Runtime parsing
+    code: `// The runtime parsers are modules, not globals
+import * as TOML from "goccia:toml";
+import * as CSV from "goccia:csv";
+
+// Runtime parsing
 const tomlSource = \`
 [server]
 host = "www.gocciascript.dev"
