@@ -50,6 +50,7 @@ type
     procedure TestShortOptionTakesAttachedValue;
     procedure TestShortOptionWithoutValueMatchesLongForm;
     procedure TestShortFlagDoesNotConsumeNextArgument;
+    procedure TestAttachedShortOptionIsNotAValue;
     procedure TestScopeListBareAndScoped;
     procedure TestScopeListAccumulates;
     procedure TestScopeListDoesNotConsumeNextArgument;
@@ -98,6 +99,8 @@ begin
     TestShortOptionWithoutValueMatchesLongForm);
   Test('A short flag does not consume the next argument',
     TestShortFlagDoesNotConsumeNextArgument);
+  Test('An attached short option is not the previous option''s value',
+    TestAttachedShortOptionIsNotAValue);
   Test('Scope list: bare flag and scoped list', TestScopeListBareAndScoped);
   Test('Scope list: repeats accumulate', TestScopeListAccumulates);
   Test('Scope list: the next argument is never consumed',
@@ -243,6 +246,52 @@ begin
     end;
   finally
     Update.Free;
+  end;
+end;
+
+procedure TCLIOptionsTests.TestAttachedShortOptionIsNotAValue;
+var
+  Jobs: TIntegerOption;
+  Log: TStringOption;
+  Options: TOptionArray;
+  Positionals: TStringList;
+  IsUsageError: Boolean;
+begin
+  Jobs := TIntegerOption.Create('jobs', 'Worker count');
+  Log := TStringOption.Create('log', 'Log file');
+  try
+    Jobs.ShortName := 'j';
+    SetLength(Options, 2);
+    Options[0] := Jobs;
+    Options[1] := Log;
+    { `-j2` is an option of its own, so the option before it has no value. }
+    Expect<string>(ParseMessage(['--jobs', '-j2'], Options, IsUsageError))
+      .ToBe('--jobs requires a value');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+    Expect<string>(ParseMessage(['-j', '-j2'], Options, IsUsageError))
+      .ToBe('-j requires a value');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+    Expect<string>(ParseMessage(['-j', '-j=2'], Options, IsUsageError))
+      .ToBe('-j requires a value');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+    { A string option would otherwise take `-j2` as its value silently. }
+    Expect<string>(ParseMessage(['--log', '-j2'], Options, IsUsageError))
+      .ToBe('--log requires a value');
+    Expect<Boolean>(IsUsageError).ToBe(False);
+    Expect<Boolean>(Log.Present).ToBe(False);
+    Expect<Boolean>(Jobs.Present).ToBe(False);
+    { `--log=-j2` names its value explicitly, so it keeps it. }
+    Positionals := ParseArguments(['--log=-j2'], Options);
+    try
+      Expect<string>(Log.Value).ToBe('-j2');
+      Expect<Boolean>(Jobs.Present).ToBe(False);
+      Expect<Integer>(Positionals.Count).ToBe(0);
+    finally
+      Positionals.Free;
+    end;
+  finally
+    Log.Free;
+    Jobs.Free;
   end;
 end;
 

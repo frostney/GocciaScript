@@ -108,6 +108,18 @@ begin
     AOption := nil;
 end;
 
+{ Whether the option at AIndex has no separate value to take: it is the last
+  argument, or the next one is an option of its own (`--name`, `-x`, `-j2`). }
+function MissingSeparateValue(const AArgs: array of string;
+  const AIndex: Integer; const AOptions: TOptionArray): Boolean;
+var
+  AttachedOption: TOptionBase;
+begin
+  Result := (AIndex >= High(AArgs)) or
+    LooksLikeOptionToken(AArgs[AIndex + 1]) or
+    IsAttachedShortOptionValue(AArgs[AIndex + 1], AOptions, AttachedOption);
+end;
+
 function ParseArguments(const AArgs: array of string;
   const AOptions: TOptionArray): TStringList;
 var
@@ -135,7 +147,7 @@ begin
         if (Value = '') and (not HasEquals) and
            Option.ConsumesSeparateValue then
         begin
-          if (I >= High(AArgs)) or LooksLikeOptionToken(AArgs[I + 1]) then
+          if MissingSeparateValue(AArgs, I, AOptions) then
             raise TParseError.CreateFmt(
               '--%s requires a value', [Name]);
           Inc(I);
@@ -163,7 +175,7 @@ begin
         begin
           { `-j 2`: a valued short option takes the next argument, as its
             long form does. }
-          if (I >= High(AArgs)) or LooksLikeOptionToken(AArgs[I + 1]) then
+          if MissingSeparateValue(AArgs, I, AOptions) then
             raise TParseError.CreateFmt('%s requires a value', [Arg]);
           Inc(I);
           Option.ApplyExplicit(AArgs[I], False);
