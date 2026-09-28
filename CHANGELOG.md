@@ -2,6 +2,104 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.14.0] - 2026-09-28
+
+### ⚡ Performance
+
+- perf(strings): defer copies in bytecode accumulators (#1235)
+- perf(array): reuse live callback argument roots (#1236)
+- perf(vm): keep execution contexts unmanaged on the call path (#1219)
+- perf(bytecode): fuse less-than compares into OP_JUMP_IF_NOT_LT (#1217)
+- perf(vm): skip coverage and limit polls on production dispatch (#1216)
+- perf(bytecode): fuse increment, add-immediate, write IC, and local property reads (#1215)
+- perf(gc): keep worker allocations running during another worker's collection (#1213)
+
+### 🌐 Website
+
+- perf(website): cache dashboard history in immutable snapshots (#1232)
+- refactor(website): centralize report storage and publication (#1228)
+- perf(website): throttle rate-limit bucket cleanup (#1227)
+- fix(website): print install commands without a double slash (#1253)
+- fix(website): resolve AEO leftovers on 404 and canonical URL consistency (#1240)
+- fix(seo): fix 404 metadata leak and align H1 with engine-first positioning (#1225)
+
+### 🏗️ Internal
+
+- chore(skills): sync known-good-route skills so skipped or rate-limited reviews count as missing (#1287)
+- docs: verify every docs page and the website against the 0.14 binaries (#1272)
+- chore(test262): bump pin to 7ab7fafa (#1284)
+- docs(orchestration): add a repository orchestration policy (#1280)
+- docs(adr): record the unified allow/deny capability model (#1256)
+- ci(coderabbit): stop reviewing vendored Agent Skills (#1263)
+- refactor(ci): share report publication setup (#1229)
+- docs(sandbox): scope the write-back flush guarantee to POSIX and Windows (#1252)
+- chore(toml-test): bump pin to ff49d109 (#1246)
+- chore(skills): sync provisioned skills and replace removed workflow skills (#1249)
+- chore(test262): bump pin to 0a888ef3 (#1242)
+- chore(tc39-mcp): bump pin to v0.6.3 (#1239)
+- chore(test262): bump pin to aae8cf6e (#1237)
+- refactor(builtins): release temporary member definitions after construction (#1231)
+- refactor(runtime): remove unused ASCII memo cleanup (#1226)
+- refactor(runtime): centralize ordered property keys (#1234)
+- refactor(csv-tsv): share callback conversion and chunk results (#1233)
+- chore(toml-test): bump pin to bc8f2c2c (#1223)
+- chore(jetstream): bump pin to c603c04d (#1224)
+- chore(test262): bump pin to 77100523 (#1222)
+
+### 🐛 Fixed
+
+- fix(modules): verify provider data modules on load, and gate reviews on CodeRabbit completion (#1285)
+- fix(cli): read the value of a short option such as -j 4 (#1283)
+- fix(temporal): detect the system time zone on Linux and macOS (#1282)
+- fix(modules): keep host paths out of script-visible module-loading errors (#1281)
+- fix(capabilities): close four ways guest code could bypass its capability set (#1261)
+- fix(fetch): keep an engine's fetch policy when a nested run ends (#1258)
+- fix(cli): keep --no-host-filesystem in force when a JavaScript manifest is loaded (#1257) — `--no-host-filesystem` is removed in this release: host reads are denied by default, and `--deny-read` also refuses the project's own imports
+- fix(profiling): count allocations in host-run bytecode callbacks (#1230)
+- fix: recognise `of` only in for-of headers, flush write-back before replacing, keep retained `parse` callable (#1251)
+- fix: refuse symlinked write-back temporaries, parse JSX `of` as an identifier, bound goccia:ast hosts (#1250)
+- fix(parser): JSX comment trivia and ASI inside type declarations (#1243)
+- fix(cli): materialize parked parse docs before growth-gate parking (#1241)
+- fix(compliance): use detected CPU count for default workers (#1238)
+- fix(compiler): evaluate const increment RHS and recheck global for-limits (#1220)
+- fix(gc): make BytesAllocated reads tear-free on 32-bit targets (#1214)
+- fix(runtime): correctness, GC-safety, and conformance fixes across the new stack layers (#1212)
+- fix(runtime): root the instanceof prototype-chain walk across proxy traps (#1211)
+- fix(runtime): complete EGocciaBytecodeThrow boundary handling (#1210)
+- fix(shadowrealm): unpin ShadowRealm.prototype at host teardown (#1209)
+- fix(modules): close class-body strictness leaks and enforce symlink containment (#1208)
+- fix(diagnostics): render identical runtime-error diagnostics in both modes with sandbox-safe code frames (#1206)
+- fix(runtime): root binary-operator operands across coercion re-entry (#1205)
+- fix(classes): run the implicit-constructor chain per spec on every construction path (#1204)
+- fix(runtime): reject async promises with the thrown value across the executor boundary (#1203)
+- fix(interpreter): root async module evaluation across its synchronous prefix (#1202)
+- fix(modules): classify stripped source by UTF-16 code units for bare-specifier detection (#1201)
+- fix(runtime): GC-rooting, class-construction, and sandbox-capability corrections across the stack (#1200)
+- fix(interpreter): let the GC own pattern-matching scopes and root match temporaries (#1198)
+- fix(bytecode): root the function object of suspended async continuations (#1197)
+- fix(interpreter): run instance elements when classes are constructed reflectively (#1196)
+- fix(runtime): resolve argument-array holes through the prototype chain (#1195)
+- fix(classes): run field initializers in the definition environment at spec-mandated points (#1194)
+- fix(bytecode): match call/apply/bind intrinsics by identity in method-call fast paths (#1193)
+- fix(testing): render Error-like rejection reasons as Name: message (#1191)
+- fix(bytecode): run compiled class constructors when instantiated from evaluator paths (#1189)
+
+### 🚀 Added
+
+- feat(runner): add, update and verify provider package pins with an install mode (#1267)
+- feat(modules): import github: packages pinned by a lockfile, under the import capability (#1266)
+- feat(cli)!: merge the script loader and sandbox runner into GocciaRunner with a sandbox mode (#1265)
+- feat(cli)!: require trust before a config file can grant permissions (#1264)
+- feat(cli)!: grant host access with --allow-/--deny- flags and deny everything else by default (#1262)
+- feat(runtime)!: enforce an engine-owned capability set for read, net, ffi and import (#1259)
+- feat(test262): add native sharded runner (#1050)
+- feat(sandbox): apply a sandbox run's changes with --write-back (#1248) — shipped as `--copy-rw`: name each input the run may write back with `--copy-rw` (or `"copy-rw"` in the `sandbox` section)
+- feat(runtime): map goccia:ast ranges back to the original file (#1247)
+- feat(runtime): expose the parse tree to JavaScript as goccia:ast (#1244)
+- feat(testing): add deterministic virtual timers matching the Vitest fake-timer surface (#1207)
+- feat(runtime): node:async_hooks with engine-propagated async context (#1192)
+- feat(modules): opt-in bare-specifier resolution against node_modules (#1190) — the opt-in is `--allow-import=node_modules` (the interim `--allow-node-modules` flag was removed before release)
+
 ## [0.13.0] - 2026-08-19
 
 ### ⚡ Performance
