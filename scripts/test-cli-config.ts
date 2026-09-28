@@ -673,6 +673,13 @@ console.log("Per-file allow-ffi config across runtime apps...");
     if (!trParallel.combined.includes("Passed: 2"))
       throw new Error(`TestRunner parallel allow-ffi config should pass, got: ${trParallel.combined}`);
 
+    // The documented short form: `-j N` takes the next argument, `-jN` an attached one.
+    for (const jobsArgs of [["-j", "2"], ["-j2"]]) {
+      const trShortJobs = runCwd(TESTRUNNER, ["-P", ".", ...jobsArgs, "--no-progress"], parallelTestDir);
+      if (!trShortJobs.combined.includes("Passed: 2"))
+        throw new Error(`TestRunner ${jobsArgs.join(" ")} should run both files, got: ${trShortJobs.combined}`);
+    }
+
     for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
       const bench = Bun.spawnSync(
         [resolve(BENCHRUNNER), "-P", join(tmp, "bench.js"), "--no-progress", ...modeArgs],

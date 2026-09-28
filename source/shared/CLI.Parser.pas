@@ -92,6 +92,22 @@ begin
     not (AArg[2] in ['0'..'9']);
 end;
 
+{ Whether AArg is a short option that takes a value, spelled with the value
+  attached (`-j2`, `-j=2`). A flag's short name never matches, so `-P=1`
+  stays the usage error ParseArguments reports for it. }
+function IsAttachedShortOptionValue(const AArg: string;
+  const AOptions: TOptionArray; out AOption: TOptionBase): Boolean;
+begin
+  AOption := nil;
+  if (Length(AArg) <= 2) or (AArg[1] <> SHORT_FLAG_CHAR) or
+     (AArg[2] = SHORT_FLAG_CHAR) then
+    Exit(False);
+  AOption := FindOptionShort(AOptions, AArg[2]);
+  Result := Assigned(AOption) and AOption.ConsumesSeparateValue;
+  if not Result then
+    AOption := nil;
+end;
+
 function ParseArguments(const AArgs: array of string;
   const AOptions: TOptionArray): TStringList;
 var
@@ -143,7 +159,25 @@ begin
         Option := FindOptionShort(AOptions, Arg[2]);
         if Option = nil then
           raise TParseError.CreateFmt('Unknown option: %s', [Arg]);
-        Option.Apply('');
+        if Option.ConsumesSeparateValue then
+        begin
+          { `-j 2`: a valued short option takes the next argument, as its
+            long form does. }
+          if (I >= High(AArgs)) or LooksLikeOptionToken(AArgs[I + 1]) then
+            raise TCLIUsageError.CreateFmt('%s requires a value', [Arg]);
+          Inc(I);
+          Option.ApplyExplicit(AArgs[I], False);
+        end
+        else
+          Option.Apply('');
+      end
+      else if IsAttachedShortOptionValue(Arg, AOptions, Option) then
+      begin
+        { `-j2` or `-j=2`: a valued short option with its value attached. }
+        Value := Copy(Arg, 3, MaxInt);
+        if Value[1] = FLAG_VALUE_SEPARATOR then
+          Delete(Value, 1, 1);
+        Option.ApplyExplicit(Value, False);
       end
       else
         Result.Add(Arg);
