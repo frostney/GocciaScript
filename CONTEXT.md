@@ -50,6 +50,10 @@ _Avoid_: Module resolver, module loader, filesystem when the retrieval mechanism
 A named bundle of runtime extensions used by a CLI host or embedding host.
 _Avoid_: Mode, preset.
 
+**Loader runtime profile**:
+The runtime profile that `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and `GocciaBenchmarkRunner` apply: console, fetch, the data-format modules, and the other runtime extensions of a normal CLI host. The name predates the 0.14 rename of the Script Loader to the Runner.
+_Avoid_: Loader profile, Runner profile.
+
 **Runtime surface**:
 The aggregate set of JavaScript-visible APIs installed by a runtime profile or by individual runtime extensions. Use it when discussing what a host exposes overall; use runtime global, runtime extension, or runtime profile when naming the concrete mechanism. What those APIs may reach outside the process is the capability set, not the runtime surface.
 _Avoid_: Runtime, built-in surface, host surface, capability set.
@@ -69,6 +73,26 @@ _Avoid_: Widening, override, child permissions.
 **Module-graph exemption**:
 The one kind of host read that needs no `read` grant: a static import with a literal specifier (including `json`, `text`, and `bytes` imports and a literal `import()`) of a file inside the project, the directory of the nearest goccia config above the entry. A deny removes it.
 _Avoid_: Trusted imports, implicit read.
+
+**Grant**:
+An allow entry for a capability, given on the command line (`--allow-<cap>[=<scope>]`), by a trusted config file's `permissions` block, or by an embedding host. A **deny** (`--deny-<cap>`, or any config deny, which needs no trust) always wins over a grant.
+_Avoid_: Permission (for one entry), allowlist.
+
+**Config trust**:
+The user's recorded approval of a config file's requests: its `allow-*` permissions, its `unsafe-*` keys, and its `sandbox` section. A config's requests are not grants until it is trusted; an untrusted config that requests anything stops the run with status 2, and `-P` accepts the requests for one run without recording trust. See [Permissions](docs/permissions.md#config-trust).
+_Avoid_: Trusted config (for a config that only denies), auto-grant.
+
+**Trust store**:
+The per-user `trust.json` file, kept in the user's configuration directory rather than in any project, that records each trusted config by its path and a hash of its permission requests.
+_Avoid_: Allowlist, trust file in the project.
+
+**Provider package**:
+A package named by a `github:<owner>/<repo>@<ref>[/<path>]` import-map entry, materialized into the project's package cache, verified on load, and reachable only under an `import` grant. See [Provider Imports](docs/provider-imports.md).
+_Avoid_: Remote import, dependency (unqualified), npm package.
+
+**Lockfile**:
+`goccia.lock.json` beside the import map: it pins each provider package to a commit and each of its files to a SHA-256. A run reads it and never writes it.
+_Avoid_: Package manifest, lock (unqualified).
 
 **Host environment**:
 The engine-owned module that supplies JavaScript-observable time, time zone, and randomness. Hosts may inject its clock and RNG adapters; infrastructure timing is not part of the host environment.
@@ -393,6 +417,10 @@ _Avoid_: Loader mode, normal mode.
 **Sandbox mode**:
 The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs` and `goccia`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
 _Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
+
+**Install mode**:
+The Runner mode, enabled by `--add`, `--remove`, `--install`, or `--update`, that resolves provider-package refs and writes the lockfile and then the import map. It runs no script and takes no input files.
+_Avoid_: Package manager, install command.
 
 **Bare Script Loader**:
 The CLI host that executes through the core engine without attaching the runtime surface.

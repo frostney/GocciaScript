@@ -5,9 +5,9 @@
 ## Executive Summary
 
 - **Singleton pattern** — Primitive singletons (`undefined`, `null`, `true`, `false`, `NaN`) use class-var + class-function, pinned by the GC
-- **Factory method** — Scopes are created via `CreateChild`, never directly instantiated
-- **Builder pattern** — Built-in objects constructed by creating a `TGocciaObjectValue` and adding methods one at a time
-- **Shared prototype singleton** — Each built-in type shares a single class-level prototype instance via `TGocciaSharedPrototype`
+- **Factory method** — Plain scopes are created via `CreateChild`; specialized scopes (call, catch, class-init, …) are constructed with their parent; never `TGocciaScope.Create`
+- **Builder pattern** — Built-in objects declare their members in a `TGocciaMemberCollection` and install them with `RegisterMemberDefinitions`
+- **Shared prototype singleton** — Each built-in type shares one prototype per realm, stored in a realm slot (often through a `TGocciaSharedPrototype` helper)
 - **Define vs Assign** — `Define` creates a new binding; `Assign` changes an existing one — distinct operations throughout the codebase
 
 For **canonical terminology**, see [GocciaScript Context](../CONTEXT.md). For **pipelines and layers**, see [Architecture](architecture.md). For the **execution modes**, see [Interpreter](interpreter.md) (tree-walk) and [Bytecode VM](bytecode-vm.md) (register VM, `.gbc`).
@@ -40,14 +40,14 @@ The same pattern applies to `TGocciaNullLiteralValue.NullValue`, `TGocciaBoolean
 
 ### Factory method (scope creation)
 
-Scopes are created via `CreateChild`, never directly instantiated:
+Plain scopes are created via `CreateChild(AScopeKind, ACustomLabel, ACapacity)`. Scopes that carry extra state — call, arrow-call and method-call scopes, catch, class-init, function-name and `with` scopes — are `TGocciaScope` subclasses, constructed directly with their parent as the first argument. Either way the parent's callbacks and mode flags are copied by the `TGocciaScope` constructor. Never build a bare `TGocciaScope` by hand:
 
 ```pascal
-// Correct
-ChildScope := ParentScope.CreateChild(skBlock);
+// Correct — plain block scope
+ChildScope := AContext.Scope.CreateChild(skBlock);
 
-// Correct — with capacity hint for function call scopes
-CallScope := FClosure.CreateChild(skFunction, ParamCount + 4);
+// Correct — specialized scope, parent first (TGocciaFunctionValue.CreateCallScope)
+Result := TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2);
 
 // WRONG — never do this
 ChildScope := TGocciaScope.Create(ParentScope, skBlock);
@@ -55,95 +55,114 @@ ChildScope := TGocciaScope.Create(ParentScope, skBlock);
 
 ### Builder pattern (built-in registration)
 
-Built-in objects are constructed by creating a `TGocciaObjectValue` and adding methods one at a time:
+Built-in objects declare their members in a `TGocciaMemberCollection` and install them in one pass with `RegisterMemberDefinitions` (`Goccia.ObjectModel.pas`). Abbreviated from `TGocciaMath.Create`:
 
 ```pascal
-MathObj := TGocciaObjectValue.Create;
-MathObj.DefineProperty('PI', TGocciaNumberLiteralValue.Create(Pi), False);
-MathObj.DefineProperty('floor', TGocciaNativeFunction.Create(@MathFloor), False);
+FBuiltinObject.RegisterConstant('PI', TGocciaNumberLiteralValue.Create(MATH_PI));
+
+Members := TGocciaMemberCollection.Create;
+try
+  Members.AddMethod(MathFloor, 1, gmkStaticMethod);
+  // ... more AddMethod / AddSymbolDataProperty ...
+  RegisterMemberDefinitions(FBuiltinObject, Members.ToDefinitions);
+finally
+  Members.Free;
+end;
+
+AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 ```
 
 ### Ordered own property keys
 
 `TGocciaObjectValue.GetOwnPropertyKeys` owns string-key enumeration order. Ordinary objects return array indices in ascending numeric order followed by other strings in creation order; exotic values retain their own ordering. `OwnPropertyKeyValues` includes symbols and preserves a proxy trap's mixed string/symbol order. Both executors consume these existing value-layer operations for object spread, rest, and `for...in`, without sorting the returned keys again. Classes include their synthesized `length`, `name`, and `prototype` keys through their override, just as other exotic values include their virtual properties.
 
-### Parser combinator (binary expressions)
+### Binary expression levels (parser)
 
-All left-associative binary operator parsers delegate to a shared `ParseBinaryExpression` helper:
-
-```pascal
-function TGocciaParser.ParseBinaryExpression(
-  NextLevel: TParseFunction;
-  const Operators: array of TGocciaTokenType
-): TGocciaExpression;
-```
-
-Each precedence level is a one-liner:
+Each left-associative precedence level in `Goccia.Parser.pas` is its own short loop: parse the next-tighter level, then fold operators of this level into a `TGocciaBinaryExpression` while they appear:
 
 ```pascal
-function TGocciaParser.Equality: TGocciaExpression;
+function TGocciaParser.Addition: TGocciaExpression;
+var
+  Op: TGocciaToken;
 begin
-  Result := ParseBinaryExpression(Comparison, [gttStrictEqual, gttStrictNotEqual]);
+  Result := Multiplication;
+  while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttPlus, gttMinus] do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+      Multiplication, Op.Span);
+  end;
 end;
 ```
+
+Levels that need extra checks keep them inline. `Equality`, for example, accepts `gttEqual`/`gttNotEqual` and only builds a node for `gttLooseEqual`/`gttLooseNotEqual` when loose equality is enabled (`--compat-loose-equality`); otherwise it records an unsupported-feature warning.
 
 ### Shared prototype singleton pattern
 
 GocciaScript uses a **shared prototype object** for each built-in type so every instance has the same `[[Prototype]]` as in ECMA-262 (for example all `Set` instances share the one `Set.prototype` object from the spec). **That layout matches the standard**; it is not an extra semantic on top of ECMAScript. In Pascal we realize it with `TGocciaSharedPrototype`, `TGocciaMemberCollection`, and `RegisterMemberDefinitions` (pinning, method tables, wiring the constructor’s `prototype` property).
 
-The following matches **`TGocciaSetValue.InitializePrototype`** in `Goccia.Values.SetValue.pas` (abbreviated):
+The following matches **`TGocciaSetValue`** in `Goccia.Values.SetValue.pas` (abbreviated). There are no class vars: the helper lives in a realm-owned slot (see [Realm Ownership & Slot Registration](#realm-ownership--slot-registration)), and the member definitions are rebuilt for each realm:
 
 ```pascal
-class var FShared: TGocciaSharedPrototype;
-class var FPrototypeMembers: array of TGocciaMemberDefinition;
-
 procedure TGocciaSetValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
+  Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
-  if Assigned(FShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSetShared <> nil) then Exit;
 
-  FShared := TGocciaSharedPrototype.Create(Self);
-  if Length(FPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('has', SetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      // ... more AddNamedMethod / AddSymbolMethod ...
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        SetSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Shared := TGocciaSharedPrototype.Create(Self);
+  CurrentRealm.SetOwnedSlot(GSetSharedSlot, Shared);
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('has', SetHas, 1, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // ... more AddNamedMethod / AddAccessor ...
+    Members.AddNamedMethod('values', SetValues, 0, gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddPropertyAlias(PROP_KEYS, PROP_VALUES,
+      [pfConfigurable, pfWritable]);
+    Members.AddSymbolAlias(
+      TGocciaSymbolValue.WellKnownIterator,
+      PROP_VALUES,
+      [pfConfigurable, pfWritable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(FShared.Prototype, FPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 constructor TGocciaSetValue.Create(const AClass: TGocciaClassValue = nil);
+var
+  Shared: TGocciaSharedPrototype;
 begin
   inherited Create(AClass);
-  FItems := TGocciaValueList.Create(False);
+  FStore := TGocciaOrderedValueMap.Create;
   InitializePrototype;
-  if not Assigned(AClass) and Assigned(FShared) then
-    FPrototype := FShared.Prototype;
+  Shared := GetSetShared;
+  if not Assigned(AClass) and Assigned(Shared) then
+    FPrototype := Shared.Prototype;
 end;
 
 class procedure TGocciaSetValue.ExposePrototype(const AConstructor: TGocciaValue);
+var
+  Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(FShared) then
+  Shared := GetSetShared;
+  if not Assigned(Shared) then
+  begin
     TGocciaSetValue.Create;
-  ExposeSharedPrototypeOnConstructor(FShared, AConstructor);
+    Shared := GetSetShared;
+  end;
+  if Assigned(Shared) then
+    ExposeSharedPrototypeOnConstructor(Shared, AConstructor);
 end;
 ```
 
-**Variant:** `TGocciaStringObjectValue` uses a shared `TGocciaObjectValue` as `FSharedStringPrototype` and pins it explicitly in `InitializePrototype` — same idea (one prototype for all string objects), different helper type.
+**Variant:** `TGocciaStringObjectValue` keeps `String.prototype` in a plain realm slot (`GStringPrototypeSlot`, set with `CurrentRealm.SetSlot`), and the prototype instance is its own method host — same idea (one prototype for all string objects in a realm), no `TGocciaSharedPrototype` helper.
 
-Prototype **methods** take `(AArgs, AThisValue)`; use **`AThisValue`** for the real instance — **`Self`** is the method host singleton. For chaining (`Set.add`, `Map.set`), return **`AThisValue`**, not `Self`.
+Prototype **methods** take `(AArgs, AThisValue)`; use **`AThisValue`** for the real instance — **`Self`** is the realm's method host instance. For chaining (`Set.add`, `Map.set`), return **`AThisValue`**, not `Self`.
 
 When two standard properties must contain the **same function object**, declare the first method normally and register the later name with `AddPropertyAlias` or `AddSymbolAlias`. Aliases resolve an earlier data-property definition during `RegisterMemberDefinitions` and install its existing value with the requested descriptor flags. Do not register a second native callback: equivalent behavior is not enough for identity requirements such as `Set.prototype.keys === Set.prototype.values` or `Map.prototype[Symbol.iterator] === Map.prototype.entries`.
 
@@ -170,7 +189,7 @@ var
 
 function GetSharedIteratorPrototype: TGocciaObjectValue; inline;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaObjectValue(CurrentRealm.GetSlot(GIteratorPrototypeSlot))
   else
     Result := nil;
@@ -180,12 +199,14 @@ procedure TGocciaIteratorValue.InitializePrototype;
 var
   SharedPrototype: TGocciaObjectValue;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(CurrentRealm.GetSlot(GIteratorPrototypeSlot)) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetSharedIteratorPrototype <> nil) then Exit;
 
-  SharedPrototype := TGocciaObjectValue.Create;
-  // ... register methods on SharedPrototype ...
+  SharedPrototype := TGocciaObjectValue.Create(
+    TGocciaObjectValue.SharedObjectPrototype);
   CurrentRealm.SetSlot(GIteratorPrototypeSlot, SharedPrototype);
+  CurrentRealm.SetSlot(GIteratorMethodHostSlot, Self);
+  // ... register members on SharedPrototype ...
 end;
 
 initialization
@@ -196,7 +217,7 @@ Read live every time — never cache the prototype pointer in a Pascal variable 
 
 #### Owned-slot pattern (a `TGocciaSharedPrototype` helper)
 
-This is what `Goccia.Values.MapValue.pas` and the other ~22 `TGocciaSharedPrototype` users do:
+This is what `Goccia.Values.MapValue.pas` and the other ~40 `TGocciaSharedPrototype` users do:
 
 ```pascal
 var
@@ -204,7 +225,7 @@ var
 
 function GetMapShared: TGocciaSharedPrototype; inline;
 begin
-  if Assigned(CurrentRealm) then
+  if (CurrentRealm <> nil) then
     Result := TGocciaSharedPrototype(CurrentRealm.GetOwnedSlot(GMapSharedSlot))
   else
     Result := nil;
@@ -214,19 +235,19 @@ procedure TGocciaMapValue.InitializePrototype;
 var
   Shared: TGocciaSharedPrototype;
 begin
-  if not Assigned(CurrentRealm) then Exit;
-  if Assigned(GetMapShared) then Exit;
+  if (CurrentRealm = nil) then Exit;
+  if (GetMapShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
-  // ... register methods on Shared.Prototype ...
   CurrentRealm.SetOwnedSlot(GMapSharedSlot, Shared);
+  // ... register members on Shared.Prototype ...
 end;
 
 initialization
-  GMapSharedSlot := RegisterRealmOwnedSlot('Map.SharedPrototype');
+  GMapSharedSlot := RegisterRealmOwnedSlot('Map.shared');
 ```
 
-`TGocciaSharedPrototype.Destroy` unpins both `FPrototype` and `FMethodHost`, so realm tear-down freeing the helper releases everything atomically — even before the next GC pass runs.
+`SetOwnedSlot` does not pin anything: `TGocciaSharedPrototype.Create` pins both `FPrototype` and `FMethodHost`, and `TGocciaSharedPrototype.Destroy` unpins them, so realm tear-down freeing the helper releases everything atomically — even before the next GC pass runs.
 
 Native classes whose default instance prototype lives in an owned realm slot opt in through `TGocciaClassValue.SupportsRealmIntrinsicPrototypeFallback` and override `IntrinsicPrototypeForRealm`. Their value unit exposes a matching `GetSharedPrototypeForRealm` lookup. `GetNativePrototypeFromConstructor` reads `newTarget.prototype` first, then uses this virtual resolver when the result is not an object, so `GetPrototypeFromConstructor` falls back to the intrinsic from the **constructor's realm**, not whichever realm happens to be current. Keep this resolution in the native-class abstraction instead of adding constructor-name branches.
 
@@ -244,7 +265,7 @@ This distinction is critical in the codebase:
 
 - `DefineLexicalBinding` — Creates a **new** variable in the current scope. Used for `let`/`const` declarations, function parameters, and built-in registration. Built-ins are registered using `DefineLexicalBinding(..., dtLet)` — there is no separate `DefineBuiltin` method.
 - `CreateImportBinding` — Creates an immutable **indirect** binding in a module scope. Reads resolve the target module's current exported binding value instead of copying a value into the importing scope.
-- `AssignLexicalBinding` — Changes the value of an **existing** variable, walking up the scope chain. Throws `ReferenceError` if not found, `TypeError` if `const`.
+- `AssignBinding` — Changes the value of an **existing** variable, walking up the scope chain. Throws `ReferenceError` if not found (with `ANonStrictMode`, an unbound name becomes a property of the global object instead), `TypeError` if `const`.
 
 ## Design Rationale
 
@@ -260,20 +281,22 @@ classDiagram
     TGocciaValue <|-- TGocciaNumberLiteralValue
     TGocciaValue <|-- TGocciaStringLiteralValue
     TGocciaValue <|-- TGocciaObjectValue
-    TGocciaValue <|-- TGocciaError
 
-    TGocciaObjectValue <|-- TGocciaArrayValue
-    TGocciaObjectValue <|-- TGocciaFunctionValue
+    TGocciaObjectValue <|-- TGocciaFunctionBase
+    TGocciaFunctionBase <|-- TGocciaFunctionValue
     TGocciaObjectValue <|-- TGocciaClassValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
+    TGocciaInstanceValue <|-- TGocciaArrayValue
 ```
+
+`TGocciaError` is not part of this hierarchy: it is a Pascal `Exception` subclass for internal engine errors (see [Value System](value-system.md#error-values)).
 
 The base `TGocciaValue` declares virtual `GetProperty` and `SetProperty` methods with safe defaults (`nil` / no-op). Each value type overrides these to implement its property semantics — objects walk the prototype chain, arrays handle numeric indices, instances invoke getters/setters, etc.
 
 Beyond property access, the base class provides two additional virtual methods for type discrimination:
 
-- **`IsPrimitive`** — Returns `False` by default; overridden to return `True` by all primitive types (`Null`, `Undefined`, `Boolean`, `Number`, `String`). Replaces 5-way `is` check chains at call sites like `ToPrimitive`.
-- **`IsCallable`** — Returns `False` by default; overridden to return `True` by `TGocciaFunctionBase` (all function types) and `TGocciaClassValue` (callable via `new`). Replaces 2-way `is` check chains at call sites like `Function.prototype.call/apply/bind` and array callback validation.
+- **`IsPrimitive`** — Returns `False` by default; overridden to return `True` by all primitive types (`Null`, `Undefined`, `Boolean`, `Number`, `String`, `Symbol`, `BigInt`). Replaces one-`is`-per-type check chains at call sites like `ToPrimitive`.
+- **`IsCallable`** — Returns `False` by default; overridden to return `True` by `TGocciaFunctionBase` (all function types) and `TGocciaClassValue` (callable via `new`); `TGocciaProxyValue` forwards to its target. Replaces 2-way `is` check chains at call sites like `Function.prototype.call/apply/bind` and array callback validation.
 
 **Why virtual dispatch?**
 
@@ -281,7 +304,7 @@ Beyond property access, the base class provides two additional virtual methods f
 - **Simple call sites** — `Value.GetProperty(Name)` is a single virtual call. `Value.IsPrimitive` and `Value.IsCallable` are likewise single VMT calls. No capability queries, no casting.
 - **Safe defaults** — The base class returns `nil` for `GetProperty`, no-ops for `SetProperty`, `False` for `IsPrimitive`, and `False` for `IsCallable`, so the evaluator can call these on any value without type-checking first.
 - **Extensible** — New value types added to the hierarchy automatically participate by overriding the virtual methods.
-- **Dispatch shape** — A single VMT call replaces multi-`is` type check chains. For `IsPrimitive`, this replaces five sequential `is` checks; for `IsCallable`, two. See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for the underlying comparison of virtual, interface, and manual VMT dispatch mechanics.
+- **Dispatch shape** — A single VMT call replaces multi-`is` type check chains. For `IsPrimitive`, this replaces one sequential `is` check per primitive type; for `IsCallable`, two. See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for the underlying comparison of virtual, interface, and manual VMT dispatch mechanics.
 
 ### Centralized Keyword Constants
 
@@ -293,7 +316,7 @@ const
   KEYWORD_THIS      = 'this';
   KEYWORD_SUPER     = 'super';
   KEYWORD_NULL      = 'null';
-  // ... 33 reserved keywords total
+  // ... more reserved keywords
 
 // Goccia.Keywords.Contextual.pas
 const
@@ -301,7 +324,7 @@ const
   KEYWORD_SET       = 'set';
   KEYWORD_TYPE      = 'type';
   KEYWORD_INTERFACE = 'interface';
-  // ... 12 contextual keywords total
+  // ... more contextual keywords
 ```
 
 **Why dedicated units?**
@@ -317,16 +340,16 @@ Small, frequently-called non-virtual methods are marked `inline` to eliminate ca
 
 | Method | Unit | Rationale |
 |--------|------|-----------|
-| `GetValue(Name)` | `Goccia.Scope` | Called on every identifier lookup |
-| `ResolveIdentifier(Name)` | `Goccia.Scope` | Unifies `this`/keyword checks with scope lookup |
-| `ContainsOwnLexicalBinding(Name)` | `Goccia.Scope` | Dictionary lookup wrapper |
-| `Contains(Name)` | `Goccia.Scope` | Scope chain containment check |
-| `IsNegativeZero(Value)` | `Goccia.Values.Primitives` | Trivial enum comparison |
+| `ContainsOwnLexicalBinding(Name)` | `Goccia.Scope` | Own-scope dictionary lookup wrapper |
+| `TryGetLexicalValueAt(EntryIndex, Version, Value)` | `Goccia.Scope` | Inline-cache re-read of an own lexical binding by entry index |
+| `GetIsNegativeZero` (the `IsNegativeZero` property) | `Goccia.Values.Primitives` | Wraps `NumberBits.IsNegativeZero`, a sign-bit pattern compare |
+
+The identifier lookups themselves — `GetValue`, `ResolveIdentifier` and `Contains` — are `virtual` on `TGocciaScope`, so they are not inlined.
 
 **Why selective inlining?**
 
 - **Virtual methods cannot be inlined** — `GetProperty`, `IsPrimitive`, `IsCallable`, and scope chain walkers (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) rely on VMT dispatch and are never candidates for inlining.
-- **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, enum comparisons) where the call overhead is significant relative to the method body.
+- **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, bit-pattern compares) where the call overhead is significant relative to the method body.
 - **Measurable on hot paths** — Scope lookups happen on every identifier reference. Eliminating function call overhead here compounds across deeply nested expressions.
 
 ### Singleton Special Values
@@ -334,13 +357,14 @@ Small, frequently-called non-virtual methods are marked `inline` to eliminate ca
 Special values like `undefined`, `null`, `true`, `false`, `NaN`, `Infinity`, and `-Infinity` are singletons:
 
 ```pascal
-function UndefinedValue: TGocciaValue;  // Always returns the same instance
-function NullValue: TGocciaValue;       // Always returns the same instance
+TGocciaUndefinedLiteralValue.UndefinedValue  // Always returns the same instance
+TGocciaNullLiteralValue.NullValue            // Always returns the same instance
+TGocciaNumberLiteralValue.InfinityValue      // also NaNValue, NegativeInfinityValue, ...
 ```
 
 **Why singletons?**
 
-- **Identity comparison** — `Value = UndefinedValue` is a fast pointer comparison instead of type checking.
+- **Identity comparison** — `Value = TGocciaUndefinedLiteralValue.UndefinedValue` is a fast pointer comparison instead of type checking.
 - **Memory efficiency** — These values are created once and shared.
 - **Semantic correctness** — There's only one `undefined` in JavaScript; the implementation reflects this.
 
@@ -348,8 +372,8 @@ function NullValue: TGocciaValue;       // Always returns the same instance
 
 The codebase enforces a strict rule: **no global mutable state**. All runtime state flows through explicit parameters — the `TGocciaEvaluationContext` record, the scope chain, and value objects.
 
-- **`OnError` propagation** — The error handler callback is stored on `TGocciaScope` (`FOnError` field) and propagated to child scopes via `CreateChild`. Functions retrieve it from their closure scope, which is always the scope where they were defined.
-- **`LoadModule` propagation** — The module loading callback is stored on `TGocciaScope` (`FLoadModule` field) and propagated to child scopes via `CreateChild`, following the same pattern as `OnError`. Functions retrieve it from their closure scope. This enables dynamic `import()` expressions (ES2026 §13.3.10) to work inside functions, conditionals, and callbacks — not just at the top level.
+- **`OnError` propagation** — The error handler callback is stored on `TGocciaScope` (`FOnError` field) and copied to every child scope by the `TGocciaScope` constructor, whether the child comes from `CreateChild` or a specialized scope subclass. Functions retrieve it from their closure scope, which is always the scope where they were defined.
+- **`LoadModule` propagation** — The module loading callback is stored on `TGocciaScope` (`FLoadModule` field) and copied to child scopes the same way as `OnError`. Functions retrieve it from their closure scope. This enables dynamic `import()` expressions (ES2026 §13.3.10) to work inside functions, conditionals, and callbacks — not just at the top level.
 - **`CurrentFilePath` propagation** — Each `TGocciaEvaluationContext` carries the path of the file being evaluated. The interpreter sets this to `FFileName` for the main script and to the resolved module path for each module. The evaluator passes it to `LoadModule` so import paths are resolved relative to the importing file, not the working directory.
 
 This keeps the evaluator fully reentrant — all dependencies are explicit, making the code safe for concurrent execution and trivial to reason about.
@@ -362,8 +386,8 @@ This keeps the evaluator fully reentrant — all dependencies are explicit, maki
 
 - **Loader runtime profile** — `ApplyLoaderRuntimeProfile` installs the ordinary CLI runtime surface: console, structured data modules, text assets, performance, text encoding, URL/fetch, SemVer, and other runtime globals.
 - **Testing** — The GocciaTestRunner installs `TGocciaTestingLibraryRuntimeExtension` to inject `describe`, `test`, and `expect` without polluting the loader runtime.
-- **Benchmarking** — The GocciaBenchmarkRunner installs `TGocciaBenchmarkRuntimeExtension` to inject `suite` and `bench`.
-- **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries. It attaches only to an engine whose capability set grants `ffi`; hosts call `InstallFFIIfGranted`, which CLI tools reach through `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block (see [Permissions](permissions.md)).
+- **Benchmarking** — The GocciaBenchmarkRunner installs `TGocciaBenchmarkRuntimeExtension`, which provides the `goccia:microbench` module (`bench`, `group`, `run`, `summary`, `boxplot`).
+- **FFI** — `TGocciaFFIRuntimeExtension` enables the Foreign Function Interface for calling native shared libraries. It attaches only to an engine whose capability set grants `ffi`; hosts call `InstallFFIIfGranted`, which CLI tools reach through `--allow-ffi` or `"allow-ffi"` in a trusted config file's `permissions` block (`-P` for one run, or `--trust`; see [Config trust](permissions.md#config-trust)).
 
 ### Capability Checks
 
@@ -380,13 +404,12 @@ Use the same shim pattern for future legacy names: if the modern implementation 
 Built-in functions use `TGocciaArgumentValidator` (`Goccia.Arguments.Validator.pas`) for consistent argument count and type checking:
 
 ```pascal
-TGocciaArgumentValidator.RequireExactly(Args, 1, 'Array.isArray');
-TGocciaArgumentValidator.RequireAtLeast(Args, 1, 'Array.from');
+TGocciaArgumentValidator.RequireAtLeast(AArgs, 2, 'Reflect.get', ThrowError);
 ```
 
 Benefits:
 
-- **Consistent error messages** — All argument errors follow the same format: `"FunctionName expected N arguments, but got M"`.
+- **Consistent error messages** — All argument errors follow the same format: `"<name> expects [at least | at most] N arguments but got M"` (for example `Reflect.get expects at least 2 arguments but got 1`). `RequireExactly`, `RequireAtMost`, `RequireBetween` and `RequireNone` take the same `(AArgs, …, AFunctionName, AThrowError)` shape.
 - **Single point of change** — Validation logic and error formatting live in one place.
 - **Reduced boilerplate** — Each call site is a single line instead of a multi-line if/then/throw pattern.
 

@@ -117,7 +117,7 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 
 ## Automatic Semicolon Insertion and Type Syntax
 
-Type-level declarations that are skipped rather than parsed (`type`, `import type`, `export type`) end at the first line break that is a legal ASI point. A type argument list wrapped across lines is fine, because its breaks fall after a `<` or `,` or before a `>`; a break at another operator, such as a union `|` leading the next line, ends the declaration early. Terminate multi-line type declarations with an explicit `;`, or keep the operator at the end of the line.
+Type-level declarations that are skipped rather than parsed (`type`, `import type`, `export type`) are erased whole under ASI, even when they span lines: a union `|` or intersection `&` leading the next line, a break right after the `=`, a break before a function type's `=>`, and a conditional type broken around `?` and `:` all stay part of the declaration. A type argument list wrapped across lines is fine too, because its breaks fall after a `<` or `,` or before a `>`.
 
 A type query keeps its operand across a line break the same way an operator does, so `let value: typeof` followed by `source` on the next line reads as one annotation.
 

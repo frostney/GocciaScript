@@ -27,8 +27,10 @@ replacement is recorded in
   a neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
   mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
-  checkout's `harness/` directory. The only bundled harness file is
-  `scripts/test262_harness/$262.js`, the host-provided hook object.
+  checkout's `harness/` directory. The runner bundles two files from
+  `scripts/test262_harness/`: `$262.js`, the host-provided hook object, and
+  `goccia-global-shim.js`, which is appended after the includes and
+  re-publishes the harness bindings on `globalThis`.
 - `Goccia.Test262.Host` installs the host hooks only in engines owned by the
   Test262 runner.
 - Test feature metadata may add explicit engine options when test262 splits
@@ -79,7 +81,11 @@ run on each UTC day. Website builds do not download GitHub Actions artifact
 ZIPs, read Blob, or bake test262 data into the deployment output. The
 `/compatibility` page and `/api/test262/*` routes read the daily pointers and
 per-run reports from Blob on request, using short CDN/server caching because
-new results arrive only a few times per day.
+new results arrive only a few times per day. History reads go through immutable
+monthly snapshots of the daily pointers, stored under
+`test262/history/v1/<YYYY-MM>/`, so a request does not fetch every pointer
+serially; see
+[ADR 0115](adr/0115-immutable-blob-history-snapshots.md).
 
 Configure the Vercel project so both Preview and Production deployments have
 access to the Blob store at runtime. CI and one-off backfills still need the
@@ -158,7 +164,9 @@ provide the runner arguments and artifact names, so changing the matrix does
 not require synchronised numeric edits elsewhere.
 
 Both `--shard-index` and `--shard-count` are required, and the index is
-zero-based:
+zero-based. Run the runner from the repository root: the bundled `$262.js`
+and `goccia-global-shim.js` are resolved relative to the working directory,
+and every test reports `WRAPPER_INFRA` otherwise.
 
 ```bash
 ./build/GocciaTest262Runner \
@@ -257,10 +265,11 @@ spec-visible constructor/prototype path. If this cannot identify the
 thrown error class, the test is treated as an engine failure rather than
 papered over by the harness.
 
-The bindings `__gocciaT262_e` (catch parameter) and `__gocciaT262_n`
-(local var inside catch) are the only Goccia-specific identifiers in
-the generated source. Both are catch-block-scoped and cannot collide
-with body-level vars.
+The bindings `__gocciaT262_e` and `__gocciaT262_n` are the only
+Goccia-specific identifiers in the generated source. The catch parameter
+`__gocciaT262_e` is scoped to the catch block; `__gocciaT262_n` is a `var`
+and hoists to the script's global scope. The `__gocciaT262_` prefix is what
+avoids collisions with test-body bindings.
 
 ### Negative parse
 
@@ -268,8 +277,9 @@ with body-level vars.
 {body}
 ```
 
-Body alone. The runner executes it in process and records whether
-parsing, linking, or execution raised. Any raised error passes the test;
+Body alone (with the `"use strict";` prefix for `onlyStrict` tests). The
+runner executes it in process and records whether parsing, linking, or
+execution raised. Any raised error passes the test;
 the error type is not compared. A body that completes cleanly fails with
 `expected parse error, body executed cleanly`. Module-flagged negative
 tests of every phase use this template too, because top-level `import`
@@ -293,7 +303,7 @@ formatted diagnostic. On POSIX, a native signal terminates only the current
 worker process. The supervisor records a wrapper-infrastructure result for that
 test and continues the shard; a watchdog expiry is recorded as a timeout.
 
-`wrapper_infra_failures` is gated to zero in CI. Any non-zero count
+`summary.wrapperInfraFailures` is gated to zero in CI. Any non-zero count
 fails the run because the conformance numbers are not trustworthy when
 the wrapper itself is broken.
 
@@ -304,16 +314,18 @@ Bodies see only the identifiers stock test262 expects:
 - `Test262Error` (from `sta.js`)
 - `assert` and its methods (from `assert.js`)
 - `$DONE`, `$DONOTEVALUATE` (from `sta.js` / `doneprintHandle.js` when included)
-- `print` (Goccia engine global; stock `doneprintHandle.js` uses it for async markers)
+- `print` (installed by the Test262 runner, which captures its output; stock
+  `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
   `detachArrayBuffer`, `evalScript`, `gc`, `global`, `createRealm`,
   `AbstractModuleSource`, and `IsHTMLDDA`
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
-- `test262Host`, a private marker on the `Goccia` namespace exposed only by
-  `Goccia.Test262.Host` so `$262.js` can reject accidental
-  use outside the conformance host.
+- Two properties on the `Goccia` namespace, both installed only by
+  `Goccia.Test262.Host`: the `test262Host` marker, which `$262.js` checks to
+  reject accidental use outside the conformance host, and the `test262` object
+  holding the host hooks `$262.js` delegates to.
 - Anything declared in test-included harness files (e.g. `compareArray`,
   `propertyHelper`)
 
@@ -321,7 +333,7 @@ Bodies do NOT see:
 
 - `expect`, `describe`, `test`, `it`, `beforeAll`, `beforeEach`,
   `afterEach`, `afterAll`, `onTestFinished`, `runTests`, `mock`,
-  `spyOn` — none of these exist on the Bare engine.
+  `spyOn` — none of these exist in the Test262 runner's engines.
 - `console`, `fetch`, `URL`, `performance` — the Test262 engine doesn't register
   Goccia's runtime extension.
 - Optional `$262` hooks outside the bundled implementation. Tests that
@@ -330,9 +342,13 @@ Bodies do NOT see:
 ## Bundled harness adaptations
 
 The runner loads stock tc39/test262 harness files from the pinned
-checkout's `harness/` directory. `BUNDLED_INCLUDES` contains only
-`$262.js`, because `$262` is not a stock harness helper: it is the
-host-provided object test262 expects engines to supply.
+checkout's `harness/` directory. `TTest262App.BuildHarness` prepends
+`$262.js`, `sta.js`, and `assert.js`, adds the test's `includes` (plus
+`doneprintHandle.js` for async tests), and appends `goccia-global-shim.js`.
+Only `$262.js` and the shim are bundled: `$262` is not a stock harness helper
+but the host-provided object test262 expects engines to supply, and the shim
+only re-publishes `$262`, `Test262Error`, `assert`, `$DONE`, and `asyncTest`
+on `globalThis`.
 
 Bundling rule: do not add compatibility copies of stock harness files.
 If a stock helper fails, fix the language/runtime behavior or classify the
@@ -376,9 +392,10 @@ regular-function nullish `this` coercion on the strict path. Remaining
 GocciaScript still does not provide and fail naturally as ordinary
 conformance failures, not as wrapper-infra failures.
 
-The runner enables syntax compatibility for traditional and `for...in` loops,
-while loops, labels, and implicit arguments objects because test262 uses those
-forms across both harness helpers and test bodies. The test's source type and
+Every test runs with ASI, `var`, `function` declarations, traditional `for`,
+`while`/`do...while`, loose equality, labels, `for...in`, and implicit
+`arguments` objects enabled, because test262 uses those forms across both
+harness helpers and test bodies. The test's source type and
 strictness still decide strict-mode semantics; `--compat-arguments-object`
 only enables the implicit `arguments` binding. Strictness and parameter-list
 shape decide whether that binding is unmapped or mapped.
@@ -426,9 +443,11 @@ heap, roots, queues, executor, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
 Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
 (`--max-memory`, a size such as `512MiB`), and the native worker watchdog bound
-ordinary hangs and memory growth. The runner grants no capabilities: it rejects
-`--allow-*` and accepts `--deny-*` as a no-op (see
-[Permissions](permissions.md#what-each-binary-honors)).
+ordinary hangs and memory growth. The runner accepts no capability flags: it
+rejects `--allow-*` and accepts `--deny-*` as a no-op (see
+[Permissions](permissions.md#what-each-binary-honors)). Internally each test
+engine may read only the `--suite-dir` checkout, which test262 fixtures need
+for computed `import()` specifiers.
 
 ## Known engine crashes
 
@@ -444,7 +463,7 @@ Changes to `TTest262App.BuildSource` in `GocciaTest262Runner` are
 verified by the full conformance run itself (no separate regression
 suite). After any wrapper-template change:
 
-1. Run locally:
+1. Run locally, from the repository root:
 
    ```bash
    ./build.pas test262runner
@@ -452,7 +471,8 @@ suite). After any wrapper-template change:
      --output=local-results.json
    ```
 
-2. Confirm `wrapper_infra_failures: 0` in the summary.
+2. Confirm `Wrapper infra: 0` in the console summary
+   (`summary.wrapperInfraFailures` in `local-results.json`).
 3. Diff `local-results.json` against the prior baseline; investigate
    any sign change in pass/fail counts before opening the PR.
 

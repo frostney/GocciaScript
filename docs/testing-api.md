@@ -9,7 +9,7 @@
 - **Mock functions** --- `mock()` creates tracked mock functions and `spyOn()` wraps existing methods; both record calls, arguments, return values, and support configurable behavior
 - **Lifecycle hooks** --- `beforeAll`/`afterAll` run once per suite, `beforeEach`/`afterEach` run around every test and are inherited by nested suites, and `onTestFinished` registers per-test cleanup
 - **Async patterns** --- Tests can be `async` functions or return Promises; `.resolves`/`.rejects` matchers unwrap Promises for Vitest/Jest-compatible assertions
-- **Vitest is the compatibility target** --- The testing API aims at being an exact Vitest drop-in, so Vitest decides what a matcher, hook, or accounting rule is *supposed* to do; bun is a fast proxy whose expect differs from Vitest's often enough that it cannot decide (see [Differential Testing](differential-testing.md)). Known deliberate divergences remain around `mock()`/`spyOn()` globals, `Math.clamp`, emoji identifiers, and arrow-function `this` binding on object properties
+- **Vitest is the compatibility target** --- The testing API aims at being an exact Vitest drop-in, so Vitest decides what a matcher, hook, or accounting rule is *supposed* to do; bun is a fast proxy whose expect differs from Vitest's often enough that it cannot decide (see [Differential Testing](differential-testing.md)). Known deliberate divergences remain around `mock()`/`spyOn()` globals, `Math.clamp`, and emoji identifiers
 
 ## Writing Tests
 
@@ -48,7 +48,7 @@ Nested `describe` blocks compose their suite names with ` > ` separators. In the
 import { describe, expect, mock, spyOn, test } from "goccia:test";
 ```
 
-The module exports everything the globals do — `describe`, `test`, `it`, `expect`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`, `mock`, `spyOn`, and `runTests` — and the imported `test` and `describe` carry their modifiers (`.each`, `.skip`, `.only`, `.todo`). Both spellings drive the same registry, so a mock created through the import is assertable through the global `expect` and the other way round.
+The module exports everything the globals do — `describe`, `test`, `it`, `expect`, `beforeAll`, `beforeEach`, `afterEach`, `afterAll`, `onTestFinished`, `mock`, `spyOn`, and `runTests` — and the imported `test` and `describe` carry their modifiers (`.each`, `.skip`, `.only`, `.skipIf`, `.runIf`; only `test` has `.todo` — there is no `describe.todo` yet, [#1278](https://github.com/frostney/GocciaScript/issues/1278)). Both spellings drive the same registry, so a mock created through the import is assertable through the global `expect` and the other way round.
 
 #### Availability per binary
 
@@ -70,7 +70,7 @@ Outside the runner the assertions object is built lazily, on the first import th
 
 #### Running an imported suite outside the runner
 
-`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A loader script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
+`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A `GocciaRunner` script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
 
 ```javascript
 import { expect, runTests, test } from "goccia:test";
@@ -87,7 +87,7 @@ if (results.failed > 0) {
 
 `runTests` executes everything registered so far, prints its report unless `showTestResults` is `false`, and returns a result object with `passed`, `failed`, `skipped`, `totalTests`, `totalRunTests`, `assertions`, `duration`, `suiteErrors`, `failedTests`, and `summary`. It accepts `{ exitOnFirstFailure, showTestResults }`.
 
-`runTests` reports; it does not decide. A failing test does not by itself change the loader's exit status, because the loader has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
+`runTests` reports; it does not decide. A failing test does not by itself change `GocciaRunner`'s exit status, because the runner has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
 
 ### Available Assertions
 
@@ -200,7 +200,7 @@ fn("a", "b");
 fn.mock.calls;      // [[1, 2], ["a", "b"]]
 fn.mock.results;    // [{ type: "return", value: undefined }, ...]
 fn.mock.contexts;   // [this values for each call]
-fn.mock.instances;  // [] (only populated for new calls; see note below)
+fn.mock.instances;  // always [] — a mock is not a constructor (see note below)
 fn.mock.lastCall;   // ["a", "b"]
 
 // Configure behavior
@@ -277,7 +277,7 @@ expect(fn).not.toHaveBeenCalledWith(5, 6);
 
 All mock matchers use deep equality for argument and return value comparison.
 
-**GocciaScript vs Vitest/Jest:** `mock()` and `spyOn()` are standalone globals in GocciaScript (equivalent to `vi.fn()` / `vi.spyOn()` in Vitest or `jest.fn()` / `jest.spyOn()` in Jest). Tests using these APIs are GocciaScript-specific and will not run in Vitest without adaptation. GocciaScript follows the Vitest/Jest convention where `mock.instances` only stores objects created via `new`, and `mock.contexts` stores the `this` value for every call.
+**GocciaScript vs Vitest/Jest:** `mock()` and `spyOn()` are standalone globals in GocciaScript (equivalent to `vi.fn()` / `vi.spyOn()` in Vitest or `jest.fn()` / `jest.spyOn()` in Jest). Tests using these APIs are GocciaScript-specific and will not run in Vitest without adaptation. `mock.contexts` stores the `this` value for every call, as in Vitest/Jest. `mock.instances` is present for shape compatibility but always empty: calling a mock (or the shim's `vi.fn()`) with `new` throws a `TypeError`, where Vitest records the instance ([#1278](https://github.com/frostney/GocciaScript/issues/1278)).
 
 ### Lifecycle Hooks
 
@@ -539,9 +539,9 @@ The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only 
 | `vi.spyOn` | The engine's `spyOn` |
 | `vi.mock` | Supported, **factory form only** (see below) |
 | `vi.unmock` | Supported; hoisted with `vi.mock`, last directive in source order wins |
-| everything else | Throws, naming the member and why it cannot be honored |
+| the unsupported members listed [below](#the-rest-of-the-vi-namespace) | Throws, naming the member and why it cannot be honored |
 
-Nothing is a silent no-op. Every member that throws names its own reason rather than a blanket one.
+None of these is a silent no-op, and each names its own reason. `vi.isMockFunction`, `vi.mockObject`, `vi.dynamicImportSettled`, and `vi.defineHelper` are absent, so calling one is an ordinary `is not a function` TypeError ([#1278](https://github.com/frostney/GocciaScript/issues/1278)).
 
 #### `vi.mock` — what is supported
 
@@ -588,7 +588,7 @@ The factory must be a **synchronous arrow function whose body is directly an obj
 | Spread-based partial mock: `() => ({ ...actual, fn: vi.fn() })` | Throws |
 | `async` factory, or one with a block body (`() => { return {...}; }`) | Throws |
 | Computed keys, getters, or setters in the returned object | Throws |
-| A key that is not usable as an export name, including reserved words: `() => ({ class: 1 })` | Throws (`default` is the exception — it becomes the default export) |
+| A key that is not an ASCII identifier: `() => ({ "a-b": 1 })` | Throws. Reserved words such as `class` are exported as named exports, and `default` becomes the default export |
 | `vi.doMock` / `vi.doUnmock` / `vi.resetModules` | Throws |
 | `vi.importActual` / `vi.importMock` / `importOriginal` inside a factory | Throws |
 | `vi.hoisted` | Throws |
@@ -601,10 +601,10 @@ Automock throws because it would have to execute the real module's top-level cod
 
 Further divergences from Vitest worth knowing:
 
-- A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`. Vitest reports it lazily, at property access.
+- In interpreter mode a missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. Bytecode mode currently raises it as a `SyntaxError` inside the test that first reads the binding, and not at all when nothing reads it ([#1274](https://github.com/frostney/GocciaScript/issues/1274)).
 - An **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling.
 - A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
-- Vitest silently yields `undefined` for a `var` referenced from a factory; here it is a `ReferenceError`.
+- A test-file `var` (under `--compat-var`) referenced from a factory is a `ReferenceError` under module source type, where Vitest yields `undefined`. Under script source type a static import sees `undefined`, as in Vitest, and a dynamic `import()` resolves the variable, as for `const` in the table above.
 
 #### The rest of the `vi` namespace
 
@@ -641,7 +641,7 @@ Further divergences from Vitest worth knowing:
 | `vi.advanceTimersToNextFrame`, `vi.runAllTicks` | Throw — no `requestAnimationFrame`, and no `process.nextTick` queue (promise jobs run on the engine microtask queue, which the `…Async` members already drain) |
 | `vi.setTimerTickMode` | `"manual"` is accepted and does nothing — it names the only behaviour there is. Every other mode throws: they advance the clock against real elapsed time, which no GocciaScript clock measures |
 
-Every implemented member returns `vi`, so calls chain; the three that throw are listed in the last row above. The semantics were probed against the pinned Vitest 4.1.10 — whose fake timers wrap `@sinonjs/fake-timers` — rather than read off its documentation, and are locked in by a [vitest-gated differential suite](differential-testing.md). The details worth knowing:
+Every implemented member except the four getters (`isFakeTimers`, `getTimerCount`, `getMockedSystemTime`, `getRealSystemTime`) returns `vi` (the `…Async` members a promise of it), so calls chain; the members that throw are in the last two rows above. The semantics were probed against the pinned Vitest 4.1.10 — whose fake timers wrap `@sinonjs/fake-timers` — rather than read off its documentation, and are locked in by a [vitest-gated differential suite](differential-testing.md). The details worth knowing:
 
 - **`advanceTimersByTime` runs no microtasks between timers.** A promise callback a timer queued waits until the advance returns. The `…Async` variants drain the microtask queue before the first timer and again after each one, which is the ordering a suite awaiting between ticks depends on.
 - **Timers due at the same instant fire in registration order.** Ties break on creation time, then on id.
@@ -698,7 +698,7 @@ It exports the same operations plus the four timer globals, but speaks in epoch 
 
 #### `process.env`
 
-GocciaScript has no `process`. `vi.stubEnv` writes to whatever one the host injected, so a suite that needs it supplies it — the same `--global` and `--globals` options the loader has, now on `GocciaTestRunner` too:
+GocciaScript has no `process`. `vi.stubEnv` writes to whatever one the host injected, so a suite that needs it supplies it — the same `--global` and `--globals` options `GocciaRunner` has, now on `GocciaTestRunner` too:
 
 ```bash
 ./build/GocciaTestRunner suite.test.ts --global 'process={"env":{}}'
@@ -727,22 +727,14 @@ With no `process` at all, `vi.stubEnv` throws and names the two options rather t
 
 When writing tests that should pass in both environments, follow these patterns:
 
-**Iterators** --- GocciaScript returns arrays from `Map.keys()`, `Map.values()`, `Map.entries()`, and `Set.values()`, while standard JS returns iterator objects. Wrap calls with spread to normalize:
-
-```javascript
-// Works in both GocciaScript and standard JS
-expect([...map.keys()]).toEqual(["a", "b", "c"]);
-expect([...set.values()]).toEqual([1, 2, 3]);
-```
-
-This applies to the iterator-returning methods only. Comparing the collections themselves needs no spreading, since `Map` and `Set` equality is order-insensitive in both environments:
+**Collections** --- `Map` and `Set` equality is order-insensitive in both environments, so compare the collections directly:
 
 ```javascript
 expect(map).toEqual(new Map([["a", 1]]));
 expect(set).toEqual(new Set([2, 1]));
 ```
 
-**GocciaScript-specific behaviors** --- Some tests exercise GocciaScript extensions or intentional divergences from the spec (e.g., `Math.clamp`, emoji identifiers, arrow function `this` binding in object methods). These will fail in Vitest since standard JS doesn't support them. This is expected.
+**GocciaScript-specific behaviors** --- Some tests exercise GocciaScript extensions or intentional divergences from the spec (e.g., `Math.clamp`, emoji identifiers). These will fail in Vitest since standard JS doesn't support them. This is expected.
 
 **Async context** --- A suite whose library keeps per-request state in `AsyncLocalStorage` runs unchanged: `node:async_hooks` is present in `GocciaTestRunner`, and the engine propagates the context across `await` and every promise-reaction continuation. See [Async Context](built-ins-async-context.md) for the surface and the two things that are out of scope (host-scheduled callbacks and the `async_hooks` observer API).
 
@@ -752,11 +744,11 @@ expect(set).toEqual(new Set([2, 1]));
 |----------|-------------|-------------|
 | `Math.clamp` | Supported (TC39 proposal) | Not available |
 | Emoji identifiers | Supported | Not supported by V8/Rollup |
-| Arrow methods `this` | Binds to owning object | Inherits from enclosing scope |
 | Global `parseInt`, `isNaN`, etc. | Available as shims; prefer `Number.*` | Available as global functions |
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
+| `new` on a mock | `TypeError`; `mock.instances` is always empty | Constructs, and `mock.instances` records the instance |
 | `vi.mock` factories | Must directly return an object literal; no automock, no spread-based partial mock | Any factory shape; automock and `importOriginal` partial mocks supported |
-| Missing export on a mock | Reported eagerly at link time | Reported lazily, at property access |
+| Missing export on a mock | Interpreter: reported eagerly at link time. Bytecode: a `SyntaxError` when first read, none if never read ([#1274](https://github.com/frostney/GocciaScript/issues/1274)) | Reported lazily, at property access |
 | `process` | Not provided; inject one with `--global` / `--globals` when a suite needs it | The real process environment and the rest of the Node `process` API |
 | `import.meta.env` | Not available; `vi.stubEnv` writes to `process.env` | Vite populates it, and `vi.stubEnv` writes there |
 | Timer ids | Numbers, as on the web | Node `Timeout` objects with `ref`/`unref`/`refresh` |

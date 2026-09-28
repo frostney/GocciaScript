@@ -109,11 +109,12 @@ from a clean build.
 
 The website has its own dependency tree, and its checks fail to load rather
 than fail loudly when that tree is missing. In a fresh clone or worktree,
-`bun run test` inside `website/` reports **142 pass / 8 fail** — and reports
-exactly that before and after any change you make, because the 8 are modules
-that cannot import, not assertions that disagree with your edit.
+`bun run test` inside `website/` reports some modules failing to import — and
+reports exactly that before and after any change you make, because those
+failures are modules that cannot load, not assertions that disagree with your
+edit.
 
-Install first, then the same tree reports **204 pass / 0 fail** and a genuine
+Install first; then every file loads, the suite reports `0 fail`, and a genuine
 regression fails immediately and by name:
 
 ```bash
@@ -188,7 +189,7 @@ This affects any code that converts `Int64` fields to `Double` for floating-poin
 
 Do **not** inspect raw byte arrays of `Double` values to check the sign bit (e.g., `Bytes[7] and $80`). This assumes little-endian byte layout and breaks on big-endian platforms.
 
-Instead, overlay the `Double` with `Int64 absolute` and test via integer sign:
+Instead, use the helpers in `NumberBits` (`source/shared/NumberBits.pas`), which compare the value as a whole 64-bit integer:
 
 ```pascal
 // WRONG — assumes little-endian byte order
@@ -197,14 +198,12 @@ begin
   Result := (V = 0.0) and ((Bytes[7] and $80) <> 0);
 end;
 
-// CORRECT — endian-neutral sign bit check
-var V: Double; Bits: Int64 absolute V;
-begin
-  Result := (V = 0.0) and (Bits < 0);
-end;
+// CORRECT — endian-neutral: NumberBits.IsNegativeZero compares
+// DoubleToBits(V) with the sign bit alone (1 shl 63)
+Result := NumberBits.IsNegativeZero(V);
 ```
 
-This works because `Int64` and `Double` share the same sign bit position (bit 63) at the integer level, regardless of byte ordering.
+This works because `DoubleToBits` copies the whole `Double` into a `UInt64`, so the sign is bit 63 of the integer regardless of byte ordering. Use `DoubleToBits` / `BitsToDouble` for any other bit-level test.
 
 ## Fuzzing and Memory Safety
 
@@ -304,7 +303,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner -P tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own

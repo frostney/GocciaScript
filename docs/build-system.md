@@ -53,9 +53,9 @@ The build script supports two modes via `--dev` (default) and `--prod` flags:
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, runner, loaderbare, testrunner,
-test262runner, the TOML compliance runner, benchmarkrunner, bundler,
-and repl. The default full build does not clean first; pass `--clean` explicitly
+Builds all components in order: tests, runner, loaderbare, fuzzharness,
+testrunner, test262runner, tomlcompliancerunner, wasmtestrunner,
+benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly
 when you need to remove stale build artifacts.
 
 ### Build Specific Components
@@ -64,9 +64,11 @@ when you need to remove stale build artifacts.
 ./build.pas repl             # Interactive REPL
 ./build.pas runner           # Runner (host mode and sandbox mode)
 ./build.pas loaderbare       # Bare Script Loader (core engine only)
+./build.pas fuzzharness      # Fuzz harness (both executors)
 ./build.pas testrunner       # JavaScript test runner + native FFI fixture
 ./build.pas test262runner    # Native Test262 conformance runner
 ./build.pas tomlcompliancerunner # Native TOML compliance runner
+./build.pas wasmtestrunner   # Manifest-driven test runner for the Wasm/LAKON host
 ./build.pas benchmarkrunner  # Performance benchmark runner
 ./build.pas bundler          # Bundler (compile to .gbc)
 ./build.pas tests            # Pascal unit tests
@@ -141,8 +143,8 @@ Coverage and profiling output are available from the runner:
 
 ```bash
 ./build.pas testrunner
-./build/GocciaTestRunner tests
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests
+./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 `./build.pas testrunner` also builds `fixtures/ffi/libfixture.*` for the
@@ -151,10 +153,10 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner tests --jobs=4
-./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --silent
-./build/GocciaTestRunner tests --output=results.json --log=test-console.log
-./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
+./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
+./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 ```
 
 ### Bytecode Mode
@@ -180,7 +182,7 @@ printf "console.log('hi'); 2 + 2;" | ./build/GocciaRunner --output=compact-json
 #   `--output=compact-json` emit JSON to stdout (suppressing the human-readable
 #   summary); any other --output value is treated as a file path that receives
 #   the full JSON envelope.
-./build/GocciaTestRunner tests --output=compact-json
+./build/GocciaTestRunner -P tests --output=compact-json
 # - GocciaBenchmarkRunner: pass it as the value of --format alongside the
 #   existing console/text/csv/json options. `--output=<path>` still selects the
 #   destination file when provided.
@@ -207,11 +209,11 @@ printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 
 # Import lockfile-pinned github: packages named in the import map, and refuse
 # the network when one is not cached (see docs/provider-imports.md)
-./build/GocciaRunner app.js --allow-import=github:frostney --cached-only
+./build/GocciaRunner app.js --allow-import=github:acme --cached-only
 
 # Pin a provider package, or re-check every pin in CI (install mode)
-./build/GocciaRunner --add raylib=github:frostney/GocciaScript-Raylib@v0.10.0/bindings/raylib.ts
-./build/GocciaRunner --install --frozen --check-refs --allow-import=github:frostney
+./build/GocciaRunner --add lib=github:acme/lib@v1.0.0/index.js
+./build/GocciaRunner --install --frozen --check-refs --allow-import=github:acme
 
 # Resolve bare specifiers against node_modules (see docs/module-resolution.md).
 # The plain scope walks up from each importing file; =<dir> caps the walk at that directory.
@@ -219,7 +221,7 @@ printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 ./build/GocciaRunner app.js --allow-import=node_modules=./project
 
 # The same module-resolution and virtual-module flags are available on the shared CLI hosts.
-./build/GocciaTestRunner tests --import-map=imports.json --alias @/=./tests/helpers/
+./build/GocciaTestRunner -P tests --import-map=imports.json --alias @/=./tests/helpers/
 ./build/GocciaBenchmarkRunner benchmarks --import-map=imports.json
 ./build/GocciaREPL --import-map=imports.json
 
@@ -233,31 +235,33 @@ printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 # and uses the first goccia.json (or .json5 / .toml) it finds.
 printf 'import { add } from "@/math"; add(1, 2);' | ./build/GocciaRunner
 
-# Abort long-running scripts (durations: 500ms, 5s, 2m, or plain milliseconds)
-printf "const f = () => f(); f();" | ./build/GocciaRunner --timeout=100ms
+# Abort long-running scripts (500ms, 5s, 2m, or plain milliseconds): "Fatal error: file timed out after 100ms"
+printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --timeout=100ms
 
 # Abort after a fixed number of bytecode instructions
-printf "const f = () => f(); f();" | ./build/GocciaRunner --max-instructions=1000000 --mode=bytecode
+printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner --max-instructions=1000000 --mode=bytecode
 
 # Set call stack depth limit (default 2200; 0 = unlimited)
 ./build/GocciaRunner example.js --max-stack=5000
 ./build/GocciaRunner example.js --max-stack=0
+# Caveat (#1274): with 0, deep interpreted recursion exits 1 with "Fatal error: Stack overflow"
 
 # Write .map source map alongside execution
 ./build/GocciaRunner example.jsx --source-map --mode=bytecode
 
 # Run tests via bytecode VM
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests --mode=bytecode
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
 ./build/GocciaRunner example.js --jobs=4
-./build/GocciaTestRunner tests --jobs=4
+./build/GocciaTestRunner -P tests --jobs=4
 ./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
 # Split a single input file (or stdin) on `---` separator lines and dispatch
 # each section as an independent file across the worker pool
 ./build/GocciaRunner scenarios.js --multifile
 ./build/GocciaTestRunner suites.js --multifile --jobs=4
+mkdir -p dist   # the bundler does not create --output directories
 ./build/GocciaBundler scenarios.js --multifile --output=dist/
 printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaRunner --multifile
 
@@ -306,14 +310,14 @@ The first file found is loaded and applied as the **root config**. When running 
 
 `GocciaTestRunner` keeps explicit multi-file test invocations isolated: when you pass more than one input path and do not pass `--config`, the first file's auto-discovered config is not promoted to a root config for the rest of the list. Each file still gets its nearest per-file config. Pass `--config=<path>` when you intentionally want one shared root config across an explicit test file list.
 
-**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every CLI tool.
+**`--config=<path>`** — Override auto-discovery and load the root config from an explicit location. Available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaScriptLoaderBare`, `GocciaTest262Runner`, and `GocciaWasmTestRunner` do not take it.
 
 The path may be either a **file** (any registered extension — `.json`, `.json5`, `.toml`; the parser is selected by extension), or a **directory**, in which case the CLI looks for `goccia.toml` → `goccia.json5` → `goccia.json` in that directory only (same priority as auto-discovery). The directory form does **not** walk upward — that's the point of the explicit override.
 
 ```bash
 # File form (use this exact file)
 ./build/GocciaRunner example.js --config=./configs/strict.toml
-./build/GocciaTestRunner tests --config=./configs/ci.json
+./build/GocciaTestRunner -P tests --config=./configs/ci.json
 
 # Directory form (find goccia.{toml,json5,json} inside, no walk-up)
 ./build/GocciaRunner example.js --config=./configs/
@@ -396,7 +400,7 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 ./build/GocciaTestRunner --ignore-config-permissions tests   # command-line grants only
 ```
 
-The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every CLI tool. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
+The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every `TGocciaCLIApplication` binary (`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`); `GocciaWasmTestRunner` takes only `-P`, and `GocciaScriptLoaderBare` and `GocciaTest262Runner` read no config. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
 
 TOML equivalent (`goccia.toml`):
 
@@ -414,14 +418,13 @@ allow-ffi = true
 
 **CLI vs. embedding** — Config file discovery is automatic for all CLI applications (`GocciaRunner`, in both modes, `GocciaTestRunner`, `GocciaBenchmarkRunner`, `GocciaBundler`, `GocciaREPL`) because they inherit from `TGocciaCLIApplication`. When embedding the engine directly, config file loading is not automatic. Use the shared `CLI.ConfigFile` unit to get the same behavior.
 
-**Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, you must register their parsers first — the same way `TGocciaCLIApplication.Execute` does via `EnsureConfigParsersRegistered`. See `Goccia.CLI.Application.pas` for the registration pattern using `RegisterConfigParser`.
+**Note:** `ApplyConfigFile` only handles `.json` out of the box. To support `.json5` and `.toml` config files, call `EnsureConfigParsersRegistered` (in `Goccia.CLI.Application`) first, as `TGocciaCLIApplication.Execute` does, or register your own parsers with `RegisterConfigParser`.
 
 ```pascal
-uses CLI.ConfigFile, CLI.Options;
+uses CLI.ConfigFile, CLI.Options, Goccia.CLI.Application;
 
-// Register parsers for JSON5 and TOML (required before discovery)
-RegisterConfigParser('.json5', @ParseJSON5Config);
-RegisterConfigParser('.toml', @ParseTOMLConfig);
+// Register the JSON5 and TOML parsers (required before discovery)
+EnsureConfigParsersRegistered;
 
 // Discover a config file from a starting directory
 ConfigPath := DiscoverConfigFile(EntryDir,
@@ -450,7 +453,8 @@ GocciaBundler is a dedicated tool for compiling source files to `.gbc` bytecode 
 # Compile a single file (output: example.gbc alongside the source)
 ./build/GocciaBundler example.js
 
-# Custom output path
+# Custom output path (the directory must already exist)
+mkdir -p dist
 ./build/GocciaBundler example.js --output=dist/example.gbc
 
 # Compile all source files in a directory (1:1 .gbc output alongside each source)
@@ -477,6 +481,10 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 # Parallel compilation (default: CPU count)
 ./build/GocciaBundler src/ --jobs=4
 ```
+
+`--output` directories must already exist; the bundler does not create them. A missing directory for
+several files or `--multifile` is currently reported as "`--output` must be a directory"
+([#1279](https://github.com/frostney/GocciaScript/issues/1279)).
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
@@ -570,6 +578,8 @@ All compiled binaries go to the `build/` directory:
 | `build/GocciaTest262Runner` | `source/app/GocciaTest262Runner.dpr` | Discover, shard, execute, classify, and report the pinned Test262 corpus using isolated native workers |
 | `build/GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | JavaScript test runner |
 | `build/GocciaTOMLComplianceRunner` | `source/app/compliance/GocciaTOMLComplianceRunner.dpr` | Native pinned `toml-test` runner |
+| `build/GocciaFuzzHarness` | `source/app/GocciaFuzzHarness.dpr` | Crash harness that drives one input through the lexer, parser, and both executors |
+| `build/GocciaWasmTestRunner` | `source/app/GocciaWasmTestRunner.dpr` | Single-threaded, manifest-driven test runner for the Wasm/LAKON host |
 | `build/GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Performance benchmark runner for files or stdin input |
 | `build/GocciaBundler` | `source/app/GocciaBundler.dpr` | Bundler (source to `.gbc`) |
 | `build/Goccia.Values.Primitives.Test` | `*.Test.pas` | Pascal unit test binaries |
@@ -585,8 +595,10 @@ Intermediate files (`.o`, `.or`, `.ppu`, generated resource lists) go to `build/
 -Fu./source/generated # Generated runtime data unit search path
 -Fu./source/shared   # Shared infrastructure unit search path
 -Fu./source/app      # CLI application unit search path
+-Fu./souffle         # Legacy Souffle VM path; the directory no longer exists
 -Fi./source/units    # Engine include file search path
 -Fi./source/shared   # Shared include file search path
+-Fi./souffle         # Legacy Souffle VM path; the directory no longer exists
 -FUbuild/compiled    # Default unit output directory
 -FEbuild             # Executable output directory
 ```
@@ -727,7 +739,7 @@ GitHub Actions CI is split into two workflow files:
 
 ### `ci.yml` — Push to main + tags
 
-Job graph: `build -> test / toml-compliance / json5-compliance / test262 / awfy / jetstream / web-tooling / benchmark / cli -> artifacts/release`.
+Job graph: `toolchain -> build -> test / toml-compliance / json5-compliance / test262 -> test262-merge / awfy / jetstream-workload -> jetstream / web-tooling-workload -> web-tooling / benchmark / cli -> artifacts + nightly (main) / release (tags)`. `jetstream-plan` and `web-tooling-plan` feed their workload matrices, and `test-structure` runs on its own.
 
 All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The post-build jobs (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`) are independent.
 
@@ -756,7 +768,7 @@ Runs on the full platform matrix:
 
 **`benchmark`** (needs build) — Runs all benchmarks on all platforms. On main (ubuntu-latest x64), it additionally emits JSON and validates the report shape. PR comparison no longer reads a cached baseline from here — each PR builds and benchmarks `main` on its own runner ([ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). The main bytecode benchmark lane also captures deterministic VM profile details, uploads the `benchmark-profile` artifact, and publishes aggregate/detail profile payloads under the separate `benchmark-profiles/` Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
-**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, and app-specific features including the runner's sandbox mode. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
+**`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: the shared test assertions, options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, app-specific features including the runner's sandbox mode, capability flags, limits and permission defaults (`scripts/test-cli-permissions.ts`), embedded resources, Intl taint robustness, the differential suites, and coverage parity between execution modes. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints.
 
@@ -764,7 +776,7 @@ Runs on the full platform matrix:
 
 ### `pr.yml` — Pull requests
 
-Job graph: `build -> test / benchmark -> comment / test262 -> comment / awfy -> comment / jetstream -> comment / web-tooling -> comment / cli`.
+Job graph: `build (+ build-main) -> test / benchmark -> benchmark-comment / awfy-report -> awfy-comment / jetstream-workload -> jetstream-report -> jetstream-comment / web-tooling-workload -> web-tooling-report -> web-tooling-comment / test262 -> test262-merge -> test262-comment / boot-timing / cli`. `test`, `benchmark`, and `boot-timing` feed `timing-comment`; `docs` and `test-structure` run on their own.
 
 Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices on that platform.
 
@@ -776,13 +788,13 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA and runs a matrix of native `GocciaTest262Runner` shards. GitHub's strategy index and total define each shard, and `scripts/run_test262_suite.ts --merge-shards` validates and merges every downloaded shard report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
 
-**`awfy`** (needs build) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
+**`awfy-report`** (needs build + build-main) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
 
 **`jetstream-plan` / `jetstream-workload` / `jetstream-report`** (needs build + build-main) — Runs each frozen JetStream workload in parallel under the main and PR Goccia bytecode loaders, QuickJS, and Node Current. Engine samples remain interleaved within a workload and each shard keeps five repetitions; the merge job restores manifest order, validates compatible metadata, recomputes geomean ratios, and uploads the normalized report. The downstream `jetstream-comment` job posts or updates a `JetStream 3 Performance Barometer` comment with separate QuickJS and Node.js reference ratios.
 
 **`web-tooling-workload` / `web-tooling-report`** (needs build) — Runs the same direct-invocation workload matrix as full CI on the PR x64 build, using Goccia bytecode only, then validates and merges the shards into the normalized `web-tooling-report` JSON artifact. The downstream `web-tooling-comment` job posts or updates a `Web Tooling Benchmark` comment with per-workload build/execution status and Goccia `runs/s` where available; full stdout/stderr for failures and min/max/CV remain in the artifact.
 
-**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`). `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
+**`cli`** (needs build) — Runs CLI behavior smoke tests via Bun (`scripts/test-cli-assertions.ts`, `scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`, `scripts/test-cli-permissions.ts`, `scripts/test-cli-embedded-resources.ts`, `scripts/test-cli-intl-taint.ts`, `scripts/test-cli-differential.ts`). `test-cli-permissions.ts` covers the capability flags, limits, and permission defaults. `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, absence of the loader runtime profile, and `--mode=interpreted|bytecode` (both values plus invalid-value rejection), plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, bytecode mode, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
 FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 

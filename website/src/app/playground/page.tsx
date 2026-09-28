@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Playground } from "@/components/playground";
 import {
+  binaryNames,
   listPlaygroundVersions,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
@@ -45,12 +46,18 @@ export default async function PlaygroundPage() {
       },
     ]),
   );
+  // The loader binary was renamed `GocciaScriptLoader` -> `GocciaRunner` in
+  // 0.14.0; the banner names whichever binary each version's archive shipped.
+  const runnerNames = Object.fromEntries(
+    manifest.versions.map((entry) => [entry.tag, binaryNames(entry)]),
+  );
   return (
     <Suspense>
       <Playground
         versions={versions}
         defaultVersion={resolvePublicDefaultVersion(manifest)}
         asiFlags={asiFlags}
+        runnerNames={runnerNames}
       />
     </Suspense>
   );

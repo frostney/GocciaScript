@@ -7,7 +7,7 @@
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
 - **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; two residual couplings remain — direct `eval`, and a module's top-level function declarations, which are created and run by the tree-walk evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
-- **Opcode space** — core instructions (0-127) for hot paths, non-core generic ops (128-166), and semantic/helper instructions (167-255) for colder operations like imports/exports
+- **Opcode space** — core instructions (0-127) for hot paths, non-core generic arithmetic/bitwise and class helpers (128-143, with 144-166 unused), and semantic/helper instructions from 167 up: module and async orchestration plus later additions, including fused superinstructions
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
 
 ## Overview
@@ -53,7 +53,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
 - Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit (CLI default 2 200 frames, `--max-stack=N`). Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
-- Bytecode mode enables strict type enforcement through compiler-emitted checks and typed opcodes.
+- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)). See [Type Annotations](type-annotations.md).
 
 ## Opcode Layout
 
@@ -63,11 +63,12 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM:
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 210 opcodes, highest `233`):
 
-- core instructions cover hot execution paths such as locals, arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup
-- semantic instructions already include generic arithmetic and bitwise operations in `128..140`
-- module and async orchestration currently starts at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`)
+- core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
+- the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_SETUP_AUTO_ACCESSOR_DYNAMIC` (`135`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), and `OP_SET_CLASS_SOURCE_CONST` (`143`); `144..166` are unused
+- the semantic range starts with module and async orchestration at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`), and later additions were appended after it, including hot-path instructions such as `OP_INC_NUMERIC` (`199`), `OP_GET_IMPORT_BINDING` (`213`), `OP_SUB_NUM_IMM` (`227`), `OP_CALL_SELF_NUM` (`229`), and `OP_JUMP_IF_NOT_LT` (`232`)
+- `IsValidGocciaOpCode` rejects the unused numbers `99` and `144..166`
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
@@ -338,8 +339,8 @@ Stack-based VMs (like the JVM and WASM) are simpler to compile to and have small
 The solution is a split opcode space with three tiers:
 
 - **Core range (0–127):** register, control-flow, closure, literal, and other hot/stable VM operations.
-- **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands.
-- **Semantic helper range (167–255):** colder language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal.
+- **Non-core generic range (128–166):** generic arithmetic and bitwise operations that are still explicit bytecode but handle mixed or untyped operands, plus a few class/object definition helpers.
+- **Semantic helper range (167–255):** language-level orchestration operations such as imports/exports, dynamic import, `import.meta`, await, and resource disposal, plus opcodes added later — including fused superinstructions on hot paths — so the range is no longer only cold code.
 
 This split keeps the dispatch surface organized while still allowing the bytecode executor to be explicitly Goccia-specific.
 
@@ -401,16 +402,13 @@ Prefer:
 - compiler lowering to existing instructions for syntactic sugar
 - flags or operands when an operation is a mode of an existing instruction rather than a new concept
 
-### Tier 1 Property Flags vs Tier 2 Visibility
+### Object Integrity Levels
 
-Property **mutability** (writable/configurable) is still a VM concern. Bulk operations like freeze and seal remain derived from the lower-level property-flag operations:
+The VM has no property-flag primitives of its own; integrity levels belong to the shared object model. `TGocciaObjectValue` (`Goccia.Values.ObjectValue.pas`) declares virtual `Freeze`, `Seal`, `PreventExtensions`, `TryPreventExtensions`, `TestIntegrityFrozen`, and `TestIntegritySealed`:
 
-- `SetEntryFlags(key, flags)` — modify flags on a single property
-- `PutWithFlags(key, value, flags)` — create a property with specific flags
-- `PreventExtensions` — stop new properties from being added
-- `Freeze` = iterate all entries, set flags to 0, prevent extensions (a convenience, not a primitive)
-
-Property **visibility** and **accessor semantics** remain part of the higher-level object/class model rather than low-level property-flag storage.
+- `Freeze` and `Seal` follow ES2026 §7.3.15 SetIntegrityLevel: prevent extensions, then redefine each own key with `[[Configurable]]: false` (and `[[Writable]]: false` for data properties when freezing).
+- `TestIntegrityFrozen` / `TestIntegritySealed` follow §7.3.16 TestIntegrityLevel.
+- Objects with their own storage override some of these methods — `TGocciaArrayValue`, `TGocciaModuleNamespaceObject`, and the VM's `TGocciaVMLiteralObjectValue` among them — and the VM reaches them through the same virtual calls as the interpreter.
 
 ### Spread Calling Consolidation
 

@@ -15,9 +15,9 @@ type
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; virtual; abstract;
     function ParseModuleRecords(const AContent: string;
-      const AResolvedPath: string): TGocciaArrayValue; virtual; abstract;
+      const ASpecifier, AResolvedPath: string): TGocciaArrayValue; virtual; abstract;
   public
-    function TryLoadModule(const AResolvedPath: string;
+    function TryLoadModule(const AResolvedPath, ASpecifier: string;
       const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; override;
   end;
@@ -30,7 +30,8 @@ uses
   Goccia.Modules.ContentProvider;
 
 function TGocciaIndexedDataModuleRuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; const AReadContent: TGocciaModuleContentReader;
+  const AResolvedPath, ASpecifier: string;
+  const AReadContent: TGocciaModuleContentReader;
   out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
@@ -46,7 +47,8 @@ begin
   Content := AReadContent(AResolvedPath);
   Records := nil;
   try
-    Records := ParseModuleRecords(Content.Text, AResolvedPath);
+    Records := ParseModuleRecords(Content.Text, ASpecifier,
+      AResolvedPath);
 
     LoadSucceeded := False;
     AModule := TGocciaModule.Create(AResolvedPath);

@@ -33,9 +33,12 @@ uses
   Goccia.Modules.Resolver,
   Goccia.Parser,
   Goccia.Runtime,
+  Goccia.RuntimeExtensions.CSV,
+  Goccia.RuntimeExtensions.JSON5,
   Goccia.RuntimeExtensions.JSONL,
   Goccia.RuntimeExtensions.TextAssets,
   Goccia.RuntimeExtensions.TOML,
+  Goccia.RuntimeExtensions.YAML,
   Goccia.TestSetup,
   Goccia.Token,
   Goccia.TOML,
@@ -49,6 +52,13 @@ uses
 
 type
   TInMemoryModuleResolver = class(TGocciaModuleResolver)
+  public
+    function Resolve(const AModulePath, AImportingFilePath: string): string; override;
+  end;
+
+  { Maps a written "./name" request under a host root the script never sees,
+    and passes an already-resolved address through unchanged. }
+  THostRootModuleResolver = class(TGocciaModuleResolver)
   public
     function Resolve(const AModulePath, AImportingFilePath: string): string; override;
   end;
@@ -89,6 +99,9 @@ type
       const AExecutor: TGocciaExecutor);
     procedure AssertReloadedModuleRetargetsCachedImport(
       const AExecutor: TGocciaExecutor);
+    procedure AssertReloadedDataModuleFailureNamesSpecifier(
+      const AExecutor: TGocciaExecutor; const AModeName: string;
+      const AMismatches: TStringList);
     procedure AssertUnavailableProviderRejectsDynamicImport(
       const AExecutor: TGocciaExecutor);
     procedure AssertUnavailableProviderStaticImportThrowsError(
@@ -106,6 +119,7 @@ type
     procedure TestEngineRetriesModuleAfterFailedLoad;
     procedure TestFailedCycleKeepsLiveBindings;
     procedure TestInterpreterReloadedModuleRetargetsCachedImport;
+    procedure TestReloadedDataModuleFailureNamesSpecifier;
     procedure TestEngineReportsJSONLModuleLineNumbers;
     procedure TestEngineReportsTOMLModuleSyntaxErrors;
     procedure TestFileSystemContentProviderInvalidUTF8OmitsHostPath;
@@ -135,6 +149,18 @@ function TInMemoryModuleResolver.Resolve(const AModulePath,
   AImportingFilePath: string): string;
 begin
   Result := AModulePath;
+end;
+
+const
+  HOST_ROOT_ADDRESS = 'memory:/host-secret-root/';
+
+function THostRootModuleResolver.Resolve(const AModulePath,
+  AImportingFilePath: string): string;
+begin
+  if Copy(AModulePath, 1, 2) = './' then
+    Result := HOST_ROOT_ADDRESS + Copy(AModulePath, 3, MaxInt)
+  else
+    Result := AModulePath;
 end;
 
 constructor TMemoryModuleContentProvider.Create;
@@ -205,6 +231,8 @@ begin
     TestFailedCycleKeepsLiveBindings);
   Test('Interpreter reloads retarget cached import bindings',
     TestInterpreterReloadedModuleRetargetsCachedImport);
+  Test('Reloaded data module failures name the specifier, not the host path',
+    TestReloadedDataModuleFailureNamesSpecifier);
   Test('Engine reports JSONL module parse line numbers',
     TestEngineReportsJSONLModuleLineNumbers);
   Test('Engine reports TOML module syntax errors',
@@ -740,6 +768,186 @@ begin
     AssertReloadedModuleRetargetsCachedImport(Executor);
   finally
     Executor.Free;
+  end;
+end;
+
+{ The message a failed import carries to script, whichever way the executor
+  raised it. }
+function ScriptVisibleMessage(const AError: Exception): string;
+var
+  ThrownValue: TGocciaValue;
+begin
+  Result := AError.Message;
+  ThrownValue := nil;
+  if AError is TGocciaThrowValue then
+    ThrownValue := TGocciaThrowValue(AError).Value
+  else if AError is EGocciaBytecodeThrow then
+    ThrownValue := EGocciaBytecodeThrow(AError).ThrownValue;
+  if ThrownValue is TGocciaObjectValue then
+    Result := TGocciaObjectValue(ThrownValue)
+      .GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
+end;
+
+type
+  TDataModuleReloadCase = record
+    Specifier: string;
+    ImportAttributes: string;
+    ValidText: string;
+    InvalidText: string;
+    MessagePrefix: string;
+  end;
+
+const
+  DATA_MODULE_RELOAD_CASES: array[0..7] of TDataModuleReloadCase = (
+    (Specifier: './data.json'; ImportAttributes: '';
+     ValidText: '{"value": 1}'; InvalidText: '{"value": ';
+     MessagePrefix: 'Failed to parse JSON module'),
+    (Specifier: './typed.data'; ImportAttributes: ' with { type: "json" }';
+     ValidText: '{"value": 1}'; InvalidText: '{"value": ';
+     MessagePrefix: 'Failed to parse JSON module'),
+    (Specifier: './config.toml'; ImportAttributes: '';
+     ValidText: 'value = 1'; InvalidText: 'value = ';
+     MessagePrefix: 'Failed to parse TOML module'),
+    (Specifier: './config.yaml'; ImportAttributes: '';
+     ValidText: 'value: 1'; InvalidText: 'items: [1, 2';
+     MessagePrefix: 'Failed to parse YAML module'),
+    (Specifier: './empty.yaml'; ImportAttributes: '';
+     ValidText: 'value: 1'; InvalidText: '# comment only, no document';
+     MessagePrefix: 'YAML module'),
+    (Specifier: './config.json5'; ImportAttributes: '';
+     ValidText: '{ value: 1 }'; InvalidText: '{ value: }';
+     MessagePrefix: 'Failed to parse JSON5 module'),
+    (Specifier: './table.csv'; ImportAttributes: '';
+     ValidText: 'name,city' + #10 + 'Ada,Zurich';
+     InvalidText: 'name,city' + #10 + '"unterminated,Zurich';
+     MessagePrefix: 'Failed to parse CSV module'),
+    (Specifier: './events.jsonl'; ImportAttributes: '';
+     ValidText: '{"value": 1}';
+     InvalidText: '{"value": 1}' + #10 + '{"value":';
+     MessagePrefix: 'Failed to parse JSONL module')
+  );
+
+{ A cached data module rewritten on disk is reloaded by the next import. When
+  the new content fails to parse, the failure must name the request as the
+  import wrote it, exactly as a first load does, never the resolved host
+  address the reload works from (ADR 0108). }
+procedure TModuleContentProviderTests.AssertReloadedDataModuleFailureNamesSpecifier(
+  const AExecutor: TGocciaExecutor; const AModeName: string;
+  const AMismatches: TStringList);
+const
+  ENTRY_PATH = HOST_ROOT_ADDRESS + 'app.mjs';
+var
+  Engine: TGocciaEngine;
+  FailureMessage: string;
+  I: Integer;
+  ModuleLoader: TGocciaModuleLoader;
+  ModulePath: string;
+  Provider: TMemoryModuleContentProvider;
+  RaisedExpected: Boolean;
+  ReloadCase: TDataModuleReloadCase;
+  Resolver: THostRootModuleResolver;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  for I := Low(DATA_MODULE_RELOAD_CASES) to High(DATA_MODULE_RELOAD_CASES) do
+  begin
+    ReloadCase := DATA_MODULE_RELOAD_CASES[I];
+    ModulePath := HOST_ROOT_ADDRESS + Copy(ReloadCase.Specifier, 3, MaxInt);
+    Provider := TMemoryModuleContentProvider.Create;
+    Resolver := THostRootModuleResolver.Create;
+    Source := TStringList.Create;
+    try
+      Provider.SetModule(ModulePath, ReloadCase.ValidText,
+        EncodeDate(2026, 1, 1));
+      Source.Text := 'import * as data from "' + ReloadCase.Specifier + '"' +
+        ReloadCase.ImportAttributes + ';' + sLineBreak + '1;';
+
+      ModuleLoader := TGocciaModuleLoader.Create(ENTRY_PATH, Resolver,
+        Provider);
+      try
+        Engine := TGocciaEngine.Create(ENTRY_PATH, Source, ModuleLoader,
+          AExecutor);
+        Runtime := nil;
+        try
+          Runtime := TGocciaRuntime.Create(Engine);
+          Runtime.Install(TGocciaTOMLRuntimeExtension.Create);
+          Runtime.Install(TGocciaYAMLRuntimeExtension.Create);
+          Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
+          Runtime.Install(TGocciaCSVRuntimeExtension.Create);
+          Runtime.Install(TGocciaJSONLRuntimeExtension.Create);
+
+          { The first run caches the module; the rewrite makes the second
+            run's import reload it. }
+          Runtime.Execute;
+          Provider.SetModule(ModulePath, ReloadCase.InvalidText,
+            EncodeDate(2026, 1, 2));
+
+          RaisedExpected := False;
+          FailureMessage := '';
+          try
+            Runtime.Execute;
+          except
+            on E: Exception do
+            begin
+              RaisedExpected := True;
+              FailureMessage := ScriptVisibleMessage(E);
+            end;
+          end;
+
+          if not RaisedExpected then
+            AMismatches.Add(AModeName + ' ' + ReloadCase.Specifier +
+              ': the reloaded module did not fail to load')
+          else if (Pos(ReloadCase.MessagePrefix + ' "' +
+             ReloadCase.Specifier + '"', FailureMessage) <> 1) or
+             (Pos('host-secret-root', FailureMessage) > 0) then
+            AMismatches.Add(AModeName + ' ' + ReloadCase.Specifier + ': ' +
+              FailureMessage);
+        finally
+          Runtime.Free;
+          Engine.Free;
+        end;
+      finally
+        ModuleLoader.Free;
+      end;
+    finally
+      Source.Free;
+      Resolver.Free;
+      Provider.Free;
+    end;
+  end;
+end;
+
+procedure TModuleContentProviderTests.TestReloadedDataModuleFailureNamesSpecifier;
+var
+  Executor: TGocciaExecutor;
+  Mismatches: TStringList;
+begin
+  Mismatches := TStringList.Create;
+  try
+    Executor := TGocciaInterpreterExecutor.Create;
+    try
+      AssertReloadedDataModuleFailureNamesSpecifier(Executor, 'interpreted',
+        Mismatches);
+    finally
+      Executor.Free;
+    end;
+
+    Executor := TGocciaBytecodeExecutor.Create;
+    try
+      AssertReloadedDataModuleFailureNamesSpecifier(Executor, 'bytecode',
+        Mismatches);
+    finally
+      Executor.Free;
+    end;
+
+    { Every format under both executors, listed together so one run shows
+      each reload that still names a host address. }
+    if Mismatches.Count > 0 then
+      Fail('Reload failures that do not name only the specifier:' +
+        sLineBreak + Mismatches.Text);
+    Expect<Integer>(Mismatches.Count).ToBe(0);
+  finally
+    Mismatches.Free;
   end;
 end;
 

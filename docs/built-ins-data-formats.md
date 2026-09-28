@@ -109,7 +109,7 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 | Method | Description |
 |--------|-------------|
 | `CSV.parse(text, options?, reviver?)` | Parse RFC 4180 CSV text into an array of objects (headers mode) or array of arrays |
-| `CSV.parseChunk(text, options?, start?, end?)` | Parse as many complete CSV rows as possible and return `{ values, read, done, error }` |
+| `CSV.parseChunk(text, options?, start?, end?)` | Parse CSV rows in the range and return `{ values, read, done, error }`; see below for the final row |
 | `CSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to CSV text |
 
 **Options:** `{ delimiter: ',', headers: true, skipEmptyLines: false }`. The `delimiter` option supports any single character (e.g., `;` for European CSVs, `|` for pipe-delimited). All parsed values are strings — no type coercion.
@@ -118,14 +118,16 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 
 **Replacer:** The optional replacer callback `(key, value)` is called for each cell during `CSV.stringify`, enabling value transformation before serialization.
 
-**Edge cases:** Empty fields are `""`, trailing delimiters create an extra `""` field, empty rows are preserved by default (opt-in `skipEmptyLines`), ragged rows are padded with `""`, and quoting follows RFC 4180 (fields containing the delimiter, `"`, or newline are enclosed in double quotes with `""` escaping).
+**Edge cases:** Empty fields are `""`, trailing delimiters create an extra `""` field, empty rows are preserved by default (opt-in `skipEmptyLines`), in headers mode short rows are padded with `""` and extra fields dropped (in array mode each row keeps its own length), and quoting follows RFC 4180 (fields containing the delimiter, `"`, or newline are enclosed in double quotes with `""` escaping).
+
+**`parseChunk` and the final row:** CSV and TSV differ on a last row with no line terminator ([#1277](https://github.com/frostney/GocciaScript/issues/1277)). `CSV.parseChunk("a,b\n1,2\n3")` parses `3` as a row and returns `read: 9, done: true`; an unterminated quoted field is left unread and reported in `error`. `TSV.parseChunk("a\tb\n1\t2\n3")` leaves `3` unread (`read: 8, done: false`), the resume model JSONL uses.
 
 ## TSV (`goccia:tsv`, `Goccia.Builtins.TSV.pas`)
 
 | Method | Description |
 |--------|-------------|
 | `TSV.parse(text, options?, reviver?)` | Parse IANA TSV text into an array of objects (headers mode) or array of arrays |
-| `TSV.parseChunk(text, options?, start?, end?)` | Parse as many complete TSV rows as possible and return `{ values, read, done, error }` |
+| `TSV.parseChunk(text, options?, start?, end?)` | Parse as many complete TSV rows as possible and return `{ values, read, done, error }`; an unterminated final row is left unread |
 | `TSV.stringify(data, options?, replacer?)` | Convert an array of objects or arrays to TSV text |
 
 **Options:** `{ headers: true, skipEmptyLines: false }`. No `delimiter` option — TSV always uses tab.
@@ -134,7 +136,7 @@ After `import * as JSONL from "goccia:jsonl"`, `JSONL.parse(...)` and `JSONL.par
 
 **Replacer:** The optional replacer callback `(key, value)` is called for each cell during `TSV.stringify`, enabling value transformation before serialization.
 
-TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, `parseChunk`, and edge case handling match CSV.
+TSV uses IANA `text/tab-separated-values` semantics, which differ fundamentally from CSV: instead of RFC 4180 double-quote escaping, TSV uses **backslash escaping** (`\t` for tab, `\n` for newline, `\r` for carriage return, `\\` for literal backslash). Unrecognized escape sequences preserve the backslash. The reviver, replacer, and edge case handling match CSV; `parseChunk` does not (see below).
 
 CSV and TSV share callback selection, reviver argument construction, replacer row conversion, and chunk result assembly in `Goccia.Builtins.DelimitedText`. The adapters retain their own options, parser calls, reviver contexts, and stringifiers. Shared conversion roots intermediate values across callbacks; each adapter keeps the converted array rooted until serialization finishes.
 

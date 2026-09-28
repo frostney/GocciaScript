@@ -63,7 +63,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
 | `EventTarget`, `Event` | [WHATWG DOM §2](https://dom.spec.whatwg.org/#events) | Supported subset (single-target dispatch; no propagation) |
 | `AbortController`, `AbortSignal` | [WHATWG DOM §3](https://dom.spec.whatwg.org/#aborting-ongoing-activities) | Supported subset (fetch-scoped; `abort` event and `onabort`; no `any`) |
-| `fetch`, `Headers`, `Response` | [WHATWG Fetch](https://fetch.spec.whatwg.org/) | Supported (GET/HEAD only) |
+| `fetch`, `Headers`, `Response` | [WHATWG Fetch](https://fetch.spec.whatwg.org/) | Supported (GET/HEAD only; needs an `--allow-net` grant, see [Permissions](permissions.md)) |
 
 ## TC39 Proposals
 
@@ -88,5 +88,5 @@ GocciaScript provides a `Goccia` global object with engine metadata and runtime 
 
 ## Related documents
 
-- **Language** -- [language.md](language.md) -- Detailed semantics, examples, restrictions, and rationale
+- **Language** -- [language.md](language.md) -- Detailed semantics, examples, off-by-default forms, and rationale
 - **Built-ins** -- [built-ins.md](built-ins.md) -- API reference for all built-in types and functions

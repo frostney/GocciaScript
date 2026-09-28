@@ -44,9 +44,12 @@ type
     const AResolvedPath: string): TGocciaModuleContent of object;
   { A runtime module loader claims a resolved path and builds its module.
     It reads the file only through AReadContent, never from the content
-    provider directly, so the bytes it parses are the bytes verified. }
-  TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
-    const AReadContent: TGocciaModuleContentReader;
+    provider directly, so the bytes it parses are the bytes verified.
+    ASpecifier is the request as the import wrote it. A load failure names it,
+    never AResolvedPath: the message reaches script through the import
+    rejection path, and the expanded host path stays host-side (ADR 0108). }
+  TGocciaRuntimeModuleLoader = function(const AResolvedPath,
+    ASpecifier: string; const AReadContent: TGocciaModuleContentReader;
     out AModule: TGocciaModule): Boolean of object;
   TGocciaGlobalModuleProvider = function: TGocciaModule of object;
 
@@ -230,7 +233,7 @@ type
       const AOnError: TGocciaThrowErrorCallback);
     procedure BeginEvaluatingModulePath(const APath: string);
     procedure CheckForModuleReload(const AModule: TGocciaModule;
-      const ACacheKey: string = '');
+      const ACacheKey, AModuleRequest, AImportingFilePath: string);
     procedure EndEvaluatingModulePath(const APath: string);
     function IsEvaluatingModulePath(const APath: string): Boolean;
     procedure ValidateStaticNamedImports(const AProgram: TGocciaProgram;
@@ -1334,7 +1337,7 @@ begin
   ConflictingModule := nil;
   if StartsStr('goccia:', CanonicalAddress) and
      Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(CanonicalAddress, ReadResolvedContent,
+     FRuntimeModuleLoader(CanonicalAddress, AAddress, ReadResolvedContent,
        ConflictingModule) then
   begin
     ConflictingModule.Free;
@@ -2461,7 +2464,7 @@ begin
   if FModules.TryGetValue(CacheKey, Result) then
   begin
     if not FLoadingModules.ContainsKey(CacheKey) then
-      CheckForModuleReload(Result, CacheKey);
+      CheckForModuleReload(Result, CacheKey, AModulePath, ImportingFilePath);
     Exit;
   end;
 
@@ -2523,7 +2526,8 @@ begin
 
   Module := nil;
   if Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(ResolvedPath, ReadResolvedContent, Module) then
+     FRuntimeModuleLoader(ResolvedPath, RequestedModulePath,
+       ReadResolvedContent, Module) then
   begin
     if Assigned(Module) then
     begin
@@ -3168,8 +3172,15 @@ begin
     TGarbageCollector.Instance.AddRootObject(Result);
 end;
 
+{ Reloads AModule when its source changed since it was cached. The reload
+  runs through the request that reached the cache, AModuleRequest as the
+  import wrote it from AImportingFilePath, never through the cache key: a
+  reload failure reaches script through the import rejection path and must
+  name the written specifier, not the resolved host path (ADR 0108), and the
+  read check judges the same request the first load judged. ACacheKey only
+  names the cache entry to take out and put back. }
 procedure TGocciaModuleLoader.CheckForModuleReload(const AModule: TGocciaModule;
-  const ACacheKey: string);
+  const ACacheKey, AModuleRequest, AImportingFilePath: string);
 var
   CurrentModified: TDateTime;
   ReloadCacheKey: string;
@@ -3186,7 +3197,7 @@ begin
 
     FModules.Remove(ReloadCacheKey);
     try
-      ReloadedModule := LoadModule(ReloadCacheKey, AModule.Path);
+      ReloadedModule := LoadModule(AModuleRequest, AImportingFilePath);
     except
       FModules.AddOrSetValue(ReloadCacheKey, AModule);
       raise;

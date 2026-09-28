@@ -33,4 +33,18 @@ describe("missing named imports reject identically in both engines", () => {
       "../../../fixtures/modules/missing-named-import-bytes.js",
     );
   });
+
+  test("a missing import from a module still evaluating names the specifier, not the host path", async () => {
+    let message;
+    try {
+      await import("../../../fixtures/modules/cyclic-missing-export-a.js");
+    } catch (e) {
+      message = e.message;
+    }
+    // The importing module wrote "./cyclic-missing-export-a.js"; its expanded
+    // host path stays host-side (ADR 0108).
+    expect(message).toBe(
+      'Module "./cyclic-missing-export-a.js" has no export named "thisExportDoesNotExist"',
+    );
+  });
 });

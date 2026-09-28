@@ -49,7 +49,9 @@ type
     procedure TestExecuteCapturedClosure;
     procedure TestProfileHostCallbackAllocations;
     procedure TestRestoreAllocationProfiling;
+    function RunMissingImportBinding(const ADetachModule: Boolean): string;
     procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
+    procedure TestMissingImportBindingNamesSpecifier;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -100,6 +102,8 @@ begin
     TestRestoreAllocationProfiling);
   Test('Detached module namespace import raises SyntaxError',
     TestDetachedModuleNamespaceImportRaisesSyntaxError);
+  Test('Missing import binding names the specifier, not the host path',
+    TestMissingImportBindingNamesSpecifier);
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -712,66 +716,63 @@ begin
   end;
 end;
 
-procedure TTestGocciaVM.TestDetachedModuleNamespaceImportRaisesSyntaxError;
+{ Runs OP_GET_IMPORT_BINDING for a missing export of a namespace whose module
+  was loaded from a host path through the specifier "./dependency.js", and
+  returns the thrown error as "<name>: <message>". }
+function TTestGocciaVM.RunMissingImportBinding(
+  const ADetachModule: Boolean): string;
 var
   ErrorObject: TGocciaObjectValue;
   MissingNameIndex: UInt16;
   Module: TGocciaModule;
   NamespaceNameIndex: UInt16;
   NamespaceObject: TGocciaModuleNamespaceObject;
-  RaisedExpected: Boolean;
+  RequestIndex: UInt16;
   Scope: TGocciaScope;
   Template: TGocciaFunctionTemplate;
   VM: TGocciaVM;
 begin
-  Module := TGocciaModule.Create('memory:/detached.js');
-  Scope := TGocciaScope.Create(nil, skGlobal, 'detached-import');
-  Template := TGocciaFunctionTemplate.Create('detached-import');
+  Result := '';
+  Module := TGocciaModule.Create('/host/project/dependency.js');
+  Scope := TGocciaScope.Create(nil, skGlobal, 'missing-import');
+  Template := TGocciaFunctionTemplate.Create('missing-import');
   VM := TGocciaVM.Create;
   try
     NamespaceObject := TGocciaModuleNamespaceObject(
       Module.GetNamespaceObject);
     Scope.DefineLexicalBinding('namespace', NamespaceObject, dtConst);
-    Module.Free;
-    Module := nil;
+    if ADetachModule then
+    begin
+      Module.Free;
+      Module := nil;
+    end;
 
     VM.GlobalScope := Scope;
     VM.Realm := FRealm;
     Template.MaxRegisters := 1;
     NamespaceNameIndex := Template.AddConstantString('namespace');
     MissingNameIndex := Template.AddConstantString('missing');
+    RequestIndex := Template.AddConstantString('./dependency.js');
     Template.EmitInstruction(EncodeABx(OP_GET_GLOBAL, 0,
       NamespaceNameIndex));
-    Template.EmitInstruction(EncodeABx(OP_GET_IMPORT_BINDING, 0,
-      MissingNameIndex));
+    Template.EmitInstruction(EncodeABC(OP_GET_IMPORT_BINDING, 0,
+      MissingNameIndex, RequestIndex));
     Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
 
-    RaisedExpected := False;
+    ErrorObject := nil;
     try
       VM.ExecuteFunction(Template);
     except
       on E: EGocciaBytecodeThrow do
         if E.ThrownValue is TGocciaObjectValue then
-        begin
           ErrorObject := TGocciaObjectValue(E.ThrownValue);
-          RaisedExpected :=
-            (ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
-              'SyntaxError') and
-            (ErrorObject.GetProperty(PROP_MESSAGE).ToStringLiteral.Value =
-              'Module has no export named "missing"');
-        end;
       on E: TGocciaThrowValue do
         if E.Value is TGocciaObjectValue then
-        begin
           ErrorObject := TGocciaObjectValue(E.Value);
-          RaisedExpected :=
-            (ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value =
-              'SyntaxError') and
-            (ErrorObject.GetProperty(PROP_MESSAGE).ToStringLiteral.Value =
-              'Module has no export named "missing"');
-        end;
     end;
-    Expect<Boolean>(RaisedExpected).ToBe(True);
+    if Assigned(ErrorObject) then
+      Result := ErrorObject.GetProperty(PROP_NAME).ToStringLiteral.Value +
+        ': ' + ErrorObject.GetProperty(PROP_MESSAGE).ToStringLiteral.Value;
   finally
     if Assigned(Module) then
       Module.Free;
@@ -781,6 +782,18 @@ begin
     Template.Free;
     Scope.Free;
   end;
+end;
+
+procedure TTestGocciaVM.TestDetachedModuleNamespaceImportRaisesSyntaxError;
+begin
+  Expect<string>(RunMissingImportBinding(True)).ToBe(
+    'SyntaxError: Module has no export named "missing"');
+end;
+
+procedure TTestGocciaVM.TestMissingImportBindingNamesSpecifier;
+begin
+  Expect<string>(RunMissingImportBinding(False)).ToBe(
+    'SyntaxError: Module "./dependency.js" has no export named "missing"');
 end;
 
 begin

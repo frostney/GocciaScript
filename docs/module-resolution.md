@@ -45,8 +45,9 @@ file extension, and a directory resolves to its `index` file.
 # Same walk, but no node_modules above ./project is ever consulted.
 ./build/GocciaRunner app.js --allow-import=node_modules=./project
 
-# Any shared CLI host takes it, and so does a config file.
-./build/GocciaTestRunner tests --allow-import=node_modules
+# GocciaTestRunner, GocciaBenchmarkRunner and GocciaREPL take it too
+# (GocciaBundler grants no capabilities), and so does a trusted config file.
+./build/GocciaTestRunner app.test.js --allow-import=node_modules
 ```
 
 ```json
@@ -56,6 +57,10 @@ file extension, and a directory resolves to its `index` file.
   }
 }
 ```
+
+A config's `permissions` block is a request: it applies only once the config
+is trusted (`GocciaRunner --trust <path>`), or for one run with `-P` /
+`--accept-config-permissions`. See [Config trust](permissions.md#config-trust).
 
 Without the grant, a bare specifier fails with `Cannot resolve bare module
 specifier "<name>". Imports must start with "./" or "../"`. This is a
@@ -150,7 +155,10 @@ checks enforce it, and a failure of any is an ordinary `Module not found:
   package directory are canonicalized — every symbolic link on either path
   resolved — before the comparison. A package that ships
   `linked/out.js -> ../../../outside.js` normalizes to a path inside itself
-  while naming a file outside it, and only the physical check refuses that. It
+  while naming a file outside it, and only the physical check refuses that.
+  Under the default capabilities such a link is usually refused earlier, by
+  the `read` check, as `PermissionDenied: read: <specifier>`; the physical
+  check is what still refuses it when a `read` grant covers the target. It
   follows the same principle as [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md),
   where the sandbox refuses a symlinked copy input rather than trusting where
   its name appears to sit.
@@ -186,7 +194,7 @@ The supported shapes, all of which are what packages in practice use:
 | `"exports": { ".": …, "./sub": … }` | Subpath map, exact keys |
 | `"exports": { "./x/*": "./src/*.ts" }` | Wildcard pattern; every `*` in the target is replaced with the matched text |
 | A nested condition object | Recursed into, to any depth |
-| An array of targets | First entry that resolves wins |
+| An array of targets | First valid target wins; a well-formed target whose file is missing does not fall through to the next |
 | `null` | The subpath is deliberately not exported |
 
 **Conditions.** Only `import` and `default` are understood. Node's default ESM
@@ -339,9 +347,13 @@ engine's own record of where the error was created, never to the thrown value's
 - **Principal / ownership — a guest never reads host source.** Ownership travels
   with each module and is decided *at load time by the loader*, never inferred
   from which engine happens to be running when a later error is captured. Every
-  host enrollment API stamps its root module host-owned: `--globals`,
-  `--host-environment`, `--module`, `--modules`, manifest/config variants, and
-  their embedding equivalents. Static imports, dynamic `import()`, and deferred
+  command-line host enrollment (`--globals`, `--host-environment`, `--module`,
+  `--modules`) and its embedding equivalent stamps its root module host-owned.
+  The config-file forms (`"globals"`, `"host-environment"`, a `"modules"`
+  manifest path) are the repository's choice and load as guest modules
+  ([ADR 0122](adr/0122-unified-capability-model.md)), so their errors get an
+  excerpt; the virtual modules any manifest or config defines are still
+  host-owned. Static imports, dynamic `import()`, and deferred
   loads inherit the importing module's ownership transitively, even when guest
   code calls an exported host function after enrollment has finished. A
   host-injected virtual module is also host-owned because the guest has no API
