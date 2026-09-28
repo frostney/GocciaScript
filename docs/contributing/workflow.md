@@ -85,6 +85,11 @@ and is reviewed like any other file. The config reads the lock through
 `skills-lock.yaml`, a symlink, because CodeRabbit's config sandbox imports
 `.yaml` but not `.json`.
 
+`.github/delivery/review-automations.json` tells the `address-feedback` and
+`delivery-wait` helpers which evidence shows CodeRabbit finished reviewing the
+exact head: its `CodeRabbit` commit status and its reviews, excluding skipped,
+paused, and rate-limited notices.
+
 ### Stacked pull requests
 
 A stacked pull request targets the layer below it rather than `main`, and

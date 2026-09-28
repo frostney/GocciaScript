@@ -1,0 +1,22 @@
+{
+  "automations": [
+    {
+      "id": "coderabbit",
+      "actors": ["coderabbitai", "coderabbitai[bot]"],
+      "check_contexts": ["CodeRabbit"],
+      "check_app_slugs": ["coderabbitai", "coderabbitai[bot]"],
+      "terminal_check_conclusions": ["success"],
+      "terminal_review_states": ["COMMENTED", "APPROVED", "CHANGES_REQUESTED"],
+      "nonterminal_review_markers": [
+        "Review skipped",
+        "skip review by coderabbit.ai",
+        "Reviews paused",
+        "review paused by coderabbit.ai",
+        "Rate limit exceeded",
+        "Review rate limited",
+        "rate limited by coderabbit.ai",
+        "Action not completed"
+      ]
+    }
+  ]
+}
