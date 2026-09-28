@@ -5,13 +5,78 @@ import {
   MARKDOWN_CONTENT_TYPE,
   markdownResponseHeaders,
 } from "@/lib/markdown-negotiation";
+import type {
+  PerformanceDashboardData,
+  PerformanceSuiteData,
+} from "@/lib/performance-dashboard";
 import {
   createSiteMarkdown,
   renderCompatibilityMarkdown,
+  renderPerformanceMarkdown,
   resolveMarkdownRoute,
   yamlScalar,
 } from "@/lib/site-markdown";
 import type { Test262DashboardData } from "@/lib/test262-dashboard";
+
+const emptyPerformanceSuite: PerformanceSuiteData = {
+  latest: null,
+  latestComplete: null,
+  timeline: [],
+  targets: [],
+};
+
+const awfyPoint = {
+  suite: "awfy" as const,
+  runId: 200,
+  runNumber: 912,
+  artifactId: 200,
+  runUrl: "https://github.com/frostney/GocciaScript/actions/runs/200",
+  headSha: "1234567890abcdef1234567890abcdef12345678",
+  shortSha: "12345678",
+  createdAt: "2026-09-20T04:00:00.000Z",
+  complete: true,
+  stale: false,
+  quickjsRatio: 1.5,
+  nodeRatio: 12.25,
+  failedWorkloadCount: 0,
+  workloadCount: 14,
+  repetitions: 3,
+  engineVersions: {},
+  corpusCommit: "abc",
+  driverVersion: 1,
+  compatibilityKey: "k",
+};
+
+const performanceSource = {
+  repositoryUrl: "https://github.com/frostney/GocciaScript",
+  workflowUrl:
+    "https://github.com/frostney/GocciaScript/actions/workflows/ci.yml",
+};
+
+const performanceData: PerformanceDashboardData = {
+  status: "ready",
+  generatedAt: "2026-09-20T05:00:00.000Z",
+  source: performanceSource,
+  awfy: {
+    latest: awfyPoint,
+    latestComplete: awfyPoint,
+    timeline: [awfyPoint],
+    targets: [
+      {
+        name: "Richards",
+        status: "degraded",
+        failure: "goccia: timeout",
+        unit: "microseconds",
+        goccia: null,
+        quickjs: 10,
+        node: 1,
+        quickjsRatio: null,
+        nodeRatio: null,
+      },
+    ],
+  },
+  jetstream: emptyPerformanceSuite,
+};
 
 const compatibilityData = {
   status: "ready",
@@ -129,6 +194,9 @@ describe("resolveMarkdownRoute", () => {
     expect(resolveMarkdownRoute(["compatibility"])).toEqual({
       kind: "compatibility",
     });
+    expect(resolveMarkdownRoute(["performance"])).toEqual({
+      kind: "performance",
+    });
     expect(resolveMarkdownRoute(["playground"])).toEqual({
       kind: "playground",
     });
@@ -188,5 +256,37 @@ describe("createSiteMarkdown", () => {
       "- CI run: [#829](https://github.com/frostney/GocciaScript/actions/runs/100)",
     );
     expect(markdown).not.toContain("/api/test262/latest");
+  });
+
+  test("renders a performance alternate from dashboard data", () => {
+    const markdown = renderPerformanceMarkdown(performanceData);
+
+    expect(markdown).toContain("# Performance Barometer");
+    expect(markdown).toContain("## Are We Fast Yet");
+    expect(markdown).toContain("- QuickJS reference ratio: **1.50x**");
+    expect(markdown).toContain("- Node.js reference ratio: **12.25x**");
+    expect(markdown).toContain("- Workloads: 14 (0 failed)");
+    expect(markdown).toContain(
+      "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",
+    );
+    expect(markdown).toContain(
+      "- Degraded workloads in the latest report: Richards",
+    );
+    expect(markdown).toContain("## JetStream 3");
+    expect(markdown).toContain("No complete report has been retained yet.");
+  });
+
+  test("keeps the performance alternate when reports are unavailable", () => {
+    const markdown = renderPerformanceMarkdown({
+      status: "needs-blob-credentials",
+      message: "missing credentials",
+      generatedAt: "2026-09-20T05:00:00.000Z",
+      source: performanceSource,
+      awfy: emptyPerformanceSuite,
+      jetstream: emptyPerformanceSuite,
+    });
+
+    expect(markdown).toContain("temporarily unavailable");
+    expect(markdown).toContain("[Open the dashboard](/performance)");
   });
 });
