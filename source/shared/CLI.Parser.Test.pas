@@ -48,7 +48,7 @@ type
     procedure TestFlagRejectsValue;
     procedure TestShortOptionTakesNextArgument;
     procedure TestShortOptionTakesAttachedValue;
-    procedure TestShortOptionWithoutValueIsUsageError;
+    procedure TestShortOptionWithoutValueMatchesLongForm;
     procedure TestShortFlagDoesNotConsumeNextArgument;
     procedure TestScopeListBareAndScoped;
     procedure TestScopeListAccumulates;
@@ -94,8 +94,8 @@ begin
     TestShortOptionTakesNextArgument);
   Test('A valued short option takes an attached value',
     TestShortOptionTakesAttachedValue);
-  Test('A valued short option without a value is a usage error',
-    TestShortOptionWithoutValueIsUsageError);
+  Test('A valued short option without a value fails like its long form',
+    TestShortOptionWithoutValueMatchesLongForm);
   Test('A short flag does not consume the next argument',
     TestShortFlagDoesNotConsumeNextArgument);
   Test('Scope list: bare flag and scoped list', TestScopeListBareAndScoped);
@@ -194,7 +194,7 @@ begin
   end;
 end;
 
-procedure TCLIOptionsTests.TestShortOptionWithoutValueIsUsageError;
+procedure TCLIOptionsTests.TestShortOptionWithoutValueMatchesLongForm;
 var
   Jobs: TIntegerOption;
   Options: TOptionArray;
@@ -205,12 +205,17 @@ begin
     Jobs.ShortName := 'j';
     SetLength(Options, 1);
     Options[0] := Jobs;
+    { The same parse error as `--jobs` with no value, so one option has one
+      exit code. }
+    Expect<string>(ParseMessage(['t.js', '--jobs'], Options, IsUsageError))
+      .ToBe('--jobs requires a value');
+    Expect<Boolean>(IsUsageError).ToBe(False);
     Expect<string>(ParseMessage(['t.js', '-j'], Options, IsUsageError))
       .ToBe('-j requires a value');
-    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<Boolean>(IsUsageError).ToBe(False);
     Expect<string>(ParseMessage(['-j', '--jobs=4'], Options, IsUsageError))
       .ToBe('-j requires a value');
-    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<Boolean>(IsUsageError).ToBe(False);
     Expect<Boolean>(Jobs.Present).ToBe(False);
   finally
     Jobs.Free;

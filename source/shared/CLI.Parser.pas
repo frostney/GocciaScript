@@ -164,7 +164,7 @@ begin
           { `-j 2`: a valued short option takes the next argument, as its
             long form does. }
           if (I >= High(AArgs)) or LooksLikeOptionToken(AArgs[I + 1]) then
-            raise TCLIUsageError.CreateFmt('%s requires a value', [Arg]);
+            raise TParseError.CreateFmt('%s requires a value', [Arg]);
           Inc(I);
           Option.ApplyExplicit(AArgs[I], False);
         end
