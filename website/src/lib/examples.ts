@@ -332,7 +332,7 @@ console.log(\`Your total: \${total}\`);`,
   {
     id: "fetch",
     label: "Async / await — fetch + Promise",
-    desc: "Top-level await, async arrow functions, and a sandboxed fetch (GET/HEAD only, explicit allow-listed hosts).",
+    desc: "Top-level await, async arrow functions, and a sandboxed fetch (GET/HEAD only, hosts granted with --allow-net).",
     code: `const fetchJoke = async () => {
   const res = await fetch("https://icanhazdadjoke.com/", {
     headers: { Accept: "application/json" },

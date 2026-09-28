@@ -242,7 +242,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "shield",
     title: "Sandbox-first",
-    body: "AI-agent execution with seeded VFS snapshots, explicit modules and capabilities, structured results, and host-owned limits.",
+    body: "AI-agent execution with copied-in VFS snapshots, explicit modules and capabilities, structured results, and host-owned limits.",
   },
   {
     icon: "leaf",
