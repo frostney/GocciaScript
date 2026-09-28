@@ -33,7 +33,11 @@ type
     procedure Attach(const ARuntime: TGocciaRuntimeCore); virtual;
     procedure Detach; virtual;
     procedure AddModuleExtensions(const AExtensions: TStrings); virtual;
+    { Claims a resolved path and builds its module. Read the file only
+      through AReadContent: it verifies provider-package files against
+      their pins, which a direct content-provider read would skip. }
     function TryLoadModule(const AResolvedPath: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; virtual;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; virtual;
@@ -56,6 +60,7 @@ type
       var ACount: Integer; const AExtension: string);
     procedure RefreshModuleExtensions;
     function LoadRuntimeModule(const AResolvedPath: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean;
     function InjectGlobals(const AFormat: string;
       const AContent: string): Boolean;
@@ -223,6 +228,7 @@ begin
 end;
 
 function TGocciaRuntimeExtension.TryLoadModule(const AResolvedPath: string;
+  const AReadContent: TGocciaModuleContentReader;
   out AModule: TGocciaModule): Boolean;
 begin
   AModule := nil;
@@ -435,17 +441,18 @@ begin
 end;
 
 function TGocciaRuntimeCore.LoadRuntimeModule(const AResolvedPath: string;
+  const AReadContent: TGocciaModuleContentReader;
   out AModule: TGocciaModule): Boolean;
 var
   I: Integer;
 begin
   AModule := nil;
   for I := 0 to FExtensions.Count - 1 do
-    if FExtensions[I].TryLoadModule(AResolvedPath, AModule) then
+    if FExtensions[I].TryLoadModule(AResolvedPath, AReadContent, AModule) then
       Exit(True);
 
   if Assigned(FPrevRuntimeModuleLoader) then
-    Exit(FPrevRuntimeModuleLoader(AResolvedPath, AModule));
+    Exit(FPrevRuntimeModuleLoader(AResolvedPath, AReadContent, AModule));
 
   Result := False;
 end;

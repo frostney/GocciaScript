@@ -37,7 +37,16 @@ type
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
     const AContext: TGocciaEvaluationContext;
     out AProgramConsumed: Boolean): TGocciaValue of object;
+  { Reads a resolved module's content the way the loader reads its own
+    modules: virtual modules from the registry, and provider-package files
+    verified against their pins (verify on load). The caller owns the result. }
+  TGocciaModuleContentReader = function(
+    const AResolvedPath: string): TGocciaModuleContent of object;
+  { A runtime module loader claims a resolved path and builds its module.
+    It reads the file only through AReadContent, never from the content
+    provider directly, so the bytes it parses are the bytes verified. }
   TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
+    const AReadContent: TGocciaModuleContentReader;
     out AModule: TGocciaModule): Boolean of object;
   TGocciaGlobalModuleProvider = function: TGocciaModule of object;
 
@@ -164,6 +173,8 @@ type
       ACacheKey: string; const AIsHostOwned: Boolean): TGocciaModule;
     function ResolveModuleRequestWithAttribute(const AModulePath,
       AAttributeType, AImportingFilePath: string): string;
+    function ReadResolvedContent(
+      const AResolvedPath: string): TGocciaModuleContent;
     function LoadResolvedContent(const AResolvedPath: string;
       var AIsHostOwned: Boolean): TGocciaModuleContent;
     function LoadResolvedContentBytes(const AResolvedPath: string): TBytes;
@@ -1202,8 +1213,8 @@ begin
     'No module resolver configured and cannot resolve "%s"', [AModulePath]);
 end;
 
-function TGocciaModuleLoader.LoadResolvedContent(const AResolvedPath: string;
-  var AIsHostOwned: Boolean): TGocciaModuleContent;
+function TGocciaModuleLoader.ReadResolvedContent(
+  const AResolvedPath: string): TGocciaModuleContent;
 begin
   // A content provider decodes the module's bytes as UTF-8 and raises
   // EConvertError on malformed input (both the filesystem and virtual providers
@@ -1229,6 +1240,12 @@ begin
     on E: EGocciaProviderVerificationError do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
   end;
+end;
+
+function TGocciaModuleLoader.LoadResolvedContent(const AResolvedPath: string;
+  var AIsHostOwned: Boolean): TGocciaModuleContent;
+begin
+  Result := ReadResolvedContent(AResolvedPath);
   if Assigned(Result) and (Result.CanonicalIdentity <> '') then
   begin
     if FHostOwnedModuleIdentities.ContainsKey(Result.CanonicalIdentity) then
@@ -1317,7 +1334,8 @@ begin
   ConflictingModule := nil;
   if StartsStr('goccia:', CanonicalAddress) and
      Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(CanonicalAddress, ConflictingModule) then
+     FRuntimeModuleLoader(CanonicalAddress, ReadResolvedContent,
+       ConflictingModule) then
   begin
     ConflictingModule.Free;
     raise EInvalidOperation.CreateFmt(
@@ -2505,7 +2523,7 @@ begin
 
   Module := nil;
   if Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(ResolvedPath, Module) then
+     FRuntimeModuleLoader(ResolvedPath, ReadResolvedContent, Module) then
   begin
     if Assigned(Module) then
     begin

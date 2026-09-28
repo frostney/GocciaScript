@@ -8,6 +8,7 @@ uses
   Classes,
 
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Runtime;
 
 type
@@ -15,6 +16,7 @@ type
   public
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
     function TryLoadModule(const AResolvedPath: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; override;
   end;
 
@@ -44,7 +46,8 @@ begin
 end;
 
 function TGocciaTextAssetsRuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath: string; const AReadContent: TGocciaModuleContentReader;
+  out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
   LoadSucceeded: Boolean;
@@ -59,8 +62,7 @@ begin
   if not Result then
     Exit;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
+  Content := AReadContent(AResolvedPath);
   try
     NormalizedText := NormalizeNewlinesToLF(Content.Text);
     { The metadata strings below are GC safe points; the metadata object and

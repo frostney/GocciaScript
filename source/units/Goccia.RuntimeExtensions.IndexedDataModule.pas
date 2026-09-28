@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Runtime,
   Goccia.Values.ArrayValue;
 
@@ -17,6 +18,7 @@ type
       const AResolvedPath: string): TGocciaArrayValue; virtual; abstract;
   public
     function TryLoadModule(const AResolvedPath: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; override;
   end;
 
@@ -28,7 +30,8 @@ uses
   Goccia.Modules.ContentProvider;
 
 function TGocciaIndexedDataModuleRuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath: string; const AReadContent: TGocciaModuleContentReader;
+  out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
   I: Integer;
@@ -40,8 +43,7 @@ begin
   if not Result then
     Exit;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
+  Content := AReadContent(AResolvedPath);
   Records := nil;
   try
     Records := ParseModuleRecords(Content.Text, AResolvedPath);

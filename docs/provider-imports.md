@@ -167,9 +167,10 @@ hash and run with `--cached-only`.
 ## Verify on load
 
 The materialization check is not trusted at load time. Each module, `json`,
-`text`, or `bytes` import, and native library read from a materialized package
-is hashed from the exact bytes about to be compiled, read, or loaded, and
-refused unless they match the pin:
+`text`, or `bytes` import, data module (TOML, YAML, JSON5, CSV, TSV, JSONL),
+and native library read from a materialized package is hashed from the exact
+bytes about to be compiled, parsed, read, or loaded, and refused unless they
+match the pin:
 
 ```text
 Provider package file github:frostney/raylib@v1.0.0/bindings/late.ts changed after it was verified
