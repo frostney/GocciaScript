@@ -19,6 +19,7 @@ uses
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
+  Goccia.CLI.Trust,
   Goccia.Engine,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -33,10 +34,14 @@ type
     FAuditLog: TStringOption;
     FMultifile: TFlagOption;
     FConfig: TStringOption;
-    FLogFileHandle: TextFile;
+    { The --log file, written through a buffer so a chatty script does not
+      cost a write per line; flushed when full and when the log closes. }
+    FLogStream: TStream;
+    FLogBuffer: TBytes;
+    FLogBuffered: Integer;
     FLogLock: TGocciaCriticalSection;
     FLogFileOpen: Boolean;
-    FAuditLogStream: TFileStream;
+    FAuditLogStream: TStream;
     FAuditLogLock: TGocciaCriticalSection;
     FAuditLogOpen: Boolean;
     FEngineOptions: TGocciaEngineOptions;
@@ -46,11 +51,30 @@ type
     FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
-    FRootPermissionRequest: TGocciaConfigPermissionRequest;
     FRootConfigExplicit: Boolean;
+    FRootConfigEntries: TConfigEntryArray;
     FWarnLock: TGocciaCriticalSection;
     FWarned: TStringList;
+    FTrust: TRepeatableOption;
+    FUntrust: TRepeatableOption;
+    FListTrusted: TFlagOption;
+    FYes: TFlagOption;
+    FAcceptConfigPermissions: TFlagOption;
+    FIgnoreConfigPermissions: TFlagOption;
+    FTrustStore: TStringOption;
+    FTrustGate: TGocciaConfigTrustGate;
+    FAuditedConfigs: TStringList;
     procedure BuildAllOptions;
+    procedure CreateTrustOptions;
+    function TrustOptions: TOptionArray;
+    function TrustModeCount: Integer;
+    procedure ValidateTrustOptions(const APaths: TStringList);
+    function ResolveTrustStorePath(out AProblem: string): string;
+    procedure RunTrustMode;
+    procedure CreateTrustGate;
+    function TrustStoreArgument: string;
+    procedure AuditConfigVerdict(const AVerdict: TGocciaConfigTrustVerdict);
+    function CommandLineGrantDescription: string;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
     procedure OpenLogFile;
@@ -92,24 +116,58 @@ type
     { The limits this binary applies. Any other limit on the command line is
       a usage error; in config it is ignored. Default: all. }
     function HonoredSettings: TGocciaHonoredSettings; virtual;
+    { Whether this binary applies the unsafe-* keys (it runs code). A config
+      requesting them from a binary that does not is warned about instead of
+      needing trust. Default: True. }
+    function HonorsUnsafeRequests: Boolean; virtual;
     { The engine capability set for a file: command-line grants, plus the
-      permission request of the file's config (AFileConfigPath, or the root
-      config when the file has none), minus every deny. }
-    function ResolveEngineCapabilities(const AFileConfig: TConfigEntryArray;
-      const AFileConfigPath: string;
+      permission request of the config that governs AFileName (see
+      FileConfigVerdict) once the request is trusted or accepted, minus every
+      deny. }
+    function ResolveEngineCapabilities(const AFileConfigPath: string;
       const AFileName: string = ''): TGocciaCapabilities;
-    { The permission request that governs a file: its own config's
-      (AFileConfigPath), else the root config's when RootConfigGoverns the
-      file, else none. Requests this binary cannot honor are reported once on
-      stderr. }
-    function FilePermissionRequest(const AFileConfig: TConfigEntryArray;
-      const AFileConfigPath: string;
+    { The trust verdict of the config that governs a file: its own config
+      (AFileConfigPath), else the root config when RootConfigGoverns
+      AFileName, else none. Requests this binary cannot honor are reported
+      once on stderr. }
+    function FileConfigVerdict(const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaConfigTrustVerdict;
+    { The permission request of FileConfigVerdict. }
+    function FilePermissionRequest(const AFileConfigPath: string;
       const AFileName: string = ''): TGocciaConfigPermissionRequest;
     { Whether the root config's permissions and unsafe-* keys apply to
       AFileName: always for an explicit --config (and for AFileName = ''),
       otherwise only when the file is inside the root config's directory
       tree. A discovered config never grants to files outside its tree. }
     function RootConfigGoverns(const AFileName: string): Boolean;
+    { The config whose permissions govern AFileName: its nearest config, or
+      the root config when it governs the file. '' when there is neither. }
+    function GoverningConfigPath(const AFileName: string): string;
+    { The trust half of ValidateFileConfigs, for config paths rather than
+      files: loads and validates each config, emits one config.permissions
+      audit event per config that requests a grant, and raises
+      EGocciaConfigTrustError with one report naming every config whose
+      requests are neither trusted nor accepted for the run. }
+    procedure VerifyGoverningConfigs(const AConfigPaths: TStrings);
+    { ValidateFileConfigs for one input, such as STDIN_FILE_NAME or a
+      session governed by the working directory's config. }
+    procedure ValidateFileConfig(const AFileName: string);
+    { Each WritesHostFile option whose value came from the root config (not
+      the command line): a relative path is resolved against the directory of
+      the config file that declared it, and the result must stay inside that
+      directory, canonically. Raises TParseError naming the key and config
+      otherwise. }
+    procedure ConfineConfigOutputPaths(const AEntries: TConfigEntryArray);
+    { Sends an event the application itself decides through the capability
+      audit log, when one is open. Main thread only. }
+    procedure EmitApplicationAudit(const AKind: TGocciaCapabilityKind;
+      const ADecision: TGocciaCapabilityDecision;
+      const ASubject, AReason: string);
+    { Where an engine's capability set came from, for its
+      capabilities.effective event: `cli --allow-net=example.com; config
+      /repo/goccia.json trusted sha256:...`. }
+    function CapabilityProvenance(
+      const AVerdict: TGocciaConfigTrustVerdict): string;
     { The set for a main-thread warm-up engine: it grants ffi when any of
       AFiles would, so the FFI prototypes are warmed before workers start. }
     function WarmUpCapabilities(const AFiles: TStrings): TGocciaCapabilities;
@@ -120,9 +178,12 @@ type
       keys and malformed flag values. }
     function LoadFileConfig(const APath: string): TConfigEntryArray;
     { Loads and validates, on the calling thread, the config and permissions
-      block of every distinct config governing AFiles, so a config error stops
-      the run before any file executes (a usage error exits 2 through
-      Goccia.Application.Run) instead of failing one file among many. }
+      block of every distinct config governing AFiles (each file's nearest
+      config, else the root config), so a config error stops the run before
+      any file executes (a usage error exits 2 through Goccia.Application.Run)
+      instead of failing one file among many. In the same pass, checks that
+      each config's permission requests are trusted or accepted for the run
+      (VerifyGoverningConfigs). ExpandMultifileFiles calls it. }
     procedure ValidateFileConfigs(const AFiles: TStrings);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
@@ -167,6 +228,13 @@ type
     function SplitStdinMultifile(
       const AStdinSource: TStringList): TStringList;
     property EngineOptions: TGocciaEngineOptions read FEngineOptions;
+    { The applied root config, or ''. }
+    property RootConfigPath: string read FRootConfigPath;
+    { The root config's entries for AOption when the root config set it
+      (not the command line), each with the file that declared it: the
+      inputs a config names, which are read under the script's capability
+      set rather than as the user's own. Empty otherwise. }
+    function ConfigNamedEntries(const AOption: TOptionBase): TConfigEntryArray;
     property CoverageOptions: TGocciaCoverageOptions read FCoverageOptions;
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
     property LogFileOpen: Boolean read FLogFileOpen;
@@ -177,6 +245,23 @@ type
 
 { Registers the JSON5 and TOML config parsers. Idempotent. }
 procedure EnsureConfigParsersRegistered;
+
+{ Injects the globals of a file or module a config at AConfigPath names
+  (AWritten, relative to the config): read under AEngine's capability set
+  with the config's directory as the project; a data file is parsed, and a
+  module runs in an engine of its own whose named exports cross as data. }
+procedure InjectConfiguredGlobals(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+{ Configures AEngine's clock and random source from a host-environment module
+  a config at AConfigPath names: read under AEngine's capability set, loaded
+  as a guest module of AEngine, never host-owned. }
+procedure ConfigureConfiguredHostEnvironment(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+
+{ Why a config at AConfigPath may not have a host file written at APath, or
+  '' when it may: the path is a symbolic link, or it resolves (through any
+  existing directories) outside the config's directory. }
+function ConfigOutputPathProblem(const APath, AConfigPath: string): string;
 
 function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
@@ -191,11 +276,14 @@ procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   needs its own module resolver — call it directly rather than restating
   the option set, which is how the sandbox runner previously lost
   --max-memory and the fetch policy.  Pass an empty AFileConfig when there
-  is no host file to discover a per-file config for. }
+  is no host file to discover a per-file config for. AAcceptedUnsafe are the
+  unsafe-* requests of the file's config that are trusted or accepted for
+  the run (TGocciaConfigTrustVerdict.AcceptedUnsafe); the command-line flags
+  apply regardless. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray; const AFileName: string;
-  const ARootConfigGoverns: Boolean = True);
+  const AAcceptedUnsafe: TGocciaUnsafeRequests);
 
 implementation
 
@@ -205,14 +293,19 @@ uses
 
   CLI.Parser,
   CLI.Units,
+  FileUtils,
+  HostOutputFiles,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
 
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.Error.Suggestions,
+  Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
+  Goccia.HostEnvironment.JavaScript,
   Goccia.JSON,
   Goccia.JSON.Utils,
   Goccia.JSON5,
@@ -222,21 +315,67 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Profiler,
+  Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Timeout,
   Goccia.TOML,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntValue,
+  Goccia.Values.ErrorHelper,
   Goccia.Values.Formatting,
+  Goccia.Values.HoleValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
+  Goccia.Values.SymbolValue,
   Goccia.YAML;
 
 const
-  CONFIG_BASE_NAME = 'goccia';
-  CONFIG_EXTENSIONS: array[0..2] of string = (EXT_TOML, EXT_JSON5, EXT_JSON);
+  TRUST_GROUP = 'Config trust';
+
+type
+  { `--trust <path>`: a repeatable path. }
+  TPathListOption = class(TRepeatableOption)
+  public
+    function FormatForHelp: string; override;
+  end;
+
+  { `--trust-store=<path>`. The path attaches only with `=`, so the option
+    never takes the next argument, an input file, as its value. }
+  TPathOption = class(TStringOption)
+  public
+    procedure ApplyExplicit(const AValue: string;
+      const AHasEquals: Boolean); override;
+    function ConsumesSeparateValue: Boolean; override;
+    function FormatForHelp: string; override;
+  end;
+
+function TPathListOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + ' <path>';
+end;
+
+procedure TPathOption.ApplyExplicit(const AValue: string;
+  const AHasEquals: Boolean);
+begin
+  if (not AHasEquals) or (AValue = '') then
+    raise TCLIUsageError.CreateFmt('--%s needs a path: --%s=<path>',
+      [LongName, LongName]);
+  Apply(AValue);
+end;
+
+function TPathOption.ConsumesSeparateValue: Boolean;
+begin
+  Result := False;
+end;
+
+function TPathOption.FormatForHelp: string;
+begin
+  Result := '--' + LongName + '=<path>';
+end;
 
 function IsAbsoluteFilePath(const APath: string): Boolean;
 begin
@@ -426,10 +565,12 @@ begin
   FLogFileOpen := False;
   FAuditLogStream := nil;
   FAuditLogOpen := False;
-  FRootPermissionRequest := TGocciaConfigPermissionRequest.Empty;
   CriticalSectionInit(FWarnLock);
   FWarned := TStringList.Create;
   FWarned.Sorted := True;
+  FTrustGate := nil;
+  FAuditedConfigs := TStringList.Create;
+  FAuditedConfigs.Sorted := True;
 end;
 
 destructor TGocciaCLIApplication.Destroy;
@@ -446,10 +587,169 @@ begin
   FAuditLog.Free;
   FMultifile.Free;
   FConfig.Free;
+  FTrust.Free;
+  FUntrust.Free;
+  FListTrusted.Free;
+  FYes.Free;
+  FAcceptConfigPermissions.Free;
+  FIgnoreConfigPermissions.Free;
+  FTrustStore.Free;
+  FTrustGate.Free;
+  FAuditedConfigs.Free;
   FSourceRegistry.Free;
   FWarned.Free;
   CriticalSectionDone(FWarnLock);
   inherited Destroy;
+end;
+
+procedure TGocciaCLIApplication.CreateTrustOptions;
+begin
+  FTrust := TPathListOption.Create('trust',
+    'Trust the permission requests of each goccia config at or under ' +
+    '<path> (asks first; see --yes)', TRUST_GROUP);
+  FUntrust := TPathListOption.Create('untrust',
+    'Remove stored trust for configs at or under <path>', TRUST_GROUP);
+  FListTrusted := TFlagOption.Create('list-trusted',
+    'List trusted configs and whether they changed since', TRUST_GROUP);
+  FYes := TFlagOption.Create('yes', 'Confirm --trust without prompting',
+    TRUST_GROUP);
+  FAcceptConfigPermissions := TFlagOption.Create(
+    ACCEPT_CONFIG_PERMISSIONS_FLAG,
+    'Apply config permission requests for this run without trusting them ' +
+    '(short: -P)', TRUST_GROUP);
+  FAcceptConfigPermissions.ShortName := ACCEPT_CONFIG_PERMISSIONS_SHORT_FLAG;
+  FIgnoreConfigPermissions := TFlagOption.Create(
+    IGNORE_CONFIG_PERMISSIONS_FLAG,
+    'Ignore config permission requests and unsafe-* keys; use command-line ' +
+    'grants only', TRUST_GROUP);
+  FTrustStore := TPathOption.Create(TRUST_STORE_FLAG,
+    'Use this trust store file instead of the per-user default', TRUST_GROUP);
+  FTrust.CommandLineOnly := True;
+  FUntrust.CommandLineOnly := True;
+  FListTrusted.CommandLineOnly := True;
+  FYes.CommandLineOnly := True;
+  FAcceptConfigPermissions.CommandLineOnly := True;
+  FIgnoreConfigPermissions.CommandLineOnly := True;
+  FTrustStore.CommandLineOnly := True;
+end;
+
+function TGocciaCLIApplication.TrustOptions: TOptionArray;
+begin
+  SetLength(Result, 7);
+  Result[0] := FTrust;
+  Result[1] := FUntrust;
+  Result[2] := FListTrusted;
+  Result[3] := FYes;
+  Result[4] := FAcceptConfigPermissions;
+  Result[5] := FIgnoreConfigPermissions;
+  Result[6] := FTrustStore;
+end;
+
+function TGocciaCLIApplication.TrustModeCount: Integer;
+begin
+  Result := Ord(FTrust.Present) + Ord(FUntrust.Present) +
+    Ord(FListTrusted.Present);
+end;
+
+procedure TGocciaCLIApplication.ValidateTrustOptions(const APaths: TStringList);
+var
+  ModeName: string;
+begin
+  if FAcceptConfigPermissions.Present and FIgnoreConfigPermissions.Present then
+    raise TCLIUsageError.Create('-P and --ignore-config-permissions cannot ' +
+      'be combined');
+  if TrustModeCount > 1 then
+    raise TCLIUsageError.Create('--trust, --untrust, and --list-trusted ' +
+      'cannot be combined; run each on its own');
+  if FYes.Present and not FTrust.Present then
+    raise TCLIUsageError.Create('--yes only confirms --trust');
+  { The store is one file; a directory would otherwise surface later as a
+    read error on a run, or a failed write after --trust has asked. }
+  if FTrustStore.Present and (FTrustStore.Value <> '') and
+     DirectoryExists(ExpandFileName(FTrustStore.Value)) then
+    raise Exception.CreateFmt('--%s=%s is a directory; pass the path of the ' +
+      'trust store file (for example %s)', [TRUST_STORE_FLAG,
+      FTrustStore.Value, IncludeTrailingPathDelimiter(FTrustStore.Value) +
+      'trust.json']);
+  if TrustModeCount = 0 then
+    Exit;
+  if FTrust.Present then
+    ModeName := '--trust'
+  else if FUntrust.Present then
+    ModeName := '--untrust'
+  else
+    ModeName := '--list-trusted';
+  if APaths.Count > 0 then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with input files; ' +
+      'run it on its own', [ModeName]);
+  if FAcceptConfigPermissions.Present or FIgnoreConfigPermissions.Present then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with -P or ' +
+      '--ignore-config-permissions', [ModeName]);
+end;
+
+function GetEnvironmentValue(const AName: string): string;
+begin
+  Result := GetEnvironmentVariable(AName);
+end;
+
+function TGocciaCLIApplication.ResolveTrustStorePath(
+  out AProblem: string): string;
+begin
+  AProblem := '';
+  if FTrustStore.Present then
+  begin
+    Exit(ExpandFileName(FTrustStore.Value));
+  end;
+  Result := TGocciaTrustStore.DefaultPath(@GetEnvironmentValue);
+  if Result = '' then
+    AProblem := TGocciaTrustStore.DefaultPathProblem(
+      CurrentTrustStorePlatform, @GetEnvironmentValue);
+end;
+
+function TGocciaCLIApplication.TrustStoreArgument: string;
+begin
+  if FTrustStore.Present then
+    Result := FTrustStore.Value
+  else
+    Result := '';
+end;
+
+procedure TGocciaCLIApplication.RunTrustMode;
+var
+  StorePath, Problem: string;
+begin
+  EnsureConfigParsersRegistered;
+  StorePath := ResolveTrustStorePath(Problem);
+  if StorePath = '' then
+    raise Exception.CreateFmt('cannot locate the per-user trust store (%s); ' +
+      'pass --%s=<path>', [Problem, TRUST_STORE_FLAG]);
+  if FTrust.Present then
+    RunTrustCommand(StorePath, FTrust.Values, FYes.Present, LoadFileConfig,
+      Name)
+  else if FUntrust.Present then
+    RunUntrustCommand(StorePath, FUntrust.Values)
+  else
+    RunListTrustedCommand(StorePath, LoadFileConfig);
+end;
+
+procedure TGocciaCLIApplication.CreateTrustGate;
+var
+  Mode: TGocciaConfigTrustMode;
+  StorePath, Problem: string;
+begin
+  StorePath := '';
+  Problem := '';
+  if FAcceptConfigPermissions.Present then
+    Mode := ctmAcceptForRun
+  else if FIgnoreConfigPermissions.Present then
+    Mode := ctmIgnoreConfig
+  else
+  begin
+    Mode := ctmStore;
+    StorePath := ResolveTrustStorePath(Problem);
+  end;
+  FTrustGate := TGocciaConfigTrustGate.Create(StorePath, Problem, Mode,
+    HonoredCapabilities, HonorsUnsafeRequests, LoadFileConfig);
 end;
 
 procedure TGocciaCLIApplication.BuildAllOptions;
@@ -561,23 +861,34 @@ end;
 
 procedure TGocciaCLIApplication.ValidateFileConfigs(const AFiles: TStrings);
 var
-  Seen: TStringList;
-  I, Index: Integer;
-  ConfigPath: string;
+  ConfigPaths: TStringList;
+  I: Integer;
 begin
-  Seen := TStringList.Create;
+  ConfigPaths := TStringList.Create;
   try
-    Seen.Sorted := True;
+    { Byte order, so reports list configs the same way in every locale. }
+    ConfigPaths.UseLocale := False;
+    ConfigPaths.CaseSensitive := True;
+    ConfigPaths.Sorted := True;
+    ConfigPaths.Duplicates := dupIgnore;
     for I := 0 to AFiles.Count - 1 do
-    begin
-      ConfigPath := DiscoverFileConfigPath(AFiles[I]);
-      if (ConfigPath = '') or Seen.Find(ConfigPath, Index) then
-        Continue;
-      Seen.Add(ConfigPath);
-      FilePermissionRequest(LoadFileConfig(ConfigPath), ConfigPath);
-    end;
+      ConfigPaths.Add(GoverningConfigPath(AFiles[I]));
+    VerifyGoverningConfigs(ConfigPaths);
   finally
-    Seen.Free;
+    ConfigPaths.Free;
+  end;
+end;
+
+procedure TGocciaCLIApplication.ValidateFileConfig(const AFileName: string);
+var
+  Files: TStringList;
+begin
+  Files := TStringList.Create;
+  try
+    Files.Add(AFileName);
+    ValidateFileConfigs(Files);
+  finally
+    Files.Free;
   end;
 end;
 
@@ -609,7 +920,7 @@ begin
   if StartDir = '' then
     StartDir := GetCurrentDir;
   Result := DiscoverConfigFile(StartDir,
-    [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+    [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
 end;
 
 { Resolve --source-type / config "source-type" into the engine's
@@ -708,28 +1019,10 @@ end;
   Priority: CLI option > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root config values
   so that a per-file config can override a root-level config value. }
-{ An unsafe-* flag: the command line, else the file's own config, else the
-  root config only when ARootConfigGoverns: the file has no config of its
-  own and lies inside the root config's tree (or --config named it). }
-function ResolveUnsafeFlag(const AFlag: TFlagOption;
-  const AFileConfig: TConfigEntryArray;
-  const ARootConfigGoverns: Boolean): Boolean;
-var
-  Value: string;
-begin
-  if AFlag.FromCommandLine then
-    Exit(True);
-  if FindConfigEntry(AFileConfig, AFlag.LongName, Value) or
-     ((AFlag.ConfigName <> '') and
-      FindConfigEntry(AFileConfig, AFlag.ConfigName, Value)) then
-    Exit(Value = 'true');
-  Result := ARootConfigGoverns and AFlag.Present;
-end;
-
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray; const AFileName: string;
-  const ARootConfigGoverns: Boolean);
+  const AAcceptedUnsafe: TGocciaUnsafeRequests);
 var
   Entry: TConfigEntry;
   MemoryLimit, ResponseLimit: Int64;
@@ -749,15 +1042,14 @@ begin
   AEngine.StrictTypes := ResolveFlagOption(
     AEngineOptions.StrictTypes, AFileConfig);
 
-  { unsafe-function-constructor: CLI flag > per-file config > root config
-    (when it governs the file) > default (false) }
-  AEngine.FunctionConstructor.Enabled := ResolveUnsafeFlag(
-    AEngineOptions.UnsafeFunctionConstructor, AFileConfig,
-    ARootConfigGoverns);
-
-  { unsafe-shadowrealm: as unsafe-function-constructor }
-  if ResolveUnsafeFlag(AEngineOptions.UnsafeShadowRealm, AFileConfig,
-     ARootConfigGoverns) then
+  { unsafe-*: the command-line flag, else the governing config's request once
+    it is trusted or accepted (ADR 0122). The options are RequiresTrust, so
+    a root config never sets them. }
+  AEngine.FunctionConstructor.Enabled :=
+    AEngineOptions.UnsafeFunctionConstructor.Present or
+    (gurFunctionConstructor in AAcceptedUnsafe);
+  if AEngineOptions.UnsafeShadowRealm.Present or
+     (gurShadowRealm in AAcceptedUnsafe) then
     EnableShadowRealm(AEngine);
 
   { max-memory: CLI option > per-file config > root config > system default.
@@ -814,31 +1106,39 @@ begin
   Result := ALL_RUNTIME_SETTINGS;
 end;
 
+function TGocciaCLIApplication.HonorsUnsafeRequests: Boolean;
+begin
+  Result := True;
+end;
+
 function TGocciaCLIApplication.WarmUpCapabilities(
   const AFiles: TStrings): TGocciaCapabilities;
 var
   I: Integer;
-  FileConfigPath: string;
-  FileConfig: TConfigEntryArray;
 begin
   Result := TGocciaCapabilities.None;
   if not (gcFFI in HonoredCapabilities) then
     Exit;
   for I := 0 to AFiles.Count - 1 do
     try
-      FileConfigPath := DiscoverFileConfigPath(AFiles[I]);
-      if FileConfigPath <> '' then
-        FileConfig := LoadFileConfig(FileConfigPath)
-      else
-        SetLength(FileConfig, 0);
-      if ResolveEngineCapabilities(FileConfig, FileConfigPath, AFiles[I])
-         .Grants(gcFFI) then
+      if ResolveEngineCapabilities(DiscoverFileConfigPath(AFiles[I]),
+         AFiles[I]).Grants(gcFFI) then
         Exit(Result.Allow(gcFFI));
     except
       { A config error belongs to that file's own run, which reports it. }
       on E: Exception do
         Continue;
     end;
+end;
+
+function TGocciaCLIApplication.GoverningConfigPath(
+  const AFileName: string): string;
+begin
+  { One config per file: the file's nearest config, else the root config
+    when it governs the file. extends is the only way configs compose. }
+  Result := DiscoverFileConfigPath(AFileName);
+  if (Result = '') and RootConfigGoverns(AFileName) then
+    Result := FRootConfigPath;
 end;
 
 function TGocciaCLIApplication.RootConfigGoverns(
@@ -855,43 +1155,295 @@ begin
     CanonicalCapabilityPath(ExtractFileDir(FRootConfigPath)));
 end;
 
-function TGocciaCLIApplication.FilePermissionRequest(
-  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
-  const AFileName: string): TGocciaConfigPermissionRequest;
+function TGocciaCLIApplication.FileConfigVerdict(const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigTrustVerdict;
 var
+  ConfigPath: string;
   Warnings: TGocciaCapabilityScopes;
   I: Integer;
 begin
-  { One config per file: the file's nearest config, else the root config
-    when it governs the file. extends is the only way configs compose. }
-  if AFileConfigPath <> '' then
-    Result := ReadConfigPermissionRequest(AFileConfig, AFileConfigPath)
-  else if RootConfigGoverns(AFileName) then
-    Result := FRootPermissionRequest
-  else
-    Result := TGocciaConfigPermissionRequest.Empty;
+  ConfigPath := AFileConfigPath;
+  if (ConfigPath = '') and RootConfigGoverns(AFileName) then
+    ConfigPath := FRootConfigPath;
+  if not Assigned(FTrustGate) then
+    CreateTrustGate;
+  Result := FTrustGate.Verify(ConfigPath);
 
-  Warnings := UnsupportedRequestWarnings(Result, HonoredCapabilities, Name);
+  Warnings := UnsupportedRequestWarnings(Result.Request, HonoredCapabilities,
+    Name, HonorsUnsafeRequests);
   for I := 0 to High(Warnings) do
     WarnOnce(Result.ConfigPath + #0 + Warnings[I],
       'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);
 end;
 
-function TGocciaCLIApplication.ResolveEngineCapabilities(
-  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
-  const AFileName: string): TGocciaCapabilities;
+function TGocciaCLIApplication.FilePermissionRequest(
+  const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigPermissionRequest;
+begin
+  Result := FileConfigVerdict(AFileConfigPath, AFileName).Request;
+end;
+
+function ResolveVerdictCapabilities(const AEngineOptions: TGocciaEngineOptions;
+  const AVerdict: TGocciaConfigTrustVerdict;
+  const AHonored: TGocciaHonoredCapabilities): TGocciaCapabilities;
 var
-  Request: TGocciaConfigPermissionRequest;
   CapabilityOptions: TGocciaCapabilityOptions;
 begin
-  Request := FilePermissionRequest(AFileConfig, AFileConfigPath, AFileName);
-  if Assigned(FEngineOptions) then
-    CapabilityOptions := FEngineOptions.Capabilities
+  if Assigned(AEngineOptions) then
+    CapabilityOptions := AEngineOptions.Capabilities
   else
     CapabilityOptions := nil;
-  { Layer 2 of ADR 0122 applies config requests without a trust step. }
-  Result := ResolveCapabilities(CapabilityOptions, Request, True,
-    HonoredCapabilities, GetCurrentDir);
+  { A config's denies apply in every verdict; its allows only once trusted
+    or accepted for the run. }
+  Result := ResolveCapabilities(CapabilityOptions, AVerdict.Request,
+    AVerdict.GrantsAccepted, AHonored, GetCurrentDir);
+end;
+
+function TGocciaCLIApplication.ResolveEngineCapabilities(
+  const AFileConfigPath: string;
+  const AFileName: string): TGocciaCapabilities;
+begin
+  Result := ResolveVerdictCapabilities(FEngineOptions,
+    FileConfigVerdict(AFileConfigPath, AFileName), HonoredCapabilities);
+end;
+
+procedure TGocciaCLIApplication.VerifyGoverningConfigs(
+  const AConfigPaths: TStrings);
+var
+  Checked: TStringList;
+  Verdict: TGocciaConfigTrustVerdict;
+  I: Integer;
+begin
+  Checked := TStringList.Create;
+  try
+    for I := 0 to AConfigPaths.Count - 1 do
+    begin
+      if AConfigPaths[I] = '' then
+        Continue;
+      { A config that does not load stops the run here, before any file. }
+      Verdict := FileConfigVerdict(AConfigPaths[I]);
+      AuditConfigVerdict(Verdict);
+      Checked.Add(AConfigPaths[I]);
+    end;
+    FTrustGate.RequireAccepted(Checked, Name, GetCommandLineArguments,
+      TrustStoreArgument);
+  finally
+    Checked.Free;
+  end;
+end;
+
+function ConfigOutputPathProblem(const APath, AConfigPath: string): string;
+var
+  Directory: string;
+begin
+  Result := '';
+  Directory := ExtractFileDir(AConfigPath);
+  { A link at the name itself would redirect the write wherever it points. }
+  if HostPathIsSymlink(APath) then
+    Exit('is a symbolic link');
+  { Existing directories along the path are resolved, so a symlinked parent
+    cannot carry the write out of the config's tree. }
+  if not IsPathWithinScope(CanonicalCapabilityPath(APath),
+     CanonicalCapabilityPath(Directory)) then
+    Result := 'is outside ' + Directory;
+end;
+
+procedure TGocciaCLIApplication.ConfineConfigOutputPaths(
+  const AEntries: TConfigEntryArray);
+const
+  OUTPUT_MODE_JSON = 'json';
+  OUTPUT_MODE_COMPACT_JSON = 'compact-json';
+var
+  I: Integer;
+  Option: TOptionBase;
+  Entry: TConfigEntry;
+  Key, Value, Path, Problem: string;
+begin
+  for I := 0 to High(FAllOptions) do
+  begin
+    Option := FAllOptions[I];
+    if (not Option.WritesHostFile) or (not Option.Present) or
+       Option.FromCommandLine or not (Option is TStringOption) then
+      Continue;
+    Value := TStringOption(Option).Value;
+    { Not a path: "derive it from the input", or an output mode where the
+      option has them (the test runner's --output). }
+    if (Value = '') or (Option.AcceptsOutputModes and
+       ((Value = OUTPUT_MODE_JSON) or (Value = OUTPUT_MODE_COMPACT_JSON))) then
+      Continue;
+    Key := Option.LongName;
+    if (Option.ConfigName <> '') and
+       TryFindConfigEntry(AEntries, Option.ConfigName, Entry) then
+      Key := Option.ConfigName
+    else if not TryFindConfigEntry(AEntries, Option.LongName, Entry) then
+      Continue;
+    { Relative to the file that wrote it, like a permission scope. }
+    if IsAbsoluteFilePath(Value) then
+      Path := ExpandFileName(Value)
+    else
+      Path := ExpandFileName(IncludeTrailingPathDelimiter(
+        ExtractFileDir(Entry.SourcePath)) + Value);
+    Problem := ConfigOutputPathProblem(Path, Entry.SourcePath);
+    if Problem <> '' then
+      raise TParseError.CreateFmt('%s: "%s" writes to %s, which %s; a ' +
+        'config may only write inside its own directory (pass --%s on the ' +
+        'command line to write elsewhere)',
+        [Entry.SourcePath, Key, Path, Problem, Option.LongName]);
+    { The check above is the state now; the write may come at the end of the
+      run. Pin the route so the write cannot be carried elsewhere by a
+      directory swapped for a link in between (HostOutputFiles). }
+    RegisterConfinedHostOutput(Path, CanonicalCapabilityPath(Path),
+      CanonicalCapabilityPath(ExtractFileDir(Entry.SourcePath)));
+    TStringOption(Option).Apply(Path);
+  end;
+end;
+
+function TGocciaCLIApplication.ConfigNamedEntries(
+  const AOption: TOptionBase): TConfigEntryArray;
+
+  { The root config entry that supplied AValue, so it carries the file that
+    declared it (a base config under `extends` keeps its own). }
+  procedure AddEntryFor(const AValue: string);
+  var
+    I: Integer;
+  begin
+    for I := 0 to High(FRootConfigEntries) do
+      if ((FRootConfigEntries[I].Key = AOption.LongName) or
+          ((AOption.ConfigName <> '') and
+           (FRootConfigEntries[I].Key = AOption.ConfigName))) and
+         (FRootConfigEntries[I].Value = AValue) then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := FRootConfigEntries[I];
+        Exit;
+      end;
+  end;
+
+var
+  I: Integer;
+begin
+  Result := nil;
+  if (not AOption.Present) or AOption.FromCommandLine then
+    Exit;
+  { Walk the values the option holds, not the raw entries, so precedence
+    across `extends` (an empty array resetting a base's list) is the one
+    ApplyConfigEntries already settled. }
+  if AOption is TRepeatableOption then
+  begin
+    for I := 0 to TRepeatableOption(AOption).Values.Count - 1 do
+      AddEntryFor(TRepeatableOption(AOption).Values[I]);
+  end
+  else if (AOption is TStringOption) and
+          (TStringOption(AOption).Value <> '') then
+    AddEntryFor(TStringOption(AOption).Value);
+end;
+
+procedure TGocciaCLIApplication.EmitApplicationAudit(
+  const AKind: TGocciaCapabilityKind;
+  const ADecision: TGocciaCapabilityDecision;
+  const ASubject, AReason: string);
+var
+  Event: TGocciaCapabilityAuditEvent;
+begin
+  if not FAuditLogOpen then
+    Exit;
+  Event := Default(TGocciaCapabilityAuditEvent);
+  Event.Kind := AKind;
+  Event.Decision := ADecision;
+  Event.Subject := ASubject;
+  Event.Reason := AReason;
+  HandleCapabilityAudit(Event);
+end;
+
+procedure TGocciaCLIApplication.AuditConfigVerdict(
+  const AVerdict: TGocciaConfigTrustVerdict);
+var
+  Index: Integer;
+begin
+  if AVerdict.State = ctsNoRequest then
+    Exit;
+  if FAuditedConfigs.Find(AVerdict.ConfigPath, Index) then
+    Exit;
+  FAuditedConfigs.Add(AVerdict.ConfigPath);
+  if ConfigTrustAuditAllows(AVerdict) then
+    EmitApplicationAudit(gckConfigPermissions, gcdAllow, AVerdict.ConfigPath,
+      ConfigTrustAuditReason(AVerdict, Name))
+  else
+    EmitApplicationAudit(gckConfigPermissions, gcdDeny, AVerdict.ConfigPath,
+      ConfigTrustAuditReason(AVerdict, Name));
+end;
+
+function TGocciaCLIApplication.CommandLineGrantDescription: string;
+
+  procedure AddFlag(const AText: string);
+  begin
+    if Result <> '' then
+      Result := Result + ' ';
+    Result := Result + AText;
+  end;
+
+  procedure AddScopeOption(const AOption: TScopeListOption);
+  var
+    Scopes: string;
+    I: Integer;
+  begin
+    if not AOption.Present then
+      Exit;
+    if AOption.Unscoped then
+      AddFlag('--' + AOption.LongName);
+    if AOption.Scopes.Count = 0 then
+      Exit;
+    Scopes := '';
+    for I := 0 to AOption.Scopes.Count - 1 do
+    begin
+      if I > 0 then
+        Scopes := Scopes + ',';
+      Scopes := Scopes + AOption.Scopes[I];
+    end;
+    AddFlag('--' + AOption.LongName + '=' + Scopes);
+  end;
+
+var
+  Capability: TGocciaCapability;
+begin
+  Result := '';
+  if not Assigned(FEngineOptions) then
+    Exit;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    AddScopeOption(FEngineOptions.Capabilities.AllowOption(Capability));
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    AddScopeOption(FEngineOptions.Capabilities.DenyOption(Capability));
+  if FEngineOptions.UnsafeFunctionConstructor.Present then
+    AddFlag('--' + FEngineOptions.UnsafeFunctionConstructor.LongName);
+  if FEngineOptions.UnsafeShadowRealm.Present then
+    AddFlag('--' + FEngineOptions.UnsafeShadowRealm.LongName);
+end;
+
+function TGocciaCLIApplication.CapabilityProvenance(
+  const AVerdict: TGocciaConfigTrustVerdict): string;
+var
+  CommandLine: string;
+begin
+  Result := '';
+  CommandLine := CommandLineGrantDescription;
+  if CommandLine <> '' then
+    Result := 'cli ' + CommandLine;
+  if AVerdict.State <> ctsNoRequest then
+  begin
+    if Result <> '' then
+      Result := Result + '; ';
+    Result := Result + 'config ' + AVerdict.ConfigPath + ' ' +
+      ConfigTrustAuditReason(AVerdict, Name);
+  end
+  else if AVerdict.Request.DeclaresDenies then
+  begin
+    { A deny-only config needs no trust, but its denies shape the set. }
+    if Result <> '' then
+      Result := Result + '; ';
+    Result := Result + 'config ' + AVerdict.ConfigPath + ' denies only';
+  end;
+  if Result = '' then
+    Result := 'defaults';
 end;
 
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
@@ -1044,10 +1596,308 @@ end;
 procedure InjectInlineModuleDefinition(const AEngine: TGocciaEngine;
   const ADefinition, ABaseAddress: string); forward;
 
+{ ── Inputs a config file names ──────────────────────────────── }
+
+{ A module manifest, a globals file or module, or a host-environment module a
+  config file names is the repository's choice, not the user's, so it is read
+  under the capability set of the script the config governs (ADR 0122). The
+  config's own directory plays the project's part: a file inside it is
+  covered as the module graph is, anything else needs a read grant, and a read
+  deny refuses it. ASpecifier is the path as the config wrote it, which is all
+  the refusal names. }
+procedure CheckConfigInputRead(const AEngine: TGocciaEngine;
+  const APath, ASpecifier, AConfigPath: string);
+var
+  CanonicalPath: string;
+  InConfigDirectory: Boolean;
+begin
+  CanonicalPath := CanonicalCapabilityPath(APath);
+  InConfigDirectory := IsPathWithinScope(CanonicalPath,
+    CanonicalCapabilityPath(ExtractFileDir(AConfigPath)));
+  if AEngine.Capabilities.DeniesPath(gcRead, CanonicalPath) then
+  begin
+    AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
+      'read is denied for this path');
+    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
+      Format(SSuggestReadDenied, [CanonicalPath]));
+  end;
+  if InConfigDirectory then
+    Exit;
+  if not AEngine.Capabilities.AllowsPath(gcRead, CanonicalPath) then
+  begin
+    AEngine.EmitCapabilityAudit(gckReadFile, gcdDeny, CanonicalPath,
+      'the path is outside the config''s directory and no read grant ' +
+      'covers it');
+    ThrowPermissionDenied(CapabilityName(gcRead), ASpecifier,
+      Format(SSuggestReadNotGranted, [CanonicalPath,
+        ExtractFileDir(CanonicalPath)]));
+  end;
+  AEngine.EmitCapabilityAudit(gckReadFile, gcdAllow, CanonicalPath,
+    'a read grant covers the path');
+end;
+
+function ConfigInputPath(const AWritten, AConfigPath: string): string;
+begin
+  if IsAbsoluteFilePath(AWritten) then
+    Result := ExpandFileName(AWritten)
+  else
+    Result := ExpandFileName(IncludeTrailingPathDelimiter(
+      ExtractFileDir(AConfigPath)) + AWritten);
+end;
+
+{ Why AValue, reached at APath inside a globals module's exports, is not data,
+  or '' when it and everything under it is: data is what JSON carries as is
+  (null, booleans, finite numbers, strings, arrays, and plain objects), so
+  nothing is dropped, rewritten, or run on the way into the script. AVisiting
+  holds the objects being walked, so a cycle is reported, not followed. AAt
+  receives the path of the value that is not data. }
+function NonDataReason(const AValue: TGocciaValue; const APath: string;
+  const AVisiting: TList<TGocciaObjectValue>; out AAt: string): string;
+var
+  Key: string;
+  I, Count: Integer;
+begin
+  AAt := APath;
+  if (AValue = nil) or (AValue is TGocciaUndefinedLiteralValue) or
+     (AValue is TGocciaHoleValue) then
+    Exit('undefined');
+  if (AValue is TGocciaNullLiteralValue) or
+     (AValue is TGocciaBooleanLiteralValue) or
+     (AValue is TGocciaStringLiteralValue) then
+    Exit('');
+  if AValue is TGocciaNumberLiteralValue then
+  begin
+    if TGocciaNumberLiteralValue(AValue).IsNaN or
+       TGocciaNumberLiteralValue(AValue).IsInfinity or
+       TGocciaNumberLiteralValue(AValue).IsNegativeInfinity then
+      Exit('a number JSON cannot hold');
+    Exit('');
+  end;
+  if AValue.IsCallable then
+    Exit('a function');
+  if AValue is TGocciaSymbolValue then
+    Exit('a symbol');
+  if AValue is TGocciaBigIntValue then
+    Exit('a BigInt');
+  if not (AValue is TGocciaObjectValue) or
+     ((AValue.ClassType <> TGocciaObjectValue) and
+      (AValue.ClassType <> TGocciaArrayValue)) then
+    Exit('an object that is not a plain object or array');
+  if AVisiting.IndexOf(TGocciaObjectValue(AValue)) >= 0 then
+    Exit('a circular reference');
+  AVisiting.Add(TGocciaObjectValue(AValue));
+  try
+    if AValue is TGocciaArrayValue then
+    begin
+      Count := TGocciaArrayValue(AValue).GetLength;
+      for I := 0 to Count - 1 do
+      begin
+        Result := NonDataReason(TGocciaArrayValue(AValue).GetProperty(
+          IntToStr(I)), APath + '[' + IntToStr(I) + ']', AVisiting, AAt);
+        if Result <> '' then
+          Exit;
+      end;
+    end
+    else
+      for Key in TGocciaObjectValue(AValue).GetEnumerablePropertyNames do
+      begin
+        Result := NonDataReason(TGocciaObjectValue(AValue).GetProperty(Key),
+          APath + '.' + Key, AVisiting, AAt);
+        if Result <> '' then
+          Exit;
+      end;
+    Result := '';
+  finally
+    AVisiting.Remove(TGocciaObjectValue(AValue));
+  end;
+end;
+
+type
+  { What crosses back from an isolated module: its default export, or all of
+    its named exports as one object. }
+  TIsolatedModuleResult = (imrDefaultExport, imrNamedExports);
+
+{ Evaluates the JavaScript or TypeScript module at APath in an engine of its
+  own with AEngine's capability set, the config's directory as its project,
+  and AEngine's language settings: its imports are guest reads, judged like
+  the script's, and whatever it leaves on its global object stays in that
+  engine. Returns the requested exports as JSON, so only data reaches the
+  script. AModulePath receives the module's canonical path. }
+function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
+  const APath, AConfigPath: string; const AResult: TIsolatedModuleResult;
+  out AModulePath: string): string;
+var
+  Isolated: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Source: TStringList;
+  Module: TGocciaModule;
+  ExportValue, ExportedValue: TGocciaValue;
+  NamedExports: TGocciaObjectValue;
+  ExportName, Reason, ReasonPath: string;
+  Visiting: TList<TGocciaObjectValue>;
+  Stringifier: TGocciaJSONStringifier;
+begin
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    Isolated := TGocciaEngine.Create(APath, Source, Executor,
+      AEngine.Capabilities);
+    try
+      Isolated.ProjectRoot := ExtractFileDir(AConfigPath);
+      Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
+      Isolated.Preprocessors := AEngine.Preprocessors;
+      Isolated.Compatibility := AEngine.Compatibility;
+      Isolated.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
+      Isolated.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
+      Isolated.StrictTypes := AEngine.StrictTypes;
+      { The filesystem content provider, with every read it makes checked. }
+      AttachRuntime(Isolated);
+      Module := Isolated.ModuleLoader.LoadModule(APath, APath);
+      AModulePath := Module.Path;
+      if AResult = imrDefaultExport then
+      begin
+        if not Module.TryGetExportValue(KEYWORD_DEFAULT, ExportValue) then
+          raise EArgumentException.Create(
+            'Virtual modules manifest module must have a default export.');
+      end
+      else
+      begin
+        NamedExports := TGocciaObjectValue.Create;
+        if TGarbageCollector.Instance <> nil then
+          TGarbageCollector.Instance.AddTempRoot(NamedExports);
+        Visiting := TList<TGocciaObjectValue>.Create;
+        try
+          try
+            for ExportName in Module.GetExportNames do
+              if Module.TryGetExportValue(ExportName, ExportedValue) then
+              begin
+                { Only data crosses into the script's engine, and all of it:
+                  JSON would drop a nested function or rewrite NaN silently. }
+                Reason := NonDataReason(ExportedValue, ExportName, Visiting,
+                  ReasonPath);
+                if Reason <> '' then
+                  raise EArgumentException.CreateFmt(
+                    '%s: export "%s" is %s; a config''s globals module may ' +
+                    'export data only (pass it with --globals on the ' +
+                    'command line to inject code)',
+                    [APath, ReasonPath, Reason]);
+                NamedExports.SetProperty(ExportName, ExportedValue);
+              end;
+          except
+            { The stringify step's finally removes the root on success; a
+              refused export must not leave it pinning the copied values. }
+            if TGarbageCollector.Instance <> nil then
+              TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+            raise;
+          end;
+        finally
+          Visiting.Free;
+        end;
+        ExportValue := NamedExports;
+      end;
+      if TGarbageCollector.Instance <> nil then
+        TGarbageCollector.Instance.AddTempRoot(ExportValue);
+      try
+        Stringifier := TGocciaJSONStringifier.Create;
+        try
+          Result := Stringifier.Stringify(ExportValue);
+        finally
+          Stringifier.Free;
+        end;
+      finally
+        if TGarbageCollector.Instance <> nil then
+        begin
+          TGarbageCollector.Instance.RemoveTempRoot(ExportValue);
+          if AResult = imrNamedExports then
+            TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+        end;
+      end;
+    finally
+      Isolated.Free;
+    end;
+  finally
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+function IsScriptModuleFile(const APath: string): Boolean;
+var
+  Extension: string;
+begin
+  Extension := LowerCase(ExtractFileExt(APath));
+  Result := (Extension = EXT_JS) or (Extension = EXT_MJS) or
+    (Extension = EXT_TS);
+end;
+
+{ A manifest path from a config file's "modules" key. }
+procedure InjectConfiguredManifest(const AEngine: TGocciaEngine;
+  const APath, ASpecifier, AConfigPath: string);
+var
+  ModulePath: string;
+  ManifestJSON: string;
+begin
+  CheckConfigInputRead(AEngine, APath, ASpecifier, AConfigPath);
+  if IsScriptModuleFile(APath) then
+  begin
+    ManifestJSON := EvaluateIsolatedConfigModule(AEngine, APath, AConfigPath,
+      imrDefaultExport, ModulePath);
+    AEngine.InjectModulesFromJSON(ManifestJSON, ModulePath);
+  end
+  else
+    InjectModulesFromManifestFile(AEngine, APath);
+end;
+
+procedure InjectConfiguredGlobals(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+var
+  Path, ModulePath: string;
+begin
+  Path := ConfigInputPath(AWritten, AConfigPath);
+  CheckConfigInputRead(AEngine, Path, AWritten, AConfigPath);
+  if IsStructuredGlobalsFile(Path) then
+  begin
+    if IsYAMLGlobalsFile(Path) then
+      AEngine.InjectGlobalsFromYAML(ReadFileText(Path))
+    else if IsJSON5GlobalsFile(Path) then
+      AEngine.InjectGlobalsFromJSON5(ReadFileText(Path))
+    else if IsTOMLGlobalsFile(Path) then
+      AEngine.InjectGlobalsFromTOML(ReadFileText(Path))
+    else
+      AEngine.InjectGlobalsFromJSON(ReadFileText(Path));
+  end
+  else
+    AEngine.InjectGlobalsFromJSON(EvaluateIsolatedConfigModule(AEngine, Path,
+      AConfigPath, imrNamedExports, ModulePath));
+end;
+
+procedure ConfigureConfiguredHostEnvironment(const AEngine: TGocciaEngine;
+  const AWritten, AConfigPath: string);
+var
+  Path, ScriptProjectRoot: string;
+  Module: TGocciaModule;
+begin
+  Path := ConfigInputPath(AWritten, AConfigPath);
+  CheckConfigInputRead(AEngine, Path, AWritten, AConfigPath);
+  { The providers are functions the engine calls for as long as it runs, so
+    they cannot cross from another engine as data. The module is a guest
+    module of the script's own engine instead: never host-owned, so its
+    imports, now and later, are guest reads under the script's capability
+    set, with the config's directory as its project while it loads. }
+  ScriptProjectRoot := AEngine.ProjectRoot;
+  AEngine.ProjectRoot := ExtractFileDir(AConfigPath);
+  try
+    Module := AEngine.ModuleLoader.LoadModule(Path, AEngine.SourcePath);
+  finally
+    AEngine.ProjectRoot := ScriptProjectRoot;
+  end;
+  ConfigureHostEnvironmentFromLoadedModule(AEngine, Module);
+end;
+
 procedure InjectModulesFromConfigFile(const AEngine: TGocciaEngine;
   const APath: string; const ADepth: Integer = 0);
 var
-  Content, Extension, ExtendsPath, ItemPath: string;
+  Content, Extension, ExtendsPath, ItemPath, Written: string;
   I: Integer;
   ArrayValue: TGocciaArrayValue;
   ModulesValue, ParsedValue: TGocciaValue;
@@ -1117,10 +1967,11 @@ begin
       if ModulesValue is TGocciaStringLiteralValue then
       begin
         ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+        Written := ItemPath;
         if not IsAbsoluteFilePath(ItemPath) then
           ItemPath := ExpandFileName(
             IncludeTrailingPathDelimiter(ExtractFilePath(APath)) + ItemPath);
-        InjectModulesFromManifestFile(AEngine, ItemPath);
+        InjectConfiguredManifest(AEngine, ItemPath, Written, APath);
       end
       else if ModulesValue is TGocciaArrayValue then
       begin
@@ -1132,11 +1983,12 @@ begin
             raise EArgumentException.Create(
               'Config modules manifest paths must be strings.');
           ItemPath := TGocciaStringLiteralValue(ModulesValue).Value;
+          Written := ItemPath;
           if not IsAbsoluteFilePath(ItemPath) then
             ItemPath := ExpandFileName(
               IncludeTrailingPathDelimiter(ExtractFilePath(APath)) +
               ItemPath);
-          InjectModulesFromManifestFile(AEngine, ItemPath);
+          InjectConfiguredManifest(AEngine, ItemPath, Written, APath);
         end;
       end
       else if ModulesValue is TGocciaObjectValue then
@@ -1269,16 +2121,19 @@ var
   AliasBaseDirectory: string;
   FileConfig: TConfigEntryArray;
   FileConfigPath: string;
+  Verdict: TGocciaConfigTrustVerdict;
 begin
   FileConfigPath := DiscoverFileConfigPath(AFileName);
   if FileConfigPath <> '' then
     FileConfig := LoadFileConfig(FileConfigPath)
   else
     SetLength(FileConfig, 0);
+  Verdict := FileConfigVerdict(FileConfigPath, AFileName);
   { The capability set is fixed when the engine is created (ADR 0122). }
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
-    ResolveEngineCapabilities(FileConfig, FileConfigPath, AFileName));
+    ResolveVerdictCapabilities(FEngineOptions, Verdict, HonoredCapabilities));
   try
+    Result.CapabilityProvenance := CapabilityProvenance(Verdict);
     ConfigureCapabilityAudit(Result);
     if Assigned(FEngineOptions) then
     begin
@@ -1299,9 +2154,7 @@ begin
         keys from that config (and its extends chain) alone; the root config
         fills in only for a file without one, inside its tree. }
       ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName,
-        ((FileConfigPath = '') or
-         (ExpandFileName(FileConfigPath) = ExpandFileName(FRootConfigPath))) and
-        RootConfigGoverns(AFileName));
+        Verdict.AcceptedUnsafe);
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
@@ -1312,24 +2165,47 @@ begin
   end;
 end;
 
+const
+  LOG_BUFFER_BYTES = 64 * 1024;
+
 procedure TGocciaCLIApplication.HandleConsoleLog(const AMethod, ALine: string);
+var
+  Line: TBytes;
 begin
+  Line := EncodeUTF8WithReplacement('[' + AMethod + '] ' + ALine +
+    LineEnding);
   CriticalSectionEnter(FLogLock);
   try
-    WriteLn(FLogFileHandle, '[' + AMethod + '] ' + ALine);
+    if FLogBuffered + Length(Line) > Length(FLogBuffer) then
+    begin
+      if FLogBuffered > 0 then
+        FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
+      FLogBuffered := 0;
+    end;
+    if Length(Line) > Length(FLogBuffer) then
+      FLogStream.WriteBuffer(Line[0], Length(Line))
+    else if Length(Line) > 0 then
+    begin
+      Move(Line[0], FLogBuffer[FLogBuffered], Length(Line));
+      Inc(FLogBuffered, Length(Line));
+    end;
   finally
     CriticalSectionLeave(FLogLock);
   end;
 end;
 
+{ Opened through CreateHostOutputStream, so a log a config names is created
+  where the config was allowed to put it even if a directory on the way was
+  swapped after the config was read. }
 procedure TGocciaCLIApplication.OpenLogFile;
 begin
   if FLogFileOpen then
     Exit;
   CriticalSectionInit(FLogLock);
   try
-    AssignFile(FLogFileHandle, FLog.Value);
-    Rewrite(FLogFileHandle);
+    FLogStream := CreateHostOutputStream(FLog.Value);
+    SetLength(FLogBuffer, LOG_BUFFER_BYTES);
+    FLogBuffered := 0;
     FLogFileOpen := True;
   except
     CriticalSectionDone(FLogLock);
@@ -1342,8 +2218,12 @@ begin
   if not FLogFileOpen then
     Exit;
   try
-    CloseFile(FLogFileHandle);
+    if FLogBuffered > 0 then
+      FLogStream.WriteBuffer(FLogBuffer[0], FLogBuffered);
   finally
+    FreeAndNil(FLogStream);
+    FLogBuffer := nil;
+    FLogBuffered := 0;
     FLogFileOpen := False;
     CriticalSectionDone(FLogLock);
   end;
@@ -1370,7 +2250,7 @@ begin
     Exit;
   CriticalSectionInit(FAuditLogLock);
   try
-    FAuditLogStream := TFileStream.Create(FAuditLog.Value, fmCreate);
+    FAuditLogStream := CreateHostOutputStream(FAuditLog.Value);
     FAuditLogOpen := True;
   except
     FAuditLogStream.Free;
@@ -1692,16 +2572,16 @@ begin
 
   if DirectoryExists(Expanded) then
   begin
-    for E := 0 to High(CONFIG_EXTENSIONS) do
+    for E := 0 to High(CONFIG_FILE_EXTENSIONS) do
     begin
       Candidate := IncludeTrailingPathDelimiter(Expanded) +
-        CONFIG_BASE_NAME + CONFIG_EXTENSIONS[E];
+        CONFIG_FILE_BASE_NAME + CONFIG_FILE_EXTENSIONS[E];
       if FileExists(Candidate) then
         Exit(Candidate);
     end;
     raise Exception.CreateFmt(
       'No %s.{toml,json5,json} found in config directory: %s',
-      [CONFIG_BASE_NAME, AValue]);
+      [CONFIG_FILE_BASE_NAME, AValue]);
   end;
 
   if FileExists(Expanded) then
@@ -1737,6 +2617,8 @@ begin
   FLog := TStringOption.Create('log', 'Write console output to a log file');
   FAuditLog := TStringOption.Create('audit-log',
     'Write capability audit events as JSON Lines');
+  FLog.WritesHostFile := True;
+  FAuditLog.WritesHostFile := True;
 
   FMultifile := TFlagOption.Create('multifile',
     'Split each input (file or stdin) on "---" lines and run each ' +
@@ -1744,6 +2626,8 @@ begin
 
   FConfig := TStringOption.Create('config',
     'Path to a config file or a directory containing one (skips auto-discovery)');
+
+  CreateTrustOptions;
 
   if Assigned(FEngineOptions) then
   begin
@@ -1760,6 +2644,7 @@ begin
   FAllOptions[High(FAllOptions) - 2] := FAuditLog;
   FAllOptions[High(FAllOptions) - 1] := FMultifile;
   FAllOptions[High(FAllOptions)] := FConfig;
+  FAllOptions := ConcatOptions([FAllOptions, TrustOptions]);
 
   { Parse CLI first so we know the entry file. }
   Paths := ParseCommandLine(FAllOptions);
@@ -1767,6 +2652,15 @@ begin
     if FHelp.Present then
     begin
       Write(BuildHelpText);
+      Exit;
+    end;
+
+    { --trust, --untrust, and --list-trusted manage the trust store and run
+      nothing, so they come before the no-argument rule. }
+    ValidateTrustOptions(Paths);
+    if TrustModeCount > 0 then
+    begin
+      RunTrustMode;
       Exit;
     end;
 
@@ -1822,7 +2716,7 @@ begin
     begin
       ConfigStartDir := ResolveConfigStartDirectory(Paths);
       ConfigPath := DiscoverConfigFile(ConfigStartDir,
-        [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
+        [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
     end;
     FRootConfigExplicit := FConfig.Present;
     if (ConfigPath <> '') and
@@ -1830,12 +2724,21 @@ begin
     begin
       FRootConfigPath := ConfigPath;
       RootConfigEntries := ParseConfigFile(ConfigPath);
+      FRootConfigEntries := RootConfigEntries;
+      { unsafe-* keys are RequiresTrust and skipped here: they reach an
+        engine through the governing config's trust verdict. }
       ApplyConfigEntries(RootConfigEntries, FAllOptions);
-      FRootPermissionRequest := ReadConfigPermissionRequest(RootConfigEntries,
-        ConfigPath);
+      ConfineConfigOutputPaths(RootConfigEntries);
+      { A malformed permissions block fails the run before anything else. }
+      ReadConfigPermissionRequest(RootConfigEntries, ConfigPath);
     end
     else
       FRootConfigPath := '';
+
+    { Every config's permission requests are checked against the trust store
+      (or -P / --ignore-config-permissions) before any file runs, in the
+      ValidateFileConfigs pass. }
+    CreateTrustGate;
 
     Validate;
     ValidateOutputPaths;

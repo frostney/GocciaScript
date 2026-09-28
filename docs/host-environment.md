@@ -35,7 +35,7 @@ The epoch and monotonic callbacks must return either an `Int64`-range `BigInt` o
 
 The provider module is evaluated after file loading is available but before the loader runtime profile extensions attach. Its exported callbacks remain rooted for the engine lifetime. A provider callback must not recursively read the source it supplies—for example, `random` must not call `Math.random()`, and a clock callback must not call `Date.now()`.
 
-`--host-environment` and `--deterministic` are mutually exclusive. The equivalent configuration-file key is `"host-environment"`.
+`--host-environment` and `--deterministic` are mutually exclusive. The equivalent configuration-file key is `"host-environment"`; a module a config names resolves from that config file and loads as a guest module under the script's capabilities rather than as a host module (see [Permissions](permissions.md#config-files)).
 
 ## Pascal Embedders
 

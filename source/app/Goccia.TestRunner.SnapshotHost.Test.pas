@@ -3,6 +3,7 @@ program Goccia.TestRunner.SnapshotHost.Test;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   StrUtils,
   SysUtils,
 
@@ -34,6 +35,8 @@ type
     procedure TestRewritesAfterUnicodeLineSeparator;
     procedure TestRewritesWithNonBreakingSpaceBeforeArguments;
     procedure TestRejectsLateFlushFromPreviousRun;
+    procedure TestRefusesSymlinkedSnapshotFile;
+    procedure TestRefusesSymlinkedSnapshotDirectory;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -63,6 +66,10 @@ begin
     TestRewritesAfterUnicodeLineSeparator);
   Test('Rewrites with non-breaking space before matcher arguments',
     TestRewritesWithNonBreakingSpaceBeforeArguments);
+  Test('Refuses a snapshot file that is a symbolic link',
+    TestRefusesSymlinkedSnapshotFile);
+  Test('Refuses a __snapshots__ directory that is a symbolic link',
+    TestRefusesSymlinkedSnapshotDirectory);
   Test('Rejects a late inline flush from the previous run',
     TestRejectsLateFlushFromPreviousRun);
 end;
@@ -135,6 +142,96 @@ begin
     HostRef := nil;
   end;
 end;
+
+{ A clone can commit the .snap file as a link to a file outside the project;
+  updating the snapshot must not overwrite (or read, or delete) its target. }
+procedure TSnapshotHostTests.TestRefusesSymlinkedSnapshotFile;
+{$IFDEF UNIX}
+var
+  Host: TGocciaTestRunnerSnapshotHost;
+  HostRef: IGocciaSnapshotHost;
+  Content, SnapshotPath, SourcePath, VictimPath: string;
+  Refused: Boolean;
+begin
+  SourcePath := FTempDir + PathDelim + 'example.test.js';
+  WriteSource(SourcePath, 'test("example", () => {});' + #10);
+  VictimPath := FTempDir + PathDelim + 'victim.txt';
+  WriteSource(VictimPath, 'VICTIM' + #10);
+  ForceDirectories(FTempDir + PathDelim + '__snapshots__');
+  SnapshotPath := FTempDir + PathDelim + '__snapshots__' + PathDelim +
+    'example.test.js.snap';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(VictimPath)),
+    PAnsiChar(AnsiString(SnapshotPath)))).ToBe(0);
+  Host := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+  HostRef := Host;
+  try
+    Refused := False;
+    try
+      Host.WriteSnapshotFile('// snapshot' + #10);
+    except
+      on E: Exception do
+        Refused := Pos('symbolic link', E.Message) > 0;
+    end;
+    Expect<Boolean>(Refused).ToBe(True);
+    Refused := False;
+    try
+      Host.ReadSnapshotFile(Content);
+    except
+      on E: Exception do
+        Refused := Pos('symbolic link', E.Message) > 0;
+    end;
+    Expect<Boolean>(Refused).ToBe(True);
+    Expect<string>(ReadUTF8FileText(VictimPath)).ToBe('VICTIM' + #10);
+    Expect<Boolean>(HostPathIsSymlink(SnapshotPath)).ToBe(True);
+  finally
+    HostRef := nil;
+    DeleteFile(SnapshotPath);
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
+{ Likewise for the __snapshots__ directory: a link to a directory outside the
+  project must not receive a snapshot file. }
+procedure TSnapshotHostTests.TestRefusesSymlinkedSnapshotDirectory;
+{$IFDEF UNIX}
+var
+  Host: TGocciaTestRunnerSnapshotHost;
+  HostRef: IGocciaSnapshotHost;
+  OutsidePath, SnapshotDirectory, SourcePath: string;
+  Refused: Boolean;
+begin
+  SourcePath := FTempDir + PathDelim + 'example.test.js';
+  WriteSource(SourcePath, 'test("example", () => {});' + #10);
+  OutsidePath := FTempDir + PathDelim + 'outside';
+  ForceDirectories(OutsidePath);
+  SnapshotDirectory := FTempDir + PathDelim + '__snapshots__';
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(OutsidePath)),
+    PAnsiChar(AnsiString(SnapshotDirectory)))).ToBe(0);
+  Host := TGocciaTestRunnerSnapshotHost.Create(SourcePath);
+  HostRef := Host;
+  try
+    Refused := False;
+    try
+      Host.WriteSnapshotFile('// snapshot' + #10);
+    except
+      on E: Exception do
+        Refused := Pos('symbolic link', E.Message) > 0;
+    end;
+    Expect<Boolean>(Refused).ToBe(True);
+    Expect<Boolean>(FileExists(OutsidePath + PathDelim +
+      'example.test.js.snap')).ToBe(False);
+  finally
+    HostRef := nil;
+    DeleteFile(SnapshotDirectory);
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure TSnapshotHostTests.TestInsertsInlineSnapshot;
 var

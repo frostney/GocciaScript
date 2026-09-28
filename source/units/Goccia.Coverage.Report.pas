@@ -30,6 +30,7 @@ uses
   SysUtils,
 
   BaseMap,
+  HostOutputFiles,
   OrderedStringMap,
   StringBuffer,
   TextSemantics,
@@ -407,7 +408,7 @@ begin
       Output.Add('end_of_record');
     end;
 
-    Output.SaveToFile(AOutputPath);
+    SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;
   end;
@@ -696,7 +697,7 @@ begin
   Output := TStringList.Create;
   try
     Output.Text := Buf.ToString;
-    Output.SaveToFile(AOutputPath);
+    SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;
   end;

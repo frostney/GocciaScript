@@ -25,6 +25,7 @@ uses
   SysUtils,
 
   BaseMap,
+  HostOutputFiles,
   NumericText,
   StringBuffer,
   TimingUtils,
@@ -432,7 +433,7 @@ begin
   Output := TStringList.Create;
   try
     Output.Text := Buf.ToString;
-    Output.SaveToFile(AOutputPath);
+    SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;
   end;
@@ -455,7 +456,7 @@ begin
       if Microseconds > 0 then
         Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
     end;
-    Output.SaveToFile(AOutputPath);
+    SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;
   end;

@@ -147,6 +147,10 @@ begin
 
   IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
 
+  { The working directory's config governs the session: refuse before the
+    prompt when its permission requests are not trusted. }
+  ValidateFileConfig(REPL_FILE_NAME);
+
   if IsBytecodeMode then
     WriteLn('Goccia REPL v' + GetVersion + ' (bytecode)')
   else

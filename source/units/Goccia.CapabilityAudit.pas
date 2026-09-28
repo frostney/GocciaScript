@@ -23,7 +23,11 @@ type
     gckFunctionConstructor,
     gckShadowRealm,
     gckSandboxFileSystem,
-    gckCapabilitiesEffective
+    gckCapabilitiesEffective,
+    { A host's decision on a config's permission requests (ADR 0122): allow
+      when they are trusted, accepted for the run, or not needed; deny when
+      they are not trusted, changed, or ignored. }
+    gckConfigPermissions
   );
 
   TGocciaCapabilityDecision = (
@@ -95,6 +99,8 @@ begin
       Result := 'sandbox.fs.path';
     gckCapabilitiesEffective:
       Result := 'capabilities.effective';
+    gckConfigPermissions:
+      Result := 'config.permissions';
   end;
 end;
 

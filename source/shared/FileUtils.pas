@@ -10,6 +10,45 @@ uses
   Classes,
   SysUtils;
 
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  { open(2)/openat(2) flags and *at(2) arguments FPC 3.2.2's BaseUnix does
+    not declare on every host, or declares wrongly: on Linux it gives every
+    CPU but SPARC and MIPS the x86 O_DIRECTORY/O_NOFOLLOW values, but arm,
+    aarch64 and powerpc use their own (arch/*/include/uapi/asm/fcntl.h),
+    where $20000 is O_LARGEFILE and would make O_NOFOLLOW a no-op. Linux's
+    AT_* values are the same on every architecture (linux/fcntl.h).
+    Darwin's come from the macOS SDK / xnu bsd/sys/fcntl.h, FreeBSD's from
+    sys/sys/fcntl.h. }
+  {$IF DEFINED(LINUX)}
+  {$IF DEFINED(CPUARM) OR DEFINED(CPUAARCH64) OR DEFINED(CPUPOWERPC) OR
+    DEFINED(CPUPOWERPC64)}
+  HOST_O_NOFOLLOW = $8000;
+  HOST_O_DIRECTORY = $4000;
+  {$ELSE}
+  HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
+  HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
+  {$IFEND}
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $100;
+  HOST_AT_REMOVEDIR = $200;
+  {$ELSEIF DEFINED(DARWIN)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $100000;
+  HOST_AT_FDCWD = -2;
+  HOST_AT_SYMLINK_NOFOLLOW = $20;
+  HOST_AT_REMOVEDIR = $80;
+  {$ELSEIF DEFINED(FREEBSD)}
+  HOST_O_NOFOLLOW = $0100;
+  HOST_O_DIRECTORY = $20000;
+  HOST_AT_FDCWD = -100;
+  HOST_AT_SYMLINK_NOFOLLOW = $200;
+  HOST_AT_REMOVEDIR = $800;
+  {$ELSE}
+    {$ERROR Declare the open(2) and *at(2) constants for this host in FileUtils}
+  {$IFEND}
+{$IFEND}
+
 function FindAllFiles(const ADirectory: string; const AFileExtension: string): TStringList; overload;
 function FindAllFiles(const ADirectory: string; const AFileExtensions: array of string): TStringList; overload;
 
@@ -75,6 +114,13 @@ procedure WriteUTF8FileText(const APath, AText: string);
 { Read an entire file as raw bytes, preserving every byte exactly
   (NUL bytes, non-UTF-8 sequences, and original newlines). }
 function ReadFileBytes(const APath: string): TBytes;
+{ As ReadFileBytes, for a file other processes replace while it is read (the
+  trust store). On Windows the file is opened sharing read, write, and
+  delete, so a concurrent ReplaceHostFile can rename over it while it is open,
+  and a sharing violation from some other tool holding it is retried briefly.
+  Elsewhere this is ReadFileBytes: POSIX has no share modes, and a rename
+  over an open file leaves the reader with the file it opened. }
+function ReadSharedHostFileBytes(const APath: string): TBytes;
 
 { Replace APath's contents with ABytes so that APath afterwards holds either
   the new bytes or exactly what it held before, never neither.
@@ -87,18 +133,124 @@ function ReadFileBytes(const APath: string): TBytes;
   On POSIX and Windows the temporary is flushed to disk and then replaces
   APath in one step — rename(2) on POSIX, MoveFileExW with
   MOVEFILE_REPLACE_EXISTING on Windows — without the original being deleted
-  beforehand. The Lakon/WASI lane writes its in-memory filesystem, which has
+  beforehand. On Windows the rename uses POSIX semantics where the system
+  has them (Windows 10 1607 and later, NTFS), so it succeeds while readers
+  that share delete have the old file open; a replace refused with a sharing
+  violation or access denied (a reader without delete sharing, an antivirus
+  scan, an indexer) is retried in short steps for up to two seconds. The Lakon/WASI lane writes its in-memory filesystem, which has
   nothing to flush, and replaces with a rename.
 
   Returns False with AError describing the failure; the temporary is removed
   whenever the replacement did not happen. }
 function ReplaceHostFile(const APath, ATemporaryPath: string;
-  const ABytes: TBytes; out AError: string): Boolean;
+  const ABytes: TBytes; out AError: string): Boolean; overload;
+{ As ReplaceHostFile, creating the temporary with APermissions (POSIX mode
+  bits, narrowed by the umask) instead of 0666, so the file is never more
+  readable than intended, not even before the rename. Ignored where the host
+  has no POSIX modes. }
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  out AError: string): Boolean; overload;
 
 implementation
 
 uses
   TextEncoding;
+
+{$IFDEF MSWINDOWS}
+const
+  { A transient hold on a file by another process (a reader, antivirus, an
+    indexer) is waited out in these steps, for at most this many. }
+  SHARING_RETRY_MILLISECONDS = 50;
+  SHARING_RETRY_ATTEMPTS = 40;
+
+function IsTransientSharingError(const AError: DWORD): Boolean;
+begin
+  Result := (AError = ERROR_SHARING_VIOLATION) or
+    (AError = ERROR_ACCESS_DENIED);
+end;
+
+const
+  { FILE_INFO_BY_HANDLE_CLASS FileRenameInfoEx and its flags (winbase.h,
+    Windows 10 1607 and later), missing from FPC 3.2.2's Windows unit. }
+  FILE_RENAME_INFO_EX_CLASS = 22;
+  FILE_RENAME_FLAG_REPLACE_IF_EXISTS = $00000001;
+  FILE_RENAME_FLAG_POSIX_SEMANTICS = $00000002;
+  DELETE_ACCESS = $00010000;
+
+type
+  {$PUSH}{$PACKRECORDS C}
+  { FILE_RENAME_INFO with its Flags member (winbase.h). }
+  TFileRenameInfoEx = record
+    Flags: DWORD;
+    RootDirectory: THandle;
+    FileNameLength: DWORD;
+    FileName: array[0..0] of WideChar;
+  end;
+  {$POP}
+  PFileRenameInfoEx = ^TFileRenameInfoEx;
+
+function SetFileInformationByHandle(AFile: THandle; AInformationClass: DWORD;
+  AInformation: Pointer; ABufferSize: DWORD): BOOL;
+  stdcall; external 'kernel32.dll' name 'SetFileInformationByHandle';
+
+{ Renames ASource over ATarget with POSIX semantics: the name is replaced
+  even while other handles have the old file open, as long as they share
+  delete, which is how every reader of a replaced file opens it. Plain
+  MoveFileExW refuses that with access denied until the last handle closes.
+  The path is given in its verbatim \\?\ form, as the call requires a
+  full path. Returns False with GetLastError set; ERROR_INVALID_PARAMETER,
+  ERROR_NOT_SUPPORTED, or ERROR_INVALID_FUNCTION means the system or file
+  system cannot do it (before Windows 10 1607, FAT). }
+function PosixRenameReplacing(const ASource, ATarget: string): Boolean;
+var
+  Handle: THandle;
+  Target: UnicodeString;
+  Info: PFileRenameInfoEx;
+  Size: SizeInt;
+  LastError: DWORD;
+begin
+  Target := UnicodeString(StringReplace(ExpandFileName(ATarget), '/', '\',
+    [rfReplaceAll]));
+  if Copy(Target, 1, 4) <> '\\?\' then
+  begin
+    if Copy(Target, 1, 2) = '\\' then
+      Target := '\\?\UNC\' + Copy(Target, 3, MaxInt)
+    else
+      Target := '\\?\' + Target;
+  end;
+  Handle := CreateFileW(PWideChar(UnicodeString(ASource)), DELETE_ACCESS,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit(False);
+  Size := SizeOf(TFileRenameInfoEx) + Length(Target) * SizeOf(WideChar);
+  GetMem(Info, Size);
+  try
+    FillChar(Info^, Size, 0);
+    Info^.Flags := FILE_RENAME_FLAG_REPLACE_IF_EXISTS or
+      FILE_RENAME_FLAG_POSIX_SEMANTICS;
+    Info^.RootDirectory := 0;
+    Info^.FileNameLength := Length(Target) * SizeOf(WideChar);
+    Move(PWideChar(Target)^, Info^.FileName[0],
+      Length(Target) * SizeOf(WideChar));
+    Result := SetFileInformationByHandle(Handle, FILE_RENAME_INFO_EX_CLASS,
+      Info, DWORD(Size));
+    LastError := GetLastError;
+  finally
+    FreeMem(Info);
+    CloseHandle(Handle);
+  end;
+  if not Result then
+    SetLastError(LastError);
+end;
+
+function IsRenameUnsupported(const AError: DWORD): Boolean;
+begin
+  Result := (AError = ERROR_INVALID_PARAMETER) or
+    (AError = ERROR_NOT_SUPPORTED) or (AError = ERROR_INVALID_FUNCTION);
+end;
+{$ENDIF}
 
 function IsAbsoluteHostPath(const APath: string): Boolean;
 {$IFDEF UNIX}
@@ -400,7 +552,8 @@ begin
 end;
 
 function ReplaceHostFile(const APath, ATemporaryPath: string;
-  const ABytes: TBytes; out AError: string): Boolean;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  out AError: string): Boolean; overload;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   TemporaryBytes, PathBytes: TBytes;
@@ -429,7 +582,7 @@ begin
     DeleteFile(ATemporaryPath);
 
   Handle := fpOpen(PAnsiChar(@TemporaryBytes[0]),
-    O_WRONLY or O_CREAT or O_EXCL, &666);
+    O_WRONLY or O_CREAT or O_EXCL, APermissions);
   if Handle < 0 then
   begin
     AError := SysErrorMessage(fpgeterrno);
@@ -474,7 +627,9 @@ end;
 var
   Handle: THandle;
   Offset: SizeInt;
-  Written: DWORD;
+  Written, LastError: DWORD;
+  Attempt: Integer;
+  PosixRename: Boolean;
 begin
   Result := False;
   AError := '';
@@ -515,11 +670,45 @@ begin
 
   if AError = '' then
   begin
-    if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
-         MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
-      Result := True
-    else
-      AError := SysErrorMessage(GetLastError);
+    { A POSIX-semantics rename replaces the name even while readers have
+      the old file open (they share delete); where the system cannot do
+      that, MoveFileExW. Either is retried briefly on a transient hold. }
+    PosixRename := True;
+    Attempt := 0;
+    repeat
+      if PosixRename then
+      begin
+        if PosixRenameReplacing(ATemporaryPath, APath) then
+        begin
+          Result := True;
+          Break;
+        end;
+        LastError := GetLastError;
+        if IsRenameUnsupported(LastError) then
+        begin
+          PosixRename := False;
+          Continue;
+        end;
+      end
+      else
+      begin
+        if MoveFileExW(PWideChar(ATemporaryPath), PWideChar(APath),
+             MOVEFILE_REPLACE_EXISTING or MOVEFILE_WRITE_THROUGH) then
+        begin
+          Result := True;
+          Break;
+        end;
+        LastError := GetLastError;
+      end;
+      if not IsTransientSharingError(LastError) or
+         (Attempt >= SHARING_RETRY_ATTEMPTS) then
+      begin
+        AError := SysErrorMessage(LastError);
+        Break;
+      end;
+      Inc(Attempt);
+      SysUtils.Sleep(SHARING_RETRY_MILLISECONDS);
+    until False;
   end;
   if not Result then
     DeleteFile(ATemporaryPath);
@@ -551,6 +740,15 @@ begin
     DeleteFile(ATemporaryPath);
 end;
 {$ENDIF}
+
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; out AError: string): Boolean;
+const
+  DEFAULT_FILE_PERMISSIONS = &666;
+begin
+  Result := ReplaceHostFile(APath, ATemporaryPath, ABytes,
+    DEFAULT_FILE_PERMISSIONS, AError);
+end;
 
 {$IFDEF LAKON}
 
@@ -628,5 +826,58 @@ begin
     Stream.Free;
   end;
 end;
+
+function ReadSharedHostFileBytes(const APath: string): TBytes;
+{$IFDEF MSWINDOWS}
+var
+  Handle: THandle;
+  LastError, BytesRead: DWORD;
+  Attempt: Integer;
+  Size, Offset: Int64;
+begin
+  Attempt := 0;
+  repeat
+    Handle := CreateFileW(PWideChar(UnicodeString(APath)), GENERIC_READ,
+      FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if Handle <> INVALID_HANDLE_VALUE then
+      Break;
+    LastError := GetLastError;
+    if not IsTransientSharingError(LastError) or
+       (Attempt >= SHARING_RETRY_ATTEMPTS) then
+      raise EFOpenError.CreateFmt('Unable to open file "%s": %s',
+        [APath, SysErrorMessage(LastError)]);
+    Inc(Attempt);
+    SysUtils.Sleep(SHARING_RETRY_MILLISECONDS);
+  until False;
+  try
+    Size := FileSeek(Handle, Int64(0), fsFromEnd);
+    if (Size < 0) or (FileSeek(Handle, Int64(0), fsFromBeginning) <> 0) then
+      raise EReadError.CreateFmt('Unable to read file "%s": %s',
+        [APath, SysErrorMessage(GetLastError)]);
+    SetLength(Result, Size);
+    Offset := 0;
+    while Offset < Size do
+    begin
+      if not Windows.ReadFile(Handle, Result[Offset], DWORD(Size - Offset),
+           BytesRead, nil) then
+        raise EReadError.CreateFmt('Unable to read file "%s": %s',
+          [APath, SysErrorMessage(GetLastError)]);
+      if BytesRead = 0 then
+      begin
+        SetLength(Result, Offset);
+        Break;
+      end;
+      Inc(Offset, BytesRead);
+    end;
+  finally
+    CloseHandle(Handle);
+  end;
+end;
+{$ELSE}
+begin
+  Result := ReadFileBytes(APath);
+end;
+{$ENDIF}
 
 end.

@@ -137,6 +137,13 @@ begin
       .ToBe('--silent does not take a value; got "". Omit the flag to ' +
         'leave it off');
     Expect<Boolean>(Flag.Present).ToBe(False);
+    { A short flag with a value is the same mistake, not an input path. }
+    Flag.ShortName := 's';
+    Expect<string>(ParseMessage(['-s=1'], Options, IsUsageError))
+      .ToBe('-s does not take a value; got "1". Omit the flag to leave it ' +
+        'off');
+    Expect<Boolean>(IsUsageError).ToBe(True);
+    Expect<Boolean>(Flag.Present).ToBe(False);
     Expect<string>(ParseMessage(['--silent'], Options, IsUsageError)).ToBe('');
     Expect<Boolean>(Flag.Present).ToBe(True);
   finally

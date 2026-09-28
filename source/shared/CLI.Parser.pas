@@ -128,6 +128,14 @@ begin
 
         Option.ApplyExplicit(Value, HasEquals);
       end
+      else if (Length(Arg) > 2) and (Arg[1] = SHORT_FLAG_CHAR) and
+              (Arg[3] = FLAG_VALUE_SEPARATOR) and
+              (FindOptionShort(AOptions, Arg[2]) is TFlagOption) then
+        { `-P=1`: a short flag given a value, the same mistake as
+          `--flag=value`, rather than an input path. }
+        raise TCLIUsageError.CreateFmt(
+          '-%s does not take a value; got "%s". Omit the flag to leave it off',
+          [Arg[2], Copy(Arg, 4, MaxInt)])
       else if (Length(Arg) = 2) and
               (Arg[1] = SHORT_FLAG_CHAR) and
               (Arg[2] <> SHORT_FLAG_CHAR) then

@@ -11,6 +11,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   FileUtils,
+  HostOutputFiles,
   TextSemantics,
 
   Goccia.Application,
@@ -260,6 +261,7 @@ begin
   FDiffFormat := AddString('diff-format',
     'Diff format: json or unified (default: json)');
   FDiffOutput := AddString('diff-output', 'Write diff output to a host file');
+  FDiffOutput.WritesHostFile := True;
   FWriteBack := AddFlag('write-back',
     'After a successful run, write files it changed back to the host paths they were seeded from');
   FPrint := AddFlag('print', 'Print the script result value');
@@ -590,12 +592,42 @@ end;
 
 procedure TSandboxRunnerApp.LoadSeeds;
 var
-  I: Integer;
+  I, FirstOrigin: Integer;
+
+  { Seeds named by the config are write-back targets the config chose: with
+    --write-back they must lie inside the config's directory, like any
+    config-set output path. }
+  procedure ConfineConfigSeeds(const AOption: TOptionBase;
+    const AFirst: Integer);
+  var
+    Index: Integer;
+    Problem: string;
+  begin
+    if (not FWriteBack.Present) or AOption.FromCommandLine or
+       (RootConfigPath = '') then
+      Exit;
+    for Index := AFirst to High(FSeedOrigins) do
+    begin
+      Problem := ConfigOutputPathProblem(FSeedOrigins[Index].HostPath,
+        RootConfigPath);
+      if Problem <> '' then
+        raise TParseError.CreateFmt('%s: "%s" seeds %s for --write-back, ' +
+          'which %s; a config may only write inside its own directory ' +
+          '(pass --%s on the command line to write elsewhere)',
+          [RootConfigPath, AOption.LongName, FSeedOrigins[Index].HostPath,
+           Problem, AOption.LongName]);
+    end;
+  end;
+
 begin
+  FirstOrigin := Length(FSeedOrigins);
   for I := 0 to FSeedPaths.Values.Count - 1 do
     SeedHostPathSpec(FSeedPaths.Values[I], GetCurrentDir);
+  ConfineConfigSeeds(FSeedPaths, FirstOrigin);
+  FirstOrigin := Length(FSeedOrigins);
   for I := 0 to FSeedConfigFiles.Values.Count - 1 do
     SeedConfigFile(FSeedConfigFiles.Values[I]);
+  ConfineConfigSeeds(FSeedConfigFiles, FirstOrigin);
 end;
 
 procedure TSandboxRunnerApp.EnsureSandboxParentDirectory(
@@ -725,7 +757,8 @@ begin
     could only ever find a config that has nothing to do with this run.
     Root config still applies, because it is merged into the option values
     before execution starts. }
-  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName);
+  ApplyFileConfigToEngine(AEngine, EngineOptions, EmptyConfig, AFileName,
+    FileConfigVerdict('').AcceptedUnsafe);
 
   ConsoleExtension := TGocciaConsoleRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaConsoleRuntimeExtension));
@@ -904,8 +937,7 @@ begin
       if FHasCurrentCapabilities then
         EngineCapabilities := FCurrentCapabilities
       else
-        EngineCapabilities := ResolveEngineCapabilities(
-          EmptyConfigEntries, '');
+        EngineCapabilities := ResolveEngineCapabilities('');
 
       if EngineOptions.Mode.Matches(emBytecode) then
       begin
@@ -1336,7 +1368,6 @@ end;
 procedure TSandboxRunnerApp.WriteDiffIfRequested;
 var
   DiffText: string;
-  OutFile: TextFile;
 begin
   if not FDiff.Present and not FDiffMetadata.Present and
      not FDiffOutput.Present then
@@ -1347,15 +1378,7 @@ begin
     DiffText := FContext.DiffJson(FDiffMetadata.Present);
 
   if FDiffOutput.Present then
-  begin
-    AssignFile(OutFile, FDiffOutput.Value);
-    Rewrite(OutFile);
-    try
-      Write(OutFile, DiffText);
-    finally
-      CloseFile(OutFile);
-    end;
-  end
+    WriteHostOutputText(FDiffOutput.Value, DiffText)
   else
     Write(DiffText);
 end;
@@ -1364,12 +1387,23 @@ procedure TSandboxRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   EntryPath: string;
   RunResult: TGocciaSandboxRunResult;
+  ConfigPaths: TStringList;
 begin
   if APaths.Count <> 1 then
   begin
     WriteLn(ErrOutput, 'Error: expected one sandbox entry path.');
     ExitCode := 1;
     Exit;
+  end;
+
+  { Only an explicit --config reaches this runner; its permission requests
+    must be trusted before the sandbox is built. }
+  ConfigPaths := TStringList.Create;
+  try
+    ConfigPaths.Add(GoverningConfigPath(''));
+    VerifyGoverningConfigs(ConfigPaths);
+  finally
+    ConfigPaths.Free;
   end;
 
   FContext.Free;

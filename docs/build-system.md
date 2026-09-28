@@ -372,6 +372,22 @@ Likewise, `tests/built-ins/FFI/goccia.json` grants `ffi` only for the FFI tests,
 }
 ```
 
+**Inputs named in config** — A `modules` manifest, a `globals` file or module, and a `host-environment` module named in a config are read under the capability set of the script the config governs, judged with the directory of the config that names them as the project: relative paths resolve from that config file, and outside its directory they need a read grant. Under `extends`, a file a base config names is judged against the base's own directory. A JavaScript or TypeScript manifest or globals module runs in an engine of its own and only data crosses back, so a globals module a config names may export only values JSON carries as they are, at any depth; a function, symbol, BigInt, or other non-JSON value fails the run, naming its export path. A host-environment module is loaded as a guest module, never host-owned. The same options on the command line are unchanged. See [Permissions](permissions.md#config-files) and [Virtual Modules](virtual-modules.md).
+
+**Output paths in config** — A config may set the options that write host files — `log`, `audit-log`, `coverage-output`, `profile-output`, `source-map`, the test runner's, benchmark runner's, and bundler's `output` (when it names a file), and the sandbox runner's `diff-output` — only to a path inside its own directory. A relative value resolves against the directory of the config file that declares it, existing directories along the path are resolved, and a symbolic link at the name itself is refused; anything else fails with status 1, naming the key and the config. The write itself is opened from the config's directory, checked to be the same directory it was, and walked one component at a time without following links (`openat` with `O_NOFOLLOW` on POSIX hosts), so a directory on the path swapped for a link during the run refuses the write rather than redirecting it; Windows re-checks the path just before writing instead. With `--write-back`, the sandbox runner's seeds named by a config are checked the same way, since write-back rewrites them. The same options on the command line write wherever they are told to.
+
+**Config trust** — A config's `allow-*` permissions and `unsafe-*` keys are requests: they take effect only once trusted, while every other key (`compat-*`, limits, import maps, aliases, and `deny-*` permissions) applies automatically. Before any file runs, the CLI checks every config that governs its inputs; an untrusted one fails the run with status 2 and a report naming each config and the command that would fix it. Trust is recorded in a per-user store outside the repository:
+
+```bash
+./build/GocciaTestRunner --trust tests/          # review and trust every config under tests/
+./build/GocciaTestRunner --list-trusted          # what is trusted, and what changed since
+./build/GocciaTestRunner --untrust tests/        # forget it again
+./build/GocciaTestRunner -P tests                # accept the requests for this run only (CI)
+./build/GocciaTestRunner --ignore-config-permissions tests   # command-line grants only
+```
+
+The trust options (`--trust`, `--untrust`, `--list-trusted`, `--yes`, `-P`/`--accept-config-permissions`, `--ignore-config-permissions`, `--trust-store=<path>`) are command-line-only and available on every CLI tool. See [Permissions — Config trust](permissions.md#config-trust) for the store location and format, what a hash covers, and the report.
+
 TOML equivalent (`goccia.toml`):
 
 ```toml

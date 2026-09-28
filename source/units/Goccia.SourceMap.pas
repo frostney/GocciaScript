@@ -74,6 +74,7 @@ type
 implementation
 
 uses
+  HostOutputFiles,
   StringBuffer,
 
   Goccia.Base64,
@@ -435,7 +436,7 @@ begin
   Output := TStringList.Create;
   try
     Output.Text := ToJSON;
-    Output.SaveToFile(APath);
+    SaveStringsToHostFile(Output, APath);
   finally
     Output.Free;
   end;

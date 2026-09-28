@@ -40,8 +40,8 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 ### 2. Verify green — the DEFINITION_OF_DONE gate (reused, not restated)
 ```bash
 ./build.pas testrunner
-./build/GocciaTestRunner tests
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests
+./build/GocciaTestRunner -P tests --mode=bytecode
 ./format.pas --check
 ```
 When the website is in scope, also run its configured checks: `cd website` then `bun test`, the Biome lint, and `tsc --noEmit` (see `website/package.json` scripts). **Read `website/AGENTS.md` first — this is _not_ the Next.js you know; consult `node_modules/next/dist/docs/` before any website edit.** A red gate is a hard blocker → stop.

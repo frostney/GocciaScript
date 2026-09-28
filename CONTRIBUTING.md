@@ -75,9 +75,14 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
 
   ```bash
   ./build.pas testrunner
-  ./build/GocciaTestRunner tests
-  ./build/GocciaTestRunner tests --mode=bytecode
+  ./build/GocciaTestRunner -P tests
+  ./build/GocciaTestRunner -P tests --mode=bytecode
   ```
+
+  `-P` accepts the test configs' permission requests for that run only and
+  never touches the trust store; AI assistants always use it. If you prefer
+  to trust the suite once, run `./build/GocciaTestRunner --trust tests/` per
+  checkout or worktree (again after a permission block changes) and drop `-P`.
 
 See [docs/testing.md](docs/testing.md) for the full testing guide including directory structure, naming conventions, and platform-specific rules.
 

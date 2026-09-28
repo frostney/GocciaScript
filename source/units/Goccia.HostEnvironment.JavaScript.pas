@@ -5,10 +5,15 @@ unit Goccia.HostEnvironment.JavaScript;
 interface
 
 uses
-  Goccia.Engine;
+  Goccia.Engine,
+  Goccia.Modules;
 
 procedure ConfigureHostEnvironmentFromModule(const AEngine: TGocciaEngine;
   const AModulePath: string);
+{ As ConfigureHostEnvironmentFromModule, from a module the caller loaded,
+  such as a guest module whose reads are judged by the capability set. }
+procedure ConfigureHostEnvironmentFromLoadedModule(
+  const AEngine: TGocciaEngine; const AModule: TGocciaModule);
 
 implementation
 
@@ -21,7 +26,6 @@ uses
   Goccia.Arguments.Collection,
   Goccia.Constants.NumericLimits,
   Goccia.HostEnvironment,
-  Goccia.Modules,
   Goccia.Temporal.TimeZone,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -248,6 +252,15 @@ end;
 
 procedure ConfigureHostEnvironmentFromModule(const AEngine: TGocciaEngine;
   const AModulePath: string);
+begin
+  if not Assigned(AEngine) then
+    raise EArgumentNilException.Create('AEngine');
+  ConfigureHostEnvironmentFromLoadedModule(AEngine,
+    AEngine.ModuleLoader.LoadHostModule(AModulePath, AEngine.SourcePath));
+end;
+
+procedure ConfigureHostEnvironmentFromLoadedModule(
+  const AEngine: TGocciaEngine; const AModule: TGocciaModule);
 var
   Clock: IGocciaHostClock;
   EpochNanosecondsProvider: TGocciaValue;
@@ -258,9 +271,7 @@ var
 begin
   if not Assigned(AEngine) then
     raise EArgumentNilException.Create('AEngine');
-
-  Module := AEngine.ModuleLoader.LoadHostModule(AModulePath,
-    AEngine.SourcePath);
+  Module := AModule;
   EpochNanosecondsProvider := RequireCallableExport(Module,
     'epochNanoseconds');
   MonotonicNanosecondsProvider := RequireCallableExport(Module,

@@ -952,9 +952,11 @@ begin
 end;
 
 { macOS hands out temporary directories under /var, a symlink to
-  /private/var, and reports the working directory physically. A ceiling
-  spelled one way must still contain an importer spelled the other, and the
-  walk must get a ceiling spelled like the importer. }
+  /private/var, and reports the working directory physically; a config's
+  relative ceiling is resolved from the config's canonical directory while the
+  importer may be spelled through a link. A ceiling spelled one way must still
+  contain an importer spelled the other, and the walk must get a ceiling
+  spelled like the importer: the importer's own ancestor that names it. }
 procedure TCapabilitiesTests.TestNodeModulesCeilingThroughASymlink;
 {$IFDEF UNIX}
 var
@@ -975,7 +977,12 @@ begin
     Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
       'node_modules=' + LinkDir + '/project/src')
       .NodeModulesCeiling(RealDir + '/src', Ceiling)).ToBe(True);
-    Expect<string>(Ceiling).ToBe(CanonicalCapabilityPath(RealDir + '/src'));
+    Expect<string>(Ceiling).ToBe(RealDir + '/src');
+    { The ceiling is spelled physically; the importer through the link. }
+    Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
+      'node_modules=' + CanonicalCapabilityPath(RealDir))
+      .NodeModulesCeiling(LinkDir + '/project/src', Ceiling)).ToBe(True);
+    Expect<string>(Ceiling).ToBe(LinkDir + '/project');
     { Spelled alike, the ceiling is handed on as written. }
     Expect<Boolean>(TGocciaCapabilities.None.Allow(gcImport,
       'node_modules=' + LinkDir + '/project')

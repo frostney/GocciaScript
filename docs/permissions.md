@@ -10,12 +10,13 @@
 - **Nested contexts only narrow** — ShadowRealm children, sandbox `runScript` children, and test262 realms inherit their parent's set and can never reach more
 - **Denials are catchable and auditable** — a denied operation throws `PermissionDenied` naming the capability and the requested scope, never a host path, and emits an audit event
 - **One command-line grammar** — `--allow-<cap>[=scope,...]` and `--deny-<cap>[=scope,...]`, a `permissions` block in config files, and `--max-*` limits with units
+- **Config grants need trust** — a config's `allow-*` and `unsafe-*` requests apply only once the user trusts them (`--trust`) or accepts them for one run (`-P`); its denies always apply
 
 The design is recorded in [ADR 0122](adr/0122-unified-capability-model.md).
 This page is the single reference for the engine mechanism, the
 [command line](#command-line) and [config files](#config-files) that fill the
-set, [limits](#limits-and-units), and the
-[flags GocciaScript 0.14.0 removed](#removed-flags-and-keys).
+set, the [trust](#config-trust) config grants need, [limits](#limits-and-units),
+and the [flags GocciaScript 0.14.0 removed](#removed-flags-and-keys).
 
 ## Capabilities
 
@@ -252,7 +253,10 @@ Every decision that consults a capability emits a
 `read.file`, `net.fetch`, `net.dispatch`, `ffi.open`, and `import.node-modules`
 (`import.provider` is reserved). Exempt module-graph loads emit nothing. Each
 root engine also emits one `capabilities.effective` event carrying
-`TGocciaCapabilities.ToJSON`; nested contexts that inherit their parent's set —
+`TGocciaCapabilities.ToJSON`, whose reason is the set's provenance when the
+host supplies one (`cli --allow-net=example.com; config /repo/goccia.json
+trusted sha256:…`). The CLI emits one `config.permissions` event per config
+that requests a grant, with the [trust](#config-trust) decision; nested contexts that inherit their parent's set —
 ShadowRealm children and sandbox `runScript` children — report through the
 same sink without repeating it. A fetch's address and redirect decisions are
 attributed to the `fetch()` call that started it, even when they are delivered
@@ -302,6 +306,7 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |
 | `Engine.ProjectRoot` | The exemption's project directory; override before executing |
 | `Engine.FetchMaxResponseBytes` | Response-body ceiling for `fetch` (0 = default) |
+| `Engine.CapabilityProvenance` | Where the host says the set came from; the reason of `capabilities.effective` |
 | `AttachRuntime(Engine)` | Installs the filesystem provider; the loader checks every read through it |
 | `InstallFFIIfGranted(Runtime)` | Installs the FFI extension only when `ffi` is granted; installing it directly without the grant raises `EGocciaFFINotGranted` |
 
@@ -411,13 +416,39 @@ allow-ffi = ["../fixtures/ffi"]
   value and fails with status 1, as on the command line.
 - `allow-*` and `deny-*` at the top level of a config are errors: they belong
   in `permissions`.
+- A file a config names as an input — a module manifest (`"modules"`), a
+  globals file or module (`"globals"`), or a host-environment module
+  (`"host-environment"`) — is read under the capability set of the script
+  the config governs, with the directory of the config that names it as the
+  project: inside that directory it is covered as the module graph is,
+  elsewhere it needs a read grant. A file named in an `extends` base is judged
+  against the base's own directory, not the child's, since the base is the
+  config that names it. A JavaScript or TypeScript manifest or globals module
+  runs in an engine of its own and only data crosses back. For a globals
+  module, data means values JSON carries as they are — null, booleans, finite
+  numbers, strings, arrays, and plain objects, at any depth — and any other
+  export (a function, symbol, BigInt, `undefined`, `NaN`, a `Map`, a cycle)
+  fails the run, naming where it sits (`nested.fn`). A host-environment
+  module is a guest module of the script's engine, never host-owned (see
+  [Virtual Modules](virtual-modules.md)). The same options on the command line
+  stay host requests.
+- A config writes host files only inside its own directory: `log`,
+  `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
+  and `diff-output` resolve against the declaring file and fail with status 1
+  if they lead outside it, through a symbolic link or otherwise (see
+  [Build System](build-system.md#configuration-file-gocciajson)). The check
+  holds until the write: the file is opened from the config's directory, held
+  to the identity it had when the config was read, one directory at a time
+  without following links, so a directory swapped for a link while the script
+  runs refuses the write instead of redirecting it.
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 
 A command-line allow adds to a config's grants, and every deny, from either
-source, subtracts. In this release a config's `permissions` block applies
-without any further step; [ADR 0122](adr/0122-unified-capability-model.md)
-adds a trust step for it.
+source, subtracts. A config's `allow-*` keys, and its top-level
+`unsafe-function-constructor` and `unsafe-shadowrealm` keys, take effect only
+once the config is trusted; see [Config trust](#config-trust). Its `deny-*`
+keys always apply.
 
 ### What each binary honors
 
@@ -441,7 +472,210 @@ being validated.
 | `GocciaSandboxRunner` | net | all, plus `--max-fs-bytes` and `--max-fs-nodes` | `--config` only |
 | `GocciaScriptLoaderBare` | none | `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack` | none |
 | `GocciaTest262Runner` | none | `--timeout`, `--max-memory` | none |
-| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file; accepts `-P`, currently a no-op |
+| `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file, accepted with `-P` |
+
+## Config trust
+
+A config file can sit in any repository, so what it asks for is a request,
+not a grant. A config's **grants** — its `allow-*` permissions and its
+`unsafe-function-constructor` and `unsafe-shadowrealm` keys — take effect only
+once the user trusts them. Everything else applies automatically: `compat-*`,
+`experimental-*`, limits, import maps, aliases, and every `deny-*` permission.
+A block that only denies needs no trust.
+
+```sh
+GocciaTestRunner --trust tests/        # review and trust each config under tests/
+GocciaTestRunner tests                 # runs with the trusted grants
+GocciaTestRunner -P tests              # CI: accept every request for this run only
+```
+
+### When trust is checked
+
+Before any file runs, the binary collects the config that governs each input
+(its nearest `goccia.*`, else the root config) and checks each one that
+requests a grant. Standard input is governed by the working directory's config,
+the REPL checks the working directory's config before its prompt, and
+`GocciaSandboxRunner` checks its `--config`. If any is untrusted the run stops
+with status 2 and nothing runs:
+
+```text
+Error: 2 config files request permissions that have not been trusted:
+
+  tests/built-ins/fetch/goccia.json (never trusted)
+    allow-net: 0.0.0.0, 127.0.0.1, example.com
+
+  tests/built-ins/FFI/goccia.json (changed since trusted 2026-09-20T10:12:03Z)
+    allow-ffi: /home/u/GocciaScript/fixtures/ffi
+  + allow-read: /home/u/GocciaScript/fixtures/modules
+
+Nothing was run. To trust these requests (stored in /home/u/.config/goccia/trust.json):
+  GocciaTestRunner --trust tests/built-ins/fetch/goccia.json --trust tests/built-ins/FFI/goccia.json
+To accept them for this run only:
+  GocciaTestRunner -P tests --mode=bytecode
+To run with command-line grants only:
+  GocciaTestRunner --ignore-config-permissions tests --mode=bytecode
+```
+
+Paths under the working directory are shown relative to it, the suggested
+commands repeat the real arguments, and more than three configs are trusted
+through their nearest common directory. A changed config shows each line of
+its block: unchanged lines indented, added lines with `+`, removed lines with
+`-`.
+
+Trust is only checked when the binary honors at least one requested grant. A
+request it cannot honor is a warning instead (see
+[What each binary honors](#what-each-binary-honors)): `GocciaBundler` runs no
+code, so a config with grants only warns there.
+
+### Trusting, listing, and removing
+
+| Option | Effect |
+|---|---|
+| `--trust <path>` | Shows the requests of each config at or under `<path>` (a config file, or a directory scanned for the effective `goccia.toml`, `goccia.json5`, or `goccia.json` of each folder, skipping `node_modules` and `.git`) with what changed since it was trusted, asks for confirmation, and records them. Repeatable. |
+| `--yes` | Confirms `--trust` without a prompt. Without a terminal, `--trust` needs it and otherwise fails with status 2, leaving the store unchanged. |
+| `--untrust <path>` | Removes the entries for configs at or under `<path>`. Repeatable. |
+| `--list-trusted` | Lists each entry with when it was trusted and its keys, marked `(changed)` when the config's block has changed or `(missing)` when the file is gone. |
+| `-P`, `--accept-config-permissions` | Applies every config request for this run without trusting it, and never reads or writes the store. |
+| `--ignore-config-permissions` | Applies no config grant for this run; the config's denies still apply. |
+| `--trust-store=<path>` | Uses this store file instead of the per-user one. |
+
+`--trust`, `--untrust`, and `--list-trusted` run on their own: combining two
+of them, or one with input files, `-P`, or `--ignore-config-permissions`, is a
+usage error, as is `-P` with `--ignore-config-permissions`. So is an empty
+`--trust` or `--untrust` path (`--untrust=` would otherwise mean the working
+directory), `-P` given a value (`-P=1`), and `--trust-store` without `=`: the
+store path attaches only as `--trust-store=<path>`, so it never takes an
+input file as its value. A `--trust` path that does not exist fails with
+status 1. All of these
+options are command-line-only; in a config file they fail with status 2. There
+is no environment variable for the store: one set ambiently, by a repository's
+tooling for example, could point at a store the repository pre-trusted.
+
+With the command line, the precedence is:
+
+- a command-line allow always applies;
+- a config's grants apply when the config is trusted or `-P` is given;
+- every deny subtracts, from the command line or from the config, trusted or
+  not, and even under `--ignore-config-permissions`.
+
+`--unsafe-function-constructor` and `--unsafe-shadowrealm` on the command line
+need no trust; in a config they are requests like any allow.
+
+### What a trust covers
+
+Each entry is keyed by the config's canonical directory plus its own file
+name, which is not resolved (so a `goccia.json` that is itself a symbolic link
+has a trust of its own), and records the SHA-256 of its **normalized block**: the effective permission request after `extends`
+resolution, as canonical JSON.
+
+```json
+{"permissions":{"allow-ffi":["/abs/fixtures/ffi"],"allow-net":["0.0.0.0","127.0.0.1","example.com"]},"unsafe":{"unsafe-function-constructor":true},"version":1}
+```
+
+- Keys are sorted in byte order; each capability's scopes are deduplicated and
+  sorted, and a capability with an unscoped entry collapses to `true`. `false`
+  and empty keys are omitted, and `unsafe` lists only keys set to `true`.
+- Relative paths are made absolute against the file that declares them, with
+  no trailing separator. This is lexical: symbolic links are not resolved, so a
+  trust stays valid when a path it names (a built library, say) appears later.
+- Net scopes are lowercased, and `node_modules` and provider names too.
+- Denies are part of the block even though they need no trust, so a trusted
+  block is exactly the one reviewed.
+
+Because the key is the path as well as the hash, a block copied to another
+path is not trusted, and because a base config is part of its child's block, a
+change to a base reached through `extends` invalidates every child. Trust
+covers what code may do, not what the code is: new code under a trusted block
+runs with its permissions.
+
+The block is lexical, so replacing a trusted path with a symbolic link would
+keep its hash while pointing the grant somewhere else. Each entry therefore
+also records, outside the hash, where every path scope (`read` and `ffi`
+paths, allow and deny, and the directory of `node_modules=<dir>`) resolved
+when it was trusted: the scope with links resolved, or, when it did not exist,
+its deepest existing ancestor resolved plus the rest of the path. A scope that
+now resolves
+to a different place makes the config changed since trusted, and the report
+and `--list-trusted` show it:
+
+```text
+  project/goccia.json (changed since trusted 2026-09-20T10:12:03Z)
+    allow-read: /home/u/project/data
+  ~ target of /home/u/project/data: /home/u/project/data -> /etc
+```
+
+So re-pointing any existing part of a scope's path is a change, even for a
+scope that never existed: `allow-read: ./cfg/ssh` with no `cfg/` changes when
+`cfg` appears as a link to `/etc`. The scope itself appearing in place, as a
+build output does, resolves where it was recorded and is not a change, and
+neither is a scope that disappears.
+
+### The store
+
+| Platform | Path |
+|---|---|
+| Linux and BSD | `$XDG_CONFIG_HOME/goccia/trust.json`, or `~/.config/goccia/trust.json` |
+| macOS | `~/Library/Application Support/Goccia/trust.json` |
+| Windows | `%APPDATA%\Goccia\trust.json` |
+| LAKON | none; `GocciaWasmTestRunner` takes `-P` |
+
+```json
+{
+  "version": 1,
+  "trusted": {
+    "/abs/tests/built-ins/fetch/goccia.json": {
+      "sha256": "9f2c…",
+      "block": {"permissions":{"allow-net":["0.0.0.0","127.0.0.1","example.com"]},"version":1},
+      "targets": {},
+      "trustedAt": "2026-09-25T10:12:03Z",
+      "trustedBy": "GocciaTestRunner 0.14.0"
+    }
+  }
+}
+```
+
+Keys are compared case-insensitively on macOS and Windows. The stored `block`
+is only used to show what changed; grants always come from the current file,
+and only when its hash matches. The directory is created private to the user
+(`0700`), and the per-user default directory is made private again if it is
+not; a `--trust-store` directory is left as it is. The file is written `0600`
+from creation, before it replaces the store. A run reads the store once and
+never locks it. A writer takes an exclusive operating-system lock on
+`trust.json.lock` (`flock` on Linux and macOS, `LockFileEx` on Windows),
+retrying for 10 seconds and then failing with an error that names the lock
+file. It applies its changes to the store as it is on disk at that moment and
+replaces the file in one rename, so concurrent readers and writers always see
+a whole store and no writer's change is lost. The system releases the lock
+when its writer exits, even by crashing, so a `trust.json.lock` left on disk
+never blocks the next writer.
+
+A missing store is empty. A store that is not JSON, that has the wrong shape
+(anything but the schema above: a missing or non-integer `version`, a
+`trusted` that is not an object, an entry missing a field or with a field of
+the wrong type or an unknown key (`targets` is optional; its values are
+strings), a `sha256` that is not 64 lower-case hex
+digits), or that a newer GocciaScript wrote, is an error with status 1 for
+`--trust`, `--untrust`, and `--list-trusted`, which never overwrite it; at run
+time its configs are treated as untrusted and the report names the problem:
+
+```text
+Error: trust store /home/u/.config/goccia/trust.json is not valid JSON; fix or delete it
+Error: trust store /home/u/.config/goccia/trust.json is not a valid trust store (no "trusted"); fix or delete it
+Error: trust store /home/u/.config/goccia/trust.json was written by a newer GocciaScript (version 2); upgrade GocciaScript or remove the file
+```
+
+A store that cannot be located (`cannot locate the per-user trust store (HOME
+is not set); pass --trust-store=<path>`), a `--trust-store` path that is a
+directory (refused before anything runs or is asked), a held lock, or a
+failed write is also an error with status 1.
+
+### `GocciaWasmTestRunner`
+
+The Wasm test runner has no store: it takes `GocciaWasmTestRunner [-P]
+<manifest>`. Without `-P`, each file whose config requests a grant fails with
+`FILEERROR <file> :: <config> requests permissions; pass -P to accept them
+(GocciaWasmTestRunner has no trust store)`. Extra arguments after the
+manifest are ignored with a warning, for the external harness.
 
 ## Limits and units
 

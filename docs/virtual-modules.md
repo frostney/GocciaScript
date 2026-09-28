@@ -59,16 +59,33 @@ Use repeatable `--modules` options for bulk manifests:
 Bulk manifests may be JSON, JSON5, TOML, YAML, JavaScript, or TypeScript.
 JavaScript and TypeScript manifests must default-export the module map. A
 manifest is evaluated before its definitions are registered, so it cannot
-import modules that it defines itself. The manifest is a host file, so it is
-always read from the filesystem, and it and its own imports are host requests
-the `read` capability does not check while the manifest is being loaded.
-Code it leaves behind — a global function that calls `import()`, say — runs
-later as guest code, so such an import is a guest read: it needs a `read`
-grant outside the module graph and is refused with `PermissionDenied`
-without one. Under `--deny-read` (an outright `read` deny) the manifest is
-evaluated in an isolated loader. An engine whose module provider does not
-read the host filesystem (the sandbox runner) always evaluates it in an
-isolated loader.
+import modules that it defines itself.
+
+Who named the manifest decides how much it may do:
+
+- A manifest named on the command line (`--modules`) is the user's own choice.
+  It is a host file, always read from the filesystem, and it and its own
+  imports are host requests the `read` capability does not check while the
+  manifest is being loaded. Code it leaves behind — a global function that
+  calls `import()`, say — runs later as guest code, so such an import is a
+  guest read: it needs a `read` grant outside the module graph and is refused
+  with `PermissionDenied` without one. Under `--deny-read` (an outright `read`
+  deny) the manifest is evaluated in an isolated loader. An engine whose
+  module provider does not read the host filesystem (the sandbox runner)
+  always evaluates it in an isolated loader.
+- A manifest a config file names (`"modules": "./manifest.js"`, or an array of
+  paths, of any format) is the repository's choice, so it runs under the
+  capability set of the script the config governs
+  ([ADR 0122](adr/0122-unified-capability-model.md)). Reading it is a guest
+  read, judged with the directory of the config that names it as the project:
+  a manifest inside that directory is covered as the module graph is, so a
+  root config's manifest also serves a subfolder with a config of its own;
+  anything else needs a read grant; and a read deny refuses it with `PermissionDenied`
+  and a `read.file` audit event. A JavaScript or TypeScript manifest is
+  evaluated in an engine of its own with that capability set, so its imports
+  are judged like the script's even while it loads, and whatever it leaves on
+  its global object stays in that engine; only its default export reaches the
+  script, as data.
 
 Project config may contain a module map directly:
 

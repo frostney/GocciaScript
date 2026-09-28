@@ -46,10 +46,12 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ## Quick checks
 
 ```bash
-./build.pas testrunner && ./build/GocciaTestRunner tests && ./build/GocciaTestRunner tests --mode=bytecode  # after substantive changes
+./build.pas testrunner && ./build/GocciaTestRunner -P tests && ./build/GocciaTestRunner -P tests --mode=bytecode  # after substantive changes
 ./build.pas bundler && ./build/GocciaBundler example.js  # build and run the bundler
 ./format.pas --check # before push / PR
 ```
+
+Assistants run the test runner with `-P`, which accepts the test configs' permission requests for that run only. Do not run `--trust`: it writes the user's per-user trust store, which is the user's decision (see [Permissions — Config trust](docs/permissions.md#config-trust)).
 
 ## Quick reference
 
