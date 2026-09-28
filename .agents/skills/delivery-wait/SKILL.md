@@ -39,10 +39,21 @@ requires its own identity flags:
 - `tag-target`: `--tag <name>` and `--head <sha>`.
 - `release-assets`: `--tag <name>`, `--head <sha>`, and one `--asset <name>` per
   required asset.
-- `wake-at` (`wait` only): `--deadline` alone.
+- `wake-at` (`wait` only): `--deadline` alone. It keeps no state file, so
+  `--state` has no effect.
 
 There is no `--checkpoint` flag. The state path is `--state`, and the command
 derives a default path from the kind and identity when it is omitted.
+
+## Results
+
+`--json` prints one envelope whose `state` is the result. Only `satisfied`
+establishes the awaited fact. `changed` means a check or workflow reached a
+non-success terminal result or other relevant state moved; inspect it before
+deciding. `invalidated` means the expected head, ref, or saved identity no
+longer matches, `timed-out` means the deadline passed, and `cancelled` means
+the wait was interrupted. These exit 0; `operational-error` exits 2. `inspect`
+can also report `waiting`.
 
 Use `inspect` for a single authoritative delivery snapshot and `wait` for a
 foreground transition wait. Supported predicates are exact-head checks,

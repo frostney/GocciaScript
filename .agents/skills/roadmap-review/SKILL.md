@@ -32,8 +32,9 @@ optional and confirmation-gated.
   tests, or primary specifications as Done, Partial, or Absent with evidence.
   Propose only Partial or Absent work.
 
-Use a small bounded subagent fan-out only for genuinely independent, sizeable
-evidence areas; otherwise work directly. Synthesize before planning.
+Delegate independent, sizeable evidence areas to bounded subagents by default
+when the host supports it; work directly on small or coupled areas. Synthesize
+before planning.
 
 ## Workflow
 
@@ -41,10 +42,12 @@ evidence areas; otherwise work directly. Synthesize before planning.
    release, and milestone counts from the Git hosting service.
 2. Assess release cadence, merged-but-unreleased work, milestone-versus-commit
    drift, vision, scope, and non-goals.
-3. Apply measured rates to the counted backlog, with basis and confidence. Never
-   pad the timeline. When evidence cannot support calendar dates, report ranges
-   and dependencies without a dated Gantt or placeholder dates.
-4. Verify every candidate against source and remove work already delivered.
+3. Classify every candidate under the evidence contract and drop work already
+   delivered.
+4. Apply measured rates to the counted remaining backlog, with basis and
+   confidence. Never pad the timeline. When evidence cannot support calendar
+   dates, report ranges and dependencies without a dated Gantt or placeholder
+   dates.
 5. Plan themed releases across independent tracks, marking dependencies and the
    longest pole. Surface genuine human decisions with a recommendation.
 6. Stop for those decisions and present:

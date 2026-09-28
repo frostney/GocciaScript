@@ -38,5 +38,6 @@ actual decision loop, one decision at a time. Stop if it is unavailable; do not
 imitate it with ad-hoc questions. Use the comparison and evidence above, then
 wait for the user's choice. For an idea, confirm the final mini-spec covering
 the outcome, scope/non-goals, and testable success measures. Automatic mode
-selects the evidence-backed recommendation without this interview, while
-preserving the same evidence and material-decision gates.
+skips this interview and selects the evidence-backed recommendation, except
+that a material product, architecture, security or scope choice stays pending
+for the user with the same evidence.

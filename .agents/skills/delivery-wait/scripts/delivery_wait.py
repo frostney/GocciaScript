@@ -232,12 +232,11 @@ def main() -> int:
         "assets": sorted(args.asset),
     }
     try:
+        # wake-at observes nothing external, so it keeps no checkpoint.
         state_path = (
-            args.state
-            if args.command == "wait" and args.state is not None
-            else default_state_path(args.kind, identity)
-            if args.command == "wait"
-            else None
+            None
+            if args.command != "wait" or args.kind == "wake-at"
+            else args.state or default_state_path(args.kind, identity)
         )
         if args.kind == "wake-at":
             args.interval = positive_interval(args.interval)

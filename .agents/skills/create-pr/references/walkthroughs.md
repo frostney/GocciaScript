@@ -1,10 +1,14 @@
-# Narrated PR walkthroughs
+# PR media and narrated walkthroughs
+
+This reference covers reviewer-facing media for a pull request: before/after
+screenshots or videos and narrated walkthroughs, their upload, and the report
+when media is incomplete.
 
 Create a short video with voice-over and synchronized subtitles when UI, CLI
 or backend changes have meaningful behavior to demonstrate. Documentation and
 skill changes need a video only when an actual workflow example helps explain
 them. A scroll through the diff alone is usually insufficient. Reuse suitable
-current recordings instead of repeating work.
+current recordings and images instead of repeating work.
 
 ## Discover capabilities on this machine
 
@@ -62,9 +66,17 @@ Wayland capture needs a Wayland session and its capture backend or portal.
 - Review the finished playback for legible text, intelligible audio, accurate
   captions, synchronization and the claimed result. Check the actual exported
   file; an export command succeeding does not establish playback quality.
-- Upload through the repository's supported attachment path and verify the
-  resulting PR asset. Keep media out of source control. A locally created file
-  is not an uploaded, reviewer-accessible walkthrough.
+- Upload it as described below. A locally created file is not an uploaded,
+  reviewer-accessible walkthrough.
+
+## Upload media
+
+Use a supported upload path for local screenshots and videos; inspect the
+installed GitHub CLI's attachment support. With `--attach`, use
+`'<image>#<alt text>'` for images and a plain file path for videos. Verify each
+uploaded asset in the actual PR. A partial upload failure can still create the
+PR: reconcile the returned URL and successful attachments before retrying.
+Never commit evidence media to the repository.
 
 ## Report incomplete requirements without blocking the PR
 

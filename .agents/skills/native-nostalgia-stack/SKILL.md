@@ -18,8 +18,9 @@ language-neutral layout and documentation.
 
 ## Compiler and layout
 
-- Use the project-pinned latest stable FPC and Delphi mode unless project docs
-  explicitly choose another mode.
+- Use the FPC version the project and CI pin; a new project pins the latest
+  stable release. Use Delphi mode unless project docs explicitly choose another
+  mode.
 - Keep project-wide compiler directives in one shared include used by every
   unit.
 - Put Pascal source under one root (`source/` preferred), using namespaced
@@ -56,13 +57,15 @@ and cognitive complexity, sortable file health, and complexity-times-churn
 hotspots. Thresholds and ignores live in one root config; breaches exit
 non-zero. Document the tool and thresholds in `docs/tooling.md`.
 
-## Hook and completion
+## Hook
 
 Lefthook runs the project's formatter check on staged Pascal and its
 build-and-test command. Use the exact project entry points, install the hook via
 the documented quick start, and never bypass it without explicit user direction.
 
-Before relying on tool behavior, inspect root and area AGENTS, confirm `fpc -iV`
-against project/CI pins, and verify any touched tool version live. Before
-handoff, observe the project formatter and build-and-test gates passing and
-update only the authoritative docs affected by the change.
+## Completion
+
+- Root and area AGENTS were inspected, `fpc -iV` matches the project/CI pin, and
+  any touched tool version was verified live before relying on its behavior.
+- The project formatter and build-and-test gates were observed passing.
+- Only the authoritative docs affected by the change were updated.

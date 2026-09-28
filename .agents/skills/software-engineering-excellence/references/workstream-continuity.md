@@ -47,8 +47,8 @@ Give a worker only what its lane needs:
 - Return contract: <result envelope fields below>
 ```
 
-Default to isolated context. Include a small recent-turn slice only when it is
-directly relevant. Full conversation inheritance requires a recorded reason.
+Full conversation inheritance, instead of an isolated context with only the
+directly relevant recent turns, requires a recorded reason.
 
 ## Result envelope
 

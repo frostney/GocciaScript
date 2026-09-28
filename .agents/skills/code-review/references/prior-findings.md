@@ -16,8 +16,9 @@ When the user supplies findings JSON from `code-review` or `codebase-audit`:
    locally, continue against current state, mark the baseline unavailable, and
    do not attribute an outcome to a particular change.
 4. Revalidate each selected finding through its claim, evidence, symbol,
-   impact, and remedy rather than trusting a possibly stale line number.
-   Classify it:
+   impact, and remedy rather than trusting a possibly stale line number. Skip
+   the fresh-review setup and review axes; apply the evidence requirements in
+   `SKILL.md` only where they test a selected finding. Classify it:
    - `resolved`: the reported problem no longer exists;
    - `still_present`: the material problem and remedy remain accurate;
    - `changed`: the problem remains but its location, evidence, impact, or
@@ -35,13 +36,17 @@ Git-confirmed rename, and enumerate every excluded open or deferred ID as
 
 ## Targeted revalidation report
 
-For prior-findings mode, report:
+Use the parent skill's report terms verbatim; for revalidation they include
+`finding-to-lane map`, `not selected`, `skippedOutOfScope`, `complete`,
+`incomplete`, `coordinator`, and `worker`. For prior-findings mode, report:
 
 - the source path, kind, recorded revision, baseline availability, current
   `HEAD`, and dirty state;
-- the exact selected IDs and any `skippedOutOfScope` IDs;
-- when `subagents` was supplied, the finding-to-lane map, completed and
-  incomplete lanes, and every coordinator-completed fallback with its reason;
+- the exact selected IDs, prior IDs named as `not selected`, and any
+  `skippedOutOfScope` IDs;
+- when the revalidation delegated lanes, the `finding-to-lane map` with each
+  lane's `complete` or `incomplete` status, and every coordinator-completed
+  fallback with its reason, or that none was needed;
 - supporting context inspected and exact probes with observed results;
 - each selected source ID, its source location, current location when known,
   outcome, current evidence, explanation, and remaining remedy when applicable;

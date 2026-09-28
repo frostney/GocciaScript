@@ -87,14 +87,7 @@ confirmed from issue or pull-request history, log-derived, or approximate.
 - **Output:** merge lessons with the same cause, impact, and proposed action;
   preserve provenance and reconcile conflicts.
 
-Audit the complete available coordinator and subagent record as a process
-surface. Report repeated reasoning, evidence reconstruction, loaded-but-unused
-or bypassed skills, manual resumes, capability-routing mistakes, and other
-no-value context separately from delivery, process, and codebase findings so
-context cost does not become a vague substitute for a supported lesson.
-
-Implementation duplication may be reported when it directly caused workstream
-friction. Wider repository discovery belongs to `codebase-audit`. If the
-workstream already contains SEO, AI-assisted discovery, or other discoverability
-evidence, include its delivery impact; do not start a fresh discoverability
-audit from the retro.
+Report no-value context separately from delivery, process, and codebase
+findings so context cost does not become a vague substitute for a supported
+lesson. If the workstream already contains SEO, AI-assisted discovery, or other
+discoverability evidence, include its delivery impact.

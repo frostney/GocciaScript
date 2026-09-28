@@ -1,8 +1,10 @@
 ---
 name: create-release
 description: >-
-  Prepare or publish a release when requested or handed off by milestone-rush,
-  using the repository's established versioning and publication workflow.
+  Prepares or publishes a release using the repository's established
+  versioning and publication workflow. Use when asked to cut, prepare, or
+  publish a release, when the user runs /create-release, or when
+  milestone-rush hands off a milestone.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git, Python 3.11 or newer, the GitHub CLI (gh) authenticated to the
@@ -33,28 +35,26 @@ one evidence-backed path when publication is authorized.
 - The changelog and version bump land before the tag, through a squash-merged PR.
 - Use the repository's configured tools and current documentation. Regenerate
   generated changelogs rather than hand-editing them.
-- Use a settled explicit version or the project's deterministic version policy.
-  Otherwise recommend a version from unreleased conventional commits and ask
-  for that unresolved choice.
 - Run the declared release-relevant gate and report only observed results.
 - Never amend, force-push, force-update a tag, skip hooks, or publish through
   more than one path.
 
 ## Prepare
 
-1. Resolve the authorization stage, remote default branch, clean working tree,
-   changelog/version tooling, last release, remote tags, workflows, and release
-   documentation.
+1. Require a clean working tree, then resolve the authorized stage, remote
+   default branch, changelog/version tooling, last release, remote tags,
+   workflows, and release documentation.
 2. Stop if there are no releasable commits.
-3. Validate the settled version or compute it under the established version
-   policy. Ask for a specific version choice only when neither settles it.
+3. Use a settled explicit version, or compute it under the project's
+   deterministic version policy. When neither settles it, recommend a version
+   from the unreleased conventional commits and ask for that choice.
 4. Create a release branch from the fresh remote base.
 5. Generate the changelog section and update every authoritative version
    declaration using project tooling. Do not invent a manifest bump when the
    project derives its version from tags.
-6. Run the release-relevant project gate, commit `chore(release): <version>`,
-   and open a draft release PR through `/create-pr`. Include the changelog
-   section and observed validation. Stop here for Prepare-only requests.
+6. Run the release-relevant gate, commit `chore(release): <version>`, and open a
+   draft release PR through `/create-pr` with the changelog section and observed
+   validation. Prepare-only requests end here.
 
 ## Publish
 
@@ -65,7 +65,7 @@ one evidence-backed path when publication is authorized.
 2. Refresh the merged base, then re-read the actual workflow YAML and release
    documentation. Identify separate owners for tag creation, GitHub release
    creation, artifact signing, and registry publishing.
-3. Select exactly one route:
+3. Select exactly one route, so no tag or release is created twice:
    - workflow owns tag and release: trigger or monitor it only;
    - agent owns tag, workflow owns release: push the verified tag once, then
      monitor;

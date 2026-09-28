@@ -2,7 +2,8 @@
 name: deliver
 description: >-
   Carries one feature, bug, issue, branch, or PR through verified delivery.
-  Use when asked to deliver a work item or run /deliver.
+  Use when asked to deliver or ship a work item end to end, such as getting it
+  merged or deployed, or when the user runs /deliver.
 license: Unlicense OR MIT
 compatibility: >-
   Uses the project's implementation, GitHub and integration tools and available
@@ -55,11 +56,12 @@ service as an incidental fix.
   enlarge scope. Await pending checks and provider transitions through existing
   deterministic helpers. Inspect failures and route fixable causes through the
   development loop, then publish and verify the new exact head.
-- At `ready-to-merge`, require the selected PR's complete readiness contract:
-  all verified requirement gaps resolved, current behavior and project evidence,
-  successful required CI and reviews, and completed required thread handling.
-  For a native stack, require complete-stack readiness, including every needed
-  fix layer. Ready for review alone does not satisfy this endpoint.
+- At `ready-to-merge`, require the complete readiness contract defined by
+  `address-feedback`'s readiness references for the selected PR's exact head: all verified
+  requirement gaps resolved, current behavior and project evidence, successful
+  required CI and reviews, and completed required thread handling. For a native
+  stack, require its complete-stack readiness, including every needed fix
+  layer. Ready for review alone does not satisfy this endpoint.
 - For `merged` or `deployed`, recheck readiness and use `git-workflow` to merge
   the authorized ordinary PR or complete native stack. Verify the resulting
   integrated revision. A partial prefix below a required fix layer is not done.
@@ -102,5 +104,4 @@ nothing about the repair branch. An acknowledgment likewise does not confirm
 cleanup or message delivery. Verify required outcomes; omit optional unconfirmed
 claims or label them unconfirmed, without implying failure. Apply this to the
 whole report, including tables and parenthetical remarks; see
-[agent-writing](../agent-writing/SKILL.md) for shared writing guidance. Release
-publication belongs to a separately requested release or the milestone boundary.
+[agent-writing](../agent-writing/SKILL.md) for shared writing guidance.
