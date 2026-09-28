@@ -48,8 +48,8 @@ that fixes are therefore the same program, and the difference is a word on the
 host's command line. See
 [Permissions — Sandbox mode](docs/permissions.md#sandbox-mode).
 
-The host can also define globals, virtual modules, allowed network hosts,
-instruction and memory limits, deterministic time/randomness, and
+The host can also define globals, virtual modules, network grants
+(`--allow-net`), instruction and memory limits, deterministic time/randomness, and
 application-specific APIs. See [Build System — GocciaRunner sandbox mode](docs/build-system.md#gocciarunner-sandbox-mode)
 and [Built-ins — Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas).
 
@@ -102,8 +102,10 @@ parsing rules.
 
 ## Node host compatibility and sandbox `fs`
 
-GocciaScript is not a complete Node.js host: it does not provide CommonJS, npm
-package resolution, `process`, `Buffer`, or the general `node:` module set.
+GocciaScript is not a complete Node.js host: it does not provide CommonJS,
+`process`, `Buffer`, or the general `node:` module set. Bare-specifier lookup
+through `node_modules` (ESM only, a subset of Node's resolver) is opt-in with
+`--allow-import=node_modules`; see [Module Resolution](docs/module-resolution.md).
 `GocciaRunner`'s sandbox mode does provide a Node-compatible `fs` API over its
 virtual filesystem:
 
@@ -132,7 +134,9 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
 `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
 `BigInt64Array`, `BigUint64Array`), alongside the global functions
-`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader profile adds
+`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader runtime
+profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
+`GocciaBenchmarkRunner`) adds
 `console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
 `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
 `URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
@@ -296,7 +300,11 @@ above:
 
 Beyond the static imports of its own project a script reaches nothing by default: other host reads, computed dynamic imports, `fetch`, FFI, and `node_modules` all throw `PermissionDenied` until the host grants them with `--allow-read`, `--allow-net`, `--allow-ffi`, or `--allow-import` (or a config file's `permissions` block). A deny always wins. See [Permissions](docs/permissions.md).
 
+A config file's `permissions` block is only a request: its grants take effect once the user trusts the config (`--trust <path>`) or accepts it for one run (`-P`). A block that only denies needs no trust. See [Permissions — Config trust](docs/permissions.md#config-trust).
+
 The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
+
+An import-map entry can also name a `github:` provider package. `GocciaRunner --add` and `--install` pin it in `goccia.lock.json`, and a run loads it once the `import` capability grants it (`--allow-import=github`). See [Provider Imports](docs/provider-imports.md).
 
 Structured data files and text assets can also be imported directly:
 
