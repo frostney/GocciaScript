@@ -337,4 +337,29 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("temporarily unavailable");
     expect(markdown).not.toContain("undefined");
   });
+
+  test("carries the test262 dashboard's diagnosis when no result is available", () => {
+    const message =
+      "Failed to read test262 reports from Vercel Blob: fetch failed";
+    const markdown = renderCompatibilityMarkdown({
+      ...compatibilityData,
+      status: "error",
+      message,
+      latest: null,
+    } as Parameters<typeof renderCompatibilityMarkdown>[0]);
+
+    expect(markdown).toContain(message);
+    expect(markdown).toContain("Open the HTML dashboard or CI workflow");
+  });
+
+  test("keeps a generic test262 diagnosis when there is no message", () => {
+    const markdown = renderCompatibilityMarkdown({
+      ...compatibilityData,
+      status: "error",
+      latest: null,
+    } as Parameters<typeof renderCompatibilityMarkdown>[0]);
+
+    expect(markdown).toContain("temporarily unavailable");
+    expect(markdown).not.toContain("undefined");
+  });
 });
