@@ -33,6 +33,8 @@ Cut these patterns when they do not carry project meaning:
   change works` to `edit-to-trustworthy-answer`, and `GitHub`, `Git hosting
   service`, `pull-request state`, or `CI results` to `forge`, as the context
   requires. Preserve quoted headings, fixture keys, and code identifiers.
+- The same explanation copied into several documents. Keep one canonical home
+  for each fact and link to it with descriptive link text.
 
 After cutting a pattern, restore any mechanism, evidence, caveat, decision, or
 next action the reader still needs. Shorter prose is not better when it removes

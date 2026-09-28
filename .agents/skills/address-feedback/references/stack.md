@@ -79,8 +79,9 @@ arguments so the adapter can select the newest edited account-scoped wait.
 8. Run focused validation while fixing. Before submitting a substantive fix
    layer, repeat `/code-review fix-all` and `/test-against-spec fix` against the
    complete integrated tree until both pass on the same unchanged content, then
-   establish the project's declared gate using matching current results. Stop for a material product, architecture,
-   security, compatibility, or scope decision.
+   establish the project's declared gate using matching current results. Stop
+   for a material product, architecture, security, compatibility, or scope
+   decision.
    If required behavior can only be exercised on a PR preview, complete the
    available checks and use step 9 to publish the necessary draft fix layer,
    explicitly retaining the missing preview evidence. Test its exact revision
@@ -89,11 +90,11 @@ arguments so the adapter can select the newest edited account-scoped wait.
 9. Enforce the native-stack reference's push-boundary checks for the frozen
    prefix and new branch. Use its protected `gh stack push` followed by separate
    PR creation and native append procedure; preserve the frozen PR heads and
-   metadata. Reconcile a partial result before continuing. Immediately replace generated
-   metadata with its actual claim, validation, and originating finding links,
-   and satisfy the project's PR evidence contract. Keep it draft until its own
-   local evidence and required checks permit review. Trigger and collect its
-   exact-head review under the active provider contract.
+   metadata. Reconcile a partial result before continuing. Immediately replace
+   generated metadata with its actual claim, validation, and originating
+   finding links, and satisfy the project's PR evidence contract. Keep it draft
+   until its own local evidence and required checks permit review. Trigger and
+   collect its exact-head review under the active provider contract.
 10. Once that fix layer has successful exact-head CI and a terminal review, it
     is frozen. Reply to and resolve the originating threads with the exact fix
     evidence. If review of the fix layer produces live findings, create another
@@ -122,9 +123,13 @@ CodeRabbit adapter is the sole owner of its two permitted trigger commands. Its
 through stated waits, and treats a finished acknowledgment as `clean-complete`
 only when walkthrough coverage is verified for the exact head and either ack
 latency meets the trusted threshold or that same head has a CodeRabbit check
-SUCCESS. It escalates untrusted incremental acknowledgments to a full review,
-refuses guessed retry times, and never exposes a paid-review command. Keep
-`review-complete` for real exact-head review objects only.
+SUCCESS. Latency and walkthrough freshness count from when GitHub recorded the
+head's push (its branch activity, else its earliest check suite on that
+branch), or from the commit time if that is later. Without that record, only
+the head-scoped check completes the review. It escalates untrusted incremental
+acknowledgments to a full review, refuses guessed retry times, and never
+exposes a paid-review command. Keep `review-complete` for real exact-head review
+objects only.
 
 ## Result contract
 

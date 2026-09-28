@@ -1,8 +1,9 @@
 ---
 name: run-retro
 description: >-
-  Review a workstream and agree process improvements when the user requests or
-  accepts a retrospective. Apply only selected follow-up actions.
+  Reviews a workstream and agrees process improvements, applying only the
+  selected follow-up actions. Use when the user asks for, runs /run-retro, or
+  accepts a retrospective.
 license: Unlicense OR MIT
 compatibility: >-
   Requires the registered grilling skill and access to
@@ -15,12 +16,20 @@ compatibility: >-
 # Run retrospective
 
 Assess the completed workstream through delivery-speed, process, and
-codebase-health lenses. The actual `grilling` skill owns the decision loop.
-Apply only documentation and ticket actions the user selects from the detailed
-summary. An explicitly selected immediate implementation enters its normal
-workflow rather than being implemented directly by this skill. Present the
-retrospective in the conversation. The request alone authorizes analysis;
-file edits and other mutations require the selection described below.
+codebase-health lenses and agree evidence-backed improvements with the user.
+The actual `grilling` skill owns the decision loop. Present the retrospective
+in the conversation.
+
+## Authorization
+
+The request to run a retrospective authorizes analysis only. File edits and
+other mutations require the user's final selection through `grilling`, and
+that selection authorizes only the selected documentation edits, the selected
+ticket actions through `create-issue`, and invocation of any explicitly
+selected immediate implementation through its normal `/deliver` workflow,
+never direct implementation by this skill. It does not authorize unrelated
+commits, pushes, PRs, issues, or file edits. The original request to run a
+retrospective is not this final selection.
 
 ## Gates
 
@@ -40,11 +49,12 @@ file edits and other mutations require the selection described below.
   capability-routing mistakes, and other context consumption that added no
   value. Report this no-value context separately from other findings and name
   any unavailable conversation or process evidence.
-- For a completed Milestone Rush, read its ignored
-  `.agent/milestone-rush-events.jsonl` under
-  [references/timing-analysis.md](references/timing-analysis.md). Reconcile it
-  with current repository, issue, pull-request, and CI evidence; partial or
-  missing telemetry is a confidence limitation, not permission to infer values.
+- Read [references/timing-analysis.md](references/timing-analysis.md) before
+  building the timing ledger. For a completed Milestone Rush, also read its
+  ignored `.agent/milestone-rush-events.jsonl` under that reference. Reconcile
+  telemetry with current repository, issue, pull-request, and CI evidence;
+  partial or missing telemetry is a confidence limitation, not permission to
+  infer values.
 - Invoke `grilling` with the evidence and candidates. Do not imitate it with
   ad-hoc questions; stop if it is unavailable. Let it ask one decision at a time
   with a recommendation. Act only after it reaches shared understanding and
@@ -61,8 +71,9 @@ file edits and other mutations require the selection described below.
 - Apply de-duplication to the workstream: reuse prior investigations and
   decisions, coalesce the same event from multiple evidence systems, and combine
   candidate lessons with the same cause and action while retaining provenance.
-  Report repeated implementation encountered in the workstream, but do not turn
-  the retro into a repository-wide duplication or discoverability audit.
+  Report repeated implementation or discoverability evidence when it caused
+  workstream friction, but do not turn the retro into a repository-wide
+  duplication or discoverability audit; that belongs to `codebase-audit`.
 
 ## Route each lesson
 
@@ -71,8 +82,9 @@ file edits and other mutations require the selection described below.
   Prefer tightening or coupling with existing text. Direct edits are limited to
   documentation.
 - **Follow-up ticket:** source, executable configuration, or other implementation
-  is needed. Offer more detail, further grilling, normal or automatic
-  `create-issue`, or skip; the delegated workflow retains its own gates.
+  is needed. Offer more detail, further grilling, `create-issue` (with a draft
+  first if the user wants one), or skip; the delegated workflow retains its own
+  gates.
 - **Implement before next cycle:** recommend this route when a selected
   improvement should be delivered before another cycle begins. Recommendation
   alone authorizes nothing. After explicit user selection, reuse or create its
@@ -88,12 +100,12 @@ selects its exact proposed contents.
 ## Workflow
 
 1. Resolve the workstream boundary and read relevant project documentation.
-2. Trace the process origins, implementation/configuration, documentation, and
-   complete available coordinator/subagent record. Then build an evidence
-   ledger of outcomes, friction, rework, surprises, effective or missed gates,
-   successful practices, and separately classified no-value context under all
-   three lenses. Select one or more timing profiles from the reference and map
-   both high-level lifecycle phases and available ground-level operations.
+2. Trace origins and the coordinator/subagent record under the gates above.
+   Then build an evidence ledger of outcomes, friction, rework, surprises,
+   effective or missed gates, successful practices, and separately classified
+   no-value context under all three lenses. Select one or more timing profiles
+   from the timing reference and map both high-level lifecycle phases and
+   available ground-level operations.
 3. Reconstruct exclusive critical-path contribution, overlapping or masked
    work, and aggregate resource consumption without double-counting. Rank
    bottlenecks by exclusive wall-clock impact; report confidence and missing
@@ -117,20 +129,14 @@ selects its exact proposed contents.
    - report-only observations, supporting evidence, confidence, and gaps.
 8. Obtain exact user selections through `grilling`. More detail or further
    grilling returns to that loop and regenerates the summary.
-9. Apply only selected documentation changes, preserving structure and avoiding
-   duplication. Run only selected ticket actions through `create-issue`. For
-   each explicitly selected implement-before-next-cycle action, reuse or create
-   the visibility issue, invoke normal `/deliver`, and remain in the
-   retrospective until it is delivered or genuinely blocked.
-10. Compare the result with the confirmed action set, reread edited sections,
-    and run declared documentation checks.
+9. Apply only the selected actions under the authorization above, preserving
+   documentation structure and avoiding duplication. For each selected
+   implement-before-next-cycle action, reuse or create the visibility issue,
+   invoke normal `/deliver`, and remain in the retrospective until it is
+   delivered or genuinely blocked.
+10. Compare the result with the confirmed action set and run declared
+    documentation checks.
 11. Report changed docs, created issue links, immediate-action
     delivery or blocker evidence, report-only findings, confidence limits, and
     observed validation. Keep workstream history in chat and remind the user
     they can request a deep dive into any finding.
-
-Confirmation authorizes only the selected documentation and ticket actions and
-invocation of any explicitly selected immediate implementation through its
-normal workflow. It does not authorize unrelated commits, pushes, PRs, issues,
-or file edits. The original request to run a retrospective is not this final
-confirmation.

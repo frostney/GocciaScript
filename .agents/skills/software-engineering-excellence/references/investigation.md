@@ -40,10 +40,6 @@ A change can be entirely feasible and still be wrong *for this project* because 
 
 A correction is not a cue to flip the conclusion or soften the tone. Reversing a guess is still a guess, and matching the correction's apparent mood is not the same as being right. Return to the source, name the specific assumption that turned out to be wrong, and rebuild the answer from verified facts. Your next message should contain evidence of fresh reading, not a new proposal aimed in the opposite direction.
 
-## The thread through all of it
-
-Investigation goes wrong the moment the story replaces the source: the README stands in for the code, the positioning stands in for the implementation, the recommendation arrives before the evidence, or the correction flips the answer without re-reading. Consult the source, the run, and the spec first. Record them plainly, and only then say what should be done.
-
 ## Intermittent failures and the debugging bar
 
 An intermittent defect is fixed only when the mechanism is pinned by observed
@@ -60,7 +56,7 @@ window; an unaligned non-reproduction is absence of evidence, not evidence of
 absence.
 
 After three disproven hypotheses or failed fix attempts on the same defect,
-stop and bring in an independent second opinion, handing over an evidence
+stop guessing and bring in an independent second opinion, handing over an evidence
 brief containing the symptom, raw artifacts, and each hypothesis with how it was
 killed. Three quick kills in an hour is healthy progress; the trigger exists
 for the third dead end, when the next guess would otherwise come from an

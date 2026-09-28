@@ -1,6 +1,6 @@
 # The engineering barometer
 
-A periodic gut-check, adapted for agentic coding from a classic engineering self-test. These are **direction questions, not a score**: a "no" is not a failing grade, it is a heading to correct. Run through them when you are about to call a piece of work good, or when a long task feels like it has drifted and you want to re-orient.
+A periodic gut-check, adapted for agentic coding from a classic engineering self-test. These are **direction questions, not a score**: a "no" is not a failing grade, it is a heading to correct. Use them when the strategy needs reconsideration: repeated work is not advancing the goal, or a long task has drifted and you want to re-orient.
 
 Read each as "for the work I am doing right now…"
 
@@ -37,11 +37,11 @@ Read each as "for the work I am doing right now…"
 ## Validation
 
 - **16.** Have I run every mode that matters so that nothing in my report is asserted but unverified?
-- **17.** When something failed, did I fix the root cause rather than a symptom or environmental workaround, and does the test ship in the same change as the fix?
+- **17.** When something failed, did I fix the root cause rather than a symptom or environmental workaround, and, where a regression test is warranted, does it ship in the same change as the fix?
 
 ## Judgment
 
-- **18.** Where I was uncertain, did I surface the question or state my assumption instead of quietly improvising, and where I was certain and authorized, did I proceed?
+- **18.** Where I was uncertain, did I state my assumption and continue, raising a question only when it blocked the work or the action needed confirmation, and where I was certain and authorized, did I proceed?
 - **19.** Did I leave a durable trail of decisions, open questions, limitations, and next steps that someone without my internal context could pick up?
 
 Apply these questions to the authorized outcome. Correct material gaps within

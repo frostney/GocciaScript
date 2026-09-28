@@ -12,8 +12,23 @@ Apply the parent SKILL.md shared authority, attribution, and evidence rules.
   requires a maintainer-workflow reply stating its evidence-backed disposition
   before readiness or merge, including invalid, obsolete, duplicate, and
   out-of-scope findings. Do not post top-level PR summaries or issue comments.
-  In `automatic-merge` mode, a documented automation retrigger command is the
-  only allowed top-level comment.
+  In normal and `automatic-merge` modes, the only allowed top-level comment is
+  an intentionally active automation's documented retrigger command, posted
+  only when all of these hold:
+  - the automation has no completed verdict for the exact current head because
+    its attempt was rate-limited, skipped, or missing;
+  - any availability the provider stated has passed under the `retry_at` rules
+    in [pr-readiness.md](pr-readiness.md); a statement without a derivable
+    `retry_at` keeps the automation `pending`;
+  - no retrigger for that automation was posted on the current head; and
+  - the command does not request a paid or usage-based review.
+
+  For CodeRabbit, retrigger only through `scripts/coderabbit_adapter.py run`
+  with the repository, PR, exact head, an absolute deadline, and a
+  `--scan-repo` for each repository with recent CodeRabbit activity. The
+  adapter owns the account-wide lock, stated waits, and command choice; one
+  `run` per exact head is that head's retrigger. Never type a CodeRabbit
+  command by hand.
 - Mechanical applicability alone does not validate a finding: a symbol existing,
   a patch applying, or compilation succeeding does not establish its factual
   claim or authority. Classify both axes in step 4.
@@ -32,7 +47,7 @@ state. The repository policy defaults to
 `.github/delivery/review-automations.json` and may be overridden explicitly.
 Use a caller-owned `--state` path below gitignored `.agent/waits/`.
 
-## Automatic merge
+## Active review automation
 
 An active review automation is a gate when repository policy or the current PR
 shows it was intentionally invoked. Inspect inline threads plus top-level
@@ -50,9 +65,9 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    Done. Label any claim inferred from the current change rather than a source.
 2. If an ordinary branch needs a baseline update, merge the remote base by
    following `/update-pr`'s no-rebase workflow, but defer its commit and push
-   until the pre-push loop in steps 5 through 7 passes. A stack owner must perform any
-   stack-wide synchronization before asking this skill to re-evaluate the
-   affected layer.
+   until the pre-push loop in steps 5 through 7 passes. A stack owner must
+   perform any stack-wide synchronization before asking this skill to
+   re-evaluate the affected layer.
 3. Run the review helper's `inspect` operation for the exact PR head. It returns
    active automation evidence, one explicit `findingSurfaces` collection across
    inline threads, exact-head reviews, and top-level comments from every author,
@@ -69,14 +84,15 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    thread through the helper's idempotent `reply` operation; resolve completed
    threads through its explicit `resolve` operation. Never silently ignore a
    nitpick, and never substitute a top-level comment when an inline comment
-   cannot accept a reply. Resolve attribution identities before the first reply
-   and append the required Note to every substantive reply.
+   cannot accept a reply. Every substantive reply carries the parent skill's
+   attribution Note.
 5. Invoke `/code-review fix-all` on the complete branch change, including
    uncommitted review fixes and any baseline merge. Apply every validated
    in-scope requirement gap. Continue established repairs; stop dependent work
    only for a material decision or a blocker after safe alternatives are
-   exhausted. An unresolved required finding prevents readiness. If `/code-review` is unavailable, perform the same bounded review
-   and fix pass directly.
+   exhausted. An unresolved required finding prevents readiness. If
+   `/code-review` is unavailable, perform the same bounded review and fix pass
+   directly.
 6. Run `/test-against-spec fix` when it is available. Otherwise perform the same
    black-box test directly against the explicit PR specification. Do not use
    source as proof of behavior. Prefer an exact-revision preview deployment when
@@ -90,10 +106,10 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    continue fixing and restart at step 5. Repeat until code review and behavior
    testing pass on the same unchanged implementation. Then establish the
    declared pre-PR gate, reusing its matching passing result. If fixing a gate
-   failure changes the implementation,
-   restart at step 5. Once the complete loop passes unchanged, use `/update-pr`
-   to commit and push without amending or force-pushing. If that skill is
-   unavailable, follow its documented workflow directly.
+   failure changes the implementation, restart at step 5. Once the complete
+   loop passes unchanged, use `/update-pr` to commit and push without amending
+   or force-pushing. If that skill is unavailable, follow its documented
+   workflow directly.
 8. Re-read the exact head, required checks, terminal automation verdicts,
    actionable findings, unresolved threads, and unanswered inline automation
    threads. Apply the readiness and `retry_at` rules in the reference. A new
@@ -101,17 +117,16 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    requirement only when the pushed content is identical and its recorded
    dependencies did not change. A validated CI, code, or behavior failure
    returns to step 5 before another commit or push.
-9. In normal mode, return the result contract without merging. In
-   `automatic-merge` mode, launch the helper's foreground `wait` operation with
-   the exact head, repository policy, `--state` path, and safely derived
-   deadline.
+9. In either mode, post a documented retrigger only when the top-level
+   exception in the PR-specific boundaries permits it. In normal mode, a
+   passive helper `wait` may await the retriggered verdict; then return the
+   result contract without merging. In `automatic-merge` mode, launch the
+   helper's foreground `wait` operation with the exact head, repository policy,
+   `--state` path, and safely derived deadline.
    Resume this workflow only when the command returns a meaningful transition.
-   Use a
-   documented retrigger only when current evidence permits it; its required
-   command may use the narrow top-level exception. Never guess a timer, quota,
-   provider policy, or retry count. If the host cannot passively await a
-   subprocess, return `pending` with that unsupported capability instead of
-   using model heartbeats.
+   Never guess a timer, quota, provider policy, or retry count. If the host
+   cannot passively await a subprocess, return `pending` with that unsupported
+   capability instead of using model heartbeats.
 10. Stop without merging for a material product decision, unrelated failure,
    unsafe or divergent PR, unavailable terminal external dependency, or
    unresolved required finding. Report the exact blocker.

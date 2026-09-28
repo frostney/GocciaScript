@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 from typing import Iterable
@@ -33,11 +34,39 @@ BANNED_PATTERNS = (
     ),
 )
 INLINE_CODE = re.compile(r"`[^`]*`")
+SKILL_DIR = Path(__file__).resolve().parents[1]
+
+
+def suite_skills(root: Path) -> set[str] | None:
+    """Skills installed from this suite's source, or None without a usable lock.
+
+    A project install keeps `skills-lock.json` beside `.agents/`, and its
+    skills root can hold skills from other sources that this contract does not
+    govern.
+    """
+    lock = root.parent.parent / "skills-lock.json"
+    try:
+        skills = json.loads(lock.read_text(encoding="utf-8"))["skills"]
+        source = skills[SKILL_DIR.name]["source"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(source, str) or not source:
+        return None
+    return {
+        name
+        for name, entry in skills.items()
+        if isinstance(entry, dict) and entry.get("source") == source
+    }
 
 
 def markdown_paths(root: Path) -> list[Path]:
-    paths = [root / "README.md"]
+    suite = suite_skills(root)
+    # In a project install, a README beside the skills is not this suite's.
+    readme = root / "README.md"
+    paths = [readme] if suite is None and readme.is_file() else []
     for skill in sorted(root.iterdir()):
+        if suite is not None and skill.name not in suite:
+            continue
         if skill.is_dir() and (skill / "SKILL.md").is_file():
             paths.extend(sorted(skill.rglob("*.md")))
     return paths
@@ -78,8 +107,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[2]
+    root = SKILL_DIR.parent
     paths = args.paths or markdown_paths(root)
+    if not paths:
+        raise SystemExit(f"no Markdown files found under {root}")
     findings = check_paths(path.resolve() for path in paths)
     if findings:
         raise SystemExit("\n".join(findings))

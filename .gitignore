@@ -33,7 +33,10 @@ node_modules/
 !scripts/differential/mods/nodemods/node_modules/
 !tests/language/modules/node-modules/node_modules/
 
-scripts/__pycache__/
+__pycache__/
+
+# Wait-state files written by the delivery-wait and address-feedback helpers
+.agent/waits/
 
 tests-wasm/*.wasm
 

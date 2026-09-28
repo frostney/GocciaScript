@@ -179,8 +179,13 @@ def review_snapshot(
                 conclusion = str(check.get("state") or "").lower()
                 status = "PENDING" if conclusion in {"pending", "expected"} else "COMPLETED"
             if check_name in contexts_wanted and (not apps_wanted or app in apps_wanted):
+                description = (
+                    " ".join(str(check.get(key) or "") for key in ("title", "summary")).strip()
+                    if check.get("__typename") == "CheckRun"
+                    else str(check.get("description") or "")
+                )
                 matching_checks.append({"id": check.get("id"), "source": check.get("__typename"), "name": check_name, "app": app,
-                    "status": status, "conclusion": conclusion,
+                    "status": status, "conclusion": conclusion, "description": description,
                     "startedAt": check.get("startedAt") if check.get("__typename") == "CheckRun" else check.get("createdAt"),
                     "completedAt": check.get("completedAt") if check.get("__typename") == "CheckRun" else check.get("createdAt")})
         matching_reviews = [

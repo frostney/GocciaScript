@@ -11,8 +11,8 @@ REVIEW_FIELDS = "id databaseId author{login} authorAssociation state body create
 THREAD_COMMENT_FIELDS = COMMENT_FIELDS + " replyTo{id}"
 THREAD_FIELDS = "id isResolved comments(first:100){nodes{" + THREAD_COMMENT_FIELDS + "} " + PAGE_INFO + "}"
 CHECK_FIELDS = """__typename
-... on CheckRun{id name status conclusion startedAt completedAt checkSuite{app{slug}}}
-... on StatusContext{id context state createdAt creator{login}}
+... on CheckRun{id name status conclusion title summary startedAt completedAt checkSuite{app{slug}}}
+... on StatusContext{id context state description createdAt creator{login}}
 """
 FIELDS = {"comments": COMMENT_FIELDS, "reviews": REVIEW_FIELDS,
           "reviewThreads": THREAD_FIELDS, "contexts": CHECK_FIELDS}
@@ -158,7 +158,10 @@ def terminal_evidence(checks: list[dict[str, Any]], reviews: list[dict[str, Any]
     for item in checks:
         event = {"kind": "check", "id": item.get("id"), "attemptAt": instant(item.get("startedAt")),
                  "at": instant(item.get("completedAt"), item.get("startedAt")),
-                 "accepted": item["status"] == "COMPLETED" and item["conclusion"] in conclusions,
+                 # A provider can report a skipped, paused or rate-limited
+                 # attempt as a successful check; its description says so.
+                 "accepted": item["status"] == "COMPLETED" and item["conclusion"] in conclusions
+                 and not any(marker in str(item.get("description") or "").lower() for marker in markers),
                  "active": item["status"] != "COMPLETED"}
         groups.setdefault(("check", item.get("source"), item["name"], item["app"]), []).append(event)
     for item in reviews:

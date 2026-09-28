@@ -2,7 +2,8 @@
 name: implement
 description: >-
   Develops a GitHub issue or idea until its requirements and fidelity criteria
-  are verified. Use when asked to implement a change or run /implement.
+  are verified. Use when asked to implement, build, or fix a described change
+  or GitHub issue, or when the user runs /implement.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git and authenticated GitHub access when an issue supplies the scope.
@@ -14,9 +15,13 @@ compatibility: >-
 # Implement
 
 Develop the smallest complete change that satisfies the agreed requirements.
-Reuse settled scope, approach and authorization; ask only for a material
-unresolved choice after completing independent work. User instructions override
-skill defaults. If a skill requires a pause, identify its loaded file and rule.
+Reuse settled scope, approach and authorization. A failed check, diagnosis or
+available fix does not end implementation. Only a material unresolved
+decision, new authority or an external blocker after safe alternatives are
+exhausted can stop dependent work; complete independent work before asking. If
+a skill requires a pause, link its loaded file as a Markdown link and quote the
+rule verbatim in a block quote; a paraphrase or a bare path does not let the
+user check the rule.
 
 ## Establish the work
 
@@ -43,12 +48,13 @@ comparison, read [references/approach-selection.md](references/approach-selectio
 It owns comparison evidence and the registered `grilling` loop. Explicit
 `automatic` mode skips that interview while preserving investigation and the
 user's ownership of material product, architecture, security or scope choices.
-Required evidence or a conclusively failed readiness threshold blocks dependent
-work, not independent investigation or an established in-scope correction.
+If required external evidence is unavailable, stop the dependent work; continue
+independent investigation and any established in-scope correction. A
+conclusively failed readiness threshold blocks dependent work the same way.
 
 ## Develop and verify
 
-Keep this loop local to development. `/deliver` owns end-to-end delivery;
+This loop covers development only: `/deliver` owns end-to-end delivery and
 `/create-pr` owns publication. Reuse the confirmed requirements and approach.
 
 1. Reuse or create a focused branch/worktree under `git-workflow`. Apply its
@@ -69,16 +75,16 @@ Keep this loop local to development. `/deliver` owns end-to-end delivery;
    on the unchanged result. Own the final applicable Definition of Done and
    project gate; run only its missing or invalidated checks.
 
-A failed check, diagnosis or available fix does not end implementation. Continue
-safe in-scope repair; reconsider an approach that is not advancing acceptance.
-If required behavior needs an unavailable exact-revision preview, return the
-specific publication need to the active delivery or PR caller, which owns that
-operation and resumes testing afterward. A standalone implementation asks only
-for the missing authority or environment after completing independent work.
+Continue safe in-scope repair; reconsider an approach that is not advancing
+acceptance. If required behavior needs an unavailable exact-revision preview,
+return the specific publication need to the active delivery or PR caller, which
+owns that operation and resumes testing afterward. A standalone implementation
+asks only for the missing authority or environment.
 
-Return the implemented result and observed requirement evidence to the caller.
+## Finish
+
 Finish when every verified requirement gap is resolved and applicable gates
-pass. Report unresolved required behavior as incomplete, never waive it because
-its finding is low severity. A material unresolved decision, new authority or
-external blocker after safe alternatives are exhausted can stop dependent work;
-unrelated improvements do not extend the task.
+pass; unrelated improvements do not extend the task. Return the implemented
+result and observed requirement evidence to the caller. Report unresolved
+required behavior as incomplete; never waive it because its finding is low
+severity.

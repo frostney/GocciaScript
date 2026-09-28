@@ -1,8 +1,9 @@
 ---
 name: code-review
 description: >-
-  Review a PR, branch, or worktree for evidence-backed findings. Supports scoped
-  revalidation and explicitly requested fixes or review workers.
+  Reviews a PR, branch, or worktree for evidence-backed findings, with scoped
+  revalidation and explicitly requested fixes. Use when asked to review code
+  changes, a diff, a branch, or a PR, or to recheck earlier review findings.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git, the project's declared build and test tools, and network access
@@ -27,23 +28,37 @@ Choose one operation before gathering evidence:
   review and supplies prior findings; keep their outputs and conclusions
   separate.
 
-Remediation is independent of the operation: default is read-only, `fix
-<finding IDs>` fixes only selected findings, and `fix-all` fixes every validated
-in-scope finding in one bounded pass. Stop remediation for a material product,
-architecture, security, compatibility, or scope decision.
+Remediation is independent of the operation:
 
+- Default remediation is none. Inspect and run safe local probes, but do not
+  edit source, tests, configuration, or documentation.
+- `fix <finding IDs>` fixes only the selected findings; `fix-all` fixes every
+  validated in-scope finding in one bounded pass. With prior findings, either
+  mode may edit only for selected findings classified `still_present` or
+  `changed`, never for `resolved`, `not_retestable`, or `skippedOutOfScope`
+  findings.
+- Fix modes authorize local edits and validation, not commits, pushes, PR
+  comments, review-thread changes, deployments, publication, or shared-state
+  mutation. Stop remediation for a material product, architecture, security,
+  compatibility, or scope decision.
+- A request to save JSON authorizes only the named findings artifact; it does
+  not authorize remediation.
 - Exact file lists and prior-findings JSON are additive inputs. They do not
   change unscoped review behavior unless the user supplies them.
 - A reporting profile or threshold changes presentation only. Gather and
-  validate the complete candidate set, retain every supported severity in the
-  canonical result, and let the caller decide which severities become visible.
-- `subagents` is an additive execution input. Without it, do not delegate any
-  part of the review.
-- Default remediation is none. Inspect and run safe local probes, but do not
-  edit source, tests, configuration, or documentation.
-- Fix modes authorize local edits and validation, not commits, pushes, PR
-  comments, review-thread changes, deployments, publication, or shared-state
-  mutation.
+  validate the complete candidate set across the mapped scope, retain every
+  supported severity in the canonical result, and let the caller decide which
+  severities become visible.
+- Search the complete mapped scope; do not stop after the first or
+  highest-severity issue.
+- Delegate review lanes by default when the host supports subagents and the
+  scope is not trivial. A small change, such as a few lines in one file, stays
+  local. `no-subagents` or an equivalent user instruction keeps the whole review
+  local. When the review delegates lanes, read
+  [references/subagent-lanes.md](references/subagent-lanes.md) before
+  publishing the lane map. While lanes run, the coordinator continues its own
+  lane-independent work, such as resolving the boundary and running the project
+  gate.
 
 Safe probes include declared checks, local builds and servers, disposable
 repros, isolated test data, browser interaction, temporary artifacts, and
@@ -56,31 +71,41 @@ probe and mark the evidence static-only when exact restoration is not safe.
 Clean up disposable artifacts and report retained ones. Ask before any
 persistent or externally visible side effect.
 
-A request to save JSON authorizes only the named findings artifact in default
-mode; it does not authorize remediation. For ordinary review findings, read
-[references/findings-json.md](references/findings-json.md) only when JSON output
-is requested. For targeted revalidation, read
-[references/revalidation-json.md](references/revalidation-json.md) whenever
-prior findings are supplied, whether or not JSON output is requested.
+## Conditional references
 
-## Additive inputs
+Read each reference when its condition holds:
 
-Read only the references for supplied inputs:
-
-- [references/subagent-lanes.md](references/subagent-lanes.md) for `subagents`.
-- [references/file-scope.md](references/file-scope.md) for an exact file list.
-- [references/prior-findings.md](references/prior-findings.md) for prior findings,
-  their intersection with a file list, and the targeted result contract.
+- [references/subagent-lanes.md](references/subagent-lanes.md) when the review
+  delegates lanes, before publishing the lane map.
+- [references/file-scope.md](references/file-scope.md) when the user supplies
+  an exact file list.
+- [references/prior-findings.md](references/prior-findings.md) and
+  [references/revalidation-json.md](references/revalidation-json.md) when the
+  user supplies prior findings, whether or not JSON output is requested; they
+  define selection, the intersection with a file list, and the targeted result
+  contract.
+- [references/findings-json.md](references/findings-json.md) when the user
+  requests JSON output for a fresh review.
+- [references/discoverability.md](references/discoverability.md) when a fresh
+  review activates the discoverability axis.
+- [references/adversarial-review.md](references/adversarial-review.md) when the
+  change touches authentication, authorization, payments, secrets, destructive
+  or data-loss behavior, or tenant isolation; apply its bounded bypass hunt
+  within engineering quality.
+- [references/engineering-smells.md](references/engineering-smells.md) when
+  structural evidence suggests a design smell but concrete impact or the
+  smallest remedy is unclear. Use it as investigation prompts; repository
+  standards and observed impact remain authoritative.
+- [references/fix-mode.md](references/fix-mode.md) when the user selects
+  `fix <finding IDs>` or `fix-all`.
 
 ## Establish a fresh review
 
-Use this section for a normal review or when the user explicitly combines
-revalidation with a fresh review. For targeted revalidation alone, use the
-source selection and recorded baseline above and gather evidence only for the
-selected prior findings.
+Use this section for a fresh or combined review. Targeted revalidation alone
+follows the prior-findings reference instead.
 
-1. Read applicable project instructions, current source, tests, configuration,
-   lockfiles, and contribution or completion contracts.
+1. Ground the review in applicable project instructions, current source, tests,
+   configuration, lockfiles, and contribution or completion contracts.
 2. Resolve the comparison boundary:
    - use the user-supplied base when present;
    - for a pull request, use its base branch;
@@ -102,16 +127,7 @@ selected prior findings.
    add UI/accessibility, trust boundaries, persistence/migrations, concurrency,
    compatibility, deployment/rollback, observability, or performance only when
    the change touches those concerns.
-7. When the change touches authentication, authorization, payments, secrets,
-   destructive or data-loss behavior, or tenant isolation, read
-   [references/adversarial-review.md](references/adversarial-review.md) and apply
-   its bounded bypass hunt within engineering quality.
-8. When structural evidence suggests a design smell but concrete impact or the
-   smallest remedy is unclear, read
-   [references/engineering-smells.md](references/engineering-smells.md) as
-   optional investigation prompts. Repository standards and observed impact
-   remain authoritative.
-9. Measure churn for every changed file in the finding scope and, where history
+7. Measure churn for every changed file in the finding scope and, where history
    can identify it reliably, each changed function, method, class, or module.
    Follow renames, state the history window, and record touch count and line
    churn. Use the repository's declared churn window or 90 days when none
@@ -121,9 +137,7 @@ selected prior findings.
 
 ## Generate evidence
 
-For a fresh review, apply these requirements across the mapped finding scope.
-For targeted revalidation, apply them only where they test a selected prior
-finding.
+Apply these requirements across the mapped finding scope.
 
 - Establish the repository's relevant gate from current evidence or run the
   missing checks. In a composed workflow the caller owns the aggregate gate.
@@ -147,7 +161,8 @@ finding.
 
 ## Review axes
 
-Keep the axes distinct so one cannot mask the other.
+Keep the axes distinct so one cannot mask the other. The discoverability axis,
+when active, is defined in its reference.
 
 ### De-duplication
 
@@ -198,23 +213,20 @@ Cite the originating requirement or identify the claim as inferred.
   current official documentation or source. Repository decisions override
   generic preferences.
 
-### Discoverability
-
-For an active public-web surface, verify crawl and index controls, canonical and
-descriptive metadata, internal discovery paths, structured data that matches
-visible content, semantic content structure, rendering, and material web
-performance. Assess conventional search and AI-assisted discovery together,
-while keeping crawler access, search inclusion, and model-training controls
-distinct. Use current official search-engine and publisher guidance; do not
-invent special AEO markup, keywords, or guarantees.
-
 ## Fresh-review report
+
+Report terms are an interface: callers such as `milestone-rush`, review
+tooling and audits match them literally, so a paraphrase breaks the handoff.
+Use these terms verbatim for the lane map, review axes, lane statuses, and
+roles: `review-axis-to-lane map`; `de-duplication`,
+`claim and specification`, `engineering quality`, `discoverability`;
+`complete`, `incomplete`; `coordinator`, `worker`. A plain-language gloss may
+follow a term but never replaces it. When lanes ran, label that section with
+the map's term and describe your own role there as the `coordinator`. A short
+report may compress wording but keeps every applicable field below.
 
 For a fresh review, lead with the verdict: `APPROVE`,
 `APPROVE WITH IMPROVEMENTS`, or `REQUEST CHANGES`.
-
-Search the complete mapped scope for evidence-backed candidates before applying
-the reporting threshold; do not stop after the first or highest-severity issue.
 
 Include:
 
@@ -222,8 +234,10 @@ Include:
 - active and skipped review axes, with the reason for each skip;
 - the material engineering-quality concerns covered and any conditional concern
   skipped because the changed runtime path did not touch it;
-- when `subagents` was supplied, the review-axis-to-lane map, completed and
-  incomplete lanes, and every coordinator-completed fallback with its reason;
+- when the review delegated lanes, the review-axis-to-lane map with each
+  lane's `complete` or `incomplete` status, worker candidates the coordinator
+  filtered out with the reason (listed apart from findings), and every
+  coordinator-completed fallback with its reason, or that none was needed;
 - the churn window, symbol/file coverage, and architectural-risk hotspots;
 - exact probes and checks with observed results;
 - de-duplication coverage, coalesced evidence sources, and merged or conflicted
@@ -250,29 +264,10 @@ security, operability, test-value, maintainability, simplification, or
 comprehension cost. `IMPROVEMENT` is a verified worthwhile simplification or
 current-practice alignment. `NITPICK` is a small, local polish issue with a
 clear remedy and evidence from repository conventions or current code; it must
-not represent personal taste. Optional polish does not block readiness, but a
-verified requirement gap cannot be waived by assigning it a lower severity.
-Omit praise, diff narration,
-subjective style preferences, and findings without concrete impact.
+not represent personal taste. Omit praise, diff narration, subjective style
+preferences, and findings without concrete impact.
 
-## Fix follow-up
-
-In a fix mode, implement the smallest remedies without expanding the agreed
-change. Promote a useful repro into a regression test; otherwise remove it.
-Rerun affected behavioral probes and project checks once after the fixes, then
-report fixed and unresolved IDs plus observed results. Do not start an
-unbounded review-fix-review loop. The coordinator makes every edit. Do not
-redispatch completed lanes after fixes; re-engage a worker only to resolve
-incomplete or contradictory evidence.
-
-For prior-findings input, default to read-only revalidation. An explicit
-`fix <finding IDs>` may remediate only matching selected findings classified
-`still_present` or `changed`; `fix-all` may remediate all such selected
-findings. Never edit for `resolved`, `not_retestable`, or `skippedOutOfScope`
-findings, and do not turn remediation into a fresh review.
-
-Return fixed and unresolved findings to the caller, which owns the development
-or delivery loop. Unresolved `BLOCKING` or `IMPORTANT` findings prevent readiness.
-Every verified gap against the agreed requirements must be resolved regardless
-of severity. Record deferred optional improvements separately; they do not
-extend the agreed work.
+Unresolved `BLOCKING` or `IMPORTANT` findings prevent readiness. Optional polish
+does not block readiness, but every verified gap against the agreed requirements
+must be resolved regardless of severity; assigning it a lower severity does not
+waive it.

@@ -102,6 +102,19 @@ class ReviewCurrencyTest(unittest.TestCase):
                    "state": "PENDING", "createdAt": T1, "creator": {"login": "review-app"}}
         self.assertFalse(self.terminal([pending], [verdict("later", T3)]))
 
+    def test_successful_status_describing_a_skipped_or_limited_review_is_not_terminal(self):
+        def status(description):
+            return {"__typename": "StatusContext", "id": "status", "context": "Review", "state": "SUCCESS",
+                    "description": description, "createdAt": T1, "creator": {"login": "review-app"}}
+        self.assertFalse(self.terminal([status("Review rate limited")]))
+        self.assertTrue(self.terminal([status("Review completed")]))
+
+    def test_successful_check_run_describing_a_limited_review_is_not_terminal(self):
+        limited = check("limited", T1, T2)
+        limited["title"] = "Review rate limited"
+        self.assertFalse(self.terminal([limited]))
+        self.assertTrue(self.terminal([check("done", T1, T2)]))
+
     def test_reply_only_review_cannot_supersede_incomplete_verdict(self):
         reply = verdict("reply", T3, state="COMMENTED")
         reply["comments"]["nodes"] = [{"id": "reply-comment", "replyTo": {"id": "original"}}]
