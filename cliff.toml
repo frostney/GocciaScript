@@ -22,6 +22,15 @@ body = """
 """
 footer = ""
 trim = true
+# Annotate entries whose subject names a flag that was renamed or removed
+# before the release that contains it, so neither CHANGELOG.md nor the
+# tag-rendered GitHub release notes advertise a flag the binaries reject.
+# Each pattern matches exactly one PR's entry.
+postprocessors = [
+  { pattern = '(?m)^(- feat\(sandbox\): apply a sandbox run.s changes with --write-back \(#1248\))$', replace = "$1 — shipped as `--copy-rw`: name each input the run may write back with `--copy-rw` (or `\"copy-rw\"` in the `sandbox` section)" },
+  { pattern = '(?m)^(- feat\(modules\): opt-in bare-specifier resolution against node_modules \(#1190\))$', replace = "$1 — the opt-in is `--allow-import=node_modules` (the interim `--allow-node-modules` flag was removed before release)" },
+  { pattern = '(?m)^(- fix\(cli\): keep --no-host-filesystem in force when a JavaScript manifest is loaded \(#1257\))$', replace = "$1 — `--no-host-filesystem` is removed in this release: host reads are denied by default, and `--deny-read` also refuses the project's own imports" },
+]
 
 [git]
 conventional_commits = false
