@@ -36,6 +36,12 @@ type
     property Text: string read GetText;
   end;
 
+  { Checks the exact bytes a module is about to be compiled or read from,
+    raising to refuse them. The provider-package pin check (verify on load)
+    is one. }
+  TGocciaModuleContentVerifier = procedure(const APath: string;
+    const ABytes: TBytes) of object;
+
   TGocciaModuleContentProvider = class
   public
     function Exists(const APath: string): Boolean; virtual; abstract;
@@ -48,6 +54,16 @@ type
       implementation reuses LoadContent; providers backed by exact byte storage
       should override it to avoid the UTF-8/source-line round trip. }
     function LoadContentBytes(const APath: string): TBytes; virtual;
+
+    { LoadContent and LoadContentBytes with AVerifier (when assigned) shown
+      the bytes first. A provider that reads bytes once overrides them so the
+      bytes verified are the bytes used; the base implementations read the
+      content a second time. }
+    function LoadVerifiedContent(const APath: string;
+      const AVerifier: TGocciaModuleContentVerifier): TGocciaModuleContent;
+      virtual;
+    function LoadVerifiedContentBytes(const APath: string;
+      const AVerifier: TGocciaModuleContentVerifier): TBytes; virtual;
 
     { True when this provider reads the host filesystem, which makes every
       module it loads subject to the engine's read capability. Providers over
@@ -68,6 +84,11 @@ type
     function Exists(const APath: string): Boolean; override;
     function LoadContent(const APath: string): TGocciaModuleContent; override;
     function LoadContentBytes(const APath: string): TBytes; override;
+    function LoadVerifiedContent(const APath: string;
+      const AVerifier: TGocciaModuleContentVerifier): TGocciaModuleContent;
+      override;
+    function LoadVerifiedContentBytes(const APath: string;
+      const AVerifier: TGocciaModuleContentVerifier): TBytes; override;
     function TryGetLastModified(const APath: string;
       out ALastModified: TDateTime): Boolean; override;
     function ReadsHostFileSystem: Boolean; override;
@@ -148,6 +169,23 @@ begin
   end;
 end;
 
+function TGocciaModuleContentProvider.LoadVerifiedContent(
+  const APath: string;
+  const AVerifier: TGocciaModuleContentVerifier): TGocciaModuleContent;
+begin
+  if Assigned(AVerifier) then
+    AVerifier(APath, LoadContentBytes(APath));
+  Result := LoadContent(APath);
+end;
+
+function TGocciaModuleContentProvider.LoadVerifiedContentBytes(
+  const APath: string; const AVerifier: TGocciaModuleContentVerifier): TBytes;
+begin
+  Result := LoadContentBytes(APath);
+  if Assigned(AVerifier) then
+    AVerifier(APath, Result);
+end;
+
 function TGocciaModuleContentProvider.ReadsHostFileSystem: Boolean;
 begin
   Result := False;
@@ -193,6 +231,15 @@ end;
 
 function TGocciaFileSystemModuleContentProvider.LoadContent(
   const APath: string): TGocciaModuleContent;
+begin
+  Result := LoadVerifiedContent(APath, nil);
+end;
+
+{ The bytes are read once, from the handle whose identity is recorded, and
+  those same bytes are verified and then decoded. }
+function TGocciaFileSystemModuleContentProvider.LoadVerifiedContent(
+  const APath: string;
+  const AVerifier: TGocciaModuleContentVerifier): TGocciaModuleContent;
 var
   Bytes: TBytes;
   CanonicalIdentity: string;
@@ -229,6 +276,8 @@ begin
   finally
     Stream.Free;
   end;
+  if Assigned(AVerifier) then
+    AVerifier(APath, Bytes);
   if not TryDecodeUTF8(Bytes, SourceText, ErrorOffset) then
     { Report only the byte offset: this message reaches guest code through
       TGocciaRuntimeError, and the resolved host path must not be disclosed
@@ -244,6 +293,14 @@ function TGocciaFileSystemModuleContentProvider.LoadContentBytes(
   const APath: string): TBytes;
 begin
   Result := ReadFileBytes(APath);
+end;
+
+function TGocciaFileSystemModuleContentProvider.LoadVerifiedContentBytes(
+  const APath: string; const AVerifier: TGocciaModuleContentVerifier): TBytes;
+begin
+  Result := ReadFileBytes(APath);
+  if Assigned(AVerifier) then
+    AVerifier(APath, Result);
 end;
 
 function TGocciaFileSystemModuleContentProvider.ReadsHostFileSystem: Boolean;

@@ -43,6 +43,9 @@ type
     procedure TestNodeModulesCeilings;
     procedure TestNodeModulesDeny;
     procedure TestProviderScopes;
+    procedure TestProviderOwnerAndRepositoryScopes;
+    procedure TestProviderDenyWins;
+    procedure TestProviderScopeGrammar;
     procedure TestGrantsAndDeniesAll;
     procedure TestAllowsUnscoped;
     procedure TestNetTrailingDot;
@@ -92,6 +95,11 @@ begin
     TestNodeModulesCeilings);
   Test('node_modules denies win', TestNodeModulesDeny);
   Test('Provider import scopes', TestProviderScopes);
+  Test('Provider owner and repository scopes',
+    TestProviderOwnerAndRepositoryScopes);
+  Test('A provider deny wins', TestProviderDenyWins);
+  Test('Import scopes name only the github provider',
+    TestProviderScopeGrammar);
   Test('Grants and DeniesAll', TestGrantsAndDeniesAll);
   Test('AllowsUnscoped needs an unscoped allow and no deny in every ' +
     'layer; HasDeny sees any deny',
@@ -172,7 +180,8 @@ begin
   Expect<Boolean>(Capabilities.NodeModulesCeiling(RootPath('a'),
     Ceiling)).ToBe(True);
   Expect<string>(Ceiling).ToBe('');
-  Expect<Boolean>(Capabilities.AllowsProvider('github')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'GocciaScript-Raylib')).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestDenyWinsAllowFirst;
@@ -714,14 +723,122 @@ var
   Ceiling: string;
 begin
   Capabilities := TGocciaCapabilities.None.Allow(gcImport, 'github');
-  Expect<Boolean>(Capabilities.AllowsProvider('github')).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsProvider('GitHub')).ToBe(True);
-  Expect<Boolean>(Capabilities.AllowsProvider('gitlab')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'raylib')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('GitHub', 'Frostney',
+    'Raylib')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('gitlab', 'frostney',
+    'raylib')).ToBe(False);
+  Expect<Boolean>(Capabilities.Allows(gcImport,
+    'github:frostney/raylib')).ToBe(True);
   { A provider grant is not a node_modules grant. }
   Expect<Boolean>(Capabilities.NodeModulesCeiling(RootPath('app'),
     Ceiling)).ToBe(False);
   Capabilities := Capabilities.Deny(gcImport, 'github');
-  Expect<Boolean>(Capabilities.AllowsProvider('github')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'raylib')).ToBe(False);
+end;
+
+procedure TCapabilitiesTests.TestProviderOwnerAndRepositoryScopes;
+var
+  Capabilities: TGocciaCapabilities;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcImport, 'github:frostney');
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'raylib')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'FROSTNEY',
+    'other')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'someone',
+    'raylib')).ToBe(False);
+  { An owner scope is not a prefix of another owner's name. }
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostneyx',
+    'raylib')).ToBe(False);
+
+  Capabilities := TGocciaCapabilities.None.Allow(gcImport,
+    'github:Frostney/GocciaScript-Raylib');
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'gocciascript-raylib')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    'GocciaScript')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'frostney',
+    '')).ToBe(False);
+  { Scopes are stored lowercased. }
+  Expect<Boolean>(Pos('github:frostney/gocciascript-raylib',
+    Capabilities.ToJSON) > 0).ToBe(True);
+end;
+
+procedure TCapabilitiesTests.TestProviderDenyWins;
+var
+  Capabilities: TGocciaCapabilities;
+  Scope: string;
+begin
+  { An owner deny carves every repository of that owner out of a provider
+    grant, in either order. }
+  Capabilities := TGocciaCapabilities.None
+    .Deny(gcImport, 'github:evil')
+    .Allow(gcImport, 'github');
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'evil',
+    'pkg')).ToBe(False);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'good',
+    'pkg')).ToBe(True);
+  Expect<Boolean>(Capabilities.ProviderPackageDenyScope('github', 'Evil',
+    'pkg', Scope)).ToBe(True);
+  Expect<string>(Scope).ToBe('github:evil');
+  Expect<Boolean>(Capabilities.ProviderPackageDenyScope('github', 'good',
+    'pkg', Scope)).ToBe(False);
+
+  Capabilities := TGocciaCapabilities.None
+    .Allow(gcImport, 'github:good/pkg')
+    .Deny(gcImport, 'github:good/pkg');
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'good',
+    'pkg')).ToBe(False);
+
+  { A narrowed layer must allow too. }
+  Capabilities := TGocciaCapabilities.None.Allow(gcImport, 'github')
+    .Narrow(TGocciaCapabilities.None.Allow(gcImport, 'github:good'));
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'good',
+    'pkg')).ToBe(True);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'other',
+    'pkg')).ToBe(False);
+
+  Capabilities := TGocciaCapabilities.Unrestricted.Deny(gcImport);
+  Expect<Boolean>(Capabilities.AllowsProviderPackage('github', 'good',
+    'pkg')).ToBe(False);
+  Expect<Boolean>(Capabilities.ProviderPackageDenyScope('github', 'good',
+    'pkg', Scope)).ToBe(True);
+  Expect<string>(Scope).ToBe('');
+end;
+
+procedure TCapabilitiesTests.TestProviderScopeGrammar;
+
+  function Rejects(const AScope: string): Boolean;
+  begin
+    try
+      TGocciaCapabilities.None.Allow(gcImport, AScope);
+      Result := False;
+    except
+      on EGocciaCapabilityScopeError do
+        Result := True;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(Rejects('github')).ToBe(False);
+  Expect<Boolean>(Rejects('GitHub')).ToBe(False);
+  Expect<Boolean>(Rejects('github:owner')).ToBe(False);
+  Expect<Boolean>(Rejects('github:owner/repo.name_x')).ToBe(False);
+  { Only the github provider exists. }
+  Expect<Boolean>(Rejects('gitlab')).ToBe(True);
+  Expect<Boolean>(Rejects('example.com')).ToBe(True);
+  Expect<Boolean>(Rejects('github:')).ToBe(True);
+  Expect<Boolean>(Rejects('github:owner/')).ToBe(True);
+  Expect<Boolean>(Rejects('github:/repo')).ToBe(True);
+  Expect<Boolean>(Rejects('github:owner/repo/extra')).ToBe(True);
+  Expect<Boolean>(Rejects('github:owner/..')).ToBe(True);
+  Expect<Boolean>(Rejects('github:-owner')).ToBe(True);
+  Expect<Boolean>(Rejects('github:owner@v1')).ToBe(True);
+  Expect<Boolean>(Rejects('github:owner/repo@v1')).ToBe(True);
+  Expect<Boolean>(Rejects('github:ow_ner')).ToBe(True);
 end;
 
 procedure TCapabilitiesTests.TestGrantsAndDeniesAll;

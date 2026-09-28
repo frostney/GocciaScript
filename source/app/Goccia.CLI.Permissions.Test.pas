@@ -245,8 +245,8 @@ begin
   Path := WriteConfig('import-true/goccia.json',
     '{"permissions": {"allow-import": true}}');
   Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
-    Path + ': "permissions.allow-import" needs scopes: node_modules[=<dir>] ' +
-    'or a provider such as github');
+    Path + ': "permissions.allow-import" needs scopes: node_modules[=<dir>], ' +
+    'github, github:<owner>, or github:<owner>/<repo>');
   Path := WriteConfig('not-object/goccia.json', '{"permissions": true}');
   Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
     Path + ': "permissions" must be an object of allow-* and deny-* keys');

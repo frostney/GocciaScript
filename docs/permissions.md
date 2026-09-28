@@ -30,7 +30,7 @@ set, the [trust](#config-trust) config grants need,
 | `read` | absolute paths, canonical and recursive | host file reads beyond the module-graph exemption |
 | `net` | `host`, `host:port`, `*.domain`, IP, CIDR, `private` | `fetch`, checked on every redirect hop |
 | `ffi` | absolute library paths | `FFI.open` and installing the `FFI` global |
-| `import` | `node_modules`, `node_modules=<dir>`, provider hosts such as `github` | bare specifiers resolved against `node_modules`; provider imports are reserved |
+| `import` | `node_modules`, `node_modules=<dir>`, `github`, `github:<owner>`, `github:<owner>/<repo>` | bare specifiers resolved against `node_modules`; [provider imports](provider-imports.md) |
 
 An allow or deny with no scope covers every scope of that capability. Limits
 such as the fetch response-body ceiling are settings, not capabilities: see
@@ -142,14 +142,19 @@ against expanded paths, as described in
 specifier the set does not grant keeps the sealed-by-default resolution
 message; one it explicitly denies throws `PermissionDenied`.
 
-Provider hosts (`github`) are modeled so a set can carry them, but provider
-resolution is not implemented yet.
+`github` allows every provider package, `github:<owner>` every repository of
+that owner, and `github:<owner>/<repo>` that repository; names compare
+case-insensitively, and any other provider is an invalid scope. A deny scope
+covers what the same allow scope would, and wins. An import-map entry naming a
+package the set does not cover throws `PermissionDenied` (`import: <package>`)
+before anything is fetched. [Provider Imports](provider-imports.md) describes
+the import map, the lockfile, and the cache.
 
 Packages the import capability grants are part of the module graph (see
 below): when a bare specifier resolves through a granted `node_modules` scope,
 the package's canonical root — symlinks resolved, so a workspace or pnpm link
-counts where it really lives — joins the graph. Provider packages will follow
-the same rule.
+counts where it really lives — joins the graph. A provider package joins it
+the same way when an import resolves through its entry.
 
 ## The module-graph exemption
 
@@ -161,7 +166,10 @@ bare specifier resolved to through the `import` capability, nor a literal import
 made by a file of that package that stays inside the package's canonical root.
 A path that merely contains a `node_modules` segment is no grant: a relative or
 absolute import of `./node_modules/x/file` is judged like any other path, by
-where it canonically lives. The project is the directory of the
+where it canonically lives. Nor is the provider package cache: a path inside
+any `.goccia` directory of the project is outside the exemption, and its
+files load without a read grant only as a resolved provider package. The
+project is the directory of the
 nearest `goccia.json`, `goccia.json5`, or `goccia.toml` above the entry file,
 or the entry file's own directory when there is none (the `ProjectRoot` property of `TGocciaEngine`).
 
@@ -255,8 +263,8 @@ identically.
 
 Every decision that consults a capability emits a
 [capability audit event](capability-audit.md), allow and deny alike:
-`read.file`, `net.fetch`, `net.dispatch`, `ffi.open`, and `import.node-modules`
-(`import.provider` is reserved). Exempt module-graph loads emit nothing. Each
+`read.file`, `net.fetch`, `net.dispatch`, `ffi.open`, `import.node-modules`,
+and `import.provider`. Exempt module-graph loads emit nothing. Each
 root engine also emits one `capabilities.effective` event carrying
 `TGocciaCapabilities.ToJSON`, whose reason is the set's provenance when the
 host supplies one (`cli --allow-net=example.com; config /repo/goccia.json
@@ -305,7 +313,7 @@ Engine.FetchMaxResponseBytes := 1024 * 1024;
 | `TGocciaCapabilities.None` / `.Unrestricted` | Grants nothing / everything including `private` (tests, fully trusted hosts) |
 | `.Allow(cap, scope)` / `.Deny(cap, scope)` | Return a copy with the scope added to the innermost layer |
 | `.Narrow(child)` | Return a copy with the child's layers appended |
-| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesNodeModules`, `.AllowsProvider` | Queries |
+| `.Grants`, `.Allows`, `.AllowsPath`, `.AllowsUnscoped`, `.AllowsNetHost`, `.AllowsNetAddress`, `.NodeModulesCeiling`, `.DeniesAll`, `.DeniesPath`, `.DeniesNodeModules`, `.AllowsProviderPackage`, `.ProviderPackageDenyScope` | Queries |
 | `.ExplainNetHostDenial` | The host-side reason a net host is refused, for audit |
 | `.ToJSON` | The layers, as `capabilities.effective` reports them |
 | `TGocciaEngine.Create(..., ACapabilities)` | Fixes the set; the overloads without one use `None` |
@@ -338,7 +346,7 @@ config file. There is no `--allow-all` and no environment-variable form.
 | `--allow-read` | every path | paths, relative to the working directory |
 | `--allow-net` | every public host | `host`, `host:port`, `*.domain`, IP, CIDR, `private` |
 | `--allow-ffi` | every library (installs the `FFI` global) | library paths, relative to the working directory |
-| `--allow-import` | not accepted: a scope is required | `node_modules`, `node_modules=<dir>`, a provider such as `github` |
+| `--allow-import` | not accepted: a scope is required | `node_modules`, `node_modules=<dir>`, `github`, `github:<owner>`, `github:<owner>/<repo>` |
 | `--deny-read` | every read, including the project's own imports | paths |
 | `--deny-net` | every host | as for `--allow-net` |
 | `--deny-ffi` | every library | library paths |
@@ -703,8 +711,9 @@ The guest reaches files only through the virtual filesystem, so `net` is the
 one capability sandbox mode grants. `--allow-net` and `--deny-net` apply as in
 host mode. `--allow-read`, `--allow-import`, and `--allow-ffi` are usage errors
 (exit 2); `--deny-read`, `--deny-import`, and `--deny-ffi` are accepted and
-change nothing. A config that requests `read`, `import`, or `ffi` gets a
-warning instead:
+change nothing. Sandbox mode does not apply the root config's import map, and
+warns once when it has [provider entries](provider-imports.md#authorization).
+A config that requests `read`, `import`, or `ffi` gets a warning instead:
 
 ```text
 Error: --allow-read cannot be used in sandbox mode (enabled by --copy): the sandbox has no host filesystem; copy inputs with --copy

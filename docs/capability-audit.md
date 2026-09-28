@@ -41,7 +41,7 @@ consulted it, allow and deny alike:
 | `net.dispatch` | An allowed fetch request reached the dispatch boundary |
 | `ffi.open` | An `ffi` decision for a library-open attempt |
 | `import.node-modules` | An `import` decision for a bare specifier resolved against `node_modules`; one a virtual module, import-map alias, or host module serves never reaches `node_modules` and emits none |
-| `import.provider` | Reserved for provider imports |
+| `import.provider` | A [provider import](provider-imports.md) decision: the grant for a package, each file fetched, and each cached or loaded file checked against its pin |
 
 The remaining kinds report engine features that are not capabilities:
 
@@ -90,6 +90,11 @@ command-line grants and the governing config's trust decision, such as
 `import.node-modules` subjects are the bare specifier; the reason carries the
 ceiling the walk was bounded by. See [Module Resolution](module-resolution.md)
 for what the grant permits.
+
+`import.provider` subjects are the package key (`github:<owner>/<repo>@<ref>`)
+for the grant, the derived URL for a fetch, and `<package key>/<path>` for a
+pin check; [Provider Imports](provider-imports.md#audit-events) lists the
+reasons.
 
 Every event is delivered on the runtime thread. The decisions a fetch worker
 makes for resolved addresses and redirect hops are recorded with the request

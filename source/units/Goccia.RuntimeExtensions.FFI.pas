@@ -53,6 +53,12 @@ begin
   FBuiltinFFI := TGocciaGlobalFFI.Create(CONSTRUCTOR_FFI,
     Runtime.Engine.Interpreter.GlobalScope, Runtime.Engine.ThrowError,
     Runtime.Engine.Capabilities, Runtime.Engine.EmitCapabilityAudit);
+  if Assigned(Runtime.Engine.Resolver) then
+  begin
+    FBuiltinFFI.IsProviderPath := Runtime.Engine.Resolver.IsProviderPackagePath;
+    FBuiltinFFI.VerifyProviderBytes :=
+      Runtime.Engine.Resolver.VerifyProviderContent;
+  end;
   Runtime.RegisterRuntimeGlobalName('FFI');
 end;
 

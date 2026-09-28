@@ -205,6 +205,10 @@ printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 ./build/GocciaRunner app.js --allow-read=../shared --allow-net=api.example.com
 ./build/GocciaRunner app.js --allow-ffi=./libs/libcalc.so
 
+# Import lockfile-pinned github: packages named in the import map, and refuse
+# the network when one is not cached (see docs/provider-imports.md)
+./build/GocciaRunner app.js --allow-import=github:frostney --cached-only
+
 # Resolve bare specifiers against node_modules (see docs/module-resolution.md).
 # The plain scope walks up from each importing file; =<dir> caps the walk at that directory.
 ./build/GocciaRunner app.js --allow-import=node_modules

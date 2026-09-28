@@ -122,6 +122,9 @@ type
     FLastPackageRoot: string;
 
     function EnforcesHostReads: Boolean;
+    function IsProjectGraphPath(const ACanonicalPath: string): Boolean;
+    function IsProviderGraphPath(const APath, AImportingFilePath,
+      APackageRoot: string): Boolean;
     function HostReadVerdict(const ACanonicalPath, AImportingFilePath: string;
       const AIsLiteral: Boolean; out ADenial: TGocciaReadDenial): Boolean;
     procedure DenyHostRead(const ASpecifier, ACanonicalPath: string;
@@ -328,6 +331,8 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.ModuleResolver,
+  Goccia.Packages.Address,
+  Goccia.Packages.Store,
   Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
@@ -806,11 +811,64 @@ begin
     FContentProvider.ReadsHostFileSystem;
 end;
 
+{ Whether ACanonicalPath is inside the project and outside every `.goccia`
+  directory in it. The provider package cache is not part of the module
+  graph: its files load only as a resolved provider package, whose bytes are
+  checked against the lockfile, and reaching them any other way is an
+  ordinary read (ADR 0122). }
+function TGocciaModuleLoader.IsProjectGraphPath(
+  const ACanonicalPath: string): Boolean;
+var
+  RelativePath, Segment: string;
+  SegmentStart, I: Integer;
+begin
+  if (FProjectRoot = '') or
+     not IsPathWithinScope(ACanonicalPath, FProjectRoot) then
+    Exit(False);
+  RelativePath := Copy(ACanonicalPath, Length(FProjectRoot) + 1, MaxInt);
+  SegmentStart := 1;
+  for I := 1 to Length(RelativePath) + 1 do
+    if (I > Length(RelativePath)) or (RelativePath[I] = PathDelim) then
+    begin
+      Segment := Copy(RelativePath, SegmentStart, I - SegmentStart);
+      if SameText(Segment, PACKAGE_CACHE_DIRECTORY_NAME) then
+        Exit(False);
+      SegmentStart := I + 1;
+    end;
+  Result := True;
+end;
+
+{ Whether APath is a file of a materialized provider package reached as
+  that package: resolved through the package's import-map entry
+  (APackageRoot is its root) or imported by one of its own files. Such a
+  path can only be a pinned file, verified when it is loaded, so the import
+  grant that materialized the package covers it whether the specifier was
+  literal or computed (ADR 0122). }
+function TGocciaModuleLoader.IsProviderGraphPath(const APath,
+  AImportingFilePath, APackageRoot: string): Boolean;
+var
+  Package: TGocciaMaterializedPackage;
+  RelativePath: string;
+begin
+  Result := False;
+  if (APath = '') or not Assigned(FResolver) or
+     not Assigned(FResolver.ProviderPackages) then
+    Exit;
+  Package := FResolver.ProviderPackages.FindPackage(APath, RelativePath);
+  if not Assigned(Package) then
+    Exit;
+  Result := ((APackageRoot <> '') and
+    (ExcludeTrailingPathDelimiter(APackageRoot) = Package.Root)) or
+    ((AImportingFilePath <> '') and
+     (FResolver.ProviderPackages.FindPackage(AImportingFilePath,
+       RelativePath) = Package));
+end;
+
 { ADR 0122 read judgment for one canonical path. AIsLiteral is False for a
   dynamic import whose specifier was computed at run time. A deny wins over
-  every exemption; a literal import inside the project, or inside a package
-  its importer belongs to, is part of the module graph; anything else needs
-  a read grant. }
+  every exemption; a literal import inside the project (outside its
+  `.goccia` cache), or inside a package its importer belongs to, is part of
+  the module graph; anything else needs a read grant. }
 function TGocciaModuleLoader.HostReadVerdict(const ACanonicalPath,
   AImportingFilePath: string; const AIsLiteral: Boolean;
   out ADenial: TGocciaReadDenial): Boolean;
@@ -818,8 +876,7 @@ begin
   ADenial := rdDenied;
   if FCapabilities.DeniesPath(gcRead, ACanonicalPath) then
     Exit(False);
-  if AIsLiteral and (FProjectRoot <> '') and
-     IsPathWithinScope(ACanonicalPath, FProjectRoot) then
+  if AIsLiteral and IsProjectGraphPath(ACanonicalPath) then
     Exit(True);
   if AIsLiteral and IsInGraphPackage(ACanonicalPath, AImportingFilePath) then
     Exit(True);
@@ -885,6 +942,10 @@ begin
   if not FProbeActive then
     Exit;
   CanonicalPath := CanonicalCapabilityPath(ACandidatePath);
+  if IsProviderGraphPath(ACandidatePath, FProbeImporter,
+     FResolver.ProbePackageDirectory) and
+     not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
+    Exit;
   { A file probe inside the package a literal bare specifier is being
     resolved in belongs to the module graph, as the resolved file will. }
   if FProbeLiteral and (FResolver.ProbePackageDirectory <> '') and
@@ -1015,6 +1076,12 @@ begin
     Exit;
 
   CanonicalPath := CanonicalCapabilityPath(APath);
+  { The package's files are already confined and verified; recording its
+    root is not needed for them, and the read exemption for its literal
+    relative imports follows from the same check. }
+  if IsProviderGraphPath(APath, AImportingFilePath, APackageRoot) and
+     not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
+    Exit;
   if AIsLiteral and (APackageRoot <> '') and
      not FCapabilities.DeniesPath(gcRead, CanonicalPath) then
   begin
@@ -1030,8 +1097,7 @@ begin
      Denial) then
     DenyHostRead(ASpecifier, CanonicalPath, Denial);
   if Assigned(FCapabilityAuditEmitter) and
-     not (AIsLiteral and (((FProjectRoot <> '') and
-     IsPathWithinScope(CanonicalPath, FProjectRoot)) or
+     not (AIsLiteral and (IsProjectGraphPath(CanonicalPath) or
      IsInGraphPackage(CanonicalPath, AImportingFilePath))) then
     FCapabilityAuditEmitter(gckReadFile, gcdAllow, CanonicalPath,
       'a read grant covers the path');
@@ -1073,6 +1139,7 @@ var
   var
     Definition: TGocciaVirtualModuleDefinition;
     SavedGrant: TModuleResolverNodeModulesGrant;
+    SavedProviderGrant: TGocciaProviderGrant;
   begin
     if not Assigned(FResolver) or
        FWarnedVirtualCollisions.ContainsKey(AVirtualAddress) then
@@ -1089,6 +1156,10 @@ var
     SavedGrant := FResolver.NodeModulesGrant;
     if Assigned(SavedGrant) and FCapabilityPolicyConfigured then
       FResolver.NodeModulesGrant := QuietNodeModulesGrant;
+    { Nor a provider import: without a grant callback the resolver refuses
+      it before anything is materialized or fetched. }
+    SavedProviderGrant := FResolver.ProviderGrant;
+    FResolver.ProviderGrant := nil;
     try
       try
         FileSystemAddress := FResolver.Resolve(AModulePath,
@@ -1102,6 +1173,7 @@ var
       end;
     finally
       FResolver.NodeModulesGrant := SavedGrant;
+      FResolver.ProviderGrant := SavedProviderGrant;
     end;
   end;
 
@@ -1144,10 +1216,17 @@ begin
   try
     if FVirtualModules.Contains(AResolvedPath) then
       Result := FVirtualModules.LoadContent(AResolvedPath)
+    else if Assigned(FResolver) and
+       FResolver.IsProviderPackagePath(AResolvedPath) then
+      { Verify on load: the bytes compiled are the bytes hashed. }
+      Result := FContentProvider.LoadVerifiedContent(AResolvedPath,
+        FResolver.VerifyProviderContent)
     else
       Result := FContentProvider.LoadContent(AResolvedPath);
   except
     on E: EConvertError do
+      raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+    on E: EGocciaProviderVerificationError do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
   end;
   if Assigned(Result) and (Result.CanonicalIdentity <> '') then
@@ -1178,6 +1257,17 @@ function TGocciaModuleLoader.LoadResolvedContentBytes(
 begin
   if FVirtualModules.Contains(AResolvedPath) then
     Exit(FVirtualModules.LoadContentBytes(AResolvedPath));
+  if Assigned(FResolver) and
+     FResolver.IsProviderPackagePath(AResolvedPath) then
+  begin
+    try
+      Exit(FContentProvider.LoadVerifiedContentBytes(AResolvedPath,
+        FResolver.VerifyProviderContent));
+    except
+      on E: EGocciaProviderVerificationError do
+        raise TGocciaRuntimeError.Create(E.Message, 0, 0, '', nil);
+    end;
+  end;
   Result := FContentProvider.LoadContentBytes(AResolvedPath);
 end;
 
@@ -1276,6 +1366,11 @@ begin
        FVirtualModules.Resolve(AliasCandidate, AImportingFilePath,
        VirtualCandidate) then
       Exit(VirtualCandidate);
+    { A provider entry answers lexically with the provider address it maps
+      to: resolving it for real would grant, materialize, and audit a
+      package the guest only asked the name of. }
+    if IsProviderAddress(AliasCandidate) then
+      Exit(AliasCandidate);
   end;
 
   { Resolution probes the host for extensions and index files. A candidate

@@ -165,11 +165,11 @@ begin
   AbsolutePath := StringReplace(AbsolutePath, '\', '/', [rfReplaceAll]);
   // RFC 8089 §2 — UNC paths map to file://server/share/..., not file:///
   if (Length(AbsolutePath) >= 2) and (AbsolutePath[1] = '/') and (AbsolutePath[2] = '/') then
-    Result := 'file:' + PercentEncodePath(AbsolutePath)
+    Result := FILE_URL_SCHEME + PercentEncodePath(AbsolutePath)
   else
-    Result := 'file:///' + PercentEncodePath(AbsolutePath);
+    Result := FILE_URL_SCHEME + '///' + PercentEncodePath(AbsolutePath);
   {$ELSE}
-  Result := 'file://' + PercentEncodePath(AbsolutePath);
+  Result := FILE_URL_SCHEME + '//' + PercentEncodePath(AbsolutePath);
   {$ENDIF}
 end;
 
@@ -254,7 +254,7 @@ begin
   // ES2026 §13.3.12.1.1 HostGetImportMetaProperties step: resolve
   ResolveBasePath := AFilePath;
   if Assigned(Resolver) and
-     (Copy(CanonicalPath, 1, Length('file:')) <> 'file:') then
+     not IsFileURL(CanonicalPath) then
     ResolveBasePath := CanonicalPath;
   ResolveHelper := TGocciaImportMetaResolveHelper.Create(ResolveBasePath,
     Resolver);

@@ -99,7 +99,7 @@ type
 
     { Generic request query. read/ffi take a path, net takes `host`,
       `host:port`, or `[v6]:port`, import takes `node_modules` or a provider
-      name. }
+      package, `github:<owner>/<repo>`. }
     function Allows(const ACapability: TGocciaCapability;
       const ARequest: string): Boolean;
 
@@ -155,9 +155,19 @@ type
       denied outright, as opposed to merely never granted. }
     function DeniesNodeModules(const AImportingDirectory: string): Boolean;
 
-    { import: whether provider imports from AProvider (e.g. `github`) are
-      allowed. Provider resolution itself is not implemented yet. }
-    function AllowsProvider(const AProvider: string): Boolean;
+    { import: whether the provider package AOwner/ARepository of AProvider
+      (`github`) may be imported. An import scope `github` covers every
+      package of the provider, `github:<owner>` every repository of that
+      owner, and `github:<owner>/<repo>` that repository. Names compare
+      case-insensitively, as GitHub's do. }
+    function AllowsProviderPackage(const AProvider, AOwner,
+      ARepository: string): Boolean;
+
+    { When an import deny refuses the provider package, True with the deny
+      scope that matched it ('' for an unscoped deny), for host-side
+      reports. }
+    function ProviderPackageDenyScope(const AProvider, AOwner,
+      ARepository: string; out AScope: string): Boolean;
 
     function LayerCount: Integer;
     function ToJSON: string;
@@ -166,6 +176,9 @@ type
 const
   NET_PRIVATE_SCOPE = 'private';
   IMPORT_NODE_MODULES_SCOPE = 'node_modules';
+  { The one import provider (ADR 0122). Its scopes are `github`,
+    `github:<owner>`, and `github:<owner>/<repo>`. }
+  IMPORT_PROVIDER_GITHUB = 'github';
 
 function CapabilityName(const ACapability: TGocciaCapability): string;
 function TryParseCapabilityName(const AName: string;
@@ -186,7 +199,8 @@ uses
   FileUtils,
   NetworkAddress,
 
-  Goccia.JSON.Utils;
+  Goccia.JSON.Utils,
+  Goccia.Packages.Address;
 
 const
   { Port argument that matches a scope whatever port it names. }
@@ -210,6 +224,9 @@ type
     Kind: TGocciaImportScopeKind;
     Ceiling: string;
     Provider: string;
+    { Empty for a scope covering every owner, or every repository. }
+    Owner: string;
+    Repository: string;
   end;
 
 const
@@ -527,6 +544,36 @@ end;
 
 { ── import scopes ─────────────────────────────────────────────── }
 
+{ `github`, `github:<owner>`, or `github:<owner>/<repo>`, lowercased. Any
+  other provider, and any malformed owner or repository, is refused: a scope
+  naming a provider nothing implements could only ever be a mistake. }
+function TryParseProviderScope(const AText: string;
+  out AImportScope: TGocciaImportScope): Boolean;
+var
+  Rest: string;
+  SlashIndex: Integer;
+begin
+  Result := False;
+  AImportScope.Kind := iskProvider;
+  AImportScope.Provider := IMPORT_PROVIDER_GITHUB;
+  if AText = IMPORT_PROVIDER_GITHUB then
+    Exit(True);
+  if Copy(AText, 1, Length(GITHUB_PROVIDER_PREFIX)) <>
+     GITHUB_PROVIDER_PREFIX then
+    Exit;
+  Rest := Copy(AText, Length(GITHUB_PROVIDER_PREFIX) + 1, MaxInt);
+  SlashIndex := Pos('/', Rest);
+  if SlashIndex = 0 then
+  begin
+    AImportScope.Owner := Rest;
+    Exit(IsSafeGitHubOwner(Rest));
+  end;
+  AImportScope.Owner := Copy(Rest, 1, SlashIndex - 1);
+  AImportScope.Repository := Copy(Rest, SlashIndex + 1, MaxInt);
+  Result := IsSafeGitHubOwner(AImportScope.Owner) and
+    IsSafeGitHubRepository(AImportScope.Repository);
+end;
+
 function TryParseImportScope(const AScope: string;
   out AImportScope: TGocciaImportScope): Boolean;
 var
@@ -549,9 +596,29 @@ begin
     AImportScope.Ceiling := Copy(Text, Length(Prefix) + 1, MaxInt);
     Exit(AImportScope.Ceiling <> '');
   end;
-  AImportScope.Kind := iskProvider;
-  AImportScope.Provider := LowerCase(Text);
-  Result := IsValidHostName(AImportScope.Provider);
+  Result := TryParseProviderScope(LowerCase(Text), AImportScope);
+end;
+
+function ProviderScopeText(const AImportScope: TGocciaImportScope): string;
+begin
+  Result := AImportScope.Provider;
+  if AImportScope.Owner = '' then
+    Exit;
+  Result := Result + ':' + AImportScope.Owner;
+  if AImportScope.Repository <> '' then
+    Result := Result + '/' + AImportScope.Repository;
+end;
+
+{ Whether a provider scope covers the package AOwner/ARepository of
+  AProvider, all three already lowercased. }
+function ProviderScopeCovers(const AImportScope: TGocciaImportScope;
+  const AProvider, AOwner, ARepository: string): Boolean;
+begin
+  Result := (AImportScope.Kind = iskProvider) and
+    (AImportScope.Provider = AProvider) and
+    ((AImportScope.Owner = '') or ((AImportScope.Owner = AOwner) and
+     ((AImportScope.Repository = '') or
+      (AImportScope.Repository = ARepository))));
 end;
 
 { node_modules ceilings stay *expanded* rather than canonical: the ancestor
@@ -563,8 +630,8 @@ var
 begin
   if not TryParseImportScope(AScope, ImportScope) then
     raise EGocciaCapabilityScopeError.CreateFmt(
-      'import scope is not node_modules, node_modules=<dir>, or a provider: %s',
-      [AScope]);
+      'import scope is not node_modules, node_modules=<dir>, github, ' +
+      'github:<owner>, or github:<owner>/<repo>: %s', [AScope]);
   case ImportScope.Kind of
     iskNodeModules:
       begin
@@ -578,7 +645,7 @@ begin
           StripTrailingDelimiter(ExpandHostFileName(ImportScope.Ceiling));
       end;
   else
-    Result := ImportScope.Provider;
+    Result := ProviderScopeText(ImportScope);
   end;
 end;
 
@@ -1235,9 +1302,38 @@ begin
   Result := False;
 end;
 
-function TGocciaCapabilities.AllowsProvider(const AProvider: string): Boolean;
+function TGocciaCapabilities.ProviderPackageDenyScope(const AProvider,
+  AOwner, ARepository: string; out AScope: string): Boolean;
 var
-  Provider: string;
+  Provider, Owner, Repository: string;
+  I, J: Integer;
+  ImportScope: TGocciaImportScope;
+  Rule: TGocciaCapabilityRule;
+begin
+  AScope := '';
+  Provider := LowerCase(Trim(AProvider));
+  Owner := LowerCase(Trim(AOwner));
+  Repository := LowerCase(Trim(ARepository));
+  for I := 0 to High(FLayers) do
+  begin
+    Rule := FLayers[I].Rules[gcImport];
+    if Rule.DenyAll then
+      Exit(True);
+    for J := 0 to High(Rule.DenyScopes) do
+      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
+         ProviderScopeCovers(ImportScope, Provider, Owner, Repository) then
+      begin
+        AScope := Rule.DenyScopes[J];
+        Exit(True);
+      end;
+  end;
+  Result := False;
+end;
+
+function TGocciaCapabilities.AllowsProviderPackage(const AProvider, AOwner,
+  ARepository: string): Boolean;
+var
+  Provider, Owner, Repository, DenyScope: string;
   I, J: Integer;
   ImportScope: TGocciaImportScope;
   LayerAllows: Boolean;
@@ -1246,19 +1342,12 @@ begin
   if Length(FLayers) = 0 then
     Exit(False);
   Provider := LowerCase(Trim(AProvider));
-  if Provider = '' then
+  Owner := LowerCase(Trim(AOwner));
+  Repository := LowerCase(Trim(ARepository));
+  if (Provider = '') or (Owner = '') or (Repository = '') then
     Exit(False);
-  for I := 0 to High(FLayers) do
-  begin
-    Rule := FLayers[I].Rules[gcImport];
-    if Rule.DenyAll then
-      Exit(False);
-    for J := 0 to High(Rule.DenyScopes) do
-      if TryParseImportScope(Rule.DenyScopes[J], ImportScope) and
-         (ImportScope.Kind = iskProvider) and
-         (ImportScope.Provider = Provider) then
-        Exit(False);
-  end;
+  if ProviderPackageDenyScope(Provider, Owner, Repository, DenyScope) then
+    Exit(False);
   for I := 0 to High(FLayers) do
   begin
     Rule := FLayers[I].Rules[gcImport];
@@ -1267,8 +1356,7 @@ begin
     while (not LayerAllows) and (J <= High(Rule.AllowScopes)) do
     begin
       LayerAllows := TryParseImportScope(Rule.AllowScopes[J], ImportScope) and
-        (ImportScope.Kind = iskProvider) and
-        (ImportScope.Provider = Provider);
+        ProviderScopeCovers(ImportScope, Provider, Owner, Repository);
       Inc(J);
     end;
     if not LayerAllows then
@@ -1280,6 +1368,7 @@ end;
 function TGocciaCapabilities.Allows(const ACapability: TGocciaCapability;
   const ARequest: string): Boolean;
 var
+  ImportScope: TGocciaImportScope;
   NetScope: TGocciaNetScope;
   Host, Ceiling: string;
   CloseBracket: Integer;
@@ -1308,7 +1397,10 @@ begin
       if SameText(Trim(ARequest), IMPORT_NODE_MODULES_SCOPE) then
         Result := NodeModulesCeiling('', Ceiling)
       else
-        Result := AllowsProvider(ARequest);
+        Result := TryParseImportScope(ARequest, ImportScope) and
+          (ImportScope.Kind = iskProvider) and
+          AllowsProviderPackage(ImportScope.Provider, ImportScope.Owner,
+            ImportScope.Repository);
   else
     Result := False;
   end;

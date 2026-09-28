@@ -2242,6 +2242,8 @@ begin
         AliasBaseDirectory := GetCurrentDir
       else
         AliasBaseDirectory := ExtractFilePath(FRootConfigPath);
+      Result.Resolver.ProviderCachedOnly := ResolveFlagOption(
+        FEngineOptions.CachedOnly, FileConfig);
       ConfigureModuleResolver(Result.Resolver, AFileName,
         FEngineOptions.ImportMap.ValueOr(''), FEngineOptions.Aliases.Values,
         AliasBaseDirectory);

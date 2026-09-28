@@ -55,6 +55,27 @@ type
     FProbePackageDirectory: string;
   protected
     function ProbeHostFile(const APath: string): Boolean;
+    { Whether the candidate ProbeHostFile is judging exists. The base answer is
+      the host's; a resolver that knows better (a provider package, whose
+      files are exactly the ones its lockfile pins) overrides it. }
+    function CandidateExists(const APath: string): Boolean; virtual;
+    { True for an alias target that names no path, such as a provider
+      package address. ApplyAliases leaves it as it is, and Resolve hands it
+      to ResolveExternalAliasTarget. }
+    function IsExternalAliasTarget(const ATarget: string): Boolean; virtual;
+    { Resolves AModulePath, which an alias mapped to the external target
+      ATarget. The base resolver knows no external targets and refuses. }
+    function ResolveExternalAliasTarget(const AModulePath, ATarget,
+      AImportingFilePath: string): string; virtual;
+    { Called with the expanded candidate of a relative or absolute specifier
+      before any file is probed. May raise to refuse the request. }
+    procedure CheckPathCandidate(const AModulePath, AImportingFilePath,
+      ACandidatePath: string); virtual;
+    { Records the package directory a resolution found its file in, for
+      LastPackageDirectory. }
+    procedure SetLastPackageDirectory(const APath: string);
+    { Names the package directory ProbeGuard is judging candidates in. }
+    procedure SetProbePackageDirectory(const APath: string);
     function ApplyAliases(const AModulePath, AImportingFilePath: string): string;
     function TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
     { Resolves a bare specifier against node_modules. The base implementation
@@ -319,7 +340,9 @@ begin
     else
       Replacement := BestValue;
 
-    if not IsAbsolutePath(Replacement) then
+    if IsExternalAliasTarget(Replacement) then
+      Result := Replacement
+    else if not IsAbsolutePath(Replacement) then
       Result := FBaseDirectory + Replacement
     else
       Result := Replacement;
@@ -330,7 +353,39 @@ function TModuleResolver.ProbeHostFile(const APath: string): Boolean;
 begin
   if Assigned(FProbeGuard) then
     FProbeGuard(APath);
+  Result := CandidateExists(APath);
+end;
+
+function TModuleResolver.CandidateExists(const APath: string): Boolean;
+begin
   Result := HostFileExists(APath);
+end;
+
+function TModuleResolver.IsExternalAliasTarget(
+  const ATarget: string): Boolean;
+begin
+  Result := False;
+end;
+
+function TModuleResolver.ResolveExternalAliasTarget(const AModulePath,
+  ATarget, AImportingFilePath: string): string;
+begin
+  raise EModuleNotFound.CreateNotFound(AModulePath, ATarget);
+end;
+
+procedure TModuleResolver.CheckPathCandidate(const AModulePath,
+  AImportingFilePath, ACandidatePath: string);
+begin
+end;
+
+procedure TModuleResolver.SetLastPackageDirectory(const APath: string);
+begin
+  FLastPackageDirectory := APath;
+end;
+
+procedure TModuleResolver.SetProbePackageDirectory(const APath: string);
+begin
+  FProbePackageDirectory := APath;
 end;
 
 function TModuleResolver.TryResolveWithExtensions(const ABasePath: string; out AResolvedPath: string): Boolean;
@@ -465,6 +520,9 @@ begin
 
   if AliasApplied <> AModulePath then
   begin
+    if IsExternalAliasTarget(AliasApplied) then
+      Exit(ResolveExternalAliasTarget(AModulePath, AliasApplied,
+        AImportingFilePath));
     CandidatePath := ExpandHostFileName(AliasApplied);
     if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
@@ -474,6 +532,7 @@ begin
   if IsAbsolutePath(AModulePath) then
   begin
     CandidatePath := ExpandHostFileName(AModulePath);
+    CheckPathCandidate(AModulePath, AImportingFilePath, CandidatePath);
     if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
     raise EModuleNotFound.CreateNotFound(AModulePath, CandidatePath);
@@ -486,6 +545,7 @@ begin
       BaseDirectory := GetCurrentDir + PathDelim;
 
     CandidatePath := ExpandHostFileName(BaseDirectory + AModulePath);
+    CheckPathCandidate(AModulePath, AImportingFilePath, CandidatePath);
     if TryResolveWithExtensions(CandidatePath, Result) then
       Exit;
 

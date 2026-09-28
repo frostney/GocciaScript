@@ -54,6 +54,7 @@ uses
   Goccia.Modules.Resolver,
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
+  Goccia.Packages.Address,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -230,6 +231,10 @@ type
       const ACapabilities: TGocciaCapabilities);
     procedure SetProjectRoot(const AValue: string);
     procedure ApplyCapabilityPolicy;
+    procedure GrantProviderPackage(const ASpecifier: string;
+      const AAddress: TGocciaProviderAddress);
+    procedure AuditProviderPackage(const AAllowed: Boolean;
+      const ASubject, AReason: string);
     function GrantNodeModules(const ASpecifier, AImportingDirectory: string;
       out ACeiling: string): Boolean;
     function GetResolver: TGocciaModuleResolver;
@@ -453,6 +458,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.Coverage,
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
@@ -1070,7 +1076,59 @@ begin
   FModuleLoader.ConfigureCapabilities(FCapabilities, FProjectRoot,
     EmitCapabilityAudit);
   if Assigned(FModuleLoader.Resolver) then
+  begin
     FModuleLoader.Resolver.NodeModulesGrant := GrantNodeModules;
+    FModuleLoader.Resolver.ProviderGrant := GrantProviderPackage;
+    FModuleLoader.Resolver.ProviderAudit := AuditProviderPackage;
+  end;
+end;
+
+{ A provider import needs an import scope covering its repository:
+  `github`, `github:<owner>`, or `github:<owner>/<repo>` (ADR 0122). The
+  PermissionDenied names the package, which is what the import map asked
+  for; the suggestion names the grants that would cover it, or the deny
+  that refused it. }
+procedure TGocciaEngine.GrantProviderPackage(const ASpecifier: string;
+  const AAddress: TGocciaProviderAddress);
+var
+  DenyScope, Owner, Suggestion: string;
+begin
+  if FCapabilities.AllowsProviderPackage(IMPORT_PROVIDER_GITHUB,
+     AAddress.Owner, AAddress.Repository) then
+  begin
+    EmitCapabilityAudit(gckImportProvider, gcdAllow, AAddress.PackageKey,
+      'the import capability covers ' + AAddress.ScopeText);
+    Exit;
+  end;
+  if FCapabilities.ProviderPackageDenyScope(IMPORT_PROVIDER_GITHUB,
+     AAddress.Owner, AAddress.Repository, DenyScope) then
+  begin
+    if DenyScope = '' then
+      Suggestion := 'refused by an unscoped import deny'
+    else
+      Suggestion := 'refused by the import deny ' + DenyScope;
+    EmitCapabilityAudit(gckImportProvider, gcdDeny, AAddress.PackageKey,
+      Suggestion);
+  end
+  else
+  begin
+    Owner := LowerCase(GITHUB_PROVIDER_PREFIX + AAddress.Owner);
+    Suggestion := Format(SSuggestProviderImportNotGranted,
+      [AAddress.ScopeText, AAddress.ScopeText, Owner]);
+    EmitCapabilityAudit(gckImportProvider, gcdDeny, AAddress.PackageKey,
+      'the import capability does not cover ' + AAddress.ScopeText);
+  end;
+  ThrowPermissionDenied(CapabilityName(gcImport), AAddress.PackageKey,
+    Suggestion);
+end;
+
+procedure TGocciaEngine.AuditProviderPackage(const AAllowed: Boolean;
+  const ASubject, AReason: string);
+begin
+  if AAllowed then
+    EmitCapabilityAudit(gckImportProvider, gcdAllow, ASubject, AReason)
+  else
+    EmitCapabilityAudit(gckImportProvider, gcdDeny, ASubject, AReason);
 end;
 
 procedure TGocciaEngine.SetProjectRoot(const AValue: string);
@@ -1128,6 +1186,17 @@ begin
     current when it was constructed — engines nest on one thread, so clearing
     the thread outright would strip an outer engine's context mid-run. }
   LeaveEngineAsyncContext(FAsyncContextToken);
+
+  { ApplyCapabilityPolicy wired this engine into the resolver, and a host
+    can pass in a loader that outlives the engine. A method pointer left
+    behind would make the next provider import call into a freed engine. }
+  if Assigned(FModuleLoader) and Assigned(FModuleLoader.Resolver) then
+  begin
+    if TMethod(FModuleLoader.Resolver.ProviderGrant).Data = Pointer(Self) then
+      FModuleLoader.Resolver.ProviderGrant := nil;
+    if TMethod(FModuleLoader.Resolver.ProviderAudit).Data = Pointer(Self) then
+      FModuleLoader.Resolver.ProviderAudit := nil;
+  end;
 
   if (TGarbageCollector.Instance <> nil) and Assigned(FInterpreter) then
     TGarbageCollector.Instance.RemoveRootObject(FInterpreter.GlobalScope);

@@ -44,6 +44,7 @@ uses
   Goccia.HostEnvironment.JavaScript,
   Goccia.InstructionLimit,
   Goccia.Modules.Resolver,
+  Goccia.Packages.Address,
   Goccia.Profiler,
   Goccia.Profiler.Report,
   Goccia.Runtime,
@@ -1684,6 +1685,7 @@ procedure TRunnerApp.WarnIgnoredConfigHostKeys;
 const
   HOST_FILE_KEYS: array[0..4] of string = ('modules', 'module', 'globals',
     'global', 'host-environment');
+  IMPORTS_CONFIG_PREFIX = 'imports.';
 var
   Entries: TConfigEntryArray;
   I, J: Integer;
@@ -1705,6 +1707,17 @@ begin
           [RootConfigPath, HOST_FILE_KEYS[I], CapabilityPolicyName]));
         Break;
       end;
+    end;
+  { Sandbox mode resolves only the command line's import map, so the root
+    config's provider entries do nothing there. }
+  for J := 0 to High(Entries) do
+    if (Copy(Entries[J].Key, 1, Length(IMPORTS_CONFIG_PREFIX)) =
+        IMPORTS_CONFIG_PREFIX) and IsProviderAddress(Entries[J].Value) then
+    begin
+      WarnOnce(RootConfigPath + #0 + IMPORTS_CONFIG_PREFIX, Format(
+        'Warning: %s sets provider imports, which %s does not apply; ' +
+        'ignoring them', [RootConfigPath, CapabilityPolicyName]));
+      Break;
     end;
 end;
 

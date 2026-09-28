@@ -58,7 +58,7 @@ environment-variable form of any grant.
 | `read` | canonical paths (symlinks resolved), recursive | host reads beyond the module-graph exemption, including dynamic `import()` with non-literal specifiers |
 | `net` | `host`, `host:port`, `*.domain`, IP, CIDR, `private` | `fetch`; private and loopback ranges are denied unless named, and every redirect hop is re-checked |
 | `ffi` | library paths | opening native libraries |
-| `import` | `node_modules[=ceiling]`, provider hosts such as `github` | non-local module sources |
+| `import` | `node_modules[=ceiling]`, `github`, `github:<owner>`, `github:<owner>/<repo>` | non-local module sources |
 
 CLI scopes are relative to the working directory; config scopes are relative to
 the config file.
@@ -121,10 +121,22 @@ Audit event kinds are named after capabilities (`net.fetch`, `read.file`,
 decision emits one. Two further events are added: `config.permissions` for
 trust decisions and `capabilities.effective` for the final set.
 
-**Provider imports use `import`.** `--allow-import=github` materializes
-lockfile-pinned, hash-verified provider packages when imports are resolved.
-There are no default provider hosts, and the materialized files belong to the
-module graph.
+**Provider imports use `import`.** An import-map entry whose address is
+`github:<owner>/<repo>@<ref>[/<path>]` names a provider package; the ref is a
+tag or a commit, never a branch. `--allow-import=github`, `github:<owner>`,
+or `github:<owner>/<repo>` lets a run materialize the package's
+lockfile-pinned files from the provider's fixed host into the project's
+`.goccia/` cache, and every file is hashed again from the bytes a module,
+data import, or native library load actually uses. The materialized files
+belong to the module graph as a resolved package; `.goccia/` itself is not
+covered by the module-graph exemption, so reaching it any other way needs
+`read`. A run never resolves a ref or writes `goccia.lock.json`.
+`GocciaRunner`'s install mode (`--add`, `--remove`, `--install`, `--update`)
+creates and updates the pins; the same `import` grant covers its network use,
+except that a specifier typed on the command line is its own grant for that
+invocation, and a deny from any source still wins. There are no default
+provider hosts, no separate network grant for a provider, and native libraries
+in a package still need `ffi`.
 
 **One breaking release.** Old flags and config keys fail with an error naming
 their replacement, with no aliases, following ADRs 0046 and 0057. The model
@@ -150,9 +162,11 @@ ships as one release.
   "everything" a short flag; grants stay specific.
 - **Interactive prompts.** Rejected: they make runs non-deterministic, hurt
   embedding and CI, and would pause the engine mid-execution.
-- **A separate install step for provider packages.** Rejected once config can
-  no longer grant `import` implicitly. Resolve-time materialization under an
-  explicit grant keeps one command and verified offline reuse.
+- **A required install step before running provider packages.** Rejected:
+  resolve-time materialization under an explicit grant keeps one command and
+  verified offline reuse, so runs never need a separate install step when the
+  lock and cache are present. An install mode exists only to create and
+  update pins, which a run never does.
 - **Keeping a separate sandbox binary.** Rejected: once the default runner has
   no ambient authority, the sandbox is a filesystem mode, not a different
   program.
