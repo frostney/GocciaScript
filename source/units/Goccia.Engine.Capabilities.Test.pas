@@ -1920,38 +1920,42 @@ begin
       ' (CI builds it with gcc before the Pascal unit tests)');
   Base := IncludeTrailingPathDelimiter(GetTempDir(False)) +
     'goccia-winpin-' + IntToStr(GetProcessID);
-  ForceDirectories(Base);
-  { Long, final spelling, so it matches the module names the loader keeps. }
-  Base := CanonicalCapabilityPath(Base);
-  Good := Base + '\proj\libs\good';
-  GoodLibrary := Good + '\libfixture.dll';
-  OtherLibrary := Base + '\other\libfixture.dll';
-  CopyFileContents(Fixture, GoodLibrary);
-  CopyFileContents(Fixture, OtherLibrary);
-  GPinParent := Good;
-  GPinGrandparent := Base + '\proj\libs';
-  GPinJunction := Base + '\proj\link';
-  GPinOther := Base + '\other';
-  GPinProbeRan := False;
-  GPinParentRenamed := True;
-  GPinGrandparentRenamed := True;
-  GPinJunctionRepointed := False;
-  if ExecuteProcess('cmd.exe', '/c mklink /J "' + GPinJunction + '" "' +
-     Good + '"') <> 0 then
-    Fail('could not create the test junction');
-
+  GPinJunction := '';
   Outcome := Default(TRunOutcome);
   GoodLoaded := False;
   OtherLoaded := False;
-  Source := TStringList.Create;
-  Source.Text := 'globalThis.lib = FFI.open("' +
-    StringReplace(GPinJunction + '\libfixture.dll', '\', '\\',
-      [rfReplaceAll]) + '"); globalThis.result = "opened";';
-  Executor := TGocciaInterpreterExecutor.Create;
-  Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
-    TGocciaCapabilities.None.Allow(gcFFI, Base + '\proj'));
-  GocciaFFIAfterOpenCheck := ProbeWindowsLibraryPin;
+  Source := nil;
+  Executor := nil;
+  Engine := nil;
   try
+    ForceDirectories(Base);
+    { Long, final spelling, so it matches the module names the loader keeps. }
+    Base := CanonicalCapabilityPath(Base);
+    Good := Base + '\proj\libs\good';
+    GoodLibrary := Good + '\libfixture.dll';
+    OtherLibrary := Base + '\other\libfixture.dll';
+    CopyFileContents(Fixture, GoodLibrary);
+    CopyFileContents(Fixture, OtherLibrary);
+    GPinParent := Good;
+    GPinGrandparent := Base + '\proj\libs';
+    GPinJunction := Base + '\proj\link';
+    GPinOther := Base + '\other';
+    GPinProbeRan := False;
+    GPinParentRenamed := True;
+    GPinGrandparentRenamed := True;
+    GPinJunctionRepointed := False;
+    if ExecuteProcess('cmd.exe', '/c mklink /J "' + GPinJunction + '" "' +
+       Good + '"') <> 0 then
+      Fail('could not create the test junction');
+
+    Source := TStringList.Create;
+    Source.Text := 'globalThis.lib = FFI.open("' +
+      StringReplace(GPinJunction + '\libfixture.dll', '\', '\\',
+        [rfReplaceAll]) + '"); globalThis.result = "opened";';
+    Executor := TGocciaInterpreterExecutor.Create;
+    Engine := TGocciaEngine.Create(ProjectPath('app.js'), Source, Executor,
+      TGocciaCapabilities.None.Allow(gcFFI, Base + '\proj'));
+    GocciaFFIAfterOpenCheck := ProbeWindowsLibraryPin;
     InstallFFIIfGranted(AttachRuntime(Engine));
     try
       Engine.Execute;
@@ -1968,9 +1972,11 @@ begin
     Engine.Free;
     Executor.Free;
     Source.Free;
-    RemoveDirectoryW(PWideChar(UnicodeString(GPinJunction)));
-    DeleteFile(GoodLibrary);
-    DeleteFile(OtherLibrary);
+    { The junction goes first: DeleteTree would otherwise walk through it and
+      delete files in whatever directory it points at. }
+    if GPinJunction <> '' then
+      RemoveDirectoryW(PWideChar(UnicodeString(GPinJunction)));
+    DeleteTree(Base);
   end;
   Expect<string>(Outcome.ErrorMessage).ToBe('');
   Expect<Boolean>(GPinProbeRan).ToBe(True);
