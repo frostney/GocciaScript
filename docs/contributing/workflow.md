@@ -6,7 +6,7 @@
 
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Branch workflow** — Branch from `main`, implement with [implementation principles](../../CONTRIBUTING.md#implementation-principles), [critical rules](../../CONTRIBUTING.md#critical-rules), and [code style](code-style.md), add tests, update docs, commit
-- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`. Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes
+- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode`. `-P` accepts the test configs' permission requests for that run only; humans who prefer may trust the suite once with `--trust tests/` instead, but assistants never run `--trust`
 
 ## Local setup
 
@@ -114,10 +114,12 @@ the newest run — a dispatched run belongs to the commit it started from.
 
 ```bash
 ./build.pas testrunner
-./build/GocciaTestRunner tests
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests
+./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
-Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
+`-P` accepts the test configs' permission requests for the run without writing
+the trust store. [Testing requirements](../../CONTRIBUTING.md#3-testing-requirements)
+describes the one-time `--trust` alternative, which is for humans only.
 
 For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
