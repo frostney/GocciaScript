@@ -35,3 +35,8 @@ On Windows, junctions and other reparse points are treated as symlinks and rejec
 The guard lives in the shared `FileUtils` unit, so host-path symlink detection is a single cross-platform implementation reused by the runner rather than per-call-site logic.
 
 In-VFS operations and nested `runScript` semantics are unchanged. Nested child seeds copy from the parent virtual filesystem rather than the host (ADR 0069), so they never re-enter the host import path and are unaffected by this guard.
+
+**Superseded in part by [ADR 0122](0122-unified-capability-model.md):** the
+`--seed` and `--seed-config` imports became `--copy`, `--copy-rw`, and the
+`sandbox` config section in GocciaScript 0.14.0; the same rejection applies to
+them, reported as `Copy path is a symlink (not supported): <path>`.

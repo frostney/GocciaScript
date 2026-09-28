@@ -5,7 +5,7 @@
  * CRLF and LF captures identically.
  */
 
-import { LOADER } from "./binaries";
+import { RUNNER } from "./binaries";
 
 /**
  * Returns true when `value` appears on its own line in `s`, CRLF-tolerant.
@@ -47,7 +47,7 @@ export function runLoaderJson(
   if (opts?.timeout != null) spawnOpts.timeout = opts.timeout;
   const proc = Bun.spawnSync(
     [
-      opts?.bin ?? LOADER,
+      opts?.bin ?? RUNNER,
       ...(hasOutputFlag ? [] : ["--output=json"]),
       ...(extraArgs ?? []),
     ],

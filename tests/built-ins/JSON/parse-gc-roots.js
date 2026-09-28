@@ -50,7 +50,7 @@ describe.runIf(hasGoccia)("JSON.parse GC roots", () => {
     // dispatches on a value the parse record is the last holder of once a
     // reviver has overwritten the property it came from. Whether reading that
     // freed object *faults* is an allocator question, and the answer is not
-    // portable: with the rooting removed this shape aborts GocciaScriptLoader
+    // portable: with the rooting removed this shape aborts GocciaRunner
     // with an access violation on arm64 macOS/FPC 3.2.2, does not fault under
     // the parallel test runner (per-worker heaps keep the block readable), and
     // does not fault at all on some other platforms. Attempts to turn it into

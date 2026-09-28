@@ -41,17 +41,17 @@ loaded.
 Use `--module` for an inline definition:
 
 ```bash
-./build/GocciaScriptLoader app.mjs \
+./build/GocciaRunner app.mjs \
   --module='host:config=export const answer = 42;'
 
-./build/GocciaScriptLoader app.mjs \
+./build/GocciaRunner app.mjs \
   --module='host:data={"type":"json","content":{"answer":42}}'
 ```
 
 Use repeatable `--modules` options for bulk manifests:
 
 ```bash
-./build/GocciaScriptLoader app.mjs \
+./build/GocciaRunner app.mjs \
   --modules=modules.json \
   --modules=generated-modules.ts
 ```
@@ -71,8 +71,8 @@ Who named the manifest decides how much it may do:
   guest read: it needs a `read` grant outside the module graph and is refused
   with `PermissionDenied` without one. Under `--deny-read` (an outright `read`
   deny) the manifest is evaluated in an isolated loader. An engine whose
-  module provider does not read the host filesystem (the sandbox runner)
-  always evaluates it in an isolated loader.
+  module provider does not read the host filesystem (`GocciaRunner`'s sandbox
+  mode) always evaluates it in an isolated loader.
 - A manifest a config file names (`"modules": "./manifest.js"`, or an array of
   paths, of any format) is the repository's choice, so it runs under the
   capability set of the script the config governs
@@ -107,8 +107,8 @@ Configuration precedence is CLI, then per-file config, then root config.
 Within one level, a later definition may replace an earlier definition until
 the module is first loaded.
 
-The shared CLI hosts expose these options. `GocciaSandboxRunner` applies them
-after installing its runtime modules, so attempts to shadow `fs` or `goccia`
+The shared CLI hosts expose these options. In sandbox mode `GocciaRunner`
+applies them after installing its runtime modules, so attempts to shadow `fs` or `goccia`
 are configuration errors.
 
 ## Resolution and Collisions

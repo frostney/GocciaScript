@@ -9,7 +9,7 @@
 
 import { readFileSync } from "fs";
 
-import { LOADER } from "./test-cli/binaries";
+import { RUNNER } from "./test-cli/binaries";
 import { runLoaderJson } from "./test-cli/assertions";
 
 type EmbeddedResourceMarker = {
@@ -26,7 +26,7 @@ const embeddedResources: EmbeddedResourceMarker[] = [
 
 function assertBinaryContains(buffer: Buffer, marker: string, label: string): void {
   if (buffer.indexOf(Buffer.from(marker, "ascii")) < 0) {
-    throw new Error(`${LOADER} is missing ${label} marker ${marker}`);
+    throw new Error(`${RUNNER} is missing ${label} marker ${marker}`);
   }
 }
 
@@ -34,7 +34,7 @@ function assertBinaryContainsResourceName(buffer: Buffer, resourceName: string, 
   const asciiName = Buffer.from(resourceName, "ascii");
   const utf16LEName = Buffer.from(resourceName, "utf16le");
   if (buffer.indexOf(asciiName) < 0 && buffer.indexOf(utf16LEName) < 0) {
-    throw new Error(`${LOADER} is missing ${label} resource name ${resourceName}`);
+    throw new Error(`${RUNNER} is missing ${label} resource name ${resourceName}`);
   }
 }
 
@@ -52,7 +52,7 @@ function assertLoaderReturnsTrue(source: string, label: string, extraArgs: strin
 
 console.log("Embedded resource payload markers...");
 {
-  const loaderBytes = readFileSync(LOADER);
+  const loaderBytes = readFileSync(RUNNER);
   for (const resource of embeddedResources) {
     assertBinaryContains(loaderBytes, resource.magic, `${resource.label} payload`);
     // PE resource directory names are UTF-16LE; ELF and Mach-O builds retain

@@ -8,7 +8,7 @@
 import { $ } from "bun";
 import { writeFileSync } from "fs";
 import { join } from "path";
-import { LOADER } from "./test-cli/binaries";
+import { RUNNER } from "./test-cli/binaries";
 import { assertSyntaxError, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { clean, mkdtemp } from "./test-cli/tmpdir";
 
@@ -31,7 +31,7 @@ function assertSyntaxErrorInBothModes(
 
 console.log("Error display (SyntaxError with caret and suggestion)...");
 {
-  const res = await $`printf '%s\n' 'const x = 1' 'const y = x +' | ${LOADER} 2>&1`.nothrow();
+  const res = await $`printf '%s\n' 'const x = 1' 'const y = x +' | ${RUNNER} 2>&1`.nothrow();
   const out = res.text();
   if (res.exitCode === 0) throw new Error("Expected syntax error exit code");
   if (!out.includes("SyntaxError")) throw new Error(`Expected SyntaxError, got: ${out}`);
@@ -661,7 +661,7 @@ console.log("Unsupported syntax in imported modules follows the entry policy..."
 
     for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
       const label = modeArgs.length ? "module dependency (bytecode)" : "module dependency";
-      const defaultProc = Bun.spawnSync([LOADER, "--source-type=module", ...modeArgs, entry], {
+      const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", ...modeArgs, entry], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -672,7 +672,7 @@ console.log("Unsupported syntax in imported modules follows the entry policy..."
         throw new Error(`${label}: expected imported SyntaxError, got: ${defaultOut}`);
 
       const warningProc = Bun.spawnSync(
-        [LOADER, "--source-type=module", "--warning-unsupported-features", ...modeArgs, entry],
+        [RUNNER, "--source-type=module", "--warning-unsupported-features", ...modeArgs, entry],
         { stdout: "pipe", stderr: "pipe" },
       );
       const warningOut = `${warningProc.stdout.toString()}${warningProc.stderr.toString()}`;
@@ -780,7 +780,7 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
         throw new Error(`${label}: expected output ${JSON.stringify(expected)}, got ${JSON.stringify(warningRes.json.output)}`);
     }
 
-    const diag = Bun.spawnSync([LOADER], {
+    const diag = Bun.spawnSync([RUNNER], {
       stdin: new TextEncoder().encode(source),
       stdout: "pipe",
       stderr: "pipe",
@@ -1023,7 +1023,7 @@ console.log("Malformed type annotations...");
         const path = join(tmp, "malformed.ts");
         writeFileSync(path, source);
         for (const args of [[] as string[], ["--mode=bytecode"]]) {
-          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
           const out = res.text();
           if (res.exitCode === 0)
             throw new Error(`${desc} (.ts file) should be rejected, got exit 0`);
@@ -1073,7 +1073,7 @@ console.log("Malformed type annotations...");
         const path = join(tmp, "accepted.ts");
         writeFileSync(path, `${source}\n`);
         for (const args of [[] as string[], ["--mode=bytecode"]]) {
-          const res = await $`${LOADER} ${path} ${args} 2>&1`.quiet().nothrow();
+          const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
           if (res.exitCode !== 0)
             throw new Error(
               `Valid type syntax must still parse: ${source}\n  got: ${res.text()}`,

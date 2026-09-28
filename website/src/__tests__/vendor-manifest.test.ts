@@ -93,7 +93,7 @@ const SAMPLE_MANIFEST: VendorManifest = {
       isPrerelease: true,
       publishedAt: "2026-04-29T01:51:50Z",
       binaries: {
-        loader: "nightly/GocciaScriptLoader",
+        loader: "nightly/GocciaRunner",
         testRunner: "nightly/GocciaTestRunner",
       },
       features: MODERN_FEATURES,
@@ -320,7 +320,7 @@ describe("listPlaygroundVersions", () => {
             tag: "nightly",
             isPrerelease: true,
             binaries: {
-              loader: "nightly/GocciaScriptLoader",
+              loader: "nightly/GocciaRunner",
               testRunner: "nightly/GocciaTestRunner",
             },
           },
@@ -374,7 +374,7 @@ describe("checkVendorManifestFloor", () => {
         tag: "nightly",
         isPrerelease: true,
         binaries: {
-          loader: "nightly/GocciaScriptLoader",
+          loader: "nightly/GocciaRunner",
           testRunner: "nightly/GocciaTestRunner",
         },
         features: MODERN_FEATURES,
@@ -495,7 +495,7 @@ describe("pickVendorManifestSource", () => {
         {
           tag: "nightly",
           binaries: {
-            loader: "nightly/GocciaScriptLoader",
+            loader: "nightly/GocciaRunner",
             testRunner: "nightly/GocciaTestRunner",
           },
           features: MODERN_FEATURES,

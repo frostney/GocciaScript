@@ -13,7 +13,7 @@
 
 ## Overview
 
-The `--profile` option on GocciaScriptLoader enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
+The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. It operates inside the dispatch loop, providing data that external profilers (like `sample` or `callgrind`) cannot see — which opcodes execute, which JS functions are hot, and where the VM allocates.
 
 Profiling implies `--mode=bytecode` automatically, as does `--coverage` (see [Testing — Coverage](testing.md#coverage)). When profiling is off, production dispatch does not record opcodes; turning `--profile` on selects the instrumented loop that still carries the per-instruction profiler guard.
 
@@ -21,22 +21,22 @@ Profiling implies `--mode=bytecode` automatically, as does `--coverage` (see [Te
 
 ```bash
 # Opcode profiling: histogram, pair frequency, scalar hit rate
-./build/GocciaScriptLoader script.js --profile=opcodes
+./build/GocciaRunner script.js --profile=opcodes
 
 # Function profiling: self-time, total-time, call count, allocations
-./build/GocciaScriptLoader script.js --profile=functions
+./build/GocciaRunner script.js --profile=functions
 
 # Both
-./build/GocciaScriptLoader script.js --profile=all
+./build/GocciaRunner script.js --profile=all
 
 # JSON export (includes all sections regardless of console mode)
-./build/GocciaScriptLoader script.js --profile=all --profile-output=profile.json
+./build/GocciaRunner script.js --profile=all --profile-output=profile.json
 
 # Deterministic benchmark profile capture for CI comparisons
 ./build/GocciaBenchmarkRunner benchmarks/numbers.js --profile-deterministic --profile-output=numbers-profile.json
 
 # Stdin works too
-echo 'const x = 1 + 2; x;' | ./build/GocciaScriptLoader --profile=all
+echo 'const x = 1 + 2; x;' | ./build/GocciaRunner --profile=all
 ```
 
 ## Report Sections
@@ -147,7 +147,7 @@ or call-frame improvements.
 `--profile-format=flamegraph --profile-output=flamegraph.txt` writes collapsed stack traces, viewable in [speedscope](https://speedscope.app) (drag and drop) or renderable to SVG via [FlameGraph](https://github.com/brendangregg/FlameGraph):
 
 ```bash
-./build/GocciaScriptLoader script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt
+./build/GocciaRunner script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt
 
 # View in browser
 open https://speedscope.app  # drag flamegraph.txt into the page
@@ -174,13 +174,13 @@ Run both on the same production binary for the full picture:
 
 ```bash
 # Build production
-./build.pas --prod loader
+./build.pas --prod runner
 
 # Profiler run
-./build/GocciaScriptLoader script.js --profile=all
+./build/GocciaRunner script.js --profile=all
 
 # sample run (no --profile, to avoid measuring profiling overhead)
-./build/GocciaScriptLoader script.js --mode=bytecode &
+./build/GocciaRunner script.js --mode=bytecode &
 PID=$!
 sleep 0.2
 sample "$PID" 10 1 -file sample-output.txt -mayDie

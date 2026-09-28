@@ -123,7 +123,7 @@ function HeroRunnableCard({ code }: { code: string }) {
     if (running) return;
     setRunning(true);
     setRunTick((t) => t + 1);
-    const banner = "GocciaScriptLoader coffee-typed.ts";
+    const banner = "GocciaRunner coffee-typed.ts";
     setOutput([{ kind: "meta", text: banner }]);
     try {
       const res = await fetch("/api/execute", {
@@ -704,7 +704,7 @@ console.log("total:", total);`;
                       lines={[
                         {
                           kind: "meta" as const,
-                          text: "GocciaScriptLoader example.js",
+                          text: "GocciaRunner example.js",
                         },
                         ...CONSOLE_OUTPUT.split("\n").map((text) => ({
                           kind: "out" as const,
@@ -856,7 +856,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "How does the sandbox model work?",
     answer:
-      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaSandboxRunner imports explicit seed baselines into a virtual filesystem, exposes fs/goccia as import-only modules, and reports sandbox writes as diffs instead of writing back to host paths.",
+      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaRunner's sandbox mode copies explicit inputs into a virtual filesystem, exposes fs/goccia as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
   },
   {
     question: "How compatible is it with ECMAScript?",
@@ -1138,11 +1138,11 @@ export function Landing({
                 <code className={inlineCodeClass}>test</code>/
                 <code className={inlineCodeClass}>describe</code>/
                 <code className={inlineCodeClass}>expect</code> API. In
-                GocciaSandboxRunner, the sandbox surface adds import-only{" "}
-                <code className={inlineCodeClass}>fs</code> and{" "}
+                GocciaRunner&apos;s sandbox mode, the sandbox surface adds
+                import-only <code className={inlineCodeClass}>fs</code> and{" "}
                 <code className={inlineCodeClass}>goccia</code> modules backed
-                by a seeded virtual filesystem, sandbox shell commands, nested
-                execution, and explicit diffs.
+                by a virtual filesystem of copied inputs, sandbox shell
+                commands, nested execution, and explicit diffs.
               </p>
               <p className="text-ink-2 mb-4">
                 The sandbox <code className={inlineCodeClass}>fs</code> module

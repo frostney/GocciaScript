@@ -179,7 +179,7 @@ generally typed function or change generic `+` semantics.
 
 ## Profiling
 
-The `--profile` option on GocciaScriptLoader enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
+The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
 
 - `--profile=opcodes` — opcode frequency histogram, opcode pair frequency (superinstruction candidates), and scalar fast-path hit rate for generic arithmetic/comparison opcodes
 - `--profile=functions` — per-function self-time, total-time, call count, and heap allocation count

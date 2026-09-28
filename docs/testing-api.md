@@ -57,9 +57,8 @@ The module namespace and the globals install independently. A host that applies 
 | Binary | `goccia:test` | Testing globals |
 |---|---|---|
 | `GocciaTestRunner` | Yes | Yes |
-| `GocciaScriptLoader` | Yes | No |
+| `GocciaRunner` (host and sandbox mode) | Yes | No |
 | `GocciaREPL` | Yes | No |
-| `GocciaSandboxRunner` | Yes | No |
 | `GocciaBenchmarkRunner` | Yes | No |
 | `GocciaScriptLoaderBare` | No — attaches no runtime | No |
 
@@ -530,7 +529,7 @@ Running `tests/` under Vitest needs a local Vitest install and a config that poi
 
 A suite written against Vitest imports from a bare `vitest` specifier, which would otherwise resolve to nothing. `GocciaTestRunner` ships a small shim inside the binary and resolves that specifier to it by default, so such a suite runs unchanged. Pass `--no-vitest-compat` to leave the specifier unresolvable.
 
-The shim is a runner default only. It does not follow `goccia:test` to the other binaries: in `GocciaScriptLoader`, `GocciaREPL`, `GocciaSandboxRunner`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve even though `goccia:test` imports fine. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere; an embedder that wants it installs `TGocciaVitestCompatRuntimeExtension` alongside the testing extension. The shim statically imports `goccia:timers`, so `TGocciaTimersRuntimeExtension` is a hard prerequisite: without it every `vitest` import fails to resolve, not only the `vi` timer members. Install the timers extension whenever the compat shim is installed (the runner always does).
+The shim is a runner default only. It does not follow `goccia:test` to the other binaries: in `GocciaRunner` (either mode), `GocciaREPL`, and `GocciaBenchmarkRunner` a bare `vitest` import fails to resolve even though `goccia:test` imports fine. Resolving a bare specifier that the host cannot honor is a Vitest-shaped promise, and only the runner is Vitest-shaped. There is no CLI flag or configuration key that turns it on elsewhere; an embedder that wants it installs `TGocciaVitestCompatRuntimeExtension` alongside the testing extension. The shim statically imports `goccia:timers`, so `TGocciaTimersRuntimeExtension` is a hard prerequisite: without it every `vitest` import fails to resolve, not only the `vi` timer members. Install the timers extension whenever the compat shim is installed (the runner always does).
 
 The shim re-exports `goccia:test` and adds the `vi` namespace. `vi` exists only in the shim — the engine itself never grows one:
 

@@ -1,5 +1,8 @@
 # Permissions
 
+<!-- doc-length-limit: 1000 -->
+<!-- The single reference for grants, config trust, and sandbox mode (ADR 0122). -->
+
 *The capability model: what an engine may reach outside its process, how grants and denies combine, and how a denial surfaces.*
 
 ## Executive Summary
@@ -11,12 +14,14 @@
 - **Denials are catchable and auditable** — a denied operation throws `PermissionDenied` naming the capability and the requested scope, never a host path, and emits an audit event
 - **One command-line grammar** — `--allow-<cap>[=scope,...]` and `--deny-<cap>[=scope,...]`, a `permissions` block in config files, and `--max-*` limits with units
 - **Config grants need trust** — a config's `allow-*` and `unsafe-*` requests apply only once the user trusts them (`--trust`) or accepts them for one run (`-P`); its denies always apply
+- **Sandbox mode grants only `net`** — `GocciaRunner`'s sandbox mode sees only a virtual filesystem of copied inputs, and writes back to the host only inputs copied with `--copy-rw`, after a successful run
 
 The design is recorded in [ADR 0122](adr/0122-unified-capability-model.md).
 This page is the single reference for the engine mechanism, the
 [command line](#command-line) and [config files](#config-files) that fill the
-set, the [trust](#config-trust) config grants need, [limits](#limits-and-units),
-and the [flags GocciaScript 0.14.0 removed](#removed-flags-and-keys).
+set, the [trust](#config-trust) config grants need,
+[sandbox mode](#sandbox-mode), [limits](#limits-and-units), and the
+[flags GocciaScript 0.14.0 removed](#removed-flags-and-keys).
 
 ## Capabilities
 
@@ -359,11 +364,11 @@ inside the project work, and everything else is refused with
 `PermissionDenied`:
 
 ```sh
-GocciaScriptLoader app.js                        # imports inside the project only
-GocciaScriptLoader app.js --allow-read=../shared # plus reads under ../shared
-GocciaScriptLoader app.js --allow-net=api.example.com --allow-net=127.0.0.1
-GocciaScriptLoader app.js --allow-import=node_modules
-GocciaScriptLoader app.js --deny-read            # not even the project's imports
+GocciaRunner app.js                        # imports inside the project only
+GocciaRunner app.js --allow-read=../shared # plus reads under ../shared
+GocciaRunner app.js --allow-net=api.example.com --allow-net=127.0.0.1
+GocciaRunner app.js --allow-import=node_modules
+GocciaRunner app.js --deny-read            # not even the project's imports
 ```
 
 ### Config files
@@ -400,7 +405,7 @@ allow-ffi = ["../fixtures/ffi"]
   walking up from the first input's directory (the working directory for
   stdin and the REPL). Configs compose only through `extends`.
 - A discovered config's `permissions` and `unsafe-*` keys govern only files
-  inside its own directory tree. In `GocciaScriptLoader a/x.js c/y.js`,
+  inside its own directory tree. In `GocciaRunner a/x.js c/y.js`,
   `a/goccia.json` is the root config, but `c/y.js` (with no config of its
   own) gets no permissions or `unsafe-*` keys from it. Its other settings
   apply to every input as before. An explicit `--config` governs every
@@ -434,13 +439,15 @@ allow-ffi = ["../fixtures/ffi"]
   stay host requests.
 - A config writes host files only inside its own directory: `log`,
   `audit-log`, `coverage-output`, `profile-output`, `source-map`, `output`,
-  and `diff-output` resolve against the declaring file and fail with status 1
-  if they lead outside it, through a symbolic link or otherwise (see
+  and the `sandbox` section's `copy-rw` inputs and `diff-file` resolve against
+  the declaring file and fail with status 1 if they lead outside it, through a
+  symbolic link or otherwise (see
   [Build System](build-system.md#configuration-file-gocciajson)). The check
   holds until the write: the file is opened from the config's directory, held
   to the identity it had when the config was read, one directory at a time
   without following links, so a directory swapped for a link while the script
-  runs refuses the write instead of redirecting it.
+  runs refuses the write instead of redirecting it (for the sandbox's inputs
+  and diff file, see [Write-back](#write-back)).
 - Every config governing a run's inputs is loaded and checked before any file
   runs, so a config error never leaves some files run and others not.
 
@@ -456,7 +463,7 @@ A binary rejects an `--allow-*` flag for a capability it cannot grant (exit
 2) and warns once when a config requests one:
 
 ```text
-Error: GocciaSandboxRunner cannot grant read; it supports net. Remove --allow-read.
+Error: GocciaBundler cannot grant read; it supports no capability flags. Remove --allow-read.
 Warning: /repo/goccia.json requests allow-read, which GocciaBundler cannot grant; ignoring it
 ```
 
@@ -466,10 +473,10 @@ being validated.
 
 | Binary | Capabilities | Limits | Config |
 |---|---|---|---|
-| `GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner` | read, net, ffi, import | all | root and per-file |
+| `GocciaRunner` (host mode), `GocciaTestRunner`, `GocciaBenchmarkRunner` | read, net, ffi, import | all | root and per-file |
+| `GocciaRunner` ([sandbox mode](#sandbox-mode)) | net | all, plus `--max-fs-bytes` and `--max-fs-nodes` | root, including its `sandbox` section |
 | `GocciaREPL` | read, net, ffi, import | all, per evaluated input | discovered from the working directory |
 | `GocciaBundler` | none | none | per-file, for compatibility flags |
-| `GocciaSandboxRunner` | net | all, plus `--max-fs-bytes` and `--max-fs-nodes` | `--config` only |
 | `GocciaScriptLoaderBare` | none | `--timeout`, `--max-memory`, `--max-instructions`, `--max-stack` | none |
 | `GocciaTest262Runner` | none | `--timeout`, `--max-memory` | none |
 | `GocciaWasmTestRunner` | read, net, ffi (not on LAKON) | none | per-file, accepted with `-P` |
@@ -495,7 +502,8 @@ Before any file runs, the binary collects the config that governs each input
 (its nearest `goccia.*`, else the root config) and checks each one that
 requests a grant. Standard input is governed by the working directory's config,
 the REPL checks the working directory's config before its prompt, and
-`GocciaSandboxRunner` checks its `--config`. If any is untrusted the run stops
+`GocciaRunner` also checks a root config with a `sandbox` section. If any is
+untrusted the run stops
 with status 2 and nothing runs:
 
 ```text
@@ -677,6 +685,186 @@ The Wasm test runner has no store: it takes `GocciaWasmTestRunner [-P]
 (GocciaWasmTestRunner has no trust store)`. Extra arguments after the
 manifest are ignored with a warning, for the external harness.
 
+## Sandbox mode
+
+`GocciaRunner` has two modes. In **host mode**, the default, source runs
+against the host filesystem under the set this page describes. In **sandbox
+mode** the entry runs inside an isolated in-memory virtual filesystem, filled
+only with what the host copies in, and can import `"fs"` and `"goccia"`
+([Sandbox Modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)).
+`--sandbox`, any `--copy` or `--copy-rw` input, or a trusted
+[`sandbox` config section](#the-sandbox-config-section) turns sandbox mode on.
+The options and diff output are listed under
+[Build System — GocciaRunner sandbox mode](build-system.md#gocciarunner-sandbox-mode).
+
+### What sandbox mode honors
+
+The guest reaches files only through the virtual filesystem, so `net` is the
+one capability sandbox mode grants. `--allow-net` and `--deny-net` apply as in
+host mode. `--allow-read`, `--allow-import`, and `--allow-ffi` are usage errors
+(exit 2); `--deny-read`, `--deny-import`, and `--deny-ffi` are accepted and
+change nothing. A config that requests `read`, `import`, or `ffi` gets a
+warning instead:
+
+```text
+Error: --allow-read cannot be used in sandbox mode (enabled by --copy): the sandbox has no host filesystem; copy inputs with --copy
+Warning: /repo/goccia.json requests allow-read, which GocciaRunner sandbox mode cannot grant; ignoring it
+```
+
+Nested `runScript` children inherit the running engine's set, as described in
+[Nested contexts](#nested-contexts).
+
+### Copy inputs
+
+`--copy <host>[=<sandbox>]` copies a host file or directory into the sandbox
+before the run, read-only. `--copy-rw` copies the same way and marks the input
+for [write-back](#write-back). Both repeat. The copies are snapshots, not live
+mounts: they form the baseline a diff is measured against, and the host path is
+never reachable from the guest.
+
+- A host path on the command line is relative to the working directory; one in
+  the `sandbox` section is relative to the config file that declares it.
+- The default target is `/<basename>`, for files and directories alike, so
+  `--copy src` lands at `/src`. `dir=/x` copies the directory's contents into
+  `/x`, and `dir=/` into the root.
+- A target is an absolute sandbox path. An empty target (`x=`), a relative one
+  (`x=rel`), or one that climbs above the root (`x=/../etc`) is a usage error
+  (exit 2); so are two command-line inputs, or two config inputs, that land on
+  the same path.
+- A file whose target ends in `/`, or names a directory that already exists, is
+  copied inside it.
+- A host path with no basename (a filesystem root) is an error that asks for
+  an explicit `=<sandbox>` target.
+- Symbolic links are refused rather than followed, anywhere in a copied tree:
+  `Copy path is a symlink (not supported): <path>` (exit 1, see
+  [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md)).
+
+The positional entry file is copied read-only to `/<basename>` — unless it lies
+inside a copied input, in which case it runs at that input's sandbox path and is
+not copied again: `GocciaRunner src/main.js --copy src` runs `/src/main.js`. An
+entry that would land on another input's path is an error that suggests
+`--entry` or an explicit target. A positional entry that is a symbolic link is
+refused like any other copy. `--entry=<sandbox-path>` runs a path that only
+exists in the sandbox, and must be absolute; giving both a positional file and
+`--entry` is a usage error.
+
+Sandbox mode sees only the virtual filesystem. A root config's `modules`,
+`module`, `globals`, `global`, and `host-environment`, which read host files,
+are not applied: each gets one warning, such as
+`Warning: <config> sets "modules", which GocciaRunner sandbox mode does not
+apply; ignoring it`. The command line's `--module` and `--modules` still
+apply: a module or manifest named there is the user's explicit choice, not the
+repository's.
+
+### Write-back
+
+Nothing the guest writes reaches the host unless the host asked for it. After a
+**successful** run, files changed under a `--copy-rw` input are written back to
+the host paths they were copied from, including new files created inside a
+`--copy-rw` directory. The rules of
+[ADR 0119](adr/0119-host-applied-sandbox-write-back.md) hold:
+
+- a failed run writes nothing;
+- changes under a read-only `--copy` input, or outside every input, are
+  reported as skipped;
+- a deletion is never applied;
+- a symbolic link met at write-back, at the file or on its way, is refused
+  and the run exits 1 (other files are still written): copy-in already
+  refuses links, so one found then was planted during the run;
+- each file is written to an exclusively created temporary beside it and then
+  replaces it in one rename, so a failed write leaves the original intact.
+
+Each input's directory is pinned: a command-line input when it is copied (its
+canonical path and which directory it is — device and inode on POSIX, the
+64-bit volume serial number and 128-bit file ID from
+`GetFileInformationByHandleEx(FileIdInfo)` on Windows), and a config-named one
+when the config is checked, as the config's directory plus the route from it,
+and again when it is copied, as the directory that route led to. A Windows
+directory that call cannot identify gets nothing written back — each of its
+files is refused with that reason and the run exits 1 — rather than falling
+back to the 64-bit file index, which ReFS does not keep unique. Before
+anything is written, every read-write input must still be the directory that
+was copied; one that was moved, swapped for a symbolic link (an ancestor on a
+config input's route included), or replaced by another directory means nothing
+is written and the run exits 1. Each write then
+walks down from the pinned directory without following a link (on POSIX
+through directory descriptors opened with `O_NOFOLLOW`), creating missing
+directories, so a link planted at any point after the check cannot carry a
+write out. A config's `diff-file` is pinned the same way, from the config's
+directory, and a link at its own name is refused. A `--diff-file` on the
+command line is the user's own choice and is written as named — `/dev/null`, a
+FIFO, or a link the user chose — replacing a regular file atomically; it is
+never opened for reading, and a FIFO nobody reads fails at once instead of
+waiting. A write
+that fails or is refused makes the run exit 1.
+
+The report, one `write-back:` line per path, goes to standard error so the
+guest's standard output stays clean.
+
+### The `sandbox` config section
+
+The root config can declare a sandbox run, so a repository can describe its
+inputs once:
+
+```json
+{
+  "sandbox": {
+    "copy": ["src", "fixtures=/data"],
+    "copy-rw": ["out"],
+    "diff": "unified"
+  },
+  "max-fs-bytes": "32MiB"
+}
+```
+
+```toml
+[sandbox]
+copy = ["src", "fixtures=/data"]
+copy-rw = ["out"]
+```
+
+| Key | Value |
+|---|---|
+| `copy`, `copy-rw` | Arrays of `<host>[=<sandbox>]` strings, as on the command line, relative to the declaring config file; a single string is an error |
+| `entry` | An absolute sandbox path, as `--entry`; a positional entry or `--entry` on the command line wins, with a note on stderr |
+| `diff` | `true`, `"json"`, or `"unified"` |
+| `diff-file` | A host path, as `--diff-file`, relative to the declaring config file |
+
+- Any other key is an error that lists these; `files`, the old seed-config
+  shape, is an error that names `copy` and `copy-rw`. Inline text and base64
+  entries are gone.
+- An empty section, `"sandbox": {}`, turns sandbox mode on with no inputs.
+- Only the root config's section is read: `--config`, or the one discovered
+  from the entry file (from the working directory when `--entry` names the
+  entry). A section in any other config, the entry's own config under
+  `--config=<other>` included, is ignored with the warning
+  `declares a "sandbox" section, which GocciaRunner reads only from the root
+  config; ignoring it`, and needs no trust.
+- `max-fs-bytes` and `max-fs-nodes` are limits at the top level of the root
+  config, not part of the section. Sandbox mode reads and validates them; host
+  mode ignores them without validating them.
+
+**Trust.** A config that can copy host files into a run and write results back
+asks for authority, so its `sandbox` section is a request like an `allow-*`
+key: `GocciaRunner` applies it only once the config is trusted (`--trust`) or
+accepted for the run (`-P`), and stops with status 2 otherwise, as described in
+[When trust is checked](#when-trust-is-checked). Binaries that do not run
+sandbox mode warn that they ignore the section instead of asking for trust.
+
+**Confinement.** The host paths a config can write — its `copy-rw` inputs and
+its `diff-file` — must lie inside the declaring config's own directory tree,
+judged canonically, so a symbolic link cannot lead out of it; otherwise the run
+fails with status 1, naming the key and the config. The same values on the
+command line may name any path.
+
+**Combining with the command line.** Command-line `--copy` and `--copy-rw`
+inputs add to the section's. When a command-line input has the same sandbox
+target as a config input, the command-line one replaces it, so `--copy out`
+over a config's `"copy-rw": ["out"]` is a read-only dry run. There is no flag
+that turns a config's sandbox off; run with `--config=<other>` to leave it, or
+with `--ignore-config-permissions`, which ignores the section along with the
+config's other requests.
+
 ## Limits and units
 
 Limits are settings, not capabilities. Each takes a unit:
@@ -719,11 +907,17 @@ Each now fails with status 2 and names its replacement:
 | `--no-host-filesystem` | host reads are denied by default; `--deny-read` also refuses the project's imports |
 | `--stack-size` | `--max-stack` |
 | `--fs-quota-bytes`, `--fs-node-limit` (sandbox) | `--max-fs-bytes`, `--max-fs-nodes` |
+| `--seed <host>[=<sandbox>]` (sandbox) | `--copy <host>[=<sandbox>]`; the default sandbox path is now `/<basename>`, for directories too |
+| `--seed-config` (sandbox) | the [`sandbox` section](#the-sandbox-config-section) of `goccia.json`, or `--copy`; inline text and base64 entries are gone |
+| `--write-back` (sandbox) | copy the inputs that may be written with `--copy-rw` |
+| `--diff-format=<format>` (sandbox) | `--diff=json\|unified` |
+| `--diff-output=<path>` (sandbox) | `--diff-file=<path>` |
+| `--diff-metadata` (sandbox) | none: JSON diffs always include timestamp metadata |
 | `--timeout-ms` (test262) | `--timeout` (units: `20s`) |
 
 The config keys of the same names (`"unsafe-ffi"`, `"allow-node-modules"`,
 `"no-host-filesystem"`, `"fetch-deny-private-ranges"`,
-`"fetch-max-response-bytes"`, `"stack-size"`, and the sandbox runner's
+`"fetch-max-response-bytes"`, `"stack-size"`, and the old sandbox runner's
 `"fs-quota-bytes"` and `"fs-node-limit"`) fail the same way, naming the config
 spelling of the replacement:
 

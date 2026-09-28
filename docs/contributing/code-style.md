@@ -77,7 +77,7 @@ Generated units should contain generated data, generated resource links, and the
 
 **When to omit the prefix:** Generic data structures, utilities, and framework code that could be extracted to a standalone library. These live in `source/shared/` and use `{$I Shared.inc}` instead of `{$I Goccia.inc}`.
 
-**CLI program naming:** Application `.dpr` files use `Goccia` as a prefix without a dot separator — `GocciaTestRunner.dpr`, `GocciaScriptLoader.dpr`, `GocciaREPL.dpr`. This produces binary names like `build/GocciaTestRunner`.
+**CLI program naming:** Application `.dpr` files use `Goccia` as a prefix without a dot separator — `GocciaTestRunner.dpr`, `GocciaRunner.dpr`, `GocciaREPL.dpr`. This produces binary names like `build/GocciaTestRunner`.
 
 Do **not** use `snake_case` or `mixed_Case` for locals — use full words in PascalCase. Do **not** disambiguate with numeric suffixes; choose a descriptive name (`PrimaryScope`, `FallbackScope`) instead. Short single-letter names in very small scopes (e.g. loop `I`, `J`) remain acceptable.
 

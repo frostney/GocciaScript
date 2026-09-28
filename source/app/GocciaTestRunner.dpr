@@ -752,7 +752,7 @@ var
   StdinSource: TStringList;
   UseStdin: Boolean;
 begin
-  { stdin support — match GocciaScriptLoader and GocciaBenchmarkRunner.
+  { stdin support — match GocciaRunner and GocciaBenchmarkRunner.
     Source is read from stdin and tagged as <stdin> when either:
       * no positional arguments are supplied, OR
       * the sole positional argument is "-".

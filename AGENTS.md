@@ -57,7 +57,7 @@ Assistants run the test runner with `-P`, which accepts the test configs' permis
 
 The authoritative command reference lives in [Build System](docs/build-system.md).
 Use that file for build targets, CLI options, configuration-file behavior,
-`GocciaScriptLoader`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and
+`GocciaRunner`, `GocciaTestRunner`, `GocciaBenchmarkRunner`, and
 `GocciaBundler` examples. Keep this file agent-only; do not duplicate build or
 runtime command lists here.
 

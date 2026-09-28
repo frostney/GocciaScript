@@ -53,8 +53,8 @@ beating V8/SpiderMonkey as in-scope (`VISION.md`).
    same compiler, dependencies, flags, and host used for candidates:
 
    ```sh
-   ./build.pas --prod loader benchmarkrunner
-   cp build/GocciaScriptLoader /tmp/goccia-baseline-$(git rev-parse --short HEAD)
+   ./build.pas --prod runner benchmarkrunner
+   cp build/GocciaRunner /tmp/goccia-baseline-$(git rev-parse --short HEAD)
    ```
 
 2. Stop competing benchmark processes. Serialize measurements through one
@@ -176,7 +176,7 @@ combined diff:
 ./build.pas testrunner
 ./build/GocciaTestRunner -P tests
 ./build/GocciaTestRunner -P tests --mode=bytecode
-./build.pas --prod loader
+./build.pas --prod runner
 ```
 
 For VM, compiler, register, or GC changes also run the relevant native Pascal

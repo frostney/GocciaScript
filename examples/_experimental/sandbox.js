@@ -1,6 +1,5 @@
-// Run: ./build/GocciaSandboxRunner /sandbox.js \
-//   --seed=examples/_experimental/sandbox.js=/ --source-type=module \
-//   --diff --diff-format=unified
+// Run: ./build/GocciaRunner examples/_experimental/sandbox.js --sandbox \
+//   --source-type=module --diff=unified
 import fs from "fs";
 import { $ } from "goccia";
 

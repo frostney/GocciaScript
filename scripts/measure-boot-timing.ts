@@ -2,7 +2,7 @@
 /**
  * measure-boot-timing.ts
  *
- * Measure empty-script engine-boot wall-clock for GocciaScriptLoader in both
+ * Measure empty-script engine-boot wall-clock for GocciaRunner in both
  * execution modes and emit a small JSON summary the PR suite-timing comment
  * renders.
  *

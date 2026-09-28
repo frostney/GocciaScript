@@ -152,9 +152,68 @@ function ReplaceHostFile(const APath, ATemporaryPath: string;
   const ABytes: TBytes; const APermissions: Cardinal;
   out AError: string): Boolean; overload;
 
+type
+  { Which directory a path named when it was recorded: POSIX device and inode
+    (InodeHigh is 0). On Windows, the 64-bit volume serial number and the
+    128-bit file ID from GetFileInformationByHandleEx(FileIdInfo), its low
+    half in Inode and its high half in InodeHigh. Known is False where the
+    host cannot say (Lakon/WASI). Unavailable is True for a Windows directory
+    whose file ID the call would not give: such a directory matches no
+    identity, and nothing is written under it. }
+  THostDirectoryIdentity = record
+    Known: Boolean;
+    Unavailable: Boolean;
+    Device: QWord;
+    Inode: QWord;
+    InodeHigh: QWord;
+  end;
+
+{ The identity of the directory at APath, following links along it. False
+  when APath is not a directory. A Windows directory whose file ID cannot be
+  read is still a directory: the answer is True with AIdentity.Unavailable. }
+function TryHostDirectoryIdentity(const APath: string;
+  out AIdentity: THostDirectoryIdentity): Boolean;
+
+{ AIdentity is AExpected, or AExpected is not known. An Unavailable identity
+  on either side is never the same. }
+function SameDirectoryIdentity(const AIdentity,
+  AExpected: THostDirectoryIdentity): Boolean;
+
+{ Why nothing may be written under ADirectory, recorded as AIdentity, or ''
+  when its identity does not stand in the way. }
+function HostDirectoryIdentityProblem(const ADirectory: string;
+  const AIdentity: THostDirectoryIdentity): string;
+
+{ The identity of the directory ARoute leads to under ARoot, which must still
+  be the directory recorded as ARootIdentity. ARoute ('' for ARoot itself) is
+  walked without following a symbolic link, as ReplaceHostFileBeneath walks
+  it, so the answer is False, with AError saying why, when anything on the
+  way was replaced by a link or is not a directory. }
+function TryHostDirectoryIdentityBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity; const ARoute: string;
+  out AIdentity: THostDirectoryIdentity; out AError: string): Boolean;
+
+{ ReplaceHostFile for ARelativePath under the directory ARoot, which must
+  still be the directory recorded as ARootIdentity: a root replaced since (a
+  different directory, or a link to one) is refused. Every directory between
+  the root and the file is opened without following a symbolic link, and
+  created when missing, and the file itself must not be a link, so nothing
+  swapped in after the root was recorded can carry the write elsewhere. On
+  POSIX the walk and the write go through directory descriptors, so no name
+  is looked up twice; on Windows each component is checked for a reparse
+  point before the write. ARelativePath uses PathDelim. The bytes go first to
+  the file's name plus ATemporarySuffix, which, like ReplaceHostFile's
+  temporary, is refused when it is a link and replaced when it is a leftover
+  file. }
+function ReplaceHostFileBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity;
+  const ARelativePath, ATemporarySuffix: string; const ABytes: TBytes;
+  out AError: string): Boolean;
+
 implementation
 
 uses
+  {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}InitC,{$ENDIF}
   TextEncoding;
 
 {$IFDEF MSWINDOWS}
@@ -826,6 +885,504 @@ begin
     Stream.Free;
   end;
 end;
+
+
+{ ── Writes beneath a recorded directory ─────────────────────────── }
+
+const
+  BENEATH_DIRECTORY_MODE = $1FF;
+  BENEATH_FILE_MODE = $1B6;
+
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+{ POSIX.1-2008 *at() calls, so each step is relative to a descriptor the
+  walk already holds. `openat` is variadic in its mode, which only O_CREAT
+  reads. }
+function HostOpenAt(ADirectory: cint; APath: PAnsiChar; AFlags: cint): cint;
+  cdecl; varargs; external 'c' name 'openat';
+function HostMkdirAt(ADirectory: cint; APath: PAnsiChar;
+  AMode: TMode): cint; cdecl; external 'c' name 'mkdirat';
+function HostRenameAt(AFromDirectory: cint; AFrom: PAnsiChar;
+  AToDirectory: cint; ATo: PAnsiChar): cint; cdecl;
+  external 'c' name 'renameat';
+function HostUnlinkAt(ADirectory: cint; APath: PAnsiChar;
+  AFlags: cint): cint; cdecl; external 'c' name 'unlinkat';
+{$ENDIF}
+
+{$IFDEF MSWINDOWS}
+type
+  { FILE_ID_INFO: a 64-bit volume serial number and a 128-bit file ID. }
+  THostFileIdInfo = record
+    VolumeSerialNumber: QWord;
+    FileId: array[0..15] of Byte;
+  end;
+
+const
+  { FileIdInfo in FILE_INFO_BY_HANDLE_CLASS. }
+  HOST_FILE_ID_INFO_CLASS = 18;
+
+function HostGetFileInformationByHandleEx(AFile: THandle;
+  AInformationClass: DWORD; AInformation: Pointer;
+  ABufferSize: DWORD): BOOL; stdcall;
+  external 'kernel32.dll' name 'GetFileInformationByHandleEx';
+{$ENDIF}
+
+function TryHostDirectoryIdentity(const APath: string;
+  out AIdentity: THostDirectoryIdentity): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Info: Stat;
+  PathBytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+  if not TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) then
+    Exit;
+  if (fpStat(PAnsiChar(@PathBytes[0]), Info) <> 0) or
+     not fpS_ISDIR(Info.st_mode) then
+    Exit;
+  AIdentity.Known := True;
+  AIdentity.Device := QWord(Info.st_dev);
+  AIdentity.Inode := QWord(Info.st_ino);
+  Result := True;
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+var
+  Handle: THandle;
+  Information: THostFileIdInfo;
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := False;
+  if not DirectoryExists(APath) then
+    Exit;
+  { Opened for no access at all, only to ask which file it is; backup
+    semantics lets a directory be opened. }
+  Handle := CreateFileW(PWideChar(UnicodeString(APath)), 0,
+    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
+    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+  if Handle = INVALID_HANDLE_VALUE then
+    Exit;
+  try
+    Result := True;
+    { The 64-bit file index BY_HANDLE_FILE_INFORMATION gives is not unique
+      on ReFS, so there is no falling back to it: a directory without a
+      FileIdInfo answer is marked Unavailable and nothing is written under
+      it. }
+    Information := Default(THostFileIdInfo);
+    if not HostGetFileInformationByHandleEx(Handle, HOST_FILE_ID_INFO_CLASS,
+       @Information, SizeOf(Information)) then
+    begin
+      AIdentity.Unavailable := True;
+      Exit;
+    end;
+    AIdentity.Known := True;
+    AIdentity.Device := Information.VolumeSerialNumber;
+    Move(Information.FileId[0], AIdentity.Inode, SizeOf(AIdentity.Inode));
+    Move(Information.FileId[8], AIdentity.InodeHigh,
+      SizeOf(AIdentity.InodeHigh));
+  finally
+    CloseHandle(Handle);
+  end;
+end;
+{$ELSE}
+begin
+  AIdentity := Default(THostDirectoryIdentity);
+  Result := DirectoryExists(APath);
+end;
+{$ENDIF}
+
+function SameDirectoryIdentity(const AIdentity,
+  AExpected: THostDirectoryIdentity): Boolean;
+begin
+  if AIdentity.Unavailable or AExpected.Unavailable then
+    Exit(False);
+  Result := (not AExpected.Known) or (AIdentity.Known and
+    (AIdentity.Device = AExpected.Device) and
+    (AIdentity.Inode = AExpected.Inode) and
+    (AIdentity.InodeHigh = AExpected.InodeHigh));
+end;
+
+function HostDirectoryIdentityProblem(const ADirectory: string;
+  const AIdentity: THostDirectoryIdentity): string;
+begin
+  if AIdentity.Unavailable then
+    Result := 'Windows gives no file ID for ' + ADirectory +
+      ' (GetFileInformationByHandleEx FileIdInfo failed), so it cannot be ' +
+      'checked for replacement; refusing to write under it'
+  else
+    Result := '';
+end;
+
+function SplitRelativeHostPath(const APath: string): TStringList;
+var
+  Part: string;
+  I, Start: Integer;
+begin
+  Result := TStringList.Create;
+  Start := 1;
+  for I := 1 to Length(APath) + 1 do
+    if (I > Length(APath)) or (APath[I] = PathDelim) or
+       (APath[I] = '/') then
+    begin
+      Part := Copy(APath, Start, I - Start);
+      if Part <> '' then
+        Result.Add(Part);
+      Start := I + 1;
+    end;
+end;
+
+function ReplaceHostFileBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity;
+  const ARelativePath, ATemporarySuffix: string; const ABytes: TBytes;
+  out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Parts: TStringList;
+  Directory, Next, Handle: cint;
+  Info: Stat;
+  NameBytes, TemporaryBytes: TBytes;
+  ErrorOffset, I: Integer;
+  Leaf: string;
+  Offset: SizeInt;
+  Written: TSsize;
+  Created: Boolean;
+
+  function Encode(const AText: string; out ABytes: TBytes): Boolean;
+  begin
+    Result := TryEncodeUTF8NullTerminated(AText, ABytes, ErrorOffset);
+    if not Result then
+      AError := 'path cannot be encoded for the host';
+  end;
+
+begin
+  Result := False;
+  AError := '';
+  Created := False;
+  Parts := SplitRelativeHostPath(ARelativePath);
+  Directory := -1;
+  try
+    for I := 0 to Parts.Count - 1 do
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+    if Parts.Count = 0 then
+    begin
+      AError := 'no file name';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
+    if not Encode(ARoot, NameBytes) then
+      Exit;
+    Directory := fpOpen(PAnsiChar(@NameBytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if Directory < 0 then
+    begin
+      AError := ARoot + ' is no longer the copied directory (' +
+        SysErrorMessage(fpgeterrno) + ')';
+      Exit;
+    end;
+    if ARootIdentity.Known and ((fpFStat(Directory, Info) <> 0) or
+       (QWord(Info.st_dev) <> ARootIdentity.Device) or
+       (QWord(Info.st_ino) <> ARootIdentity.Inode)) then
+    begin
+      AError := ARoot + ' was replaced after it was copied';
+      Exit;
+    end;
+
+    for I := 0 to Parts.Count - 2 do
+    begin
+      if not Encode(Parts[I], NameBytes) then
+        Exit;
+      Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+      if (Next < 0) and (fpgetCerrno = ESysENOENT) then
+      begin
+        HostMkdirAt(Directory, PAnsiChar(@NameBytes[0]),
+          BENEATH_DIRECTORY_MODE);
+        Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+          O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+      end;
+      if Next < 0 then
+      begin
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+      fpClose(Directory);
+      Directory := Next;
+    end;
+
+    Leaf := Parts[Parts.Count - 1];
+    if not Encode(Leaf, NameBytes) or
+       not Encode(Leaf + ATemporarySuffix, TemporaryBytes) then
+      Exit;
+    Handle := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+      O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
+    if Handle >= 0 then
+    begin
+      if (fpFStat(Handle, Info) = 0) and not fpS_ISREG(Info.st_mode) then
+      begin
+        fpClose(Handle);
+        AError := 'the target is not a regular file';
+        Exit;
+      end;
+      fpClose(Handle);
+    end
+    else if fpgetCerrno <> ESysENOENT then
+    begin
+      AError := 'the target is a symbolic link or cannot be opened';
+      Exit;
+    end;
+
+    { A link at the temporary's name is refused; a leftover file from an
+      interrupted write is removed. }
+    Handle := HostOpenAt(Directory, PAnsiChar(@TemporaryBytes[0]),
+      O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
+    if Handle >= 0 then
+    begin
+      fpClose(Handle);
+      HostUnlinkAt(Directory, PAnsiChar(@TemporaryBytes[0]), 0);
+    end
+    else if fpgetCerrno <> ESysENOENT then
+    begin
+      AError := IncludeTrailingPathDelimiter(ARoot) + ARelativePath +
+        ATemporarySuffix + ' is a symlink';
+      Exit;
+    end;
+    Handle := HostOpenAt(Directory, PAnsiChar(@TemporaryBytes[0]),
+      O_WRONLY or O_CREAT or O_EXCL or HOST_O_NOFOLLOW,
+      cint(BENEATH_FILE_MODE));
+    if Handle < 0 then
+    begin
+      AError := SysErrorMessage(fpgetCerrno);
+      Exit;
+    end;
+    Created := True;
+    try
+      Offset := 0;
+      while Offset < Length(ABytes) do
+      begin
+        Written := fpWrite(Handle, ABytes[Offset], Length(ABytes) - Offset);
+        if Written < 0 then
+        begin
+          if fpgeterrno = ESysEINTR then
+            Continue;
+          AError := SysErrorMessage(fpgeterrno);
+          Break;
+        end;
+        Inc(Offset, Written);
+      end;
+      if (AError = '') and not FileFlush(Handle) then
+        AError := SysErrorMessage(fpgeterrno);
+    finally
+      if (fpClose(Handle) <> 0) and (AError = '') then
+        AError := SysErrorMessage(fpgeterrno);
+    end;
+    if AError = '' then
+    begin
+      if HostRenameAt(Directory, PAnsiChar(@TemporaryBytes[0]), Directory,
+         PAnsiChar(@NameBytes[0])) = 0 then
+        Result := True
+      else
+        AError := SysErrorMessage(fpgetCerrno);
+    end;
+    if Created and not Result then
+      HostUnlinkAt(Directory, PAnsiChar(@TemporaryBytes[0]), 0);
+  finally
+    if Directory >= 0 then
+      fpClose(Directory);
+    Parts.Free;
+  end;
+end;
+{$ELSE}
+var
+  Parts: TStringList;
+  Path: string;
+  I: Integer;
+  Identity: THostDirectoryIdentity;
+begin
+  Result := False;
+  AError := '';
+  Parts := SplitRelativeHostPath(ARelativePath);
+  try
+    if Parts.Count = 0 then
+    begin
+      AError := 'no file name';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
+    Path := ExcludeTrailingPathDelimiter(ARoot);
+    if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
+    begin
+      AError := ARoot + ' is no longer the copied directory';
+      Exit;
+    end;
+    if not TryHostDirectoryIdentity(Path, Identity) then
+    begin
+      AError := ARoot + ' was replaced after it was copied';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, Identity);
+    if AError <> '' then
+      Exit;
+    if not SameDirectoryIdentity(Identity, ARootIdentity) then
+    begin
+      AError := ARoot + ' was replaced after it was copied';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+      Path := Path + PathDelim + Parts[I];
+      if HostPathIsSymlink(Path) then
+      begin
+        AError := Parts[I] + ' is a symbolic link';
+        Exit;
+      end;
+      if I < Parts.Count - 1 then
+      begin
+        if not DirectoryExists(Path) and not CreateDir(Path) then
+        begin
+          AError := 'cannot create ' + Path;
+          Exit;
+        end;
+        if HostPathIsSymlink(Path) or not DirectoryExists(Path) then
+        begin
+          AError := Parts[I] + ' is a symbolic link or not a directory';
+          Exit;
+        end;
+      end;
+    end;
+    Result := ReplaceHostFile(Path, Path + ATemporarySuffix, ABytes, AError);
+  finally
+    Parts.Free;
+  end;
+end;
+{$ENDIF}
+
+
+function TryHostDirectoryIdentityBeneath(const ARoot: string;
+  const ARootIdentity: THostDirectoryIdentity; const ARoute: string;
+  out AIdentity: THostDirectoryIdentity; out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Parts: TStringList;
+  Directory, Next: cint;
+  Info: Stat;
+  NameBytes: TBytes;
+  ErrorOffset, I: Integer;
+begin
+  Result := False;
+  AError := '';
+  AIdentity := Default(THostDirectoryIdentity);
+  Parts := SplitRelativeHostPath(ARoute);
+  Directory := -1;
+  try
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
+    if not TryEncodeUTF8NullTerminated(ARoot, NameBytes, ErrorOffset) then
+    begin
+      AError := 'path cannot be encoded for the host';
+      Exit;
+    end;
+    Directory := fpOpen(PAnsiChar(@NameBytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if (Directory < 0) or (fpFStat(Directory, Info) <> 0) or
+       (ARootIdentity.Known and
+        ((QWord(Info.st_dev) <> ARootIdentity.Device) or
+         (QWord(Info.st_ino) <> ARootIdentity.Inode))) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      if (Parts[I] = '.') or (Parts[I] = '..') or
+         not TryEncodeUTF8NullTerminated(Parts[I], NameBytes, ErrorOffset) then
+      begin
+        AError := 'the route climbs out of ' + ARoot;
+        Exit;
+      end;
+      Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+      if Next < 0 then
+      begin
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+      fpClose(Directory);
+      Directory := Next;
+    end;
+    if fpFStat(Directory, Info) <> 0 then
+    begin
+      AError := SysErrorMessage(fpgeterrno);
+      Exit;
+    end;
+    AIdentity.Known := True;
+    AIdentity.Device := QWord(Info.st_dev);
+    AIdentity.Inode := QWord(Info.st_ino);
+    Result := True;
+  finally
+    if Directory >= 0 then
+      fpClose(Directory);
+    Parts.Free;
+  end;
+end;
+{$ELSE}
+var
+  Parts: TStringList;
+  Path: string;
+  I: Integer;
+begin
+  Result := False;
+  AError := '';
+  AIdentity := Default(THostDirectoryIdentity);
+  Parts := SplitRelativeHostPath(ARoute);
+  try
+    AError := HostDirectoryIdentityProblem(ARoot, ARootIdentity);
+    if AError <> '' then
+      Exit;
+    Path := ExcludeTrailingPathDelimiter(ARoot);
+    if HostPathIsSymlink(Path) or
+       not TryHostDirectoryIdentity(Path, AIdentity) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    AError := HostDirectoryIdentityProblem(ARoot, AIdentity);
+    if AError <> '' then
+      Exit;
+    if not SameDirectoryIdentity(AIdentity, ARootIdentity) then
+    begin
+      AError := ARoot + ' was replaced';
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+    begin
+      Path := Path + PathDelim + Parts[I];
+      if (Parts[I] = '.') or (Parts[I] = '..') or HostPathIsSymlink(Path) or
+         not DirectoryExists(Path) then
+      begin
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+    end;
+    Result := TryHostDirectoryIdentity(Path, AIdentity);
+  finally
+    Parts.Free;
+  end;
+end;
+{$ENDIF}
 
 function ReadSharedHostFileBytes(const APath: string): TBytes;
 {$IFDEF MSWINDOWS}

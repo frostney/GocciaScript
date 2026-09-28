@@ -2,14 +2,14 @@
 /**
  * test-cli-apps.ts
  *
- * App-specific features: GocciaScriptLoader (JSON output, --global/--globals,
- * JavaScript host environments,
- * coverage, source maps), GocciaScriptLoaderBare (core-engine-only stdin/file
- * execution, CLI print, and runtime-global absence), GocciaBundler (compile,
- * roundtrip, stdin, directory, .gbc rejection, source maps),
+ * App-specific features: GocciaRunner (JSON output, --global/--globals,
+ * JavaScript host environments, coverage, source maps; and its sandbox mode:
+ * copied inputs, sandbox fs, shell, nested execution, diffs, write-back, the
+ * config `sandbox` section), GocciaScriptLoaderBare (core-engine-only
+ * stdin/file execution, CLI print, and runtime-global absence), GocciaBundler
+ * (compile, roundtrip, stdin, directory, .gbc rejection, source maps),
  * GocciaBenchmarkRunner (file, stdin, bytecode), GocciaREPL (banner,
- * evaluation, ASI, error recovery, bytecode), GocciaSandboxRunner
- * (seed baselines, sandbox fs, shell, nested execution, diffs).
+ * evaluation, ASI, error recovery, bytecode).
  */
 
 import { $ } from "bun";
@@ -22,13 +22,15 @@ import {
   chmodSync,
   rmSync,
   symlinkSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
 } from "fs";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import {
-  LOADER,
+  RUNNER,
   BARE,
-  SANDBOXRUNNER,
   REPL,
   TESTRUNNER,
   TEST262RUNNER,
@@ -42,6 +44,38 @@ import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-c
 import { verifyAllocationProfiles } from "./test-cli-profiling";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
+// The runner reports canonical host paths. On Windows the temp directory's
+// own spelling can be the 8.3 short form (RUNNER~1), so sandbox-mode tests
+// build their expected paths from the long, native form.
+const makeNativeTmp = (): string => realpathSync.native(makeTmp());
+
+/**
+ * A sandbox layout written to the host, for GocciaRunner's sandbox mode to
+ * copy in: each file lands under `<tmp>/<name>` at its sandbox path, so
+ * `--copy <tree>=/` reproduces the layout at the sandbox root. Paths may be
+ * written Windows-style (`\main.js`); they are stored with `/`. Returns the
+ * tree's host path.
+ */
+type SandboxTreeFile = { path: string; text: string } | { path: string; base64: string };
+
+function writeSandboxTree(
+  tmp: string,
+  files: SandboxTreeFile[] | Record<string, string>,
+  name = "tree",
+): string {
+  const tree = join(tmp, name);
+  mkdirSync(tree, { recursive: true });
+  const entries: SandboxTreeFile[] = Array.isArray(files)
+    ? files
+    : Object.entries(files).map(([path, text]) => ({ path, text }));
+  for (const file of entries) {
+    const relative = file.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    const target = join(tree, ...relative.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "base64" in file ? Buffer.from(file.base64, "base64") : file.text);
+  }
+  return tree;
+}
 
 /**
  * Run one named section, recording a failure instead of aborting the run.
@@ -159,7 +193,7 @@ async function runLoaderJsonAsync(
   const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
   const proc = Bun.spawn(
     [
-      LOADER,
+      RUNNER,
       ...(hasOutputFlag ? [] : ["--output=json"]),
       ...(extraArgs ?? []),
     ],
@@ -265,7 +299,7 @@ function assertPreservesBodyFailure(outputPath: string, label: string): void {
 }
 
 // ============================================================================
-// GocciaScriptLoader
+// GocciaRunner
 // ============================================================================
 
 // -- JSON output (interpreted + bytecode) ---------------------------------------
@@ -357,7 +391,7 @@ await section("Loader: JSON multi-file structure...", async () => {
     writeFileSync(first, "console.log('first out'); 11;\n");
     writeFileSync(second, "console.error('second err'); 22;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--output=json", "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -401,7 +435,7 @@ await section("Loader: JSON source-load failure stays per-file...", async () => 
     writeFileSync(valid, "2 + 2;\n");
     if (process.platform !== "win32") {
       chmodSync(unreadable, 0o000);
-      const proc = Bun.spawnSync([LOADER, "--output=json", "--jobs=1", unreadable, valid], {
+      const proc = Bun.spawnSync([RUNNER, "--output=json", "--jobs=1", unreadable, valid], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -475,7 +509,7 @@ await section("Loader: compact-json multi-file omits build, memory, stdout, stde
     writeFileSync(first, "11;\n");
     writeFileSync(second, "22;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--output=compact-json", "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--output=compact-json", "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -515,7 +549,7 @@ await section("Loader: parallel human-readable output preserves console output..
     writeFileSync(first, "console.log('parallel first out'); 1;\n");
     writeFileSync(second, "console.log('parallel second out'); 2;\n");
 
-    const proc = Bun.spawnSync([LOADER, "--jobs=2", first, second], {
+    const proc = Bun.spawnSync([RUNNER, "--jobs=2", first, second], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -531,7 +565,7 @@ await section("Loader: parallel human-readable output preserves console output..
 // -- --print --------------------------------------------------------------------
 
 await section("Loader: silent (no result line) by default...", async () => {
-  const proc = Bun.spawnSync([LOADER], {
+  const proc = Bun.spawnSync([RUNNER], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -547,7 +581,7 @@ await section("Loader: silent (no result line) by default...", async () => {
 });
 
 await section("Loader: --print emits bare value (no 'Result:' prefix)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--print"], {
+  const proc = Bun.spawnSync([RUNNER, "--print"], {
     stdin: new TextEncoder().encode("const r = 'this contains the word error'; r;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -561,7 +595,7 @@ await section("Loader: --print emits bare value (no 'Result:' prefix)...", async
 });
 
 await section("Loader: --print emits 'undefined' when result is undefined...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--print"], {
+  const proc = Bun.spawnSync([RUNNER, "--print"], {
     stdin: new TextEncoder().encode("undefined;\n"),
     stdout: "pipe",
     stderr: "pipe",
@@ -578,7 +612,7 @@ await section("Loader: --print honored from goccia.json...", async () => {
     writeFileSync(join(tmp, "goccia.json"), '{"print": true}\n');
     const file = join(tmp, "test.js");
     writeFileSync(file, "1 + 1;\n");
-    const proc = Bun.spawnSync([LOADER, file], {
+    const proc = Bun.spawnSync([RUNNER, file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -2175,7 +2209,7 @@ await section("Bare Loader: Promise.then drain (bytecode)...", async () => {
 // -- Promise.then microtask drain (Loader) --------------------------------------
 
 await section("Loader: Promise.then drain (interpreted)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--mode=interpreted"], {
+  const proc = Bun.spawnSync([RUNNER, "--mode=interpreted"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
@@ -2186,7 +2220,7 @@ await section("Loader: Promise.then drain (interpreted)...", async () => {
 });
 
 await section("Loader: Promise.then drain (bytecode)...", async () => {
-  const proc = Bun.spawnSync([LOADER, "--mode=bytecode"], {
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
     stdin: new TextEncoder().encode('Promise.resolve(42).then(v => console.log("then-" + v));\n'),
     stdout: "pipe",
     stderr: "pipe",
@@ -2203,7 +2237,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       const audit = join(tmp, `capabilities-${mode}.jsonl`);
       const proc = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           `--mode=${mode}`,
           "--allow-ffi",
           "--unsafe-shadowrealm",
@@ -2252,7 +2286,7 @@ await section("Loader: --audit-log records capability decisions with source loca
       const allowAudit = join(tmp, `function-allow-${mode}.jsonl`);
       const allow = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           `--mode=${mode}`,
           "--unsafe-function-constructor",
           `--audit-log=${allowAudit}`,
@@ -2280,7 +2314,7 @@ await section("Loader: --audit-log records capability decisions with source loca
 await section("Loader: --audit-log fails closed when the output cannot be opened...", async () => {
   const tmp = makeTmp();
   try {
-    const proc = Bun.spawnSync([LOADER, `--audit-log=${tmp}`], {
+    const proc = Bun.spawnSync([RUNNER, `--audit-log=${tmp}`], {
       stdin: new TextEncoder().encode("1;\n"),
       stdout: "pipe",
       stderr: "pipe",
@@ -2298,7 +2332,7 @@ await section("Loader: --log and --audit-log reject the same output path...", as
     const shared = join(tmp, "combined.log");
     const alias = `${tmp}/./combined.log`;
     const proc = Bun.spawnSync(
-      [LOADER, `--log=${shared}`, `--audit-log=${alias}`],
+      [RUNNER, `--log=${shared}`, `--audit-log=${alias}`],
       {
         stdin: new TextEncoder().encode('console.log("hello");\n'),
         stdout: "pipe",
@@ -2406,7 +2440,7 @@ await section("Loader: --host-environment errors withhold provider source...", a
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
         [
-          LOADER,
+          RUNNER,
           guestPath,
           `--host-environment=${providerPath}`,
           `--mode=${mode}`,
@@ -2453,7 +2487,7 @@ await section("Loader: ShadowRealm.importValue inherits the host module aliases.
     // not cover it; the aliased file needs its own read grant.
     const proc = Bun.spawnSync(
       [
-        LOADER,
+        RUNNER,
         entry,
         "--unsafe-shadowrealm",
         "--alias",
@@ -2475,7 +2509,7 @@ await section("Loader: ShadowRealm.importValue inherits the host module aliases.
 await section("Loader: relative aliases use the invocation or config directory...", async () => {
   const tmp = makeTmp();
   try {
-    const loader = resolve(LOADER);
+    const loader = resolve(RUNNER);
     const project = join(tmp, "project");
     mkdirSync(join(project, "api-tests"), { recursive: true });
     mkdirSync(join(project, "src"), { recursive: true });
@@ -2631,7 +2665,7 @@ await section("Loader: bare specifiers stay sealed without --allow-import=node_m
   const tmp = makeTmp();
   try {
     const project = writeNodeModulesProject(tmp);
-    const proc = Bun.spawnSync([resolve(LOADER), "app.js", "--source-type=module"], {
+    const proc = Bun.spawnSync([resolve(RUNNER), "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -2652,7 +2686,7 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
     const project = writeNodeModulesProject(tmp);
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
+        [resolve(RUNNER), "app.js", "--source-type=module", `--mode=${mode}`, "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2664,7 +2698,7 @@ await section("Loader: --allow-import=node_modules resolves exports, wildcards, 
     // The config-file spelling has to reach the resolver too, since a project
     // that needs the capability wants it recorded, not retyped.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules"] } }));
-    const configProc = Bun.spawnSync([resolve(LOADER), "-P", "app.js", "--source-type=module"], {
+    const configProc = Bun.spawnSync([resolve(RUNNER), "-P", "app.js", "--source-type=module"], {
       cwd: project,
       stdout: "pipe",
       stderr: "pipe",
@@ -2688,7 +2722,7 @@ await section("Loader: --allow-import=node_modules=<dir> caps the ancestor walk.
     mkdirSync(inner, { recursive: true });
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "src/app.js", "--source-type=module", `--allow-import=node_modules=${inner}`],
+      [resolve(RUNNER), "src/app.js", "--source-type=module", `--allow-import=node_modules=${inner}`],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2714,7 +2748,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     // for <foreign>/node_modules and find nothing.
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(project, "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(project, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2729,7 +2763,7 @@ await section("Loader: a relative config ceiling anchors to the config file...",
     writeFileSync(join(inner, "app.js"), 'import "pkg-exports";\n');
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(inner, "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(inner, "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
@@ -2757,7 +2791,7 @@ await section("Loader: a relative config ceiling holds when the project is reach
     mkdirSync(foreign, { recursive: true });
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./"] } }));
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(link, "project", "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(link, "project", "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0 || !containsLine(proc.stdout.toString(), "chained:42"))
@@ -2768,7 +2802,7 @@ await section("Loader: a relative config ceiling holds when the project is reach
     writeFileSync(join(project, "src", "app.js"), 'import "pkg-exports";\n');
     writeFileSync(join(project, "goccia.json"), JSON.stringify({ permissions: { "allow-import": ["node_modules=./src"] } }));
     const bounded = Bun.spawnSync(
-      [resolve(LOADER), "-P", join(link, "project", "src", "app.js"), "--source-type=module"],
+      [resolve(RUNNER), "-P", join(link, "project", "src", "app.js"), "--source-type=module"],
       { cwd: foreign, stdout: "pipe", stderr: "pipe" },
     );
     const boundedOut = bounded.stdout.toString() + bounded.stderr.toString();
@@ -2786,7 +2820,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     const audit = join(tmp, "node-modules-audit.jsonl");
     const proc = Bun.spawnSync(
       [
-        resolve(LOADER),
+        resolve(RUNNER),
         "app.js",
         "--source-type=module",
         "--allow-import=node_modules=.",
@@ -2812,7 +2846,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     const unboundedAudit = join(tmp, "unbounded-audit.jsonl");
     const unbounded = Bun.spawnSync(
       [
-        resolve(LOADER),
+        resolve(RUNNER),
         "app.js",
         "--source-type=module",
         "--allow-import=node_modules",
@@ -2831,7 +2865,7 @@ await section("Loader: --allow-import=node_modules audits every node_modules res
     // audited as a deny.
     const sealedAudit = join(tmp, "sealed-audit.jsonl");
     const sealed = Bun.spawnSync(
-      [resolve(LOADER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
+      [resolve(RUNNER), "app.js", "--source-type=module", `--audit-log=${sealedAudit}`],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     if (sealed.exitCode === 0) throw new Error("A bare specifier must fail without the grant");
@@ -2859,7 +2893,7 @@ await section("Loader: package resolution cannot escape the package directory...
     ]) {
       writeFileSync(join(project, "escape.js"), `import ${JSON.stringify(specifier)};\n`);
       const proc = Bun.spawnSync(
-        [resolve(LOADER), "escape.js", "--source-type=module", "--allow-import=node_modules"],
+        [resolve(RUNNER), "escape.js", "--source-type=module", "--allow-import=node_modules"],
         { cwd: project, stdout: "pipe", stderr: "pipe" },
       );
       const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2879,7 +2913,7 @@ await section("Loader: a CommonJS package is refused by name, not parsed...", as
     const project = writeNodeModulesProject(tmp);
     writeFileSync(join(project, "cjs.js"), 'import "pkg-commonjs";\n');
     const proc = Bun.spawnSync(
-      [resolve(LOADER), "cjs.js", "--source-type=module", "--allow-import=node_modules"],
+      [resolve(RUNNER), "cjs.js", "--source-type=module", "--allow-import=node_modules"],
       { cwd: project, stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
@@ -2971,7 +3005,7 @@ await section("Loader: --globals from JS module...", async () => {
 });
 
 await section("Loader: --global cannot override built-in...", async () => {
-  const res = await $`echo '1;' | ${LOADER} --global console=1 2>&1`.nothrow();
+  const res = await $`echo '1;' | ${RUNNER} --global console=1 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Overriding built-in should fail");
   if (!res.text().includes("Cannot override built-in global")) throw new Error("Should mention 'Cannot override built-in global'");
 });
@@ -2979,7 +3013,7 @@ await section("Loader: --global cannot override built-in...", async () => {
 // -- Coverage -------------------------------------------------------------------
 
 await section("Loader: coverage summary...", async () => {
-  const out = await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage 2>&1`.text();
+  const out = await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage 2>&1`.text();
   if (!out.includes("Coverage Summary:")) throw new Error(`Expected "Coverage Summary:", got: ${out}`);
 });
 
@@ -2993,7 +3027,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
   try {
     console.log("Loader: coverage LCOV...");
     const lcovPath = join(tmp, "coverage.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-format=lcov --coverage-output=${lcovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-format=lcov --coverage-output=${lcovPath}`.quiet();
     if (!existsSync(lcovPath)) throw new Error("LCOV file should exist");
     const lcov = readFileSync(lcovPath, "utf-8");
     if (!lcov.includes("SF:")) throw new Error('LCOV should contain "SF:"');
@@ -3001,7 +3035,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 
     console.log("Loader: coverage JSON...");
     const jsonCovPath = join(tmp, "coverage.json");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-format=json --coverage-output=${jsonCovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-format=json --coverage-output=${jsonCovPath}`.quiet();
     if (!existsSync(jsonCovPath)) throw new Error("JSON coverage file should exist");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
@@ -3020,7 +3054,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const functionLcovPath = join(tmp, `function-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=lcov --coverage-output=${functionLcovPath} ${functionSourcePath}`.quiet();
       const functionLcov = readFileSync(functionLcovPath, "utf-8");
       if (!functionLcov.includes("FN:1,called")) throw new Error(`${modeName} LCOV should define called`);
       if (!functionLcov.includes("FN:2,neverCalled")) throw new Error(`${modeName} LCOV should define neverCalled`);
@@ -3037,7 +3071,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
     const functionJsonPath = join(tmp, "function-coverage.json");
-    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${functionJsonPath} ${functionSourcePath}`.quiet();
     const functionFile = coverageEntryFor(functionJsonPath, functionSourcePath);
     if (!functionFile) throw new Error("JSON coverage should contain the source file");
     const functionIdsByName = Object.fromEntries(
@@ -3088,7 +3122,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const generatorLcovPath = join(tmp, `generator-function-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${generatorLcovPath} ${generatorSourcePath}`.quiet();
       const generatorLcov = readFileSync(generatorLcovPath, "utf-8");
       for (const name of [
         "generatorFunction",
@@ -3119,7 +3153,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     for (const modeArgs of [[], ["--mode=bytecode"]]) {
       const modeName = modeArgs.length === 0 ? "default" : "explicit-bytecode";
       const declarationLcovPath = join(tmp, `function-declaration-${modeName}.lcov`);
-      await $`${LOADER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --compat-function --coverage --coverage-format=lcov --coverage-output=${declarationLcovPath} ${declarationSourcePath}`.quiet();
       const declarationLcov = readFileSync(declarationLcovPath, "utf-8");
       for (const name of ["ordinaryNeverCalled", "generatorNeverCalled"]) {
         if (!declarationLcov.includes(`FNDA:0,${name}`)) {
@@ -3147,7 +3181,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ].join("\n"),
     );
     const escapedFunctionNameLcovPath = join(tmp, "escaped-function-name.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${escapedFunctionNameLcovPath} ${escapedFunctionNameSourcePath}`.quiet();
     const escapedFunctionNameLcov = readFileSync(escapedFunctionNameLcovPath, "utf-8");
     const escapedFunctionRecords = escapedFunctionNameLcov.split(/\r?\n/);
     if (!escapedFunctionRecords.some((line) => /^FN:\d+,line\\r\\nbreak$/.test(line)) ||
@@ -3177,13 +3211,13 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 
     console.log("Loader: coverage order-independent flags...");
     const orderPath = join(tmp, "order.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --coverage-output=${orderPath} --coverage-format=lcov`.quiet();
     if (!existsSync(orderPath)) throw new Error("Order-independent LCOV should exist");
     if (!readFileSync(orderPath, "utf-8").includes("SF:")) throw new Error("Order-independent LCOV should contain SF:");
 
     console.log("Loader: coverage bytecode...");
     const bcLcovPath = join(tmp, "bc-coverage.lcov");
-    await $`echo 'const x = 1 + 2; x;' | ${LOADER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
+    await $`echo 'const x = 1 + 2; x;' | ${RUNNER} --mode=bytecode --coverage-format=lcov --coverage-output=${bcLcovPath}`.quiet();
     if (!existsSync(bcLcovPath)) throw new Error("Bytecode LCOV should exist");
     if (!readFileSync(bcLcovPath, "utf-8").includes("DA:")) throw new Error("Bytecode LCOV should contain DA:");
 
@@ -3223,7 +3257,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ["bytecode", ["--mode=bytecode"]],
     ] as [string, string[]][]) {
       const implyJsonPath = join(implyDir, `coverage-${label}.json`);
-      await $`${LOADER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
+      await $`${RUNNER} ${modeArgs} --coverage --coverage-format=json --coverage-output=${implyJsonPath} ${implyEntryPath}`.quiet();
       const report = readCoverageByBasename(implyJsonPath);
       implyReports[label] = report;
       const helper = report["helper.js"];
@@ -3384,7 +3418,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       ].join("\n"),
     );
     const declLineLcovPath = join(tmp, "declaration-line.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${declLineLcovPath} ${declLinePath}`.quiet();
     const declLineRecords = readFileSync(declLineLcovPath, "utf-8").split(/\r?\n/);
     for (const expected of ["FN:1,oneLine", "FN:2,multi", "FNDA:1,oneLine", "FNDA:1,multi"]) {
       if (!declLineRecords.includes(expected)) {
@@ -3498,7 +3532,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       for (const jobs of ["1", "2", "4"]) {
         const outPath = join(loaderJobsDir, `coverage-${label}-${jobs}.json`);
         const args = [
-          resolve(LOADER),
+          resolve(RUNNER),
           ...loaderEntries,
           `--jobs=${jobs}`,
           ...(label === "implied" ? [] : ["--coverage"]),
@@ -3597,13 +3631,13 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     );
 
     const jsxLcovPath = join(tmp, "jsx-coverage.lcov");
-    await $`${LOADER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${jsxLcovPath} ${jsxPath}`.quiet();
     const jsxLcov = readFileSync(jsxLcovPath, "utf-8");
     if (!jsxLcov.includes("BRDA:3,")) throw new Error("JSX LCOV should have branch on line 3");
     if (!jsxLcov.includes("FN:2,Greet")) throw new Error("JSX LCOV should map Greet to original line 2");
 
     const jsxJsonPath = join(tmp, "jsx-coverage.json");
-    await $`${LOADER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
+    await $`${RUNNER} --coverage --coverage-format=json --coverage-output=${jsxJsonPath} ${jsxPath}`.quiet();
     if (!readFileSync(jsxJsonPath, "utf-8").includes('"line":3')) throw new Error('JSX JSON should have "line":3');
   } finally {
     clean(tmp);
@@ -5001,21 +5035,21 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     console.log("Loader: source map bytecode...");
     const jsxPath = join(tmp, "test.jsx");
     writeFileSync(jsxPath, jsxSource);
-    await $`${LOADER} --source-map --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map --mode=bytecode ${jsxPath}`.quiet();
     const mapPath = jsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(mapPath)) throw new Error("Source map should exist");
     assertValidSourceMap(mapPath);
 
     console.log("Loader: source map custom path...");
     const customMapPath = join(tmp, "custom.map");
-    await $`${LOADER} --source-map=${customMapPath} --mode=bytecode ${jsxPath}`.quiet();
+    await $`${RUNNER} --source-map=${customMapPath} --mode=bytecode ${jsxPath}`.quiet();
     if (!existsSync(customMapPath)) throw new Error("Custom source map should exist");
     assertValidSourceMap(customMapPath);
 
     console.log("Loader: source map interpreted...");
     const interpJsxPath = join(tmp, "interp.jsx");
     writeFileSync(interpJsxPath, jsxSource);
-    await $`${LOADER} --source-map ${interpJsxPath}`.quiet();
+    await $`${RUNNER} --source-map ${interpJsxPath}`.quiet();
     const interpMapPath = interpJsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(interpMapPath)) throw new Error("Interpreted source map should exist");
     assertValidSourceMap(interpMapPath);
@@ -5023,12 +5057,12 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     console.log("Loader: no --source-map -> no .map...");
     const noMapJsxPath = join(tmp, "nomap.jsx");
     writeFileSync(noMapJsxPath, jsxSource);
-    await $`${LOADER} ${noMapJsxPath}`.quiet();
+    await $`${RUNNER} ${noMapJsxPath}`.quiet();
     const noMapPath = noMapJsxPath.replace(/\.jsx$/, ".jsx.map");
     if (existsSync(noMapPath)) throw new Error("No .map file should exist without --source-map");
 
     console.log("Loader: stdin --source-map rejection...");
-    const stdinRes = await $`echo 'const x = 1;' | ${LOADER} --source-map 2>&1`.nothrow();
+    const stdinRes = await $`echo 'const x = 1;' | ${RUNNER} --source-map 2>&1`.nothrow();
     const stdinOut = stdinRes.text().toLowerCase();
     if (!stdinOut.includes("error") && !stdinOut.includes("cannot") && !stdinOut.includes("require")) {
       throw new Error(`Stdin --source-map should produce an error, got: ${stdinRes.text()}`);
@@ -5054,7 +5088,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     if (!singleOut.includes("Compiled to")) throw new Error('Output should contain "Compiled to"');
 
     // Roundtrip
-    const roundtripOut = await $`${LOADER} --print ${singleGbc} 2>&1`.text();
+    const roundtripOut = await $`${RUNNER} --print ${singleGbc} 2>&1`.text();
     if (!containsLine(roundtripOut, "4")) throw new Error(`Roundtrip should print 4 on its own line, got: ${roundtripOut}`);
 
     console.log("Bundler: custom --output path...");
@@ -5076,7 +5110,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
       ].join("\n"),
     );
     await $`${BUNDLER} ${argumentsSrc} --output=${argumentsOut} --compat-var --compat-function --compat-arguments-object`.quiet();
-    const argumentsRoundtrip = await $`${LOADER} --print ${argumentsOut} 2>&1`.text();
+    const argumentsRoundtrip = await $`${RUNNER} --print ${argumentsOut} 2>&1`.text();
     if (!containsLine(argumentsRoundtrip, "2"))
       throw new Error(`Arguments-object roundtrip should print 2, got: ${argumentsRoundtrip}`);
 
@@ -5093,7 +5127,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     );
     await $`${BUNDLER} ${nanSrc} --output=${nanOut}`.quiet();
     if (!existsSync(nanOut)) throw new Error("Repeated NaN constants should compile to .gbc");
-    const nanRoundtrip = await $`${LOADER} ${nanOut} 2>&1`.text();
+    const nanRoundtrip = await $`${RUNNER} ${nanOut} 2>&1`.text();
     if (!nanRoundtrip.includes("NaN = NaN") || !nanRoundtrip.includes("NaN2 = NaN"))
       throw new Error(`Repeated NaN roundtrip should print both lines, got: ${nanRoundtrip}`);
 
@@ -5101,7 +5135,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     const stdinOut = join(tmp, "stdin.gbc");
     await $`echo 'const z = 5 + 5; z;' | ${BUNDLER} --output=${stdinOut}`.quiet();
     if (!existsSync(stdinOut)) throw new Error("Stdin --output .gbc should exist");
-    const stdinRoundtrip = await $`${LOADER} --print ${stdinOut} 2>&1`.text();
+    const stdinRoundtrip = await $`${RUNNER} --print ${stdinOut} 2>&1`.text();
     if (!containsLine(stdinRoundtrip, "10")) throw new Error(`Stdin roundtrip should print 10 on its own line, got: ${stdinRoundtrip}`);
 
     console.log("Bundler: stdin without --output should fail...");
@@ -5845,44 +5879,41 @@ await section("REPL: repeated tagged template execution (interpreted + bytecode)
 });
 
 // ============================================================================
-// GocciaSandboxRunner
+// GocciaRunner sandbox mode
 // ============================================================================
 
-await section("SandboxRunner: a thrown stack cannot read a host file into the diagnostic...", async () => {
+await section("Runner sandbox mode: a thrown stack cannot read a host file into the diagnostic...", async () => {
   // A code frame's source must come from what the engine parsed, not from a
   // path lifted out of a script-controlled `stack` string. In the sandbox this
   // is load-bearing: reading such a path would bypass the sandbox.fs.path
   // capability gate and hand guest code the contents of any host file through
   // the reported ErrorMessage/ErrorOutput.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const secretPath = join(tmp, "HOST_SECRET.txt");
     const secretMarker = "SANDBOX_HOST_SECRET_LEAKED";
     writeFileSync(secretPath, `${secretMarker}\nsecond line\n`);
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            `const forged = { name: "Error", message: "forged", stack: "Error: forged\\n    at f (${secretPath.replace(/\\/g, "\\\\")}:1:1)" };`,
-            "throw forged;",
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          `const forged = { name: "Error", message: "forged", stack: "Error: forged\\n    at f (${secretPath.replace(/\\/g, "\\\\")}:1:1)" };`,
+          "throw forged;",
+        ].join("\n"),
+      },
+    ]);
     for (const [label, extraArgs] of [
       ["interpreter", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const combined = proc.stdout.toString() + proc.stderr.toString();
       if (combined.includes(secretMarker))
         throw new Error(
-          `SECURITY: SandboxRunner ${label} leaked a host file named by a thrown stack: ${combined}`,
+          `SECURITY: Sandbox mode ${label} leaked a host file named by a thrown stack: ${combined}`,
         );
     }
   } finally {
@@ -5890,7 +5921,7 @@ await section("SandboxRunner: a thrown stack cannot read a host file into the di
   }
 });
 
-await section("SandboxRunner: a nested isolated child cannot read the parent's module source...", async () => {
+await section("Runner sandbox mode: a nested isolated child cannot read the parent's module source...", async () => {
   // Regression for the disclosure the source registry introduced: the parent
   // imports a module (registering its source), then runs an ISOLATED child
   // seeded with only its own file. The child forges a frame naming the parent's
@@ -5898,12 +5929,11 @@ await section("SandboxRunner: a nested isolated child cannot read the parent's m
   // the guest `.stack`) and each engine has its own source scope, the child gets
   // no frame and the parent module's source never crosses the boundary — even
   // though the child's own filesystem correctly cannot open that path either.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     // Appears ONLY as /parent_secret.js's source content; never in the child's
     // own code or the forged stack string, so any occurrence in output is a leak.
     const leakMarker = "LEAKED_PARENT_SOURCE_XZ";
-    const seed = join(tmp, "seed.json");
     // The child names the parent module in a forged stack but never contains the
     // leak marker itself. It first proves it cannot read that path through its
     // own (isolated) filesystem, so the only channel under test is the code
@@ -5916,48 +5946,46 @@ await section("SandboxRunner: a nested isolated child cannot read the parent's m
       'const forged = { name: "Error", message: "child forged", stack: "Error: child forged\\n    at f (/parent_secret.js:1:1)" };',
       "throw forged;",
     ].join("\n");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/parent_secret.js",
-          text: `export const secret = 1; // ${leakMarker}`,
-        },
-        { path: "/child.js", text: childForge },
-        {
-          path: "/main.js",
-          text: [
-            'import { secret } from "/parent_secret.js";',
-            'import { runScript } from "goccia";',
-            "void secret;",
-            // Isolated child seeded with ONLY its own file; no /parent_secret.js.
-            'const child = runScript("/child.js", { sandbox: true, seed: [{ path: "/child.js", text: ' +
-              JSON.stringify(childForge) +
-              " }] });",
-            "console.log(child.stdout);",
-            "console.log(child.stderr);",
-            "console.log(child.error);",
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/parent_secret.js",
+        text: `export const secret = 1; // ${leakMarker}`,
+      },
+      { path: "/child.js", text: childForge },
+      {
+        path: "/main.js",
+        text: [
+          'import { secret } from "/parent_secret.js";',
+          'import { runScript } from "goccia";',
+          "void secret;",
+          // Isolated child given ONLY its own file; no /parent_secret.js.
+          'const child = runScript("/child.js", { sandbox: true, copy: [{ path: "/child.js", text: ' +
+            JSON.stringify(childForge) +
+            " }] });",
+          "console.log(child.stdout);",
+          "console.log(child.stderr);",
+          "console.log(child.error);",
+        ].join("\n"),
+      },
+    ]);
     for (const [label, extraArgs] of [
       ["interpreter", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const combined = proc.stdout.toString() + proc.stderr.toString();
       if (combined.includes(leakMarker))
         throw new Error(
-          `SECURITY: SandboxRunner ${label} nested child disclosed the parent module source: ${combined}`,
+          `SECURITY: Sandbox mode ${label} nested child disclosed the parent module source: ${combined}`,
         );
       // The channel under test is the code frame, not the filesystem: confirm
       // the isolated child genuinely cannot read the parent module directly.
       if (!combined.includes("childCanRead:false"))
         throw new Error(
-          `SandboxRunner ${label}: expected the isolated child to lack FS access to /parent_secret.js, got: ${combined}`,
+          `Sandbox mode ${label}: expected the isolated child to lack FS access to /parent_secret.js, got: ${combined}`,
         );
     }
   } finally {
@@ -5965,44 +5993,41 @@ await section("SandboxRunner: a nested isolated child cannot read the parent's m
   }
 });
 
-await section("SandboxRunner: a legitimate error in the child's own module still renders its code frame...", async () => {
+await section("Runner sandbox mode: a legitimate error in the child's own module still renders its code frame...", async () => {
   // Feature-survival counterpart to the disclosure test: a genuine throw inside
   // a module the child itself loaded must still produce that module's code frame
   // in both modes (the fix must not blanket-disable frames).
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/boom.js",
-          text: [
-            "// boom filler 1",
-            "// boom filler 2",
-            "export const boom = (() => { throw new Error('own module exploded'); })();",
-          ].join("\n"),
-        },
-        {
-          path: "/main.js",
-          text: ['import { boom } from "/boom.js";', "void boom;"].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/boom.js",
+        text: [
+          "// boom filler 1",
+          "// boom filler 2",
+          "export const boom = (() => { throw new Error('own module exploded'); })();",
+        ].join("\n"),
+      },
+      {
+        path: "/main.js",
+        text: ['import { boom } from "/boom.js";', "void boom;"].join("\n"),
+      },
+    ]);
     for (const [label, extraArgs] of [
       ["interpreter", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const combined = proc.stdout.toString() + proc.stderr.toString();
       if (!combined.includes("own module exploded"))
-        throw new Error(`SandboxRunner ${label} should report the module error, got: ${combined}`);
+        throw new Error(`Sandbox mode ${label} should report the module error, got: ${combined}`);
       if (!combined.includes("boom.js:3:") ||
           !combined.includes("throw new Error('own module exploded')"))
         throw new Error(
-          `SandboxRunner ${label} should render the child's own module code frame, got: ${combined}`,
+          `Sandbox mode ${label} should render the child's own module code frame, got: ${combined}`,
         );
     }
   } finally {
@@ -6010,7 +6035,7 @@ await section("SandboxRunner: a legitimate error in the child's own module still
   }
 });
 
-await section("SandboxRunner: a nested child's genuine module source is withheld when the parent surfaces its error...", async () => {
+await section("Runner sandbox mode: a nested child's genuine module source is withheld when the parent surfaces its error...", async () => {
   // Render-time principal enforcement. The child GENUINELY throws inside a
   // module it loaded itself, so the child engine captures a real code-frame
   // excerpt (guest-owned, stamped with the child's principal). The parent then
@@ -6020,50 +6045,47 @@ await section("SandboxRunner: a nested child's genuine module source is withheld
   // active one. The parent must see the fault's location but never the child's
   // source line. A sibling test above proves the SAME child, run at top level,
   // does render its frame — so this is enforcement, not a blanket disable.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const childMarker = "NESTED_CHILD_MODULE_SOURCE_XZ";
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/lib.js",
-          text: [
-            `// ${childMarker}`,
-            "export const boom = () => { const z = null; return z.x; };",
-          ].join("\n"),
-        },
-        {
-          path: "/child.js",
-          text: ['import { boom } from "/lib.js";', "boom();"].join("\n"),
-        },
-        {
-          path: "/main.js",
-          text: [
-            'import { runScript } from "goccia";',
-            'const c = runScript("/child.js", { sandbox: true, seed: ["/child.js", "/lib.js"] });',
-            "console.log(c.error);",
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/lib.js",
+        text: [
+          `// ${childMarker}`,
+          "export const boom = () => { const z = null; return z.x; };",
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: ['import { boom } from "/lib.js";', "boom();"].join("\n"),
+      },
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const c = runScript("/child.js", { sandbox: true, copy: ["/child.js", "/lib.js"] });',
+          "console.log(c.error);",
+        ].join("\n"),
+      },
+    ]);
     for (const [label, extraArgs] of [
       ["interpreter", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const combined = proc.stdout.toString() + proc.stderr.toString();
       if (combined.includes(childMarker))
         throw new Error(
-          `SECURITY: SandboxRunner ${label} disclosed a nested child's module source when the parent surfaced its error: ${combined}`,
+          `SECURITY: Sandbox mode ${label} disclosed a nested child's module source when the parent surfaced its error: ${combined}`,
         );
       // The location must still be reported (only the source excerpt is gated).
       if (!combined.includes("/lib.js:"))
         throw new Error(
-          `SandboxRunner ${label} should still locate the nested child's fault, got: ${combined}`,
+          `Sandbox mode ${label} should still locate the nested child's fault, got: ${combined}`,
         );
     }
   } finally {
@@ -6071,35 +6093,32 @@ await section("SandboxRunner: a nested child's genuine module source is withheld
   }
 });
 
-await section("SandboxRunner: fs callback APIs and promises defer filesystem work...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: fs callback APIs and promises defer filesystem work...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs, { exists, readFile, writeFile } from "fs";',
-            'writeFile("/callback.txt", "callback", (error) => {',
-            '  if (error) { console.log("callback-error:" + error.code); return; }',
-            '  readFile("/callback.txt", "utf8", (readError, text) => {',
-            '    if (readError) { console.log("read-error:" + readError.code); return; }',
-            '    console.log("callback:" + text);',
-            '  });',
-            '});',
-            'Goccia.gc();',
-            'console.log("callback-immediate:" + fs.existsSync("/callback.txt"));',
-            'const promiseWrite = fs.promises.writeFile("/promise.txt", "promise");',
-            'promiseWrite.then(() => exists("/promise.txt", (present) => {',
-            '  console.log("exists:" + present);',
-            '}));',
-            'Goccia.gc();',
-            'console.log("promise-immediate:" + fs.existsSync("/promise.txt"));',
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs, { exists, readFile, writeFile } from "fs";',
+          'writeFile("/callback.txt", "callback", (error) => {',
+          '  if (error) { console.log("callback-error:" + error.code); return; }',
+          '  readFile("/callback.txt", "utf8", (readError, text) => {',
+          '    if (readError) { console.log("read-error:" + readError.code); return; }',
+          '    console.log("callback:" + text);',
+          '  });',
+          '});',
+          'Goccia.gc();',
+          'console.log("callback-immediate:" + fs.existsSync("/callback.txt"));',
+          'const promiseWrite = fs.promises.writeFile("/promise.txt", "promise");',
+          'promiseWrite.then(() => exists("/promise.txt", (present) => {',
+          '  console.log("exists:" + present);',
+          '}));',
+          'Goccia.gc();',
+          'console.log("promise-immediate:" + fs.existsSync("/promise.txt"));',
+        ].join("\n"),
+      },
+    ]);
 
     const expected = [
       "callback-immediate:false",
@@ -6112,92 +6131,89 @@ await section("SandboxRunner: fs callback APIs and promises defer filesystem wor
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
       if (proc.exitCode !== 0)
-        throw new Error(`SandboxRunner ${label} fs callback run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`Sandbox mode ${label} fs callback run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
       if (stdout !== expected)
-        throw new Error(`SandboxRunner ${label} fs callback output should be ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode ${label} fs callback output should be ${JSON.stringify(expected)}, got: ${stdout}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: fs callback overloads use Node-shaped results...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: fs callback overloads use Node-shaped results...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs, { appendFile, copyFile, exists, mkdir, readFile, readdir, rename, rm, stat } from "fs";',
-            'const capture = (start) => new Promise((resolve) => start((...args) => resolve(args)));',
-            'console.log("lengths:" + [fs.readFile.length, fs.writeFile.length, fs.appendFile.length, fs.mkdir.length, fs.readdir.length, fs.stat.length, fs.rm.length, fs.rename.length, fs.copyFile.length, fs.exists.length].join(","));',
-            'console.log("promise-lengths:" + [fs.promises.readFile.length, fs.promises.writeFile.length, fs.promises.appendFile.length, fs.promises.mkdir.length, fs.promises.readdir.length, fs.promises.stat.length, fs.promises.rm.length, fs.promises.rename.length, fs.promises.copyFile.length].join(","));',
-            'console.log("promises-exists:" + typeof fs.promises.exists);',
-            'try { readFile("/source.txt", "utf8"); }',
-            'catch (error) { console.log("missing-callback:" + error.name); }',
-            'try { readFile("/source.txt", "latin1", () => {}); }',
-            'catch (error) { console.log("unsupported-encoding:" + error.name); }',
-            'try { mkdir("/bad-mkdir", true, () => {}); }',
-            'catch (error) { console.log("mkdir-boolean-options:" + error.name); }',
-            'try { rm("/source.txt", true, () => {}); }',
-            'catch (error) { console.log("rm-boolean-options:" + error.name); }',
-            'const invalidPathPromise = fs.promises.readFile(123);',
-            'console.log("promise-validation-return:" + (invalidPathPromise instanceof Promise));',
-            'try { await invalidPathPromise; }',
-            'catch (error) { console.log("promise-validation-reject:" + error.name); }',
-            'const invalidCopyPromise = fs.promises.copyFile("/source.txt", "/bad-copy.txt", 1);',
-            'console.log("copy-mode-return:" + (invalidCopyPromise instanceof Promise));',
-            'try { await invalidCopyPromise; }',
-            'catch (error) { console.log("unsupported-copy-mode:" + error.name); }',
-            'const invalidRmPromise = fs.promises.rm("/source.txt", true);',
-            'console.log("promise-rm-boolean-return:" + (invalidRmPromise instanceof Promise));',
-            'try { await invalidRmPromise; }',
-            'catch (error) { console.log("promise-rm-boolean-reject:" + error.name); }',
-            'const thrownReason = { source: "encoding-getter" };',
-            'const getterPromise = fs.promises.readFile("/source.txt", { get encoding() { throw thrownReason; } });',
-            'try { await getterPromise; }',
-            'catch (error) { console.log("promise-getter-reason:" + (error === thrownReason)); }',
-            'fs.mkdirSync("/existing");',
-            'const appendArgs = await capture((callback) => appendFile("/source.txt", "!", callback));',
-            'console.log("append-shape:" + (appendArgs.length === 1 && appendArgs[0] === null));',
-            'const readOptions = { encoding: "utf8" };',
-            'const readPromise = capture((callback) => readFile("/source.txt", readOptions, callback));',
-            'readOptions.encoding = "latin1";',
-            'const readArgs = await readPromise;',
-            'console.log("read-shape:" + (readArgs.length === 2 && readArgs[0] === null && readArgs[1] === "source!"));',
-            'const mkdirOptions = { recursive: true };',
-            'const mkdirPromise = capture((callback) => mkdir("/existing/first/second", mkdirOptions, callback));',
-            'mkdirOptions.recursive = false;',
-            'const mkdirArgs = await mkdirPromise;',
-            'console.log("mkdir-shape:" + (mkdirArgs.length === 2 && mkdirArgs[0] === null && mkdirArgs[1] === "/existing/first"));',
-            'const readdirArgs = await capture((callback) => readdir("/existing/first", callback));',
-            'console.log("readdir-shape:" + (readdirArgs.length === 2 && readdirArgs[0] === null && readdirArgs[1][0] === "second"));',
-            'const statArgs = await capture((callback) => stat("/source.txt", callback));',
-            'console.log("stat-shape:" + (statArgs.length === 2 && statArgs[0] === null && statArgs[1].isFile()));',
-            'const copyArgs = await capture((callback) => copyFile("/source.txt", "/copy.txt", 0, callback));',
-            'console.log("copy-shape:" + (copyArgs.length === 1 && copyArgs[0] === null));',
-            'const renameArgs = await capture((callback) => rename("/copy.txt", "/renamed.txt", callback));',
-            'console.log("rename-shape:" + (renameArgs.length === 1 && renameArgs[0] === null));',
-            'const rmArgs = await capture((callback) => rm("/renamed.txt", callback));',
-            'console.log("rm-shape:" + (rmArgs.length === 1 && rmArgs[0] === null));',
-            'const errorArgs = await capture((callback) => readFile("/missing.txt", "utf8", callback));',
-            'console.log("error-shape:" + (errorArgs.length === 1 && errorArgs[0] instanceof Error && errorArgs[0].code === "ENOENT"));',
-            'const existsArgs = await capture((callback) => exists("/missing.txt", callback));',
-            'console.log("exists-shape:" + (existsArgs.length === 1 && existsArgs[0] === false));',
-            'const promiseMkdirPath = await fs.promises.mkdir("/promise/child", { recursive: true });',
-            'console.log("promise-mkdir:" + promiseMkdirPath);',
-          ].join("\n"),
-        },
-        { path: "/source.txt", text: "source" },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs, { appendFile, copyFile, exists, mkdir, readFile, readdir, rename, rm, stat } from "fs";',
+          'const capture = (start) => new Promise((resolve) => start((...args) => resolve(args)));',
+          'console.log("lengths:" + [fs.readFile.length, fs.writeFile.length, fs.appendFile.length, fs.mkdir.length, fs.readdir.length, fs.stat.length, fs.rm.length, fs.rename.length, fs.copyFile.length, fs.exists.length].join(","));',
+          'console.log("promise-lengths:" + [fs.promises.readFile.length, fs.promises.writeFile.length, fs.promises.appendFile.length, fs.promises.mkdir.length, fs.promises.readdir.length, fs.promises.stat.length, fs.promises.rm.length, fs.promises.rename.length, fs.promises.copyFile.length].join(","));',
+          'console.log("promises-exists:" + typeof fs.promises.exists);',
+          'try { readFile("/source.txt", "utf8"); }',
+          'catch (error) { console.log("missing-callback:" + error.name); }',
+          'try { readFile("/source.txt", "latin1", () => {}); }',
+          'catch (error) { console.log("unsupported-encoding:" + error.name); }',
+          'try { mkdir("/bad-mkdir", true, () => {}); }',
+          'catch (error) { console.log("mkdir-boolean-options:" + error.name); }',
+          'try { rm("/source.txt", true, () => {}); }',
+          'catch (error) { console.log("rm-boolean-options:" + error.name); }',
+          'const invalidPathPromise = fs.promises.readFile(123);',
+          'console.log("promise-validation-return:" + (invalidPathPromise instanceof Promise));',
+          'try { await invalidPathPromise; }',
+          'catch (error) { console.log("promise-validation-reject:" + error.name); }',
+          'const invalidCopyPromise = fs.promises.copyFile("/source.txt", "/bad-copy.txt", 1);',
+          'console.log("copy-mode-return:" + (invalidCopyPromise instanceof Promise));',
+          'try { await invalidCopyPromise; }',
+          'catch (error) { console.log("unsupported-copy-mode:" + error.name); }',
+          'const invalidRmPromise = fs.promises.rm("/source.txt", true);',
+          'console.log("promise-rm-boolean-return:" + (invalidRmPromise instanceof Promise));',
+          'try { await invalidRmPromise; }',
+          'catch (error) { console.log("promise-rm-boolean-reject:" + error.name); }',
+          'const thrownReason = { source: "encoding-getter" };',
+          'const getterPromise = fs.promises.readFile("/source.txt", { get encoding() { throw thrownReason; } });',
+          'try { await getterPromise; }',
+          'catch (error) { console.log("promise-getter-reason:" + (error === thrownReason)); }',
+          'fs.mkdirSync("/existing");',
+          'const appendArgs = await capture((callback) => appendFile("/source.txt", "!", callback));',
+          'console.log("append-shape:" + (appendArgs.length === 1 && appendArgs[0] === null));',
+          'const readOptions = { encoding: "utf8" };',
+          'const readPromise = capture((callback) => readFile("/source.txt", readOptions, callback));',
+          'readOptions.encoding = "latin1";',
+          'const readArgs = await readPromise;',
+          'console.log("read-shape:" + (readArgs.length === 2 && readArgs[0] === null && readArgs[1] === "source!"));',
+          'const mkdirOptions = { recursive: true };',
+          'const mkdirPromise = capture((callback) => mkdir("/existing/first/second", mkdirOptions, callback));',
+          'mkdirOptions.recursive = false;',
+          'const mkdirArgs = await mkdirPromise;',
+          'console.log("mkdir-shape:" + (mkdirArgs.length === 2 && mkdirArgs[0] === null && mkdirArgs[1] === "/existing/first"));',
+          'const readdirArgs = await capture((callback) => readdir("/existing/first", callback));',
+          'console.log("readdir-shape:" + (readdirArgs.length === 2 && readdirArgs[0] === null && readdirArgs[1][0] === "second"));',
+          'const statArgs = await capture((callback) => stat("/source.txt", callback));',
+          'console.log("stat-shape:" + (statArgs.length === 2 && statArgs[0] === null && statArgs[1].isFile()));',
+          'const copyArgs = await capture((callback) => copyFile("/source.txt", "/copy.txt", 0, callback));',
+          'console.log("copy-shape:" + (copyArgs.length === 1 && copyArgs[0] === null));',
+          'const renameArgs = await capture((callback) => rename("/copy.txt", "/renamed.txt", callback));',
+          'console.log("rename-shape:" + (renameArgs.length === 1 && renameArgs[0] === null));',
+          'const rmArgs = await capture((callback) => rm("/renamed.txt", callback));',
+          'console.log("rm-shape:" + (rmArgs.length === 1 && rmArgs[0] === null));',
+          'const errorArgs = await capture((callback) => readFile("/missing.txt", "utf8", callback));',
+          'console.log("error-shape:" + (errorArgs.length === 1 && errorArgs[0] instanceof Error && errorArgs[0].code === "ENOENT"));',
+          'const existsArgs = await capture((callback) => exists("/missing.txt", callback));',
+          'console.log("exists-shape:" + (existsArgs.length === 1 && existsArgs[0] === false));',
+          'const promiseMkdirPath = await fs.promises.mkdir("/promise/child", { recursive: true });',
+          'console.log("promise-mkdir:" + promiseMkdirPath);',
+        ].join("\n"),
+      },
+      { path: "/source.txt", text: "source" },
+    ]);
 
     const expected = [
       "lengths:3,4,4,3,3,1,3,3,4,2",
@@ -6231,47 +6247,45 @@ await section("SandboxRunner: fs callback overloads use Node-shaped results...",
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
       if (proc.exitCode !== 0)
-        throw new Error(`SandboxRunner ${label} fs callback shape run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`Sandbox mode ${label} fs callback shape run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
       if (stdout !== expected)
-        throw new Error(`SandboxRunner ${label} fs callback shapes should be ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode ${label} fs callback shapes should be ${JSON.stringify(expected)}, got: ${stdout}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: deterministic nested engines use stable distinct streams...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: deterministic nested engines use stable distinct streams...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "deterministic-seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import { runScript } from "goccia";',
-            "const parentRandom = Math.random();",
-            'const child = runScript("/child.js");',
-            'console.log([parentRandom, child.result].join("|"));',
-          ].join("\n"),
-        },
-        { path: "/child.js", text: "Math.random();" },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          "const parentRandom = Math.random();",
+          'const child = runScript("/child.js");',
+          'console.log([parentRandom, child.result].join("|"));',
+        ].join("\n"),
+      },
+      { path: "/child.js", text: "Math.random();" },
+    ]);
 
     const expected = "0.8833108082136426|0.6524484863740322";
     for (const mode of ["interpreted", "bytecode"] as const) {
       for (let run = 0; run < 2; run++) {
         const proc = Bun.spawnSync(
           [
-            SANDBOXRUNNER,
-            "/main.js",
-            `--seed-config=${seed}`,
+            RUNNER,
+            "--copy",
+            `${tree}=/`,
+            "--entry=/main.js",
             "--source-type=module",
             "--deterministic",
             `--mode=${mode}`,
@@ -6281,7 +6295,7 @@ await section("SandboxRunner: deterministic nested engines use stable distinct s
         const output = proc.stdout.toString().trim();
         if (proc.exitCode !== 0 || output !== expected)
           throw new Error(
-            `SandboxRunner deterministic ${mode} run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
+            `Sandbox mode deterministic ${mode} run ${run + 1} expected ${expected}, got ${output}${proc.stderr.toString()}`,
           );
       }
     }
@@ -6290,102 +6304,96 @@ await section("SandboxRunner: deterministic nested engines use stable distinct s
   }
 });
 
-await section("SandboxRunner: a runScript child's stderr carries no host-side suggestion...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: a runScript child's stderr carries no host-side suggestion...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "suggestion-seed.json");
     // The child's uncaught PermissionDenied becomes the parent guest's
     // `stderr` string. Its suggestion names the CLI option that would grant
     // the host and is meant for the host alone.
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import { runScript } from "goccia";',
-            'const child = runScript("/child.js");',
-            "console.log(JSON.stringify(child.stderr));",
-          ].join("\n"),
-        },
-        { path: "/child.js", text: 'fetch("http://example.com/");' },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const child = runScript("/child.js");',
+          "console.log(JSON.stringify(child.stderr));",
+        ].join("\n"),
+      },
+      { path: "/child.js", text: 'fetch("http://example.com/");' },
+    ]);
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", `--mode=${mode}`],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
         { stdout: "pipe", stderr: "pipe" },
       );
       const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
       if (proc.exitCode !== 0 || !stdout.includes("PermissionDenied: net: example.com"))
-        throw new Error(`SandboxRunner ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
+        throw new Error(`Sandbox mode ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
       if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
-        throw new Error(`SandboxRunner ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
+        throw new Error(`Sandbox mode ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: inline seeds, fs, $, runScript, and diffs...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: copied inputs, fs, $, runScript, and diffs...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
     const diff = join(tmp, "diff.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'import { $, runScript } from "goccia";',
-            'await fs.promises.writeFile("/hello.txt", "hello");',
-            'const shellOut = await $`cat /hello.txt`.text();',
-            'const spaced = "hello world";',
-            'const interpolated = await $`echo ${spaced}`.text();',
-            'const quietText = await $`echo hidden`.quiet().text();',
-            'const quietRun = await $`echo hidden`.quiet().run();',
-            'const child = runScript("/child.js");',
-            'const objectChild = runScript("/object-child.js");',
-            'const shellChild = await $`goccia /child.js`.text();',
-            'const stat = fs.statSync("/hello.txt");',
-            'console.log(shellOut.trim());',
-            'console.log(interpolated.trim());',
-            'console.log("quiet-text:" + (quietText === ""));',
-            'console.log("quiet-run:" + (quietRun.stdout === "" && quietRun.stderr === "" && quietRun.ok));',
-            'console.log(child.stdout.trim());',
-            'console.log(objectChild.result.value);',
-            'console.log(objectChild.result.items[1]);',
-            'console.log(objectChild.result.nested.ok);',
-            'console.log("mtime-ms:" + (stat.mtimeMs > 1000000000000));',
-            'console.log(shellChild.trim());',
-            'console.log(fs.readFileSync("/child.out", "utf8"));',
-            '"sandbox-ok";',
-          ].join("\n"),
-        },
-        {
-          path: "/child.js",
-          text: [
-            'import fs from "fs";',
-            'fs.writeFileSync("/child.out", "child-write");',
-            'console.log("child");',
-            '"child-result";',
-          ].join("\n"),
-        },
-        {
-          path: "/object-child.js",
-          text: '({ value: 42, items: ["zero", "one"], nested: { ok: true } });',
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'import { $, runScript } from "goccia";',
+          'await fs.promises.writeFile("/hello.txt", "hello");',
+          'const shellOut = await $`cat /hello.txt`.text();',
+          'const spaced = "hello world";',
+          'const interpolated = await $`echo ${spaced}`.text();',
+          'const quietText = await $`echo hidden`.quiet().text();',
+          'const quietRun = await $`echo hidden`.quiet().run();',
+          'const child = runScript("/child.js");',
+          'const objectChild = runScript("/object-child.js");',
+          'const shellChild = await $`goccia /child.js`.text();',
+          'const stat = fs.statSync("/hello.txt");',
+          'console.log(shellOut.trim());',
+          'console.log(interpolated.trim());',
+          'console.log("quiet-text:" + (quietText === ""));',
+          'console.log("quiet-run:" + (quietRun.stdout === "" && quietRun.stderr === "" && quietRun.ok));',
+          'console.log(child.stdout.trim());',
+          'console.log(objectChild.result.value);',
+          'console.log(objectChild.result.items[1]);',
+          'console.log(objectChild.result.nested.ok);',
+          'console.log("mtime-ms:" + (stat.mtimeMs > 1000000000000));',
+          'console.log(shellChild.trim());',
+          'console.log(fs.readFileSync("/child.out", "utf8"));',
+          '"sandbox-ok";',
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/child.out", "child-write");',
+          'console.log("child");',
+          '"child-result";',
+        ].join("\n"),
+      },
+      {
+        path: "/object-child.js",
+        text: '({ value: 42, items: ["zero", "one"], nested: { ok: true } });',
+      },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff", `--diff-output=${diff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     const stderr = proc.stderr.toString();
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
+      throw new Error(`Sandbox mode interpreter should exit 0, got ${proc.exitCode}: ${stderr}`);
     for (const expected of [
       "hello",
       "hello world",
@@ -6400,86 +6408,84 @@ await section("SandboxRunner: inline seeds, fs, $, runScript, and diffs...", asy
       "child-write",
     ]) {
       if (!stdout.includes(expected))
-        throw new Error(`SandboxRunner interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode interpreter stdout should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
     const defaultDiff = JSON.parse(readFileSync(diff, "utf-8"));
     const changes = defaultDiff.changes;
-    if ("metadataChanges" in defaultDiff)
-      throw new Error(`SandboxRunner default diff should omit metadataChanges, got ${JSON.stringify(defaultDiff)}`);
+    // A JSON diff always carries the metadata changes (ADR 0122).
+    if (!Array.isArray(defaultDiff.metadataChanges))
+      throw new Error(`Sandbox mode JSON diff should include metadataChanges, got ${JSON.stringify(defaultDiff)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/hello.txt"))
-      throw new Error(`SandboxRunner diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode diff should include /hello.txt create, got ${JSON.stringify(changes)}`);
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/child.out"))
-      throw new Error(`SandboxRunner diff should include /child.out create, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode diff should include /child.out create, got ${JSON.stringify(changes)}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in every execution mode...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: fs Stats expose realm-owned lazy Date metadata in every execution mode...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'const intrinsicStat = fs.statSync("/tracked.txt");',
-            'globalThis.Date = class ReplacementDate { constructor() { this.replacement = true; } };',
-            'const intrinsicMtime = intrinsicStat.mtime;',
-            'const intrinsicDateValid = typeof intrinsicMtime.getTime === "function" && !Object.hasOwn(intrinsicMtime, "replacement");',
-            'globalThis.Date = Object.getPrototypeOf(intrinsicMtime).constructor;',
-            'const syncStat = fs.statSync("/tracked.txt");',
-            'const promiseStat = await fs.promises.stat("/tracked.txt");',
-            'const checks = (stat) => {',
-            'const firstAtime = stat.atime;',
-            'const secondAtime = stat.atime;',
-            'return [',
-            '  stat.atime instanceof Date,',
-            '  stat.mtime instanceof Date,',
-            '  stat.ctime instanceof Date,',
-            '  stat.birthtime instanceof Date,',
-            '  stat.atime.getTime() === Math.trunc(stat.atimeMs + 0.5),',
-            '  stat.mtime.getTime() === Math.trunc(stat.mtimeMs + 0.5),',
-            '  stat.ctime.getTime() === Math.trunc(stat.ctimeMs + 0.5),',
-            '  stat.birthtime.getTime() === Math.trunc(stat.birthtimeMs + 0.5),',
-            '  typeof stat.atimeMs === "number",',
-            '  typeof stat.mtimeMs === "number",',
-            '  typeof stat.ctimeMs === "number",',
-            '  typeof stat.birthtimeMs === "number",',
-            '  stat.isFile(),',
-            '  !stat.isDirectory(),',
-            '  !stat.isSymbolicLink(),',
-            '  firstAtime !== secondAtime,',
-            '  !Object.hasOwn(stat, "atime"),',
-            '  !Object.hasOwn(stat, "isFile"),',
-            '];',
-            '};',
-            'const valid = (stat) => checks(stat).every(Boolean);',
-            'if (!valid(syncStat)) console.log("sync-checks:" + checks(syncStat).join(","));',
-            'if (!valid(promiseStat)) console.log("promise-checks:" + checks(promiseStat).join(","));',
-            'console.log("sync-stats:" + valid(syncStat));',
-            'console.log("promise-stats:" + valid(promiseStat));',
-            'console.log("shared-stats-prototype:" + (Object.getPrototypeOf(syncStat) === Object.getPrototypeOf(promiseStat)));',
-            'console.log("intrinsic-stats-date:" + intrinsicDateValid);',
-          ].join("\n"),
-        },
-        { path: "/tracked.txt", text: "tracked" },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const intrinsicStat = fs.statSync("/tracked.txt");',
+          'globalThis.Date = class ReplacementDate { constructor() { this.replacement = true; } };',
+          'const intrinsicMtime = intrinsicStat.mtime;',
+          'const intrinsicDateValid = typeof intrinsicMtime.getTime === "function" && !Object.hasOwn(intrinsicMtime, "replacement");',
+          'globalThis.Date = Object.getPrototypeOf(intrinsicMtime).constructor;',
+          'const syncStat = fs.statSync("/tracked.txt");',
+          'const promiseStat = await fs.promises.stat("/tracked.txt");',
+          'const checks = (stat) => {',
+          'const firstAtime = stat.atime;',
+          'const secondAtime = stat.atime;',
+          'return [',
+          '  stat.atime instanceof Date,',
+          '  stat.mtime instanceof Date,',
+          '  stat.ctime instanceof Date,',
+          '  stat.birthtime instanceof Date,',
+          '  stat.atime.getTime() === Math.trunc(stat.atimeMs + 0.5),',
+          '  stat.mtime.getTime() === Math.trunc(stat.mtimeMs + 0.5),',
+          '  stat.ctime.getTime() === Math.trunc(stat.ctimeMs + 0.5),',
+          '  stat.birthtime.getTime() === Math.trunc(stat.birthtimeMs + 0.5),',
+          '  typeof stat.atimeMs === "number",',
+          '  typeof stat.mtimeMs === "number",',
+          '  typeof stat.ctimeMs === "number",',
+          '  typeof stat.birthtimeMs === "number",',
+          '  stat.isFile(),',
+          '  !stat.isDirectory(),',
+          '  !stat.isSymbolicLink(),',
+          '  firstAtime !== secondAtime,',
+          '  !Object.hasOwn(stat, "atime"),',
+          '  !Object.hasOwn(stat, "isFile"),',
+          '];',
+          '};',
+          'const valid = (stat) => checks(stat).every(Boolean);',
+          'if (!valid(syncStat)) console.log("sync-checks:" + checks(syncStat).join(","));',
+          'if (!valid(promiseStat)) console.log("promise-checks:" + checks(promiseStat).join(","));',
+          'console.log("sync-stats:" + valid(syncStat));',
+          'console.log("promise-stats:" + valid(promiseStat));',
+          'console.log("shared-stats-prototype:" + (Object.getPrototypeOf(syncStat) === Object.getPrototypeOf(promiseStat)));',
+          'console.log("intrinsic-stats-date:" + intrinsicDateValid);',
+        ].join("\n"),
+      },
+      { path: "/tracked.txt", text: "tracked" },
+    ]);
 
     for (const [label, extraArgs] of [
       ["interpreter", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const stdout = normalizeLineEndings(proc.stdout.toString());
       if (proc.exitCode !== 0)
-        throw new Error(`SandboxRunner ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`Sandbox mode ${label} Stats run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
       for (const expected of [
         "sync-stats:true",
         "promise-stats:true",
@@ -6487,7 +6493,7 @@ await section("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in 
         "intrinsic-stats-date:true",
       ]) {
         if (!containsLine(stdout, expected))
-          throw new Error(`SandboxRunner ${label} Stats stdout should include ${expected}, got: ${stdout}`);
+          throw new Error(`Sandbox mode ${label} Stats stdout should include ${expected}, got: ${stdout}`);
       }
     }
   } finally {
@@ -6495,34 +6501,31 @@ await section("SandboxRunner: fs Stats expose realm-owned lazy Date metadata in 
   }
 });
 
-await section("SandboxRunner: metadata diffing is opt-in and separate from content changes...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: JSON diffs always carry metadata, unified diffs never do...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
     const diff = join(tmp, "diff.json");
-    const unifiedDiff = join(tmp, "diff.patch");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
-            'const text = fs.readFileSync("/tracked.txt", "utf8");',
-            'fs.writeFileSync("/tracked.txt", text);',
-            'fs.mkdirSync("/created");',
-          ].join("\n"),
-        },
-        { path: "/tracked.txt", text: "unchanged" },
-      ],
-    }));
+    const unifiedDiff = join(tmp, "diff.diff");
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+          'const text = fs.readFileSync("/tracked.txt", "utf8");',
+          'fs.writeFileSync("/tracked.txt", text);',
+          'fs.mkdirSync("/created");',
+        ].join("\n"),
+      },
+      { path: "/tracked.txt", text: "unchanged" },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", `--diff-output=${diff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner metadata diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode metadata diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     const parsed = JSON.parse(readFileSync(diff, "utf-8"));
     if (parsed.metadataChanges.some((change: any) => change.path === "/"))
       throw new Error(`Metadata diff must not expose the implicit root, got ${JSON.stringify(parsed.metadataChanges)}`);
@@ -6538,53 +6541,50 @@ await section("SandboxRunner: metadata diffing is opt-in and separate from conte
       throw new Error(`Metadata diff should not duplicate size/type or change birthtime, got ${JSON.stringify(tracked)}`);
 
     const unifiedProc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-metadata", "--diff-format=unified", `--diff-output=${unifiedDiff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${unifiedDiff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (unifiedProc.exitCode !== 0)
-      throw new Error(`SandboxRunner unified metadata diff should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+      throw new Error(`Sandbox mode unified diff should exit 0, got ${unifiedProc.exitCode}: ${unifiedProc.stderr.toString()}`);
+    // A unified diff is content only: the timestamp-only rewrite of
+    // /tracked.txt leaves no trace in it.
     const unified = readFileSync(unifiedDiff, "utf-8");
-    if (!unified.includes("@@ sandbox metadata changed /tracked.txt @@") ||
-        unified.includes("@@ sandbox file changed @@") ||
-        unified.includes("@@ sandbox metadata changed / @@"))
-      throw new Error(`Unified metadata diff should keep timestamp-only changes separate, got: ${unified}`);
+    if (unified.includes("sandbox metadata changed") || unified.includes("/tracked.txt"))
+      throw new Error(`Unified diff should carry no metadata changes, got: ${unified}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: fs errors are Node-shaped in every execution mode...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: fs errors are Node-shaped in every execution mode...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'const printError = (label, error) => console.log([',
-            '  label,',
-            '  error instanceof Error,',
-            '  Error.isError(error),',
-            '  error.name,',
-            '  error.code,',
-            '  typeof error.errno === "number" && error.errno < 0,',
-            '  error.syscall,',
-            '  error.path,',
-            '  typeof error.dest,',
-            '  error.message,',
-            '].join("|"));',
-            'try { fs.readFileSync("/missing.txt", "utf8"); }',
-            'catch (error) { printError("sync", error); }',
-            'try { await fs.promises.readFile("/missing.txt", "utf8"); }',
-            'catch (error) { printError("promise", error); }',
-            'try { fs.renameSync("/missing.txt", "/destination.txt"); }',
-            'catch (error) { printError("rename", error); }',
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'const printError = (label, error) => console.log([',
+          '  label,',
+          '  error instanceof Error,',
+          '  Error.isError(error),',
+          '  error.name,',
+          '  error.code,',
+          '  typeof error.errno === "number" && error.errno < 0,',
+          '  error.syscall,',
+          '  error.path,',
+          '  typeof error.dest,',
+          '  error.message,',
+          '].join("|"));',
+          'try { fs.readFileSync("/missing.txt", "utf8"); }',
+          'catch (error) { printError("sync", error); }',
+          'try { await fs.promises.readFile("/missing.txt", "utf8"); }',
+          'catch (error) { printError("promise", error); }',
+          'try { fs.renameSync("/missing.txt", "/destination.txt"); }',
+          'catch (error) { printError("rename", error); }',
+        ].join("\n"),
+      },
+    ]);
 
     const expected = [
       "sync|true|true|Error|ENOENT|true|readFile|/missing.txt|undefined|ENOENT: no such file or directory, readFile '/missing.txt'",
@@ -6596,190 +6596,185 @@ await section("SandboxRunner: fs errors are Node-shaped in every execution mode.
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", ...extraArgs],
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", ...extraArgs],
         { stdout: "pipe", stderr: "pipe" },
       );
       const stdout = normalizeLineEndings(proc.stdout.toString()).trim();
       if (proc.exitCode !== 0)
-        throw new Error(`SandboxRunner ${label} fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+        throw new Error(`Sandbox mode ${label} fs error run should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
       const actual = stdout.split("\n");
       if (JSON.stringify(actual) !== JSON.stringify(expected))
-        throw new Error(`SandboxRunner ${label} fs errors should be Node-shaped, got: ${stdout}`);
+        throw new Error(`Sandbox mode ${label} fs errors should be Node-shaped, got: ${stdout}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: aliases and import maps resolve sandbox module paths...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: aliases and import maps resolve sandbox module paths...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
     const importMap = join(tmp, "import-map.json");
     writeFileSync(importMap, JSON.stringify({ imports: { "#lib/": "/lib/", "#rel/": "./lib/" } }));
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/alias-main.js",
-          text: [
-            'import { label } from "@lib/alias.js";',
-            'console.log(label);',
-          ].join("\n"),
-        },
-        {
-          path: "/map-main.js",
-          text: [
-            'import { label } from "#lib/map.js";',
-            'import { relativeLabel } from "#rel/relative.js";',
-            'console.log(label);',
-            'console.log(relativeLabel);',
-          ].join("\n"),
-        },
-        { path: "/lib/alias.js", text: 'export const label = "alias-ok";' },
-        { path: "/lib/map.js", text: 'export const label = "map-ok";' },
-        { path: "/lib/relative.js", text: 'export const relativeLabel = "relative-ok";' },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/alias-main.js",
+        text: [
+          'import { label } from "@lib/alias.js";',
+          'console.log(label);',
+        ].join("\n"),
+      },
+      {
+        path: "/map-main.js",
+        text: [
+          'import { label } from "#lib/map.js";',
+          'import { relativeLabel } from "#rel/relative.js";',
+          'console.log(label);',
+          'console.log(relativeLabel);',
+        ].join("\n"),
+      },
+      { path: "/lib/alias.js", text: 'export const label = "alias-ok";' },
+      { path: "/lib/map.js", text: 'export const label = "map-ok";' },
+      { path: "/lib/relative.js", text: 'export const relativeLabel = "relative-ok";' },
+    ]);
 
     const aliasProc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/alias-main.js", `--seed-config=${seed}`, "--source-type=module", "--alias", "@lib/=/lib/"],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/alias-main.js", "--source-type=module", "--alias", "@lib/=/lib/"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const aliasStdout = normalizeLineEndings(aliasProc.stdout.toString());
     if (aliasProc.exitCode !== 0)
-      throw new Error(`SandboxRunner alias import should exit 0, got ${aliasProc.exitCode}: ${aliasProc.stderr.toString()}`);
+      throw new Error(`Sandbox mode alias import should exit 0, got ${aliasProc.exitCode}: ${aliasProc.stderr.toString()}`);
     if (!containsLine(aliasStdout, "alias-ok"))
-      throw new Error(`SandboxRunner alias import should print alias-ok, got: ${aliasStdout}`);
+      throw new Error(`Sandbox mode alias import should print alias-ok, got: ${aliasStdout}`);
 
     const importMapProc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/map-main.js", `--seed-config=${seed}`, "--source-type=module", `--import-map=${importMap}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/map-main.js", "--source-type=module", `--import-map=${importMap}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const importMapStdout = normalizeLineEndings(importMapProc.stdout.toString());
     if (importMapProc.exitCode !== 0)
-      throw new Error(`SandboxRunner import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
+      throw new Error(`Sandbox mode import map should exit 0, got ${importMapProc.exitCode}: ${importMapProc.stderr.toString()}`);
     if (!containsLine(importMapStdout, "map-ok"))
-      throw new Error(`SandboxRunner import map should print map-ok, got: ${importMapStdout}`);
+      throw new Error(`Sandbox mode import map should print map-ok, got: ${importMapStdout}`);
     if (!containsLine(importMapStdout, "relative-ok"))
-      throw new Error(`SandboxRunner import map should print relative-ok, got: ${importMapStdout}`);
+      throw new Error(`Sandbox mode import map should print relative-ok, got: ${importMapStdout}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: Windows-style sandbox paths normalize to virtual paths...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: Windows-style sandbox paths normalize to virtual paths...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: String.raw`\main.js`,
-          text: [
-            'import fs from "fs";',
-            'import { $, runScript } from "goccia";',
-            'fs.writeFileSync("\\\\hello.txt", "hello");',
-            'console.log(fs.readFileSync("/hello.txt", "utf8"));',
-            'console.log((await $("cat \'\\\\hello.txt\'").text()).trim());',
-            'const child = runScript("\\\\child.js", {',
-            '  sandbox: true,',
-            '  seed: ["\\\\child.js", { from: "\\\\hello.txt", to: "\\\\copied\\\\" }],',
-            '  diff: true,',
-            '});',
-            'console.log(child.stdout.trim());',
-            'const shellChild = await $("goccia \'\\\\child.js\'").text();',
-            'console.log(shellChild.trim());',
-          ].join("\n"),
-        },
-        {
-          path: String.raw`\child.js`,
-          text: [
-            'import fs from "fs";',
-            'if (fs.existsSync("\\\\copied\\\\hello.txt")) console.log(fs.readFileSync("\\\\copied\\\\hello.txt", "utf8"));',
-            'else console.log("child-shared");',
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: String.raw`\main.js`,
+        text: [
+          'import fs from "fs";',
+          'import { $, runScript } from "goccia";',
+          'fs.writeFileSync("\\\\hello.txt", "hello");',
+          'console.log(fs.readFileSync("/hello.txt", "utf8"));',
+          'console.log((await $("cat \'\\\\hello.txt\'").text()).trim());',
+          'const child = runScript("\\\\child.js", {',
+          '  sandbox: true,',
+          '  copy: ["\\\\child.js", { from: "\\\\hello.txt", to: "\\\\copied\\\\" }],',
+          '  diff: true,',
+          '});',
+          'console.log(child.stdout.trim());',
+          'const shellChild = await $("goccia \'\\\\child.js\'").text();',
+          'console.log(shellChild.trim());',
+        ].join("\n"),
+      },
+      {
+        path: String.raw`\child.js`,
+        text: [
+          'import fs from "fs";',
+          'if (fs.existsSync("\\\\copied\\\\hello.txt")) console.log(fs.readFileSync("\\\\copied\\\\hello.txt", "utf8"));',
+          'else console.log("child-shared");',
+        ].join("\n"),
+      },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, String.raw`\main.js`, `--seed-config=${seed}`, "--source-type=module"],
+      [RUNNER, "--copy", `${tree}=/`, String.raw`--entry=\main.js`, "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner Windows-style paths should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode Windows-style paths should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     for (const expected of ["hello", "child-shared"]) {
       if (!containsLine(stdout, expected))
-        throw new Error(`SandboxRunner Windows-style paths should include ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode Windows-style paths should include ${JSON.stringify(expected)}, got: ${stdout}`);
     }
     const helloCount = stdout.split("\n").filter((line) => line === "hello").length;
     if (helloCount !== 3)
-      throw new Error(`SandboxRunner Windows-style paths should print hello three times, got ${helloCount} in: ${stdout}`);
+      throw new Error(`Sandbox mode Windows-style paths should print hello three times, got ${helloCount} in: ${stdout}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: seed config rejects null source values...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: the sandbox section rejects non-string entries...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        { path: "/bad.txt", text: null },
-        { path: "/main.js", text: "1;" },
-      ],
-    }));
-
-    const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const output = proc.stdout.toString() + proc.stderr.toString();
-    if (proc.exitCode === 0)
-      throw new Error("SandboxRunner null seed text should fail");
-    if (!output.includes('seed config entry requires "text"'))
-      throw new Error(`SandboxRunner null seed text should report the required text field, got: ${output}`);
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const [label, sandbox, needle] of [
+      ["null copy entry", { copy: [null] }, '"sandbox.copy" must be an array of strings'],
+      ["numeric copy-rw entry", { "copy-rw": [42] }, '"sandbox.copy-rw" must be an array of strings'],
+      ["a single string for copy", { copy: "src" }, '"sandbox.copy" must be an array of strings'],
+      ["an empty target", { "copy-rw": ["out="] }, '"sandbox.copy-rw" entry "out=" names no sandbox path after "="'],
+      ["a relative entry", { entry: "main.js" }, '"sandbox.entry": "main.js" is not an absolute sandbox path; start it with /'],
+      ["object entry", { entry: { path: "/main.js" } }, '"sandbox.entry" must be a string'],
+      ["non-object section", true, '"sandbox" must be an object'],
+    ] as const) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox }));
+      const proc = Bun.spawnSync(
+        [RUNNER, join(tmp, "main.js"), "-P"],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 2)
+        throw new Error(`Sandbox mode ${label} should exit 2, got ${proc.exitCode}: ${output}`);
+      if (!output.includes(needle))
+        throw new Error(`Sandbox mode ${label} should report ${JSON.stringify(needle)}, got: ${output}`);
+    }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: unified diff includes deleted seeded files...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: unified diff includes deleted copied files...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    const diff = join(tmp, "diff.patch");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'fs.rmSync("/remove.txt");',
-          ].join("\n"),
-        },
-        { path: "/remove.txt", text: "gone" },
-      ],
-    }));
+    const diff = join(tmp, "diff.diff");
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'fs.rmSync("/remove.txt");',
+        ].join("\n"),
+      },
+      { path: "/remove.txt", text: "gone" },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--diff-format=unified", `--diff-output=${diff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--diff-file=${diff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner unified delete diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode unified delete diff should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     const diffText = readFileSync(diff, "utf-8");
     if (!diffText.includes("--- /remove.txt") || !diffText.includes("@@ sandbox file deleted @@") || !diffText.includes("-gone"))
-      throw new Error(`SandboxRunner unified delete diff should include deleted file content, got: ${diffText}`);
+      throw new Error(`Sandbox mode unified delete diff should include deleted file content, got: ${diffText}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: a sandbox write does not reach the host without --write-back...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: a sandbox write does not reach the host without --copy-rw...", async () => {
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6788,63 +6783,94 @@ await section("SandboxRunner: a sandbox write does not reach the host without --
     writeFileSync(entry, [
       'import fs from "fs";',
       'fs.writeFileSync("/src/kept.txt", "after");',
+      'fs.writeFileSync("/main.js", "overwritten");',
     ].join("\n"));
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module"],
+      [RUNNER, entry, "--copy", `${tree}=/src`, "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner write without --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode write without --copy-rw should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "before")
-      throw new Error("SECURITY: SandboxRunner wrote to a seeded host file without --write-back");
+      throw new Error("SECURITY: Sandbox mode wrote to a copied host file without --copy-rw");
+    if (!readFileSync(entry, "utf-8").includes("fs.writeFileSync"))
+      throw new Error("SECURITY: Sandbox mode wrote to the host entry file");
+    // Write-back runs only when an input was copied with --copy-rw, so a
+    // read-only run has nothing to report.
+    if (proc.stderr.toString().includes("write-back:"))
+      throw new Error(`Sandbox mode without --copy-rw should print no write-back report, got: ${proc.stderr.toString()}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: --write-back materializes changes onto the seeded host paths...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --copy-rw writes back only read-write inputs, reporting on stderr...", async () => {
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(join(tree, "nested"), { recursive: true });
     writeFileSync(join(tree, "kept.txt"), "before");
     writeFileSync(join(tree, "gone.txt"), "still here");
+    const readOnly = join(tmp, "ro");
+    mkdirSync(readOnly, { recursive: true });
+    writeFileSync(join(readOnly, "ro.txt"), "read-only before");
     const entry = join(tmp, "main.js");
     writeFileSync(entry, [
       'import fs from "fs";',
       'fs.writeFileSync("/src/kept.txt", "after");',
       'fs.writeFileSync("/src/nested/added.txt", "new");',
       'fs.writeFileSync("/loose.txt", "nowhere to go");',
+      'fs.writeFileSync("/ro/ro.txt", "read-only after");',
       'fs.rmSync("/src/gone.txt");',
+      'console.log("guest-output");',
     ].join("\n"));
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module", "--write-back"],
+      [RUNNER, entry, "--copy-rw", `${tree}=/src`, "--copy", `${readOnly}=/ro`, "--source-type=module", "--diff"],
       { stdout: "pipe", stderr: "pipe" },
     );
-    if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     const stdout = normalizeLineEndings(proc.stdout.toString());
+    const stderr = normalizeLineEndings(proc.stderr.toString());
+    if (proc.exitCode !== 0)
+      throw new Error(`Sandbox mode --copy-rw should exit 0, got ${proc.exitCode}: ${stderr}`);
     if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "after")
-      throw new Error("SandboxRunner --write-back should update a changed seeded file");
+      throw new Error("Sandbox mode --copy-rw should update a changed file");
     if (readFileSync(join(tree, "nested", "added.txt"), "utf-8") !== "new")
-      throw new Error("SandboxRunner --write-back should create a file added under a seeded directory");
+      throw new Error("Sandbox mode --copy-rw should create a file added under a read-write directory");
     if (!existsSync(join(tree, "gone.txt")))
-      throw new Error("SandboxRunner --write-back should not delete a host file the sandbox removed");
+      throw new Error("Sandbox mode --copy-rw should not delete a host file the sandbox removed");
+    if (readFileSync(join(readOnly, "ro.txt"), "utf-8") !== "read-only before")
+      throw new Error("SECURITY: Sandbox mode wrote back an input copied with --copy");
     if (existsSync(join(tmp, "loose.txt")))
-      throw new Error("SECURITY: SandboxRunner --write-back materialized a path nothing seeded");
-    if (!containsLine(stdout, "write-back: /loose.txt has no seeded host path, skipped"))
-      throw new Error(`SandboxRunner --write-back should report the unseeded path, got: ${stdout}`);
-    if (!stdout.includes("write-back: 2 file(s) written, 1 skipped"))
-      throw new Error(`SandboxRunner --write-back should summarize what it wrote, got: ${stdout}`);
+      throw new Error("SECURITY: Sandbox mode wrote back a path nothing was copied to");
+
+    for (const expected of [
+      `write-back: ${join(tree, "kept.txt")}`,
+      `write-back: ${join(tree, "nested", "added.txt")}`,
+      "write-back: /loose.txt was not copied from the host, skipped",
+      "write-back: /ro/ro.txt was copied read-only, skipped (use --copy-rw to write it back)",
+      "write-back: 2 file(s) written, 2 skipped",
+    ]) {
+      if (!containsLine(stderr, expected))
+        throw new Error(`Sandbox mode --copy-rw report should include ${JSON.stringify(expected)} on stderr, got: ${stderr}`);
+    }
+    // stdout is the guest's output and then the diff, nothing else.
+    if (stdout.includes("write-back:"))
+      throw new Error(`Sandbox mode write-back report leaked into stdout: ${stdout}`);
+    const newline = stdout.indexOf("\n");
+    if (stdout.slice(0, newline) !== "guest-output")
+      throw new Error(`Sandbox mode stdout should start with the guest's output, got: ${stdout}`);
+    const diff = JSON.parse(stdout.slice(newline + 1));
+    if (!diff.changes.some((c: any) => c.kind === "create" && c.path === "/src/nested/added.txt"))
+      throw new Error(`Sandbox mode diff should include the created file, got: ${JSON.stringify(diff.changes)}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: --write-back keeps nothing from a run that failed...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --copy-rw keeps nothing from a run that failed...", async () => {
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6853,30 +6879,33 @@ await section("SandboxRunner: --write-back keeps nothing from a run that failed.
     writeFileSync(entry, [
       'import fs from "fs";',
       'fs.writeFileSync("/src/kept.txt", "after");',
+      'fs.writeFileSync("/src/added.txt", "new");',
       'throw new Error("halfway");',
     ].join("\n"));
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${tree}=/src`, "--source-type=module", "--write-back"],
+      [RUNNER, entry, "--copy-rw", `${tree}=/src`, "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode === 0)
-      throw new Error("SandboxRunner --write-back test expected the guest run to fail");
+      throw new Error("Sandbox mode --copy-rw test expected the guest run to fail");
     if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "before")
-      throw new Error("SandboxRunner --write-back should keep nothing from a failed run");
+      throw new Error("Sandbox mode --copy-rw should keep nothing from a failed run");
+    if (existsSync(join(tree, "added.txt")))
+      throw new Error("Sandbox mode --copy-rw should create nothing after a failed run");
     if (!proc.stderr.toString().includes("write-back: skipped, the run did not succeed."))
-      throw new Error(`SandboxRunner --write-back should say why it kept nothing, got: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode --copy-rw should say why it kept nothing, got: ${proc.stderr.toString()}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: --write-back refuses a symlink at its temporary name...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --copy-rw refuses a symlink at its temporary name...", async () => {
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
-      // A file seed does not scan its directory, so a link planted beside the
-      // seeded file reaches write-back. The temporary must not follow it.
+      // A file copy does not scan its directory, so a link planted beside the
+      // copied file reaches write-back. The temporary must not follow it.
       const tree = join(tmp, "tree");
       mkdirSync(tree, { recursive: true });
       const target = join(tree, "kept.txt");
@@ -6890,27 +6919,29 @@ await section("SandboxRunner: --write-back refuses a symlink at its temporary na
       ].join("\n"));
 
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${target}=/kept.txt`, "--source-type=module", "--write-back"],
+        [RUNNER, entry, "--copy-rw", target, "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
-      if (proc.exitCode !== 0)
-        throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const stderr = normalizeLineEndings(proc.stderr.toString());
+      // A write-back that could not be carried out fails the invocation.
+      if (proc.exitCode !== 1)
+        throw new Error(`Sandbox mode --copy-rw should exit 1, got ${proc.exitCode}: ${stderr}`);
       if (readFileSync(join(tmp, "outside.txt"), "utf-8") !== "outside-secret")
-        throw new Error("SECURITY: SandboxRunner --write-back wrote through a symlink at its temporary name");
+        throw new Error("SECURITY: Sandbox mode --copy-rw wrote through a symlink at its temporary name");
       if (readFileSync(target, "utf-8") !== "before")
-        throw new Error("SandboxRunner --write-back should leave the target unchanged when it cannot write safely");
-      if (!proc.stderr.toString().includes(`${target}.goccia-write-back is a symlink`))
-        throw new Error(`SandboxRunner --write-back should report the refused temporary, got: ${proc.stderr.toString()}`);
-      if (!normalizeLineEndings(proc.stdout.toString()).includes("write-back: 0 file(s) written, 1 skipped"))
-        throw new Error(`SandboxRunner --write-back should count the refused file as skipped, got: ${proc.stdout.toString()}`);
+        throw new Error("Sandbox mode --copy-rw should leave the target unchanged when it cannot write safely");
+      if (!stderr.includes(`${target}.goccia-write-back is a symlink`))
+        throw new Error(`Sandbox mode --copy-rw should report the refused temporary, got: ${stderr}`);
+      if (!stderr.includes("write-back: 0 file(s) written, 1 skipped"))
+        throw new Error(`Sandbox mode --copy-rw should count the refused file as skipped, got: ${stderr}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: --write-back replaces a leftover temporary...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --copy-rw replaces a leftover temporary...", async () => {
+  const tmp = makeNativeTmp();
   try {
     const tree = join(tmp, "tree");
     mkdirSync(tree, { recursive: true });
@@ -6923,161 +6954,156 @@ await section("SandboxRunner: --write-back replaces a leftover temporary...", as
     ].join("\n"));
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed=${entry}=/main.js`, `--seed=${join(tree, "kept.txt")}=/kept.txt`, "--source-type=module", "--write-back"],
+      [RUNNER, entry, "--copy-rw", `${join(tree, "kept.txt")}=/kept.txt`, "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner --write-back should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode --copy-rw should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (readFileSync(join(tree, "kept.txt"), "utf-8") !== "after")
-      throw new Error("SandboxRunner --write-back should write past a leftover temporary");
+      throw new Error("Sandbox mode --copy-rw should write past a leftover temporary");
     if (existsSync(join(tree, "kept.txt.goccia-write-back")))
-      throw new Error("SandboxRunner --write-back should not leave its temporary behind");
+      throw new Error("Sandbox mode --copy-rw should not leave its temporary behind");
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: bytecode uses the same sandbox runtime modules...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: bytecode uses the same sandbox runtime modules...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
     const diff = join(tmp, "diff.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'import { $, runScript } from "goccia";',
-            'await fs.promises.writeFile("/byte.txt", "bytecode");',
-            'console.log((await $`cat /byte.txt`.text()).trim());',
-            'const child = runScript("/byte-child.js", { sandbox: true, seed: ["/byte-child.js"], diff: true });',
-            'console.log(child.stdout.trim());',
-            'console.log(child.diff.includes(\'"path": "/byte-child.txt"\'));',
-            'console.log(fs.existsSync("/byte-child.txt"));',
-          ].join("\n"),
-        },
-        {
-          path: "/byte-child.js",
-          text: [
-            'import fs from "fs";',
-            'fs.writeFileSync("/byte-child.txt", "child-bytecode");',
-            'console.log("byte-child");',
-          ].join("\n"),
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'import { $, runScript } from "goccia";',
+          'await fs.promises.writeFile("/byte.txt", "bytecode");',
+          'console.log((await $`cat /byte.txt`.text()).trim());',
+          'const child = runScript("/byte-child.js", { sandbox: true, copy: ["/byte-child.js"], diff: true });',
+          'console.log(child.stdout.trim());',
+          'console.log(child.diff.includes(\'"path": "/byte-child.txt"\'));',
+          'console.log(fs.existsSync("/byte-child.txt"));',
+        ].join("\n"),
+      },
+      {
+        path: "/byte-child.js",
+        text: [
+          'import fs from "fs";',
+          'fs.writeFileSync("/byte-child.txt", "child-bytecode");',
+          'console.log("byte-child");',
+        ].join("\n"),
+      },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module", "--mode=bytecode", `--diff-output=${diff}`],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", "--mode=bytecode", `--diff-file=${diff}`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode bytecode should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (!containsLine(stdout, "bytecode"))
-      throw new Error(`SandboxRunner bytecode stdout should include bytecode, got: ${stdout}`);
+      throw new Error(`Sandbox mode bytecode stdout should include bytecode, got: ${stdout}`);
     if (!containsLine(stdout, "byte-child"))
-      throw new Error(`SandboxRunner bytecode nested stdout should include byte-child, got: ${stdout}`);
+      throw new Error(`Sandbox mode bytecode nested stdout should include byte-child, got: ${stdout}`);
     if (!containsLine(stdout, "true") || !containsLine(stdout, "false"))
-      throw new Error(`SandboxRunner bytecode nested diff/isolation booleans missing, got: ${stdout}`);
+      throw new Error(`Sandbox mode bytecode nested diff/isolation booleans missing, got: ${stdout}`);
     const changes = JSON.parse(readFileSync(diff, "utf-8")).changes;
     if (!changes.some((c: any) => c.kind === "create" && c.path === "/byte.txt"))
-      throw new Error(`SandboxRunner bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode bytecode diff should include /byte.txt create, got ${JSON.stringify(changes)}`);
     if (changes.some((c: any) => c.path === "/byte-child.txt"))
-      throw new Error(`SandboxRunner bytecode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
+      throw new Error(`Sandbox mode bytecode parent diff should not include nested child writes, got ${JSON.stringify(changes)}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: nested sandbox execution seeds from parent VFS without leaking writes...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: nested sandbox execution copies from the parent VFS without leaking writes...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'import { $, runScript } from "goccia";',
-            'const child = runScript("/child.js", {',
-            '  sandbox: true,',
-            '  seed: [',
-            '    "/child.js",',
-            '    "/parent.txt",',
-            '    { from: "/parent.txt", to: "/out/" },',
-            '    { path: "/inline.txt", text: "inline-child" },',
-            '    { path: "/bin.dat", base64: "BAUG" },',
-            '  ],',
-            '  diff: true,',
-            '});',
-            'const noWrite = runScript("/readonly.js", { sandbox: true, seed: ["/readonly.js"], diff: true, diffFormat: "unified" });',
-            'const metadataOnly = runScript("/metadata.js", { sandbox: true, seed: ["/metadata.js", "/metadata.txt"], diffMetadata: true });',
-            'console.log(child.stdout.trim());',
-            'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
-            'console.log(noWrite.diff === "");',
-            'console.log(JSON.parse(metadataOnly.diff).changes.length === 0);',
-            'console.log(JSON.parse(metadataOnly.diff).metadataChanges.some((change) => change.path === "/metadata.txt" && "ctimeMs" in change.changes && "mtimeMs" in change.changes));',
-            'console.log(fs.existsSync("/child-only.txt"));',
-            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
-            'const shellChild = await $`goccia --sandbox --seed /child.js --seed /parent.txt --seed /parent.txt=/shell-out/ --diff-metadata /child.js`.text();',
-            'console.log(shellChild.includes("parent-seed"));',
-            'console.log(shellChild.includes("shell-out:parent-seed"));',
-            'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
-            'console.log(shellChild.includes(\'"metadataChanges"\'));',
-            'console.log(fs.existsSync("/child-only.txt"));',
-          ].join("\n"),
-        },
-        {
-          path: "/child.js",
-          text: [
-            'import fs from "fs";',
-            'console.log(fs.readFileSync("/parent.txt", "utf8"));',
-            'if (fs.existsSync("/inline.txt")) console.log(fs.readFileSync("/inline.txt", "utf8"));',
-            'if (fs.existsSync("/bin.dat")) console.log(fs.readFileSync("/bin.dat").length);',
-            'if (fs.existsSync("/out/parent.txt")) console.log("out:" + fs.readFileSync("/out/parent.txt", "utf8"));',
-            'if (fs.existsSync("/shell-out/parent.txt")) console.log("shell-out:" + fs.readFileSync("/shell-out/parent.txt", "utf8"));',
-            'fs.writeFileSync("/parent.txt", "child-mutated");',
-            'fs.writeFileSync("/child-only.txt", "secret");',
-          ].join("\n"),
-        },
-        { path: "/readonly.js", text: "1;" },
-        {
-          path: "/metadata.js",
-          text: [
-            'import fs from "fs";',
-            'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
-            'const text = fs.readFileSync("/metadata.txt", "utf8");',
-            'fs.writeFileSync("/metadata.txt", text);',
-          ].join("\n"),
-        },
-        { path: "/metadata.txt", text: "metadata" },
-        { path: "/parent.txt", text: "parent-seed" },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'import { $, runScript } from "goccia";',
+          'const child = runScript("/child.js", {',
+          '  sandbox: true,',
+          '  copy: [',
+          '    "/child.js",',
+          '    "/parent.txt",',
+          '    { from: "/parent.txt", to: "/out/" },',
+          '    { path: "/inline.txt", text: "inline-child" },',
+          '    { path: "/bin.dat", base64: "BAUG" },',
+          '  ],',
+          '  diff: true,',
+          '});',
+          'const noWrite = runScript("/readonly.js", { sandbox: true, copy: ["/readonly.js"], diff: "unified" });',
+          // JSON diffs always carry metadata, so a timestamp-only rewrite shows.
+          'const metadataOnly = runScript("/metadata.js", { sandbox: true, copy: ["/metadata.js", "/metadata.txt"], diff: true });',
+          'console.log(child.stdout.trim());',
+          'console.log(child.diff.includes(\'"path": "/child-only.txt"\'));',
+          'console.log(noWrite.diff === "");',
+          'console.log(JSON.parse(metadataOnly.diff).changes.length === 0);',
+          'console.log(JSON.parse(metadataOnly.diff).metadataChanges.some((change) => change.path === "/metadata.txt" && "ctimeMs" in change.changes && "mtimeMs" in change.changes));',
+          'console.log(fs.existsSync("/child-only.txt"));',
+          'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+          'const shellChild = await $`goccia --sandbox --copy /child.js --copy /parent.txt --copy /parent.txt=/shell-out/ --diff /child.js`.text();',
+          'console.log(shellChild.includes("parent-text"));',
+          'console.log(shellChild.includes("shell-out:parent-text"));',
+          'console.log(shellChild.includes(\'"path": "/child-only.txt"\'));',
+          'console.log(shellChild.includes(\'"metadataChanges"\'));',
+          'console.log(fs.existsSync("/child-only.txt"));',
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: [
+          'import fs from "fs";',
+          'console.log(fs.readFileSync("/parent.txt", "utf8"));',
+          'if (fs.existsSync("/inline.txt")) console.log(fs.readFileSync("/inline.txt", "utf8"));',
+          'if (fs.existsSync("/bin.dat")) console.log(fs.readFileSync("/bin.dat").length);',
+          'if (fs.existsSync("/out/parent.txt")) console.log("out:" + fs.readFileSync("/out/parent.txt", "utf8"));',
+          'if (fs.existsSync("/shell-out/parent.txt")) console.log("shell-out:" + fs.readFileSync("/shell-out/parent.txt", "utf8"));',
+          'fs.writeFileSync("/parent.txt", "child-mutated");',
+          'fs.writeFileSync("/child-only.txt", "secret");',
+        ].join("\n"),
+      },
+      { path: "/readonly.js", text: "1;" },
+      {
+        path: "/metadata.js",
+        text: [
+          'import fs from "fs";',
+          'for (const i of Array.from({ length: 10000 }, (_, index) => index)) { Math.sqrt(i); }',
+          'const text = fs.readFileSync("/metadata.txt", "utf8");',
+          'fs.writeFileSync("/metadata.txt", text);',
+        ].join("\n"),
+      },
+      { path: "/metadata.txt", text: "metadata" },
+      { path: "/parent.txt", text: "parent-text" },
+    ]);
 
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner nested sandbox should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      throw new Error(`Sandbox mode nested sandbox should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
     for (const expected of [
-      "parent-seed",
+      "parent-text",
       "inline-child",
-      "out:parent-seed",
+      "out:parent-text",
       "3",
       "true",
       "false",
     ]) {
       if (!containsLine(stdout, expected))
-        throw new Error(`SandboxRunner nested sandbox stdout should include line ${JSON.stringify(expected)}, got: ${stdout}`);
+        throw new Error(`Sandbox mode nested sandbox stdout should include line ${JSON.stringify(expected)}, got: ${stdout}`);
     }
-    if (!stdout.includes("parent-seed\ninline-child\n3\nout:parent-seed"))
-      throw new Error(`runScript child stdout should include inline seeded files, got: ${stdout}`);
+    if (!stdout.includes("parent-text\ninline-child\n3\nout:parent-text"))
+      throw new Error(`runScript child stdout should include inline copied files, got: ${stdout}`);
     const falseCount = stdout.split("\n").filter((line) => line === "false").length;
     if (falseCount !== 2)
       throw new Error(`child writes should stay out of parent VFS twice, got ${falseCount} false lines in: ${stdout}`);
@@ -7086,79 +7112,92 @@ await section("SandboxRunner: nested sandbox execution seeds from parent VFS wit
   }
 });
 
-await section("SandboxRunner: seed config imports host paths relative to the config file...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: sandbox section paths are relative to the config file...", async () => {
+  const tmp = makeNativeTmp();
   try {
     const project = join(tmp, "project");
-    mkdirSync(project, { recursive: true });
-    writeFileSync(join(project, "data.txt"), "from-host");
-    writeFileSync(join(tmp, "target-file.txt"), "from-file-target");
-    writeFileSync(join(tmp, "existing-dir-file.txt"), "from-existing-dir");
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        { from: "./project", to: "/" },
-        { path: "/existing-dir/.keep", text: "" },
-        { from: "./target-file.txt", to: "/target-dir/" },
-        { from: "./existing-dir-file.txt", to: "/existing-dir" },
-        { path: "/bin.dat", base64: "AQID" },
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'console.log(fs.readFileSync("/data.txt", "utf8"));',
-            'console.log(fs.readFileSync("/target-dir/target-file.txt", "utf8"));',
-            'console.log(fs.readFileSync("/existing-dir/existing-dir-file.txt", "utf8"));',
-            'console.log(fs.readFileSync("/bin.dat").length);',
-          ].join("\n"),
-        },
-      ],
+    mkdirSync(join(project, "data"), { recursive: true });
+    mkdirSync(join(project, "existing-dir"), { recursive: true });
+    writeFileSync(join(project, "data", "data.txt"), "from-host");
+    writeFileSync(join(project, "existing-dir", ".keep"), "");
+    writeFileSync(join(project, "target-file.txt"), "from-file-target");
+    writeFileSync(join(project, "existing-dir-file.txt"), "from-existing-dir");
+    writeFileSync(join(project, "bin.dat"), Buffer.from([1, 2, 3]));
+    writeFileSync(join(project, "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/data.txt", "utf8"));',
+      'console.log(fs.readFileSync("/target-dir/target-file.txt", "utf8"));',
+      'console.log(fs.readFileSync("/existing-dir/existing-dir-file.txt", "utf8"));',
+      'console.log(fs.readFileSync("/bin.dat").length);',
+      'fs.writeFileSync("/made.txt", "made");',
+    ].join("\n"));
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      sandbox: {
+        copy: [
+          // A directory's contents merged into the root.
+          "./data=/",
+          // A file into a directory named by a trailing slash.
+          "./target-file.txt=/target-dir/",
+          // A directory at its default /<basename>, then a file into it.
+          "./existing-dir",
+          "./existing-dir-file.txt=/existing-dir",
+          "bin.dat",
+        ],
+        "diff-file": "changes.json",
+      },
     }));
 
+    // The working directory is elsewhere: every path above resolves against
+    // the config file.
     const proc = Bun.spawnSync(
-      [resolve(SANDBOXRUNNER), "/main.js", `--seed-config=${seed}`, "--source-type=module"],
-      { stdout: "pipe", stderr: "pipe", cwd: "/" },
+      [resolve(RUNNER), join(project, "main.js"), "-P", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", cwd: tmp },
     );
     const stdout = normalizeLineEndings(proc.stdout.toString());
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner host seed should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (!containsLine(stdout, "from-host"))
-      throw new Error(`SandboxRunner host seed stdout should include imported host text, got: ${stdout}`);
-    if (!containsLine(stdout, "from-file-target"))
-      throw new Error(`SandboxRunner host seed stdout should include file copied under trailing slash target, got: ${stdout}`);
-    if (!containsLine(stdout, "from-existing-dir"))
-      throw new Error(`SandboxRunner host seed stdout should include file copied under existing target directory, got: ${stdout}`);
-    if (!containsLine(stdout, "3"))
-      throw new Error(`SandboxRunner host seed stdout should include base64 byte length, got: ${stdout}`);
+      throw new Error(`Sandbox mode config section should exit 0, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+    for (const [expected, what] of [
+      ["from-host", "a directory merged into the root"],
+      ["from-file-target", "a file copied under a trailing-slash target"],
+      ["from-existing-dir", "a file copied into an existing directory"],
+      ["3", "a copied binary file's length"],
+    ]) {
+      if (!containsLine(stdout, expected))
+        throw new Error(`Sandbox mode config section stdout should include ${what} (${expected}), got: ${stdout}`);
+    }
+    const diffPath = join(project, "changes.json");
+    if (!existsSync(diffPath))
+      throw new Error(`Sandbox mode config diff-file should be written next to the config, got stdout: ${stdout}`);
+    const diff = JSON.parse(readFileSync(diffPath, "utf-8"));
+    if (!diff.changes.some((c: any) => c.kind === "create" && c.path === "/made.txt"))
+      throw new Error(`Sandbox mode config diff should include /made.txt, got: ${JSON.stringify(diff)}`);
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: --audit-log reports root escapes without changing clamped access...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --audit-log reports root escapes without changing clamped access...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "audit-seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/main.js",
-          text: [
-            'import fs from "fs";',
-            'console.log(fs.readFileSync("../../secret.txt", "utf8"));',
-          ].join("\n"),
-        },
-        { path: "/secret.txt", text: "inside-jail" },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import fs from "fs";',
+          'console.log(fs.readFileSync("../../secret.txt", "utf8"));',
+        ].join("\n"),
+      },
+      { path: "/secret.txt", text: "inside-jail" },
+    ]);
 
     for (const mode of ["interpreted", "bytecode"] as const) {
       const audit = join(tmp, `sandbox-audit-${mode}.jsonl`);
       const proc = Bun.spawnSync(
         [
-          SANDBOXRUNNER,
-          "/main.js",
-          `--seed-config=${seed}`,
+          RUNNER,
+          "--copy",
+          `${tree}=/`,
+          "--entry=/main.js",
           "--source-type=module",
           `--mode=${mode}`,
           `--audit-log=${audit}`,
@@ -7183,8 +7222,8 @@ await section("SandboxRunner: --audit-log reports root escapes without changing 
   }
 });
 
-await section("SandboxRunner: seed directory rejects nested host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: a copied directory rejects a nested host symlink (no leak)...", async () => {
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const seedDir = join(tmp, "seedDir");
@@ -7198,24 +7237,24 @@ await section("SandboxRunner: seed directory rejects nested host symlink (no lea
       ].join("\n"));
 
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed=${seedDir}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        [RUNNER, mainJs, "--copy", `${seedDir}=/`, "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode === 0)
-        throw new Error(`SandboxRunner nested symlink seed should fail, exited 0: ${output}`);
+        throw new Error(`Sandbox mode nested symlink copy should fail, exited 0: ${output}`);
       if (!output.includes("is a symlink (not supported)"))
-        throw new Error(`SandboxRunner nested symlink seed should report the symlink rejection, got: ${output}`);
+        throw new Error(`Sandbox mode nested symlink copy should report the symlink rejection, got: ${output}`);
       if (output.includes("outside-secret"))
-        throw new Error(`SandboxRunner nested symlink seed leaked host contents, got: ${output}`);
+        throw new Error(`Sandbox mode nested symlink copy leaked host contents, got: ${output}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: direct seed argument rejects host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --copy rejects a host symlink (no leak)...", async () => {
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       writeFileSync(join(tmp, "outside.txt"), "outside-secret");
@@ -7228,63 +7267,56 @@ await section("SandboxRunner: direct seed argument rejects host symlink (no leak
       ].join("\n"));
 
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed=${link}=/leak.txt`, `--seed=${mainJs}=/`, "--source-type=module"],
+        [RUNNER, mainJs, "--copy", `${link}=/leak.txt`, "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode === 0)
-        throw new Error(`SandboxRunner direct symlink seed should fail, exited 0: ${output}`);
+        throw new Error(`Sandbox mode direct symlink copy should fail, exited 0: ${output}`);
       if (!output.includes("is a symlink (not supported)"))
-        throw new Error(`SandboxRunner direct symlink seed should report the symlink rejection, got: ${output}`);
+        throw new Error(`Sandbox mode direct symlink copy should report the symlink rejection, got: ${output}`);
       if (output.includes("outside-secret"))
-        throw new Error(`SandboxRunner direct symlink seed leaked host contents, got: ${output}`);
+        throw new Error(`Sandbox mode direct symlink copy leaked host contents, got: ${output}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: seed-config from directory rejects nested host symlink (no leak)...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: a sandbox-section directory rejects a nested host symlink (no leak)...", async () => {
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const seedDir = join(tmp, "seedDir");
       mkdirSync(seedDir, { recursive: true });
       writeFileSync(join(tmp, "outside.txt"), "outside-secret");
       symlinkSync("../outside.txt", join(seedDir, "leak.txt"));
-      const seed = join(tmp, "seed.json");
-      writeFileSync(seed, JSON.stringify({
-        files: [
-          { from: "./seedDir", to: "/" },
-          {
-            path: "/main.js",
-            text: [
-              'import fs from "fs";',
-              'console.log(fs.readFileSync("/leak.txt", "utf8"));',
-            ].join("\n"),
-          },
-        ],
-      }));
+      const mainJs = join(tmp, "main.js");
+      writeFileSync(mainJs, [
+        'import fs from "fs";',
+        'console.log(fs.readFileSync("/leak.txt", "utf8"));',
+      ].join("\n"));
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { copy: ["./seedDir=/"] } }));
 
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+        [RUNNER, mainJs, "-P", "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode === 0)
-        throw new Error(`SandboxRunner seed-config symlink should fail, exited 0: ${output}`);
+        throw new Error(`Sandbox mode sandbox-section symlink should fail, exited 0: ${output}`);
       if (!output.includes("is a symlink (not supported)"))
-        throw new Error(`SandboxRunner seed-config symlink should report the symlink rejection, got: ${output}`);
+        throw new Error(`Sandbox mode sandbox-section symlink should report the symlink rejection, got: ${output}`);
       if (output.includes("outside-secret"))
-        throw new Error(`SandboxRunner seed-config symlink leaked host contents, got: ${output}`);
+        throw new Error(`Sandbox mode sandbox-section symlink leaked host contents, got: ${output}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: trailing slash on a symlinked-directory seed is still rejected (no leak)...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: trailing slash on a symlinked-directory copy is still rejected (no leak)...", async () => {
+  const tmp = makeNativeTmp();
   try {
     if (process.platform !== "win32") {
       const outsideDir = join(tmp, "outsideDir");
@@ -7300,24 +7332,24 @@ await section("SandboxRunner: trailing slash on a symlinked-directory seed is st
 
       // A trailing slash must not let POSIX lstat() follow the symlinked leaf.
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed=${linkDir}/=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        [RUNNER, mainJs, "--copy", `${linkDir}/=/`, "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode === 0)
-        throw new Error(`SandboxRunner trailing-slash symlink seed should fail, exited 0: ${output}`);
+        throw new Error(`Sandbox mode trailing-slash symlink copy should fail, exited 0: ${output}`);
       if (!output.includes("is a symlink (not supported)"))
-        throw new Error(`SandboxRunner trailing-slash symlink seed should report the symlink rejection, got: ${output}`);
+        throw new Error(`Sandbox mode trailing-slash symlink copy should report the symlink rejection, got: ${output}`);
       if (output.includes("outside-secret"))
-        throw new Error(`SandboxRunner trailing-slash symlink seed leaked host contents, got: ${output}`);
+        throw new Error(`Sandbox mode trailing-slash symlink copy leaked host contents, got: ${output}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: Windows directory junction seed is rejected (no leak)...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: a Windows directory junction copy is rejected (no leak)...", async () => {
+  const tmp = makeNativeTmp();
   try {
     // Windows-only: file symlinks need elevation on CI runners, but a directory
     // junction is a reparse point that needs none, so it exercises the Windows
@@ -7336,19 +7368,1177 @@ await section("SandboxRunner: Windows directory junction seed is rejected (no le
       ].join("\n"));
 
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, "/main.js", `--seed=${junction}=/`, `--seed=${mainJs}=/`, "--source-type=module"],
+        [RUNNER, mainJs, "--copy", `${junction}=/`, "--source-type=module"],
         { stdout: "pipe", stderr: "pipe" },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
       if (proc.exitCode === 0)
-        throw new Error(`SandboxRunner junction seed should fail, exited 0: ${output}`);
+        throw new Error(`Sandbox mode junction copy should fail, exited 0: ${output}`);
       if (!output.includes("is a symlink (not supported)"))
-        throw new Error(`SandboxRunner junction seed should report the symlink rejection, got: ${output}`);
+        throw new Error(`Sandbox mode junction copy should report the symlink rejection, got: ${output}`);
       if (output.includes("outside-secret"))
-        throw new Error(`SandboxRunner junction seed leaked host contents, got: ${output}`);
+        throw new Error(`Sandbox mode junction copy leaked host contents, got: ${output}`);
     }
   } finally {
     clean(tmp);
+  }
+});
+
+// ── GocciaRunner sandbox mode: the CLI surface (ADR 0122) ──────────────
+//
+// Sandbox mode is part of GocciaRunner: --sandbox, --copy, --copy-rw, or a
+// trusted `sandbox` section switches it on. These pin the surface itself —
+// where inputs land, which entry runs, what is refused and why, and which
+// stream each report goes to.
+
+/** A walk of the sandbox filesystem, printed as one line of sorted paths. */
+const SANDBOX_WALK_SCRIPT = [
+  'import fs from "fs";',
+  "const walk = (dir) => fs.readdirSync(dir).flatMap((name) => {",
+  '  const path = (dir === "/" ? "" : dir) + "/" + name;',
+  '  return fs.statSync(path).isDirectory() ? [path + "/", ...walk(path)] : [path];',
+  "});",
+  'console.log(walk("/").sort().join(" "));',
+].join("\n");
+
+type SandboxRun = { exitCode: number | null; stdout: string; stderr: string };
+
+const runSandboxCli = (
+  args: string[],
+  options: { cwd?: string; stdin?: string } = {},
+): SandboxRun => {
+  const proc = Bun.spawnSync([resolve(RUNNER), ...args], {
+    cwd: options.cwd,
+    stdin: options.stdin === undefined ? undefined : new TextEncoder().encode(options.stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    exitCode: proc.exitCode,
+    stdout: normalizeLineEndings(proc.stdout.toString()),
+    stderr: normalizeLineEndings(proc.stderr.toString()),
+  };
+};
+
+const expectSandboxUsageError = (label: string, run: SandboxRun, needle: string): void => {
+  if (run.exitCode !== 2 || !run.stderr.includes(`Error: ${needle}`))
+    throw new Error(`${label} should exit 2 with ${JSON.stringify(needle)} on stderr, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+};
+
+await section("Runner: host mode provides neither fs nor goccia...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    for (const specifier of ["fs", "goccia"]) {
+      const file = join(tmp, `${specifier}.mjs`);
+      writeFileSync(file, `import * as m from "${specifier}";\nconsole.log(typeof m);\n`);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const run = runSandboxCli([file, `--mode=${mode}`]);
+        const output = run.stdout + run.stderr;
+        if (run.exitCode === 0 || !output.includes(`Cannot resolve bare module specifier "${specifier}"`))
+          throw new Error(`Host mode (${mode}) should not resolve "${specifier}", got (exit ${run.exitCode}):\n${output}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --copy lands inputs at /<basename> or the named path...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    mkdirSync(join(tmp, "dir", "sub"), { recursive: true });
+    writeFileSync(join(tmp, "dir", "a.txt"), "a");
+    writeFileSync(join(tmp, "dir", "sub", "b.txt"), "b");
+    writeFileSync(join(tmp, "file.txt"), "f");
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+    for (const [label, copies, expected] of [
+      ["default targets", ["--copy", "dir", "--copy", "file.txt"],
+        "/dir/ /dir/a.txt /dir/sub/ /dir/sub/b.txt /file.txt /walk.js"],
+      ["explicit targets", ["--copy", "dir=/x", "--copy", "file.txt=/y/z.txt"],
+        "/walk.js /x/ /x/a.txt /x/sub/ /x/sub/b.txt /y/ /y/z.txt"],
+      ["a directory merged into the root", ["--copy", "dir=/"],
+        "/a.txt /sub/ /sub/b.txt /walk.js"],
+      ["a file into a trailing-slash target", ["--copy", "file.txt=/t/"],
+        "/t/ /t/file.txt /walk.js"],
+      ["a file into an existing directory", ["--copy", "dir", "--copy", "file.txt=/dir"],
+        "/dir/ /dir/a.txt /dir/file.txt /dir/sub/ /dir/sub/b.txt /walk.js"],
+      ["--copy-rw targets", ["--copy-rw", "dir"],
+        "/dir/ /dir/a.txt /dir/sub/ /dir/sub/b.txt /walk.js"],
+    ] as const) {
+      const run = runSandboxCli(["walk.js", ...copies, "--source-type=module"], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== expected)
+        throw new Error(`Sandbox mode ${label} should lay out ${JSON.stringify(expected)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    // A host path with no name needs an explicit sandbox path.
+    expectSandboxUsageError(
+      "Sandbox mode --copy of a filesystem root",
+      runSandboxCli(["walk.js", "--copy", "/"], { cwd: tmp }),
+      "--copy /: the host path has no name to use as its sandbox path; give one with /=<sandbox>",
+    );
+    const missing = runSandboxCli(["walk.js", "--copy", "nope"], { cwd: tmp });
+    if (missing.exitCode === 0 || !(missing.stdout + missing.stderr).includes("--copy nope: copy path does not exist"))
+      throw new Error(`Sandbox mode should refuse a missing --copy path, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --sandbox copies only the entry...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+    writeFileSync(join(tmp, "beside.txt"), "not copied");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = runSandboxCli([join(tmp, "walk.js"), "--sandbox", "--source-type=module", `--mode=${mode}`]);
+      if (run.exitCode !== 0 || run.stdout.trim() !== "/walk.js")
+        throw new Error(`Sandbox mode (${mode}) with --sandbox should hold only /walk.js, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      // A clean stdout: no timing banner in sandbox mode.
+      if (run.stdout.includes("Running script") || run.stdout.includes("Lex:"))
+        throw new Error(`Sandbox mode (${mode}) should print no timing banner, got:\n${run.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: an entry inside a copied input runs from there...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src", "main.js"), SANDBOX_WALK_SCRIPT);
+    writeFileSync(join(tmp, "walk.js"), SANDBOX_WALK_SCRIPT);
+
+    // Not copied again: the entry is /src/main.js, and / holds only /src.
+    const inside = runSandboxCli(["src/main.js", "--copy", "src", "--source-type=module"], { cwd: tmp });
+    if (inside.exitCode !== 0 || inside.stdout !== "/src/ /src/main.js\n")
+      throw new Error(`Sandbox mode should run an entry from the input that holds it, got (exit ${inside.exitCode}):\n${inside.stdout}${inside.stderr}`);
+
+    // Mapped through an explicit target too.
+    const mapped = runSandboxCli(["src/main.js", "--copy", "src=/app", "--source-type=module"], { cwd: tmp });
+    if (mapped.exitCode !== 0 || mapped.stdout !== "/app/ /app/main.js\n")
+      throw new Error(`Sandbox mode should map an entry through its input's target, got (exit ${mapped.exitCode}):\n${mapped.stdout}${mapped.stderr}`);
+
+    // An entry outside every input lands at /<basename>; if an input
+    // already fills that path, it is a usage error that suggests --entry.
+    writeFileSync(join(tmp, "src", "walk.js"), "console.log('the input copy');");
+    const collision = runSandboxCli(["walk.js", "--copy", "src=/", "--source-type=module"], { cwd: tmp });
+    expectSandboxUsageError(
+      "Sandbox mode entry collision",
+      collision,
+      "the entry walk.js would be copied to /walk.js, which a copied input already fills; name the entry with --entry=/walk.js",
+    );
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --entry names a copied file and needs no stdin...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, { "/main.js": 'console.log("from-entry");' });
+    // Closed stdin (Bun's null device), piped stdin, and no stdin option at
+    // all: --entry is the program, so stdin is never read.
+    const closed = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js"]);
+    if (closed.exitCode !== 0 || closed.stdout.trim() !== "from-entry")
+      throw new Error(`Sandbox mode --entry with closed stdin should run the entry, got (exit ${closed.exitCode}):\n${closed.stdout}${closed.stderr}`);
+    const piped = runSandboxCli(["--copy", `${tree}=/`, "--entry", "/main.js"], { stdin: 'console.log("from-stdin");' });
+    if (piped.exitCode !== 0 || piped.stdout.trim() !== "from-entry")
+      throw new Error(`Sandbox mode --entry should ignore piped stdin, got (exit ${piped.exitCode}):\n${piped.stdout}${piped.stderr}`);
+
+    writeFileSync(join(tmp, "host.js"), "1;");
+    expectSandboxUsageError(
+      "Sandbox mode --entry with a positional",
+      runSandboxCli(["host.js", "--copy", `${tree}=/`, "--entry=/main.js"], { cwd: tmp }),
+      "--entry names the sandbox entry, so a host file cannot be given too; drop host.js or --entry",
+    );
+    expectSandboxUsageError(
+      "--entry without sandbox mode",
+      runSandboxCli(["--entry=/main.js"], { cwd: tmp }),
+      "--entry only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]",
+    );
+    const missing = runSandboxCli(["--sandbox", "--entry=/absent.js"]);
+    if (missing.exitCode !== 1 || !missing.stderr.includes("sandbox entry file not found: /absent.js"))
+      throw new Error(`Sandbox mode --entry naming nothing should fail, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: rejects inputs and options it cannot run...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    writeFileSync(join(tmp, "other.js"), "2;");
+    writeFileSync(join(tmp, "main.gbc"), "not bytecode");
+    mkdirSync(join(tmp, "dir"), { recursive: true });
+    const cases: [string, string[], string, string?][] = [
+      ["stdin as -", ["-", "--sandbox"],
+        "sandbox mode does not read stdin; pass a host file, or --entry <sandbox-path> for a copied one", "1;"],
+      ["no entry", ["--sandbox"],
+        "sandbox mode needs an entry: pass a host file, or --entry <sandbox-path> for a copied one (sandbox mode does not read stdin)"],
+      ["no entry with piped stdin", ["--copy", "dir"],
+        "sandbox mode needs an entry", "console.log(1);"],
+      ["a directory", ["dir", "--sandbox"],
+        "sandbox mode runs one entry file, not a directory: dir (copy it with --copy dir and name the entry with --entry)"],
+      ["several positionals", ["main.js", "other.js", "--sandbox"], "sandbox mode runs one entry file; got 2 inputs"],
+      ["a .gbc entry", ["main.gbc", "--sandbox"], "sandbox mode runs source files, not bytecode: main.gbc"],
+    ];
+    for (const option of [
+      "--output=json", "--multifile", "--coverage", "--coverage-format=lcov", "--coverage-output=c.json",
+      "--profile=functions", "--profile-output=p.json", "--profile-format=flamegraph", "--source-map",
+      "--host-environment=env.js", "--global=a=1", "--globals=g.json",
+    ]) {
+      const name = option.split("=")[0];
+      cases.push([option, ["main.js", "--sandbox", option], `${name} cannot be used in sandbox mode (enabled by --sandbox)`]);
+    }
+    for (const [label, args, needle, stdin] of cases)
+      expectSandboxUsageError(`Sandbox mode ${label}`, runSandboxCli(args, { cwd: tmp, stdin }), needle);
+
+    // A host-side failure (here a missing input) reports on stderr, keeping
+    // stdout for the guest's output and the diff.
+    const missing = runSandboxCli(["main.js", "--copy", "nope"], { cwd: tmp });
+    if (missing.exitCode !== 1 || missing.stdout !== "" ||
+        !missing.stderr.includes("Error: --copy nope: copy path does not exist: "))
+      throw new Error(`A missing --copy input should fail on stderr, got (exit ${missing.exitCode}):\n${missing.stdout}${missing.stderr}`);
+    const badDiffFile = runSandboxCli(["main.js", "--sandbox", "--diff-file=o.txt"], { cwd: tmp });
+    if (badDiffFile.exitCode !== 1 || badDiffFile.stdout !== "" ||
+        !badDiffFile.stderr.includes('Error: Cannot tell the diff format from "o.txt"'))
+      throw new Error(`An unknown --diff-file extension should fail on stderr, got (exit ${badDiffFile.exitCode}):\n${badDiffFile.stdout}${badDiffFile.stderr}`);
+
+    // --jobs is accepted and does nothing.
+    const jobs = runSandboxCli(["main.js", "--sandbox", "--jobs=4", "--print"], { cwd: tmp });
+    if (jobs.exitCode !== 0 || jobs.stdout.trim() !== "1")
+      throw new Error(`Sandbox mode should accept --jobs, got (exit ${jobs.exitCode}):\n${jobs.stdout}${jobs.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: write-back and the diff file refuse a directory swapped for a link during the run...", async () => {
+  if (process.platform === "win32") return;
+  // Named on the command line, and by a trusted config's sandbox section.
+  for (const [mode, fromConfig] of [["interpreted", false], ["bytecode", false], ["interpreted", true], ["bytecode", true]] as const) {
+    const tmp = makeNativeTmp();
+    try {
+      mkdirSync(join(tmp, "out"));
+      mkdirSync(join(tmp, "dd"));
+      mkdirSync(join(tmp, "target"));
+      writeFileSync(join(tmp, "out", "a.txt"), "orig");
+      writeFileSync(join(tmp, "w.js"), [
+        'import fs from "fs";',
+        'const start = Date.now(); while (Date.now() - start < 1500) {}',
+        'fs.writeFileSync("/out/a.txt", "PWNED");',
+        'fs.writeFileSync("/out/b.txt", "PWNED2");',
+      ].join("\n"));
+      if (fromConfig)
+        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"], "diff-file": "dd/diff.json" } }));
+      const proc = Bun.spawn(
+        [resolve(RUNNER), "w.js", "--compat-while-loops", "--source-type=module", `--mode=${mode}`,
+          // A command-line --diff-file is the user's choice and follows
+          // links; only the config's is pinned.
+          ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])],
+        { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+      );
+      // While the guest runs: the copied directory and the diff file's
+      // directory both become links to a directory outside.
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out"), join(tmp, "out.real"));
+      symlinkSync(join(tmp, "target"), join(tmp, "out"));
+      if (fromConfig) {
+        renameSync(join(tmp, "dd"), join(tmp, "dd.real"));
+        symlinkSync(join(tmp, "target"), join(tmp, "dd"));
+      }
+      const exitCode = await proc.exited;
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const written = readdirSync(join(tmp, "target"));
+      if (written.length !== 0)
+        throw new Error(`SECURITY (${mode}): write-back or the diff followed a swapped directory into ${written.join(", ")}:\n${stdout}${stderr}`);
+      if (readFileSync(join(tmp, "out.real", "a.txt"), "utf-8") !== "orig")
+        throw new Error(`(${mode}) the moved-away input must be left alone`);
+      if (exitCode !== 1 ||
+          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`) ||
+          (fromConfig && !stderr.includes(`Error: diff file ${join(tmp, "dd", "diff.json")}: dd is a symbolic link or not a directory`)))
+        throw new Error(`(${mode}) a swapped directory should be refused on stderr with exit 1, got (exit ${exitCode}):\n${stdout}${stderr}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+});
+
+await section("Runner sandbox mode: a config's modules, globals, and host-environment are not applied...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "secret.txt"), "HOST-SECRET");
+    writeFileSync(join(tmp, "manifest.json"), JSON.stringify({ leak: { content: "export default 'FROM-MANIFEST';" } }));
+    writeFileSync(join(tmp, "globals.json"), JSON.stringify({ injected: 1 }));
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({
+      modules: "./manifest.json",
+      globals: ["./globals.json"],
+      "host-environment": "./env.js",
+    }));
+    writeFileSync(join(tmp, "main.js"), [
+      'let leaked = "none";',
+      'try { leaked = (await import("leak")).default; } catch (e) { leaked = "refused"; }',
+      'console.log(leaked, typeof injected);',
+    ].join("\n"));
+    const run = runSandboxCli(["main.js", "--sandbox", "--source-type=module"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "refused undefined")
+      throw new Error(`Sandbox mode must not apply the config's modules or globals, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    for (const key of ["modules", "globals", "host-environment"])
+      if (!run.stderr.includes(`Warning: ${join(tmp, "goccia.json")} sets "${key}", which GocciaRunner sandbox mode does not apply; ignoring it`))
+        throw new Error(`Sandbox mode should warn that it ignores the config's ${key}, got:\n${run.stderr}`);
+
+    // The entry's sandbox path does not make a host directory the project:
+    // /tmp here would otherwise have exempted host reads under /tmp.
+    writeFileSync(join(tmp, "goccia.json"), "{}");
+    writeFileSync(join(tmp, "lk.js"), 'import s from "/secret.txt" with { type: "text" }; console.log(s);');
+    const probe = runSandboxCli(["--copy", `lk.js=${tmp}/lk.js`, `--entry=${tmp}/lk.js`, "--source-type=module"], { cwd: tmp });
+    if ((probe.stdout + probe.stderr).includes("HOST-SECRET"))
+      throw new Error(`SECURITY: a sandbox entry path granted a host read:\n${probe.stdout}${probe.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: invalid values report on stderr, before any option is parsed...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const args of [
+      ["--sandbox", "--max-fs-bytes=abc"],
+      ["--sandbox", "--max-fs-nodes=-1"],
+      ["--copy=main.js", "--timeout=abc"],
+      ["--copy-rw", "main.js", "--allow-net="],
+      ["--sandbox", "--max-memory=zz"],
+    ]) {
+      const run = runSandboxCli(["main.js", ...args], { cwd: tmp });
+      if (run.exitCode === 0 || run.stdout !== "" || !run.stderr.includes("Error:"))
+        throw new Error(`${args.join(" ")} should fail on stderr only, got (exit ${run.exitCode}):\nstdout: ${run.stdout}\nstderr: ${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a config-enabled sandbox rejects host-mode options with the sandbox error...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: {} }));
+    for (const option of ["--profile-output=p.json", "--profile-format=flamegraph", "--output=json", "--allow-read"]) {
+      const run = runSandboxCli(["main.js", "-P", option], { cwd: tmp });
+      const name = option.split("=")[0];
+      if (run.exitCode !== 2 || run.stdout !== "" ||
+          !run.stderr.includes(`Error: ${name} cannot be used in sandbox mode (enabled by the "sandbox" section of ${join(tmp, "goccia.json")})`))
+        throw new Error(`${option} with a config sandbox should give the sandbox-mode error, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: copy targets and entries are absolute, distinct, and inside the sandbox...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "b"));
+    mkdirSync(join(tmp, "x"));
+    writeFileSync(join(tmp, "a.txt"), "a");
+    writeFileSync(join(tmp, "b", "a.txt"), "b");
+    for (const [args, needle] of [
+      [["main.js", "--copy", "a.txt", "--copy", "b/a.txt"], "--copy a.txt and --copy b/a.txt both copy to /a.txt; give one of them an explicit =<sandbox> path"],
+      [["main.js", "--copy", "x", "--copy-rw", "x"], "--copy x and --copy-rw x both copy to /x"],
+      [["main.js", "--copy", "x="], "--copy x=: the sandbox path is empty"],
+      [["main.js", "--copy", "x=rel"], '--copy x=rel: "rel" is not an absolute sandbox path; start it with /'],
+      [["main.js", "--copy", "x=/../../etc"], '--copy x=/../../etc: "/../../etc" climbs above the sandbox root'],
+      [["--sandbox", "--entry=main.js"], '--entry: "main.js" is not an absolute sandbox path; start it with /'],
+    ] as const)
+      expectSandboxUsageError(`Sandbox mode ${args.join(" ")}`, runSandboxCli([...args], { cwd: tmp }), needle);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a positional entry wins over the section's entry, with a note...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('positional');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { entry: "/other.js" } }));
+    const run = runSandboxCli(["main.js", "-P"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "positional" ||
+        !run.stderr.includes(`Note: ${join(tmp, "goccia.json")}: "sandbox.entry" /other.js is not used; the command line names the entry (main.js)`))
+      throw new Error(`The positional entry should win with a note, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: runScript and the goccia builtin refuse options they do not take...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, {
+      "child.js": "console.log('child');",
+      "main.js": [
+        'import { runScript, $ } from "goccia";',
+        'for (const option of ["allowNet", "permissions", "capabilities"]) {',
+        '  try { runScript("/child.js", { [option]: true }); console.log("accepted", option); }',
+        '  catch (e) { console.log(e.name, e.message); }',
+        '}',
+        'const shell = await $`goccia --allow-net=example.com /child.js`.nothrow().run();',
+        'console.log("shell", shell.exitCode, shell.stderr.trim());',
+      ].join("\n"),
+    });
+    const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"], { cwd: tmp });
+    const out = run.stdout;
+    for (const option of ["allowNet", "permissions", "capabilities"])
+      if (!out.includes(`TypeError runScript does not accept option "${option}"`))
+        throw new Error(`runScript should refuse ${option} by name, got (exit ${run.exitCode}):\n${out}${run.stderr}`);
+    if (!out.includes("shell 2 goccia: --allow-net=example.com: the nested goccia shell takes no capability flags; a child inherits its parent's capabilities"))
+      throw new Error(`goccia should refuse capability flags clearly, got:\n${out}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: an invalid config max-fs-* is ignored in host mode and rejected in sandbox mode...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('ran');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ "max-fs-bytes": "lots", "max-fs-nodes": -3 }));
+    const host = runSandboxCli(["main.js"], { cwd: tmp });
+    if (host.exitCode !== 0 || !host.stdout.includes("ran"))
+      throw new Error(`Host mode should ignore config max-fs-* without validating it, got (exit ${host.exitCode}):\n${host.stdout}${host.stderr}`);
+    const sandbox = runSandboxCli(["main.js", "--sandbox"], { cwd: tmp });
+    if (sandbox.exitCode !== 1 || sandbox.stdout !== "" ||
+        !sandbox.stderr.includes(`Error: Invalid value for "max-fs-bytes" in ${join(tmp, "goccia.json")}: lots`))
+      throw new Error(`Sandbox mode should reject an invalid config max-fs-bytes, got (exit ${sandbox.exitCode}):\n${sandbox.stdout}${sandbox.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: the entry's own config's sandbox section is reported as unread...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    mkdirSync(join(tmp, "proj"));
+    mkdirSync(join(tmp, "other"));
+    writeFileSync(join(tmp, "proj", "main.js"), "console.log('ran');");
+    writeFileSync(join(tmp, "proj", "goccia.json"), JSON.stringify({ sandbox: { copy: ["."] } }));
+    writeFileSync(join(tmp, "other", "goccia.json"), "{}");
+    const run = runSandboxCli([join("proj", "main.js"), "--sandbox", `--config=${join(tmp, "other")}`], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "ran" ||
+        !run.stderr.includes(`Warning: ${join(tmp, "proj", "goccia.json")} declares a "sandbox" section, which GocciaRunner reads only from the root config; ignoring it`))
+      throw new Error(`Sandbox mode should warn about the entry config's unread section, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a config-enabled sandbox reports value errors on stderr...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const [config, args] of [
+      [{ sandbox: {} }, ["--timeout=abc"]],
+      [{ sandbox: {} }, ["--max-fs-bytes=abc"]],
+      [{ sandbox: {}, timeout: "abc" }, []],
+    ] as const) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify(config));
+      const run = runSandboxCli(["main.js", "-P", ...args], { cwd: tmp });
+      if (run.exitCode === 0 || run.stdout !== "" || !run.stderr.includes("Error:"))
+        throw new Error(`${JSON.stringify(config)} ${args.join(" ")} should fail on stderr only, got (exit ${run.exitCode}):\nstdout: ${run.stdout}\nstderr: ${run.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a command-line --diff-file is written as the user named it...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    const devNull = runSandboxCli(["main.js", "--sandbox", "--diff=json", "--diff-file=/dev/null"], { cwd: tmp });
+    if (process.platform !== "win32" && devNull.exitCode !== 0)
+      throw new Error(`--diff-file=/dev/null should work, got (exit ${devNull.exitCode}):\n${devNull.stdout}${devNull.stderr}`);
+    if (process.platform !== "win32") {
+      mkdirSync(join(tmp, "elsewhere"));
+      writeFileSync(join(tmp, "elsewhere", "d.json"), "old");
+      symlinkSync(join(tmp, "elsewhere", "d.json"), join(tmp, "link.json"));
+      const linked = runSandboxCli(["main.js", "--sandbox", "--diff-file=link.json"], { cwd: tmp });
+      if (linked.exitCode !== 0 || !readFileSync(join(tmp, "elsewhere", "d.json"), "utf-8").includes('"changes"'))
+        throw new Error(`A symlinked --diff-file the user chose should be written through, got (exit ${linked.exitCode}):\n${linked.stdout}${linked.stderr}`);
+    }
+    // A regular file is replaced.
+    writeFileSync(join(tmp, "d.json"), "old");
+    const regular = runSandboxCli(["main.js", "--sandbox", "--diff-file=d.json"], { cwd: tmp });
+    if (regular.exitCode !== 0 || !readFileSync(join(tmp, "d.json"), "utf-8").includes('"changes"'))
+      throw new Error(`--diff-file should replace a regular file, got (exit ${regular.exitCode}):\n${regular.stdout}${regular.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: two config inputs with one target are refused...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "b"));
+    writeFileSync(join(tmp, "a.txt"), "a");
+    writeFileSync(join(tmp, "b", "a.txt"), "b");
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["a.txt"], "copy-rw": ["b/a.txt"] } }));
+    expectSandboxUsageError("Duplicate config targets", runSandboxCli(["main.js", "-P"], { cwd: tmp }),
+      `${configPath}: "sandbox.copy" entry "a.txt" and "sandbox.copy-rw" entry "b/a.txt" both copy to /a.txt; give one of them an explicit =<sandbox> path`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a command-line --diff-file may be a FIFO...", async () => {
+  if (process.platform === "win32") return;
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'import fs from "fs"; fs.writeFileSync("/made.txt", "m");');
+    const fifo = join(tmp, "diff.fifo");
+    if (Bun.spawnSync(["mkfifo", fifo]).exitCode !== 0) throw new Error("mkfifo failed");
+    const reader = Bun.spawn(["cat", fifo], { stdout: "pipe" });
+    const proc = Bun.spawn([resolve(RUNNER), "main.js", "--sandbox", "--source-type=module", "--diff=unified", `--diff-file=${fifo}`],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => { proc.kill(); reader.kill(); }, 10000);
+    const exitCode = await proc.exited;
+    const received = await new Response(reader.stdout).text();
+    clearTimeout(timer);
+    if (exitCode !== 0 || !received.includes("+++ /made.txt"))
+      throw new Error(`A FIFO --diff-file should receive the diff without hanging, got (exit ${exitCode}):\n${received}${await new Response(proc.stderr).text()}`);
+    // Nobody reading: an error at once, not a hang.
+    const lonely = join(tmp, "lonely.fifo");
+    if (Bun.spawnSync(["mkfifo", lonely]).exitCode !== 0) throw new Error("mkfifo failed");
+    const alone = Bun.spawnSync([resolve(RUNNER), "main.js", "--sandbox", "--source-type=module", "--diff=unified", `--diff-file=${lonely}`],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+    if (alone.exitCode !== 1 || !alone.stderr.toString().includes("no process is reading this FIFO"))
+      throw new Error(`A FIFO nobody reads should fail at once, got (exit ${alone.exitCode}):\n${alone.stdout.toString()}${alone.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a link or replaced input met at write-back fails the run...", async () => {
+  if (process.platform === "win32") return;
+  for (const fromConfig of [false, true]) {
+    const tmp = makeNativeTmp();
+    try {
+      mkdirSync(join(tmp, "out", "sub"), { recursive: true });
+      mkdirSync(join(tmp, "elsewhere"));
+      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+      writeFileSync(join(tmp, "out", "sub", "s.txt"), "orig");
+      writeFileSync(join(tmp, "w.js"), [
+        'import fs from "fs";',
+        'const start = Date.now(); while (Date.now() - start < 1500) {}',
+        'fs.writeFileSync("/out/keep.txt", "NEW");',
+        'fs.writeFileSync("/out/sub/s.txt", "PWNED");',
+      ].join("\n"));
+      if (fromConfig)
+        writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { "copy-rw": ["out"] } }));
+      const args = ["w.js", "--compat-while-loops", "--source-type=module", ...(fromConfig ? ["-P"] : ["--copy-rw", "out"])];
+      // A subdirectory swapped for a link mid-run: that file is refused, the
+      // rest is written, and the run fails.
+      let proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out", "sub"), join(tmp, "sub.real"));
+      symlinkSync(join(tmp, "elsewhere"), join(tmp, "out", "sub"));
+      let exitCode = await proc.exited;
+      let stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+      if (exitCode !== 1 || existsSync(join(tmp, "elsewhere", "s.txt")) ||
+          readFileSync(join(tmp, "out", "keep.txt"), "utf-8") !== "NEW" ||
+          !stderr.includes(`write-back: ${join(tmp, "out", "sub", "s.txt")} is a symlink or resolves outside its input; refused`))
+        throw new Error(`(config ${fromConfig}) a link planted mid-run should be refused with exit 1, got (exit ${exitCode}):\n${stderr}`);
+
+      // The whole input moved away and replaced by a real directory: nothing
+      // is written into the new one.
+      unlinkSync(join(tmp, "out", "sub"));
+      renameSync(join(tmp, "sub.real"), join(tmp, "out", "sub"));
+      writeFileSync(join(tmp, "out", "keep.txt"), "orig");
+      proc = Bun.spawn([resolve(RUNNER), ...args], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+      await Bun.sleep(500);
+      renameSync(join(tmp, "out"), join(tmp, "out.real"));
+      mkdirSync(join(tmp, "out"));
+      exitCode = await proc.exited;
+      stderr = normalizeLineEndings(await new Response(proc.stderr).text());
+      if (exitCode !== 1 || readdirSync(join(tmp, "out")).length !== 0 ||
+          !stderr.includes(`write-back: ${join(tmp, "out")} was replaced during the run; nothing written`))
+        throw new Error(`(config ${fromConfig}) an input replaced by a directory should get nothing written, got (exit ${exitCode}):\n${stderr}`);
+    } finally {
+      clean(tmp);
+    }
+  }
+});
+
+await section("Runner sandbox mode: --entry beats the section's entry, with a note...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "console.log('cli entry');");
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ sandbox: { entry: "/other.js", copy: ["main.js"] } }));
+    const run = runSandboxCli(["-P", "--entry=/main.js"], { cwd: tmp });
+    if (run.exitCode !== 0 || run.stdout.trim() !== "cli entry" ||
+        !run.stderr.includes(`Note: ${join(tmp, "goccia.json")}: "sandbox.entry" /other.js is not used; the command line names the entry (--entry /main.js)`))
+      throw new Error(`--entry should win with a note, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --print prints the last value like host mode...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "value.js"), "1 + 1;");
+    writeFileSync(join(tmp, "empty.js"), "const x = 5;");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const value = runSandboxCli(["value.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
+      if (value.exitCode !== 0 || value.stdout !== "2\n")
+        throw new Error(`Sandbox mode (${mode}) --print should print 2, got (exit ${value.exitCode}):\n${value.stdout}${value.stderr}`);
+      const undef = runSandboxCli(["empty.js", "--sandbox", "--print", `--mode=${mode}`], { cwd: tmp });
+      if (undef.exitCode !== 0 || undef.stdout !== "undefined\n")
+        throw new Error(`Sandbox mode (${mode}) --print should print undefined, got (exit ${undef.exitCode}):\n${undef.stdout}${undef.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --diff prints JSON with metadata, or unified...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "write.js"), [
+      'import fs from "fs";',
+      'fs.writeFileSync("/new.txt", "n");',
+      'console.log("guest");',
+    ].join("\n"));
+    const base = ["write.js", "--sandbox", "--source-type=module"];
+
+    const json = runSandboxCli([...base, "--diff"], { cwd: tmp });
+    if (json.exitCode !== 0 || !json.stdout.startsWith("guest\n"))
+      throw new Error(`Sandbox mode --diff should exit 0 after the guest output, got (exit ${json.exitCode}):\n${json.stdout}${json.stderr}`);
+    const parsed = JSON.parse(json.stdout.slice("guest\n".length));
+    if (!parsed.changes.some((c: any) => c.kind === "create" && c.path === "/new.txt") ||
+        !Array.isArray(parsed.metadataChanges))
+      throw new Error(`Sandbox mode --diff should print a JSON diff with metadataChanges, got:\n${json.stdout}`);
+    const explicitJson = runSandboxCli([...base, "--diff=json"], { cwd: tmp });
+    if (explicitJson.exitCode !== 0 ||
+        !Array.isArray(JSON.parse(explicitJson.stdout.slice("guest\n".length)).metadataChanges))
+      throw new Error(`Sandbox mode --diff=json should print a JSON diff, got (exit ${explicitJson.exitCode}):\n${explicitJson.stdout}${explicitJson.stderr}`);
+
+    const unified = runSandboxCli([...base, "--diff=unified"], { cwd: tmp });
+    if (unified.exitCode !== 0 ||
+        !unified.stdout.startsWith("guest\n--- /new.txt\n+++ /new.txt\n") ||
+        !containsLine(unified.stdout, "+n") ||
+        unified.stdout.includes("metadata"))
+      throw new Error(`Sandbox mode --diff=unified should print a content-only unified diff, got (exit ${unified.exitCode}):\n${unified.stdout}${unified.stderr}`);
+
+    // A diff file replaces printing; its format comes from .json or .diff
+    // unless --diff=<format> names one.
+    for (const [file, extra, format] of [
+      ["out.json", [], "json"],
+      ["out.diff", [], "unified"],
+      ["explicit.json", ["--diff=unified"], "unified"],
+      ["explicit.patch", ["--diff=json"], "json"],
+      ["explicit.txt", ["--diff=unified"], "unified"],
+    ] as const) {
+      const run = runSandboxCli([...base, `--diff-file=${file}`, ...extra], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout !== "guest\n")
+        throw new Error(`Sandbox mode --diff-file=${file} ${extra.join(" ")} should leave only the guest output on stdout, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      const text = normalizeLineEndings(readFileSync(join(tmp, file), "utf-8"));
+      if (format === "json") {
+        const diff = JSON.parse(text);
+        if (!Array.isArray(diff.changes) || !Array.isArray(diff.metadataChanges))
+          throw new Error(`Sandbox mode --diff-file=${file} should hold a JSON diff with metadata, got:\n${text}`);
+      } else if (!text.startsWith("--- /new.txt\n") || text.includes("metadata")) {
+        throw new Error(`Sandbox mode --diff-file=${file} should hold a unified diff, got:\n${text}`);
+      }
+    }
+
+    // Any other extension needs an explicit format. R1: .patch does not
+    // infer, since a unified sandbox diff is not a patch.
+    for (const file of ["out.patch", "out.txt"]) {
+      const run = runSandboxCli([...base, `--diff-file=${file}`], { cwd: tmp });
+      const output = run.stdout + run.stderr;
+      if (run.exitCode !== 1 ||
+          !output.includes(`Cannot tell the diff format from "${file}": name the file .json or .diff, or pass --diff=json or --diff=unified`))
+        throw new Error(`Sandbox mode --diff-file=${file} should fail naming the formats, got (exit ${run.exitCode}):\n${output}`);
+      if (existsSync(join(tmp, file)))
+        throw new Error(`Sandbox mode --diff-file=${file} should write nothing when the format is unknown`);
+    }
+
+    for (const [flag, needle] of [
+      ["--diff=xml", "Invalid value for --diff: xml (use --diff=json or --diff=unified)"],
+      ["--diff=", "--diff= needs a format: use --diff=json or --diff=unified, or --diff alone for json"],
+    ]) {
+      const run = runSandboxCli([...base, flag], { cwd: tmp });
+      if (run.exitCode === 0 || !(run.stdout + run.stderr).includes(needle))
+        throw new Error(`Sandbox mode ${flag} should fail with ${JSON.stringify(needle)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+
+    writeFileSync(join(tmp, "host.js"), "1;");
+    for (const flag of ["--diff", "--diff=unified", "--diff-file=host.json"]) {
+      const name = flag.startsWith("--diff-file") ? "--diff-file" : "--diff";
+      expectSandboxUsageError(
+        `${flag} without sandbox mode`,
+        runSandboxCli(["host.js", flag], { cwd: tmp }),
+        `${name} only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: only net is granted; host capabilities are refused...", async () => {
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), 'console.log("ran");');
+    for (const [flags, reason] of [
+      [["--sandbox", "--allow-read"], "--sandbox"],
+      [["--sandbox", "--allow-read=."], "--sandbox"],
+      [["--copy", "main.js=/copy.js", "--allow-import=node_modules"], "--copy"],
+      [["--copy-rw", "main.js=/copy.js", "--allow-ffi"], "--copy-rw"],
+    ] as const) {
+      const flag = flags[flags.length - 1].split("=")[0];
+      expectSandboxUsageError(
+        `Sandbox mode ${flags.join(" ")}`,
+        runSandboxCli(["main.js", ...flags], { cwd: tmp }),
+        `${flag} cannot be used in sandbox mode (enabled by ${reason}): the sandbox has no host filesystem; copy inputs with --copy`,
+      );
+    }
+    for (const flag of ["--allow-net", "--allow-net=127.0.0.1,private", "--deny-read", "--deny-read=.", "--deny-import=github", "--deny-ffi", "--deny-net=private"]) {
+      const run = runSandboxCli(["main.js", "--sandbox", flag], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== "ran")
+        throw new Error(`Sandbox mode should accept ${flag}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+
+    // The same capabilities from a config warn instead, and only net needs
+    // trust.
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ permissions: { "allow-read": true, "allow-ffi": true } }));
+    const warned = runSandboxCli(["main.js", "--sandbox"], { cwd: tmp });
+    if (warned.exitCode !== 0 || warned.stdout.trim() !== "ran")
+      throw new Error(`Sandbox mode with an allow-read config should run, got (exit ${warned.exitCode}):\n${warned.stdout}${warned.stderr}`);
+    for (const capability of ["allow-read", "allow-ffi"]) {
+      const warning = `Warning: ${configPath} requests ${capability}, which GocciaRunner sandbox mode cannot grant; ignoring it`;
+      if (!warned.stderr.includes(warning))
+        throw new Error(`Sandbox mode should warn ${JSON.stringify(warning)}, got:\n${warned.stderr}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: removed sandbox-runner flags name their replacements...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    for (const [flag, replacement] of [
+      ["--seed=dir", "--seed was removed in GocciaScript 0.14.0; use --copy <host>[=<sandbox>] (default sandbox path is /<basename>)"],
+      ["--seed-config=seed.json", '--seed-config was removed in GocciaScript 0.14.0; declare inputs in the "sandbox" section of goccia.json or pass --copy'],
+      ["--write-back", "--write-back was removed in GocciaScript 0.14.0; copy the inputs that may be written with --copy-rw"],
+      ["--diff-format=unified", "--diff-format was removed in GocciaScript 0.14.0; use --diff=json|unified"],
+      ["--diff-output=diff.json", "--diff-output was removed in GocciaScript 0.14.0; use --diff-file=<path>"],
+      ["--diff-metadata", "--diff-metadata was removed in GocciaScript 0.14.0; JSON diffs always include timestamp metadata; remove the flag"],
+      ["--fs-quota-bytes=1024", "--fs-quota-bytes was removed in GocciaScript 0.14.0; use --max-fs-bytes instead (units: 16MiB)"],
+      ["--fs-node-limit=10", "--fs-node-limit was removed in GocciaScript 0.14.0; use --max-fs-nodes instead"],
+    ]) {
+      // In sandbox mode and out of it alike.
+      for (const mode of [["--sandbox"], []]) {
+        expectSandboxUsageError(
+          `${flag} ${mode.join(" ")}`,
+          runSandboxCli(["main.js", ...mode, flag], { cwd: tmp }),
+          replacement,
+        );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: runScript and the goccia builtin reject the pre-0.14 option names...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, {
+      "/main.js": [
+        'import { $, runScript } from "goccia";',
+        "for (const options of [",
+        '  { seed: ["/child.js"] },',
+        '  { seeds: ["/child.js"] },',
+        '  { diffFormat: "unified" },',
+        "  { diffMetadata: true },",
+        "]) {",
+        "  try { runScript(\"/child.js\", options); console.log(\"accepted\"); }",
+        '  catch (error) { console.log(error.name + ": " + error.message); }',
+        "}",
+        "for (const command of [",
+        '  "goccia --seed /child.js /child.js",',
+        '  "goccia --diff-format=unified /child.js",',
+        '  "goccia --diff-metadata /child.js",',
+        '  "goccia --diff=xml /child.js",',
+        "]) {",
+        "  try { await $(command).quiet().run(); console.log(\"accepted\"); }",
+        '  catch (error) { console.log(error.name + ": " + error.message); }',
+        "}",
+      ].join("\n"),
+      "/child.js": 'console.log("child");',
+    });
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = runSandboxCli(["--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`]);
+      if (run.exitCode !== 0)
+        throw new Error(`Sandbox mode (${mode}) removed-option probe should exit 0, got ${run.exitCode}:\n${run.stdout}${run.stderr}`);
+      for (const expected of [
+        'TypeError: runScript option "seed" was removed; use "copy"',
+        'TypeError: runScript option "seeds" was removed; use "copy"',
+        'TypeError: runScript option "diffFormat" was removed; use diff: "json" or diff: "unified"',
+        'TypeError: runScript option "diffMetadata" was removed; JSON diffs always include timestamp metadata; use diff: true',
+        "TypeError: Shell command failed with exit code 2: goccia: --seed was removed; use --copy <from>[=<to>]",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff-format was removed; use --diff=json or --diff=unified",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff-metadata was removed; JSON diffs always include timestamp metadata (use --diff)",
+        "TypeError: Shell command failed with exit code 2: goccia: --diff must be json or unified",
+      ]) {
+        if (!run.stdout.includes(expected))
+          throw new Error(`Sandbox mode (${mode}) should report ${JSON.stringify(expected)}, got:\n${run.stdout}`);
+      }
+      if (run.stdout.includes("accepted"))
+        throw new Error(`Sandbox mode (${mode}) runScript accepted a removed option:\n${run.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: --max-fs-bytes and --max-fs-nodes take units and apply...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "fill.js"), [
+      'import fs from "fs";',
+      'let bytes = "ok";',
+      'try { fs.writeFileSync("/big.txt", "x".repeat(4096)); } catch (error) { bytes = error.code; }',
+      'let nodes = "ok";',
+      'try { for (const i of [1, 2, 3, 4, 5, 6]) fs.writeFileSync("/n" + i + ".txt", ""); } catch (error) { nodes = error.code; }',
+      'console.log("bytes:" + bytes + " nodes:" + nodes);',
+    ].join("\n"));
+    const base = ["fill.js", "--sandbox", "--source-type=module"];
+    for (const [flags, expected] of [
+      [[], "bytes:ok nodes:ok"],
+      [["--max-fs-bytes=2KiB"], "bytes:ENOSPC nodes:ok"],
+      [["--max-fs-bytes=1MiB"], "bytes:ok nodes:ok"],
+      [["--max-fs-bytes=2048"], "bytes:ENOSPC nodes:ok"],
+      [["--max-fs-nodes=5"], "bytes:ok nodes:ENOSPC"],
+    ] as const) {
+      const run = runSandboxCli([...base, ...flags], { cwd: tmp });
+      if (run.exitCode !== 0 || run.stdout.trim() !== expected)
+        throw new Error(`Sandbox mode ${flags.join(" ") || "(defaults)"} should print ${expected}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    for (const [flag, needle] of [
+      ["--max-fs-bytes=abc", "Invalid value for --max-fs-bytes: abc"],
+      ["--max-fs-nodes=0", "--max-fs-nodes must be greater than 0."],
+    ]) {
+      const run = runSandboxCli([...base, flag], { cwd: tmp });
+      if (run.exitCode === 0 || !(run.stdout + run.stderr).includes(needle))
+        throw new Error(`Sandbox mode ${flag} should fail with ${JSON.stringify(needle)}, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    }
+    for (const flag of ["--max-fs-bytes=1MiB", "--max-fs-nodes=10"]) {
+      expectSandboxUsageError(
+        `${flag} without sandbox mode`,
+        runSandboxCli(["fill.js", flag], { cwd: tmp }),
+        `${flag.split("=")[0]} only applies in sandbox mode; enable sandbox mode with --sandbox or --copy <host>[=<sandbox>]`,
+      );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a discovered config's limits apply...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "fill.js"), [
+      'import fs from "fs";',
+      'let bytes = "ok";',
+      'try { fs.writeFileSync("/big.txt", "x".repeat(4096)); } catch (error) { bytes = error.code; }',
+      'console.log("bytes:" + bytes);',
+    ].join("\n"));
+    // Keys the sandbox does not use (output) are ignored rather than
+    // breaking the clean stdout.
+    writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ "max-fs-bytes": "2KiB", output: "json" }));
+    const limited = runSandboxCli(["fill.js", "--sandbox", "--source-type=module"], { cwd: tmp });
+    if (limited.exitCode !== 0 || limited.stdout !== "bytes:ENOSPC\n")
+      throw new Error(`Sandbox mode should apply the discovered config's max-fs-bytes, got (exit ${limited.exitCode}):\n${limited.stdout}${limited.stderr}`);
+    if (limited.stderr.includes("ignoring discovered configuration"))
+      throw new Error(`Sandbox mode should not skip the discovered config, got:\n${limited.stderr}`);
+    // The command line still wins.
+    const overridden = runSandboxCli(["fill.js", "--sandbox", "--source-type=module", "--max-fs-bytes=1MiB"], { cwd: tmp });
+    if (overridden.exitCode !== 0 || overridden.stdout !== "bytes:ok\n")
+      throw new Error(`Sandbox mode --max-fs-bytes should override the config, got (exit ${overridden.exitCode}):\n${overridden.stdout}${overridden.stderr}`);
+    // A config's max-fs-* are ignored in host mode, so one config serves both.
+    writeFileSync(join(tmp, "host.js"), 'console.log("host");');
+    const host = runSandboxCli(["host.js"], { cwd: tmp });
+    if (host.exitCode !== 0 || !host.stdout.includes("host"))
+      throw new Error(`Host mode should run with a max-fs-bytes config, got (exit ${host.exitCode}):\n${host.stdout}${host.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a trusted sandbox section switches it on...", async () => {
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = makeNativeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "src"), { recursive: true });
+    mkdirSync(join(project, "out"), { recursive: true });
+    writeFileSync(join(project, "src", "input.txt"), "input");
+    writeFileSync(join(project, "out", "result.txt"), "before");
+    writeFileSync(join(project, "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/src/input.txt", "utf8"));',
+      'fs.writeFileSync("/out/result.txt", "after");',
+    ].join("\n"));
+    const configPath = join(project, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["src"], "copy-rw": ["out"] } }));
+    const store = join(tmp, "trust.json");
+    const result = () => readFileSync(join(project, "out", "result.txt"), "utf-8");
+
+    // Untrusted: nothing runs, and the error names both ways forward.
+    const untrusted = runSandboxCli(["main.js", "--source-type=module", `--trust-store=${store}`], { cwd: project });
+    if (untrusted.exitCode !== 2 ||
+        !untrusted.stderr.includes("goccia.json (never trusted)") ||
+        !untrusted.stderr.includes(`sandbox.copy: ${join(project, "src")}`) ||
+        !untrusted.stderr.includes(`sandbox.copy-rw: ${join(project, "out")}`) ||
+        !untrusted.stderr.includes("--trust goccia.json") ||
+        !untrusted.stderr.includes("-P main.js"))
+      throw new Error(`An untrusted sandbox section should stop the run naming --trust and -P, got (exit ${untrusted.exitCode}):\n${untrusted.stdout}${untrusted.stderr}`);
+    if (result() !== "before")
+      throw new Error("An untrusted sandbox section must not write back");
+
+    // A command-line --copy of the same target replaces the config's
+    // copy-rw: a read-only dry run.
+    const dryRun = runSandboxCli(["main.js", "--source-type=module", "-P", "--copy", "out"], { cwd: project });
+    if (dryRun.exitCode !== 0 || dryRun.stdout.trim() !== "input" || result() !== "before")
+      throw new Error(`--copy out should downgrade the config's copy-rw, got (exit ${dryRun.exitCode}, result ${result()}):\n${dryRun.stdout}${dryRun.stderr}`);
+    if (dryRun.stderr.includes("write-back:"))
+      throw new Error(`A dry run has no read-write input, so no write-back report, got:\n${dryRun.stderr}`);
+
+    // -P accepts the section for one run.
+    const accepted = runSandboxCli(["main.js", "--source-type=module", "-P"], { cwd: project });
+    if (accepted.exitCode !== 0 || accepted.stdout.trim() !== "input" || result() !== "after")
+      throw new Error(`-P should run the config sandbox and write back, got (exit ${accepted.exitCode}, result ${result()}):\n${accepted.stdout}${accepted.stderr}`);
+    if (!accepted.stderr.includes(`write-back: ${join(project, "out", "result.txt")}`))
+      throw new Error(`The config sandbox should report its write-back on stderr, got:\n${accepted.stderr}`);
+
+    // --trust stores it; later runs need no flag.
+    writeFileSync(join(project, "out", "result.txt"), "before");
+    const trust = runSandboxCli(["--trust", "goccia.json", "--yes", `--trust-store=${store}`], { cwd: project });
+    if (trust.exitCode !== 0)
+      throw new Error(`--trust should store the sandbox section, got (exit ${trust.exitCode}):\n${trust.stdout}${trust.stderr}`);
+    const trusted = runSandboxCli(["main.js", "--source-type=module", `--trust-store=${store}`], { cwd: project });
+    if (trusted.exitCode !== 0 || trusted.stdout.trim() !== "input" || result() !== "after")
+      throw new Error(`A trusted sandbox section should run, got (exit ${trusted.exitCode}, result ${result()}):\n${trusted.stdout}${trusted.stderr}`);
+
+    // --ignore-config-permissions ignores the section: host mode, where
+    // "fs" does not resolve.
+    const ignored = runSandboxCli(["main.js", "--source-type=module", "--ignore-config-permissions"], { cwd: project });
+    if (ignored.exitCode === 0 || !(ignored.stdout + ignored.stderr).includes('Cannot resolve bare module specifier "fs"'))
+      throw new Error(`--ignore-config-permissions should ignore the sandbox section, got (exit ${ignored.exitCode}):\n${ignored.stdout}${ignored.stderr}`);
+
+    // --config=<other> is the way out of a config sandbox (R3): the entry's
+    // own config is then not the root config, so its section is ignored
+    // with a warning and needs no trust.
+    const otherDir = join(tmp, "other");
+    mkdirSync(otherDir);
+    writeFileSync(join(otherDir, "goccia.json"), "{}");
+    const other = runSandboxCli(["main.js", "--source-type=module", `--config=${otherDir}`,
+      `--trust-store=${join(tmp, "empty-trust.json")}`], { cwd: project });
+    if (other.exitCode === 0 || !(other.stdout + other.stderr).includes('Cannot resolve bare module specifier "fs"') ||
+        !other.stderr.includes(`Warning: ${configPath} declares a "sandbox" section, which GocciaRunner reads only from the root config; ignoring it`))
+      throw new Error(`--config=<other> should leave the entry's sandbox section unused, got (exit ${other.exitCode}):\n${other.stdout}${other.stderr}`);
+
+    // With --entry, the config is discovered from the working directory.
+    const entryRun = runSandboxCli(["--copy", "main.js=/app/main.js", "--entry=/app/main.js", "--source-type=module", "-P"], { cwd: project });
+    if (entryRun.exitCode !== 0 || entryRun.stdout.trim() !== "input")
+      throw new Error(`--entry should run with the working directory's sandbox section, got (exit ${entryRun.exitCode}):\n${entryRun.stdout}${entryRun.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: the section's entry and diff keys, from the root config only...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const project = join(tmp, "project");
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(join(project, "src", "main.js"), 'console.log("config-entry");');
+    writeFileSync(join(project, "goccia.json"), JSON.stringify({
+      sandbox: { copy: ["src=/"], entry: "/main.js", diff: true },
+    }));
+    // No positional and no --entry: the section names the entry, and stdin
+    // (piped here) is not read.
+    for (const stdin of [undefined, 'console.log("from-stdin");']) {
+      const run = runSandboxCli(["-P"], { cwd: project, stdin });
+      if (run.exitCode !== 0 || !run.stdout.startsWith("config-entry\n"))
+        throw new Error(`The section's entry should run, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+      const diff = JSON.parse(run.stdout.slice("config-entry\n".length));
+      if (!Array.isArray(diff.changes) || !Array.isArray(diff.metadataChanges))
+        throw new Error(`The section's diff: true should print a JSON diff, got:\n${run.stdout}`);
+    }
+
+    // Only the root config's section counts. With --config naming another
+    // root, the entry directory's section is not used: host mode, where
+    // "fs" does not resolve.
+    const other = join(tmp, "other");
+    mkdirSync(other, { recursive: true });
+    writeFileSync(join(other, "goccia.json"), JSON.stringify({ timeout: "5s" }));
+    writeFileSync(join(project, "host.mjs"), 'import fs from "fs";\nconsole.log(typeof fs);\n');
+    const hostRun = runSandboxCli(["host.mjs", `--config=${other}`, "-P"], { cwd: project });
+    if (hostRun.exitCode === 0 || !(hostRun.stdout + hostRun.stderr).includes('Cannot resolve bare module specifier "fs"'))
+      throw new Error(`A non-root sandbox section should not switch sandbox mode on, got (exit ${hostRun.exitCode}):\n${hostRun.stdout}${hostRun.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: the sandbox section in TOML...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(join(tmp, "src", "data.txt"), "toml-input");
+    writeFileSync(join(tmp, "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/data/data.txt", "utf8"));',
+      'fs.writeFileSync("/made.txt", "made");',
+    ].join("\n"));
+    writeFileSync(join(tmp, "goccia.toml"), '[sandbox]\ncopy = ["src=/data"]\ndiff = "unified"\n');
+    const run = runSandboxCli(["main.js", "--source-type=module", "-P"], { cwd: tmp });
+    if (run.exitCode !== 0 || !run.stdout.startsWith("toml-input\n"))
+      throw new Error(`A TOML sandbox section should run, got (exit ${run.exitCode}):\n${run.stdout}${run.stderr}`);
+    // "diff" from the section prints a unified diff after the guest output.
+    if (!run.stdout.startsWith("toml-input\n--- /made.txt\n+++ /made.txt\n"))
+      throw new Error(`A TOML sandbox section's diff = "unified" should print a unified diff, got:\n${run.stdout}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: sandbox section keys are validated...", async () => {
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = makeNativeTmp();
+  try {
+    writeFileSync(join(tmp, "main.js"), "1;");
+    mkdirSync(join(tmp, "project"), { recursive: true });
+    mkdirSync(join(tmp, "elsewhere"), { recursive: true });
+    writeFileSync(join(tmp, "project", "main.js"), "1;");
+    const configPath = join(tmp, "goccia.json");
+    for (const [label, sandbox, needle] of [
+      ["the removed files key", { files: [{ path: "/a.txt", text: "a" }] },
+        `${configPath}: "sandbox.files" was removed in GocciaScript 0.14.0; list host inputs as "copy" or "copy-rw" strings (<host>[=<sandbox>]) instead`],
+      ["an unknown key", { seeds: ["src"] },
+        `${configPath}: unknown sandbox key "seeds" (valid: copy, copy-rw, entry, diff, diff-file)`],
+      ["an invalid diff", { diff: "xml" },
+        `${configPath}: "sandbox.diff" must be true, false, "json", or "unified"`],
+      ["a string for the section", "on",
+        `${configPath}: "sandbox" must be an object with copy, copy-rw, entry, diff, diff-file keys`],
+    ] as const) {
+      writeFileSync(configPath, JSON.stringify({ sandbox }));
+      // A malformed section fails before trust is considered.
+      for (const extra of [[], ["-P"]]) {
+        expectSandboxUsageError(
+          `Sandbox section with ${label} ${extra.join(" ")}`,
+          runSandboxCli(["main.js", ...extra], { cwd: tmp }),
+          needle,
+        );
+      }
+    }
+    rmSync(configPath);
+
+    // Decision B: what a config may write stays inside its own directory
+    // (status 1, like every config output path).
+    const projectConfig = join(tmp, "project", "goccia.json");
+    for (const [label, sandbox, needle] of [
+      ["copy-rw", { "copy-rw": ["../elsewhere"] },
+        `${projectConfig}: "sandbox.copy-rw" writes to ${join(tmp, "elsewhere")}, which is outside ${join(tmp, "project")}; a config may only write inside its own directory (pass --copy-rw on the command line to write elsewhere)`],
+      ["diff-file", { "diff-file": "../elsewhere/diff.json" },
+        `${projectConfig}: "sandbox.diff-file" writes to ${join(tmp, "elsewhere", "diff.json")}, which is outside ${join(tmp, "project")}`],
+    ] as const) {
+      writeFileSync(projectConfig, JSON.stringify({ sandbox }));
+      const refused = runSandboxCli(["main.js", "-P"], { cwd: join(tmp, "project") });
+      if (refused.exitCode !== 1 || !refused.stderr.includes(`Error: ${needle}`) || refused.stdout !== "")
+        throw new Error(`A config ${label} outside its directory should exit 1 with ${JSON.stringify(needle)} on stderr, got (exit ${refused.exitCode}):\n${refused.stdout}${refused.stderr}`);
+    }
+    // A read-only copy may come from anywhere.
+    writeFileSync(join(tmp, "elsewhere", "shared.txt"), "shared");
+    writeFileSync(join(tmp, "project", "main.js"), [
+      'import fs from "fs";',
+      'console.log(fs.readFileSync("/elsewhere/shared.txt", "utf8"));',
+    ].join("\n"));
+    writeFileSync(projectConfig, JSON.stringify({ sandbox: { copy: ["../elsewhere"] } }));
+    const readOnly = runSandboxCli(["main.js", "-P", "--source-type=module"], { cwd: join(tmp, "project") });
+    if (readOnly.exitCode !== 0 || readOnly.stdout.trim() !== "shared")
+      throw new Error(`A config copy from outside its directory should be allowed, got (exit ${readOnly.exitCode}):\n${readOnly.stdout}${readOnly.stderr}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: binaries that ignore the sandbox section warn about it...", async () => {
+  // Canonical, so the paths the binary reports from its working
+  // directory match the ones built here (macOS links /var).
+  const tmp = makeNativeTmp();
+  try {
+    const configPath = join(tmp, "goccia.json");
+    writeFileSync(configPath, JSON.stringify({ sandbox: { copy: ["missing-dir"] } }));
+    writeFileSync(join(tmp, "a.test.js"), 'test("t", () => { expect(1).toBe(1); });\n');
+    const proc = Bun.spawnSync([resolve(TESTRUNNER), "a.test.js", "--no-progress"], { cwd: tmp, stdout: "pipe", stderr: "pipe" });
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    // No trust is needed for a section the binary does not use (R5).
+    if (proc.exitCode !== 0 || !output.includes("Test Results Passed: 1"))
+      throw new Error(`GocciaTestRunner should run past an unused sandbox section, got (exit ${proc.exitCode}):\n${output}`);
+    const warning = `Warning: ${configPath} declares a "sandbox" section, which GocciaTestRunner does not use; ignoring it`;
+    if (!proc.stderr.toString().includes(warning))
+      throw new Error(`GocciaTestRunner should warn ${JSON.stringify(warning)}, got:\n${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: --help lists the sandbox options and explains sandbox mode...", async () => {
+  const proc = Bun.spawnSync([RUNNER, "--help"], { stdout: "pipe", stderr: "pipe" });
+  const help = normalizeLineEndings(proc.stdout.toString());
+  if (proc.exitCode !== 0)
+    throw new Error(`GocciaRunner --help exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  for (const needle of [
+    "Usage: GocciaRunner [file|directory|-] [options]",
+    "       GocciaRunner <file> [--copy <host>[=<sandbox>]]... [options]",
+    "Sandbox Options:",
+    "--sandbox ",
+    "--copy <host>[=<sandbox>] ",
+    "--copy-rw <host>[=<sandbox>] ",
+    "--entry <sandbox-path> ",
+    "--diff[=json|unified] ",
+    "--diff-file <path> ",
+    "--max-fs-bytes=",
+    "--max-fs-nodes=",
+    "Sandbox mode:",
+    'Enabled by --sandbox, --copy, --copy-rw, or a trusted "sandbox" section in goccia.json.',
+    "Only --allow-net applies; --allow-read, --allow-import and --allow-ffi are errors.",
+    "Nothing reaches the host unless an input was copied with --copy-rw and the run succeeded.",
+  ]) {
+    if (!help.includes(needle))
+      throw new Error(`GocciaRunner --help is missing ${JSON.stringify(needle)}:\n${help}`);
+  }
+  // The removed options are not advertised.
+  for (const removed of ["--seed", "--write-back", "--diff-format", "--diff-output", "--diff-metadata", "--fs-quota-bytes", "--fs-node-limit"]) {
+    if (help.includes(removed))
+      throw new Error(`GocciaRunner --help should not list the removed ${removed}:\n${help}`);
   }
 });
 
@@ -7360,7 +8550,7 @@ await section("Loader: --allow-net blocks unlisted host...", async () => {
   const tmp = makeTmp();
   try {
     const audit = join(tmp, "blocked-fetch-audit.jsonl");
-    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${LOADER} --allow-net=example.com --audit-log=${audit} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://user:password@blocked.test/private?token=secret");' | ${RUNNER} --allow-net=example.com --audit-log=${audit} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error("Fetch to unlisted host should fail");
     if (!res.text().includes("blocked.test")) throw new Error(`Error should mention blocked host, got: ${res.text()}`);
     const { events } = readCapabilityEvents(audit);
@@ -7385,7 +8575,7 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
     ];
     for (const [url, reason] of cases) {
       const audit = join(tmp, `reason-${cases.findIndex(([u]) => u === url)}.jsonl`);
-      await $`echo ${`fetch("${url}");`} | ${LOADER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
+      await $`echo ${`fetch("${url}");`} | ${RUNNER} --allow-net=example.com:80 --audit-log=${audit} 2>&1`.nothrow();
       const { events } = readCapabilityEvents(audit);
       if (events.length !== 1 || events[0].decision !== "deny" || events[0].reason !== reason)
         throw new Error(`Denied ${url} should be audited as "${reason}": ${JSON.stringify(events)}`);
@@ -7396,7 +8586,7 @@ await section("Loader: a denied fetch host is audited with the reason it was ref
 });
 
 await section("Loader: no --allow-net blocks all fetch...", async () => {
-  const res = await $`echo 'fetch("http://example.com");' | ${LOADER} 2>&1`.nothrow();
+  const res = await $`echo 'fetch("http://example.com");' | ${RUNNER} 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Fetch without --allow-net should fail");
   // The denial names the capability and the host; the host-side suggestion
   // names the option that grants it.
@@ -7428,7 +8618,7 @@ await section("Loader: read denials report one suggestion and location in both m
       const outputs: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), join(proj, file), `--mode=${mode}`, "--deny-read"],
+          [resolve(RUNNER), join(proj, file), `--mode=${mode}`, "--deny-read"],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString())
@@ -7468,7 +8658,7 @@ await section("Loader: a static-import denial is located alike in both modes..."
       const locations: string[] = [];
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
-          [resolve(LOADER), file, `--mode=${mode}`],
+          [resolve(RUNNER), file, `--mode=${mode}`],
           { stdout: "pipe", stderr: "pipe", cwd: tmp },
         );
         const text = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
@@ -7492,7 +8682,7 @@ await section("Loader: a fetch() denial is located alike in both modes...", asyn
     writeFileSync(file, 'const x = 1;\n  globalThis.result = fetch("http://example.com/");\n');
     const locations: string[] = [];
     for (const mode of ["interpreted", "bytecode"]) {
-      const proc = Bun.spawnSync([resolve(LOADER), file, `--mode=${mode}`], {
+      const proc = Bun.spawnSync([resolve(RUNNER), file, `--mode=${mode}`], {
         stdout: "pipe",
         stderr: "pipe",
         cwd: tmp,
@@ -7515,7 +8705,7 @@ await section("Loader: --allow-net multiple hosts...", async () => {
   // Both hosts in the list; blocked.test is not
   // The comma list and the repeated flag are two spellings of the same grant.
   for (const args of [["--allow-net=example.com,other.com"], ["--allow-net=example.com", "--allow-net=other.com"]]) {
-    const res = await $`echo 'fetch("http://blocked.test");' | ${LOADER} ${args} 2>&1`.nothrow();
+    const res = await $`echo 'fetch("http://blocked.test");' | ${RUNNER} ${args} 2>&1`.nothrow();
     if (res.exitCode === 0) throw new Error(`Fetch to unlisted host should fail with ${args.join(" ")}`);
     if (!res.text().includes("PermissionDenied: net: blocked.test"))
       throw new Error(`Error should be a net PermissionDenied naming the blocked host, got: ${res.text()}`);
@@ -7615,7 +8805,7 @@ await section("Loader: --multifile splits a single file into N section results..
       "---\n" +
       'console.log("section C:", 3 + 3);\n',
     );
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7656,7 +8846,7 @@ await section("Loader: --multifile with no separator runs file as a single secti
   try {
     const file = join(tmp, "no-sep.js");
     writeFileSync(file, "console.log('only section');\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7675,7 +8865,7 @@ await section("Loader: --multifile drops leading/trailing separators...", async 
   try {
     const file = join(tmp, "edge.js");
     writeFileSync(file, "---\nconsole.log('a');\n---\nconsole.log('b');\n---\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7692,7 +8882,7 @@ await section("Loader: --multifile dispatches sections in parallel with --jobs..
   try {
     const file = join(tmp, "parallel.js");
     writeFileSync(file, "1;\n---\n2;\n---\n3;\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", "--jobs=3", file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", "--jobs=3", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7711,7 +8901,7 @@ await section("Loader: --source-map with --multifile is rejected...", async () =
     const file = join(tmp, "sm.js");
     const sm = join(tmp, "sm.map");
     writeFileSync(file, "1;\n---\n2;\n");
-    const proc = Bun.spawnSync([LOADER, "--multifile", `--source-map=${sm}`, file], {
+    const proc = Bun.spawnSync([RUNNER, "--multifile", `--source-map=${sm}`, file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7768,7 +8958,7 @@ await section("Bundler: --multifile compiles each section as a separate .gbc..."
     if (!existsSync(part1)) throw new Error(`Bundler --multifile should emit ${part1}`);
     if (!existsSync(part2)) throw new Error(`Bundler --multifile should emit ${part2}`);
     // Each .gbc should run independently in the script loader.
-    const r1 = Bun.spawnSync([LOADER, part1], { stdout: "pipe" });
+    const r1 = Bun.spawnSync([RUNNER, part1], { stdout: "pipe" });
     if (r1.exitCode !== 0 || !r1.stdout.toString().includes("1"))
       throw new Error(`Bundler --multifile part1 .gbc should run successfully`);
   } finally {
@@ -7835,7 +9025,7 @@ await section("Loader: goccia.json multifile=true works without --multifile flag
     writeFileSync(join(tmp, "goccia.json"), JSON.stringify({ multifile: true }));
     const file = join(tmp, "config-driven.js");
     writeFileSync(file, "1;\n---\n2;\n");
-    const proc = Bun.spawnSync([LOADER, "--output=json", file], {
+    const proc = Bun.spawnSync([RUNNER, "--output=json", file], {
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -7860,7 +9050,7 @@ for (const mode of ["interpreted", "bytecode"] as const) {
   ].join("\n");
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       `--mode=${mode}`,
@@ -7897,7 +9087,7 @@ await section("Loader: dynamic import and ShadowRealm use configured virtual mod
   ].join("\n");
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--unsafe-shadowrealm",
@@ -7921,7 +9111,7 @@ await section("Loader: dynamic import and ShadowRealm use configured virtual mod
 await section("Loader: hierarchical virtual module addresses preserve canonical URLs...", async () => {
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--print",
@@ -7950,7 +9140,7 @@ await section("Loader: virtual import.meta.resolve uses aliases for bare specifi
     writeFileSync(dependency, "export default 1;\n");
     const proc = Bun.spawnSync(
       [
-        LOADER,
+        RUNNER,
         "-",
         "--source-type=module",
         "--print",
@@ -7989,7 +9179,7 @@ await section("Loader: virtual import.meta.resolve uses aliases for bare specifi
 await section("Loader: attributed virtual modules reinterpret their stored content...", async () => {
   const proc = Bun.spawnSync(
     [
-      LOADER,
+      RUNNER,
       "-",
       "--source-type=module",
       "--print",
@@ -8012,14 +9202,14 @@ await section("Loader: attributed virtual modules reinterpret their stored conte
 
 await section("Loader: virtual definitions validate eagerly but JavaScript parses lazily...", async () => {
   const unused = Bun.spawnSync(
-    [LOADER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
+    [RUNNER, "-", "--module", "host:unused=!!! not valid JavaScript !!!"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   if (unused.exitCode !== 0)
     throw new Error(`Unused invalid virtual source should not fail startup: ${unused.stderr.toString()}`);
 
   const invalidBytes = Bun.spawnSync(
-    [LOADER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
+    [RUNNER, "-", "--module", 'host:bad={"type":"bytes","content":"%%%"}'],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const invalidBytesOutput = invalidBytes.stdout.toString() + invalidBytes.stderr.toString();
@@ -8027,7 +9217,7 @@ await section("Loader: virtual definitions validate eagerly but JavaScript parse
     throw new Error(`Invalid virtual bytes should fail configuration: ${invalidBytesOutput}`);
 
   const runtimeCollision = Bun.spawnSync(
-    [LOADER, "-", "--module", "goccia:csv=export default 1;"],
+    [RUNNER, "-", "--module", "goccia:csv=export default 1;"],
     { stdin: new TextEncoder().encode("1;"), stdout: "pipe", stderr: "pipe" },
   );
   const collisionOutput = runtimeCollision.stdout.toString() + runtimeCollision.stderr.toString();
@@ -8035,21 +9225,19 @@ await section("Loader: virtual definitions validate eagerly but JavaScript parse
     throw new Error(`Runtime module collision should be a configuration error: ${collisionOutput}`);
 });
 
-await section("SandboxRunner: virtual modules share the CLI surface and cannot shadow host modules...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: virtual modules share the CLI surface and cannot shadow host modules...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [{
-        path: "/main.js",
-        text: 'import value from "host:configured"; console.log(value);',
-      }],
-    }));
+    const tree = writeSandboxTree(tmp, [{
+      path: "/main.js",
+      text: 'import value from "host:configured"; console.log(value);',
+    }]);
     const configured = Bun.spawnSync(
       [
-        SANDBOXRUNNER,
-        "/main.js",
-        `--seed-config=${seed}`,
+        RUNNER,
+        "--copy",
+        `${tree}=/`,
+        "--entry=/main.js",
         "--source-type=module",
         "--module",
         "host:configured=export default 17;",
@@ -8060,32 +9248,35 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
         normalizeLineEndings(configured.stdout.toString()).trim() !== "17")
       throw new Error(`Sandbox virtual module configuration failed: ${configured.stdout.toString()}${configured.stderr.toString()}`);
 
-    const hostConfigDir = join(tmp, "host-config");
-    const sandboxEntry = join(hostConfigDir, "main.js");
-    const isolationSeed = join(tmp, "isolation-seed.json");
-    mkdirSync(hostConfigDir, { recursive: true });
-    writeFileSync(
-      join(hostConfigDir, "goccia.json"),
-      JSON.stringify({ modules: "missing-modules.json" }),
-    );
-    writeFileSync(isolationSeed, JSON.stringify({
-      files: [{ path: sandboxEntry, text: 'console.log("isolated");' }],
-    }));
-    const isolated = Bun.spawnSync(
-      [
-        SANDBOXRUNNER,
-        sandboxEntry,
-        `--seed-config=${isolationSeed}`,
-      ],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    if (isolated.exitCode !== 0 ||
-        normalizeLineEndings(isolated.stdout.toString()).trim() !== "isolated")
-      throw new Error(`Sandbox consulted host config for a virtual path: ${isolated.stdout.toString()}${isolated.stderr.toString()}`);
-    // Skipping the discovered config is deliberate, and silence about it is
-    // not: this is the one binary whose ignored config fails open.
-    if (!isolated.stderr.toString().includes("ignoring discovered configuration"))
-      throw new Error(`Sandbox skipped a discoverable config without saying so: ${isolated.stderr.toString()}`);
+    // A sandbox path is not a host path, even when it spells one: running
+    // --entry=<path> must not walk the host directory of that name for a
+    // per-file config. POSIX only, where an absolute host path is also a
+    // valid sandbox path.
+    if (process.platform !== "win32") {
+      const hostConfigDir = join(tmp, "host-config");
+      const sandboxEntry = join(hostConfigDir, "main.js");
+      mkdirSync(hostConfigDir, { recursive: true });
+      writeFileSync(
+        join(hostConfigDir, "goccia.json"),
+        JSON.stringify({ modules: "missing-modules.json" }),
+      );
+      const isolationTree = writeSandboxTree(
+        tmp,
+        [{ path: sandboxEntry, text: 'console.log("isolated");' }],
+        "isolation-tree",
+      );
+      const isolated = Bun.spawnSync(
+        [resolve(RUNNER), "--copy", `${isolationTree}=/`, `--entry=${sandboxEntry}`],
+        { stdout: "pipe", stderr: "pipe", cwd: tmp },
+      );
+      if (isolated.exitCode !== 0 ||
+          normalizeLineEndings(isolated.stdout.toString()).trim() !== "isolated")
+        throw new Error(`Sandbox consulted host config for a virtual path: ${isolated.stdout.toString()}${isolated.stderr.toString()}`);
+      // The root config is discovered normally now, so the old notice about
+      // skipping it is gone.
+      if (isolated.stderr.toString().includes("ignoring discovered configuration"))
+        throw new Error(`Sandbox mode should not skip discovered config: ${isolated.stderr.toString()}`);
+    }
 
     const manifest = join(tmp, "modules.mjs");
     const manifestSource = join(tmp, "module-map.mjs");
@@ -8100,9 +9291,10 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
     for (const mode of ["interpreted", "bytecode"] as const) {
       const configuredFromManifest = Bun.spawnSync(
         [
-          SANDBOXRUNNER,
-          "/main.js",
-          `--seed-config=${seed}`,
+          RUNNER,
+          "--copy",
+          `${tree}=/`,
+          "--entry=/main.js",
           "--source-type=module",
           `--mode=${mode}`,
           "--modules",
@@ -8117,9 +9309,10 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
 
     const hostCollision = Bun.spawnSync(
       [
-        SANDBOXRUNNER,
-        "/main.js",
-        `--seed-config=${seed}`,
+        RUNNER,
+        "--copy",
+        `${tree}=/`,
+        "--entry=/main.js",
         "--source-type=module",
         "--module",
         "fs=export default 1;",
@@ -8148,7 +9341,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
 // ============================================================================
 
 {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   const stdinBenchEnv = {
     ...process.env,
     GOCCIA_BENCH_CALIBRATION_MS: "50",
@@ -8181,8 +9374,8 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
 
   const stdinApps = [
     {
-      name: "GocciaScriptLoader",
-      bin: LOADER,
+      name: "GocciaRunner",
+      bin: RUNNER,
       args: [] as string[],
       source: `console.log("${STDIN_MARKER}");\n`,
       env: undefined as Record<string, string> | undefined,
@@ -8249,7 +9442,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
           throw new Error(
             `${name} ${run}: no bundle written from stdin source: ${proc.stdout.toString()}${proc.stderr.toString()}`,
           );
-        const roundtrip = Bun.spawnSync([LOADER, bundlerOut], {
+        const roundtrip = Bun.spawnSync([RUNNER, bundlerOut], {
           stdout: "pipe",
           stderr: "pipe",
           timeout: 120_000,
@@ -8324,7 +9517,7 @@ await section("SandboxRunner: virtual modules share the CLI surface and cannot s
 
 console.log("Stdin policy: --help documents the stdin rule and escape hatch...");
 for (const app of [
-  { name: "GocciaScriptLoader", bin: LOADER },
+  { name: "GocciaRunner", bin: RUNNER },
   { name: "GocciaScriptLoaderBare", bin: BARE },
   { name: "GocciaTestRunner", bin: TESTRUNNER },
   { name: "GocciaBenchmarkRunner", bin: BENCHRUNNER },
@@ -8349,10 +9542,9 @@ for (const app of [
     throw new Error(`${app.name} --help wrote to stderr: ${proc.stderr.toString()}`);
 }
 
-console.log("Stdin policy: GocciaREPL and GocciaSandboxRunner opt out...");
+console.log("Stdin policy: GocciaREPL opts out...");
 for (const app of [
   { name: "GocciaREPL", bin: REPL },
-  { name: "GocciaSandboxRunner", bin: SANDBOXRUNNER },
 ]) {
   const proc = Bun.spawnSync([app.bin, "--help"], { stdout: "pipe", stderr: "pipe" });
   // Without these the test also passes when --help fails outright and prints
@@ -8470,7 +9662,7 @@ await section("Loader: goccia:test is importable and injects no globals...", asy
       ["interpreted", []],
       ["bytecode", ["--mode=bytecode"]],
     ] as const) {
-      const proc = Bun.spawnSync([LOADER, file, ...extraArgs], {
+      const proc = Bun.spawnSync([RUNNER, file, ...extraArgs], {
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -8505,7 +9697,7 @@ await section("Loader: a failing imported suite is only fatal if the script says
         "",
       ].join("\n"),
     );
-    const lenient = Bun.spawnSync([LOADER, reporting], { stdout: "pipe", stderr: "pipe" });
+    const lenient = Bun.spawnSync([RUNNER, reporting], { stdout: "pipe", stderr: "pipe" });
     const lenientOut = lenient.stdout.toString() + lenient.stderr.toString();
     if (lenient.exitCode !== 0)
       throw new Error(`A failing imported suite should not fail the loader by itself, got ${lenient.exitCode}:\n${lenientOut}`);
@@ -8523,7 +9715,7 @@ await section("Loader: a failing imported suite is only fatal if the script says
         "",
       ].join("\n"),
     );
-    const failing = Bun.spawnSync([LOADER, strict], { stdout: "pipe", stderr: "pipe" });
+    const failing = Bun.spawnSync([RUNNER, strict], { stdout: "pipe", stderr: "pipe" });
     const failingOut = failing.stdout.toString() + failing.stderr.toString();
     if (failing.exitCode === 0)
       throw new Error(`Throwing on a failed suite should fail the loader:\n${failingOut}`);
@@ -8541,7 +9733,7 @@ await section("Loader: the bare vitest specifier stays unresolvable...", async (
   try {
     const file = join(tmp, "vitest-import.js");
     writeFileSync(file, 'import { vi } from "vitest";\n');
-    const proc = Bun.spawnSync([LOADER, file], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync([RUNNER, file], { stdout: "pipe", stderr: "pipe" });
     const out = proc.stdout.toString() + proc.stderr.toString();
     if (proc.exitCode === 0)
       throw new Error(`Loader should not resolve the bare vitest specifier:\n${out}`);
@@ -8568,37 +9760,31 @@ await section("Bare Loader: goccia:test is absent along with the rest of the run
   }
 });
 
-await section("SandboxRunner: goccia:test is importable and injects no globals...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: goccia:test is importable and injects no globals...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(
-      seed,
-      JSON.stringify({
-        files: [
-          {
-            path: "/main.js",
-            text: [
-              'import { test, expect, runTests } from "goccia:test";',
-              'if (globalThis.describe !== undefined) throw new Error("leaked describe");',
-              'if (globalThis.expect !== undefined) throw new Error("leaked expect");',
-              'test("runs inside the sandbox", () => { expect(2 + 2).toBe(4); });',
-              "const results = runTests({ showTestResults: false });",
-              'console.log("sandbox-passed:" + results.passed);',
-            ].join("\n"),
-          },
-        ],
-      }),
-    );
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { test, expect, runTests } from "goccia:test";',
+          'if (globalThis.describe !== undefined) throw new Error("leaked describe");',
+          'if (globalThis.expect !== undefined) throw new Error("leaked expect");',
+          'test("runs inside the sandbox", () => { expect(2 + 2).toBe(4); });',
+          "const results = runTests({ showTestResults: false });",
+          'console.log("sandbox-passed:" + results.passed);',
+        ].join("\n"),
+      },
+    ]);
     const proc = Bun.spawnSync(
-      [SANDBOXRUNNER, "/main.js", `--seed-config=${seed}`, "--source-type=module"],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const out = proc.stdout.toString() + proc.stderr.toString();
     if (proc.exitCode !== 0)
-      throw new Error(`SandboxRunner goccia:test exited ${proc.exitCode}:\n${out}`);
+      throw new Error(`Sandbox mode goccia:test exited ${proc.exitCode}:\n${out}`);
     if (!containsLine(out, "sandbox-passed:1"))
-      throw new Error(`SandboxRunner should run the imported suite:\n${out}`);
+      throw new Error(`Sandbox mode should run the imported suite:\n${out}`);
   } finally {
     clean(tmp);
   }
@@ -8954,33 +10140,30 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
     clean(tmp);
   }
 });
-// ── Sandbox runner engine options (WP-5) ───────────────────────────────
+// ── Sandbox mode engine options (WP-5) ─────────────────────────────────
 //
-// The sandbox runner builds its own engine, because it needs its own module
-// resolver. It used to build it without applying the engine options, so the
-// binary whose entire purpose is running untrusted code silently ignored its
-// own resource and network policy flags. These assert the flags reach the
-// engine, and — for the budget — that the refusal is a refusal rather than a
-// broken gate that rejects everything.
+// Sandbox mode builds its own engine, because it needs its own module
+// resolver. The sandbox runner it replaced once built it without applying the
+// engine options, so the mode whose entire purpose is running untrusted code
+// silently ignored its own resource and network policy flags. These assert
+// the flags reach the engine, and — for the budget — that the refusal is a
+// refusal rather than a broken gate that rejects everything.
 
-await section("SandboxRunner: --max-memory bounds the sandboxed program...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --max-memory bounds the sandboxed program...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        {
-          path: "/alloc.js",
-          // 32 MB of pointer storage in one step: enough to sit either side
-          // of the two budgets below, small enough that the permitted arm
-          // allocates it in milliseconds rather than seconds.
-          text: "const a = new Array(4000000); console.log('len ' + a.length);\n",
-        },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/alloc.js",
+        // 32 MB of pointer storage in one step: enough to sit either side
+        // of the two budgets below, small enough that the permitted arm
+        // allocates it in milliseconds rather than seconds.
+        text: "const a = new Array(4000000); console.log('len ' + a.length);\n",
+      },
+    ]);
 
     const refused = Bun.spawnSync(
-      [SANDBOXRUNNER, "/alloc.js", `--seed-config=${seed}`, "--max-memory=8388608"],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/alloc.js", "--max-memory=8388608"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const refusedOut = refused.stdout.toString() + refused.stderr.toString();
@@ -8992,7 +10175,7 @@ await section("SandboxRunner: --max-memory bounds the sandboxed program...", asy
     // The same script under a budget that accommodates it must still run,
     // otherwise the option is not applied so much as the runner is broken.
     const permitted = Bun.spawnSync(
-      [SANDBOXRUNNER, "/alloc.js", `--seed-config=${seed}`, "--max-memory=67108864"],
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/alloc.js", "--max-memory=67108864"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const permittedOut = permitted.stdout.toString() + permitted.stderr.toString();
@@ -9003,10 +10186,9 @@ await section("SandboxRunner: --max-memory bounds the sandboxed program...", asy
   }
 });
 
-await section("SandboxRunner: --allow-net and --deny-net reach the sandboxed fetch...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: --allow-net and --deny-net reach the sandboxed fetch...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
     // Port 1 on loopback needs no server: a refused request never dispatches,
     // an allowed one fails at connect.
     const fetchScript = (url: string): string =>
@@ -9018,15 +10200,13 @@ await section("SandboxRunner: --allow-net and --deny-net reach the sandboxed fet
         "  console.log('err:' + error.message);",
         "}",
       ].join("\n");
-    writeFileSync(seed, JSON.stringify({
-      files: [
-        { path: "/address.js", text: fetchScript("http://127.0.0.1:1/") },
-        { path: "/name.js", text: fetchScript("http://localhost:1/") },
-      ],
-    }));
+    const tree = writeSandboxTree(tmp, [
+      { path: "/address.js", text: fetchScript("http://127.0.0.1:1/") },
+      { path: "/name.js", text: fetchScript("http://localhost:1/") },
+    ]);
     const run = (file: string, flags: string[]): { exitCode: number | null; out: string } => {
       const proc = Bun.spawnSync(
-        [SANDBOXRUNNER, file, `--seed-config=${seed}`, "--source-type=module", ...flags],
+        [RUNNER, "--copy", `${tree}=/`, `--entry=${file}`, "--source-type=module", ...flags],
         { stdout: "pipe", stderr: "pipe" },
       );
       return { exitCode: proc.exitCode, out: proc.stdout.toString() + proc.stderr.toString() };
@@ -9048,6 +10228,11 @@ await section("SandboxRunner: --allow-net and --deny-net reach the sandboxed fet
     expectRefused("without --allow-net", run("/address.js", []), "127.0.0.1:1");
     // An explicit IP allow names the private address, so it reaches it.
     expectConnect("with --allow-net=127.0.0.1", run("/address.js", ["--allow-net=127.0.0.1"]), "127.0.0.1");
+    expectConnect(
+      "with --allow-net=127.0.0.1,private",
+      run("/address.js", ["--allow-net=127.0.0.1,private"]),
+      "127.0.0.1",
+    );
     // --deny-net=private refuses private destinations even when the IP is allowed.
     expectRefused(
       "with --deny-net=private",
@@ -9092,17 +10277,15 @@ const runNestedFetchSandbox = async (
   mode: "interpreted" | "bytecode",
   extraArgs: string[],
 ): Promise<{ exitCode: number | null; stdout: string; combined: string; timedOut: boolean }> => {
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "seed.json");
-    writeFileSync(seed, JSON.stringify({
-      files: Object.entries(files).map(([path, text]) => ({ path, text })),
-    }));
+    const tree = writeSandboxTree(tmp, files);
     const proc = Bun.spawn(
       [
-        SANDBOXRUNNER,
-        "/main.js",
-        `--seed-config=${seed}`,
+        RUNNER,
+        "--copy",
+        `${tree}=/`,
+        "--entry=/main.js",
         "--source-type=module",
         `--mode=${mode}`,
         "--allow-net=127.0.0.1,localhost",
@@ -9149,12 +10332,12 @@ const fetchPort1Lines = (label: string): string[] => [
   "}",
 ];
 
-await section("SandboxRunner: a nested runScript child inherits its set silently and its fetch events name the child...", async () => {
+await section("Runner sandbox mode: a nested runScript child inherits its set silently and its fetch events name the child...", async () => {
   // A child inherits its parent's capability set, so like a ShadowRealm child
   // it reports no capabilities.effective of its own. The worker's address
   // check for the child's request is pumped by the parent, but belongs to the
   // child's fetch() call.
-  const tmp = makeTmp();
+  const tmp = makeNativeTmp();
   try {
     const main = [
       "import { runScript } from 'goccia';",
@@ -9188,7 +10371,7 @@ await section("SandboxRunner: a nested runScript child inherits its set silently
   }
 });
 
-await section("SandboxRunner: a nested runScript leaves the parent's --deny-net=private in place...", async () => {
+await section("Runner sandbox mode: a nested runScript leaves the parent's --deny-net=private in place...", async () => {
   const main = [
     "import { runScript } from 'goccia';",
     "const child = runScript('/child.js');",
@@ -9210,7 +10393,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --deny-net=
   }
 });
 
-await section("SandboxRunner: a nested runScript leaves the parent's --max-fetch-bytes in place...", async () => {
+await section("Runner sandbox mode: a nested runScript leaves the parent's --max-fetch-bytes in place...", async () => {
   const body = "x".repeat(64);
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -9247,7 +10430,7 @@ await section("SandboxRunner: a nested runScript leaves the parent's --max-fetch
   }
 });
 
-await section("SandboxRunner: a fetch followed by a nested runScript completes...", async () => {
+await section("Runner sandbox mode: a fetch followed by a nested runScript completes...", async () => {
   const main = [
     "import { runScript } from 'goccia';",
     ...fetchPort1Lines("before"),
@@ -9269,7 +10452,7 @@ await section("SandboxRunner: a fetch followed by a nested runScript completes..
   }
 });
 
-await section("SandboxRunner: fetch, nested runScript, fetch completes without a crash...", async () => {
+await section("Runner sandbox mode: fetch, nested runScript, fetch completes without a crash...", async () => {
   const main = [
     "import { runScript } from 'goccia';",
     ...fetchPort1Lines("before"),
@@ -9297,7 +10480,7 @@ await section("SandboxRunner: fetch, nested runScript, fetch completes without a
   }
 });
 
-await section("SandboxRunner: a failing nested runScript keeps the parent's in-flight fetch...", async () => {
+await section("Runner sandbox mode: a failing nested runScript keeps the parent's in-flight fetch...", async () => {
   // A failed run discards its engine's pending requests, which used to mean
   // every request on the thread. The parent's request is still in flight
   // across the whole nested run and must settle afterwards with the parent's
@@ -9333,7 +10516,7 @@ await section("SandboxRunner: a failing nested runScript keeps the parent's in-f
   }
 });
 
-await section("SandboxRunner: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
+await section("Runner sandbox mode: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
   // The child's end-of-run drain is what notices the parent's expired
   // AbortSignal.timeout. The TimeoutError it creates must belong to the
   // parent's realm: made in the child's, it failed instanceof in the parent
@@ -9405,21 +10588,17 @@ await section("SandboxRunner: a parent's fetch timeout observed during a nested 
 // Both execution modes, because the classification sits in the runner's
 // exception ladder and the executors raise through it differently.
 
-const sandboxSeedConfig = (files: Record<string, string>): string =>
-  JSON.stringify({
-    files: Object.entries(files).map(([path, text]) => ({ path, text })),
-  });
-
 const runSandboxKinds = (
-  seed: string,
+  tree: string,
   mode: "interpreted" | "bytecode",
   extraArgs: string[] = [],
 ): { stdout: string; exitCode: number | null; combined: string } => {
   const proc = Bun.spawnSync(
     [
-      SANDBOXRUNNER,
-      "/main.js",
-      `--seed-config=${seed}`,
+      RUNNER,
+      "--copy",
+      `${tree}=/`,
+      "--entry=/main.js",
       "--source-type=module",
       `--mode=${mode}`,
       ...extraArgs,
@@ -9433,11 +10612,10 @@ const runSandboxKinds = (
   };
 };
 
-await section("SandboxRunner: guest-reachable failures never classify as host faults...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: guest-reachable failures never classify as host faults...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const seed = join(tmp, "failure-kinds.json");
-    writeFileSync(seed, sandboxSeedConfig({
+    const tree = writeSandboxTree(tmp, {
       "/main.js": [
         'import { runScript } from "goccia";',
         'const ok = runScript("/ok.js");',
@@ -9447,9 +10625,9 @@ await section("SandboxRunner: guest-reachable failures never classify as host fa
         // An entry path the guest picked, which the VFS does not have.
         'const missing = runScript("/absent.js");',
         'console.log("missing:" + missing.failureKind);',
-        // A child seed source the guest picked, which the VFS does not have.
-        'const badSeed = runScript("/ok.js", { sandbox: true, seed: ["/ok.js", "/absent.txt"] });',
-        'console.log("seed:" + badSeed.failureKind);',
+        // A child copy source the guest picked, which the VFS does not have.
+        'const badCopy = runScript("/ok.js", { sandbox: true, copy: ["/ok.js", "/absent.txt"] });',
+        'console.log("copy:" + badCopy.failureKind);',
         // The nesting ceiling, observed from the frame one level above it.
         'console.log("nesting:" + runScript("/deep.js").stdout.trim());',
       ].join("\n"),
@@ -9461,56 +10639,53 @@ await section("SandboxRunner: guest-reachable failures never classify as host fa
         "if (child.ok) console.log(child.stdout.trim());",
         'else console.log(child.failureKind);',
       ].join("\n"),
-    }));
+    });
 
     const expected = [
       "success:none:true",
       "throw:script-error:false",
       "missing:script-error",
-      "seed:script-error",
+      "copy:script-error",
       "nesting:resource-limit",
     ].join("\n");
     for (const mode of ["interpreted", "bytecode"] as const) {
-      const run = runSandboxKinds(seed, mode);
+      const run = runSandboxKinds(tree, mode);
       if (run.exitCode !== 0)
-        throw new Error(`SandboxRunner ${mode} failure-kind run should exit 0, got ${run.exitCode}:\n${run.combined}`);
+        throw new Error(`Sandbox mode ${mode} failure-kind run should exit 0, got ${run.exitCode}:\n${run.combined}`);
       if (run.stdout !== expected)
-        throw new Error(`SandboxRunner ${mode} failure kinds should be ${JSON.stringify(expected)}, got:\n${run.stdout}`);
+        throw new Error(`Sandbox mode ${mode} failure kinds should be ${JSON.stringify(expected)}, got:\n${run.stdout}`);
     }
   } finally {
     clean(tmp);
   }
 });
 
-await section("SandboxRunner: every host-set ceiling reports itself as one...", async () => {
-  const tmp = makeTmp();
+await section("Runner sandbox mode: every host-set ceiling reports itself as one...", async () => {
+  const tmp = makeNativeTmp();
   try {
-    const memorySeed = join(tmp, "memory-kind.json");
-    writeFileSync(memorySeed, sandboxSeedConfig({
+    const memoryTree = writeSandboxTree(tmp, {
       "/main.js": [
         'import { runScript } from "goccia";',
         'const child = runScript("/hog.js");',
         'console.log("memory:" + child.failureKind + ":" + child.ok);',
       ].join("\n"),
       "/hog.js": "const a = new Array(4000000); console.log(a.length);\n",
-    }));
+    }, "memory-tree");
 
-    const timeoutSeed = join(tmp, "timeout-kind.json");
-    writeFileSync(timeoutSeed, sandboxSeedConfig({
+    const timeoutTree = writeSandboxTree(tmp, {
       "/main.js": [
         'import { runScript } from "goccia";',
         'const child = runScript("/spin.js");',
         'console.log("timeout:" + child.failureKind + ":" + child.ok);',
       ].join("\n"),
       "/spin.js": "while (true) {}\n",
-    }));
+    }, "timeout-tree");
 
     // The child sandbox inherits what the parent VFS has left, so a parent
-    // that has spent its node quota cannot seed one at all. That refusal
+    // that has spent its node quota cannot fill one at all. That refusal
     // raises out of the nested call rather than returning a result, so it is
     // classified by the frame that called it — here, /filler.js.
-    const quotaSeed = join(tmp, "quota-kind.json");
-    writeFileSync(quotaSeed, sandboxSeedConfig({
+    const quotaTree = writeSandboxTree(tmp, {
       "/main.js": [
         'import { runScript } from "goccia";',
         'const filler = runScript("/filler.js");',
@@ -9525,31 +10700,31 @@ await section("SandboxRunner: every host-set ceiling reports itself as one...", 
         '  try { fs.writeFileSync(name, "x"); } catch (error) { code = error.code; }',
         "}",
         'console.log("filled:" + code);',
-        'runScript("/ok.js", { sandbox: true, seed: ["/ok.js"] });',
+        'runScript("/ok.js", { sandbox: true, copy: ["/ok.js"] });',
         'console.log("unreachable");',
       ].join("\n"),
       "/ok.js": 'console.log("child ran");\n',
-    }));
+    }, "quota-tree");
 
     for (const mode of ["interpreted", "bytecode"] as const) {
-      const memory = runSandboxKinds(memorySeed, mode, ["--max-memory=8388608"]);
+      const memory = runSandboxKinds(memoryTree, mode, ["--max-memory=8388608"]);
       if (memory.stdout !== "memory:resource-limit:false")
-        throw new Error(`SandboxRunner ${mode} memory ceiling should classify as a resource limit, got:\n${memory.combined}`);
+        throw new Error(`Sandbox mode ${mode} memory ceiling should classify as a resource limit, got:\n${memory.combined}`);
 
       // The parent shares the deadline it hands the child, so it may be out
       // of time itself once the child is refused. Its output is captured
       // either way; the exit code is not the assertion.
-      const timeout = runSandboxKinds(timeoutSeed, mode, [
+      const timeout = runSandboxKinds(timeoutTree, mode, [
         "--compat-while-loops",
         "--timeout=300",
       ]);
       if (!containsLine(timeout.stdout, "timeout:timeout:false"))
-        throw new Error(`SandboxRunner ${mode} deadline should classify as a timeout, got:\n${timeout.combined}`);
+        throw new Error(`Sandbox mode ${mode} deadline should classify as a timeout, got:\n${timeout.combined}`);
 
-      const quota = runSandboxKinds(quotaSeed, mode, ["--max-fs-nodes=32"]);
+      const quota = runSandboxKinds(quotaTree, mode, ["--max-fs-nodes=32"]);
       const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
       if (quota.stdout !== expectedQuota)
-        throw new Error(`SandboxRunner ${mode} filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
+        throw new Error(`Sandbox mode ${mode} filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
     }
   } finally {
     clean(tmp);

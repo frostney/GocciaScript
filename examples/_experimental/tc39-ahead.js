@@ -1,4 +1,4 @@
-// Run: ./build/GocciaScriptLoader examples/_experimental/tc39-ahead.js
+// Run: ./build/GocciaRunner examples/_experimental/tc39-ahead.js
 // Compare: node examples/_experimental/tc39-ahead.js
 const leaders = Iterator.zip([
   ["Ada", "Grace", "Linus"],

@@ -53,6 +53,12 @@ type
     procedure TestDenyOnlyBlockRequestsNothing;
     procedure TestGoldenHash;
     procedure TestDescribeRequestAndChange;
+    procedure TestSandboxSectionIsARequest;
+    procedure TestEmptySandboxSectionIsARequest;
+    procedure TestSandboxSectionErrors;
+    procedure TestSandboxSectionExtendsAndTOML;
+    procedure TestSandboxSectionWarnsWhereUnused;
+    procedure TestSandboxInputsRunInHashedOrder;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -112,6 +118,17 @@ begin
   Test('Golden block and hash', TestGoldenHash);
   Test('Descriptions and changes since a trusted block',
     TestDescribeRequestAndChange);
+  Test('A sandbox section is a request, hashed and described',
+    TestSandboxSectionIsARequest);
+  Test('An empty sandbox section is a request too',
+    TestEmptySandboxSectionIsARequest);
+  Test('Malformed sandbox sections are rejected', TestSandboxSectionErrors);
+  Test('Sandbox sections: extends overrides per key; TOML tables',
+    TestSandboxSectionExtendsAndTOML);
+  Test('A binary that does not read the sandbox section warns',
+    TestSandboxSectionWarnsWhereUnused);
+  Test('Sandbox inputs run in the order they are hashed in',
+    TestSandboxInputsRunInHashedOrder);
 end;
 
 procedure TPermissionsTests.BeforeAll;
@@ -507,7 +524,7 @@ begin
     Message := '';
     IsUsageError := False;
     try
-      Options.ValidateHonored('GocciaSandboxRunner', [gcNet]);
+      Options.ValidateHonored('NetOnlyProgram', [gcNet]);
     except
       on E: TParseError do
       begin
@@ -515,7 +532,7 @@ begin
         IsUsageError := E is TCLIUsageError;
       end;
     end;
-    Expect<string>(Message).ToBe('GocciaSandboxRunner cannot grant read; it ' +
+    Expect<string>(Message).ToBe('NetOnlyProgram cannot grant read; it ' +
       'supports net. Remove --allow-read.');
     Expect<Boolean>(IsUsageError).ToBe(True);
   finally
@@ -822,6 +839,205 @@ begin
     '  + allow-net: a.test, b.test' + sLineBreak +
     '  + unsafe-shadowrealm: true' + sLineBreak);
   Expect<Integer>(Length(PermissionBlockLines('not json'))).ToBe(0);
+end;
+
+
+procedure TPermissionsTests.TestSandboxSectionIsARequest;
+var
+  Path, Directory: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('sandbox/goccia.json', '{"sandbox": {' +
+    '"copy": ["src", "fixtures=/data"], "copy-rw": ["out"], ' +
+    '"diff": "unified", "diff-file": "changes.diff", ' +
+    '"entry": "/src/main.js"}}');
+  Directory := FRoot + PathDelim + 'sandbox' + PathDelim;
+  Request := ReadRequest(Path);
+  Expect<Boolean>(Request.Sandbox.Declared).ToBe(True);
+  Expect<string>(Request.Sandbox.SourcePath).ToBe(Path);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(3);
+  Expect<string>(Request.Sandbox.Inputs[0].HostPath).ToBe(Directory + 'src');
+  Expect<string>(Request.Sandbox.Inputs[0].SandboxPath).ToBe('');
+  Expect<string>(Request.Sandbox.Inputs[1].SandboxPath).ToBe('/data');
+  Expect<Boolean>(Request.Sandbox.Inputs[1].ReadWrite).ToBe(False);
+  Expect<Boolean>(Request.Sandbox.Inputs[2].ReadWrite).ToBe(True);
+  Expect<string>(Request.Sandbox.Entry).ToBe('/src/main.js');
+  Expect<string>(Request.Sandbox.Diff).ToBe('unified');
+  Expect<string>(Request.Sandbox.DiffFile).ToBe(Directory + 'changes.diff');
+
+  Expect<Boolean>(Request.RequestsGrants).ToBe(True);
+  Expect<Boolean>(Request.RequestsHonoredGrants(ALL_CAPABILITIES, True,
+    False)).ToBe(False);
+  Expect<Boolean>(Request.RequestsHonoredGrants([], False, True)).ToBe(True);
+
+  { Inputs keep their order: a later one may overwrite an earlier one. }
+  Expect<string>(NormalizedPermissionBlock(Request)).ToBe(
+    '{"sandbox":{"copy":["' + StringReplace(Directory + 'src', '\', '\\',
+    [rfReplaceAll]) + '","' + StringReplace(Directory + 'fixtures', '\',
+    '\\', [rfReplaceAll]) + '=/data"],"copy-rw":["' +
+    StringReplace(Directory + 'out', '\', '\\', [rfReplaceAll]) +
+    '"],"diff":"unified","diff-file":"' + StringReplace(Directory +
+    'changes.diff', '\', '\\', [rfReplaceAll]) +
+    '","entry":"/src/main.js"},"version":1}');
+  Expect<string>(DescribePermissionRequest(Request, '  ')).ToBe(
+    '  sandbox.copy: ' + Directory + 'src, ' + Directory + 'fixtures=/data' +
+    sLineBreak +
+    '  sandbox.copy-rw: ' + Directory + 'out' + sLineBreak +
+    '  sandbox.diff: unified' + sLineBreak +
+    '  sandbox.diff-file: ' + Directory + 'changes.diff' + sLineBreak +
+    '  sandbox.entry: /src/main.js' + sLineBreak);
+end;
+
+procedure TPermissionsTests.TestEmptySandboxSectionIsARequest;
+var
+  Path: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Path := WriteConfig('sandbox-empty/goccia.json',
+    '{"sandbox": {}, "permissions": {"allow-net": ["a.test"]}}');
+  Request := ReadRequest(Path);
+  Expect<Boolean>(Request.Sandbox.Declared).ToBe(True);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(0);
+  Expect<string>(NormalizedPermissionBlock(Request)).ToBe(
+    '{"permissions":{"allow-net":["a.test"]},"sandbox":{},"version":1}');
+  Expect<string>(DescribePermissionRequest(Request, '')).ToBe(
+    'allow-net: a.test' + sLineBreak +
+    'sandbox: no inputs (sandbox mode only)' + sLineBreak);
+
+  Path := WriteConfig('sandbox-diff-true/goccia.json',
+    '{"sandbox": {"diff": true}}');
+  Request := ReadRequest(Path);
+  Expect<string>(Request.Sandbox.Diff).ToBe(SANDBOX_DIFF_DEFAULT);
+  Expect<string>(NormalizedPermissionBlock(Request)).ToBe(
+    '{"sandbox":{"diff":true},"version":1}');
+
+  Path := WriteConfig('sandbox-none/goccia.json', '{"timeout": 5}');
+  Expect<Boolean>(ReadRequest(Path).Sandbox.Declared).ToBe(False);
+end;
+
+procedure TPermissionsTests.TestSandboxSectionErrors;
+var
+  Path: string;
+begin
+  Path := WriteConfig('sandbox-files/goccia.json',
+    '{"sandbox": {"files": [{"from": "src"}]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.files" was removed in GocciaScript 0.14.0; list ' +
+    'host inputs as "copy" or "copy-rw" strings (<host>[=<sandbox>]) ' +
+    'instead');
+
+  Path := WriteConfig('sandbox-unknown/goccia.json',
+    '{"sandbox": {"copyrw": ["out"]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': unknown sandbox key "copyrw" (valid: copy, copy-rw, entry, ' +
+    'diff, diff-file)');
+
+  Path := WriteConfig('sandbox-flag/goccia.json', '{"sandbox": true}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox" must be an object with copy, copy-rw, entry, diff, ' +
+    'diff-file keys');
+
+  Path := WriteConfig('sandbox-number/goccia.json',
+    '{"sandbox": {"copy": ["src", 5]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
+
+  Path := WriteConfig('sandbox-single/goccia.json',
+    '{"sandbox": {"copy": "src"}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
+
+  Path := WriteConfig('sandbox-empty-target/goccia.json',
+    '{"sandbox": {"copy-rw": ["out="]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy-rw" entry "out=" names no sandbox path after ' +
+    '"="');
+
+  Path := WriteConfig('sandbox-object/goccia.json',
+    '{"sandbox": {"copy-rw": [{"from": "out"}]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy-rw" must be an array of strings in the --copy ' +
+    'grammar <host>[=<sandbox>]');
+
+  Path := WriteConfig('sandbox-diff/goccia.json',
+    '{"sandbox": {"diff": "patch"}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.diff" must be true, false, "json", or "unified"');
+
+  Path := WriteConfig('sandbox-host/goccia.json',
+    '{"sandbox": {"copy": ["=/x"]}}');
+  Expect<string>(RequestError(Path)).ToBe('EGocciaConfigPermissionError: ' +
+    Path + ': "sandbox.copy" entry "=/x" names no host path');
+end;
+
+procedure TPermissionsTests.TestSandboxSectionExtendsAndTOML;
+var
+  Path, Base: string;
+  Request: TGocciaConfigPermissionRequest;
+begin
+  Base := WriteConfig('sandbox-extends/goccia.json',
+    '{"sandbox": {"copy": ["shared"], "copy-rw": ["out"]}}');
+  Path := WriteConfig('sandbox-extends/child/goccia.json',
+    '{"extends": "../goccia.json", "sandbox": {"copy": ["local"]}}');
+  Request := ReadRequest(Path);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(2);
+  Expect<string>(Request.Sandbox.Inputs[0].HostPath).ToBe(
+    ExtractFilePath(Path) + 'local');
+  { The base's copy-rw is inherited, resolved against the base. }
+  Expect<string>(Request.Sandbox.Inputs[1].HostPath).ToBe(
+    ExtractFilePath(Base) + 'out');
+  Expect<Boolean>(Request.Sandbox.Inputs[1].ReadWrite).ToBe(True);
+  Expect<string>(Request.Sandbox.SourcePath).ToBe(Path);
+
+  Path := WriteConfig('sandbox-toml/goccia.toml',
+    '[sandbox]' + LineEnding + 'copy = ["src=/app"]' + LineEnding +
+    'diff = "json"' + LineEnding);
+  Request := ReadRequest(Path);
+  Expect<Boolean>(Request.Sandbox.Declared).ToBe(True);
+  Expect<Integer>(Length(Request.Sandbox.Inputs)).ToBe(1);
+  Expect<string>(Request.Sandbox.Inputs[0].SandboxPath).ToBe('/app');
+  Expect<string>(Request.Sandbox.Diff).ToBe('json');
+end;
+
+procedure TPermissionsTests.TestSandboxSectionWarnsWhereUnused;
+var
+  Path: string;
+  Request: TGocciaConfigPermissionRequest;
+  Warnings: TGocciaCapabilityScopes;
+begin
+  Path := WriteConfig('sandbox-warn/goccia.json', '{"sandbox": {}}');
+  Request := ReadRequest(Path);
+  Warnings := UnsupportedRequestWarnings(Request, ALL_CAPABILITIES,
+    'GocciaTestRunner', True, False);
+  Expect<Integer>(Length(Warnings)).ToBe(1);
+  Expect<string>(Warnings[0]).ToBe('declares a "sandbox" section, which ' +
+    'GocciaTestRunner does not use; ignoring it');
+  Expect<Integer>(Length(UnsupportedRequestWarnings(Request, ALL_CAPABILITIES,
+    'GocciaRunner', True, True))).ToBe(0);
+end;
+
+
+procedure TPermissionsTests.TestSandboxInputsRunInHashedOrder;
+var
+  First, Second: TGocciaConfigPermissionRequest;
+begin
+  First := ReadRequest(WriteConfig('order-a/goccia.json',
+    '{"sandbox": {"copy-rw": ["out"], "copy": ["src", "lib"]}}'));
+  Second := ReadRequest(WriteConfig('order-b/goccia.json',
+    '{"sandbox": {"copy": ["src", "lib"], "copy-rw": ["out"]}}'));
+  { copy then copy-rw, each as declared, whatever the key order. }
+  Expect<Integer>(Length(First.Sandbox.Inputs)).ToBe(3);
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[0].HostPath)).ToBe('src');
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[1].HostPath)).ToBe('lib');
+  Expect<string>(ExtractFileName(First.Sandbox.Inputs[2].HostPath)).ToBe('out');
+  Expect<Boolean>(First.Sandbox.Inputs[2].ReadWrite).ToBe(True);
+  Expect<string>(ExtractFileName(Second.Sandbox.Inputs[0].HostPath)).ToBe('src');
+  Expect<string>(ExtractFileName(Second.Sandbox.Inputs[2].HostPath)).ToBe('out');
+  { The same run, so the same block apart from the directory. }
+  Expect<string>(StringReplace(NormalizedPermissionBlock(First), 'order-a',
+    'order-b', [rfReplaceAll])).ToBe(NormalizedPermissionBlock(Second));
 end;
 
 begin

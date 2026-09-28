@@ -174,6 +174,7 @@ type
     FMode: TGocciaConfigTrustMode;
     FHonored: TGocciaHonoredCapabilities;
     FHonorsUnsafe: Boolean;
+    FSandboxConfigKey: string;
     FLoadConfig: TGocciaConfigLoader;
     FStorePath: string;
     FStoreProblem: string;
@@ -185,11 +186,15 @@ type
     function Decide(const AConfigPath: string): TGocciaConfigTrustVerdict;
   public
     { AStorePath is '' when there is no store; AStoreProblem then says why.
-      ALoadConfig parses and validates one config file. }
+      ALoadConfig parses and validates one config file. ASandboxConfigPath is
+      the config whose sandbox section the binary reads (GocciaRunner's root
+      config), so that section needs trust; '' when the binary reads none. A
+      sandbox section anywhere else asks for nothing. }
     constructor Create(const AStorePath, AStoreProblem: string;
       const AMode: TGocciaConfigTrustMode;
       const AHonored: TGocciaHonoredCapabilities;
-      const AHonorsUnsafe: Boolean; const ALoadConfig: TGocciaConfigLoader);
+      const AHonorsUnsafe: Boolean; const ALoadConfig: TGocciaConfigLoader;
+      const ASandboxConfigPath: string = '');
     destructor Destroy; override;
     { The verdict for the config at AConfigPath; '' has no request. Raises
       what ALoadConfig raises, without remembering it. }
@@ -230,8 +235,9 @@ function TrustKeyForPath(const APath: string): string;
   --untrust <dir>). }
 function TrustKeyForDirectory(const APath: string): string;
 
-{ Each path scope of ARequest (read and ffi paths, allow and deny, and the
-  directory of node_modules=<dir>) with where it resolves now. }
+{ Each path scope of ARequest (read and ffi paths, allow and deny, the
+  directory of node_modules=<dir>, and the host paths of a sandbox section)
+  with where it resolves now. }
 function PathScopeTargets(
   const ARequest: TGocciaConfigPermissionRequest): TGocciaTrustTargets;
 { One line per recorded scope that now resolves somewhere else than when it
@@ -464,6 +470,12 @@ begin
         AddScopes(ARequest.Allow[Capability], Capability);
         AddScopes(ARequest.Deny[Capability], Capability);
       end;
+    { The host paths a sandbox section copies in, writes back, and writes its
+      diff to are path scopes too. }
+    for I := 0 to High(ARequest.Sandbox.Inputs) do
+      Scopes.Add(ARequest.Sandbox.Inputs[I].HostPath);
+    if ARequest.Sandbox.DiffFile <> '' then
+      Scopes.Add(ARequest.Sandbox.DiffFile);
     SetLength(Result, Scopes.Count);
     for I := 0 to Scopes.Count - 1 do
     begin
@@ -1486,7 +1498,7 @@ end;
 constructor TGocciaConfigTrustGate.Create(const AStorePath,
   AStoreProblem: string; const AMode: TGocciaConfigTrustMode;
   const AHonored: TGocciaHonoredCapabilities; const AHonorsUnsafe: Boolean;
-  const ALoadConfig: TGocciaConfigLoader);
+  const ALoadConfig: TGocciaConfigLoader; const ASandboxConfigPath: string);
 begin
   inherited Create;
   CriticalSectionInit(FLock);
@@ -1495,6 +1507,10 @@ begin
   FMode := AMode;
   FHonored := AHonored;
   FHonorsUnsafe := AHonorsUnsafe;
+  if ASandboxConfigPath <> '' then
+    FSandboxConfigKey := TrustKeyForPath(ASandboxConfigPath)
+  else
+    FSandboxConfigKey := '';
   FLoadConfig := ALoadConfig;
   FPaths := TStringList.Create;
   FPaths.Sorted := True;
@@ -1544,7 +1560,8 @@ begin
     Exit;
   end;
   Result.Hash := PermissionBlockHash(Result.Request);
-  if not Result.Request.RequestsHonoredGrants(FHonored, FHonorsUnsafe) then
+  if not Result.Request.RequestsHonoredGrants(FHonored, FHonorsUnsafe,
+     (FSandboxConfigKey <> '') and (Location = FSandboxConfigKey)) then
   begin
     Result.State := ctsNotHonored;
     Exit;

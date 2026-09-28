@@ -211,7 +211,7 @@ Scripts can then import using the alias:
 import { formatDate } from "@/utils/dates";
 ```
 
-`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI hosts (`GocciaScriptLoader`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
+`TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI hosts (`GocciaRunner`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
 
 **Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
@@ -461,7 +461,7 @@ ConsoleExtension.BuiltinConsole.LogCallback := MyHandler.OnLog;
 ConsoleExtension.BuiltinConsole.Enabled := False;  // no stdout, but LogCallback still fires
 ```
 
-The CLI hosts based on `TGocciaCLIApplication` (ScriptLoader, TestRunner, BenchmarkRunner, and REPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
+The CLI hosts based on `TGocciaCLIApplication` (GocciaRunner, GocciaTestRunner, GocciaBenchmarkRunner, and GocciaREPL) apply a runtime profile and use `LogCallback` internally for `--log=<file>`, which captures console output to a log file in `[method] line` format. The TestRunner silences workers via `Enabled := False` (not by replacing JS methods), so `LogCallback` fires on every console call even in parallel mode. File writes are serialized with a critical section so `--log` is thread-safe even with `--jobs=N`.
 
 ## Built-in Registration
 
@@ -494,7 +494,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 
 | Extension/profile | Provides | Notes |
 |------|----------|-------|
-| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
+| `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by GocciaRunner (both modes) and GocciaREPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
@@ -952,7 +952,7 @@ The repository includes five embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
-| `GocciaScriptLoader` | `source/app/GocciaScriptLoader.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
+| `GocciaRunner` | `source/app/GocciaRunner.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with the test-runner runtime profile |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with the benchmark-runner runtime profile from files or stdin |

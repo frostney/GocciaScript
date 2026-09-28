@@ -61,12 +61,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseSemverTag, pickPrecedenceVersions } from "../src/lib/github";
+import { pickPrecedenceVersions } from "../src/lib/github";
 import { checkVendorManifestFloor } from "../src/lib/vendor-manifest";
 import {
   GENERATED_MANIFEST_NOTE,
   GENERATED_MANIFEST_PATH,
 } from "./ensure-generated-manifest";
+import { resolveArchiveBinaryNames } from "./lib/archive-binaries";
 
 const REPO = process.env.GOCCIA_REPO ?? "frostney/GocciaScript";
 const NIGHTLY_TAG = process.env.GOCCIA_NIGHTLY_TAG ?? "nightly";
@@ -121,31 +122,6 @@ type Manifest = {
   defaultVersion: string;
   versions: ManifestEntry[];
 };
-
-/** Pre-0.7.0 archives ship binaries without the `Goccia` prefix (PR #333
- *  added the rename). The runtime path captured in the manifest preserves
- *  whichever name was in the archive, so the API doesn't need per-version
- *  awareness — the manifest is the source of truth. */
-function archiveBinaryNames(
-  tag: string,
-  isWindows: boolean,
-): { loader: string; testRunner: string } {
-  const exe = isWindows ? ".exe" : "";
-  if (tag === NIGHTLY_TAG) {
-    return {
-      loader: `GocciaScriptLoader${exe}`,
-      testRunner: `GocciaTestRunner${exe}`,
-    };
-  }
-  const semver = parseSemverTag(tag);
-  const isLegacy = !!semver && semver.major === 0 && semver.minor < 7;
-  return isLegacy
-    ? { loader: `ScriptLoader${exe}`, testRunner: `TestRunner${exe}` }
-    : {
-        loader: `GocciaScriptLoader${exe}`,
-        testRunner: `GocciaTestRunner${exe}`,
-      };
-}
 
 function platformAsset(): PlatformAsset {
   const p = process.platform;
@@ -305,21 +281,20 @@ async function extractAsset(
 
 /** Copy the two needed binaries from an extracted archive into
  *  `vendor/<tag>/`, preserving their archive-side filenames so the
- *  manifest's recorded path matches what's on disk. */
+ *  manifest's recorded path matches what's on disk. The names are probed
+ *  from the archive (`GocciaRunner`, then `GocciaScriptLoader`, then
+ *  `ScriptLoader`) rather than derived from the tag. */
 async function vendorBinaries(
   tag: string,
   archiveRoot: string,
   isWindows: boolean,
 ): Promise<{ loader: string; testRunner: string }> {
-  const names = archiveBinaryNames(tag, isWindows);
+  const names = resolveArchiveBinaryNames(archiveRoot, isWindows);
   const versionDir = path.join(VENDOR_DIR, tag);
   await mkdir(versionDir, { recursive: true });
 
   for (const fname of [names.loader, names.testRunner]) {
     const src = path.join(archiveRoot, fname);
-    if (!existsSync(src)) {
-      throw new Error(`expected binary missing in archive: ${fname}`);
-    }
     const dest = path.join(versionDir, fname);
     await rm(dest, { force: true });
     // `rename()` fails with EXDEV when `tmpdir()` is on a different mount —

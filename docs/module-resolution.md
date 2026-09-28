@@ -8,7 +8,7 @@
 - **Bare specifiers are sealed by default** — `import "zod"` fails until the engine's `import` capability grants `node_modules` (`--allow-import=node_modules` on the command line), keeping the default profile free of ambient package lookup
 - **A subset of Node's ESM resolver** — the `exports` map with the `import` and `default` conditions, wildcard patterns, and the legacy entry fields; no `require`/`node` conditions, no `imports` map, no self-reference
 - **Two deliberate deviations** — the bundler-only `module` field is honoured (Node ignores it), and a package that resolves to CommonJS is refused by name instead of being parsed
-- **The sandbox host stays sealed** — `GocciaSandboxRunner` offers no `node_modules` opt-in, because its filesystem is seeded by the embedder rather than walked
+- **The sandbox stays sealed** — `GocciaRunner`'s sandbox mode offers no `node_modules` opt-in, because its filesystem holds only copied inputs rather than a tree to walk
 
 ## Resolution order
 
@@ -38,10 +38,10 @@ file extension, and a directory resolves to its `index` file.
 
 ```bash
 # Walk up from each importing file, exactly as Node does.
-./build/GocciaScriptLoader app.js --allow-import=node_modules
+./build/GocciaRunner app.js --allow-import=node_modules
 
 # Same walk, but no node_modules above ./project is ever consulted.
-./build/GocciaScriptLoader app.js --allow-import=node_modules=./project
+./build/GocciaRunner app.js --allow-import=node_modules=./project
 
 # Any shared CLI host takes it, and so does a config file.
 ./build/GocciaTestRunner tests --allow-import=node_modules
@@ -93,9 +93,10 @@ In a config file the two forms are the scopes `"node_modules"` (an unbounded
 walk) and `"node_modules=<dir>"` (a ceiling). `import` always takes a scope, so
 `"allow-import": true` and a bare `--allow-import` are errors.
 
-`GocciaSandboxRunner` has no equivalent. Its filesystem is a seeded in-memory
-image with no ambient host access, so there is nothing to walk up into; a bare
-specifier there fails with the same message and no opt-in exists.
+Sandbox mode has no equivalent: `--allow-import` is a usage error there. Its
+filesystem is an in-memory image of the copied inputs with no ambient host
+access, so there is nothing to walk up into; a bare specifier there fails with
+the same message and no opt-in exists.
 
 ## The algorithm
 
@@ -149,7 +150,7 @@ checks enforce it, and a failure of any is an ordinary `Module not found:
   `linked/out.js -> ../../../outside.js` normalizes to a path inside itself
   while naming a file outside it, and only the physical check refuses that. It
   follows the same principle as [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md),
-  where the sandbox refuses a symlinked seed import rather than trusting where
+  where the sandbox refuses a symlinked copy input rather than trusting where
   its name appears to sit.
 
   Canonicalizing the package directory as well as the candidate is what keeps

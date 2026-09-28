@@ -1,5 +1,5 @@
 // In-memory TTL + LRU cache for runner responses, so a client mashing the
-// "Run" button on the playground doesn't spawn a fresh GocciaScriptLoader /
+// "Run" button on the playground doesn't spawn a fresh GocciaRunner /
 // GocciaTestRunner subprocess each time when nothing about the input has
 // changed. Same input -> same cached response within the TTL window.
 //

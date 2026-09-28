@@ -92,22 +92,21 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 6. `AfterExecute` — reporting hooks
 7. `ShutdownSingletons` — cleanup in reverse order
 
-CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult` (`Goccia.CLI.SourcePipelineResult.pas`) around the shared `TGocciaSourcePipeline.Parse` result. The helper stays in `source/app/`: it applies CLI warning display, transfers AST/source-map/generated-line ownership for compilation and coverage, and leaves bytecode compilation to each caller. `Goccia.CLI.SourceMaps.pas` owns the shared CLI source-map file output policy used by the Script Loader and Bundler.
+CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult` (`Goccia.CLI.SourcePipelineResult.pas`) around the shared `TGocciaSourcePipeline.Parse` result. The helper stays in `source/app/`: it applies CLI warning display, transfers AST/source-map/generated-line ownership for compilation and coverage, and leaves bytecode compilation to each caller. `Goccia.CLI.SourceMaps.pas` owns the shared CLI source-map file output policy used by the Runner and Bundler.
 
 **Tool mapping:**
 
 | Tool | Base Class | Overrides |
 |------|-----------|-----------|
 | GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
-| GocciaScriptLoader | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
-| GocciaSandboxRunner | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
+| GocciaRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
 | GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
-`GocciaSandboxRunner` is a separate CLI host for virtual-filesystem execution. It seeds a `TSandboxVirtualFileSystem` from explicit seed baselines before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. The sandbox runner uses the same executor abstraction as the script loader: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
+`GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes use the same executor abstraction: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
 
-Nested execution uses `GocciaSandboxRunner` as its sandbox host: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` seeded from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
+Nested execution runs inside the sandbox-mode host: `runScript` and shell `goccia` dispatch through `TGocciaSandboxContext.RunScriptCallback`. Shared-VFS execution remains the default, while `{ sandbox: true }` / `goccia --sandbox` creates a child `TGocciaSandboxContext` whose `copy` entries come from parent-VFS paths and runs it through the same interpreter or bytecode executor mode.
 
 ## Executor Architecture
 

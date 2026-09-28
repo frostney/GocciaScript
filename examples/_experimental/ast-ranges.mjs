@@ -15,10 +15,9 @@
 //      truth still passes 1-3 and fails here.
 //
 // Run:
-//   ./build.pas sandboxrunner
-//   ./build/GocciaSandboxRunner /ast-ranges.mjs --experimental-ast \
-//     --seed examples/_experimental/ast-ranges.mjs=/ast-ranges.mjs \
-//     --seed <your-source-dir>=/src
+//   ./build.pas runner
+//   ./build/GocciaRunner examples/_experimental/ast-ranges.mjs \
+//     --experimental-ast --copy <your-source-dir>=/src
 //
 // Written in the default profile, so the only flags a run needs are the ones
 // the checked sources need.

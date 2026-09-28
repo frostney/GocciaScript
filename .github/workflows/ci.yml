@@ -1402,11 +1402,11 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $path = "build/GocciaScriptLoader.exe"
+          $path = "build/GocciaRunner.exe"
           $bytes = [System.IO.File]::ReadAllBytes($path)
           $text = [System.Text.Encoding]::Latin1.GetString($bytes)
           if ($text -match "libssl|libcrypto") {
-            throw "GocciaScriptLoader.exe must not depend on OpenSSL DLLs for HTTPS on Windows"
+            throw "GocciaRunner.exe must not depend on OpenSSL DLLs for HTTPS on Windows"
           }
 
   artifacts:

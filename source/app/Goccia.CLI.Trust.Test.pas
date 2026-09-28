@@ -33,6 +33,7 @@ type
     procedure TestSymlinkedConfigFileHasItsOwnKey;
     procedure TestSymlinkedDirectoryHashesAtItsTarget;
     procedure TestRetargetedScopesNeedTrust;
+    procedure TestRetargetedSandboxInputNeedsTrust;
     procedure TestAbsentScopeParentRepointed;
     procedure TestNewerAndCorruptStoresRefused;
     procedure TestMalformedStoresRefused;
@@ -150,6 +151,8 @@ begin
     TestSymlinkedDirectoryHashesAtItsTarget);
   Test('A re-pointed path scope needs trusting again',
     TestRetargetedScopesNeedTrust);
+  Test('A re-pointed sandbox input needs trusting again where it is read',
+    TestRetargetedSandboxInputNeedsTrust);
   Test('Re-pointing an absent scope''s parent needs trusting again',
     TestAbsentScopeParentRepointed);
   Test('Newer and corrupt stores are refused',
@@ -629,6 +632,65 @@ begin
     PAnsiChar(AnsiString(Base + PathDelim + 'dd' + PathDelim + 'cfg'))))
     .ToBe(0);
   Expect<Boolean>(StateNow = ctsChanged).ToBe(True);
+end;
+{$ELSE}
+begin
+  Expect<Boolean>(True).ToBe(True);
+end;
+{$ENDIF}
+
+procedure TTrustTests.TestRetargetedSandboxInputNeedsTrust;
+{$IFDEF UNIX}
+var
+  Base, ConfigPath, StorePath, Elsewhere, Data: string;
+  Store: TGocciaTrustStore;
+  Verdict: TGocciaConfigTrustVerdict;
+
+  function VerifyNow(const ASandboxConfigPath: string):
+    TGocciaConfigTrustVerdict;
+  var
+    Gate: TGocciaConfigTrustGate;
+  begin
+    Gate := TGocciaConfigTrustGate.Create(StorePath, '', ctmStore,
+      ALL_CAPABILITIES, True, LoadConfig, ASandboxConfigPath);
+    try
+      Result := Gate.Verify(ConfigPath);
+    finally
+      Gate.Free;
+    end;
+  end;
+
+begin
+  Base := FRoot + PathDelim + 'sandbox-retarget';
+  ConfigPath := WriteFile('sandbox-retarget/project/goccia.json',
+    '{"sandbox": {"copy": ["./data"]}}');
+  Data := Base + PathDelim + 'project' + PathDelim + 'data';
+  WriteFile('sandbox-retarget/project/data/x.txt', 'x');
+  Elsewhere := Base + PathDelim + 'elsewhere';
+  ForceDirectories(Elsewhere);
+  StorePath := Base + PathDelim + 'trust.json';
+
+  { Only the config whose section the binary reads needs trust. }
+  Expect<Boolean>(VerifyNow('').State = ctsNotHonored).ToBe(True);
+  Expect<Boolean>(VerifyNow(ConfigPath).State = ctsNotTrusted).ToBe(True);
+
+  Store := TGocciaTrustStore.Load(StorePath);
+  try
+    Store.Put(EntryFor(ConfigPath));
+    Store.Save;
+  finally
+    Store.Free;
+  end;
+  Expect<Boolean>(VerifyNow(ConfigPath).State = ctsTrusted).ToBe(True);
+
+  DeleteFile(Data + PathDelim + 'x.txt');
+  RemoveDir(Data);
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(Elsewhere)),
+    PAnsiChar(AnsiString(Data)))).ToBe(0);
+  Verdict := VerifyNow(ConfigPath);
+  Expect<Boolean>(Verdict.State = ctsChanged).ToBe(True);
+  Expect<string>(Verdict.TargetChanges[0]).ToBe('target of ' + Data + ': ' +
+    Data + ' -> ' + Elsewhere);
 end;
 {$ELSE}
 begin

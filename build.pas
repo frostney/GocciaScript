@@ -350,19 +350,18 @@ begin
   WriteLn('GocciaREPL built successfully');
 end;
 
-procedure BuildScriptLoader;
+procedure BuildRunner;
 var
   Output: string;
 begin
   WriteLn('');
-  WriteLn('Building GocciaScriptLoader...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoader.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('loader'))),
+  WriteLn('Building GocciaRunner...');
+  if not RunCommand('fpc', FPCArgs('source/app/GocciaRunner.dpr',
+      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('runner'))),
       Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaScriptLoader build failed',
-      'loader');
+    PrintBuildFailureAndExit(Output, 'GocciaRunner build failed', 'runner');
   WriteLn(Output);
-  WriteLn('GocciaScriptLoader built successfully');
+  WriteLn('GocciaRunner built successfully');
   WriteLn('');
 end;
 
@@ -379,22 +378,6 @@ begin
       'loaderbare');
   WriteLn(Output);
   WriteLn('GocciaScriptLoaderBare built successfully');
-  WriteLn('');
-end;
-
-procedure BuildSandboxRunner;
-var
-  Output: string;
-begin
-  WriteLn('');
-  WriteLn('Building GocciaSandboxRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaSandboxRunner.dpr',
-      EnsureUnitOutputDirectory(TargetUnitOutputDirectory('sandboxrunner'))),
-      Output) then
-    PrintBuildFailureAndExit(Output, 'GocciaSandboxRunner build failed',
-      'sandboxrunner');
-  WriteLn(Output);
-  WriteLn('GocciaSandboxRunner built successfully');
   WriteLn('');
 end;
 
@@ -581,12 +564,10 @@ procedure Build(const ATrigger: string);
 begin
   if ATrigger = 'repl' then
     BuildREPL
-  else if ATrigger = 'loader' then
-    BuildScriptLoader
+  else if ATrigger = 'runner' then
+    BuildRunner
   else if ATrigger = 'loaderbare' then
     BuildScriptLoaderBare
-  else if ATrigger = 'sandboxrunner' then
-    BuildSandboxRunner
   else if ATrigger = 'fuzzharness' then
     BuildFuzzHarness
   else if ATrigger = 'tests' then
@@ -608,9 +589,21 @@ begin
     BuildGocciaBundler
   else
   begin
-    WriteLn('Unknown build target: ', ATrigger);
-    if ATrigger = 'clean' then
-      WriteLn('Use --clean as an option, for example: ./build.pas --clean loader');
+    { The targets renamed or merged in 0.14.0 name their replacement
+      instead of failing as unknown. }
+    if ATrigger = 'loader' then
+      WriteLn('Build target "loader" was renamed to "runner" in 0.14.0; ' +
+        'use ./build.pas runner')
+    else if ATrigger = 'sandboxrunner' then
+      WriteLn('Build target "sandboxrunner" was merged into "runner" in ' +
+        '0.14.0; build ./build.pas runner and use its sandbox mode ' +
+        '(--sandbox, --copy, --copy-rw)')
+    else
+    begin
+      WriteLn('Unknown build target: ', ATrigger);
+      if ATrigger = 'clean' then
+        WriteLn('Use --clean as an option, for example: ./build.pas --clean runner');
+    end;
     Halt(1);
   end;
 end;
@@ -654,9 +647,8 @@ begin
   if BuildTriggers.Count = 0 then
   begin
     BuildTriggers.Add('tests');
-    BuildTriggers.Add('loader');
+    BuildTriggers.Add('runner');
     BuildTriggers.Add('loaderbare');
-    BuildTriggers.Add('sandboxrunner');
     { Built by default so the harness cannot silently rot: it links most of
       the engine, so a signature change elsewhere breaks the ordinary build
       rather than the nightly fuzz job days later. }
