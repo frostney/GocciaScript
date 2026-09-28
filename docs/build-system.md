@@ -209,6 +209,10 @@ printf "name;" | ./build/GocciaRunner --globals=context.toml --output=json
 # the network when one is not cached (see docs/provider-imports.md)
 ./build/GocciaRunner app.js --allow-import=github:frostney --cached-only
 
+# Pin a provider package, or re-check every pin in CI (install mode)
+./build/GocciaRunner --add raylib=github:frostney/GocciaScript-Raylib@v0.10.0/bindings/raylib.ts
+./build/GocciaRunner --install --frozen --check-refs --allow-import=github:frostney
+
 # Resolve bare specifiers against node_modules (see docs/module-resolution.md).
 # The plain scope walks up from each importing file; =<dir> caps the walk at that directory.
 ./build/GocciaRunner app.js --allow-import=node_modules

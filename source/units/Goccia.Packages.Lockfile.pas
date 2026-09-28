@@ -21,7 +21,10 @@ unit Goccia.Packages.Lockfile;
 
   The reader is strict: an unknown key, a duplicate key, a value of the wrong
   type, an unsafe path, or two paths that differ only in case is an error,
-  never ignored. A run only ever reads the lockfile. }
+  never ignored. A run only ever reads the lockfile; install mode writes it
+  deterministically: keys in byte order, two-space indentation, LF line
+  endings, and a trailing newline, so rewriting an unchanged lock changes no
+  byte and a diff shows only real changes. }
 
 {$I Goccia.inc}
 
@@ -95,13 +98,26 @@ function ParseLockfile(const AText, ALocation: string): TGocciaLockfile;
 { Reads APath. A missing file raises EGocciaLockfileError too. }
 function LoadLockfile(const APath: string): TGocciaLockfile;
 
+{ The lockfile's deterministic text. }
+function SerializeLockfile(const ALockfile: TGocciaLockfile): string;
+
+{ Writes ALockfile to APath through a temporary renamed into place, after
+  checking that the text reads back as a valid lockfile. }
+procedure SaveLockfile(const APath: string; const ALockfile: TGocciaLockfile);
+
 function LockRefKindName(const AKind: TGocciaLockRefKind): string;
 
 implementation
 
 uses
+  Classes,
+
   FileUtils,
-  JSONParser;
+  JSONParser,
+  StringBuffer,
+  TextEncoding,
+
+  Goccia.JSON.Utils;
 
 type
   TLockValueKind = (lvkObject, lvkArray, lvkString, lvkInteger, lvkOther);
@@ -150,6 +166,7 @@ const
   COMMIT_KEY = 'commit';
   ARTIFACTS_KEY = 'artifacts';
   SHA256_KEY = 'sha256';
+  LOCK_TEXT_CAPACITY = 4096;
 
 function LockRefKindName(const AKind: TGocciaLockRefKind): string;
 begin
@@ -546,6 +563,73 @@ begin
   end;
   Result := FLockfile;
   FLockfile := nil;
+end;
+
+function SerializeLockfile(const ALockfile: TGocciaLockfile): string;
+var
+  Buffer: TStringBuffer;
+  Keys: TStringList;
+  I, J: Integer;
+  Package: TGocciaLockedPackage;
+begin
+  Keys := TStringList.Create;
+  try
+    Keys.UseLocale := False;
+    Keys.CaseSensitive := True;
+    for Package in ALockfile.Packages do
+      Keys.AddObject(Package.Key, Package);
+    Keys.Sort;
+    Buffer := TStringBuffer.Create(LOCK_TEXT_CAPACITY);
+    Buffer.Append('{' + #10 + '  "packages": {');
+    for I := 0 to Keys.Count - 1 do
+    begin
+      Package := TGocciaLockedPackage(Keys.Objects[I]);
+      Package.SortArtifacts;
+      if I > 0 then
+        Buffer.Append(',');
+      Buffer.Append(#10 + '    ' + QuoteJSONString(Package.Key) + ': {' +
+        #10 + '      "artifacts": {');
+      for J := 0 to Package.ArtifactCount - 1 do
+      begin
+        if J > 0 then
+          Buffer.Append(',');
+        Buffer.Append(#10 + '        ' +
+          QuoteJSONString(Package.Artifact(J).Path) + ': {' + #10 +
+          '          "sha256": ' + QuoteJSONString(Package.Artifact(J).SHA256) +
+          #10 + '        }');
+      end;
+      if Package.ArtifactCount > 0 then
+        Buffer.Append(#10 + '      ');
+      Buffer.Append('},' + #10 + '      "commit": ' +
+        QuoteJSONString(Package.Commit) + ',' + #10 + '      "ref": ' +
+        QuoteJSONString(LockRefKindName(Package.RefKind)) + #10 + '    }');
+    end;
+    if Keys.Count > 0 then
+      Buffer.Append(#10 + '  ');
+    Buffer.Append('},' + #10 + '  "version": ' + IntToStr(LOCKFILE_VERSION) +
+      #10 + '}' + #10);
+    Result := Buffer.ToString;
+  finally
+    Keys.Free;
+  end;
+end;
+
+procedure SaveLockfile(const APath: string; const ALockfile: TGocciaLockfile);
+var
+  Bytes: TBytes;
+  ErrorMessage, Text: string;
+  ErrorOffset: Integer;
+begin
+  Text := SerializeLockfile(ALockfile);
+  { Never write what the reader would refuse. }
+  ParseLockfile(Text, APath).Free;
+  if not TryEncodeUTF8(Text, Bytes, ErrorOffset) then
+    raise EGocciaLockfileError.CreateFmt('%s cannot be encoded as UTF-8',
+      [APath]);
+  if not ReplaceHostFile(APath, APath + '.goccia-write-' +
+     IntToStr(GetProcessID), Bytes, ErrorMessage) then
+    raise EGocciaLockfileError.CreateFmt('cannot write %s: %s',
+      [APath, ErrorMessage]);
 end;
 
 function ParseLockfile(const AText, ALocation: string): TGocciaLockfile;

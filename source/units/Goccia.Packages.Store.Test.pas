@@ -511,7 +511,7 @@ begin
     end;
     Expect<string>(Message).ToBe(
       'github:frostney/GocciaScript-Raylib@v0.11.0 is not pinned in ' +
-      'goccia.lock.json');
+      'goccia.lock.json; run GocciaRunner --install');
   finally
     Store.Free;
   end;

@@ -42,6 +42,7 @@ consulted it, allow and deny alike:
 | `ffi.open` | An `ffi` decision for a library-open attempt |
 | `import.node-modules` | An `import` decision for a bare specifier resolved against `node_modules`; one a virtual module, import-map alias, or host module serves never reaches `node_modules` and emits none |
 | `import.provider` | A [provider import](provider-imports.md) decision: the grant for a package, each file fetched, and each cached or loaded file checked against its pin |
+| `import.provider.install` | A change install mode made to a provider pin, or one it refused |
 
 The remaining kinds report engine features that are not capabilities:
 

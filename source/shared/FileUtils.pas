@@ -29,18 +29,22 @@ const
   HOST_O_NOFOLLOW = BaseUnix.O_NOFOLLOW;
   HOST_O_DIRECTORY = BaseUnix.O_DIRECTORY;
   {$IFEND}
+  { The same on every Linux architecture this project builds for. }
+  HOST_O_CLOEXEC = $80000;
   HOST_AT_FDCWD = -100;
   HOST_AT_SYMLINK_NOFOLLOW = $100;
   HOST_AT_REMOVEDIR = $200;
   {$ELSEIF DEFINED(DARWIN)}
   HOST_O_NOFOLLOW = $0100;
   HOST_O_DIRECTORY = $100000;
+  HOST_O_CLOEXEC = $1000000;
   HOST_AT_FDCWD = -2;
   HOST_AT_SYMLINK_NOFOLLOW = $20;
   HOST_AT_REMOVEDIR = $80;
   {$ELSEIF DEFINED(FREEBSD)}
   HOST_O_NOFOLLOW = $0100;
   HOST_O_DIRECTORY = $20000;
+  HOST_O_CLOEXEC = $100000;
   HOST_AT_FDCWD = -100;
   HOST_AT_SYMLINK_NOFOLLOW = $200;
   HOST_AT_REMOVEDIR = $800;
@@ -219,6 +223,21 @@ function ReplaceHostFileBeneath(const ARoot: string;
   const ARootIdentity: THostDirectoryIdentity;
   const ARelativePath, ATemporarySuffix: string; const ABytes: TBytes;
   out AError: string): Boolean;
+
+{ Deletes ARelativePath under the directory ARoot and everything below it,
+  following no symbolic link: a link met anywhere is removed itself, never
+  its target. On POSIX every directory is opened without following a link
+  and entries are removed relative to it (`unlinkat`). On Windows every
+  object is opened as itself (a reparse point too) and held without delete
+  sharing, so nothing on the way can be renamed or replaced; its attributes
+  are read from the handle, and it is deleted through that handle. True when nothing is left, including when the path
+  did not exist; False with AError otherwise. }
+function RemoveHostTreeBeneath(const ARoot, ARelativePath: string;
+  out AError: string): Boolean;
+
+{ The POSIX permission bits of the file APath. False where the host has no
+  POSIX modes, or the file cannot be examined. }
+function TryHostFileMode(const APath: string; out AMode: Cardinal): Boolean;
 
 implementation
 
@@ -1485,5 +1504,345 @@ begin
   Result := ReadFileBytes(APath);
 end;
 {$ENDIF}
+
+function TryHostFileMode(const APath: string; out AMode: Cardinal): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+const
+  PERMISSION_BITS = &7777;
+var
+  Info: Stat;
+  PathBytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  AMode := 0;
+  Result := TryEncodeUTF8NullTerminated(APath, PathBytes, ErrorOffset) and
+    (fpStat(PAnsiChar(@PathBytes[0]), Info) = 0);
+  if Result then
+    AMode := Info.st_mode and PERMISSION_BITS;
+end;
+{$ELSE}
+begin
+  AMode := 0;
+  Result := False;
+end;
+{$IFEND}
+
+function RemoveHostTreeBeneath(const ARoot, ARelativePath: string;
+  out AError: string): Boolean;
+{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+var
+  Parts: TStringList;
+  Directory, Next: cint;
+  NameBytes: TBytes;
+  ErrorOffset, I: Integer;
+  ListingPath: string;
+
+  function Encode(const AText: string; out ABytes: TBytes): Boolean;
+  begin
+    Result := TryEncodeUTF8NullTerminated(AText, ABytes, ErrorOffset);
+    if not Result then
+      AError := 'path cannot be encoded for the host';
+  end;
+
+  { Removes AName in the directory AParent. The names below a directory are
+    listed by path, which may name something else if a link was swapped in,
+    but every removal is relative to the descriptor opened without following
+    a link, so nothing outside the tree can be removed. }
+  function RemoveEntry(const AParent: cint; const AName,
+    APath: string): Boolean;
+  var
+    Child: cint;
+    Entry: PDirent;
+    Listing: PDir;
+    Names: TStringList;
+    Bytes: TBytes;
+    J: Integer;
+  begin
+    Result := False;
+    if not Encode(AName, Bytes) then
+      Exit;
+    Child := HostOpenAt(AParent, PAnsiChar(@Bytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if Child < 0 then
+    begin
+      { A file or a link: removed itself. }
+      if (HostUnlinkAt(AParent, PAnsiChar(@Bytes[0]), 0) <> 0) and
+         (fpgetCerrno <> ESysENOENT) then
+      begin
+        AError := Format('cannot remove %s: %s', [APath,
+          SysErrorMessage(fpgetCerrno)]);
+        Exit;
+      end;
+      Exit(True);
+    end;
+    Names := TStringList.Create;
+    try
+      Listing := fpOpenDir(APath);
+      if Assigned(Listing) then
+      try
+        repeat
+          Entry := fpReadDir(Listing^);
+          if Assigned(Entry) and (StrPas(PAnsiChar(@Entry^.d_name[0])) <> '.')
+             and (StrPas(PAnsiChar(@Entry^.d_name[0])) <> '..') then
+            Names.Add(StrPas(PAnsiChar(@Entry^.d_name[0])));
+        until not Assigned(Entry);
+      finally
+        fpCloseDir(Listing^);
+      end;
+      for J := 0 to Names.Count - 1 do
+        if not RemoveEntry(Child, Names[J], APath + PathDelim + Names[J]) then
+          Exit;
+    finally
+      Names.Free;
+      fpClose(Child);
+    end;
+    if (HostUnlinkAt(AParent, PAnsiChar(@Bytes[0]), HOST_AT_REMOVEDIR) <> 0)
+       and (fpgetCerrno <> ESysENOENT) then
+    begin
+      AError := Format('cannot remove %s: %s', [APath,
+        SysErrorMessage(fpgetCerrno)]);
+      Exit;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+  AError := '';
+  Parts := SplitRelativeHostPath(ARelativePath);
+  Directory := -1;
+  try
+    if Parts.Count = 0 then
+    begin
+      AError := 'no path below ' + ARoot;
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+    if not Encode(ARoot, NameBytes) then
+      Exit;
+    Directory := fpOpen(PAnsiChar(@NameBytes[0]),
+      O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+    if Directory < 0 then
+    begin
+      AError := ARoot + ' is a symbolic link or not a directory';
+      Exit;
+    end;
+    ListingPath := ExcludeTrailingPathDelimiter(ARoot);
+    for I := 0 to Parts.Count - 2 do
+    begin
+      if not Encode(Parts[I], NameBytes) then
+        Exit;
+      Next := HostOpenAt(Directory, PAnsiChar(@NameBytes[0]),
+        O_RDONLY or HOST_O_DIRECTORY or HOST_O_NOFOLLOW);
+      if Next < 0 then
+      begin
+        if fpgetCerrno = ESysENOENT then
+          Exit(True);
+        AError := Parts[I] + ' is a symbolic link or not a directory';
+        Exit;
+      end;
+      fpClose(Directory);
+      Directory := Next;
+      ListingPath := ListingPath + PathDelim + Parts[I];
+    end;
+    Result := RemoveEntry(Directory, Parts[Parts.Count - 1],
+      ListingPath + PathDelim + Parts[Parts.Count - 1]);
+  finally
+    if Directory >= 0 then
+      fpClose(Directory);
+    Parts.Free;
+  end;
+end;
+{$ELSEIF DEFINED(MSWINDOWS)}
+const
+  { CreateFileW flags and FILE_INFO_BY_HANDLE_CLASS values (winbase.h). }
+  OPEN_REPARSE_POINT_FLAG = $00200000;
+  BACKUP_SEMANTICS_FLAG = $02000000;
+  FILE_DISPOSITION_INFO_CLASS = 4;
+  FILE_DISPOSITION_INFO_EX_CLASS = 21;
+  FILE_DISPOSITION_FLAG_DELETE = $00000001;
+  FILE_DISPOSITION_FLAG_POSIX_SEMANTICS = $00000002;
+  FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE = $00000010;
+  { FILE_LIST_DIRECTORY or FILE_READ_ATTRIBUTES; DELETE for what is
+    removed. }
+  HOLD_ACCESS = $00000001 or $00000080;
+  ENTRY_ACCESS = HOLD_ACCESS or DELETE_ACCESS;
+var
+  Held: array of THandle;
+  Parts: TStringList;
+  Path: string;
+  Handle: THandle;
+  Attributes: DWORD;
+  I: Integer;
+
+  { Opens APath itself, a reparse point as itself, and holds it: without
+    FILE_SHARE_DELETE nobody can rename, delete, or replace it, or any
+    directory on its path, while the handle is open. }
+  function OpenHeld(const APath: string; const AAccess: DWORD;
+    out AHandle: THandle; out AAttributes: DWORD;
+    out AMissing: Boolean): Boolean;
+  var
+    Information: BY_HANDLE_FILE_INFORMATION;
+    LastError: DWORD;
+  begin
+    Result := False;
+    AMissing := False;
+    AAttributes := 0;
+    AHandle := CreateFileW(PWideChar(UnicodeString(APath)), AAccess,
+      FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,
+      BACKUP_SEMANTICS_FLAG or OPEN_REPARSE_POINT_FLAG, 0);
+    if AHandle = INVALID_HANDLE_VALUE then
+    begin
+      LastError := GetLastError;
+      AMissing := (LastError = ERROR_FILE_NOT_FOUND) or
+        (LastError = ERROR_PATH_NOT_FOUND);
+      if not AMissing then
+        AError := Format('cannot open %s: %s', [APath,
+          SysErrorMessage(LastError)]);
+      Exit;
+    end;
+    if not GetFileInformationByHandle(AHandle, Information) then
+    begin
+      AError := Format('cannot examine %s: %s', [APath,
+        SysErrorMessage(GetLastError)]);
+      CloseHandle(AHandle);
+      AHandle := INVALID_HANDLE_VALUE;
+      Exit;
+    end;
+    AAttributes := Information.dwFileAttributes;
+    Result := True;
+  end;
+
+  { Marks the object AHandle holds for deletion, which happens when the
+    handle closes: the object checked is the object deleted. POSIX
+    semantics where the system has them (Windows 10 1709 and later, NTFS),
+    else the classic disposition. }
+  function DeleteHeld(const AHandle: THandle; const APath: string): Boolean;
+  var
+    Flags: DWORD;
+    Dispose: ByteBool;
+  begin
+    Flags := FILE_DISPOSITION_FLAG_DELETE or
+      FILE_DISPOSITION_FLAG_POSIX_SEMANTICS or
+      FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE;
+    Result := SetFileInformationByHandle(AHandle,
+      FILE_DISPOSITION_INFO_EX_CLASS, @Flags, SizeOf(Flags));
+    if Result then
+      Exit;
+    Dispose := True;
+    Result := SetFileInformationByHandle(AHandle, FILE_DISPOSITION_INFO_CLASS,
+      @Dispose, SizeOf(Dispose));
+    if not Result then
+      AError := Format('cannot remove %s: %s', [APath,
+        SysErrorMessage(GetLastError)]);
+  end;
+
+  function RemoveEntry(const APath: string): Boolean;
+  var
+    EntryHandle: THandle;
+    EntryAttributes: DWORD;
+    Missing: Boolean;
+    SearchRecord: TSearchRec;
+  begin
+    Result := False;
+    if not OpenHeld(APath, ENTRY_ACCESS, EntryHandle, EntryAttributes,
+       Missing) then
+      Exit(Missing);
+    try
+      { A directory is entered only when it is not a reparse point; while
+        it is held its children are listed by a path that cannot change. }
+      if ((EntryAttributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
+         ((EntryAttributes and FILE_ATTRIBUTE_REPARSE_POINT) = 0) then
+      begin
+        if FindFirst(IncludeTrailingPathDelimiter(APath) + '*', faAnyFile,
+           SearchRecord) = 0 then
+        try
+          repeat
+            if (SearchRecord.Name = '.') or (SearchRecord.Name = '..') then
+              Continue;
+            if not RemoveEntry(IncludeTrailingPathDelimiter(APath) +
+               SearchRecord.Name) then
+              Exit;
+          until FindNext(SearchRecord) <> 0;
+        finally
+          FindClose(SearchRecord);
+        end;
+      end;
+      Result := DeleteHeld(EntryHandle, APath);
+    finally
+      CloseHandle(EntryHandle);
+    end;
+  end;
+
+  procedure Hold(const AHandle: THandle);
+  begin
+    SetLength(Held, Length(Held) + 1);
+    Held[High(Held)] := AHandle;
+  end;
+
+var
+  Missing: Boolean;
+begin
+  Result := False;
+  AError := '';
+  Held := nil;
+  Parts := SplitRelativeHostPath(ARelativePath);
+  try
+    if Parts.Count = 0 then
+    begin
+      AError := 'no path below ' + ARoot;
+      Exit;
+    end;
+    for I := 0 to Parts.Count - 1 do
+      if (Parts[I] = '.') or (Parts[I] = '..') then
+      begin
+        AError := 'the path climbs out of ' + ARoot;
+        Exit;
+      end;
+    { The root and every directory on the way are held for the whole
+      removal, and none may be a reparse point. }
+    Path := ExcludeTrailingPathDelimiter(ARoot);
+    for I := -1 to Parts.Count - 2 do
+    begin
+      if I >= 0 then
+        Path := Path + PathDelim + Parts[I];
+      if not OpenHeld(Path, HOLD_ACCESS, Handle, Attributes, Missing) then
+      begin
+        if Missing and (I >= 0) then
+          Result := True
+        else if Missing then
+          AError := ARoot + ' does not exist';
+        Exit;
+      end;
+      Hold(Handle);
+      if (Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0 then
+      begin
+        AError := Path + ' is a reparse point';
+        Exit;
+      end;
+      if (Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0 then
+      begin
+        AError := Path + ' is not a directory';
+        Exit;
+      end;
+    end;
+    Result := RemoveEntry(Path + PathDelim + Parts[Parts.Count - 1]);
+  finally
+    for I := High(Held) downto 0 do
+      CloseHandle(Held[I]);
+    Parts.Free;
+  end;
+end;
+{$ELSE}
+begin
+  AError := 'this build cannot remove a directory tree';
+  Result := False;
+end;
+{$IFEND}
 
 end.

@@ -15,7 +15,8 @@ uses
   Goccia.Constants,
   Goccia.Lexer,
   Goccia.OriginMap,
-  Goccia.SourceMap;
+  Goccia.SourceMap,
+  Goccia.Token;
 
 type
   TGocciaPreprocessor = (ppJSX);
@@ -41,7 +42,19 @@ type
       reads the parse result may. Off by default so an ordinary run does not
       pay for the array. }
     CollectComments: Boolean;
+    { Opt-in copy of the committed token stream, lexed with the goals the
+      parser chose. The provider package crawl reads literal import
+      specifiers from it. Off by default. }
+    CollectTokens: Boolean;
   end;
+
+  { One token of TGocciaSourcePipelineResult.Tokens. }
+  TGocciaSourceToken = record
+    TokenType: TGocciaTokenType;
+    Lexeme: string;
+  end;
+
+  TGocciaSourceTokenArray = array of TGocciaSourceToken;
 
   TGocciaFunctionBodyParseResult = record
     IsValid: Boolean;
@@ -66,6 +79,7 @@ type
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
     FComments: TGocciaCommentSpanArray;
+    FTokens: TGocciaSourceTokenArray;
     FWarnings: array of TGocciaSourcePipelineWarning;
     FWarningCount: Integer;
 
@@ -88,6 +102,8 @@ type
     property GeneratedSourceLines: TStringList read FGeneratedSourceLines;
     { Empty unless the run asked for comments. Ordered by start offset. }
     property Comments: TGocciaCommentSpanArray read FComments;
+    { Empty unless the run asked for tokens. In source order, EOF last. }
+    property Tokens: TGocciaSourceTokenArray read FTokens;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
     property WarningCount: Integer read FWarningCount;
@@ -166,8 +182,7 @@ uses
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.JSX.Transformer,
-  Goccia.Parser,
-  Goccia.Token;
+  Goccia.Parser;
 
 threadvar
   // Non-owning "active scope" pointer, save/restored around each pipeline run
@@ -499,6 +514,7 @@ begin
   Result.SourceType := stScript;
   Result.InheritedStrictMode := False;
   Result.CollectComments := False;
+  Result.CollectTokens := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
@@ -592,6 +608,15 @@ begin
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
           if AOptions.CollectComments then
             Result.FComments := Lexer.TakeComments;
+          if AOptions.CollectTokens then
+          begin
+            SetLength(Result.FTokens, Lexer.Tokens.Count);
+            for I := 0 to Lexer.Tokens.Count - 1 do
+            begin
+              Result.FTokens[I].TokenType := Lexer.Tokens[I].TokenType;
+              Result.FTokens[I].Lexeme := Lexer.Tokens[I].Lexeme;
+            end;
+          end;
 
           for I := 0 to Parser.WarningCount - 1 do
           begin

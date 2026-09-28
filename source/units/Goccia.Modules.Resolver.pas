@@ -338,19 +338,10 @@ function TGocciaModuleResolver.ResolveExternalAliasTarget(const AModulePath,
   ATarget, AImportingFilePath: string): string;
 var
   Address: TGocciaProviderAddress;
-  Candidates: array of string;
-  Error, ImportMapPath, Pin, Stem: string;
-  Extensions: TModuleResolverExtensionArray;
+  Candidates: TGocciaPackagePathArray;
+  Error, ImportMapPath, Pin: string;
   I: Integer;
   Package: TGocciaMaterializedPackage;
-  TypeScriptCandidates: TFileExtensionArray;
-
-  procedure AddCandidate(const ACandidate: string);
-  begin
-    SetLength(Candidates, Length(Candidates) + 1);
-    Candidates[High(Candidates)] := ACandidate;
-  end;
-
 begin
   if not TryParseProviderAddress(ATarget, Address, Error) then
     raise EGocciaProviderResolutionError.CreateWithCandidate(Format(
@@ -379,22 +370,7 @@ begin
         E.Detail);
   end;
 
-  Candidates := nil;
-  Extensions := GetExtensions;
-  if Address.IsPrefix then
-    Stem := Address.Path
-  else
-  begin
-    AddCandidate(Address.Path);
-    TypeScriptCandidates := TypeScriptSourceCandidates(Address.Path);
-    for I := 0 to High(TypeScriptCandidates) do
-      AddCandidate(TypeScriptCandidates[I]);
-    for I := 0 to High(Extensions) do
-      AddCandidate(Address.Path + Extensions[I]);
-    Stem := Address.Path + '/';
-  end;
-  for I := 0 to High(Extensions) do
-    AddCandidate(Stem + 'index' + Extensions[I]);
+  Candidates := PackageModuleCandidates(Address.Path, GetExtensions);
 
   SetProbePackageDirectory(Package.Root);
   try

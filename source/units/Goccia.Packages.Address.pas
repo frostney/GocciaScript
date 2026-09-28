@@ -23,11 +23,15 @@ const
   SHA256_HEX_LENGTH = 64;
   { The only host a run fetches package files from. }
   GITHUB_RAW_HOST = 'raw.githubusercontent.com';
+  { The only host install mode resolves refs from (`info/refs`). }
+  GITHUB_HOST = 'github.com';
   PACKAGE_CACHE_DIRECTORY_NAME = '.goccia';
   PACKAGES_CACHE_DIRECTORY_NAME = 'packages';
   GITHUB_CACHE_DIRECTORY_NAME = 'github';
 
 type
+  TGocciaPackagePathArray = array of string;
+
   TGocciaProviderAddress = record
     Owner: string;
     Repository: string;
@@ -76,6 +80,13 @@ function IsSafeArtifactPath(const APath: string): Boolean;
 function PackageCacheRelativeDirectory(const AOwner, ARepository,
   ACommit: string): string;
 
+{ The package files a module path may name, in the resolver's candidate
+  order: the path itself, its TypeScript sources, the path with each
+  extension, then `<path>/index.<ext>`. A path that is empty or ends with
+  `/` names a directory and has only index candidates. `/`-separated. }
+function PackageModuleCandidates(const APath: string;
+  const AExtensions: array of string): TGocciaPackagePathArray;
+
 { The pinned URL of one package file. Neither the import map nor the
   lockfile can name a URL: it is always derived. }
 function PackageArtifactURL(const AOwner, ARepository, ACommit,
@@ -84,7 +95,9 @@ function PackageArtifactURL(const AOwner, ARepository, ACommit,
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.FileExtensions;
 
 const
   MAX_OWNER_LENGTH = 39;
@@ -339,6 +352,37 @@ end;
 function TGocciaProviderAddress.IsPrefix: Boolean;
 begin
   Result := (Path = '') or (Path[Length(Path)] = '/');
+end;
+
+function PackageModuleCandidates(const APath: string;
+  const AExtensions: array of string): TGocciaPackagePathArray;
+var
+  Stem: string;
+  I: Integer;
+  TypeScriptCandidates: TFileExtensionArray;
+
+  procedure Add(const ACandidate: string);
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := ACandidate;
+  end;
+
+begin
+  Result := nil;
+  if (APath = '') or (APath[Length(APath)] = '/') then
+    Stem := APath
+  else
+  begin
+    Add(APath);
+    TypeScriptCandidates := TypeScriptSourceCandidates(APath);
+    for I := 0 to High(TypeScriptCandidates) do
+      Add(TypeScriptCandidates[I]);
+    for I := Low(AExtensions) to High(AExtensions) do
+      Add(APath + AExtensions[I]);
+    Stem := APath + '/';
+  end;
+  for I := Low(AExtensions) to High(AExtensions) do
+    Add(Stem + 'index' + AExtensions[I]);
 end;
 
 function PackageCacheRelativeDirectory(const AOwner, ARepository,

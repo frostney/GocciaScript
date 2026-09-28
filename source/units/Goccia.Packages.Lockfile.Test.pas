@@ -7,6 +7,7 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Packages.Address,
   Goccia.Packages.Lockfile,
   Goccia.TestSetup;
 
@@ -32,6 +33,8 @@ type
     procedure TestRefMustMatchKind;
     procedure TestRejectsNewerAndOlderVersions;
     procedure TestRejectsInvalidJSON;
+    procedure TestWritesDeterministically;
+    procedure TestRoundTrips;
   public
     procedure SetupTests; override;
   end;
@@ -49,6 +52,8 @@ begin
   Test('The ref kind must match the key', TestRefMustMatchKind);
   Test('Rejects other lockfile versions', TestRejectsNewerAndOlderVersions);
   Test('Rejects invalid JSON', TestRejectsInvalidJSON);
+  Test('Writes deterministically', TestWritesDeterministically);
+  Test('A written lockfile reads back unchanged', TestRoundTrips);
 end;
 
 function TLockfileTests.Lock(const APackages: string): string;
@@ -259,6 +264,109 @@ begin
     > 0).ToBe(True);
   { Comments and trailing commas are JSON5, not JSON. }
   Expect<Boolean>(Rejects('{"version": 1, "packages": {},}')).ToBe(True);
+end;
+
+function BuildLockfile(const AReverse: Boolean): TGocciaLockfile;
+var
+  Address: TGocciaProviderAddress;
+  Error: string;
+  Package: TGocciaLockedPackage;
+  Keys: array[0..1] of string;
+  I: Integer;
+begin
+  Result := TGocciaLockfile.Create;
+  Keys[0] := 'github:o/b@v1';
+  Keys[1] := 'github:o/a@' + COMMIT;
+  for I := 0 to 1 do
+  begin
+    TryParsePackageKey(Keys[I], Address, Error);
+    Package := TGocciaLockedPackage.Create(Keys[I], Address);
+    Package.Commit := COMMIT;
+    if I = 1 then
+      Package.RefKind := lrkCommit
+    else
+      Package.RefKind := lrkTag;
+    if AReverse then
+    begin
+      Package.AddArtifact('z.ts', HASH_B);
+      Package.AddArtifact('a/b.ts', HASH_A);
+    end
+    else
+    begin
+      Package.AddArtifact('a/b.ts', HASH_A);
+      Package.AddArtifact('z.ts', HASH_B);
+    end;
+    if AReverse then
+      Result.Packages.Insert(0, Package)
+    else
+      Result.Packages.Add(Package);
+  end;
+end;
+
+procedure TLockfileTests.TestWritesDeterministically;
+var
+  First, Second: TGocciaLockfile;
+begin
+  First := BuildLockfile(False);
+  Second := BuildLockfile(True);
+  try
+    Expect<string>(SerializeLockfile(First)).ToBe(SerializeLockfile(Second));
+    Expect<string>(SerializeLockfile(First)).ToBe(
+      '{' + #10 +
+      '  "packages": {' + #10 +
+      '    "github:o/a@' + COMMIT + '": {' + #10 +
+      '      "artifacts": {' + #10 +
+      '        "a/b.ts": {' + #10 +
+      '          "sha256": "' + HASH_A + '"' + #10 +
+      '        },' + #10 +
+      '        "z.ts": {' + #10 +
+      '          "sha256": "' + HASH_B + '"' + #10 +
+      '        }' + #10 +
+      '      },' + #10 +
+      '      "commit": "' + COMMIT + '",' + #10 +
+      '      "ref": "commit"' + #10 +
+      '    },' + #10 +
+      '    "github:o/b@v1": {' + #10 +
+      '      "artifacts": {' + #10 +
+      '        "a/b.ts": {' + #10 +
+      '          "sha256": "' + HASH_A + '"' + #10 +
+      '        },' + #10 +
+      '        "z.ts": {' + #10 +
+      '          "sha256": "' + HASH_B + '"' + #10 +
+      '        }' + #10 +
+      '      },' + #10 +
+      '      "commit": "' + COMMIT + '",' + #10 +
+      '      "ref": "tag"' + #10 +
+      '    }' + #10 +
+      '  },' + #10 +
+      '  "version": 1' + #10 +
+      '}' + #10);
+    First.Packages.Clear;
+    Expect<string>(SerializeLockfile(First)).ToBe(
+      '{' + #10 + '  "packages": {},' + #10 + '  "version": 1' + #10 + '}' +
+      #10);
+  finally
+    First.Free;
+    Second.Free;
+  end;
+end;
+
+procedure TLockfileTests.TestRoundTrips;
+var
+  Original, Reread: TGocciaLockfile;
+begin
+  Original := BuildLockfile(True);
+  try
+    Reread := ParseLockfile(SerializeLockfile(Original), 'goccia.lock.json');
+    try
+      Expect<string>(SerializeLockfile(Reread))
+        .ToBe(SerializeLockfile(Original));
+    finally
+      Reread.Free;
+    end;
+  finally
+    Original.Free;
+  end;
 end;
 
 begin

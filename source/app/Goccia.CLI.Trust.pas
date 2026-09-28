@@ -318,6 +318,7 @@ uses
   DateUtils,
 
   FileUtils,
+  HostFileLock,
   JSONParser,
   NumericText,
   StringBuffer,
@@ -1292,104 +1293,22 @@ end;
 
 { ── The writers' lock ─────────────────────────────────────────── }
 
-type
-  { An OS-level exclusive lock on the store's lock file (flock on POSIX,
-    LockFileEx on Windows). The system releases it when its holder exits,
-    crashed or not, so a lock can never outlive its writer and nothing has to
-    guess whether a lock is stale. The lock file itself stays in place. }
-  TStoreLock = record
-    {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-    Handle: cint;
-    {$ELSEIF DEFINED(MSWINDOWS)}
-    Handle: THandle;
-    {$IFEND}
-    Held: Boolean;
-  end;
-
-{ Tries once to take the lock on ALockPath without waiting. False when
-  another writer holds it. }
+{ Tries once to take the writers' lock on ALockPath without waiting. False
+  when another writer holds it. }
 function TryAcquireStoreLock(const ALockPath: string;
-  out ALock: TStoreLock): Boolean;
-{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+  out ALock: THostFileLock): Boolean;
 var
-  PathBytes: TBytes;
-  ErrorOffset: Integer;
+  Error: string;
 begin
-  ALock := Default(TStoreLock);
-  { A link planted at the lock's name would make the open touch its target. }
-  if HostPathIsSymlink(ALockPath) then
-    raise EGocciaTrustStoreError.CreateFmt('%s is a symbolic link',
-      [ALockPath]);
-  if not TryEncodeUTF8NullTerminated(ALockPath, PathBytes, ErrorOffset) then
-    raise EGocciaTrustStoreError.CreateFmt(
-      'cannot encode the lock file path %s', [ALockPath]);
-  ALock.Handle := fpOpen(PAnsiChar(@PathBytes[0]), O_RDWR or O_CREAT,
-    STORE_FILE_MODE);
-  if ALock.Handle < 0 then
-    raise EGocciaTrustStoreError.CreateFmt('cannot open %s: %s',
-      [ALockPath, SysErrorMessage(fpgeterrno)]);
-  if fpFlock(ALock.Handle, LOCK_EX or LOCK_NB) <> 0 then
-  begin
-    fpClose(ALock.Handle);
-    Exit(False);
+  case TryAcquireHostFileLock(ALockPath, STORE_FILE_MODE, ALock, Error) of
+    hflAcquired:
+      Result := True;
+    hflHeld:
+      Result := False;
+  else
+    raise EGocciaTrustStoreError.Create(Error);
   end;
-  ALock.Held := True;
-  Result := True;
 end;
-{$ELSEIF DEFINED(MSWINDOWS)}
-var
-  Overlapped: TOverlapped;
-begin
-  ALock := Default(TStoreLock);
-  ALock.Handle := CreateFileW(PWideChar(UnicodeString(ALockPath)),
-    GENERIC_READ or GENERIC_WRITE,
-    FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
-    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-  if ALock.Handle = INVALID_HANDLE_VALUE then
-    raise EGocciaTrustStoreError.CreateFmt('cannot open %s: %s',
-      [ALockPath, SysErrorMessage(GetLastError)]);
-  FillChar(Overlapped, SizeOf(Overlapped), 0);
-  if not LockFileEx(ALock.Handle, LOCKFILE_EXCLUSIVE_LOCK or
-     LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, Overlapped) then
-  begin
-    CloseHandle(ALock.Handle);
-    Exit(False);
-  end;
-  ALock.Held := True;
-  Result := True;
-end;
-{$ELSE}
-begin
-  ALock := Default(TStoreLock);
-  raise EGocciaTrustStoreError.Create('this build cannot write a trust store');
-end;
-{$IFEND}
-
-procedure ReleaseStoreLock(var ALock: TStoreLock);
-{$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
-begin
-  if not ALock.Held then
-    Exit;
-  fpFlock(ALock.Handle, LOCK_UN);
-  fpClose(ALock.Handle);
-  ALock.Held := False;
-end;
-{$ELSEIF DEFINED(MSWINDOWS)}
-var
-  Overlapped: TOverlapped;
-begin
-  if not ALock.Held then
-    Exit;
-  FillChar(Overlapped, SizeOf(Overlapped), 0);
-  UnlockFileEx(ALock.Handle, 0, 1, 0, Overlapped);
-  CloseHandle(ALock.Handle);
-  ALock.Held := False;
-end;
-{$ELSE}
-begin
-  ALock.Held := False;
-end;
-{$IFEND}
 
 
 procedure TGocciaTrustStore.WriteFile;
@@ -1407,7 +1326,7 @@ end;
 procedure TGocciaTrustStore.Save;
 var
   LockPath, Directory: string;
-  Lock: TStoreLock;
+  Lock: THostFileLock;
   Waited: Integer;
   I: Integer;
 begin
@@ -1440,7 +1359,7 @@ begin
     WriteFile;
     FChanges := nil;
   finally
-    ReleaseStoreLock(Lock);
+    ReleaseHostFileLock(Lock);
   end;
 end;
 
