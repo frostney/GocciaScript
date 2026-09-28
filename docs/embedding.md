@@ -14,7 +14,7 @@ Native application embedding is an important secondary GocciaScript goal. `TGocc
 
 ## Quick Start
 
-The simplest way to run a script with the loader runtime surface:
+The simplest way to run a script with the loader runtime surface (`uses Classes, Goccia.Runtime, Goccia.RuntimeProfiles.Loader;`):
 
 ```pascal
 Source := TStringList.Create;
@@ -213,7 +213,7 @@ import { formatDate } from "@/utils/dates";
 
 `TGocciaModuleResolver` also exposes `LoadImportMap(path)` and `DiscoverProjectConfig(startDirectory)` helpers for browser-style import map JSON and `goccia.json` project configuration files. The shared CLI hosts (`GocciaRunner`, `GocciaTestRunner`, and `GocciaBenchmarkRunner`) all use `Goccia.Modules.Configuration.ConfigureModuleResolver(...)` on top of this resolver surface.
 
-**Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, register their parsers first via `RegisterConfigParser` (see `Goccia.CLI.Application.pas` for the pattern). For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
+**Config file discovery is automatic for CLI apps** — `TGocciaCLIApplication` discovers `goccia.toml` / `goccia.json5` / `goccia.json` (priority order: TOML > JSON5 > JSON) from the entry file's directory upward and applies config values before execution. When embedding the engine directly, this does not happen automatically. To replicate it, use the general-purpose `CLI.ConfigFile` unit (`DiscoverConfigFile`, `ApplyConfigFile`). Note that `ApplyConfigFile` only handles `.json` by default — to support `.json5` and `.toml`, call `EnsureConfigParsersRegistered` (in `Goccia.CLI.Application`) first, or register your own parsers with `RegisterConfigParser`. For import-map resolution only, use `TGocciaModuleResolver.DiscoverProjectConfig` and `LoadImportMap`. See [Configuration File](build-system.md#configuration-file-gocciajson) for the full reference.
 
 ### Bare Specifiers and node_modules
 
@@ -402,7 +402,9 @@ uses
   Classes,
 
   Goccia.Builtins.Console,
-  Goccia.Runtime;
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.Console,
+  Goccia.RuntimeProfiles.Loader;
 
 type
   TMyLogger = class
@@ -621,12 +623,12 @@ uses
 
 type
   TMyHost = class
-    function GetTimestamp(AArgs: TGocciaArgumentsCollection;
-      AThisValue: TGocciaValue): TGocciaValue;
+    function GetTimestamp(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function TMyHost.GetTimestamp(AArgs: TGocciaArgumentsCollection;
-  AThisValue: TGocciaValue): TGocciaValue;
+function TMyHost.GetTimestamp(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaNumberLiteralValue.Create(DateTimeToUnix(Now));
 end;
@@ -663,14 +665,12 @@ end;
 The callback signature is:
 
 ```pascal
-TGocciaNativeFunctionCallback = function(
-  Args: TGocciaArgumentsCollection;
-  ThisValue: TGocciaValue
-): TGocciaValue of object;
+TGocciaNativeFunctionCallback = function(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue of object;
 ```
 
-- `Args` — The arguments collection. Use `Args.Length` and `Args.GetElement(I)` to access arguments.
-- `ThisValue` — The `this` binding (relevant for method calls).
+- `AArgs` — The arguments collection. Use `AArgs.Length` and `AArgs.GetElement(I)` to access arguments.
+- `AThisValue` — The `this` binding (relevant for method calls).
 - Return value — Must be a `TGocciaValue`. Use `TGocciaUndefinedLiteralValue.UndefinedValue` for void functions.
 
 ### Injecting a Native Object with Methods
@@ -692,14 +692,14 @@ uses
 
 type
   TFileSystemAPI = class
-    function ReadFile(AArgs: TGocciaArgumentsCollection;
-      AThisValue: TGocciaValue): TGocciaValue;
-    function Exists(AArgs: TGocciaArgumentsCollection;
-      AThisValue: TGocciaValue): TGocciaValue;
+    function ReadFile(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function Exists(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
-function TFileSystemAPI.ReadFile(AArgs: TGocciaArgumentsCollection;
-  AThisValue: TGocciaValue): TGocciaValue;
+function TFileSystemAPI.ReadFile(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   Path: string;
   Content: TStringList;
@@ -714,8 +714,8 @@ begin
   end;
 end;
 
-function TFileSystemAPI.Exists(AArgs: TGocciaArgumentsCollection;
-  AThisValue: TGocciaValue): TGocciaValue;
+function TFileSystemAPI.Exists(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
 begin
   Result := TGocciaBooleanLiteralValue.Create(
     FileExists(AArgs.GetElement(0).ToStringLiteral.Value)
@@ -872,7 +872,7 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 ### Call Stack Depth Limit
 
-`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The CLI hosts set 2 200 frames (`DEFAULT_MAX_STACK_DEPTH`) unless `--max-stack` overrides it; an embedder that never calls `SetMaxStackDepth` has no limit. A value of zero disables the limit entirely.
+`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The `TGocciaCLIApplication` hosts set 2 200 frames (`DEFAULT_MAX_STACK_DEPTH`) and `GocciaScriptLoaderBare` sets 10 000, unless `--max-stack` overrides it; an embedder that never calls `SetMaxStackDepth` has no limit. A value of zero disables the limit entirely.
 
 In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
 
@@ -948,11 +948,12 @@ end;
 
 ## Existing Embeddings
 
-The repository includes five embedding examples:
+The repository includes these embedding examples:
 
 | Program | File | Description |
 |---------|------|-------------|
 | `GocciaRunner` | `source/app/GocciaRunner.dpr` | Executes source files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`) from disk or stdin, with optional JSON output, injected globals, and execution timeouts for one-shot automation |
+| `GocciaScriptLoaderBare` | `source/app/GocciaScriptLoaderBare.dpr` | Core engine with a CLI-local `print`; no runtime profile |
 | `GocciaREPL` | `source/app/GocciaREPL.dpr` | Interactive read-eval-print loop (long-lived engine) |
 | `GocciaTestRunner` | `source/app/GocciaTestRunner.dpr` | Runs test suites with the test-runner runtime profile |
 | `GocciaBenchmarkRunner` | `source/app/GocciaBenchmarkRunner.dpr` | Runs benchmarks with the benchmark-runner runtime profile from files or stdin |
@@ -962,7 +963,7 @@ These serve as reference implementations for the patterns described above.
 
 ## Application Base Class
 
-`TGocciaApplication` (`Goccia.Application.pas`) provides the standard lifecycle for any GocciaScript host application. It manages GC initialization/shutdown and unified error handling, with no CLI dependency.
+`TGocciaApplication` (`Goccia.Application.pas`) provides the standard lifecycle for any GocciaScript host application: unified error handling and exit codes, with no CLI dependency. It does not manage the GC; the first `TGocciaEngine` constructor on a thread initializes it.
 
 ```pascal
 type
@@ -973,8 +974,8 @@ type
 
 procedure TMyApp.Execute;
 begin
-  // Your application logic here
-  // GC is already initialized; errors are caught by HandleError
+  // Your application logic here; creating an engine initializes the GC
+  // Errors are caught by HandleError
 end;
 
 begin
@@ -984,9 +985,8 @@ end.
 
 **What the base class handles:**
 
-- `TGarbageCollector.Initialize` / `Shutdown` lifecycle
 - Exception dispatch via virtual `HandleError` (supports `TGocciaError`, `TGocciaThrowValue`, `EGocciaBytecodeThrow` with full source context and colored output)
-- Exit code management (0 = success, 1 = error)
+- Exit code management (0 = success, 1 = error, 2 = `TCLIUsageError`)
 
 **Overridable hooks:**
 
@@ -998,7 +998,7 @@ For CLI tools, use `TGocciaCLIApplication` instead, which adds argument parsing,
 ## Minimal Embedding Checklist
 
 1. Add `source/units/` and `source/shared/` to your FreePascal unit search path (or use `config.cfg`)
-2. `uses Goccia.Runtime, Goccia.Values.Primitives;`
+2. `uses Goccia.Runtime, Goccia.RuntimeProfiles.Loader, Goccia.Values.Primitives;`
 3. Create `TGocciaRuntime.Create(...)` for the runtime layer and file loading
 4. Use `Runtime.Engine` for engine-level options such as ASI, source type, parser diagnostic policy, and compatibility flags
 5. Choose your runtime surface, runtime globals, and `goccia:` modules via runtime profiles or runtime extensions
