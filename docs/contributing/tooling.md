@@ -304,7 +304,7 @@ JavaScript suite under two tools that answer different questions:
 | Tool | Catches | Invocation |
 |------|---------|-----------|
 | **heaptrc** (`-gh`) | FPC-level leaks, double frees, unfreed blocks with allocation sites | `mkdir -p DIR && fpc @config.cfg -gh -gl -FUDIR -oBIN source/app/GocciaTestRunner.dpr` |
-| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner tests` |
+| **Valgrind memcheck** | Invalid reads/writes the allocator never sees, uninitialised values | `valgrind --tool=memcheck --error-exitcode=42 ./build/GocciaTestRunner -P tests` |
 
 `DIR` is a unit-output directory of your own (CI uses
 `build/compiled/targets/testrunner-heaptrc`). Give the heaptrc build its own

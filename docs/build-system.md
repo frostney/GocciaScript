@@ -141,8 +141,8 @@ Coverage and profiling output are available from the runner:
 
 ```bash
 ./build.pas testrunner
-./build/GocciaTestRunner tests
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests
+./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
 `./build.pas testrunner` also builds `fixtures/ffi/libfixture.*` for the
@@ -151,10 +151,10 @@ current platform, which the folder-configured FFI JavaScript tests need.
 Useful test-runner forms:
 
 ```bash
-./build/GocciaTestRunner tests --jobs=4
-./build/GocciaTestRunner tests --no-progress --exit-on-first-failure --silent
-./build/GocciaTestRunner tests --output=results.json --log=test-console.log
-./build/GocciaTestRunner tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
+./build/GocciaTestRunner -P tests --jobs=4
+./build/GocciaTestRunner -P tests --no-progress --exit-on-first-failure --silent
+./build/GocciaTestRunner -P tests --output=results.json --log=test-console.log
+./build/GocciaTestRunner -P tests --coverage --coverage-format=lcov --coverage-output=coverage.lcov
 ```
 
 ### Bytecode Mode
@@ -247,11 +247,11 @@ printf "const f = () => f(); f();" | ./build/GocciaRunner --max-instructions=100
 ./build/GocciaRunner example.jsx --source-map --mode=bytecode
 
 # Run tests via bytecode VM
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests --mode=bytecode
 
 # Control parallel worker threads (default: CPU count; --jobs=1 forces sequential)
 ./build/GocciaRunner example.js --jobs=4
-./build/GocciaTestRunner tests --jobs=4
+./build/GocciaTestRunner -P tests --jobs=4
 ./build/GocciaBenchmarkRunner benchmarks --jobs=1
 
 # Split a single input file (or stdin) on `---` separator lines and dispatch

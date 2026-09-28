@@ -63,7 +63,7 @@ That's it — GocciaScript files are plain `.js` files. No special extension, no
 
 ## Variables
 
-GocciaScript has two variable declarations: `let` (mutable) and `const` (immutable). There is no `var`.
+GocciaScript has two variable declarations: `let` (mutable) and `const` (immutable). `var` is off by default (`--compat-var` enables it for ported code).
 
 ```javascript
 const name = "Alice";
@@ -83,7 +83,7 @@ x = 10; // TypeError: Assignment to constant variable
 
 ## Arrow Functions
 
-GocciaScript uses arrow functions exclusively. The `function` keyword does not exist.
+GocciaScript recommends arrow functions and methods; the `function` keyword is off by default (`--compat-function` enables it).
 
 ```javascript
 // Single expression — implicit return
@@ -308,8 +308,8 @@ Here's a quick reference of GocciaScript's key restrictions:
 
 | JavaScript | GocciaScript | Alternative |
 |------------|-------------|-------------|
-| `var x = 1` | Not supported | `let x = 1` or `const x = 1` |
-| `function foo() {}` | Not supported | `const foo = () => {}` |
+| `var x = 1` | Off by default | `let x = 1` or `const x = 1`, or `--compat-var` for JavaScript compatibility |
+| `function foo() {}` | Off by default | `const foo = () => {}`, or `--compat-function` for JavaScript compatibility |
 | `==` / `!=` | Off by default | `===` / `!==` or `--compat-loose-equality` |
 | labels / `break label` / `continue label` | Off by default | `return` from a helper, an early-exit flag, or `--compat-label` for JavaScript compatibility |
 | `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |

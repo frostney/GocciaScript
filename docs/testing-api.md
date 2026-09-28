@@ -70,7 +70,7 @@ Outside the runner the assertions object is built lazily, on the first import th
 
 #### Running an imported suite outside the runner
 
-`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A loader script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
+`describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A `GocciaRunner` script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
 
 ```javascript
 import { expect, runTests, test } from "goccia:test";
@@ -87,7 +87,7 @@ if (results.failed > 0) {
 
 `runTests` executes everything registered so far, prints its report unless `showTestResults` is `false`, and returns a result object with `passed`, `failed`, `skipped`, `totalTests`, `totalRunTests`, `assertions`, `duration`, `suiteErrors`, `failedTests`, and `summary`. It accepts `{ exitOnFirstFailure, showTestResults }`.
 
-`runTests` reports; it does not decide. A failing test does not by itself change the loader's exit status, because the loader has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
+`runTests` reports; it does not decide. A failing test does not by itself change `GocciaRunner`'s exit status, because the runner has no notion of a test outcome — the script owns that decision, and throwing on `results.failed > 0` as above is what turns a failure into a non-zero exit. A second `runTests` call resets the statistics and re-runs the whole registry, not just the tests registered since the previous call — registration accumulates for the life of the script.
 
 ### Available Assertions
 
@@ -698,7 +698,7 @@ It exports the same operations plus the four timer globals, but speaks in epoch 
 
 #### `process.env`
 
-GocciaScript has no `process`. `vi.stubEnv` writes to whatever one the host injected, so a suite that needs it supplies it — the same `--global` and `--globals` options the loader has, now on `GocciaTestRunner` too:
+GocciaScript has no `process`. `vi.stubEnv` writes to whatever one the host injected, so a suite that needs it supplies it — the same `--global` and `--globals` options `GocciaRunner` has, now on `GocciaTestRunner` too:
 
 ```bash
 ./build/GocciaTestRunner suite.test.ts --global 'process={"env":{}}'

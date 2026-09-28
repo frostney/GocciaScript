@@ -90,7 +90,7 @@ Up to 2 lines of context are shown before and after the error line.
 
 ### Suggestions
 
-Some parser errors include a suggestion line that recommends an alternative. GocciaScript intentionally excludes certain JavaScript features and uses suggestions to guide users toward the supported alternatives:
+Some parser errors include a suggestion line that recommends an alternative. GocciaScript keeps certain JavaScript forms off by default and uses suggestions to guide users toward the recommended alternatives:
 
 ```text
 SyntaxError: 'var' declarations are not supported in GocciaScript
