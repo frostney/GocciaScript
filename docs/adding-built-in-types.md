@@ -428,7 +428,7 @@ For a runtime global, use the same built-in/value unit patterns but wire it thro
 1. Add a dedicated runtime-extension unit in `source/units/`, following the `Goccia.RuntimeExtensions.<Feature>` naming pattern.
 2. Add a private built-in field to the concrete extension class.
 3. Instantiate it from `Attach` and free it from `Detach`, mirroring the engine's built-in / constructor-registration pattern but using `Runtime.Engine`.
-4. If the feature adds importable file types, override `AddModuleExtensions` and `TryLoadModule` so the extension participates only when installed.
+4. If the feature adds importable file types, override `AddModuleExtensions` and `TryLoadModule` so the extension participates only when installed. Read the file only through the `AReadContent` reader `TryLoadModule` receives, never from the content provider directly: the reader verifies provider-package files against their pins. Name the `ASpecifier` it receives, the request as the import wrote it, in any load or parse error, never the resolved path ([ADR 0108](adr/0108-specifier-only-module-resolution-errors.md)).
 5. If the feature should be part of a CLI surface, add it to the relevant profile in `Goccia.RuntimeProfiles.*.pas`; otherwise embedders can install the concrete extension directly.
 
 ```pascal

@@ -9,6 +9,7 @@ uses
 
   Goccia.Builtins.JSON5,
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
@@ -24,6 +25,7 @@ type
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
     function TryLoadModule(const AResolvedPath, ASpecifier: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; override;
@@ -81,6 +83,7 @@ end;
 
 function TGocciaJSON5RuntimeExtension.TryLoadModule(
   const AResolvedPath, ASpecifier: string;
+  const AReadContent: TGocciaModuleContentReader;
   out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
@@ -95,8 +98,7 @@ begin
   if not Result then
     Exit;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
+  Content := AReadContent(AResolvedPath);
   ParsedValue := nil;
   try
     JSON5Parser := TGocciaJSON5Parser.Create;

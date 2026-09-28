@@ -9,6 +9,7 @@ uses
 
   Goccia.Builtins.TOML,
   Goccia.Modules,
+  Goccia.Modules.Loader,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.NamespaceModule,
   Goccia.Values.Primitives;
@@ -24,6 +25,7 @@ type
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
     function TryLoadModule(const AResolvedPath, ASpecifier: string;
+      const AReadContent: TGocciaModuleContentReader;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; override;
@@ -80,6 +82,7 @@ end;
 
 function TGocciaTOMLRuntimeExtension.TryLoadModule(
   const AResolvedPath, ASpecifier: string;
+  const AReadContent: TGocciaModuleContentReader;
   out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
@@ -94,8 +97,7 @@ begin
   if not Result then
     Exit;
 
-  Content := Runtime.Engine.ModuleLoader.ContentProvider.LoadContent(
-    AResolvedPath);
+  Content := AReadContent(AResolvedPath);
   ParsedValue := nil;
   try
     TOMLParser := TGocciaTOMLParser.Create;

@@ -57,7 +57,8 @@ type
     function CreateProvidedGlobalModule: TGocciaModule;
     function CreateReplacementGlobalModule: TGocciaModule;
     function LoadCustomRuntimeModule(const AResolvedPath,
-      ASpecifier: string; out AModule: TGocciaModule): Boolean;
+      ASpecifier: string; const AReadContent: TGocciaModuleContentReader;
+      out AModule: TGocciaModule): Boolean;
     procedure TestEngineRejectsNilExtension;
     procedure TestGlobalModuleProviderReplacementClearsLoadedModule;
     procedure TestGlobalModuleProviderUnregisterClearsLoadedModule;
@@ -155,7 +156,9 @@ begin
 end;
 
 function TRuntimeTests.LoadCustomRuntimeModule(
-  const AResolvedPath, ASpecifier: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath, ASpecifier: string;
+  const AReadContent: TGocciaModuleContentReader;
+  out AModule: TGocciaModule): Boolean;
 begin
   Result := AResolvedPath = 'virtual.custom';
   if Result then

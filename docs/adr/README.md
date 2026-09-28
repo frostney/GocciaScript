@@ -130,4 +130,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0118 — A parse result is measured in the file, not in what the parser was handed](0118-original-file-source-ranges.md)
 - [0119 — A sandbox run is materialized by the host, on the host's command line](0119-host-applied-sandbox-write-back.md)
 - [0120 — Native Test262 runner with isolated worker runtimes](0120-native-test262-runner.md)
+- 0121 — Reserved for the capability-gated provider imports proposal in [#1054](https://github.com/frostney/GocciaScript/pull/1054), which was withdrawn unmerged and superseded by [0122](0122-unified-capability-model.md); no record uses this number
 - [0122 — One capability model: explicit allow/deny grants, trusted config, one runner](0122-unified-capability-model.md)
