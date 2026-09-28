@@ -237,6 +237,22 @@ export function resolveAsiFlag(
   return null;
 }
 
+/** The file names of an entry's vendored binaries, for display. The loader
+ *  is `GocciaScriptLoader` through 0.13 and `GocciaRunner` from 0.14.0; the
+ *  manifest records whichever the archive shipped, so the playground banner
+ *  names the binary the API actually spawns. */
+export function binaryNames(entry: VendorEntry): {
+  loader: string;
+  testRunner: string;
+} {
+  const fileName = (binaryPath: string) =>
+    binaryPath.split(/[\\/]/).pop() || binaryPath;
+  return {
+    loader: fileName(entry.binaries.loader),
+    testRunner: fileName(entry.binaries.testRunner),
+  };
+}
+
 /** Strip a leading `v` so `"v0.7.0"` and `"0.7.0"` compare equal.
  *  `"nightly"` and other non-semver tags pass through unchanged. */
 function canonicalTag(tag: string): string {
