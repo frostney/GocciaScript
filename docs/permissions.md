@@ -328,9 +328,10 @@ affected by later builder calls on the original.
 
 ## Command line
 
-Every binary except `GocciaWasmTestRunner` fills the set from the same
-grammar. `GocciaWasmTestRunner` takes no capability flags; its grants come
-only from config, with `-P`:
+Every binary in [What each binary honors](#what-each-binary-honors) except
+`GocciaWasmTestRunner` fills the set from the same grammar.
+`GocciaWasmTestRunner` takes no capability flags; its grants come only from
+config, with `-P`:
 
 ```text
 --allow-<cap>[=<scope>,<scope>...]
