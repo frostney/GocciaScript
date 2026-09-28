@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Declared in the import map** — `"raylib": "github:<owner>/<repo>@<tag-or-commit>/<path>"` (an exact entry) or `"raylib/": "github:…@<ref>/<dir>/"` (a prefix entry) names a provider package; there is no separate package manifest
+- **Declared in the import map** — `"lib": "github:<owner>/<repo>@<tag-or-commit>/<path>"` (an exact entry) or `"lib/": "github:…@<ref>/<dir>/"` (a prefix entry) names a provider package; there is no separate package manifest
 - **Pinned by `goccia.lock.json`** — the lockfile beside the import map pins each package to a commit and every file to a SHA-256; a run reads it and never writes it
 - **Granted by `import` scopes** — `--allow-import=github`, `github:<owner>`, or `github:<owner>/<repo>`; a deny from any source wins, and a config's request needs [trust](permissions.md#config-trust)
 - **Materialized, then verified on load** — every pinned file lands in `.goccia/packages/…` from `raw.githubusercontent.com` (GET only, host-pinned, private ranges refused), and each file's bytes are hashed again when a module, data file, or native library is loaded
@@ -15,7 +15,8 @@
 The decision is recorded in
 [ADR 0122](adr/0122-unified-capability-model.md). The capability grammar is in
 [Permissions](permissions.md#import-scopes); this page is the reference for
-the import map, the lockfile, and the cache.
+the import map, the lockfile, and the cache. The examples use a placeholder
+package, `github:acme/lib@v1.0.0`; substitute a real `<owner>/<repo>@<tag>`.
 
 ## The import map
 
@@ -26,8 +27,8 @@ A provider entry sits in the `imports` object of `goccia.json` (or an
 {
   "imports": {
     "@/": "./src/",
-    "raylib": "github:frostney/GocciaScript-Raylib@v0.10.0/bindings/raylib.ts",
-    "raylib/": "github:frostney/GocciaScript-Raylib@v0.10.0/bindings/"
+    "lib": "github:acme/lib@v1.0.0/index.ts",
+    "lib/": "github:acme/lib@v1.0.0/src/"
   }
 }
 ```
@@ -44,15 +45,15 @@ An exact entry resolves to its file with the usual
 [extension probe](module-resolution.md#resolution-order): the path, its
 TypeScript sources, each extension, then `<path>/index.<ext>`. An entry with no
 path resolves the package's `index` file. A prefix entry appends the rest of
-the specifier to its directory, so `import "raylib/lib/structs"` names
-`bindings/lib/structs` in the package; a tail that climbs out of the directory
-(`raylib/../x`) is refused. Only files the lockfile pins are candidates:
+the specifier to its directory, so `import "lib/structs"` names
+`src/structs` in the package; a tail that climbs out of the directory
+(`lib/../x`) is refused. Only files the lockfile pins are candidates:
 anything else in the cache does not exist for resolution.
 
 A provider entry is recorded when the import map loads and resolved when an
 import first goes through it, so a run that never imports the package needs no
 grant for it. `import.meta.resolve` of a specifier an entry maps answers with
-the provider address itself (`github:acme/lib@v1.0.0/index.js`), without a
+the provider address itself (`github:acme/lib@v1.0.0/index.ts`), without a
 grant, a fetch, or an audit event, as any resolve the engine would refuse
 answers lexically.
 
@@ -66,26 +67,39 @@ twice and are refused:
 
 ```json
 {
-  "version": 1,
   "packages": {
-    "github:frostney/GocciaScript-Raylib@v0.10.0": {
-      "ref": "tag",
-      "commit": "3f9c2a1e5b7d0c4a8e6f1b2d3c4e5f6a7b8c9d0e",
+    "github:acme/lib@v1.0.0": {
       "artifacts": {
-        "bindings/raylib.ts": { "sha256": "0b46f4d0…" },
-        "native/linux-x86_64/libraylib.so": { "sha256": "1d2f…" },
-        "native/windows-x86_64/raylib.dll": { "sha256": "948e…" }
-      }
+        "index.ts": {
+          "sha256": "0b46f4d0…"
+        },
+        "native/linux-x86_64/libacme.so": {
+          "sha256": "1d2f…"
+        },
+        "native/windows-x86_64/acme.dll": {
+          "sha256": "948e…"
+        },
+        "src/structs.ts": {
+          "sha256": "5c7a…"
+        }
+      },
+      "commit": "3f9c2a1e5b7d0c4a8e6f1b2d3c4e5f6a7b8c9d0e",
+      "ref": "tag"
     }
-  }
+  },
+  "version": 1
 }
 ```
 
 - `ref` is `tag` or `commit`. A commit pin's key names that commit.
 - `commit` is the 40-character lowercase commit every file is fetched from.
-- `artifacts` lists every file of the package with its SHA-256 as 64
-  lowercase hexadecimal digits. Every platform's native libraries are pinned
-  and materialized; there is no platform field.
+- `artifacts` lists every file of the package's
+  [crawled file set](#install-mode) with its SHA-256 as 64 lowercase
+  hexadecimal digits. Here `index.ts` names each native library literally
+  with `new URL("./native/…", import.meta.url)`, so both are pinned, and
+  `src/structs.ts` is pinned because the project imports `lib/structs`; a
+  library no module names literally is not. Every platform's pinned libraries
+  are materialized; there is no platform field.
 
 The reader is strict. An unknown or duplicate key, a value of the wrong type,
 a version other than 1, an unsafe path (absolute, `..`, a backslash or colon,
@@ -98,14 +112,16 @@ the import map nor the lockfile can point a run at another host.
 A run never resolves a ref and never writes the lockfile. A package the import
 map names but the lockfile does not pin fails with
 `<package> is not pinned in goccia.lock.json; run GocciaRunner --install`.
+When there is no `goccia.lock.json`, or it cannot be read, the import fails
+with `the provider lockfile goccia.lock.json is missing or invalid`.
 
 ## Authorization
 
 Resolving through a provider entry needs the `import` capability:
 
 ```sh
-GocciaRunner app.ts --allow-import=github:frostney/GocciaScript-Raylib
-GocciaRunner app.ts --allow-import=github:frostney        # every repository of frostney
+GocciaRunner app.ts --allow-import=github:acme/lib
+GocciaRunner app.ts --allow-import=github:acme        # every repository of acme
 GocciaRunner app.ts --allow-import=github --deny-import=github:evil
 ```
 
@@ -130,7 +146,7 @@ no `import` capability.
 
 Importing never implies FFI. A package that ships native libraries still needs
 `--allow-ffi` for the cache path, such as
-`--allow-ffi=.goccia/packages/github/frostney`.
+`--allow-ffi=.goccia/packages/github/acme`.
 
 ## The cache
 
@@ -172,7 +188,7 @@ is hashed from the exact bytes about to be compiled, read, or loaded, and
 refused unless they match the pin:
 
 ```text
-Provider package file github:frostney/raylib@v1.0.0/bindings/late.ts changed after it was verified
+Provider package file github:acme/lib@v1.0.0/src/late.ts changed after it was verified
 ```
 
 A file inside the package that the lockfile does not pin is refused the same
@@ -207,7 +223,7 @@ like any project file.
 as the path it names, so a package can open a library beside itself:
 
 ```javascript
-const lib = FFI.open(new URL("../native/linux-x86_64/libraylib.so", import.meta.url));
+const lib = FFI.open(new URL("./native/linux-x86_64/libacme.so", import.meta.url));
 ```
 
 ## Install mode
@@ -217,12 +233,12 @@ runs no code, takes no input files, and cannot be combined with sandbox mode
 or `--cached-only` (exit 2).
 
 ```sh
-GocciaRunner --add raylib=github:frostney/GocciaScript-Raylib@v0.10.0/bindings/raylib.ts
-GocciaRunner --remove raylib
-GocciaRunner --install --allow-import=github:frostney
-GocciaRunner --install --frozen --check-refs --allow-import=github:frostney   # CI
-GocciaRunner --update --allow-import=github:frostney
-GocciaRunner --update=raylib --accept-moved-tags --allow-import=github:frostney
+GocciaRunner --add lib=github:acme/lib@v1.0.0/index.ts
+GocciaRunner --remove lib
+GocciaRunner --install --allow-import=github:acme
+GocciaRunner --install --frozen --check-refs --allow-import=github:acme   # CI
+GocciaRunner --update --allow-import=github:acme
+GocciaRunner --update=lib --accept-moved-tags --allow-import=github:acme
 ```
 
 | Option | What it does |
