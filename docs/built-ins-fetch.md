@@ -44,7 +44,9 @@ name resolved to, and repeats both checks on **every redirect hop**; a hop the
 capability refuses rejects the returned promise with `PermissionDenied`.
 
 On the command line `--allow-net` and `--deny-net` fill the capability, and a
-config file's `permissions` block does the same. Private, loopback, and
+config file's `permissions` block does the same once the config is trusted
+(`--trust`) or accepted for the run (`-P`); see
+[Config trust](permissions.md#config-trust). Private, loopback, and
 link-local destinations are refused unless the grant names them: with
 `private`, or with an IP or CIDR scope covering the address. A host-name grant,
 even an unscoped `--allow-net`, does not reach a name that resolves privately.

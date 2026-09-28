@@ -7,7 +7,7 @@
 - **Pipeline** — Source → JSX Transformer → Lexer → Parser → Interpreter → Evaluator → `TGocciaValue`
 - **Pure evaluator** — Same expression + context always produces the same result; state changes happen through scope and value objects
 - **VMT dispatch** — Expression/statement evaluation dispatches through virtual method tables on AST nodes
-- **Scope chain** — Lexical scoping via `TGocciaScope.CreateChild`; no direct instantiation
+- **Scope chain** — Lexical scoping: plain child scopes come from `TGocciaScope.CreateChild`; specialized scopes (call, catch, class-init, `with`, …) are constructed directly with their parent
 - **Shared value model** — Both interpreter mode and bytecode mode produce `TGocciaValue` results on the same object model
 
 For **pipelines and the layer diagram**, see [Architecture](architecture.md). For **register VM execution and `.gbc`**, see [Bytecode VM](bytecode-vm.md).
@@ -26,17 +26,30 @@ Bytecode mode branches after the parser to the compiler and VM instead; both pat
 
 ### Evaluation context and purity
 
-The evaluator threads state through a `TGocciaEvaluationContext` record rather than using instance variables or globals:
+The evaluator threads state through a `TGocciaEvaluationContext` record rather than using instance variables or globals (`Goccia.Evaluator.Context`):
 
 ```pascal
 TGocciaEvaluationContext = record
+  Realm: TGocciaRealm;
   Scope: TGocciaScope;
   OnError: TGocciaThrowErrorCallback;
   LoadModule: TLoadModuleCallback;
   LoadModuleSource: TLoadModuleSourceCallback;
+  LoadDeferredModule: TLoadDeferredModuleCallback;
+  ResolveModuleURL: TResolveModuleURLCallback;
   CurrentFilePath: string;
   CoverageEnabled: Boolean;
+  StrictTypes: Boolean;
+  NonStrictMode: Boolean;
+  CompatibilityNonStrictMode: Boolean;
+  HideFunctionSourceText: Boolean;
+  InEvalCode: Boolean;
+  EvalVarScope: TGocciaScope;
+  RejectArgumentsVarDeclarationInEval: Boolean;
+  RejectVarDeclarationNamesInEval: TGocciaEvalRejectNameArray;
   DisposalTracker: TObject; // TGocciaDisposalTracker or nil
+  CurrentModule: TGocciaModule;
+  ModuleEnvironmentInitialized: Boolean;
 end;
 ```
 
@@ -65,8 +78,6 @@ See [spikes/fpc-dispatch-performance.md](spikes/fpc-dispatch-performance.md) for
 
 - **`SpreadIterableInto` / `SpreadIterableIntoArgs`** — Unified spread expansion for arrays, strings, sets, and maps. Used by `EvaluateCall`, `EvaluateArray`, and `EvaluateObject`.
 
-- **`EvaluateSimpleNumericBinaryOp`** — Shared helper for subtraction, multiplication, and exponentiation, which all share the same pattern of numeric coercion, NaN propagation, and a single-operation callback.
-
 ## Design Rationale
 
 ### Pure Evaluator Functions
@@ -78,20 +89,20 @@ The evaluator (`Goccia.Evaluator.pas`) is designed around pure functions — giv
 - **Testability** — Pure functions are trivially testable in isolation.
 - **Reasoning** — No hidden state mutations make the evaluation logic easier to understand and debug.
 - **Parallelism potential** — Pure evaluation is inherently safe for concurrent execution.
-- **Composability** — Evaluator sub-modules (`Arithmetic`, `Bitwise`, `Comparison`, etc.) compose cleanly because they don't share mutable state.
-- **ECMAScript conformance** — `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) is a standalone abstract operation (trying `valueOf` then `toString` on objects) used by the `+` operator and available to any module. The arithmetic module uses floating-point modulo (not integer) with proper NaN/Infinity propagation. The comparison module implements the Abstract Relational Comparison algorithm with type coercion.
+- **Composability** — Evaluator helper units (`Goccia.Arithmetic` for arithmetic, bitwise, equality, and relational operators; `Goccia.Evaluator.TypeOperations` for `typeof`, `instanceof`, and `in`; `Goccia.Evaluator.Assignment`; …) compose cleanly because they don't share mutable state.
+- **ECMAScript conformance** — `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) is a standalone abstract operation (trying `valueOf` then `toString` on objects) used by the `+` operator and available to any module. `Goccia.Arithmetic` computes `%` as a floating-point remainder (not integer modulo) with NaN/Infinity propagation, and implements the relational operators through the `IsLessThan` abstract operation with type coercion.
 
 State changes (variable bindings, object mutations) happen through the scope and value objects passed in the `TGocciaEvaluationContext`, not through evaluator-internal state.
 
-**Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuffer` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Numeric binary operations that share a common pattern (subtraction, multiplication, exponentiation) are consolidated through `EvaluateSimpleNumericBinaryOp` to avoid code duplication while maintaining clear semantics.
+**Performance-aware evaluation:** Template literal evaluation and `Array.ToStringLiteral` use `TStringBuffer` for O(n) string assembly instead of O(n^2) repeated concatenation. `Boolean.ToNumberLiteral` returns the existing `ZeroValue`/`OneValue` singletons rather than allocating, avoiding an allocation on every boolean-to-number coercion. `Function.prototype.apply` uses a fast path for `TGocciaArrayValue` arguments (direct `Elements[I]` access) instead of per-element `IntToStr` + `GetProperty`. Binary arithmetic lives in `Goccia.Arithmetic` (`EvaluateSubtraction`, `EvaluateMultiplication`, …), where each operator shares the `ToNumericOperands` / `ToNumberPair` coercion helpers.
 
-**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via property accessors on `TGocciaNumberLiteralValue` (`IsNaN`, `IsInfinite`, `IsNegativeZero`). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation uses an `IsActualZero` guard to distinguish true zero exponents, and checks `RightNum.IsInfinite` before `RightNum.Value = 0` to correctly handle infinite exponents. The sort comparator (`CallCompareFunc`) maps infinite comparison results to `±1` to avoid passing raw `Double` values to the quicksort partitioning logic. Negative zero detection (`IsNegativeZero`) uses an endian-neutral `Int64 absolute` overlay to check the sign bit (`Bits < 0`) instead of byte-indexed checks that assume little-endian layout.
+**IEEE-754 correctness:** Arithmetic operations handle special number values (`NaN`, `Infinity`, `-Infinity`, `-0`) via property accessors on `TGocciaNumberLiteralValue` (`IsNaN`, `IsInfinite`, `IsNegativeZero`). Division uses explicit `IsNegativeZero` checks to compute correct signed results (e.g., `1 / -Infinity` → `-0`, `-1 / 0` → `-Infinity`). Exponentiation delegates to `NumberExponentiation` (`Goccia.NumberExponentiation`), which follows ES2026 §6.1.6.1.3 Number::exponentiate. The sort comparator (`CallCompareFunc`) maps a `NaN` comparison result to `0` and `±Infinity` to `±1` before the stable merge sort (`StableSortElements`) uses it. Negative zero detection (`IsNegativeZero`) calls `NumberBits.IsNegativeZero`, which compares the double's bit pattern with the sign-bit-only pattern, so it does not depend on byte order.
 
 ### Scope Chain Design
 
 Scopes form a tree with parent pointers, implementing lexical scoping:
 
-- **`CreateChild` factory method** — Scopes are never instantiated directly. `CreateChild` ensures proper parent linkage, scope kind propagation, and `OnError` callback inheritance. An optional `ACapacity` parameter allows callers to pre-size the binding dictionary (used by function calls that know their parameter count).
+- **`CreateChild` factory method** — Plain block, module, and function scopes come from `CreateChild(AScopeKind, ACustomLabel, ACapacity)`, which creates a `TGocciaScope` with this scope as parent and copies its `this` value. Specialized scopes are constructed directly with their parent — for example `TGocciaCallScope.Create(FClosure, FName, Length(FParameters) + 2)` for a function call, and `TGocciaCatchScope`, `TGocciaClassInitScope`, `TGocciaFunctionNameScope`, and `TGocciaWithScope` during evaluation. Either way the `TGocciaScope` constructor links the parent and inherits its `OnError` callback, module callbacks, and strict-types and non-strict flags. The optional capacity pre-sizes the binding dictionary (function calls pass their parameter count).
 - **`OnError` on scopes** — Each scope carries a reference to the error handler callback, inherited from its parent. This allows closures and callbacks to always find the correct error handler without global state.
 - **Temporal Dead Zone** — `let`/`const` bindings are registered before initialization, enforcing TDZ semantics (accessing before `=` throws `ReferenceError`).
 - **Module scope isolation** — Modules execute in `skModule` scopes (children of the global scope), preventing module-internal variables from leaking into the global scope.
@@ -99,17 +110,17 @@ Scopes form a tree with parent pointers, implementing lexical scoping:
 - **Live import bindings** — Named imports are initialized as immutable indirect bindings in the importing module scope. The first successful access retains the resolved target module and binding name, while every access still reads that binding's current value. This avoids repeating `ResolveExport` and namespace lookup without caching the value itself, so mutations, imported-name exports, re-exports, and transitive function captures remain live in interpreter mode and bytecode mode.
 - **Circular dependency handling** — Modules are added to the cache (`FModules`) and register their local export bindings before requested modules are evaluated. If a circular import encounters a partially linked module, its import binding can refer to that module without reading the target early; an actual read still observes the target binding's temporal dead zone until its declaration is evaluated.
 - **Namespace imports** — `import * as ns from "./module.js"` binds the module's reusable namespace exotic object. The object has a null prototype, sorted enumerable read-only export properties, and live `[[Get]]` behavior. It caches each successfully resolved export identity, not its value, so repeated reads avoid re-walking forwarding chains while JavaScript bindings stay live; structured-data module values remain stable by construction.
-- **JSON module imports** — Files ending in `.json` are handled by `LoadJsonModule`, which parses the file via `TGocciaJSONParser` (`Goccia.JSON` unit) and exposes each top-level object key as a named export. JSON modules bypass the lexer/parser/evaluator pipeline entirely, keeping the import path unified (`import { key } from "./file.json"`). Non-object JSON root values (arrays, primitives) produce a module with no exports. JSON modules participate in the same caching and path resolution as JS modules.
+- **JSON module imports** — Files ending in `.json` are handled by `TGocciaModuleLoader.LoadJSONModule`, which parses the file via `TGocciaJSONParser` (`Goccia.JSON` unit) and exposes the parsed root as the `default` export and, for object roots, each own key as a named export (a root key named `default` takes that slot). JSON modules bypass the lexer/parser/evaluator pipeline entirely, keeping the import path unified (`import { key } from "./file.json"`). Array roots are objects too, so they also export their indices and `length`; primitive roots export only `default`. JSON modules participate in the same caching and path resolution as JS modules.
 - **Standalone JSON utilities** — `Goccia.JSON` provides `TGocciaJSONParser` and `TGocciaJSONStringifier` as dependency-free utility classes that convert between JSON text and `TGocciaValue` types. `Goccia.Builtins.JSON` (the `JSON.parse`/`JSON.stringify` built-in) delegates to these, keeping the built-in a thin adapter. This separation allows the interpreter and any other component to parse JSON without instantiating a built-in.
 - **Capability-driven JSON parsing** — `JSONParser.pas` now owns one event-driven parser core plus a `TJSONParserCapabilities` set. Strict JSON uses the empty capability set, while JSON5 opts into comments, trailing commas, single-quoted strings, identifier keys, hexadecimal numbers, signed numbers, `Infinity` / `NaN`, line continuations, and ECMAScript whitespace extensions. This keeps JSON and JSON5 behavior aligned on the shared grammar machinery instead of maintaining two diverging parser implementations.
 - **JSON5 parser/stringifier split** — `Goccia.JSON5` provides standalone `TGocciaJSON5Parser` and `TGocciaJSON5Stringifier` utilities. The parser reuses the same core capability-driven parser engine as strict JSON but enables the JSON5 capability set, while the stringifier reuses the shared JSON serialization engine in JSON5 mode instead of maintaining a second formatter. `Goccia.Builtins.JSON5` backs the named exports of `goccia:json5` (`parse`, `stringify`), the module loader reuses the parser for `.json5` imports, and globals injection reuses it for `--globals=file.json5` and embedding helpers.
 - **JSON5 compatibility target** — The project goal for JSON5 is full parser compatibility with the reference `json5/json5` implementation plus upstream-aligned stringify behavior. The pinned upstream parser cases are generated as an ordinary JavaScript suite and run directly through `GocciaTestRunner` with the local stringify suite. A rerun on 2026-07-21 against upstream commit `b935d4a280eafa8835e6182551b63809e61243b0` matched 84 of 84 extracted parser cases; the local stringify suite passed all 42 upstream-aligned tests covering special numeric values, quote handling, replacers, boxed primitives, options objects, and pretty-print trailing commas.
 - **JSONL parser split** — `Goccia.JSONL` provides a standalone `TGocciaJSONLParser` utility that builds on `TGocciaJSONParser` one line at a time, preserving JSONL source line numbers in parse errors and supporting Bun-style chunked parsing through `ParseChunk(...)`. `Goccia.Builtins.JSONL` backs the named exports of `goccia:jsonl` (`parse`, `parseChunk`), while the module loader reuses the same parser for `.jsonl` imports.
 - **JSONL module imports** — `.jsonl` modules intentionally expose each non-empty line as a zero-based string-indexed named export (`"0"`, `"1"`, ...). This keeps the structured-data import surface consistent with the existing string-literal named import/export work and means namespace imports can reuse the same export table without introducing a JSONL-specific synthetic wrapper object just for modules.
-- **Text asset module imports** — `.txt` and `.md` modules bypass the script parser and expose a small named-export surface: `content` is the UTF-8 file text with source newlines canonicalized to LF (`\n`), and `metadata` is a frozen object containing `kind`, `path`, `fileName`, `extension`, and `byteLength`. Text assets do not invent a default export wrapper just for plain text files, which keeps imported text stable across Windows and non-Windows hosts.
-- **TOML parser split** — `Goccia.TOML` provides a standalone `TGocciaTOMLParser` utility that converts TOML 1.1.0 text into `TGocciaValue` trees. `Goccia.Builtins.TOML` backs the `parse` named export of `goccia:toml`, and the module loader reuses the same utility for `.toml` imports and TOML-backed globals injection. TOML module imports expose each root-table key as a named export, and namespace imports project that same export table into a frozen namespace object. TOML date/time values currently map to validated string scalars rather than Temporal values. For compliance work, the parser also exposes `ParseDocument(...)`, which preserves TOML scalar kinds and canonical values in a recursive TOML node tree without changing the public TOML runtime API.
+- **Text asset module imports** — `.txt` and `.md` modules bypass the script parser and expose a small named-export surface: `content` is the UTF-8 file text with source newlines canonicalized to LF (`\n`), and `metadata` is a frozen object containing `kind`, `path`, `fileName`, `extension`, and `byteLength`. The `default` export is the same string as `content`. Canonicalizing newlines keeps imported text stable across Windows and non-Windows hosts.
+- **TOML parser split** — `Goccia.TOML` provides a standalone `TGocciaTOMLParser` utility that converts TOML 1.1.0 text into `TGocciaValue` trees. `Goccia.Builtins.TOML` backs the `parse` named export of `goccia:toml`, and the module loader reuses the same utility for `.toml` imports and TOML-backed globals injection. TOML module imports expose each root-table key as a named export, and namespace imports project that same export table into a module namespace object (non-extensible, with read-only exports). TOML date/time values currently map to validated string scalars rather than Temporal values. For compliance work, the parser also exposes `ParseDocument(...)`, which preserves TOML scalar kinds and canonical values in a recursive TOML node tree without changing the public TOML runtime API.
 - **TOML compatibility target** — The project goal for TOML is full TOML 1.1.0 compatibility. The official `toml-test` TOML 1.1.0 suite is part of CI and is rerun across the supported platform matrix through the native `GocciaTOMLComplianceRunner`.
-- **YAML parser split** — `Goccia.YAML` provides a standalone `TGocciaYAMLParser` utility that converts YAML text into `TGocciaValue` trees. `Goccia.Builtins.YAML` backs the named exports of `goccia:yaml`: `parse`, which follows Bun-style stream semantics by returning an array whenever explicit `---` document markers are present, and `parseDocuments` for callers that always want an array. The module loader reuses the same utility for `.yaml` and `.yml` imports: a single top-level mapping still exports its keys directly, while multi-document streams expose each document as a string-indexed named export (`"0"`, `"1"`, ...). Namespace imports for YAML file modules simply project that same export table into a frozen namespace object.
+- **YAML parser split** — `Goccia.YAML` provides a standalone `TGocciaYAMLParser` utility that converts YAML text into `TGocciaValue` trees. `Goccia.Builtins.YAML` backs the named exports of `goccia:yaml`: `parse`, which follows Bun-style stream semantics by returning an array whenever explicit `---` document markers are present, and `parseDocuments` for callers that always want an array. The module loader reuses the same utility for `.yaml` and `.yml` imports: a single top-level mapping still exports its keys directly, while multi-document streams expose each document as a string-indexed named export (`"0"`, `"1"`, ...). Namespace imports for YAML file modules project that same export table into a module namespace object (non-extensible, with read-only exports).
 - **YAML anchor handling** — Anchors are tracked per document during parsing, aliases resolve to the anchored node, and `<<:` merge keys fill only missing keys so explicit mapping entries always win and earlier entries in merge sequences keep precedence over later ones.
 - **YAML block scalars** — Literal (`|`) and folded (`>`) block scalars are parsed directly in `Goccia.YAML`, including chomping modifiers and indentation indicators, so common multi-line configuration text works the same through the `goccia:yaml` `parse` export and `.yaml`/`.yml` module imports.
 - **YAML folded inline scalars** — Multi-line plain, single-quoted, and double-quoted scalars are folded directly in `Goccia.YAML`, with blank continuation lines becoming line breaks and non-blank continuation lines folding to spaces. Single-line scalars still pass through the normal implicit typing path, so booleans, nulls, and numbers are not accidentally stringified just because a blank separator follows them.
@@ -147,7 +158,7 @@ GocciaScript implements ECMAScript Promises with a synchronous microtask queue (
 
 **The problem:** Promise `.then()` callbacks must be deferred (never synchronous), but GocciaScript is a synchronous engine with no event loop.
 
-**The solution:** A singleton FIFO queue. When a Promise settles or `.then()` is called on an already-settled Promise, the reaction is enqueued rather than executed immediately. The engine drains the queue after `Interpreter.Execute` completes.
+**The solution:** A singleton FIFO queue. When a Promise settles or `.then()` is called on an already-settled Promise, the reaction is enqueued rather than executed immediately. The engine drains the queue after the executor finishes the program (`TGocciaEngine.ExecuteProgram` → `WaitForRuntimeIdle`), in both execution modes.
 
 Fetch uses a separate fetch-specific completion pump: blocking HTTP work runs off-thread, the owning runtime thread settles the fetch Promise when a response or error is ready, and the resulting Promise reactions still run through this same microtask queue. The microtask queue itself is not used as an I/O queue.
 
@@ -167,8 +178,9 @@ There is one macrotask source, and it is deliberately not an event loop: `Goccia
 
 | Context | When microtasks drain |
 |---------|----------------------|
-| `TGocciaEngine.Execute` | After `Interpreter.Execute` completes |
-| `TGocciaEngine.ExecuteProgram` | After interpreter execution |
+| `TGocciaEngine.Execute` | After the script program (through `ExecuteProgram`) or the module body finishes (`WaitForRuntimeIdle`) |
+| `TGocciaEngine.ExecuteProgram` | After `FExecutor.ExecuteProgram` returns, in either execution mode (`WaitForRuntimeIdle`) |
+| `TGocciaEngine.RunModule` / `RunModuleInScope` | After the executor runs a precompiled `TGocciaCompiledModule` (`WaitForRuntimeIdle`) |
 | Test framework | After each test callback |
 | Benchmark runner | After warmup, calibration batches, and each measurement round |
 

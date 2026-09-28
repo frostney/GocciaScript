@@ -1149,10 +1149,17 @@ export function Landing({
                 provides Node-compatible synchronous, callback, and promise
                 methods over that virtual filesystem, including Stats objects
                 and Node-shaped errors. GocciaScript is not a complete Node.js
-                host: it does not provide CommonJS, npm package resolution,{" "}
+                host: it does not provide CommonJS,{" "}
                 <code className={inlineCodeClass}>process</code>,{" "}
                 <code className={inlineCodeClass}>Buffer</code>, or the general{" "}
                 <code className={inlineCodeClass}>node:</code> module set.
+                Bare-specifier lookup through{" "}
+                <code className={inlineCodeClass}>node_modules</code> (ESM only)
+                is opt-in with{" "}
+                <code className={inlineCodeClass}>
+                  --allow-import=node_modules
+                </code>
+                .
               </p>
               <div className="builtins-grid">
                 {BUILTINS.map((b) => {

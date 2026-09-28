@@ -62,7 +62,7 @@ const name = "Goccia";
 - `fn.call()`, `fn.apply()`, `fn.bind()` for explicit `this` binding.
 - `fn.length` — Number of formal parameters (before defaults/rest).
 - `fn.name` — Function name (inferred from variable declarations for anonymous functions).
-- Type annotations on parameters and return types (proposal-compatible no-op semantics by default; enforced when `--strict-types` is set — see [Type Annotations](#type-annotations-stage-1) below).
+- Type annotations on parameters and return types (proposal-compatible no-op semantics by default; with `--strict-types`, parameter and variable annotations are enforced but return-type annotations are not yet ([#1276](https://github.com/frostney/GocciaScript/issues/1276)) — see [Type Annotations](#type-annotations-stage-1) below).
 - `async`/`await` — Async functions return Promises; `await` suspends until the Promise settles (see [Async Functions](#async-functions) below).
 
 ```javascript
@@ -162,7 +162,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in interpreter and bytecode mode.
+`using` and `await using` declarations (ES2026 §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in interpreter and bytecode mode. In interpreter mode, a `using` or `await using` declared directly in a function body currently throws `using declaration outside of a block scope`; wrap it in an explicit block inside the function, as in the sample below ([#1275](https://github.com/frostney/GocciaScript/issues/1275)). Bytecode mode accepts both forms.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
@@ -177,8 +177,10 @@ class Counter {
 }
 
 const fn = async () => {
-  await using conn = openConnection();
-  // conn is asynchronously disposed when this block exits
+  {
+    await using conn = openConnection();
+    // conn is asynchronously disposed when this block exits
+  }
 };
 ```
 
@@ -257,11 +259,11 @@ Single-document YAML module imports follow the same top-level-object export mode
 
 JSONL (`.jsonl`), CSV (`.csv`), and TSV (`.tsv`) imports expose each record/row as a named export under its zero-based string index (`"0"`, `"1"`, ...). JSONL parses each non-empty line as strict JSON (blank lines are ignored; invalid JSON fails with a line-number error). CSV uses RFC 4180 semantics (comma-delimited, double-quote escaping); TSV uses IANA `text/tab-separated-values` semantics (tab-delimited, backslash escaping) — both default to headers mode. In runtime code, use `goccia:jsonl`, `goccia:csv`, and `goccia:tsv`; those modules expose `parse(...)` / `parseChunk(...)` named exports, and CSV/TSV also support `stringify(...)`, reviver callbacks, and replacer callbacks. They have no default export. See [Data Format Built-ins](built-ins-data-formats.md) for the full API.
 
-Text asset imports (`.txt`, `.md`) expose two named exports: `content` (UTF-8 text with newlines canonicalized to LF) and `metadata` (a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`).
+Text asset imports (`.txt`, `.md`) expose two named exports: `content` (UTF-8 text with newlines canonicalized to LF) and `metadata` (a frozen object with `kind`, `path`, `fileName`, `extension`, and `byteLength`). The `default` export is the same string as `content`.
 
 Bytes imports (the TC39 [Import Bytes](https://github.com/tc39/proposal-import-bytes) proposal, requested with `with { type: "bytes" }`) load the resolved file as raw bytes and expose a single default export that is a `Uint8Array` backed by an immutable `ArrayBuffer`. Unlike text imports, bytes are preserved exactly — no UTF-8 decoding and no newline normalization, so NUL bytes, non-UTF-8 sequences, and original CRLF/LF newlines are kept verbatim. The attribute selects the loader regardless of the file extension or MIME, matching the proposal's local-host guidance. Because the synthetic module declares only a default export, named imports are rejected; source-phase imports (`import.source`) of bytes modules are rejected as well, while static, dynamic (`import(...)`), and deferred (`import.defer`) forms are all supported and share the module cache by specifier and `type: "bytes"`.
 
-Non-scalar YAML keys are canonicalized into stable JSON-like strings. Keys that are not valid identifiers can be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Namespace imports (`import * as ns from "./module.js"`) are supported for script, structured-data, and text-asset modules and produce a frozen, null-prototype namespace object.
+Non-scalar YAML keys are canonicalized into stable JSON-like strings. Keys that are not valid identifiers can be imported with string-literal names such as `import { "foo-bar" as fooBar } from "./config.yaml";`. Namespace imports (`import * as ns from "./module.js"`) are supported for script, structured-data, and text-asset modules and produce a non-extensible, null-prototype module namespace object whose exports cannot be assigned or deleted.
 
 Directory/index resolution:
 
@@ -271,7 +273,7 @@ import { setup } from "./utils";  // resolves to ./utils/index.js (or .ts, .jsx,
 
 Side-effect imports (`import "module";`) are supported and evaluate the dependency for its side effects. Wildcard re-exports (`export * from "module";`) are supported and forward named exports from the dependency; as in ECMAScript, they do not forward the dependency's default export.
 
-`import.meta` (ES2026 §13.3.12) is supported and provides per-module metadata. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
+`import.meta` (ES2026 §13.3.12) is supported in module source and provides per-module metadata. Module source means an imported module, an `.mjs`/`.mts` entry, or an entry run with `--source-type=module`; in a default `.js` script entry, `import.meta` is a `SyntaxError`. The `import.meta` object has a null prototype and is identity-stable — the same object is returned on every access within the same module. Two host-defined properties are available:
 
 - **`import.meta.url`** — the current module's canonical address. Filesystem modules use a `file://` URL for the absolute path (e.g., `file:///Users/me/project/src/main.js`); virtual modules preserve configured addresses such as `host:config`.
 - **`import.meta.resolve(specifier)`** — a synchronous function that resolves a module specifier relative to the current module through the ordinary module loader. Filesystem targets return `file://` URLs, while virtual targets preserve their canonical configured addresses. Throws `TypeError` if called without arguments.
@@ -286,12 +288,12 @@ const helperUrl = import.meta.resolve("./helpers/math.js");
 
 `new.target` (ES2026 §13.3.12) is supported inside class constructors. It evaluates to the constructor that was directly invoked with `new`, or the `newTarget` argument supplied to `Reflect.construct`. Outside a constructor, `new.target` is `undefined`.
 
-Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier, loads the module synchronously, and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
+Dynamic `import()` (ES2026 §13.3.10) is supported. It accepts an arbitrary expression as the module specifier. A computed (non-literal) specifier is a host read outside the module graph, so it needs a `read` grant (`--allow-read`) even for a file inside the project; a string-literal specifier does not (see [Permissions](permissions.md#the-module-graph-exemption)). It loads the module synchronously and returns a Promise that resolves with the module namespace object. On failure, the returned Promise is rejected with the error. Dynamic imports work anywhere expressions are valid — including inside functions, conditionals, and async callbacks.
 
 The parser accepts import attributes syntax (`import(specifier, options)`) and trailing commas. The options expression is evaluated for side effects; enumerable import attribute keys other than `type` are rejected, and `type: "json"`, `type: "text"`, and `type: "bytes"` route dynamic and static imports through the corresponding JSON, text, or bytes module loaders (bytes modules expose a default-only immutable-backed `Uint8Array`). Proposal-phase `import.source(specifier)` follows TC39 Source Phase Imports syntax, but ordinary JavaScript module source objects are still part of the separate ESM Phase Imports proposal. By default, JavaScript source-phase requests resolve normally and then reject with `SyntaxError` because the host has no default source representation for source-text modules. With `--experimental-js-module-source` (or `"experimental-js-module-source": true` / `cfExperimentalJSModuleSource`), JavaScript requests produce cached `ModuleSource` objects without linking, instantiating, or evaluating the module body. Source-phase requests for JSON, text, and other non-JavaScript module kinds currently fail after normal resolution because those module kinds do not expose source objects. Proposal-phase `import.defer(specifier)` resolves with a namespace object that evaluates the module when its exports are observed, while async transitive dependencies with top-level `await` are still evaluated eagerly as part of module linking.
 
 ```javascript
-// Dynamic import with a computed specifier
+// Dynamic import with a computed specifier (needs --allow-read=./helpers)
 const moduleName = "./helpers/math.js";
 const mod = await import(moduleName);
 console.log(mod.add(2, 3)); // 5
@@ -444,7 +446,7 @@ Regex literals are lexed context-sensitively so `/` still works as division in e
 Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
-- The `v` flag (Unicode sets) is accepted and exposed but full set notation is not yet implemented beyond basic `u` flag behavior.
+- The `v` flag (Unicode sets) supports set notation: nested classes, intersection (`&&`), subtraction (`--`), string literals (`\q{…}`), and properties of strings such as `\p{RGI_Emoji}`.
 
 ## TC39 Proposal Details
 
@@ -680,7 +682,7 @@ When enabled (CLI: `--compat-function`, engine API: include `cfFunction` in `Eng
 - **Function expressions** (`const f = function(params) { body }`) parse as `TGocciaFunctionExpression` nodes. Named function expressions (`const f = function g(params) { body }`) create a read-only self-binding of the name (`g`) visible only inside the function body for recursion, matching ES2026 §15.2.5 (InstantiateOrdinaryFunctionExpression) semantics.
 - **Async functions** (`async function name(params) { body }`) are supported in both declaration and expression forms.
 - **Generator functions** (`function*`, `async function*`) are supported when this flag is enabled. Generator method shorthand (`*method()`, `async *method()`) does not require the flag.
-- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and `{ writable: false, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is inherited from `%GeneratorFunction.prototype.prototype%` / `%AsyncGeneratorFunction.prototype.prototype%` (resolving to the corresponding non-callable function prototype object), not the specific generator function — so an own back-reference would be incorrect. Generator prototype objects inherit from `%GeneratorPrototype%`, and async-generator prototype objects inherit from `%AsyncGeneratorPrototype%`; those intrinsic prototype objects are realm-owned and shared by interpreter and bytecode execution.
+- **`prototype` property** — Per ES2026 §10.2.5 MakeConstructor, function declarations and expressions, generator declarations and expressions, and async generator declarations and expressions all carry an own `prototype` data property whose value is a fresh ordinary object. Plain async functions, arrow functions, concise object/class methods, and getter/setter functions do not. The `prototype` descriptor is `{ writable: true, enumerable: false, configurable: false }` for ordinary functions and the same `{ writable: true, enumerable: false, configurable: false }` for generators and async generators (§15.5 / §15.6). For ordinary functions only, the prototype object additionally carries an own `constructor` data property — `{ writable: true, enumerable: false, configurable: true }` — back-referencing the function. Generator and async-generator prototypes do **not** receive an own `constructor`: per §27.5.1.1 / §27.7.1.1, `g.prototype.constructor` is inherited from `%GeneratorFunction.prototype.prototype%` / `%AsyncGeneratorFunction.prototype.prototype%` (resolving to the corresponding non-callable function prototype object), not the specific generator function — so an own back-reference would be incorrect. Generator prototype objects inherit from `%GeneratorPrototype%`, and async-generator prototype objects inherit from `%AsyncGeneratorPrototype%`; those intrinsic prototype objects are realm-owned and shared by interpreter and bytecode execution.
 
 ### Loose Equality (`==` and `!=`)
 
@@ -717,7 +719,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `arguments` Object
 
-**Implemented; disabled by the recommended profile.** Prefer rest parameters, or enable `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is an ordinary identifier, not a reserved keyword, so parameters or body-level lexical declarations named `arguments` shadow the implicit object.
+**Implemented; disabled by the recommended profile.** Prefer rest parameters, or enable `--compat-arguments-object` (CLI flag, `cfArgumentsObject` in `Engine.Compatibility`, or `{"compat-arguments-object": true}` in config). `--compat-non-strict-mode` does not enable `arguments` by itself; it only changes the semantics of an explicitly enabled `arguments` object in sloppy script functions. Strict functions, modules, and functions with non-simple parameter lists create unmapped array-like objects whose indexed entries and `length` reflect the call's argument list without aliasing parameter variables. Sloppy functions with simple parameter lists create mapped arguments exotic objects: indexed properties alias the corresponding parameter binding until the property is deleted, converted to an accessor, or made non-writable. Arrow functions do not create their own `arguments`; they resolve it lexically from the nearest enclosing ordinary function or method that has one. `arguments` is not a reserved keyword, but strict code (the default) rejects it as a parameter name with `SyntaxError: eval and arguments are not allowed in strict function parameters`. In non-strict functions (`--compat-non-strict-mode` script source), parameters or body-level lexical declarations named `arguments` shadow the implicit object. Strict code currently also accepts `let arguments = …`, which ECMAScript rejects ([#1276](https://github.com/frostney/GocciaScript/issues/1276)).
 
 ### Automatic Semicolon Insertion
 
@@ -855,6 +857,7 @@ When disabled (default), labeled statements are `SyntaxError`s. With `--warning-
 
 ```text
 Warning: Labeled statements are not supported in GocciaScript
+  Suggestion: Enable --compat-label for JavaScript labeled break/continue compatibility
   --> script.js:1:1
 ```
 
@@ -919,7 +922,8 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 
 | Context | `this` value |
 |---------|-------------|
-| Module level | `undefined` |
+| Module level (module source) | `undefined` |
+| Script top level (default `.js` entry) | `globalThis` |
 | Arrow function | Inherited from lexical (enclosing) scope |
 | Shorthand method (`method() {}`) | Call-site object (the receiver) |
 | Class method | Call-site object (the instance) |
@@ -931,9 +935,10 @@ GocciaScript follows ECMAScript strict mode `this` semantics:
 Arrow functions **never** receive their own `this` — they always inherit from their defining scope:
 
 ```javascript
+// Module source (.mjs, --source-type=module, or an imported module)
 const obj = {
   value: 42,
-  arrow: () => typeof this,     // undefined — arrow inherits module-level this
+  arrow: () => typeof this,     // "undefined" — arrow inherits module-level this ("object" in a script, where this is globalThis)
   method() { return this.value; } // 42 — shorthand method uses call-site this
 };
 

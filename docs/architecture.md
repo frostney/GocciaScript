@@ -9,7 +9,7 @@
 - **Shared source pipeline** — Preprocessors, lexer, parser, warning data, source maps, and AST artifacts are shared between execution modes
 - **Shared execution substrate** — Both execution modes share the same value types, core scope model, runtime extension mechanism, and mark-and-sweep GC
 - **Goccia-specific** — The bytecode VM operates directly on `TGocciaValue`, not a generic VM abstraction
-- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not depend on the interpreter or evaluator units; the VM it drives still delegates direct `eval` to the tree-walk evaluator, the one remaining cross-dependency
+- **Near-independent executors** — The `TGocciaBytecodeExecutor` unit does not call the interpreter or evaluator (it shares only the `Goccia.Evaluator.Context` record type); the VM it drives still calls the tree-walk evaluator for direct `eval`, for a module's top-level function declarations, and to construct classes those evaluator paths built. See [Bytecode VM § Overview](bytecode-vm.md#overview)
 
 ## Overview
 
@@ -72,15 +72,15 @@ The CLI tools share a two-level application class hierarchy and a declarative op
 
 **Application classes:**
 
-- `TGocciaApplication` (`Goccia.Application.pas`) — embeddable base for any GocciaScript host. Manages GC lifecycle (`Initialize`/`Shutdown`) and unified error handling (`HandleError` virtual). No CLI dependency.
+- `TGocciaApplication` (`Goccia.Application.pas`) — embeddable base for any GocciaScript host. Provides `Run`/`RunApplication`, which turn a `TCLIUsageError` into exit code 2 (`EXIT_CODE_USAGE`) and any other exception into exit code 1 after unified error handling (`HandleError` virtual). It does not depend on the CLI application layer; it uses only those two symbols from the shared `CLI.Options` unit. It has no GC code: `TGocciaEngine`'s constructor initializes the garbage collector.
 - `TGocciaCLIApplication` (`Goccia.CLI.Application.pas`) — extends `TGocciaApplication` with CLI concerns: argument parsing, help generation, option registration, and coverage/profiler singleton lifecycle. Tools override `Configure` (register options) and `ExecuteWithPaths` (business logic).
 
 **Option class hierarchy**:
 
-- `CLI.Options.pas` provides generic primitives: `TOptionBase` → `TFlagOption`, `TStringOption`, `TIntegerOption`, `TRepeatableOption`, `TEnumOption<T>`
+- `CLI.Options.pas` provides generic primitives: `TOptionBase` → `TFlagOption`, `TStringOption` (→ `TOptionalStringOption`), `TIntegerOption`, `TInt64Option` (→ `TByteSizeOption`, `TDurationOption`, `TCountOption` for unit-aware limits), `TScopeListOption` (`--allow-<cap>[=scope,...]` grant lists), `TRemovedOption` (a removed flag that stays parseable so its use fails with a message naming the replacement), `TRepeatableOption`, `TEnumOption<T>`
 - The parser calls `Option.Apply(Value)` via virtual dispatch — no pointer arithmetic
 - `TEnumOption<T>` uses RTTI (`GetEnumName` + prefix stripping) to auto-discover valid values
-- `Goccia.CLI.Options.pas` owns Goccia-specific groups (`TGocciaEngineOptions`, `TGocciaCoverageOptions`, `TGocciaProfilerOptions`) and the compatibility flag registry used by each CLI host
+- `Goccia.CLI.Options.pas` owns Goccia-specific groups (`TGocciaEngineOptions`, which owns `TGocciaCapabilityOptions` for the `--allow-*`/`--deny-*` flags; `TGocciaCoverageOptions`; `TGocciaProfilerOptions`; `TGocciaSandboxOptions`) and the compatibility flag registry used by each CLI host
 
 **CLI lifecycle** (`TGocciaCLIApplication.Execute`):
 
@@ -100,8 +100,8 @@ CLI bytecode paths that need parse artifacts use `TGocciaCLISourcePipelineResult
 |------|-----------|-----------|
 | GocciaREPL | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
 | GocciaRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `HandleError`, `AfterExecute` |
-| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
-| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `ExecuteWithPaths` |
+| GocciaTestRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths` |
+| GocciaBenchmarkRunner | `TGocciaCLIApplication` | `Configure`, `ConfigureCreatedEngine`, `Validate`, `ExecuteWithPaths`, `AfterExecute` |
 | GocciaBundler | `TGocciaCLIApplication` | `Configure`, `Validate`, `ExecuteWithPaths` |
 
 `GocciaRunner` has a host mode and a [sandbox mode](permissions.md#sandbox-mode). In sandbox mode it copies the host inputs into a `TSandboxVirtualFileSystem` and captures that as the seed baseline before creating an engine, then installs `TGocciaSandboxRuntimeExtension` so source can import `"fs"` and `"goccia"` inside that sandbox. Both modes use the same executor abstraction: `--mode=interpreted` uses `TGocciaInterpreterExecutor`, while `--mode=bytecode` uses `TGocciaBytecodeExecutor`.
@@ -118,7 +118,8 @@ TGocciaExecutor (abstract — Goccia.Executor.pas)
 │     Wraps TGocciaInterpreter for tree-walk execution
 └── TGocciaBytecodeExecutor (Goccia.Executor.Bytecode.pas)
       Compiles to bytecode and runs on TGocciaVM
-      Executor unit is evaluator-free; the VM still uses Goccia.Evaluator for direct eval
+      Executor unit does not call the evaluator; the VM still calls Goccia.Evaluator
+      for direct eval and for evaluator-built module functions and classes
 ```
 
 The engine always creates a `TGocciaInterpreter` for bootstrapping (global scope creation, built-in registration, shim loading). The executor receives the bootstrapped global scope and module loader via `Initialize`, then handles all program and module body execution independently.

@@ -13,7 +13,7 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 
 - Test coverage follows [Testing](docs/testing.md) and the public-surface testing strategy identified during readiness.
 - The relevant focused checks pass before broader checks.
-- **JavaScript suite gate** — Always run `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`. Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
+- **JavaScript suite gate** — Always run `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode`. `-P` accepts the test configs' permission requests for that run only; AI assistants always use it and never run `--trust`. Humans who prefer may instead trust the suite once per checkout or worktree with `./build/GocciaTestRunner --trust tests/` (again after a permission block changes) and drop `-P`.
 - **Format gate** — Run `./format.pas --check` before push or PR.
 - If a clean build is needed to rule out stale FPC artifacts, the relevant `./build.pas --clean <target>` check has been run before diagnosing source failures.
 

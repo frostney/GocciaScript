@@ -22,15 +22,15 @@ classDiagram
     TGocciaValue <|-- TGocciaStringLiteralValue
     TGocciaValue <|-- TGocciaSymbolValue
     TGocciaValue <|-- TGocciaObjectValue
-    TGocciaValue <|-- TGocciaClassValue
+    TGocciaObjectValue <|-- TGocciaClassValue
 
     TGocciaObjectValue <|-- TGocciaFunctionBase
     TGocciaFunctionBase <|-- TGocciaFunctionValue
     TGocciaFunctionBase <|-- TGocciaNativeFunctionValue
     TGocciaFunctionBase <|-- TGocciaBoundFunctionValue
-    TGocciaObjectValue <|-- TGocciaArrayValue
-    TGocciaObjectValue <|-- TGocciaSetValue
-    TGocciaObjectValue <|-- TGocciaMapValue
+    TGocciaInstanceValue <|-- TGocciaArrayValue
+    TGocciaInstanceValue <|-- TGocciaSetValue
+    TGocciaInstanceValue <|-- TGocciaMapValue
     TGocciaObjectValue <|-- TGocciaPromiseValue
     TGocciaObjectValue <|-- TGocciaInstanceValue
     TGocciaInstanceValue <|-- TGocciaWeakSetValue
@@ -53,13 +53,13 @@ classDiagram
     TGocciaIteratorHelperValue <|-- TGocciaConcatIteratorValue
     TGocciaIteratorHelperValue <|-- TGocciaZipIteratorValue
     TGocciaIteratorHelperValue <|-- TGocciaZipKeyedIteratorValue
-    TGocciaObjectValue <|-- TGocciaArrayBufferValue
-    TGocciaObjectValue <|-- TGocciaSharedArrayBufferValue
+    TGocciaInstanceValue <|-- TGocciaArrayBufferValue
+    TGocciaInstanceValue <|-- TGocciaSharedArrayBufferValue
     TGocciaInstanceValue <|-- TGocciaDataViewValue
-    TGocciaObjectValue <|-- TGocciaTypedArrayValue
-    TGocciaObjectValue <|-- TGocciaNumberObjectValue
-    TGocciaObjectValue <|-- TGocciaStringObjectValue
-    TGocciaObjectValue <|-- TGocciaBooleanObjectValue
+    TGocciaInstanceValue <|-- TGocciaTypedArrayValue
+    TGocciaInstanceValue <|-- TGocciaNumberObjectValue
+    TGocciaInstanceValue <|-- TGocciaStringObjectValue
+    TGocciaInstanceValue <|-- TGocciaBooleanObjectValue
     TGocciaObjectValue <|-- TGocciaSymbolObjectValue
 
     TGocciaFunctionValue <|-- TGocciaMethodValue
@@ -107,7 +107,7 @@ classDiagram
         Built-in Pascal functions
     }
     class TGocciaArrayBufferValue {
-        Fixed-length binary data buffer
+        Fixed-length or resizable binary data buffer
     }
     class TGocciaSharedArrayBufferValue {
         Shared-memory binary data buffer
@@ -151,7 +151,7 @@ Returns `True` for primitive value types. Overridden by:
 | `TGocciaBigIntValue` | `True` |
 | All others (objects, arrays, functions, classes) | `False` (inherited default) |
 
-Used by `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) to skip conversion for values that are already primitive. A standalone `IsPrimitive(Value)` function in `Goccia.Values.Primitives` delegates to `Value.IsPrimitive`.
+Used by `ToPrimitive` (`Goccia.Values.ToPrimitive.pas`) to skip conversion for values that are already primitive.
 
 ### `IsCallable`
 
@@ -161,6 +161,7 @@ Returns `True` for values that can be invoked as functions. Overridden by:
 |------|---------|
 | `TGocciaFunctionBase` (and all subclasses: `TGocciaFunctionValue`, `TGocciaArrowFunctionValue`, `TGocciaMethodValue`, `TGocciaBoundFunctionValue`, `TGocciaNativeFunctionValue`) | `True` |
 | `TGocciaClassValue` | `True` (callable via `new`) |
+| `TGocciaProxyValue` | Delegates to the proxy target |
 | All others | `False` (inherited default) |
 
 Used by:
@@ -171,7 +172,7 @@ Used by:
 - `Set.prototype.forEach` and `Map.prototype.forEach` — to validate the callback argument.
 - `IsDeepEqual` — to reject callable objects from deep structural comparison when TypeNames differ.
 
-**Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
+**Important:** When code needs to cast to `TGocciaFunctionBase` after the check (e.g., accessor property invocation via `.Call()`), use `is TGocciaFunctionBase` instead of `IsCallable`. This is because `TGocciaClassValue` inherits from `TGocciaObjectValue` (not `TGocciaFunctionBase`) but returns `True` for `IsCallable`. The RTTI check ensures the cast is safe.
 
 ### `IsConstructable`
 
@@ -196,8 +197,8 @@ Property access is unified through virtual methods on the `TGocciaValue` base cl
 
 ```pascal
 TGocciaValue = class(TGCManagedObject)
-  function GetProperty(const Name: string): TGocciaValue; virtual;
-  procedure SetProperty(const Name: string; Value: TGocciaValue); virtual;
+  function GetProperty(const AName: string): TGocciaValue; virtual;
+  procedure SetProperty(const AName: string; const AValue: TGocciaValue); virtual;
 end;
 ```
 
@@ -209,8 +210,7 @@ The base `TGocciaValue` provides default implementations: `GetProperty` returns 
 | `TGocciaArrayValue` | Handles `length` and numeric indices, delegates to object | Handles numeric index and `length`, delegates to object |
 | `TGocciaClassValue` | Checks static properties | Sets static properties |
 | `TGocciaInstanceValue` | Checks instance, then prototype (invokes getters) | Checks for setters, then sets directly |
-| `TGocciaStringLiteralValue` | Provides `.length`, `.charAt()`, etc. via string prototype | No-op (strings are immutable) |
-| Primitives | Returns `nil` | No-op |
+| Primitives (including `TGocciaStringLiteralValue`) | Returns `nil` — property access on a primitive boxes it to its wrapper object first | No-op |
 
 The evaluator accesses properties uniformly via `Value.GetProperty(Name)` and `Value.SetProperty(Name, NewValue)` — no type checking or interface querying needed at the call site.
 
@@ -221,18 +221,18 @@ The evaluator accesses properties uniformly via `Value.GetProperty(Name)` and `V
 Both are singletons — only one instance exists in the runtime:
 
 ```pascal
-function NullValue: TGocciaValue;       // Always the same TGocciaNullLiteralValue
-function UndefinedValue: TGocciaValue;   // Always the same TGocciaUndefinedLiteralValue
+class function TGocciaNullLiteralValue.NullValue: TGocciaNullLiteralValue;
+class function TGocciaUndefinedLiteralValue.UndefinedValue: TGocciaUndefinedLiteralValue;
 ```
 
-This enables fast identity checks: `if Value = UndefinedValue then ...`
+This enables fast identity checks: `if Value = TGocciaUndefinedLiteralValue.UndefinedValue then ...`
 
 ### Booleans
 
 `true` and `false` are cached singletons via `TrueValue` and `FalseValue`. Boolean creation goes through a factory:
 
 ```pascal
-function BooleanValue(B: Boolean): TGocciaBooleanLiteralValue;
+class function TGocciaBooleanLiteralValue.FromBoolean(const AValue: Boolean): TGocciaBooleanLiteralValue;
 // Returns TrueValue or FalseValue
 ```
 
@@ -248,9 +248,9 @@ TGocciaNumberLiteralValue = class(TGocciaValue)
 end;
 ```
 
-Special number singletons: `NaNValue`, `PositiveInfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`.
+Special number singletons (class functions on `TGocciaNumberLiteralValue`): `NaNValue`, `InfinityValue`, `NegativeInfinityValue`, `NegativeZeroValue`, plus `ZeroValue` and `OneValue`.
 
-**Checking for special values:** Use the property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) which delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral `Int64 absolute` sign-bit check respectively. See [Tooling](contributing/tooling.md#endian-dependent-byte-indexing) for the endian-neutral pattern.
+**Checking for special values:** Use the property accessors (`IsNaN`, `IsInfinity` / `IsNegativeInfinity` / `IsInfinite`, `IsNegativeZero`). `IsNaN` and the infinity checks delegate to `Math.IsNaN` and `Math.IsInfinite`; `IsNegativeZero` calls `NumberBits.IsNegativeZero`, which compares the double's 64-bit pattern with the sign bit alone.
 
 ### Number Prototype (`TGocciaNumberObjectValue`)
 
@@ -259,9 +259,11 @@ When methods are called on number primitives (e.g., `(42).toFixed(2)`), the eval
 | Method | Description |
 |--------|-------------|
 | `toFixed(digits?)` | Format with fixed-point notation. Returns `"NaN"`, `"Infinity"`, `"-Infinity"` for special values. |
-| `toString(radix?)` | String representation. Supports radix 10 (default) and 16 (hex). Special values return their default string. |
+| `toString(radix?)` | String representation in radix 2–36 (default 10); other radixes throw `RangeError`. Special values return their default string. |
 | `valueOf()` | Return the primitive number value. |
 | `toPrecision(precision?)` | Format to specified precision. Special values return their default string. |
+| `toExponential(digits?)` | Format in exponential notation. |
+| `toLocaleString(locales?, options?)` | Locale-aware formatting through `Intl.NumberFormat`; installed by the `numberArrayToLocaleString` shim (`Goccia.Shims.pas`). |
 
 ### Strings
 
@@ -273,7 +275,12 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String values implement property access for methods like `.length`, `.charAt()`, `.includes()`, etc. through the string prototype system. When strings are boxed into `TGocciaStringObjectValue` (e.g., via `new String()` or implicit boxing), all instances share a single per-engine string prototype singleton — methods are registered once and reused across all string object instances of that engine. The prototype graph is per-engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type. `TGocciaArrayValue`, `TGocciaSetValue`, `TGocciaMapValue`, `TGocciaFunctionBase`, `TGocciaArrayBufferValue`, `TGocciaSharedArrayBufferValue`, `TGocciaDataViewValue`, and `TGocciaTypedArrayValue` use `TGocciaSharedPrototype` — a managed wrapper that bundles the prototype object and method host together; the realm pins both via `TGocciaRealm.SetOwnedSlot` when it takes ownership and unpins them on tear-down. `TGocciaStringObjectValue` reads its prototype directly via `CurrentRealm.GetSlot(GStringPrototypeSlot)` (set with `CurrentRealm.SetSlot`), with the method host held in a thread-local `FPrototypeMethodHost` and pinned manually via `TGarbageCollector.Instance.PinObject`. `TGocciaNumberObjectValue` and `TGocciaSymbolValue` use a similar raw-slot pattern with a process-wide method-host singleton. In all cases mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread.
+String primitives get `.length`, `.charAt()`, `.includes()` and the other methods by boxing: property access on a primitive goes through a `TGocciaStringObjectValue` (also produced by `new String()`) whose prototype is the realm's single `String.prototype`. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
+
+- **Owned slot with `TGocciaSharedPrototype`** — `Set`, `Map`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `TypedArray` and the weak collections. The helper creates the prototype and pins it and its method host in its constructor; the realm frees the helper on tear-down, which unpins both.
+- **Raw slots** — `Array`, `Number`, `Symbol` and `Iterator` keep the prototype in one slot and the method host in another (`GArrayMethodHostSlot`, `GNumberMethodHostSlot`, `GSymbolMethodHostSlot`, …); for `Array` and `Number` both slots hold the same instance. `String.prototype` (`GStringPrototypeSlot`) and `Function.prototype` (`GFunctionPrototypeSlot`, a `TGocciaFunctionSharedPrototype`) are their own method hosts in a single slot. `SetSlot` pins; realm tear-down unpins.
+
+In all cases mutations on one engine's `String.prototype` do not leak into the next engine on the same worker thread.
 
 ### Symbols
 
@@ -404,7 +411,7 @@ When `Object.defineProperty` is called on an existing property, unspecified desc
 
 ### Property Order
 
-Objects track insertion order via `FPropertyInsertionOrder` (a `TStringList`). This ensures `Object.keys()` returns properties in the order they were defined, matching JavaScript semantics.
+String-keyed properties live in `FProperties`, a `TGocciaPropertyMap` (`TOrderedStringMap<TGocciaPropertyDescriptor>`) that keeps creation order; symbol-keyed properties use `FSymbolDescriptors` plus `FSymbolInsertionOrder`. `GetOwnPropertyKeys` returns array-index keys in ascending numeric order first, then other strings in creation order, so `Object.keys({ b: 1, 2: 1, a: 1, 1: 1 })` is `["1", "2", "b", "a"]` as in JavaScript.
 
 ### Prototype Chain
 
@@ -418,11 +425,11 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 
 ### Object Freezing
 
-Objects support `Object.freeze()` via an `FFrozen` flag on `TGocciaObjectValue`:
+`Object.freeze()` calls `TGocciaObjectValue.Freeze`:
 
-- **Freeze** — Makes all existing properties non-writable and non-configurable, then sets the `FFrozen` flag.
-- **Frozen check** — `AssignProperty` checks `FFrozen` before any modification and throws `TypeError` if the object is frozen.
-- **`Object.isFrozen(obj)`** — Returns the `FFrozen` flag value. Non-objects are always considered frozen per ECMAScript spec.
+- **Freeze** — Makes the object non-extensible, then redefines every own property as non-configurable (data properties also non-writable), and sets the `FFrozen` and `FSealed` markers.
+- **Writes** — Rejected by the property descriptors and the extensibility check, not by the marker; a failed write throws `TypeError` by default (see [Property Descriptor System](#property-descriptor-system)).
+- **`Object.isFrozen(obj)`** — Runs `TestIntegrityFrozen` (TestIntegrityLevel(O, frozen), ES2026 §7.3.16): the object must be non-extensible and every own property non-configurable, with data properties non-writable. So an object made non-extensible with only non-writable, non-configurable properties reports `true` without ever calling `freeze`. Non-objects return `true`.
 
 ### Error Helpers (`Goccia.Values.ErrorHelper.pas`)
 
@@ -439,9 +446,9 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Arrays
 
-`TGocciaArrayValue` extends `TGocciaObjectValue`.
+`TGocciaArrayValue` extends `TGocciaInstanceValue`.
 
-- **Sparse arrays** — Holes are represented as `nil` in the internal `FElements` list.
+- **Sparse arrays** — Holes are the `TGocciaHoleValue.HoleValue` sentinel in the internal `FElements` list, never `nil`.
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
 - **Shared prototype singleton** — All array instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods are registered once on this shared prototype during `InitializePrototype` (guarded by checking the realm slot) and pinned automatically by `TGocciaRealm.SetSlot`. The constructor assigns `FPrototype` from the realm slot instead of creating a per-instance prototype.
 - **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all operate through `ThisValue` (not `Self`) to access instance data, since the method pointers are bound to a single method host instance.
@@ -449,22 +456,23 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 
 ## Sets
 
-`TGocciaSetValue` extends `TGocciaObjectValue` (`Goccia.Values.SetValue.pas`). A collection of unique values with insertion-order iteration.
+`TGocciaSetValue` extends `TGocciaInstanceValue` (`Goccia.Values.SetValue.pas`). A collection of unique values with insertion-order iteration.
 
 - **Uniqueness** — Uses `IsSameValueZero` (same as `===` except `NaN === NaN` is true) to test for duplicates.
-- **Shared prototype singleton** — All set instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods are registered once during `InitializePrototype` and pinned automatically by `TGocciaRealm.SetSlot`. Each method operates through `ThisValue` to access instance data.
+- **Shared prototype singleton** — All set instances within an engine share a single per-engine prototype, held by a `TGocciaSharedPrototype` in a realm-owned slot ([Owned-slot pattern](core-patterns.md#owned-slot-pattern-a-tgocciasharedprototype-helper)). Methods are registered once during `InitializePrototype`. Each method operates through `ThisValue` to access instance data.
 - **Methods** — `add`, `has`, `delete`, `clear`, `forEach`, `values`, `keys`, `entries`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` — all registered on the shared prototype.
 - **Set-like operations** — Set operation methods accept either a `Set` or an object with `size`, `has(value)`, and `keys()` properties. Runtime validation follows the Set Record shape used by the ECMAScript algorithms.
-- **`size`** — Returned dynamically via `GetProperty` override.
+- **Internal storage** — `FStore: TGocciaOrderedValueMap`, an insertion-ordered map keyed by SameValueZero (members map to themselves).
+- **`size`** — A `get size` accessor on the prototype.
 - **Spreadable** — `ToArray` converts to a `TGocciaArrayValue` for spread syntax support.
 
 ## Maps
 
-`TGocciaMapValue` extends `TGocciaObjectValue` (`Goccia.Values.MapValue.pas`). A collection of key-value pairs with insertion-order iteration where any value can be a key.
+`TGocciaMapValue` extends `TGocciaInstanceValue` (`Goccia.Values.MapValue.pas`). A collection of key-value pairs with insertion-order iteration where any value can be a key.
 
 - **Key equality** — Uses `IsSameValueZero` for key lookup.
-- **Internal storage** — `FEntries: TList<TGocciaMapEntry>` where each entry is a `record` with `Key` and `Value` fields.
-- Maps follow the same implementation pattern as Sets (see [Sets](#sets) above): prototype-registered methods, dynamic `size` via `GetProperty`, and `ToArray` spreadability.
+- **Internal storage** — `FStore: TGocciaOrderedValueMap`, the same SameValueZero-keyed, insertion-ordered map that backs `Set`.
+- Maps follow the same implementation pattern as Sets (see [Sets](#sets) above): prototype-registered methods, a `get size` prototype accessor, and `ToArray` spreadability.
 - **Methods** — `get`, `set`, `has`, `delete`, `clear`, `forEach`, `keys`, `values`, `entries` — all registered on the shared prototype.
 
 ## Weak Collections
@@ -488,7 +496,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Reactions** — `FReactions: TList<TGocciaPromiseReaction>` stores pending `.then()` reactions. When the Promise settles, all reactions are enqueued as microtasks. When `.then()` is called on an already-settled Promise, the reaction is enqueued immediately.
 - **Thenable adoption** — If a Promise is resolved with another Promise, `SubscribeTo` defers settlement via a microtask (per the spec's PromiseResolveThenableJob) rather than resolving synchronously. For already-settled inner Promises, the settlement is enqueued as a microtask; for pending inner Promises, a reaction is added to the inner's reaction list.
 - **Self-rejection** — Resolving a Promise with itself throws a `TypeError` per ECMAScript spec.
-- **Shared prototype singleton** — All Promise instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` and pinned automatically by `TGocciaRealm.SetSlot`.
+- **Shared prototype singleton** — All Promise instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods (`then`, `catch`, `finally`) are registered once during `InitializePrototype` on a `TGocciaSharedPrototype` held in a realm-owned slot.
 - **GC integration** — `MarkReferences` marks the `PromiseResult`, all pending reaction callbacks, and reaction result Promises.
 
 ## Functions
@@ -600,11 +608,11 @@ Represent class constructors. Store:
 - Constructor method
 - Instance methods (on prototype)
 - Static methods
-- Static symbol-keyed properties (`FStaticSymbolDescriptors`) — supports `static get [Symbol.species]()` and similar computed symbol accessors. Use `DefineSymbolProperty` to register and `GetSymbolPropertyWithReceiver` to look up (preserves receiver for getter `this` context across superclass chain)
+- Static symbol-keyed properties (the `FSymbolDescriptors` map inherited from `TGocciaObjectValue`) — supports `static get [Symbol.species]()` and similar computed symbol accessors. Use `DefineSymbolProperty` to register and `GetSymbolPropertyWithReceiver` to look up (preserves receiver for getter `this` context across superclass chain)
 - Public getters and setters (on prototype via accessor descriptors)
 - Private getters and setters (in `FPrivateGetters`/`FPrivateSetters`, separate from public ones)
 - Private instance and static fields/methods
-- Instance property declaration order (`InstancePropertyOrder`, `PrivateInstancePropertyOrder`)
+- Instance field declaration order (`FFieldOrder`, one entry per public or private instance field, alongside the `FInstancePropertyDefs` / `FPrivateInstancePropertyDefs` maps)
 - Superclass reference for inheritance
 
 ### Instance Values (`TGocciaInstanceValue`)
@@ -623,14 +631,18 @@ flowchart TD
     New --> Create["Create TGocciaInstanceValue"]
     Create --> Proto["Set prototype = Foo.prototype"]
     Proto --> Init["Create TGocciaClassInitScope\nthis = instance\nowningClass = Foo"]
-    Init --> Public["Initialize public instance properties\n(in declaration order)"]
-    Public --> SuperPrivate["Initialize private instance properties\nfrom superclass (in declaration order)"]
-    SuperPrivate --> Private["Initialize private instance properties\nfrom current class (in declaration order)"]
-    Private --> Constructor["Call constructor with instance as this"]
-    Constructor --> Return["Return instance"]
+    Init --> Derived{"Foo extends\nanother class?"}
+    Derived -- no --> Fields["Initialize Foo's public and private\ninstance fields (one declaration order)"]
+    Fields --> Body["Run Foo's constructor body"]
+    Derived -- yes --> BodyStart["Run Foo's constructor body\nup to super(...)"]
+    BodyStart --> Super["super(...): superclass fields,\nthen superclass constructor body"]
+    Super --> DerivedFields["Initialize Foo's public and private\ninstance fields (one declaration order)"]
+    DerivedFields --> Rest["Run the rest of Foo's constructor body"]
+    Body --> Return["Return instance"]
+    Rest --> Return
 ```
 
-Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized private fields.
+Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields.
 
 ## Enums
 
@@ -650,21 +662,23 @@ Self-references in initializers are supported via a child scope that binds each 
 
 ## ArrayBuffer
 
-`TGocciaArrayBufferValue` extends `TGocciaObjectValue` (`Goccia.Values.ArrayBufferValue.pas`). A fixed-length raw binary data buffer backed by a zero-initialized `TBytes` array.
+`TGocciaArrayBufferValue` extends `TGocciaInstanceValue` (`Goccia.Values.ArrayBufferValue.pas`). A raw binary data buffer backed by a zero-initialized `TBytes` array. It is fixed-length by default, resizable when constructed with `{ maxByteLength }`, and can be detached (by `transfer`) or made immutable.
 
-- **Internal storage** — `FData: TBytes` holds the raw bytes. `FByteLength: Integer` tracks the buffer size.
-- **Shared prototype singleton** — All ArrayBuffer instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods (`slice`) and accessors (`byteLength`) are registered once during `InitializePrototype`. The prototype and method host are pinned automatically by `TGocciaRealm.SetOwnedSlot` when the realm takes ownership of the `TGocciaSharedPrototype`.
-- **`Symbol.toStringTag`** — `"ArrayBuffer"`, registered on the prototype.
+- **Internal storage** — `FData: TBytes` holds the raw bytes, and its length is the byte length. `FMaxByteLength` is set only for resizable buffers (`NO_MAX_BYTE_LENGTH` otherwise); `FDetached` and `FImmutable` record the other two states.
+- **Shared prototype singleton** — All ArrayBuffer instances within an engine share a single per-engine prototype, held by a `TGocciaSharedPrototype` in a [realm-owned slot](core-patterns.md#realm-ownership--slot-registration). Members are registered once during `InitializePrototype`.
+- **Prototype members** — Methods `slice`, `resize`, `transfer`, `transferToFixedLength`, `transferToImmutable` and `sliceToImmutable`; accessors `byteLength`, `maxByteLength`, `resizable`, `detached` and `immutable`. `Symbol.toStringTag` is `"ArrayBuffer"`.
 - **`slice(begin?, end?)`** — Returns a new ArrayBuffer containing a byte range copy. Supports negative indices (resolved relative to `byteLength`), out-of-range clamping, and defaults (`begin` = 0, `end` = `byteLength`).
+- **Detached and immutable buffers** — After `transfer`, the source is detached: `byteLength` is 0 and methods such as `slice` throw `TypeError`. `resize` on an immutable buffer throws `TypeError`.
 - **`GCMarked` integration** — `MarkReferences` calls `inherited` (no `TGocciaValue` references to mark — only holds `TBytes`).
 - **structuredClone** — Byte contents are copied into a new buffer.
 
 ## SharedArrayBuffer
 
-`TGocciaSharedArrayBufferValue` extends `TGocciaObjectValue` (`Goccia.Values.SharedArrayBufferValue.pas`). Same API as ArrayBuffer but a distinct type — `SharedArrayBuffer` instances are not instances of `ArrayBuffer` and vice versa.
+`TGocciaSharedArrayBufferValue` extends `TGocciaInstanceValue` (`Goccia.Values.SharedArrayBufferValue.pas`). A distinct type from ArrayBuffer — `SharedArrayBuffer` instances are not instances of `ArrayBuffer` and vice versa.
 
-- **Internal storage** — Same `TBytes`-backed design as ArrayBuffer.
-- **Shared prototype singleton** — All SharedArrayBuffer instances within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), separate from ArrayBuffer's, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). The prototype and method host are pinned automatically by `TGocciaRealm.SetOwnedSlot` when the realm takes ownership of the `TGocciaSharedPrototype`. `Symbol.toStringTag` is `"SharedArrayBuffer"`.
+- **Internal storage** — Same `TBytes`-backed design as ArrayBuffer. A buffer constructed with `{ maxByteLength }` is growable.
+- **Shared prototype singleton** — All SharedArrayBuffer instances within an engine share a single per-engine prototype, held by its own `TGocciaSharedPrototype` in a realm-owned slot, separate from ArrayBuffer's. `Symbol.toStringTag` is `"SharedArrayBuffer"`.
+- **Prototype members** — `slice` and `grow`; accessors `byteLength`, `maxByteLength` and `growable`.
 - **`slice(begin?, end?)`** — Returns a new SharedArrayBuffer (not ArrayBuffer).
 - **structuredClone** — Byte contents are copied into a new buffer.
 
@@ -683,7 +697,7 @@ Self-references in initializers are supported via a child scope that binds each 
 `TGocciaTypedArrayValue` extends `TGocciaInstanceValue` (`Goccia.Values.TypedArrayValue.pas`). Provides array-like views over ArrayBuffer data with fixed element types. Ten non-BigInt types are supported: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`. `Float16Array` uses IEEE 754 half-precision (binary16) with conversion helpers in `Goccia.Float16.pas`.
 
 - **Internal storage** — `FBufferValue: TGocciaValue` (the underlying buffer — either `TGocciaArrayBufferValue` or `TGocciaSharedArrayBufferValue`, returned by `.buffer`), `FBufferData: TBytes` (shared reference to the buffer's byte array for element access), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
-- **Shared prototype singleton** — All TypedArray instances (regardless of kind) within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Prototype methods are registered once during `InitializePrototype`. The prototype and method host are pinned automatically by `TGocciaRealm.SetOwnedSlot` when the realm takes ownership of the `TGocciaSharedPrototype`.
+- **Shared prototype singleton** — All TypedArray instances (regardless of kind) within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Prototype methods are registered once during `InitializePrototype`; the `TGocciaSharedPrototype` pins the prototype and method host until the realm frees it.
 - **Element access** — `ReadElement(index): Double` and `WriteElement(index, value)` delegate raw byte encoding to `Goccia.BinaryData`, using the same endian-aware helpers as DataView. Integer types wrap, `Uint8ClampedArray` clamps, and float types preserve IEEE 754 encodings.
 - **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types through `Goccia.BinaryData`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
 - **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying.
@@ -699,7 +713,7 @@ Self-references in initializers are supported via a child scope that binds each 
 
 ### Number Representation
 
-Numbers are represented by a single `Double` payload (`FValue`) using standard IEEE 754 bit patterns. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are detected via property accessors (`IsNaN`, `IsInfinity`, `IsNegativeZero`) that delegate to `Math.IsNaN`, `Math.IsInfinite`, and an endian-neutral sign-bit check — the same helpers described in the [Numbers](#numbers) section above.
+Numbers are represented by a single `Double` payload (`FValue`) using standard IEEE 754 bit patterns. Special values (`NaN`, `Infinity`, `-Infinity`, `-0`) are detected via property accessors (`IsNaN`, `IsInfinity`, `IsNegativeInfinity`, `IsNegativeZero`) that delegate to `Math.IsNaN`, `Math.IsInfinite`, and `NumberBits.IsNegativeZero` — the same helpers described in the [Numbers](#numbers) section above.
 
 This replaced an earlier enum-based design. See [ADR 0001](adr/0001-number-dual-representation.md) and [ADR 0016](adr/0016-ieee-754-number-representation.md) for the history of this change.
 
@@ -709,13 +723,13 @@ This replaced an earlier enum-based design. See [ADR 0001](adr/0001-number-dual-
 - **Negative zero** — `-0` and `+0` are equal in IEEE 754 but distinguishable in JavaScript (`Object.is(-0, +0)` is `false`). The `IsNegativeZero` accessor encapsulates the sign-bit check.
 - **Display correctness** — `NaN.toString()` must return `"NaN"`, not a floating-point artifact. The accessors ensure correct string conversion.
 
-**Pitfall: raw `Value = 0` checks.** The `IsActualZero` helper in `Goccia.Arithmetic.pas` uses `(Value = 0) and not IsNaN and not IsInfinite` — this intentionally treats `-0` as zero, which is correct for exponentiation (`(-0)^0 === 1`). In contexts where `-0` must be distinguished (e.g. `Object.is`, sort ordering), use `IsNegativeZero` explicitly. The `NumericRank` helper in `Goccia.Values.ArrayValue.pas` maps each special value to a distinct sort key for this purpose.
+**Pitfall: raw `Value = 0` checks.** `Value = 0` is true for both `+0` and `-0` (and false for `NaN`). That is right where the spec treats the zeros alike — `NumberExponentiation` (`Goccia.NumberExponentiation.pas`) returns `1` for any zero exponent, so `(-0) ** 0 === 1`. Where the sign matters, follow the zero test with an explicit `IsNegativeZero` check, as `NumberExponentiation` does for a zero base and as `Object.is` requires. Array `sort` does not compare doubles itself: `CallCompareFunc` in `Goccia.Values.ArrayValue.pas` normalises the comparator's result (`NaN` → 0, `+Infinity` → 1, `-Infinity` → -1).
 
 ### `this` Binding Design
 
 GocciaScript distinguishes two function forms — arrow functions and shorthand methods — with distinct `this` semantics that match ECMAScript strict mode.
 
-**The problem:** GocciaScript has no `function` keyword. Arrow functions and shorthand methods have fundamentally different `this` semantics, but they need distinct representation at both the AST and runtime levels.
+**The problem:** By default (the recommended profile) there is no `function` keyword; it is off unless `--compat-function` is enabled. Arrow functions and shorthand methods have fundamentally different `this` semantics, but they need distinct representation at both the AST and runtime levels.
 
 **The solution:** Separate AST nodes and runtime types:
 
@@ -732,7 +746,7 @@ The runtime uses virtual dispatch — `TGocciaFunctionValue.BindThis` is a virtu
 - **Type-safe dispatch** — The `this` binding strategy is encoded in the type hierarchy rather than a boolean flag. The vtable resolves the correct `BindThis` at zero cost.
 - **Self-documenting** — Reading the code, you know what a `TGocciaArrowFunctionValue` does vs a `TGocciaFunctionValue` without checking a flag.
 - **ECMAScript fidelity** — Arrow functions always capture `this` from their defining scope; methods receive `this` from their call site. This matches the spec exactly.
-- **Strict mode by default** — Standalone calls to either form receive `undefined` as `this`, matching strict mode. There is no implicit global `this`.
+- **Strict mode by default** — Standalone calls to either form receive `undefined` as `this`, matching strict mode. There is no implicit global `this` unless script source enables `--compat-non-strict-mode`.
 - **Callback correctness** — Array prototype methods (`map`, `filter`, `reduce`) pass `undefined` as `ThisValue` to callbacks. Arrow function callbacks correctly inherit their enclosing method's `this`; extracted method references receive `undefined`, preventing accidental `this` leakage.
 
 ### Property Descriptor System
@@ -757,7 +771,7 @@ Private fields use **composite keys** (`ClassName:FieldName`) in the instance's 
 - **Storage** — Private fields are stored on `TGocciaInstanceValue.FPrivateProperties` using keys like `"Base:x"` and `"Derived:x"`.
 - **Access resolution** — When a method accesses `this.#x`, the evaluator resolves which class declared the method (via `FindOwningClass`, which walks the scope chain for `TGocciaMethodCallScope` or `TGocciaClassInitScope` using virtual dispatch) and uses that class name to build the composite key.
 - **Private getters/setters** — Stored separately from public ones on `TGocciaClassValue` in `FPrivateGetters`/`FPrivateSetters`, because they don't participate in the prototype's property descriptor chain.
-- **Declaration order** — Instance property initializers run in source declaration order, enforced via `TStringList` order tracking from the parser through to the class value.
+- **Declaration order** — Instance property initializers run in source declaration order, recorded in the class value's `FFieldOrder`.
 
 ### Garbage Collector
 

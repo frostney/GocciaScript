@@ -21,6 +21,12 @@ import {
   PROFILE_DISABLED_FEATURES,
 } from "@/lib/landing-data";
 import {
+  loadPerformanceDashboardData,
+  type PerformanceDashboardData,
+  type PerformanceSuite,
+  type PerformanceSuiteData,
+} from "@/lib/performance-dashboard";
+import {
   COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
   GOCCIASCRIPT_SUMMARY,
@@ -39,6 +45,7 @@ export type MarkdownRoute =
   | { kind: "docs"; id: string }
   | { kind: "installation" }
   | { kind: "compatibility" }
+  | { kind: "performance" }
   | { kind: "playground" }
   | { kind: "sandbox" };
 
@@ -118,6 +125,7 @@ export function resolveMarkdownRoute(
   if (path.length !== 1) return null;
   if (section === "installation") return { kind: "installation" };
   if (section === "compatibility") return { kind: "compatibility" };
+  if (section === "performance") return { kind: "performance" };
   if (section === "playground") return { kind: "playground" };
   if (section === "sandbox") return { kind: "sandbox" };
   return null;
@@ -260,7 +268,7 @@ async function installationMarkdown(): Promise<string> {
     "",
     `Download release archives from [GitHub Releases](${GITHUB_RELEASES_URL}). Each archive carries the whole toolchain — \`GocciaRunner\` (with its sandbox mode; \`GocciaScriptLoader\` before 0.14), \`GocciaScriptLoaderBare\`, \`GocciaTestRunner\`, \`GocciaTest262Runner\`, \`GocciaBundler\`, \`GocciaBenchmarkRunner\`, \`GocciaREPL\`, \`GocciaFuzzHarness\`, and \`GocciaWasmTestRunner\` — alongside the \`tests/\`, \`benchmarks/\`, and \`examples/\` directories.`,
     "",
-    "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly `GocciaRunner`, `GocciaTestRunner`, and `GocciaREPL` on your `PATH`; the remaining tools are yours to copy out of that directory.",
+    "Everything unpacks into one versioned directory named after the archive (`gocciascript-<version>-<os>-<arch>/`), with every binary at its root. The quick-install scripts, and the manual commands on the [install page](/installation#binaries), both put exactly three binaries on your `PATH`: the runner (`GocciaRunner` from 0.14, `GocciaScriptLoader` before it), `GocciaTestRunner`, and `GocciaREPL`; the remaining tools are yours to copy out of that directory.",
     "",
     "## Build from source",
     "",
@@ -343,7 +351,11 @@ export function renderCompatibilityMarkdown(
     : [
         "## Latest main-branch result",
         "",
-        "The current test262 result is temporarily unavailable. Open the HTML dashboard or CI workflow for status.",
+        // The HTML dashboard shows the loader's diagnosis; carry the same one.
+        data.message ??
+          "The current test262 result is temporarily unavailable.",
+        "",
+        "Open the HTML dashboard or CI workflow for status.",
       ];
 
   return [
@@ -369,6 +381,91 @@ export function renderCompatibilityMarkdown(
     ]),
     "",
     "The dashboard and this Markdown alternate build the view from published Vercel Blob reports with CDN caching. The dashboard remains the canonical human-facing page.",
+  ].join("\n");
+}
+
+function performanceRatio(value: number | null): string {
+  return value === null ? "n/a" : `${value.toFixed(2)}x`;
+}
+
+function performanceSuiteLabel(suite: PerformanceSuite): string {
+  return suite === "awfy" ? "Are We Fast Yet" : "JetStream 3";
+}
+
+function performanceSuiteMarkdown(
+  suite: PerformanceSuite,
+  data: PerformanceSuiteData,
+): string[] {
+  const point = data.latestComplete;
+  const heading = `## ${performanceSuiteLabel(suite)}`;
+  if (!point) return [heading, "", "No complete report has been retained yet."];
+  const degraded = data.targets.filter(
+    (target) => target.status === "degraded",
+  );
+  return [
+    heading,
+    "",
+    `- QuickJS reference ratio: **${performanceRatio(point.quickjsRatio)}**`,
+    `- Node.js reference ratio: **${performanceRatio(point.nodeRatio)}**`,
+    `- Workloads: ${compatibilityNumber(point.workloadCount)} (${compatibilityNumber(point.failedWorkloadCount)} failed)`,
+    `- Commit: \`${point.shortSha}\``,
+    `- CI run: [#${point.runNumber}](${point.runUrl})`,
+    `- Run date: ${compatibilityDate(point.createdAt)}${point.stale ? " (last complete report)" : ""}`,
+    ...(degraded.length > 0
+      ? [
+          // Targets come from the latest run, which differs from `point`
+          // when that run is incomplete: name the run they belong to.
+          `- Degraded workloads in the latest report${
+            point.stale && data.latest
+              ? ` ([#${data.latest.runNumber}](${data.latest.runUrl}), ${compatibilityDate(data.latest.createdAt)})`
+              : ""
+          }: ${degraded.map((target) => target.name).join(", ")}`,
+        ]
+      : []),
+  ];
+}
+
+export function renderPerformanceMarkdown(
+  data: PerformanceDashboardData,
+): string {
+  const body =
+    data.status === "ready"
+      ? [
+          ...performanceSuiteMarkdown("awfy", data.awfy),
+          "",
+          ...performanceSuiteMarkdown("jetstream", data.jetstream),
+        ]
+      : [
+          "## Latest main-branch result",
+          "",
+          // The HTML dashboard shows the loader's diagnosis; carry the same one.
+          data.message ??
+            "The current performance reports are temporarily unavailable.",
+          "",
+          "Open the HTML dashboard or CI workflow for status.",
+        ];
+
+  return [
+    frontmatter(
+      "Performance Barometer - GocciaScript",
+      "Directional GocciaScript performance trends against QuickJS and Node.js, generated from the same data as the Performance Barometer page.",
+    ),
+    "",
+    "# Performance Barometer",
+    "",
+    "This is the concise Markdown representation of the GocciaScript Performance Barometer page. It is generated from the same retained main-branch AWFY and JetStream 3 reports as the HTML dashboard.",
+    "",
+    "A ratio compares GocciaScript with a reference engine on the same pinned workloads: 1.00x means aligned, and above 1.00x means GocciaScript was proportionally slower. Different runtimes have different goals; this is a directional view, not a product ranking.",
+    "",
+    ...body,
+    "",
+    "## Links",
+    "",
+    list([
+      "[Open the dashboard](/performance)",
+      "[Benchmark docs](/docs/benchmarks)",
+      `[CI workflow](${data.source.workflowUrl})`,
+    ]),
   ].join("\n");
 }
 
@@ -404,7 +501,8 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
 
 function sandboxMarkdown(): string {
   const gocciaFlow = TOOL_CALL_FLOWS.goccia;
-  const runnerCommand = `# once: review and trust the sandbox section
+  const runnerCommand = `# run from the directory holding goccia.json and main.js
+# once: review and trust the sandbox section
 ./build/GocciaRunner --trust goccia.json
 
 ./build/GocciaRunner main.js \\
@@ -501,6 +599,10 @@ export async function createSiteMarkdown(
     case "compatibility": {
       const data = await loadTest262DashboardData();
       return renderCompatibilityMarkdown(data);
+    }
+    case "performance": {
+      const data = await loadPerformanceDashboardData();
+      return renderPerformanceMarkdown(data);
     }
     case "playground":
       return playgroundMarkdown(searchParams);

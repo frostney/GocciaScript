@@ -29,7 +29,7 @@ Profiling implies `--mode=bytecode` automatically, as does `--coverage` (see [Te
 # Both
 ./build/GocciaRunner script.js --profile=all
 
-# JSON export (includes all sections regardless of console mode)
+# JSON export (every section key is present; only the modes --profile enables are populated)
 ./build/GocciaRunner script.js --profile=all --profile-output=profile.json
 
 # Deterministic benchmark profile capture for CI comparisons
@@ -85,6 +85,10 @@ Scalar Fast-Path:
 
 **How to read it:** A high hit rate (>95%) means the compiler should be emitting typed opcodes (`OP_ADD_INT`, `OP_LTE_INT`, etc.) instead of generic ones, since the runtime polymorphism is never exercised. A lower hit rate indicates genuinely mixed-type arithmetic where generic opcodes are necessary.
 
+### Shape Saturation (`--profile=opcodes`)
+
+Counts the times an object's layout could not be fully interned in the shape system: `Depth-limit prefixes` when a layout reached the transition depth limit (64 properties), and `Table-capacity events` when the realm's shape table was full. The object keeps the longest interned prefix of its layout, so property reads past that prefix lose the inline-cache fast path. The section, headed `Shape Saturation (degraded property-read caching):`, is printed only when either count is non-zero.
+
 ### Function Profile (`--profile=functions`)
 
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
@@ -113,7 +117,7 @@ Function Profile:
 
 ## JSON Export
 
-`--profile-output=path.json` writes all profiling data as JSON:
+`--profile-output=path.json` writes the profiling data as JSON. Every key is always present, but only the enabled modes collect data: `opcodes`, `opcodePairs`, and `scalarFastPath` stay empty or zero without `--profile=opcodes` or `all`, and `functions` stays empty without `--profile=functions` or `all`. `scalarFastPath` leaves out `hitRate` when its `total` is 0:
 
 ```json
 {
@@ -126,6 +130,7 @@ Function Profile:
     ...
   ],
   "scalarFastPath": {"hits": 109897525, "misses": 0, "total": 109897525, "hitRate": 100.0},
+  "shapeSaturation": {"depthLimitPrefixes": 0, "tableCapacityEvents": 0},
   "functions": [
     {"name": "fib", "sourceFile": "script.js", "line": 1, "calls": 43959011,
      "selfTimeNs": 19780000000, "totalTimeNs": 443420000000, "allocations": 13584073},
@@ -144,7 +149,7 @@ or call-frame improvements.
 
 ## Flame Graph Export
 
-`--profile-format=flamegraph --profile-output=flamegraph.txt` writes collapsed stack traces, viewable in [speedscope](https://speedscope.app) (drag and drop) or renderable to SVG via [FlameGraph](https://github.com/brendangregg/FlameGraph):
+`--profile-format=flamegraph --profile-output=flamegraph.txt` (with `--profile=functions` or `all`) writes collapsed stack traces. Opcode-only profiling has no stacks: with `--profile=opcodes` the file is written empty and the run still exits 0 ([#1279](https://github.com/frostney/GocciaScript/issues/1279)). The output is viewable in [speedscope](https://speedscope.app) (drag and drop) or renderable to SVG via [FlameGraph](https://github.com/brendangregg/FlameGraph):
 
 ```bash
 ./build/GocciaRunner script.js --profile=functions --profile-format=flamegraph --profile-output=flamegraph.txt

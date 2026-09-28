@@ -13,7 +13,7 @@
 
 ## Runtime Opt-in
 
-The Foreign Function Interface calls native shared libraries. It is available only when the engine's capability set grants `ffi` and `TGocciaFFIRuntimeExtension` is installed; hosts use `InstallFFIIfGranted`, and the extension refuses to attach without the grant. CLI tools grant `ffi` for `--allow-ffi` (every library) or `--allow-ffi=<library>,...` (only those paths, relative to the working directory), or for `"allow-ffi"` in a config file's `permissions` block, whose relative scopes resolve against that file. A `--deny-ffi` scope refuses a library whatever allows it.
+The Foreign Function Interface calls native shared libraries. It is available only when the engine's capability set grants `ffi` and `TGocciaFFIRuntimeExtension` is installed; hosts use `InstallFFIIfGranted`, and the extension refuses to attach without the grant. CLI tools grant `ffi` for `--allow-ffi` (every library) or `--allow-ffi=<library>,...` (only those paths, relative to the working directory), or for `"allow-ffi"` in a config file's `permissions` block, whose relative scopes resolve against that file, once the config is trusted (`--trust`) or accepted for the run (`-P`); see [Config trust](permissions.md#config-trust). A `--deny-ffi` scope refuses a library whatever allows it.
 
 `FFI.open(path)` checks the path against the `ffi` scopes and throws `PermissionDenied` (`ffi: <path>`) for a library outside them; see [Permissions](permissions.md#read-and-ffi-paths). The path may also be a `file:` URL, as a `URL` object or a string, which is judged as the host path it names: `FFI.open(new URL("./native/libx.so", import.meta.url))` opens a library beside the calling module. A library inside a [provider package](provider-imports.md) is hashed against its lockfile pin before it is loaded.
 
@@ -39,7 +39,7 @@ The Foreign Function Interface calls native shared libraries. It is available on
 | `library.bind(funcName, signature)` | Bind a native function. Each entry in `{ args, returns }` is a scalar type name or FFI type descriptor. Returns a callable function. |
 | `library.symbol(name)` | Get a raw pointer to a named symbol |
 | `library.close()` | Logically close the library and invalidate its bound functions and symbol pointers. Native unloading waits until all dependents are released. |
-| `library.path` | Full path to the loaded library |
+| `library.path` | The path argument passed to `FFI.open`, as given (a `URL` is reported as its href) |
 | `library.closed` | Whether the library has been closed |
 
 ## FFIPointer Properties

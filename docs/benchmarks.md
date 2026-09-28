@@ -218,7 +218,7 @@ setup before yield → yielded run function → warmup/calibrate → throughput 
 The `GocciaBenchmarkRunner` program:
 
 1. Parses CLI inputs (`--format`, `--output`, and the benchmark path or stdin marker).
-2. Scans the provided path for `.js` files.
+2. Scans the provided path for script files (`.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`), skipping anything under a `helpers/` directory.
 3. For each file, creates a `TGocciaEngine`, attaches `TGocciaRuntimeCore`, applies the loader runtime profile, and installs the benchmark runtime extension.
 4. Loads and executes the source so benchmark files import `"goccia:microbench"` and register groups and benchmarks.
 5. Measures lex, parse, compile (bytecode mode), script execution, and benchmark execution phases separately with nanosecond precision via `TimingUtils.GetNanoseconds`.
@@ -232,14 +232,15 @@ The `GocciaBenchmarkRunner` program:
    - **Teardown:** Closes generator callbacks after measurement (timed), running `finally` cleanup when present.
 8. After each file completes, `GC.Collect` runs to reclaim memory between script executions.
 9. Collects all results into a `TBenchmarkReporter`, which renders the chosen output format.
-10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs`, the process exits with code 1.
+10. After rendering, checks for failures via `TBenchmarkReporter.HasFailures`. If a file registered no benchmarks, or any benchmark entry has a non-empty `Error` field or zero `OpsPerSec`/`MeanMs` (outside `--profile-deterministic`, where throughput fields are placeholders), the process exits with code 1.
 
 ### Exit Codes
 
 | Exit Code | Meaning |
 |-----------|---------|
-| `0` | All benchmarks completed successfully with non-zero measurements |
-| `1` | One or more benchmarks failed — either an error occurred (access violation, exception) or a benchmark produced zero ops/sec or zero mean ms |
+| `0` | All benchmarks completed successfully with non-zero measurements (under `--profile-deterministic`, throughput fields are placeholders and are not checked) |
+| `1` | One or more benchmarks failed — an error occurred (access violation, exception), a benchmark produced zero ops/sec or zero mean ms (outside `--profile-deterministic`), or an input file registered no benchmarks. Also an unknown option or a missing path |
+| `2` | A removed pre-0.14 option, such as `--allow-node-modules` |
 
 The non-zero exit code ensures CI pipelines fail when benchmarks crash or produce empty results.
 
@@ -280,37 +281,56 @@ The non-zero exit code ensures CI pipelines fail when benchmarks crash or produc
 | `benchmarks/async-await.js` | Single/multiple awaits, await non-Promise, try/catch, Promise.all, nested async |
 | `benchmarks/generators.js` | Manual next, for...of, yield delegation, object/class generator methods |
 | `benchmarks/async-generators.js` | for-await-of over async generators and await inside async generator bodies |
+| `benchmarks/arraybuffer.js` | ArrayBuffer creation, `slice`, property access, and `structuredClone` |
+| `benchmarks/typed-arrays.js` | TypedArray creation, element access, methods, buffer sharing, and iteration |
+| `benchmarks/float16array.js` | Float16Array creation, element access, methods, buffer sharing, iteration, read/write against Float32Array and Float64Array, and `Math.f16round` |
+| `benchmarks/uint8array-encoding.js` | Uint8Array `toBase64`/`fromBase64`, `toHex`/`fromHex`, `setFrom*`, and round-trips |
+| `benchmarks/base64.js` | `btoa`, `atob`, and round-trips |
+| `benchmarks/property-access.js` | Cross-instance field reads and method dispatch (shape-sensitive patterns) |
+| `benchmarks/for-in/for-in.js` | for...in enumeration and prototype-chain key dedup; its directory's `goccia.json` enables `compat-for-in-loop` |
+| `benchmarks/jsx.jsx` | JSX element creation, children, components, fragments, spread and shorthand props, and complex trees |
+| `benchmarks/modules.js` | Script and JSON module imports from `benchmarks/helpers/` |
 
 ## Sample Output
 
-Console format (default):
+Console format (default). This excerpt is from an interpreted run of a
+scratch file with three benchmarks, using the default calibration and rounds:
 
 ```text
-  Lex: 287μs | Parse: 0.58ms | Execute: 7207.31ms | Total: 7208.18ms
+Running 1 files
+[1/1] sample.js
+  [1/3] fibonacci > recursive fib(15)
+  [2/3] fibonacci > iterative fib(20) via reduce
+  [3/3] collections > Set iteration
+
+  Lex: 352.17µs | Parse: 277.01µs | Execute: 10.04s | Total: 10.04s
 
   fibonacci
-    recursive fib(15)                        282 ops/sec  ± 0.87%      3.5467 ms/op  (30 iterations)
-                                    range: 279 .. 286 ops/sec
-    recursive fib(20)                         25 ops/sec  ± 0.88%     39.9814 ms/op  (10 iterations)
-                                    range: 25 .. 25 ops/sec
-    iterative fib(20) via reduce          12,762 ops/sec  ± 1.43%      0.0804 ms/op  (2500 iterations)
-                                    range: 12,430 .. 12,879 ops/sec
-
+    recursive fib(15)                        160 ops/sec  ± 0.88%      6.2487 ms/op  (50 iterations)
+                                    range: 157 .. 161 ops/sec
+                                    p75   6.27 ms  p99   6.63 ms  p999   6.63 ms  (50 samples)
+                                    |--[=|]----------------|
+    iterative fib(20) via reduce           8,609 ops/sec  ± 1.65%      0.1162 ms/op  (3480 iterations)
+                                    range: 8,277 .. 8,705 ops/sec
+                                    p75 110.32 us  p99 176.74 us  p999 477.18 us  (3480 samples)
+                                    ||]--------------------|
   collections
-    Set iteration                         50,366 ops/sec  ± 1.23%      0.0199 ms/op  (5000 iterations)
-                                    range: 49,800 .. 50,950 ops/sec
-                                    setup: 0.0120ms  teardown: 0.0010ms
+    Set iteration                          7,722 ops/sec  ± 0.46%      0.1295 ms/op  (1580 iterations)
+                                    range: 7,652 .. 7,750 ops/sec
+                                    p75 124.88 us  p99 167.77 us  p999 206.84 us  (1580 samples)
+                                    |]---------------------|
+                                    setup: 0.3037ms  teardown: 0.0503ms
 
 Benchmark Summary
-  Total benchmarks: 4
-  Total duration: 7.21s
+  Total benchmarks: 3
+  Total duration: 10.04s
 ```
 
-Durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5μs display as `ns`, values below 0.5ms as `μs`, values up to 10s as `ms` with two decimal places, and larger values as `s`.
+Phase durations are auto-formatted by `FormatDuration` from `TimingUtils`: values below 0.5µs display as `ns`, values below 0.5ms as `µs`, values below 10s as `ms` with two decimal places, and larger values as `s`.
 
 The `±X.XX%` column shows the coefficient of variation across measurement rounds. It is omitted when variance is zero (e.g., with a single measurement round).
 
-When a benchmark has a `setup` or `teardown` function, a second line displays their durations (e.g., `setup: 0.0120ms  teardown: 0.0010ms`).
+When a benchmark uses generator setup or teardown, the last line of its block displays their durations (e.g., `setup: 0.3037ms  teardown: 0.0503ms`).
 
 ## CI Integration
 
@@ -420,8 +440,8 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under the production-built PR Goccia bytecode loader, the
-production-built PR `main` baseline loader, QuickJS, and the latest Node Current
+pinned AWFY benchmarks under the production-built PR `GocciaRunner` (bytecode
+mode), the production-built `main` baseline `GocciaRunner`, QuickJS, and the latest Node Current
 release resolved by `actions/setup-node` at workflow time, with five raw samples
 per engine.
 Sampling is interleaved as target -> repetition -> engine, so every repetition
@@ -551,7 +571,9 @@ comparison lane: it is a real-world tooling viability probe for GocciaScript.
 Node is used only as the upstream build tool for Webpack, not as a measured
 engine.
 
-Use `scripts/web-tooling-driver.js` for #857 investigation:
+Use `scripts/web-tooling-driver.js` for #857 investigation. The upstream
+checkout needs its npm dependencies first; install them the way CI does, with
+`npm install --ignore-scripts --no-audit --no-fund` in the checkout.
 
 ```bash
 # List pinned Web Tooling workload names
@@ -592,17 +614,17 @@ module. The generated entry times one direct call to the module's exported
 `fn()`; process repetitions provide the raw samples, so Benchmark.js and its
 Lodash-based measurement machinery are not part of the measured bundle.
 
-Each bundle runs with `GocciaRunner` in bytecode mode and the broad
-ECMAScript compatibility flag set used for legacy tooling bundles. Every
-workload has a five-minute process ceiling. A workload-specific override can be
-pinned in the manifest only when a future corpus change has a documented reason
-to exceed that shared budget.
-PostCSS also runs with a 25 MB managed-heap ceiling so VM pressure collections
+Each bundle runs with `GocciaRunner` in bytecode mode with every `--compat-*`
+flag and `--unsafe-function-constructor`. Workloads share a five-minute process
+ceiling (`ciReport.timeoutMs`); `ciReport.timeoutMsByWorkload` pins documented
+exceptions (currently `babel`, ten minutes).
+PostCSS also runs with a 512 MiB managed-heap ceiling
+(`webTooling.maxMemoryBytesByWorkload`) so VM pressure collections
 occur before the hosted runner's process-memory limit.
 A workload build failure, timeout, crash,
-OOM, or missing benchmark result is recorded as data in the JSON report; the CI
-runner itself fails only when it cannot produce a complete report entry for
-every manifest workload.
+OOM, or missing benchmark result is recorded as data in the JSON report and
+also fails the CI runner, which requires an `ok` build and all-`ok` samples for
+every manifest workload; `runs/s` is not gated.
 
 The normalized report records:
 

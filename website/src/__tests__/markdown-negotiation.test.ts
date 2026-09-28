@@ -5,13 +5,78 @@ import {
   MARKDOWN_CONTENT_TYPE,
   markdownResponseHeaders,
 } from "@/lib/markdown-negotiation";
+import type {
+  PerformanceDashboardData,
+  PerformanceSuiteData,
+} from "@/lib/performance-dashboard";
 import {
   createSiteMarkdown,
   renderCompatibilityMarkdown,
+  renderPerformanceMarkdown,
   resolveMarkdownRoute,
   yamlScalar,
 } from "@/lib/site-markdown";
 import type { Test262DashboardData } from "@/lib/test262-dashboard";
+
+const emptyPerformanceSuite: PerformanceSuiteData = {
+  latest: null,
+  latestComplete: null,
+  timeline: [],
+  targets: [],
+};
+
+const awfyPoint = {
+  suite: "awfy" as const,
+  runId: 200,
+  runNumber: 912,
+  artifactId: 200,
+  runUrl: "https://github.com/frostney/GocciaScript/actions/runs/200",
+  headSha: "1234567890abcdef1234567890abcdef12345678",
+  shortSha: "12345678",
+  createdAt: "2026-09-20T04:00:00.000Z",
+  complete: true,
+  stale: false,
+  quickjsRatio: 1.5,
+  nodeRatio: 12.25,
+  failedWorkloadCount: 0,
+  workloadCount: 14,
+  repetitions: 3,
+  engineVersions: {},
+  corpusCommit: "abc",
+  driverVersion: 1,
+  compatibilityKey: "k",
+};
+
+const performanceSource = {
+  repositoryUrl: "https://github.com/frostney/GocciaScript",
+  workflowUrl:
+    "https://github.com/frostney/GocciaScript/actions/workflows/ci.yml",
+};
+
+const performanceData: PerformanceDashboardData = {
+  status: "ready",
+  generatedAt: "2026-09-20T05:00:00.000Z",
+  source: performanceSource,
+  awfy: {
+    latest: awfyPoint,
+    latestComplete: awfyPoint,
+    timeline: [awfyPoint],
+    targets: [
+      {
+        name: "Richards",
+        status: "degraded",
+        failure: "goccia: timeout",
+        unit: "microseconds",
+        goccia: null,
+        quickjs: 10,
+        node: 1,
+        quickjsRatio: null,
+        nodeRatio: null,
+      },
+    ],
+  },
+  jetstream: emptyPerformanceSuite,
+};
 
 const compatibilityData = {
   status: "ready",
@@ -129,6 +194,9 @@ describe("resolveMarkdownRoute", () => {
     expect(resolveMarkdownRoute(["compatibility"])).toEqual({
       kind: "compatibility",
     });
+    expect(resolveMarkdownRoute(["performance"])).toEqual({
+      kind: "performance",
+    });
     expect(resolveMarkdownRoute(["playground"])).toEqual({
       kind: "playground",
     });
@@ -188,5 +256,110 @@ describe("createSiteMarkdown", () => {
       "- CI run: [#829](https://github.com/frostney/GocciaScript/actions/runs/100)",
     );
     expect(markdown).not.toContain("/api/test262/latest");
+  });
+
+  test("renders a performance alternate from dashboard data", () => {
+    const markdown = renderPerformanceMarkdown(performanceData);
+
+    expect(markdown).toContain("# Performance Barometer");
+    expect(markdown).toContain("## Are We Fast Yet");
+    expect(markdown).toContain("- QuickJS reference ratio: **1.50x**");
+    expect(markdown).toContain("- Node.js reference ratio: **12.25x**");
+    expect(markdown).toContain("- Workloads: 14 (0 failed)");
+    expect(markdown).toContain(
+      "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",
+    );
+    expect(markdown).toContain(
+      "- Degraded workloads in the latest report: Richards",
+    );
+    expect(markdown).toContain("## JetStream 3");
+    expect(markdown).toContain("No complete report has been retained yet.");
+  });
+
+  test("names the run degraded workloads come from when it is incomplete", () => {
+    const incomplete = {
+      ...awfyPoint,
+      runId: 201,
+      runNumber: 913,
+      runUrl: "https://github.com/frostney/GocciaScript/actions/runs/201",
+      createdAt: "2026-09-21T04:00:00.000Z",
+      complete: false,
+    };
+    const markdown = renderPerformanceMarkdown({
+      ...performanceData,
+      awfy: {
+        ...performanceData.awfy,
+        latest: incomplete,
+        latestComplete: { ...awfyPoint, stale: true },
+      },
+    });
+
+    expect(markdown).toContain(
+      "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",
+    );
+    expect(markdown).toContain(
+      "- Degraded workloads in the latest report ([#913](https://github.com/frostney/GocciaScript/actions/runs/201),",
+    );
+    expect(markdown).toContain("): Richards");
+  });
+
+  test.each([
+    [
+      "needs-blob-credentials",
+      "Failed to read performance reports: No blob credentials found.",
+    ],
+    ["empty", "No performance barometer reports were found."],
+    ["error", "Failed to read performance reports: fetch failed"],
+  ] as const)("keeps the performance alternate and the dashboard's diagnosis when %s", (status, message) => {
+    const markdown = renderPerformanceMarkdown({
+      status,
+      message,
+      generatedAt: "2026-09-20T05:00:00.000Z",
+      source: performanceSource,
+      awfy: emptyPerformanceSuite,
+      jetstream: emptyPerformanceSuite,
+    });
+
+    // The HTML dashboard shows the loader's message; so does the Markdown.
+    expect(markdown).toContain(message);
+    expect(markdown).toContain("[Open the dashboard](/performance)");
+  });
+
+  test("keeps a generic diagnosis when the unavailable data has no message", () => {
+    const markdown = renderPerformanceMarkdown({
+      status: "error",
+      generatedAt: "2026-09-20T05:00:00.000Z",
+      source: performanceSource,
+      awfy: emptyPerformanceSuite,
+      jetstream: emptyPerformanceSuite,
+    });
+
+    expect(markdown).toContain("temporarily unavailable");
+    expect(markdown).not.toContain("undefined");
+  });
+
+  test("carries the test262 dashboard's diagnosis when no result is available", () => {
+    const message =
+      "Failed to read test262 reports from Vercel Blob: fetch failed";
+    const markdown = renderCompatibilityMarkdown({
+      ...compatibilityData,
+      status: "error",
+      message,
+      latest: null,
+    } as Parameters<typeof renderCompatibilityMarkdown>[0]);
+
+    expect(markdown).toContain(message);
+    expect(markdown).toContain("Open the HTML dashboard or CI workflow");
+  });
+
+  test("keeps a generic test262 diagnosis when there is no message", () => {
+    const markdown = renderCompatibilityMarkdown({
+      ...compatibilityData,
+      status: "error",
+      latest: null,
+    } as Parameters<typeof renderCompatibilityMarkdown>[0]);
+
+    expect(markdown).toContain("temporarily unavailable");
+    expect(markdown).not.toContain("undefined");
   });
 });

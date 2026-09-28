@@ -5,8 +5,8 @@
 ## Executive Summary
 
 - **ArrayBuffer** — raw binary data buffers with fixed-length and resizable modes, transfer semantics, and detachment
-- **SharedArrayBuffer** — fixed-length binary buffer with the same API shape as ArrayBuffer but as a distinct type
-- **Atomics** — atomic read-modify-write, wait/notify, waitAsync, and pause operations over shared integer TypedArray views
+- **SharedArrayBuffer** — fixed-length or growable shared binary buffer, a distinct type from ArrayBuffer
+- **Atomics** — atomic read-modify-write, wait/notify, waitAsync, and pause operations over integer TypedArray views
 - **DataView** — endian-aware typed reads and writes over ArrayBuffer and SharedArrayBuffer storage
 - **TypedArrays** — array-like views over buffer data with 12 element types (Int8 through Float64, BigInt64, BigUint64)
 - **Uint8Array encoding** — Base64 and hex encoding/decoding
@@ -17,7 +17,7 @@ Implements the [ECMAScript ArrayBuffer](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — includes resizable buffers (`maxByteLength`), `transfer`, and `transferToFixedLength`.
 
-**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are rejected — TypedArray indexed assignment, `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
+**Immutable buffers** — the [Immutable ArrayBuffers](https://github.com/tc39/proposal-immutable-arraybuffer) proposal is supported: `transferToImmutable([newLength])` returns a fixed-length immutable buffer, the `immutable` getter reports the state, an immutable buffer cannot be detached (`transfer`, `transferToFixedLength`, and `transferToImmutable` throw on it), and writes through a backing view are refused: TypedArray indexed assignment is silently ignored, while `set`, `fill`, `sort`, `copyWithin`, `reverse`, integer-index `defineProperty`, `Atomics`, and `DataView` setters throw `TypeError`. Immutable buffers also back the default export of [bytes module imports](language.md#modules).
 
 Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances are cloneable via `structuredClone`.
 
@@ -25,15 +25,15 @@ Internally backed by a zero-initialized `TBytes` array. ArrayBuffer instances ar
 
 Implements the [ECMAScript SharedArrayBuffer](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer). See [MDN SharedArrayBuffer reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer) for the full API.
 
-**Full standard compliance.** In GocciaScript, `SharedArrayBuffer` has the same API as `ArrayBuffer` but is a distinct type (not an instance of `ArrayBuffer`). SharedArrayBuffer instances are cloneable via `structuredClone`.
+**Full standard compliance.** `SharedArrayBuffer` is a distinct type (not an instance of `ArrayBuffer`). It is fixed-length by default, or growable when constructed with `maxByteLength` (`growable`, `maxByteLength`, `grow`); it has no `resize`, `transfer`, or detachment. SharedArrayBuffer instances are cloneable via `structuredClone`.
 
 ## Atomics (`Goccia.Builtins.Atomics.pas`)
 
-Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for shared integer TypedArray views.
+Implements the [ECMAScript Atomics](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics) namespace for integer TypedArray views.
 
 Supported operations: `add`, `and`, `compareExchange`, `exchange`, `isLockFree`, `load`, `notify`, `or`, `pause`, `store`, `sub`, `wait`, `waitAsync`, and `xor`.
 
-Atomic memory operations require an integer TypedArray backed by `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views.
+Atomic operations accept an integer TypedArray over an `ArrayBuffer` or a `SharedArrayBuffer`. `wait`, `waitAsync`, and `notify` require `Int32Array` or `BigInt64Array` views, and `wait` and `waitAsync` also require a `SharedArrayBuffer` (`notify` on a non-shared view returns `0`).
 
 ## DataView (`Goccia.Values.DataViewValue.pas`)
 
