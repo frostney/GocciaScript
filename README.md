@@ -255,13 +255,15 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 GocciaScript has 12,000+ JavaScript end-to-end tests across 1,500+ test files, covering language features, built-in objects, and edge cases.
 
+Some test directories request permissions in their configs, so accept them for
+the run with `-P` (or trust the suite once per checkout with
+`./build/GocciaTestRunner --trust tests/` and drop `-P`):
+
 ```bash
 ./build.pas testrunner
-./build/GocciaTestRunner tests
-./build/GocciaTestRunner tests --mode=bytecode
+./build/GocciaTestRunner -P tests
+./build/GocciaTestRunner -P tests --mode=bytecode
 ```
-
-Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes.
 
 The test runner supports Vitest-compatible external and inline snapshots,
 property shapes, asymmetric matchers, custom serializers, and `-u` updates.

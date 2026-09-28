@@ -232,7 +232,8 @@ const DEFAULT_GLOBALS = `{
   }]
 }`;
 
-const RUNNER_COMMAND = `# once: review and trust the sandbox section
+const RUNNER_COMMAND = `# run from the directory holding goccia.json and main.js
+# once: review and trust the sandbox section
 ./build/GocciaRunner --trust goccia.json
 
 ./build/GocciaRunner main.js \\
@@ -363,7 +364,18 @@ function buildScript(userCode: string, parsedGlobals: Record<string, unknown>) {
   return `${GOCCIA_SYSTEM_PROMPT}${globalsBlock}\n\n// ─── user script ───\n${userCode}`;
 }
 
-export function Sandbox() {
+type SandboxProps = {
+  /** The binary and flags `/api/execute` runs the demo with, resolved from the
+   *  default vendored engine. Display-only. */
+  apiCommand?: string;
+};
+
+export function Sandbox({
+  apiCommand = "GocciaRunner --compat-asi --timeout=5000",
+}: SandboxProps) {
+  // The globals are not passed as a flag: `buildScript` inlines them ahead of
+  // the user script, which reaches the engine on stdin.
+  const runBanner = `${apiCommand} < main.js  # context.json inlined as globals`;
   const [code, setCode] = useState(DEFAULT_CODE);
   const [globalsText, setGlobalsText] = useState(DEFAULT_GLOBALS);
   const [output, setOutput] = useState<SbLine[]>([]);
@@ -437,7 +449,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "GocciaRunner --timeout=500 --globals=context.json",
+          text: runBanner,
         },
         {
           kind: "err",
@@ -461,7 +473,7 @@ export function Sandbox() {
       setOutput([
         {
           kind: "meta",
-          text: "GocciaRunner --timeout=500 --globals=context.json",
+          text: runBanner,
         },
         {
           kind: "err",
@@ -472,7 +484,7 @@ export function Sandbox() {
     }
     const banner: SbLine = {
       kind: "meta",
-      text: "GocciaRunner --timeout=500 --globals=context.json",
+      text: runBanner,
     };
     // Set the re-entry flag *after* the synchronous validation guards
     // above have committed to actually running — so a validation
@@ -577,7 +589,7 @@ export function Sandbox() {
       setRunning(false);
       runningRef.current = false;
     }
-  }, [code, globalsText]);
+  }, [code, globalsText, runBanner]);
 
   const startPaneResize = useCallback(
     (handleIndex: 0 | 1) => (event: React.PointerEvent<HTMLElement>) => {

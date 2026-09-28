@@ -6,7 +6,7 @@
 
 - **No-argument rule** — a command that defaults its input to stdin must print help and quit when run with no input at an interactive terminal, never block on `ReadLn`
 - **Stdin** — implicit for pipes and redirects, explicit via `-`, and only ever the sole input
-- **Exit codes** — `0` success, `1` failure, `2` unusable invocation; `70` is the test runner's engine-integrity abort and `124` the test262 timeout marker
+- **Exit codes** — `0` success, `1` failure, `2` unusable invocation; `70` is the test runner's engine-integrity abort
 - **Streams** — machine-readable output modes own stdout; new diagnostics go to stderr
 - **Help** — every option is described by its own declaration, so `--help` is generated, not hand-maintained
 
@@ -62,7 +62,6 @@ The codes actually in use, which new commands should follow:
 | `1` | The work was attempted and failed — a script threw, a test failed, a path did not exist, an option value was invalid |
 | `2` | The command could not be run as invoked — no input at a terminal, a missing required argument, a removed flag or config key, a value given to a boolean flag, an `--allow-*` or limit the binary cannot honor, a command-line-only key or malformed `permissions` block in a config file, a config whose permission requests are not trusted, `--trust` without confirmation, a conflicting combination of the trust options |
 | `70` | The engine abandoned the run: an engine-integrity fault reached the host, `GocciaTestRunner` only |
-| `124` | test262 timeout marker, `GocciaScriptLoaderBare` only |
 
 Code `70` is sysexits' `EX_SOFTWARE`, "an internal software error has been detected", and it says something `1` cannot: the run stopped because the engine caught itself in an unsound state (a use-after-free, an invalid dereference, a broken heap — see [ADR 0109](../adr/0109-engine-integrity-faults-are-uncatchable.md)), so no result the process produced should be believed. `1` means the opposite — the work was done and the answer is "failed". A harness that only distinguishes zero from non-zero keeps working unchanged; one that reports build health should surface `70` separately, because a suite that aborted is not a suite that failed.
 

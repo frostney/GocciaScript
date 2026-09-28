@@ -426,12 +426,17 @@ type PlaygroundProps = {
     string,
     { loader: string | null; testRunner: string | null }
   >;
+  /** Per-version binary names from the manifest (`GocciaScriptLoader` through
+   *  0.13, `GocciaRunner` from 0.14.0), so the banner names the binary the API
+   *  spawns. Display-only. */
+  runnerNames?: Record<string, { loader: string; testRunner: string }>;
 };
 
 export function Playground({
   versions: vendoredVersions = [],
   defaultVersion,
   asiFlags,
+  runnerNames,
 }: PlaygroundProps) {
   const params = useSearchParams();
 
@@ -587,15 +592,14 @@ export function Playground({
     ]
       .filter(Boolean)
       .join(" ");
-    const banner = `GocciaRunner --mode=${
+    // An unknown tag (a locally built engine) is a current one.
+    const binary =
+      runner === "test"
+        ? (runnerNames?.[version]?.testRunner ?? "GocciaTestRunner")
+        : (runnerNames?.[version]?.loader ?? "GocciaRunner");
+    const runnerBanner = `${binary} --mode=${
       backend === "bytecode" ? "bytecode" : "interpreted"
     }${flagText ? ` ${flagText}` : ""} ${version}`;
-    const runnerBanner =
-      runner === "test"
-        ? `GocciaTestRunner --mode=${
-            backend === "bytecode" ? "bytecode" : "interpreted"
-          }${flagText ? ` ${flagText}` : ""} ${version}`
-        : banner;
     setOutput([{ kind: "meta", text: runnerBanner }]);
 
     try {
@@ -773,6 +777,7 @@ export function Playground({
     compatVar,
     compatFunction,
     asiFlags,
+    runnerNames,
   ]);
 
   const buildShareLink = useCallback(() => {

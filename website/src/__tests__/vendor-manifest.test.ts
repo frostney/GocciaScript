@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  binaryNames,
   checkVendorManifestFloor,
   findVersion,
   hostFilesystemBoundaryFlag,
@@ -137,6 +138,22 @@ describe("findVersion", () => {
   test("returns null when the manifest has no versions", () => {
     const empty: VendorManifest = { defaultVersion: "nightly", versions: [] };
     expect(findVersion(empty, "nightly")).toBeNull();
+  });
+});
+
+describe("binaryNames", () => {
+  test("names the loader each release shipped", () => {
+    const pre014 = findVersion(SAMPLE_MANIFEST, "0.7.0");
+    const nightly = findVersion(SAMPLE_MANIFEST, "nightly");
+    if (!pre014 || !nightly) throw new Error("sample manifest changed");
+    expect(binaryNames(pre014)).toEqual({
+      loader: "GocciaScriptLoader",
+      testRunner: "GocciaTestRunner",
+    });
+    expect(binaryNames(nightly)).toEqual({
+      loader: "GocciaRunner",
+      testRunner: "GocciaTestRunner",
+    });
   });
 });
 
