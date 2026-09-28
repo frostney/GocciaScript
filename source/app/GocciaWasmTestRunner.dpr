@@ -40,7 +40,9 @@ uses
   TextSemantics,
 
   Goccia.Arguments.Collection,
+  Goccia.Capabilities,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   Goccia.Engine,
   Goccia.Error,
   Goccia.Executor.Interpreter,
@@ -87,11 +89,13 @@ end;
   (DiscoverFileConfig): walk up from the script's directory to the
   nearest goccia.json. The suite tree carries JSON configs only;
   "extends" chains are resolved by ParseConfigFile. }
-function DiscoverFileConfig(const AFileName: string): TConfigEntryArray;
+function DiscoverFileConfig(const AFileName: string;
+  out AConfigPath: string): TConfigEntryArray;
 var
   StartDirectory, ConfigPath: string;
 begin
   SetLength(Result, 0);
+  AConfigPath := '';
   if AFileName = '' then
     Exit;
   StartDirectory := ExtractFilePath(ExpandFileName(AFileName));
@@ -99,8 +103,36 @@ begin
     StartDirectory := GetCurrentDir;
   ConfigPath := DiscoverConfigFile(StartDirectory,
     ['goccia'], ['.json']);
+  AConfigPath := ConfigPath;
   if ConfigPath <> '' then
     Result := ParseConfigFile(ConfigPath);
+end;
+
+const
+  WASM_PROGRAM_NAME = 'GocciaWasmTestRunner';
+  WASM_HONORED_CAPABILITIES: TGocciaHonoredCapabilities = [gcRead, gcNet
+    {$IFNDEF LAKON}, gcFFI{$ENDIF}];
+
+{ The per-file config's permission request, applied as GocciaTestRunner
+  applies it (ADR 0122 layer 2); this runner takes no capability flags. A
+  request for a capability it cannot grant is reported on stderr. }
+function ResolveFileCapabilities(const AFileConfig: TConfigEntryArray;
+  const AConfigPath: string): TGocciaCapabilities;
+var
+  Request: TGocciaConfigPermissionRequest;
+  Warnings: TGocciaCapabilityScopes;
+  I: Integer;
+begin
+  if AConfigPath <> '' then
+    Request := ReadConfigPermissionRequest(AFileConfig, AConfigPath)
+  else
+    Request := TGocciaConfigPermissionRequest.Empty;
+  Warnings := UnsupportedRequestWarnings(Request, WASM_HONORED_CAPABILITIES,
+    WASM_PROGRAM_NAME);
+  for I := 0 to High(Warnings) do
+    WriteLn(ErrOutput, 'WARN ', AConfigPath, ' :: ', Warnings[I]);
+  Result := ResolveCapabilities(nil, Request, True,
+    WASM_HONORED_CAPABILITIES, GetCurrentDir);
 end;
 
 { source-type: per-file config > file-extension default (the
@@ -124,9 +156,6 @@ begin
   Result := Goccia.Engine.stScript;
 end;
 
-{ allowed-hosts: per-file config > empty (fetch blocked) — the
-  ApplyFileConfigToEngine rule without the CLI arm. The empty-value
-  sentinel of a merged extends chain stops accumulation. }
 procedure DisableRuntimeConsole(const AEngine: TGocciaEngine);
 var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
@@ -223,6 +252,7 @@ var
   Engine: TGocciaEngine;
   Core: TGocciaRuntimeCore;
   FileConfig: TConfigEntryArray;
+  FileConfigPath: string;
   EngineOptions: TGocciaEngineOptions;
   Compatibility: TGocciaCompatibilityFlags;
   TestResult: TGocciaObjectValue;
@@ -240,16 +270,15 @@ begin
   try
     try
       Source := CreateFileTextLines(ReadUTF8FileText(AFileName));
-      FileConfig := DiscoverFileConfig(AFileName);
+      FileConfig := DiscoverFileConfig(AFileName, FileConfigPath);
       EngineOptions := TGocciaEngineOptions.Create;
+      { Removed and command-line-only keys fail the file (ADR 0122). }
+      ValidateConfigEntries(FileConfig, EngineOptions.Options);
 
       Executor := TGocciaInterpreterExecutor.Create;
       try
-        { The set mirrors what this runner has always honored: host module
-          loading, the per-file allowed hosts, and per-file FFI. }
         Engine := TGocciaEngine.Create(AFileName, Source, Executor,
-          ResolveCapabilities(EngineOptions, FileConfig, '', '',
-            [gcoHostFileLoading, gcoAllowedHosts, gcoUnsafeFFI]));
+          ResolveFileCapabilities(FileConfig, FileConfigPath));
         try
           Engine.SourceType := ResolveSourceType(FileConfig, AFileName);
           ResolveCompatibilityFlags(EngineOptions, FileConfig, Compatibility);
@@ -310,7 +339,20 @@ begin
   end;
 end;
 
+procedure PrintUsage(var AOut: Text);
+begin
+  WriteLn(AOut, 'Usage: GocciaWasmTestRunner [-P] <manifest-file>');
+  WriteLn(AOut, '  manifest: one script path per line, # starts a comment');
+  WriteLn(AOut, '  -P        accept config permission requests (currently a ' +
+    'no-op: they');
+  WriteLn(AOut, '            already apply; reserved for config trust)');
+  WriteLn(AOut, '  Extra arguments after the manifest are ignored with a ' +
+    'warning.');
+end;
+
 var
+  ManifestPath, Argument: string;
+  ArgumentIndex: Integer;
   Manifest: TStringList;
   Verdict: TFileVerdict;
   FileName, Line: string;
@@ -320,12 +362,43 @@ var
   GC: TGarbageCollector;
 
 begin
-  if ParamCount < 1 then
+  { Arguments: [-P] [--help] <manifest>. The external LAKON harness drives
+    this runner, so the parse stays tolerant: extra positional arguments are
+    ignored with a warning, as they always were. Only an unknown option or a
+    missing manifest is an unusable invocation (exit 2). }
+  ManifestPath := '';
+  for ArgumentIndex := 1 to ParamCount do
   begin
-    WriteLn(ErrOutput,
-      'Usage: GocciaWasmTestRunner <manifest-file>');
-    WriteLn(ErrOutput,
-      '  manifest: one script path per line, # starts a comment');
+    Argument := ParamStr(ArgumentIndex);
+    if (Argument = '--help') or (Argument = '-h') then
+    begin
+      PrintUsage(Output);
+      Exit;
+    end
+    else if (Argument = '-P') or
+       (Argument = '--accept-config-permissions') then
+      { Accepted for the harness; config permissions already apply
+        without a trust step (ADR 0122 layer 2). }
+    else if Copy(Argument, 1, 1) = '-' then
+    begin
+      WriteLn(ErrOutput, 'Error: Unknown option: ', Argument);
+      ExitCode := 2;
+      Exit;
+    end
+    else if ManifestPath = '' then
+      ManifestPath := Argument
+    else
+      WriteLn(ErrOutput, 'Warning: ignoring extra argument: ', Argument);
+  end;
+  if ManifestPath = '' then
+  begin
+    PrintUsage(ErrOutput);
+    ExitCode := 2;
+    Exit;
+  end;
+  if not FileExists(ManifestPath) then
+  begin
+    WriteLn(ErrOutput, 'Error: manifest not found: ', ManifestPath);
     ExitCode := 2;
     Exit;
   end;
@@ -345,7 +418,7 @@ begin
 
   Manifest := TStringList.Create;
   try
-    Manifest.LoadFromFile(ParamStr(1));
+    Manifest.LoadFromFile(ManifestPath);
     for Index := 0 to Manifest.Count - 1 do
     begin
       Line := Trim(Manifest[Index]);

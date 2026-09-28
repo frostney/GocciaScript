@@ -27,6 +27,8 @@ type
 implementation
 
 uses
+  CLI.Options,
+
   Goccia.Error,
   Goccia.Error.Detail,
   Goccia.Modules.Resolver,
@@ -63,6 +65,12 @@ begin
   try
     Execute;
   except
+    { An unusable invocation: the command did no work (CLI conventions). }
+    on E: TCLIUsageError do
+    begin
+      WriteLn(ErrOutput, 'Error: ', E.Message);
+      Result := EXIT_CODE_USAGE;
+    end;
     on E: Exception do
     begin
       HandleError(E);

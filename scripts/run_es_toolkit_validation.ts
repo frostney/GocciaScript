@@ -306,12 +306,22 @@ async function runProbe(
   probePath: string,
   mode: Mode,
   importMap: string,
+  packageRoot: string,
   engineFlags: string[],
   marker: string,
   timeoutSeconds: number,
 ): Promise<ProbeRun> {
+  // The import map points outside the harness project, into the extracted
+  // package, so the probe needs a read grant for it (docs/permissions.md).
   const subprocess = Bun.spawn(
-    [goccia, probePath, `--mode=${mode}`, `--import-map=${importMap}`, ...engineFlags],
+    [
+      goccia,
+      probePath,
+      `--mode=${mode}`,
+      `--import-map=${importMap}`,
+      `--allow-read=${packageRoot}`,
+      ...engineFlags,
+    ],
     { stdout: "pipe", stderr: "pipe" },
   );
   const stdoutPromise = new Response(subprocess.stdout).text();
@@ -435,6 +445,7 @@ async function buildReport(
         join(HARNESS_DIRECTORY, probe.file),
         mode,
         importMap,
+        packageRoot,
         manifest.engineFlags,
         RESULT_MARKER,
         timeoutSeconds,
@@ -468,6 +479,7 @@ async function buildReport(
       join(HARNESS_DIRECTORY, manifest.environmentProbe),
       mode,
       importMap,
+      packageRoot,
       manifest.engineFlags,
       ENVIRONMENT_MARKER,
       timeoutSeconds,

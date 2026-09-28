@@ -15,12 +15,15 @@ unit Goccia.CLI.Stdin;
 
 interface
 
+uses
+  CLI.Options;
+
 const
   { Usage-error exit code.  This matches the convention already in the
     repository: GocciaWasmTestRunner exits 2 when invoked without a
     manifest, and GocciaTOMLComplianceRunner exits 2 for an unusable
     invocation.  Runtime and script failures keep exit code 1. }
-  EXIT_CODE_USAGE = 2;
+  EXIT_CODE_USAGE = CLI.Options.EXIT_CODE_USAGE;
 
 type
   { Where a CLI invocation should take its program source from. }

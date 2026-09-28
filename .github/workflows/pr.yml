@@ -813,6 +813,9 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      - name: Check capability flags, limits, and permission defaults
+        run: bun run scripts/test-cli-permissions.ts
+
       - name: Check embedded resource CLI behaviour
         run: bun run scripts/test-cli-embedded-resources.ts
 
@@ -936,7 +939,7 @@ jobs:
 
       - name: Run test262 conformance suite
         continue-on-error: true
-        # --timeout-ms=20000: the per-test deadline is wall-clock, and at
+        # --timeout=20s: the per-test deadline is wall-clock, and at
         # --jobs=4 the workers fully subscribe the runner, inflating each
         # test's wall time ~30-40% vs the old --jobs=2 baseline; borderline
         # 7-9s tests must not trip the deadline purely from contention.
@@ -948,7 +951,7 @@ jobs:
             --suite-dir=test262-suite \
             --mode=bytecode \
             --jobs=4 \
-            --timeout-ms=20000 \
+            --timeout=20s \
             --shard-index=${{ strategy.job-index }} \
             --shard-count=${{ strategy.job-total }} \
             --output=test262-results-${{ strategy.job-index }}.json

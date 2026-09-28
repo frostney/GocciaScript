@@ -20,6 +20,7 @@ uses
   Goccia.CLI.SourceMaps,
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   CLI.ConfigFile,
   CLI.Options,
   Goccia.Constants.PropertyNames,
@@ -147,6 +148,7 @@ type
       const AJobCount: Integer);
     procedure RunScripts(const APath: string);
   protected
+    function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); override;
@@ -345,14 +347,16 @@ begin
   Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
+function TScriptLoaderApp.HonoredCapabilities: TGocciaHonoredCapabilities;
+begin
+  Result := ALL_CAPABILITIES;
+end;
+
 { TScriptLoaderApp - Validate }
 
 procedure TScriptLoaderApp.Validate;
 begin
   inherited Validate;
-
-  if EngineOptions.Timeout.Present and (EngineOptions.Timeout.Value < 0) then
-    raise TParseError.Create('--timeout must be 0 or greater.');
 
   // --profile-format implies --profile=functions when no explicit --profile given
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
@@ -565,7 +569,7 @@ begin
         IsJsonOutput;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
       ApplyDataGlobalsToEngine(Engine);
-      StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+      StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
       try
         ApplyModuleGlobalsToEngine(Engine);
@@ -655,7 +659,7 @@ begin
           SourcePipelineResult.Free;
         end;
 
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
@@ -701,7 +705,7 @@ begin
         Module := nil;
         ConfigureConsole(RuntimeConsole(Engine), ACapture);
         ApplyDataGlobalsToEngine(Engine);
-        StartExecutionTimeout(EngineOptions.Timeout.ValueOr(0));
+        StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
         StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
         try
           ApplyModuleGlobalsToEngine(Engine);
@@ -811,6 +815,9 @@ begin
       else
         PrintHumanReadableResult(AFileName, Report, Extension);
     except
+      { A config usage error is the invocation's, not this file's. }
+      on E: TCLIUsageError do
+        raise;
       on E: Exception do
       begin
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - StartTime;
@@ -1412,6 +1419,26 @@ begin
       if IsStdinPath(APaths[I]) then
         raise TParseError.Create(
           'stdin is supported only as the sole input.');
+
+    { Every config governing the inputs is checked before any of them runs. }
+    RawFiles := TStringList.Create;
+    try
+      for I := 0 to APaths.Count - 1 do
+        if DirectoryExists(APaths[I]) then
+        begin
+          Files := FindAllFiles(APaths[I], ScriptExtensions);
+          try
+            RawFiles.AddStrings(Files);
+          finally
+            Files.Free;
+          end;
+        end
+        else
+          RawFiles.Add(APaths[I]);
+      ValidateFileConfigs(RawFiles);
+    finally
+      RawFiles.Free;
+    end;
 
     for I := 0 to APaths.Count - 1 do
     begin

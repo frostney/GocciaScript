@@ -136,9 +136,11 @@ begin
         InnerCapabilities);
       try
         Observed := FetchExtension(InnerEngine).BuiltinFetch.Capabilities;
-        Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST)).ToBe(True);
+        Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST, 80,
+          LOOPBACK_HOST)).ToBe(True);
         Observed := FetchExtension(OuterEngine).BuiltinFetch.Capabilities;
-        Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST)).ToBe(False);
+        Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST, 80,
+          LOOPBACK_HOST)).ToBe(False);
 
         InnerSource.Text := '';
         InnerEngine.Execute;
@@ -148,7 +150,8 @@ begin
 
       Expect<Boolean>(TGocciaFetchManager.Instance <> nil).ToBe(True);
       Observed := FetchExtension(OuterEngine).BuiltinFetch.Capabilities;
-      Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST)).ToBe(False);
+      Expect<Boolean>(Observed.AllowsNetAddress(LOOPBACK_HOST, 80,
+          LOOPBACK_HOST)).ToBe(False);
       Expect<Integer>(OuterEngine.FetchMaxResponseBytes)
         .ToBe(OUTER_MAX_RESPONSE_BYTES);
     finally

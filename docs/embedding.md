@@ -96,7 +96,7 @@ The `TStringList` is passed by reference — update its contents and call `Execu
 
 ### Engine Constructor and Executor Ownership
 
-Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Executor.Interpreter`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default interpreter setup. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md).
+Callers must pass an explicit executor — `TGocciaInterpreterExecutor` (in `Goccia.Executor.Interpreter`) for tree-walk or `TGocciaBytecodeExecutor` (in `Goccia.Executor.Bytecode`) for the bytecode VM. The engine does not own the executor; the caller frees it after the engine. `TGocciaRuntime`'s file/source convenience overloads handle this internally for embedders who want the default interpreter setup. Every constructor also has an overload taking a `TGocciaCapabilities` that fixes what the engine may reach outside the process; the overloads without one use `TGocciaCapabilities.None`. See [Permissions](permissions.md). For `net`, `AllowsNetHost(host, port)` judges a URL before any lookup and `AllowsNetAddress(host, port, address)` judges the address the host resolved to. A private, loopback, or link-local address passes only when every layer names it — with the standalone `private` scope or an IP or CIDR scope covering it — so `TGocciaCapabilities.None.Allow(gcNet, 'private')` reaches local services and nothing public, while a host allow alone never reaches a name that resolves privately.
 
 ### Automatic Semicolon Insertion
 
@@ -497,7 +497,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `ApplyLoaderRuntimeProfile` | ordinary CLI runtime surface: console, `goccia:` data-format/SemVer modules, text assets, performance, text encoding, URL/fetch, and related runtime globals | Used by ScriptLoader and REPL |
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
-| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--unsafe-ffi` or `"unsafe-ffi": true` in config |
+| `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
 
 When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
@@ -872,11 +872,11 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 ### Call Stack Depth Limit
 
-`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The default is 2 900 frames. A value of zero disables the limit entirely.
+`SetMaxStackDepth` caps the number of nested function calls. Exceeding the limit throws a JavaScript `RangeError` with the message `"Maximum call stack size exceeded"` (matching V8 convention). The CLI hosts set 2 200 frames (`DEFAULT_MAX_STACK_DEPTH`) unless `--max-stack` overrides it; an embedder that never calls `SetMaxStackDepth` has no limit. A value of zero disables the limit entirely.
 
 In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
 
-Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--stack-size`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine.
+Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--max-stack`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine.
 
 ```pascal
 uses

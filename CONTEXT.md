@@ -193,7 +193,7 @@ A named command-line control such as `--mode=bytecode`, `--output=json`, or `--p
 _Avoid_: CLI flag when the option takes a value.
 
 **CLI flag**:
-A boolean CLI option that toggles behavior by its presence, such as `--print`, `--compat-asi`, or `--unsafe-ffi`.
+A boolean CLI option that toggles behavior by its presence, such as `--print`, `--compat-asi`, or `--unsafe-shadowrealm`. A flag takes no value: `--print=false` is a usage error.
 _Avoid_: CLI flag for value-taking controls.
 
 **Positional argument**:
@@ -209,7 +209,7 @@ Any file processed by a CLI host, especially batch-capable tools such as the Tes
 _Avoid_: Entry file when referring to a batch member or per-file result.
 
 **Config key**:
-A field name in a GocciaScript config file, such as `"mode"`, `"strict-types"`, or `"allowed-hosts"`.
+A field name in a GocciaScript config file, such as `"mode"`, `"strict-types"`, or `"permissions"`. Capability grants are keys inside the `permissions` object (`"allow-net"`), never top-level config keys.
 _Avoid_: Config option when referring to the field name.
 
 **Config value**:

@@ -1,3 +1,7 @@
 {
-  "unsafe-ffi": true
+  "permissions": {
+    "allow-ffi": [
+      "../../../fixtures/ffi"
+    ]
+  }
 }

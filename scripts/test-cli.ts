@@ -2,10 +2,10 @@
 /**
  * test-cli.ts
  *
- * Common CLI options tested across all apps: stdin smoke, --help, --unsafe-ffi,
+ * Common CLI options tested across all apps: stdin smoke, --help, --allow-ffi,
  * --compat-asi, --source-type, .mjs source-type inference, --compat-var, --compat-loose-equality, --compat-non-strict-mode,
  * --compat-for-in-loop, --compat-while-loops, --warning-unsupported-features,
- * --mode, --timeout, --max-instructions, --max-memory, --stack-size, --log,
+ * --mode, --timeout, --max-instructions, --max-memory, --max-stack, --log,
  * example scripts.
  */
 
@@ -242,15 +242,18 @@ console.log("--deterministic keeps timeout clock live...");
     );
 }
 
-// -- --unsafe-ffi gating --------------------------------------------------------
+// -- --allow-ffi gating ---------------------------------------------------------
 
-console.log("--unsafe-ffi gating...");
+console.log("--allow-ffi gating...");
 {
   const { json } = runLoaderJson("typeof FFI;\n");
-  if (json.files?.[0]?.result !== "undefined") throw new Error(`FFI without flag should be "undefined", got ${json.files?.[0]?.result}`);
+  if (json.files?.[0]?.result !== "undefined") throw new Error(`FFI without a grant should be "undefined", got ${json.files?.[0]?.result}`);
 
-  const { json: jsonOn } = runLoaderJson("typeof FFI;\n", ["--unsafe-ffi"]);
-  if (jsonOn.files?.[0]?.result !== "object") throw new Error(`FFI with flag should be "object", got ${jsonOn.files?.[0]?.result}`);
+  const { json: jsonOn } = runLoaderJson("typeof FFI;\n", ["--allow-ffi"]);
+  if (jsonOn.files?.[0]?.result !== "object") throw new Error(`FFI with --allow-ffi should be "object", got ${jsonOn.files?.[0]?.result}`);
+
+  const { json: jsonDenied } = runLoaderJson("typeof FFI;\n", ["--allow-ffi", "--deny-ffi"]);
+  if (jsonDenied.files?.[0]?.result !== "undefined") throw new Error(`FFI with --deny-ffi should be "undefined", got ${jsonDenied.files?.[0]?.result}`);
 }
 
 // -- --compat-asi (Loader + Bundler) ---------------------------------------------------
@@ -3013,25 +3016,25 @@ console.log("--max-memory (maxBytes readonly)...");
   if (!res.text().includes("TypeError")) throw new Error(`Read-only should mention TypeError`);
 }
 
-// -- --stack-size (Loader) ------------------------------------------------------
+// -- --max-stack (Loader) -------------------------------------------------------
 
-console.log("--stack-size (default overflow)...");
+console.log("--max-stack (default overflow)...");
 {
   const { exitCode, json } = runLoaderJson("const f = () => f(); f();\n");
   if (exitCode !== 1) throw new Error(`Default overflow should exit 1, got ${exitCode}`);
   if (json.error?.type !== "RangeError") throw new Error(`Expected RangeError, got ${json.error?.type}`);
 }
 
-console.log("--stack-size (custom limit)...");
+console.log("--max-stack (custom limit)...");
 {
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${LOADER} --stack-size=100`.text();
-  if (!out.includes("100")) throw new Error(`Custom stack-size output should contain 100, got: ${out}`);
+  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${LOADER} --max-stack=100`.text();
+  if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
 }
 
-console.log("--stack-size (bytecode trampoline)...");
+console.log("--max-stack (bytecode trampoline)...");
 {
   const src = "let n = 0; const f = () => { n++; if (n < 20000) f(); }; f(); console.log(n);";
-  const out = await $`echo ${src} | ${LOADER} --mode=bytecode --stack-size=0`.text();
+  const out = await $`echo ${src} | ${LOADER} --mode=bytecode --max-stack=0`.text();
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 

@@ -17,7 +17,8 @@ export const dynamic = "force-dynamic";
  *
  *  - `vendored`  — every staged tag, including ones the playground hides.
  *  - `playground` — the subset offered in the version picker (engines that
- *                   advertise the `--no-host-filesystem` boundary). */
+ *                   advertise the `--deny-read` or pre-0.14
+ *                   `--no-host-filesystem` boundary). */
 export function GET() {
   const manifest = getVendorManifest();
   return Response.json(

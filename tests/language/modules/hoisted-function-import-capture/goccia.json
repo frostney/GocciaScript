@@ -1,4 +1,9 @@
 {
   "source-type": "module",
-  "compat-function": true
+  "compat-function": true,
+  "permissions": {
+    "allow-read": [
+      "../../../../fixtures/modules"
+    ]
+  }
 }

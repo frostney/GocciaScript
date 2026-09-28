@@ -35,7 +35,7 @@ fs.writeFileSync("/out/result.txt", input.toUpperCase());
 ./build.pas sandboxrunner
 ./build/GocciaSandboxRunner /main.js \
   --seed=./agent-workspace=/ \
-  --timeout=5000 \
+  --timeout=5s \
   --diff
 ```
 
@@ -143,7 +143,7 @@ Non-standard data-format APIs and SemVer are import-only Goccia runtime modules,
 
 `node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
-Native FFI is an explicit unsafe runtime opt-in (`--unsafe-ffi` or the matching configuration key). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0095](docs/adr/0095-custom-bidirectional-ffi-abi-engine.md).
+Native FFI needs an explicit `ffi` grant (`--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block). It provides native-layout structures, unions, fixed-length arrays, callbacks, and guarded library lifetimes through GocciaScript's custom bidirectional ABI machinery. See the [FFI reference](docs/built-ins-ffi.md) and [ADR 0095](docs/adr/0095-custom-bidirectional-ffi-abi-engine.md).
 
 See [Built-in Objects](docs/built-ins.md) for the complete API reference.
 
@@ -289,6 +289,8 @@ above:
 - **Classes** with private fields — `class Account { #balance = 0; ... }`
 - **ES modules** — default, named, and namespace imports/exports are supported; project code prefers named exports for clarity.
 - **Strict equality by default** — `===` and `!==` (`==`/`!=` require `--compat-loose-equality`)
+
+Beyond the static imports of its own project a script reaches nothing by default: other host reads, computed dynamic imports, `fetch`, FFI, and `node_modules` all throw `PermissionDenied` until the host grants them with `--allow-read`, `--allow-net`, `--allow-ffi`, or `--allow-import` (or a config file's `permissions` block). A deny always wins. See [Permissions](docs/permissions.md).
 
 The CLI tools share WHATWG-style import map support with `--import-map=<file.json>`, `--alias key=value`, and automatic `goccia.json` discovery for project-level module aliases. Host-supplied dependencies should normally be configured as virtual ES modules with `--module`, `--modules`, or a config `modules` object; they participate in the same import pipeline as filesystem modules. Global injection remains supported for compatibility.
 

@@ -57,6 +57,8 @@ begin
   for I := 0 to High(AOptions) do
   begin
     Option := AOptions[I];
+    if Option.Hidden then
+      Continue;
     FormattedName := Option.FormatForHelp;
     if Length(FormattedName) > MaxWidth then
       MaxWidth := Length(FormattedName);

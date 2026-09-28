@@ -100,8 +100,9 @@ function isValidFeatures(
  *  Long options come in two shapes:
  *
  *  - `--name=value` — split on `=` and look up the prefix.
- *  - `--name <value>` (separate args, e.g. `--allowed-host api.example.com`)
- *    — the caller passes just `--name`; we look it up directly.
+ *  - `--name <value>` (separate args, e.g. the pre-0.14 `--allowed-host
+ *    api.example.com`) — the caller passes just `--name`; we look it up
+ *    directly.
  *
  *  Bare positional args (e.g. the test file path) and short options aren't
  *  flag-shaped so they always pass through. */
@@ -116,14 +117,32 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
+/** The flags that refuse every host read, including imports from the
+ *  project: `--deny-read` from GocciaScript 0.14.0 (ADR 0122), and the
+ *  `--no-host-filesystem` it replaced. Newest first. */
+export const HOST_FILESYSTEM_BOUNDARY_FLAGS = [
+  "--deny-read",
+  "--no-host-filesystem",
+] as const;
+
+/** The host-filesystem boundary flag a binary advertises, or null. */
+export function hostFilesystemBoundaryFlag(
+  flags: readonly string[] | undefined,
+): string | null {
+  if (!flags) return null;
+  return (
+    HOST_FILESYSTEM_BOUNDARY_FLAGS.find((flag) => flags.includes(flag)) ?? null
+  );
+}
+
 /** Public execute/test endpoints accept attacker-controlled source, so a
  * vendored engine is selectable only when both binaries advertise the
  * fail-closed host-filesystem capability. Missing probe data is unsafe here:
  * it cannot prove that the boundary exists. */
 export function isPublicExecutionSafe(entry: VendorEntry): boolean {
   return (
-    entry.features?.loader.includes("--no-host-filesystem") === true &&
-    entry.features.testRunner.includes("--no-host-filesystem")
+    hostFilesystemBoundaryFlag(entry.features?.loader) !== null &&
+    hostFilesystemBoundaryFlag(entry.features?.testRunner) !== null
   );
 }
 
@@ -162,14 +181,14 @@ export function checkVendorManifestFloor(
     return {
       code: "NO_PUBLIC_SAFE_ENGINE",
       message:
-        "no vendored engine advertises --no-host-filesystem on both binaries — the playground version picker would be empty",
+        "no vendored engine advertises --deny-read (or --no-host-filesystem) on both binaries — the playground version picker would be empty",
     };
   }
   if (!stable.some(isPublicExecutionSafe)) {
     return {
       code: "NO_PUBLIC_SAFE_STABLE",
       message:
-        "no vendored *stable* engine advertises --no-host-filesystem on both binaries — the playground would offer only nightly",
+        "no vendored *stable* engine advertises --deny-read (or --no-host-filesystem) on both binaries — the playground would offer only nightly",
     };
   }
   return null;

@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   checkVendorManifestFloor,
   findVersion,
+  hostFilesystemBoundaryFlag,
   isFlagSupported,
   isPublicExecutionSafe,
   listPlaygroundVersions,
@@ -205,11 +206,66 @@ describe("isFlagSupported", () => {
   });
 });
 
+/** The 0.14.0 surface (ADR 0122): --deny-read replaces --no-host-filesystem,
+ *  --max-stack replaces --stack-size, and --allow-net replaces --allowed-host. */
+const PERMISSIONS_FEATURES: VendorFeatureSet = {
+  loader: [
+    "--allow-net",
+    "--compat-asi",
+    "--deny-read",
+    "--max-instructions",
+    "--max-memory",
+    "--max-stack",
+    "--mode",
+    "--timeout",
+  ],
+  testRunner: [
+    "--allow-net",
+    "--compat-asi",
+    "--deny-read",
+    "--max-instructions",
+    "--max-memory",
+    "--max-stack",
+    "--mode",
+    "--no-progress",
+    "--timeout",
+  ],
+};
+
 describe("public execution safety", () => {
   test("requires the filesystem-disable capability on both binaries", () => {
     expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[0])).toBe(true);
     expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[1])).toBe(false);
     expect(isPublicExecutionSafe(SAMPLE_MANIFEST.versions[2])).toBe(false);
+  });
+
+  test("accepts --deny-read as the 0.14.0 boundary", () => {
+    const entry = {
+      ...SAMPLE_MANIFEST.versions[0],
+      tag: "0.14.0",
+      features: PERMISSIONS_FEATURES,
+    };
+    expect(isPublicExecutionSafe(entry)).toBe(true);
+    expect(
+      isPublicExecutionSafe({
+        ...entry,
+        features: { ...PERMISSIONS_FEATURES, testRunner: ["--mode"] },
+      }),
+    ).toBe(false);
+  });
+
+  test("names the boundary flag a binary advertises", () => {
+    expect(hostFilesystemBoundaryFlag(PERMISSIONS_FEATURES.loader)).toBe(
+      "--deny-read",
+    );
+    expect(hostFilesystemBoundaryFlag(MODERN_FEATURES.loader)).toBe(
+      "--no-host-filesystem",
+    );
+    expect(hostFilesystemBoundaryFlag(LEGACY_061_FEATURES.loader)).toBeNull();
+    expect(hostFilesystemBoundaryFlag(undefined)).toBeNull();
+    expect(
+      parseAdvertisedFlags("  --deny-read[=<path>,...]      Deny host reads"),
+    ).toEqual(["--deny-read"]);
   });
 
   test("falls forward to the first safe version when the configured default is unsafe", () => {

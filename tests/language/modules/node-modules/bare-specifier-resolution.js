@@ -1,6 +1,7 @@
 // Bare specifiers resolve against the committed node_modules fixture next to
 // this file, enabled for this folder only by its goccia.json
-// ("allow-node-modules": true). Without that opt-in every import here fails.
+// ("permissions": { "allow-import": ["node_modules=."] }). Without that grant
+// every import here fails.
 import { exportsLabel, viaDependency } from "pkg-exports";
 import { widen, widenName } from "pkg-exports/sub/widen";
 import { exactLabel } from "pkg-exports/sub/exact";

@@ -61,13 +61,14 @@ JavaScript and TypeScript manifests must default-export the module map. A
 manifest is evaluated before its definitions are registered, so it cannot
 import modules that it defines itself. The manifest is a host file, so it is
 always read from the filesystem, and it and its own imports are host requests
-the `read` capability does not check. Normally it is evaluated through the
-script's module loader, so code it leaves behind — a global function that calls
-`import()`, say — imports as the host did. Under `--no-host-filesystem` (an
-outright `read` deny) it is evaluated in an isolated loader instead, so such an
-import is a guest read and is refused with `PermissionDenied` like the script's
-own imports. An engine whose module provider does not read the host filesystem
-(the sandbox runner) always evaluates it in an isolated loader.
+the `read` capability does not check while the manifest is being loaded.
+Code it leaves behind — a global function that calls `import()`, say — runs
+later as guest code, so such an import is a guest read: it needs a `read`
+grant outside the module graph and is refused with `PermissionDenied`
+without one. Under `--deny-read` (an outright `read` deny) the manifest is
+evaluated in an isolated loader. An engine whose module provider does not
+read the host filesystem (the sandbox runner) always evaluates it in an
+isolated loader.
 
 Project config may contain a module map directly:
 

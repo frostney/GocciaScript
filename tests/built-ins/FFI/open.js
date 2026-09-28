@@ -13,8 +13,16 @@ describe("FFI.open", () => {
     lib.close();
   });
 
-  test("throws on missing library", () => {
-    expect(() => FFI.open("./nonexistent" + FFI.suffix)).toThrow(TypeError);
+  test("throws TypeError for a missing library inside the allowed scope", () => {
+    expect(() => FFI.open("./fixtures/ffi/nonexistent" + FFI.suffix)).toThrow(
+      TypeError,
+    );
+  });
+
+  test("throws PermissionDenied for a library outside the allowed scope", () => {
+    expect(() => FFI.open("./nonexistent" + FFI.suffix)).toThrow(
+      PermissionDenied,
+    );
   });
 
   test("throws without arguments", () => {

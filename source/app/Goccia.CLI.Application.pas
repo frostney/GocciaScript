@@ -17,6 +17,7 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.CLI.Options,
+  Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
   Goccia.Engine,
   Goccia.Executor,
@@ -45,6 +46,10 @@ type
     FAllOptions: TOptionArray;
     FSourceRegistry: TGocciaSourceRegistry;
     FRootConfigPath: string;
+    FRootPermissionRequest: TGocciaConfigPermissionRequest;
+    FRootConfigExplicit: Boolean;
+    FWarnLock: TGocciaCriticalSection;
+    FWarned: TStringList;
     procedure BuildAllOptions;
     procedure InitializeSingletons;
     procedure ShutdownSingletons;
@@ -80,17 +85,45 @@ type
     procedure ConfigureCreatedEngine(const AEngine: TGocciaEngine;
       const AFileConfig: TConfigEntryArray); virtual;
     procedure ConfigureCapabilityAudit(const AEngine: TGocciaEngine);
-    { The capability-bearing options this binary honors today (ADR 0122
-      layer 1). Binaries that ignore an option override this to leave it out,
-      so the engine set reproduces exactly what the binary does now. }
-    function HonoredCapabilityOptions: TGocciaCapabilityOptions; virtual;
-    { The engine capability set for a file, from the command line, its
-      per-file config, and the root config. }
+    { The capabilities this binary can grant (ADR 0122). An --allow-* flag
+      for any other capability is a usage error; a config request for one is
+      a warning. Default: none. }
+    function HonoredCapabilities: TGocciaHonoredCapabilities; virtual;
+    { The limits this binary applies. Any other limit on the command line is
+      a usage error; in config it is ignored. Default: all. }
+    function HonoredSettings: TGocciaHonoredSettings; virtual;
+    { The engine capability set for a file: command-line grants, plus the
+      permission request of the file's config (AFileConfigPath, or the root
+      config when the file has none), minus every deny. }
     function ResolveEngineCapabilities(const AFileConfig: TConfigEntryArray;
-      const AFileConfigPath: string): TGocciaCapabilities;
+      const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaCapabilities;
+    { The permission request that governs a file: its own config's
+      (AFileConfigPath), else the root config's when RootConfigGoverns the
+      file, else none. Requests this binary cannot honor are reported once on
+      stderr. }
+    function FilePermissionRequest(const AFileConfig: TConfigEntryArray;
+      const AFileConfigPath: string;
+      const AFileName: string = ''): TGocciaConfigPermissionRequest;
+    { Whether the root config's permissions and unsafe-* keys apply to
+      AFileName: always for an explicit --config (and for AFileName = ''),
+      otherwise only when the file is inside the root config's directory
+      tree. A discovered config never grants to files outside its tree. }
+    function RootConfigGoverns(const AFileName: string): Boolean;
     { The set for a main-thread warm-up engine: it grants ffi when any of
       AFiles would, so the FFI prototypes are warmed before workers start. }
     function WarmUpCapabilities(const AFiles: TStrings): TGocciaCapabilities;
+    { Writes AMessage to stderr once per AKey for the whole run. Safe to call
+      from worker threads. }
+    procedure WarnOnce(const AKey, AMessage: string);
+    { Parses the config at APath and rejects removed and command-line-only
+      keys and malformed flag values. }
+    function LoadFileConfig(const APath: string): TConfigEntryArray;
+    { Loads and validates, on the calling thread, the config and permissions
+      block of every distinct config governing AFiles, so a config error stops
+      the run before any file executes (a usage error exits 2 through
+      Goccia.Application.Run) instead of failing one file among many. }
+    procedure ValidateFileConfigs(const AFiles: TStrings);
     function ShouldApplyRootConfig(const APaths: TStringList;
       const AConfigPath: string; const AExplicitConfig: Boolean): Boolean; virtual;
     procedure HandleConsoleLog(const AMethod, ALine: string);
@@ -102,8 +135,6 @@ type
     function DiscoverFileConfigPath(const AFileName: string): string;
     procedure ApplyVirtualModulesToEngine(const AEngine: TGocciaEngine;
       const AFileConfigPath: string);
-    function AnyFileConfigEnablesFlag(const AFiles: TStrings;
-      const AFlag: TFlagOption): Boolean;
     function CreateEngine(const AFileName: string;
       const ASource: TStringList;
       const AExecutor: TGocciaExecutor): TGocciaEngine;
@@ -144,6 +175,9 @@ type
     destructor Destroy; override;
   end;
 
+{ Registers the JSON5 and TOML config parsers. Idempotent. }
+procedure EnsureConfigParsersRegistered;
+
 function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray;
@@ -160,7 +194,8 @@ procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
   is no host file to discover a per-file config for. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray; const AFileName: string);
+  const AFileConfig: TConfigEntryArray; const AFileName: string;
+  const ARootConfigGoverns: Boolean = True);
 
 implementation
 
@@ -169,6 +204,7 @@ uses
   Math,
 
   CLI.Parser,
+  CLI.Units,
   ProcessorDetection,
   TextEncoding,
   TextSemantics,
@@ -210,94 +246,103 @@ end;
 
 { ── Config file bridge parsers ─────────────────────────────── }
 
-{ Extract top-level key-value pairs from a TGocciaObjectValue. }
-function ExtractObjectEntries(
-  const AObject: TGocciaObjectValue): TConfigEntryArray;
+{ Extract top-level key-value pairs from a TGocciaObjectValue, flattening
+  one level of nested objects to `parent.child` keys (the ParseJSONConfig
+  contract in CLI.ConfigFile). }
+procedure AppendObjectEntries(const AObject: TGocciaObjectValue;
+  const APrefix: string; const ANested: Boolean;
+  var AEntries: TConfigEntryArray; var ACount: Integer);
+
+  procedure AddEntry(const AKey, AValue: string;
+    const AKind: TConfigValueKind; const AInArray: Boolean);
+  begin
+    if ACount >= Length(AEntries) then
+      SetLength(AEntries, Length(AEntries) * 2 + 4);
+    AEntries[ACount].Key := AKey;
+    AEntries[ACount].Value := AValue;
+    AEntries[ACount].SourcePath := '';
+    AEntries[ACount].Kind := AKind;
+    AEntries[ACount].InArray := AInArray;
+    Inc(ACount);
+  end;
+
+  function TryScalarText(const AValue: TGocciaValue; out AText: string;
+    out AKind: TConfigValueKind): Boolean;
+  begin
+    Result := True;
+    if AValue is TGocciaStringLiteralValue then
+    begin
+      AText := TGocciaStringLiteralValue(AValue).Value;
+      AKind := cvkString;
+    end
+    else if AValue is TGocciaNumberLiteralValue then
+    begin
+      AText := ConfigNumberText(TGocciaNumberLiteralValue(AValue).Value);
+      AKind := cvkNumber;
+    end
+    else if AValue is TGocciaBooleanLiteralValue then
+    begin
+      if TGocciaBooleanLiteralValue(AValue).Value then
+        AText := 'true'
+      else
+        AText := 'false';
+      AKind := cvkBoolean;
+    end
+    else
+      Result := False;
+  end;
+
 var
   Keys: TArray<string>;
-  I, J, Count: Integer;
-  Key, ElementValue: string;
+  I, J: Integer;
+  Key, Text: string;
+  Kind: TConfigValueKind;
   Value: TGocciaValue;
   Arr: TGocciaArrayValue;
 begin
   Keys := AObject.GetOwnPropertyKeys;
-  SetLength(Result, Length(Keys) * 2);
-  Count := 0;
-
   for I := 0 to High(Keys) do
   begin
-    Key := Keys[I];
-    Value := AObject.GetProperty(Key);
+    Key := APrefix + Keys[I];
+    Value := AObject.GetProperty(Keys[I]);
     if not Assigned(Value) then
       Continue;
 
-    if Value is TGocciaStringLiteralValue then
-    begin
-      if Count >= Length(Result) then
-        SetLength(Result, Length(Result) * 2 + 1);
-      Result[Count].Key := Key;
-      Result[Count].Value := TGocciaStringLiteralValue(Value).Value;
-      Inc(Count);
-    end
-    else if Value is TGocciaNumberLiteralValue then
-    begin
-      if Count >= Length(Result) then
-        SetLength(Result, Length(Result) * 2 + 1);
-      Result[Count].Key := Key;
-      Result[Count].Value := TGocciaNumberLiteralValue(Value)
-        .ToStringLiteral.Value;
-      Inc(Count);
-    end
-    else if Value is TGocciaBooleanLiteralValue then
-    begin
-      if Count >= Length(Result) then
-        SetLength(Result, Length(Result) * 2 + 1);
-      Result[Count].Key := Key;
-      if TGocciaBooleanLiteralValue(Value).Value then
-        Result[Count].Value := 'true'
-      else
-        Result[Count].Value := 'false';
-      Inc(Count);
-    end
+    if TryScalarText(Value, Text, Kind) then
+      AddEntry(Key, Text, Kind, False)
     else if Value is TGocciaArrayValue then
     begin
       Arr := TGocciaArrayValue(Value);
       if Arr.GetLength = 0 then
-      begin
-        if Count >= Length(Result) then
-          SetLength(Result, Length(Result) * 2 + 1);
-        Result[Count].Key := Key;
-        Result[Count].Value := '';
-        Inc(Count);
-      end
+        AddEntry(Key, '', cvkEmptyArray, True)
       else
         for J := 0 to Arr.GetLength - 1 do
-        begin
-          Value := Arr.GetElement(J);
-          if Value is TGocciaStringLiteralValue then
-            ElementValue := TGocciaStringLiteralValue(Value).Value
-          else if Value is TGocciaNumberLiteralValue then
-            ElementValue := TGocciaNumberLiteralValue(Value)
-              .ToStringLiteral.Value
-          else if Value is TGocciaBooleanLiteralValue then
-          begin
-            if TGocciaBooleanLiteralValue(Value).Value then
-              ElementValue := 'true'
-            else
-              ElementValue := 'false';
-          end
+          if TryScalarText(Arr.GetElement(J), Text, Kind) then
+            AddEntry(Key, Text, Kind, True)
           else
-            Continue;
-          if Count >= Length(Result) then
-            SetLength(Result, Length(Result) * 2 + 1);
-          Result[Count].Key := Key;
-          Result[Count].Value := ElementValue;
-          Inc(Count);
-        end;
-    end;
-    { Objects and other types are silently skipped. }
+            AddEntry(Key, '', cvkUnsupported, True);
+    end
+    else if (Value is TGocciaObjectValue) and not ANested then
+    begin
+      AddEntry(Key, '', cvkObject, False);
+      AppendObjectEntries(TGocciaObjectValue(Value), Key + '.', True,
+        AEntries, ACount);
+    end
+    else
+      { null, deeper objects, and anything else without a flat form. }
+      AddEntry(Key, '', cvkUnsupported, False);
   end;
+end;
 
+function ExtractObjectEntries(
+  const AObject: TGocciaObjectValue): TConfigEntryArray;
+var
+  Count: Integer;
+begin
+  Result := nil;
+  SetLength(Result, 8);
+  Count := 0;
+  AppendObjectEntries(AObject, '', False, Result, Count);
   SetLength(Result, Count);
 end;
 
@@ -381,6 +426,10 @@ begin
   FLogFileOpen := False;
   FAuditLogStream := nil;
   FAuditLogOpen := False;
+  FRootPermissionRequest := TGocciaConfigPermissionRequest.Empty;
+  CriticalSectionInit(FWarnLock);
+  FWarned := TStringList.Create;
+  FWarned.Sorted := True;
 end;
 
 destructor TGocciaCLIApplication.Destroy;
@@ -398,6 +447,8 @@ begin
   FMultifile.Free;
   FConfig.Free;
   FSourceRegistry.Free;
+  FWarned.Free;
+  CriticalSectionDone(FWarnLock);
   inherited Destroy;
 end;
 
@@ -498,7 +549,51 @@ begin
   SetLength(Result, 0);
   ConfigPath := DiscoverFileConfigPath(AFileName);
   if ConfigPath <> '' then
-    Result := ParseConfigFile(ConfigPath);
+    Result := LoadFileConfig(ConfigPath);
+end;
+
+function TGocciaCLIApplication.LoadFileConfig(
+  const APath: string): TConfigEntryArray;
+begin
+  Result := ParseConfigFile(APath);
+  ValidateConfigEntries(Result, FAllOptions);
+end;
+
+procedure TGocciaCLIApplication.ValidateFileConfigs(const AFiles: TStrings);
+var
+  Seen: TStringList;
+  I, Index: Integer;
+  ConfigPath: string;
+begin
+  Seen := TStringList.Create;
+  try
+    Seen.Sorted := True;
+    for I := 0 to AFiles.Count - 1 do
+    begin
+      ConfigPath := DiscoverFileConfigPath(AFiles[I]);
+      if (ConfigPath = '') or Seen.Find(ConfigPath, Index) then
+        Continue;
+      Seen.Add(ConfigPath);
+      FilePermissionRequest(LoadFileConfig(ConfigPath), ConfigPath);
+    end;
+  finally
+    Seen.Free;
+  end;
+end;
+
+procedure TGocciaCLIApplication.WarnOnce(const AKey, AMessage: string);
+var
+  Index: Integer;
+begin
+  CriticalSectionEnter(FWarnLock);
+  try
+    if FWarned.Find(AKey, Index) then
+      Exit;
+    FWarned.Add(AKey);
+    WriteLn(ErrOutput, AMessage);
+  finally
+    CriticalSectionLeave(FWarnLock);
+  end;
 end;
 
 function TGocciaCLIApplication.DiscoverFileConfigPath(
@@ -515,21 +610,6 @@ begin
     StartDir := GetCurrentDir;
   Result := DiscoverConfigFile(StartDir,
     [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
-end;
-
-function TGocciaCLIApplication.AnyFileConfigEnablesFlag(
-  const AFiles: TStrings; const AFlag: TFlagOption): Boolean;
-var
-  I: Integer;
-begin
-  if not Assigned(AFlag) then
-    Exit(False);
-
-  for I := 0 to AFiles.Count - 1 do
-    if ResolveFlagOption(AFlag, DiscoverFileConfig(AFiles[I])) then
-      Exit(True);
-
-  Result := False;
 end;
 
 { Resolve --source-type / config "source-type" into the engine's
@@ -607,17 +687,52 @@ begin
     AEngineOptions.WarningUnsupportedFeatures, AFileConfig);
 end;
 
+{ A per-file config value of a limit. Per-file values are read from the
+  entries rather than applied to the options, so they are parsed here by the
+  option itself, with its units and bounds. }
+function ParseConfigValue(const AOption: TInt64Option;
+  const AEntry: TConfigEntry): Int64;
+begin
+  try
+    Result := AOption.Parse(AEntry.Value);
+  except
+    on E: EOptionValueError do
+      raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
+        [AEntry.Key, AEntry.SourcePath, ConfigEntryText(AEntry), E.Reason]);
+    on E: TParseError do
+      raise TParseError.CreateFmt('%s: %s', [AEntry.SourcePath, E.Message]);
+  end;
+end;
+
 { Apply per-file config entries to the engine.
   Priority: CLI option > per-file config > root config > default.
   FromCommandLine distinguishes CLI-set options from root config values
   so that a per-file config can override a root-level config value. }
+{ An unsafe-* flag: the command line, else the file's own config, else the
+  root config only when ARootConfigGoverns: the file has no config of its
+  own and lies inside the root config's tree (or --config named it). }
+function ResolveUnsafeFlag(const AFlag: TFlagOption;
+  const AFileConfig: TConfigEntryArray;
+  const ARootConfigGoverns: Boolean): Boolean;
+var
+  Value: string;
+begin
+  if AFlag.FromCommandLine then
+    Exit(True);
+  if FindConfigEntry(AFileConfig, AFlag.LongName, Value) or
+     ((AFlag.ConfigName <> '') and
+      FindConfigEntry(AFileConfig, AFlag.ConfigName, Value)) then
+    Exit(Value = 'true');
+  Result := ARootConfigGoverns and AFlag.Present;
+end;
+
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray; const AFileName: string);
+  const AFileConfig: TConfigEntryArray; const AFileName: string;
+  const ARootConfigGoverns: Boolean);
 var
-  ValueStr: string;
-  MemoryLimit: Int64;
-  ResponseLimit: Integer;
+  Entry: TConfigEntry;
+  MemoryLimit, ResponseLimit: Int64;
   GC: TGarbageCollector;
 begin
   if not Assigned(AEngineOptions) then
@@ -634,12 +749,15 @@ begin
   AEngine.StrictTypes := ResolveFlagOption(
     AEngineOptions.StrictTypes, AFileConfig);
 
-  { unsafe-function-constructor: CLI flag > per-file config > root config > default (false) }
-  AEngine.FunctionConstructor.Enabled := ResolveFlagOption(
-    AEngineOptions.UnsafeFunctionConstructor, AFileConfig);
+  { unsafe-function-constructor: CLI flag > per-file config > root config
+    (when it governs the file) > default (false) }
+  AEngine.FunctionConstructor.Enabled := ResolveUnsafeFlag(
+    AEngineOptions.UnsafeFunctionConstructor, AFileConfig,
+    ARootConfigGoverns);
 
-  { unsafe-shadowrealm: CLI flag > per-file config > root config > default (false) }
-  if ResolveFlagOption(AEngineOptions.UnsafeShadowRealm, AFileConfig) then
+  { unsafe-shadowrealm: as unsafe-function-constructor }
+  if ResolveUnsafeFlag(AEngineOptions.UnsafeShadowRealm, AFileConfig,
+     ARootConfigGoverns) then
     EnableShadowRealm(AEngine);
 
   { max-memory: CLI option > per-file config > root config > system default.
@@ -650,11 +768,11 @@ begin
   begin
     if AEngineOptions.MaxMemory.FromCommandLine then
       GC.MaxBytes := AEngineOptions.MaxMemory.Value
-    else if FindConfigEntry(AFileConfig, 'max-memory', ValueStr) then
+    else if (not AEngineOptions.MaxMemory.ConfigIgnored) and
+      TryFindConfigEntry(AFileConfig, AEngineOptions.MaxMemory.LongName,
+      Entry) then
     begin
-      if not TryStrToInt64(ValueStr, MemoryLimit) then
-        raise Exception.CreateFmt(
-          'Invalid max-memory value in config: %s', [ValueStr]);
+      MemoryLimit := ParseConfigValue(AEngineOptions.MaxMemory, Entry);
       GC.MaxBytes := MemoryLimit;
     end
     else if AEngineOptions.MaxMemory.Present then
@@ -663,30 +781,21 @@ begin
       GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
 
-  { allowed-host, fetch-deny-private-ranges, and the other capability-bearing
-    options were resolved into the engine's capability set before the engine
-    was created. }
-
-  { fetch-max-response-bytes: CLI flag > per-file config > root config >
-    default. An engine setting, not a capability; each request carries its
-    engine's value. }
+  { max-fetch-bytes: CLI option > per-file config > root config > default.
+    An engine setting, not a capability; each request carries its engine's
+    value. }
   ResponseLimit := 0;
-  if AEngineOptions.FetchMaxResponseBytes.FromCommandLine then
-    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value
-  else if FindConfigEntry(AFileConfig, 'fetch-max-response-bytes',
-    ValueStr) then
-  begin
-    if not TryStrToInt(ValueStr, ResponseLimit) then
-      raise Exception.CreateFmt(
-        'Invalid fetch-max-response-bytes value in config: %s', [ValueStr]);
-  end
-  else if AEngineOptions.FetchMaxResponseBytes.Present then
-    ResponseLimit := AEngineOptions.FetchMaxResponseBytes.Value;
+  if AEngineOptions.MaxFetchBytes.FromCommandLine then
+    ResponseLimit := AEngineOptions.MaxFetchBytes.Value
+  else if (not AEngineOptions.MaxFetchBytes.ConfigIgnored) and
+    TryFindConfigEntry(AFileConfig, AEngineOptions.MaxFetchBytes.LongName,
+    Entry) then
+    ResponseLimit := ParseConfigValue(AEngineOptions.MaxFetchBytes, Entry)
+  else if AEngineOptions.MaxFetchBytes.Present then
+    ResponseLimit := AEngineOptions.MaxFetchBytes.Value;
 
-  if ResponseLimit < 0 then
-    raise Exception.Create('fetch-max-response-bytes must be 0 or greater');
-
-  AEngine.FetchMaxResponseBytes := ResponseLimit;
+  { The option's Maximum keeps the value within Integer. }
+  AEngine.FetchMaxResponseBytes := Integer(ResponseLimit);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
@@ -694,32 +803,95 @@ procedure TGocciaCLIApplication.ConfigureCreatedEngine(
 begin
 end;
 
-function TGocciaCLIApplication.HonoredCapabilityOptions:
-  TGocciaCapabilityOptions;
+function TGocciaCLIApplication.HonoredCapabilities:
+  TGocciaHonoredCapabilities;
 begin
-  Result := AllCapabilityOptions;
+  Result := [];
+end;
+
+function TGocciaCLIApplication.HonoredSettings: TGocciaHonoredSettings;
+begin
+  Result := ALL_RUNTIME_SETTINGS;
 end;
 
 function TGocciaCLIApplication.WarmUpCapabilities(
   const AFiles: TStrings): TGocciaCapabilities;
+var
+  I: Integer;
+  FileConfigPath: string;
+  FileConfig: TConfigEntryArray;
 begin
   Result := TGocciaCapabilities.None;
-  if Assigned(FEngineOptions) and
-     AnyFileConfigEnablesFlag(AFiles, FEngineOptions.UnsafeFFI) then
-    Result := Result.Allow(gcFFI);
+  if not (gcFFI in HonoredCapabilities) then
+    Exit;
+  for I := 0 to AFiles.Count - 1 do
+    try
+      FileConfigPath := DiscoverFileConfigPath(AFiles[I]);
+      if FileConfigPath <> '' then
+        FileConfig := LoadFileConfig(FileConfigPath)
+      else
+        SetLength(FileConfig, 0);
+      if ResolveEngineCapabilities(FileConfig, FileConfigPath, AFiles[I])
+         .Grants(gcFFI) then
+        Exit(Result.Allow(gcFFI));
+    except
+      { A config error belongs to that file's own run, which reports it. }
+      on E: Exception do
+        Continue;
+    end;
+end;
+
+function TGocciaCLIApplication.RootConfigGoverns(
+  const AFileName: string): Boolean;
+var
+  FileDirectory: string;
+begin
+  if FRootConfigPath = '' then
+    Exit(False);
+  if FRootConfigExplicit or (AFileName = '') then
+    Exit(True);
+  FileDirectory := ExtractFileDir(ExpandFileName(AFileName));
+  Result := IsPathWithinScope(CanonicalCapabilityPath(FileDirectory),
+    CanonicalCapabilityPath(ExtractFileDir(FRootConfigPath)));
+end;
+
+function TGocciaCLIApplication.FilePermissionRequest(
+  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
+  const AFileName: string): TGocciaConfigPermissionRequest;
+var
+  Warnings: TGocciaCapabilityScopes;
+  I: Integer;
+begin
+  { One config per file: the file's nearest config, else the root config
+    when it governs the file. extends is the only way configs compose. }
+  if AFileConfigPath <> '' then
+    Result := ReadConfigPermissionRequest(AFileConfig, AFileConfigPath)
+  else if RootConfigGoverns(AFileName) then
+    Result := FRootPermissionRequest
+  else
+    Result := TGocciaConfigPermissionRequest.Empty;
+
+  Warnings := UnsupportedRequestWarnings(Result, HonoredCapabilities, Name);
+  for I := 0 to High(Warnings) do
+    WarnOnce(Result.ConfigPath + #0 + Warnings[I],
+      'Warning: ' + Result.ConfigPath + ' ' + Warnings[I]);
 end;
 
 function TGocciaCLIApplication.ResolveEngineCapabilities(
-  const AFileConfig: TConfigEntryArray;
-  const AFileConfigPath: string): TGocciaCapabilities;
+  const AFileConfig: TConfigEntryArray; const AFileConfigPath: string;
+  const AFileName: string): TGocciaCapabilities;
+var
+  Request: TGocciaConfigPermissionRequest;
+  CapabilityOptions: TGocciaCapabilityOptions;
 begin
-  try
-    Result := ResolveCapabilities(FEngineOptions, AFileConfig,
-      AFileConfigPath, FRootConfigPath, HonoredCapabilityOptions);
-  except
-    on E: EGocciaCapabilityScopeError do
-      raise TParseError.Create(E.Message);
-  end;
+  Request := FilePermissionRequest(AFileConfig, AFileConfigPath, AFileName);
+  if Assigned(FEngineOptions) then
+    CapabilityOptions := FEngineOptions.Capabilities
+  else
+    CapabilityOptions := nil;
+  { Layer 2 of ADR 0122 applies config requests without a trust step. }
+  Result := ResolveCapabilities(CapabilityOptions, Request, True,
+    HonoredCapabilities, GetCurrentDir);
 end;
 
 procedure TGocciaCLIApplication.ConfigureCapabilityAudit(
@@ -804,7 +976,7 @@ begin
       the engine's own loader, the manifest and its imports become host-owned
       there, so anything it leaves behind (a global function that calls
       import(), say) would import as the host; under an outright read deny
-      (--no-host-filesystem) it is therefore evaluated in an isolated loader
+      (--deny-read) it is therefore evaluated in an isolated loader
       too, and a later import made from its code is a guest read the deny
       refuses. }
     if AEngine.Capabilities.DeniesAll(gcRead) or
@@ -1100,12 +1272,12 @@ var
 begin
   FileConfigPath := DiscoverFileConfigPath(AFileName);
   if FileConfigPath <> '' then
-    FileConfig := ParseConfigFile(FileConfigPath)
+    FileConfig := LoadFileConfig(FileConfigPath)
   else
     SetLength(FileConfig, 0);
   { The capability set is fixed when the engine is created (ADR 0122). }
   Result := TGocciaEngine.Create(AFileName, ASource, AExecutor,
-    ResolveEngineCapabilities(FileConfig, FileConfigPath));
+    ResolveEngineCapabilities(FileConfig, FileConfigPath, AFileName));
   try
     ConfigureCapabilityAudit(Result);
     if Assigned(FEngineOptions) then
@@ -1123,7 +1295,13 @@ begin
     end;
     ConfigureCreatedEngine(Result, FileConfig);
     if Assigned(FEngineOptions) then
-      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName);
+      { One config per file: a file with its own config takes its unsafe-*
+        keys from that config (and its extends chain) alone; the root config
+        fills in only for a file without one, inside its tree. }
+      ApplyFileConfigToEngine(Result, FEngineOptions, FileConfig, AFileName,
+        ((FileConfigPath = '') or
+         (ExpandFileName(FileConfigPath) = ExpandFileName(FRootConfigPath))) and
+        RootConfigGoverns(AFileName));
     ApplyVirtualModulesToEngine(Result, FileConfigPath);
     if AExecutor is TGocciaBytecodeExecutor then
       TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel :=
@@ -1306,7 +1484,9 @@ begin
   SetInspectDepth(DEFAULT_INSPECT_DEPTH);
   if Assigned(FEngineOptions) then
   begin
-    SetMaxStackDepth(Max(0, FEngineOptions.StackSize.ValueOr(DEFAULT_MAX_STACK_DEPTH)));
+    { MaxStack.Maximum keeps the value within Integer. }
+    SetMaxStackDepth(Integer(FEngineOptions.MaxStack.ValueOr(
+      DEFAULT_MAX_STACK_DEPTH)));
     SetInspectDepth(FEngineOptions.InspectDepth.ValueOr(DEFAULT_INSPECT_DEPTH));
   end;
   if Assigned(FCoverageOptions) then
@@ -1364,6 +1544,7 @@ begin
     if not MultifileEnabled then
     begin
       Result.AddStrings(AFiles);
+      ValidateFileConfigs(Result);
       Exit;
     end;
 
@@ -1426,6 +1607,7 @@ begin
         FullSource.Free;
       end;
     end;
+    ValidateFileConfigs(Result);
   except
     Result.Free;
     raise;
@@ -1532,6 +1714,7 @@ procedure TGocciaCLIApplication.Execute;
 var
   Paths: TStringList;
   ConfigPath, ConfigStartDir: string;
+  RootConfigEntries: TConfigEntryArray;
   I: Integer;
 
   { Built on demand — the common case never renders help at all. }
@@ -1561,6 +1744,12 @@ begin
 
   FConfig := TStringOption.Create('config',
     'Path to a config file or a directory containing one (skips auto-discovery)');
+
+  if Assigned(FEngineOptions) then
+  begin
+    FEngineOptions.Capabilities.HideUnsupported(HonoredCapabilities);
+    FEngineOptions.HideUnsupportedSettings(HonoredSettings);
+  end;
 
   BuildAllOptions;
   // Append common application options after BuildAllOptions so
@@ -1600,6 +1789,15 @@ begin
       Exit;
     end;
 
+    { Capabilities and limits this binary cannot honor are usage errors on
+      the command line (ADR 0122); a malformed scope is an invalid value. }
+    if Assigned(FEngineOptions) then
+    begin
+      FEngineOptions.Capabilities.ValidateHonored(Name, HonoredCapabilities);
+      ValidateHonoredSettings(FEngineOptions, Name, HonoredSettings);
+      FEngineOptions.Capabilities.ValidateScopes(GetCurrentDir);
+    end;
+
     { Snapshot CLI origin: any option Present at this point was set
       by the command line.  ApplyConfigFile below may set additional
       options, but those will not be marked FromCommandLine. }
@@ -1626,11 +1824,15 @@ begin
       ConfigPath := DiscoverConfigFile(ConfigStartDir,
         [CONFIG_BASE_NAME], CONFIG_EXTENSIONS);
     end;
+    FRootConfigExplicit := FConfig.Present;
     if (ConfigPath <> '') and
        ShouldApplyRootConfig(Paths, ConfigPath, FConfig.Present) then
     begin
       FRootConfigPath := ConfigPath;
-      ApplyConfigFile(ConfigPath, FAllOptions);
+      RootConfigEntries := ParseConfigFile(ConfigPath);
+      ApplyConfigEntries(RootConfigEntries, FAllOptions);
+      FRootPermissionRequest := ReadConfigPermissionRequest(RootConfigEntries,
+        ConfigPath);
     end
     else
       FRootConfigPath := '';
