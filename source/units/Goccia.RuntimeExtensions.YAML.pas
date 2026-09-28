@@ -23,7 +23,7 @@ type
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
-    function TryLoadModule(const AResolvedPath: string;
+    function TryLoadModule(const AResolvedPath, ASpecifier: string;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; override;
@@ -81,7 +81,8 @@ begin
 end;
 
 function TGocciaYAMLRuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath, ASpecifier: string;
+  out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
   DocumentIndex: Integer;
@@ -110,7 +111,7 @@ begin
         on E: EGocciaYAMLParseError do
           raise TGocciaRuntimeError.Create(
             Format('Failed to parse YAML module "%s": %s',
-              [AResolvedPath, E.Message]),
+              [ASpecifier, E.Message]),
             0, 0, AResolvedPath, nil);
       end;
     finally
@@ -127,7 +128,7 @@ begin
     if Documents.Elements.Count = 0 then
       raise TGocciaRuntimeError.Create(
         Format('YAML module "%s" must contain at least one top-level document.',
-          [AResolvedPath]),
+          [ASpecifier]),
         0, 0, AResolvedPath, nil);
     if Documents.Elements.Count = 1 then
       ParsedDocument := Documents.Elements[0];

@@ -14,7 +14,7 @@ type
   TGocciaTextAssetsRuntimeExtension = class(TGocciaRuntimeExtension)
   public
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
-    function TryLoadModule(const AResolvedPath: string;
+    function TryLoadModule(const AResolvedPath, ASpecifier: string;
       out AModule: TGocciaModule): Boolean; override;
   end;
 
@@ -44,7 +44,8 @@ begin
 end;
 
 function TGocciaTextAssetsRuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath, ASpecifier: string;
+  out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
   LoadSucceeded: Boolean;

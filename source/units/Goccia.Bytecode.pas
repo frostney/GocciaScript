@@ -179,7 +179,10 @@ const
   //   v80 -> v81: added OP_COMPUTED_IMPORT_SPECIFIER (opcode 233), which
   //               marks the next dynamic import as having a computed
   //               specifier for read-capability enforcement.
-  GOCCIA_FORMAT_VERSION = 81;
+  //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
+  //               declaration's module request in C, so a missing-export
+  //               SyntaxError names the specifier, not the host path.
+  GOCCIA_FORMAT_VERSION = 82;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -427,6 +430,9 @@ type
     OP_DEFINE_GLOBAL_VAR_DECL_LONG = 210,
     OP_DEFINE_STATIC_PROP_DYNAMIC = 211,
     OP_PUSH_FINALLY_HANDLER = 212,
+    // A = module namespace register and destination, B = export-name constant
+    // index, C = module-request constant index (the declaration's specifier,
+    // which a missing-export SyntaxError names).
     OP_GET_IMPORT_BINDING = 213,
     OP_DEFINE_GLOBAL_VAR_LONG = 214,
     OP_DEFINE_GLOBAL_LET_LONG = 215,

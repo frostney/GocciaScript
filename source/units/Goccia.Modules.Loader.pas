@@ -37,8 +37,11 @@ type
   TGocciaModuleBodyEvaluator = function(const AProgram: TGocciaProgram;
     const AContext: TGocciaEvaluationContext;
     out AProgramConsumed: Boolean): TGocciaValue of object;
-  TGocciaRuntimeModuleLoader = function(const AResolvedPath: string;
-    out AModule: TGocciaModule): Boolean of object;
+  { ASpecifier is the request as the import wrote it. A load failure names it,
+    never AResolvedPath: the message reaches script through the import
+    rejection path, and the expanded host path stays host-side (ADR 0108). }
+  TGocciaRuntimeModuleLoader = function(const AResolvedPath,
+    ASpecifier: string; out AModule: TGocciaModule): Boolean of object;
   TGocciaGlobalModuleProvider = function: TGocciaModule of object;
 
   { Why a host read was refused. It picks both the audit reason and the
@@ -1317,7 +1320,7 @@ begin
   ConflictingModule := nil;
   if StartsStr('goccia:', CanonicalAddress) and
      Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(CanonicalAddress, ConflictingModule) then
+     FRuntimeModuleLoader(CanonicalAddress, AAddress, ConflictingModule) then
   begin
     ConflictingModule.Free;
     raise EInvalidOperation.CreateFmt(
@@ -2505,7 +2508,7 @@ begin
 
   Module := nil;
   if Assigned(FRuntimeModuleLoader) and
-     FRuntimeModuleLoader(ResolvedPath, Module) then
+     FRuntimeModuleLoader(ResolvedPath, RequestedModulePath, Module) then
   begin
     if Assigned(Module) then
     begin

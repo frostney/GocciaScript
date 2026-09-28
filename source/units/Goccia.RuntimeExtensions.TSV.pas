@@ -24,7 +24,7 @@ type
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
     function ParseModuleRecords(const AContent: string;
-      const AResolvedPath: string): TGocciaArrayValue; override;
+      const ASpecifier, AResolvedPath: string): TGocciaArrayValue; override;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
@@ -78,7 +78,7 @@ begin
 end;
 
 function TGocciaTSVRuntimeExtension.ParseModuleRecords(
-  const AContent: string; const AResolvedPath: string): TGocciaArrayValue;
+  const AContent, ASpecifier, AResolvedPath: string): TGocciaArrayValue;
 var
   TSVParser: TGocciaTSVParser;
 begin
@@ -90,7 +90,7 @@ begin
       on E: EGocciaTSVParseError do
         raise TGocciaRuntimeError.Create(
           Format('Failed to parse TSV module "%s": %s',
-            [AResolvedPath, E.Message]),
+            [ASpecifier, E.Message]),
           0, 0, AResolvedPath, nil);
     end;
   finally

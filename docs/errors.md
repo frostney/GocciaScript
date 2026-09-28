@@ -224,6 +224,9 @@ path, not resolution alone:
 | Specifier does not resolve | `Module not found: "./missing.js"` |
 | `import.source` of a non-script module | `Module source is not available for "./data.json"` |
 | JSON module fails to parse | `Failed to parse JSON module "./data.json": <parse detail>` |
+| JSON5, YAML, TOML, CSV, TSV or JSONL module fails to parse | `Failed to parse TOML module "./config.toml": <parse detail>` |
+| YAML module has no document | `YAML module "./empty.yaml" must contain at least one top-level document.` |
+| Named import of a missing export | `Module "./dep.js" has no export named "nope"` |
 
 See [ADR 0108 — Specifier-only module resolution errors](adr/0108-specifier-only-module-resolution-errors.md).
 

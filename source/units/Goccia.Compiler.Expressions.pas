@@ -766,18 +766,22 @@ begin
 end;
 
 procedure EmitImportBindingDereference(const ACtx: TGocciaCompilationContext;
-  const APhase: TGocciaImportCallPhase; const AExportName: string;
-  const ADest: UInt16);
+  const APhase: TGocciaImportCallPhase; const AModuleRequest,
+  AExportName: string; const ADest: UInt16);
 var
-  NameIdx: UInt16;
+  NameIdx, RequestIdx: UInt16;
 begin
   // The local/upvalue retains the module namespace loaded by the declaration.
   // Reading the named property remains live, while repeated identifier reads
-  // avoid repeating module resolution and loader-cache lookup.
+  // avoid repeating module resolution and loader-cache lookup. The module
+  // request is the declaration's own specifier, which a missing-export error
+  // names instead of the module's expanded host path (ADR 0108).
   if (APhase = icpEvaluation) and (AExportName <> '') then
   begin
     NameIdx := ACtx.Template.AddConstantString(AExportName);
-    EmitInstruction(ACtx, EncodeABx(OP_GET_IMPORT_BINDING, ADest, NameIdx));
+    RequestIdx := ACtx.Template.AddConstantString(AModuleRequest);
+    EmitInstruction(ACtx, EncodeABC(OP_GET_IMPORT_BINDING, ADest, NameIdx,
+      RequestIdx));
   end;
 end;
 
@@ -814,7 +818,7 @@ begin
     begin
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Local.Slot));
       EmitImportBindingDereference(ACtx, Local.ImportPhase,
-        Local.ImportExportName, ADest);
+        Local.ImportModulePath, Local.ImportExportName, ADest);
       Exit;
     end;
     if Local.IsGlobalBacked then
@@ -837,6 +841,7 @@ begin
         UInt16(UpvalIdx)));
       EmitImportBindingDereference(ACtx,
         ACtx.Scope.GetUpvalue(UpvalIdx).ImportPhase,
+        ACtx.Scope.GetUpvalue(UpvalIdx).ImportModulePath,
         ACtx.Scope.GetUpvalue(UpvalIdx).ImportExportName, ADest);
       Exit;
     end;
