@@ -1,9 +1,9 @@
 # Pull-request readiness
 
-`address-feedback` in PR scope owns one PR and one exact current head at a time. Re-read
-GitHub state after every thread action, commit, push, baseline update, automation
-response, or check transition; delegated output is evidence to verify, not gate
-state.
+`address-feedback` in PR scope owns one PR and one exact current head at a
+time. Re-read GitHub state after every thread action, commit, push, baseline
+update, automation response, or check transition; delegated output is evidence
+to verify, not gate state.
 
 ## Terminal exact-head gate
 
@@ -34,11 +34,11 @@ together.
 
 The bundled review helper owns GitHub mechanics: inspect current findings and
 thread state, wait while unchanged, publish an explicitly supplied inline reply,
-and resolve an explicitly selected thread. `address-feedback` in PR scope owns every
-judgment, source edit, validation choice, and decision to mark the PR ready.
-Re-read GitHub through the helper after each mutation and verify the final head,
-unresolved count, unanswered automation-thread count, findings, checks, and
-automation states.
+and resolve an explicitly selected thread. `address-feedback` in PR scope owns
+every judgment, source edit, validation choice, and decision to mark the PR
+ready. Each re-read after a mutation goes through the helper and verifies the
+final head, unresolved count, unanswered automation-thread count, findings,
+checks, and automation states.
 
 The helper flattens unhandled inline threads, non-empty exact-head reviews,
 change-request reviews, and non-empty top-level comments into `findingSurfaces`,

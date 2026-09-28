@@ -1,8 +1,10 @@
 ---
 name: agent-writing
 description: >-
-  Write clear, concise agent replies and engineering artifacts while
-  preserving evidence, decisions, and required detail.
+  Writes clear, concise agent replies and engineering artifacts while
+  preserving evidence, decisions, and required detail. Use when drafting a
+  final response or report for engineering work, PR or issue text, or
+  documentation.
 license: Unlicense OR MIT
 ---
 
@@ -37,6 +39,9 @@ do not follow this guide.
   residual work, and exact artifact locations when artifacts exist.
 - A review reply or retrospective impact item states the finding or impact and
   its consequence or resolution.
+- A correction states the corrected fact first, then the incorrect claim, the
+  source or process failure, any affected conclusions, and the prevention or
+  next validation step. It does not lead with an apology.
 - A durable artifact follows its project template and preserves the complete
   decision surface, evidence, and lifecycle state. When drafting or
   substantially revising an issue, PR body, engineering document, report,
@@ -72,7 +77,8 @@ for reader effort.
   Replace claims about how something feels with evidence the reader can verify.
 - Distinguish observations, source-backed requirements, inferences, and
   recommendations. Never increase certainty while revising. When evidence is
-  partial, name the evidence and limit the claim.
+  partial, name the evidence and limit the claim. Mark anything you could not
+  confirm and say where you looked.
 - Do not present planned, proposed, partial, or unreleased behavior as shipped.
   Name its actual lifecycle state and owner.
 - Check each completion claim against the returned result or an authoritative
@@ -93,13 +99,6 @@ for reader effort.
   needed history is unavailable, name that evidence gap.
 - Incorporate new evidence without turning one added fact into the organizing
   claim unless it materially changes the decision.
-- Keep one canonical home for each fact. Use descriptive link text instead of
-  copying the same explanation into several documents.
-
-When correcting an earlier claim, state the corrected fact first. Then identify
-the incorrect claim, explain the source or process failure, name any affected
-conclusions, and give the prevention or next validation step. Do not lead with
-an apology.
 
 ## Remove generic agent prose
 
@@ -113,8 +112,11 @@ an apology.
   Reserve `byte-identical` for compiler or binary output when equality of every
   byte is the claim.
 - Remove praise before the answer, forced enthusiasm, promotional framing,
-  vague attribution, ornamental metaphors, filler, process narration, repeated
-  conclusions, and unnecessary implementation detail.
+  vague attribution, filler, process narration, repeated conclusions, and
+  unnecessary implementation detail.
+- State the literal point. When a metaphor, aphorism, dramatic framing, or
+  other flourish stands in for a claim, replace it with the mechanism,
+  evidence, or consequence it gestures at.
 - Keep every materially distinct surface the request requires. Shortening must
   reduce reading effort, not narrow the requested scope.
 - Use a conversational, respectful tone without slang, needless formality, or
@@ -134,7 +136,8 @@ Never use an em dash or the standalone words `seam`, `seams`, `honest`,
   another style.
 - Use bold text only for real emphasis, UI labels, or notices.
 - Use a table for several exact comparisons, bullets for distinct unordered
-  items, and numbers for sequences or ranked actions.
+  items, numbers for sequences or ranked actions, and paragraphs for connected
+  reasoning.
 - Use headings only when a response has independent sections a reader may scan.
   Do not repeat the opening result in a closing summary.
 - Use a colon for a list or example, not as a routine mid-sentence connector.
@@ -147,10 +150,10 @@ Never use an em dash or the standalone words `seam`, `seams`, `honest`,
 Check substantial or sensitive drafts for unsupported claims, lost decisions,
 unclear wording, and missing validation or artifact locations. Scale revision to
 the response; a short factual answer does not need a separate checklist pass.
-Length thresholds prompt judgment, not an automatic additional revision.
 
-When editing this suite's Markdown, run
-`python3 agent-writing/scripts/check_prose.py` from the repository root.
+When editing this suite's Markdown, run `python3 scripts/check_prose.py`; the
+script path is relative to this skill directory. In a project install it checks
+only the skills that `skills-lock.json` records from this suite's source.
 
 Source guidance: [Google developer documentation style
 guide](https://developers.google.com/style) and [Cursor Unslop

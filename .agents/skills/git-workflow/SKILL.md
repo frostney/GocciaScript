@@ -14,10 +14,16 @@ compatibility: >-
 
 # Git workflow
 
-Apply these defaults unless the user has explicitly overridden them in the
-active workstream. Preserve that authority across turns until changed; a new
-repository or operation needs its own scope. A git request authorizes only the repository and GitHub state required for
-that operation.
+Keep every change on a fresh, focused branch whose history stays reviewable and
+recoverable: merge instead of rewriting, never lose local work, and land each
+pull request as one squash commit with a meaningful subject. A git request
+authorizes only the repository and GitHub state required for that operation.
+
+An explicit user instruction about one of these defaults replaces only that
+default for the active workstream. Preserve it across turns until changed; a
+new repository or operation needs its own scope.
+
+## Start or resume work
 
 - Resolve the base from the remote default; never hardcode `main`.
 - Make remote-default synchronization an automatic preflight for new work; do
@@ -39,6 +45,9 @@ that operation.
   branch.
 - When entering an existing focused branch or worktree, merge the freshly
   fetched remote default before editing.
+
+## Update, commit, and push
+
 - Merge the remote base to update a branch. Never rebase.
 - During an authorized PR update, resolve conflicts whose intended behavior is
   established by the selected change and current base. Preserve both sides'
@@ -51,6 +60,9 @@ that operation.
 - Use concise Conventional Commit subjects in imperative mood. Each commit title
   must state its observable impact, not only the mechanism changed.
 - Let hooks run unless the user explicitly asks otherwise.
+
+## Merge
+
 - Squash-merge pull requests and delete the source branch afterward.
 - Because the merge is a squash, the pull request **title** becomes the commit
   subject on the base branch: the branch's own commit subjects do not survive.
@@ -59,6 +71,7 @@ that operation.
   most frequent commit under it. Where a project generates its changelog or
   version bump from commit history, a non-conforming title merges cleanly and is
   then silently absent from it.
+- After a squash merge, sync the local base and remove the merged local branch.
 
 ## Native GitHub stacks
 
@@ -74,5 +87,3 @@ the only exception to the merge-only and never-force-push defaults above:
 rebases and force-with-lease are permitted only when performed by verified
 `gh stack` commands against a clean, confirmed native stack. Raw `git rebase`,
 `git push --force`, and manual `git push --force-with-lease` remain forbidden.
-
-After a squash merge, sync the local base and remove the merged local branch.

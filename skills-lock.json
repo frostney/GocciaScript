@@ -5,19 +5,19 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "address-feedback/SKILL.md",
-      "computedHash": "bba833d1a0019f57b9e357418230e1757232b52e22b096b9d697d187649bad6c"
+      "computedHash": "de09349be49074efef624e1e3ce16f3b417159b2cf205e92ef562a2073e1033c"
     },
     "agent-writing": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "agent-writing/SKILL.md",
-      "computedHash": "d100824207c8df664fecb303e014ed1205a54631e4e7d33ea33d34b7d6b2607a"
+      "computedHash": "661aba44944219114e7cf5041db897b62d871a66d3ad0ccda2948dafcad5258c"
     },
     "code-review": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "code-review/SKILL.md",
-      "computedHash": "6ac7d5fce38ea1a4c6e17e31dc65aaf8bd4064fbdd733d6f2e02ea99cb9ef3d0"
+      "computedHash": "4676d1fbff75c61b0032a01dcb1552d36c32fc0e72290742d31423a486041e9b"
     },
     "codebase-design": {
       "source": "mattpocock/skills",
@@ -29,31 +29,31 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-issue/SKILL.md",
-      "computedHash": "5c1750b797238a248f37a73d226b63fb9a085c88436cd2df59bfe1d6bf40b1f5"
+      "computedHash": "bbb44cdc9b3218d96a4a8deb871e5ec8ff2717267470fc023e1e91b0d76c5817"
     },
     "create-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-pr/SKILL.md",
-      "computedHash": "b73ec9d16d9153ba396e7d67a58bb848198d96fe1a3c4ae571c06fda1352a249"
+      "computedHash": "3bbec9a2fb302293e48f4f329eac19d012d1fcb3372d5f05604c4b817247a646"
     },
     "create-release": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-release/SKILL.md",
-      "computedHash": "7bb6b6fd1f1ca75be3abe9182e139634363a68f7b25452e9a4cdbd510ced35d8"
+      "computedHash": "d4bab8df415e77ea1901048a9bcc38facb1c83eaa9ce9ed68dedb22a04a3498c"
     },
     "deliver": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "deliver/SKILL.md",
-      "computedHash": "8ba8b396138bf41bcfad4a5478f4484b87d40c398a5f35577200bcee1a59754e"
+      "computedHash": "21b22c83bb399280e6c002b9db088b325e762d18fc6d2711265590e11c0fed8f"
     },
     "delivery-wait": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "delivery-wait/SKILL.md",
-      "computedHash": "17f863034b9035483d35361a7f4525c490479e00f277809d99e6cb85cd119780"
+      "computedHash": "34a90b823c3f5aee856b51b82c5ed36513462abd99b7e22da38d5daf4886dd03"
     },
     "documentation-writer": {
       "source": "github/awesome-copilot",
@@ -77,7 +77,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "git-workflow/SKILL.md",
-      "computedHash": "a367ee0488c7428084c9af51013472f9ab919ba5e6f0da5c91b59cf10074b84a"
+      "computedHash": "9baa403bb7b98cf2d72c20275409a2aee5d537a61d80d0bbb7d1918d171430c7"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
@@ -101,7 +101,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement/SKILL.md",
-      "computedHash": "1813855279f54184e7c8b2be41ed8d5d8ae9d12aebd98df3f42928fdf4bc9acb"
+      "computedHash": "4f67dd7be5a7f9a26f732d6fb2d46407dce9ec4eaa301de6f981b8d482a73f0a"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
@@ -113,7 +113,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "native-nostalgia-stack/SKILL.md",
-      "computedHash": "54e1c167e2073e52ef6594ad34318988a976bdabba5b679e252a71aded9c8dff"
+      "computedHash": "11b9f0228c49653652f7254a8f6ff5aaf4f57971ed9a9cb499a48127eedc93ee"
     },
     "project-structure": {
       "source": "frostney/known-good-route",
@@ -131,31 +131,31 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "roadmap-review/SKILL.md",
-      "computedHash": "acc7d410e4fd899442583e8c86ab642ecf60169ae2afb6c8566ff40c76b6143b"
+      "computedHash": "c42419c1d03aa1f68b847eee15c37ddd2ccde175da591fafb1ccfeacc8f2271e"
     },
     "run-retro": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "run-retro/SKILL.md",
-      "computedHash": "3010c379c972a2724c7a95b0cdfefcdd45cf13ae2f9945b63ae7087bd9d63107"
+      "computedHash": "d3cc8b9075003c3f59e7f8d8207e257072c3139c35df18be225241c9cd954f39"
     },
     "software-engineering-excellence": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "software-engineering-excellence/SKILL.md",
-      "computedHash": "82d6dbde5ca1bc08c8306f55347b197c7914624ef209e38bf148cb7cde605337"
+      "computedHash": "8767d02008bb59eab411d045802aea9034d5e4bc2e007236ce1d7789c10e0793"
     },
     "test-against-spec": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "test-against-spec/SKILL.md",
-      "computedHash": "2b34bfbd3f343225254b560c26266a7636ba58355219565415cbf86e9e8b73d0"
+      "computedHash": "21606e16b066ad583a22b7d2a1100ffd7bac0a74d5cfe2ebff1d8045373dc43e"
     },
     "update-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "update-pr/SKILL.md",
-      "computedHash": "21a9fad4f15a451c8277b7005870f61bce78966a4c4eb66a22e4522e7aaa7317"
+      "computedHash": "4c20408ef596ebfd2f6e0766138a92afbee2b6fbf2e9d401823d523819c27e10"
     }
   }
 }
