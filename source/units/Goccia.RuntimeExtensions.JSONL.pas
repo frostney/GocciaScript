@@ -24,7 +24,7 @@ type
   protected
     function MatchesModulePath(const AResolvedPath: string): Boolean; override;
     function ParseModuleRecords(const AContent: string;
-      const AResolvedPath: string): TGocciaArrayValue; override;
+      const ASpecifier, AResolvedPath: string): TGocciaArrayValue; override;
   public
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
@@ -79,7 +79,7 @@ begin
 end;
 
 function TGocciaJSONLRuntimeExtension.ParseModuleRecords(
-  const AContent: string; const AResolvedPath: string): TGocciaArrayValue;
+  const AContent, ASpecifier, AResolvedPath: string): TGocciaArrayValue;
 var
   JSONLParser: TGocciaJSONLParser;
 begin
@@ -91,7 +91,7 @@ begin
       on E: EGocciaJSONLParseError do
         raise TGocciaRuntimeError.Create(
           Format('Failed to parse JSONL module "%s": %s',
-            [AResolvedPath, E.Message]),
+            [ASpecifier, E.Message]),
           0, 0, AResolvedPath, nil);
     end;
   finally

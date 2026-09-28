@@ -3358,8 +3358,7 @@
 
       OP_GET_IMPORT_BINDING:
         begin
-          GlobalName := Template.GetConstantUnchecked(
-            DecodeBx(Instruction)).StringValue;
+          GlobalName := Template.GetConstantUnchecked(B).StringValue;
           if (FRegisters[A].Kind = grkObject) and
              (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) then
           begin
@@ -3369,9 +3368,8 @@
             begin
               if Assigned(TGocciaModuleNamespaceObject(
                  FRegisters[A].ObjectValue).Module) then
-                ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
-                  [TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue)
-                     .Module.Path, GlobalName]))
+                ThrowMissingImportExport(
+                  Template.GetConstantUnchecked(C).StringValue, GlobalName)
               else
                 ThrowSyntaxError(Format('Module has no export named "%s"',
                   [GlobalName]));

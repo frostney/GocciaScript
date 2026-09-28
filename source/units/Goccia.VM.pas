@@ -702,6 +702,20 @@ begin
       (ATemplate.Name <> '') and (ABinding.Name = ATemplate.Name)));
 end;
 
+{ ES2026 §16.2.1.7.3.1 InitializeEnvironment: a named import that resolves to
+  nothing is a SyntaxError. The message names the specifier the declaration
+  wrote, as the interpreter does, never the module's expanded host path
+  (ADR 0108). Kept out of line so the dispatch loop carries no string locals
+  for it. }
+procedure ThrowMissingImportExport(const AModuleRequest, AExportName: string);
+var
+  AttributeType, Specifier: string;
+begin
+  DecodeImportSpecifierAttribute(AModuleRequest, Specifier, AttributeType);
+  ThrowSyntaxError(Format('Module "%s" has no export named "%s"',
+    [Specifier, AExportName]));
+end;
+
 procedure EnsureVMObjectPrototypeInitialized; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if TGocciaObjectValue.SharedObjectPrototype = nil then

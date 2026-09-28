@@ -33,7 +33,9 @@ type
     procedure Attach(const ARuntime: TGocciaRuntimeCore); virtual;
     procedure Detach; virtual;
     procedure AddModuleExtensions(const AExtensions: TStrings); virtual;
-    function TryLoadModule(const AResolvedPath: string;
+    { A load failure names ASpecifier, the request as the import wrote it,
+      never AResolvedPath (ADR 0108). }
+    function TryLoadModule(const AResolvedPath, ASpecifier: string;
       out AModule: TGocciaModule): Boolean; virtual;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; virtual;
@@ -55,7 +57,7 @@ type
     procedure AddResolverExtension(var AExtensions: TModuleResolverExtensionArray;
       var ACount: Integer; const AExtension: string);
     procedure RefreshModuleExtensions;
-    function LoadRuntimeModule(const AResolvedPath: string;
+    function LoadRuntimeModule(const AResolvedPath, ASpecifier: string;
       out AModule: TGocciaModule): Boolean;
     function InjectGlobals(const AFormat: string;
       const AContent: string): Boolean;
@@ -222,8 +224,8 @@ procedure TGocciaRuntimeExtension.AddModuleExtensions(
 begin
 end;
 
-function TGocciaRuntimeExtension.TryLoadModule(const AResolvedPath: string;
-  out AModule: TGocciaModule): Boolean;
+function TGocciaRuntimeExtension.TryLoadModule(const AResolvedPath,
+  ASpecifier: string; out AModule: TGocciaModule): Boolean;
 begin
   AModule := nil;
   Result := False;
@@ -434,18 +436,18 @@ begin
   Result := AThisValue;
 end;
 
-function TGocciaRuntimeCore.LoadRuntimeModule(const AResolvedPath: string;
-  out AModule: TGocciaModule): Boolean;
+function TGocciaRuntimeCore.LoadRuntimeModule(const AResolvedPath,
+  ASpecifier: string; out AModule: TGocciaModule): Boolean;
 var
   I: Integer;
 begin
   AModule := nil;
   for I := 0 to FExtensions.Count - 1 do
-    if FExtensions[I].TryLoadModule(AResolvedPath, AModule) then
+    if FExtensions[I].TryLoadModule(AResolvedPath, ASpecifier, AModule) then
       Exit(True);
 
   if Assigned(FPrevRuntimeModuleLoader) then
-    Exit(FPrevRuntimeModuleLoader(AResolvedPath, AModule));
+    Exit(FPrevRuntimeModuleLoader(AResolvedPath, ASpecifier, AModule));
 
   Result := False;
 end;

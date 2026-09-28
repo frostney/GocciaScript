@@ -23,7 +23,7 @@ type
     procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
     procedure Detach; override;
     procedure AddModuleExtensions(const AExtensions: TStrings); override;
-    function TryLoadModule(const AResolvedPath: string;
+    function TryLoadModule(const AResolvedPath, ASpecifier: string;
       out AModule: TGocciaModule): Boolean; override;
     function TryInjectGlobals(const AFormat: string;
       const AContent: string): Boolean; override;
@@ -80,7 +80,8 @@ begin
 end;
 
 function TGocciaJSON5RuntimeExtension.TryLoadModule(
-  const AResolvedPath: string; out AModule: TGocciaModule): Boolean;
+  const AResolvedPath, ASpecifier: string;
+  out AModule: TGocciaModule): Boolean;
 var
   Content: TGocciaModuleContent;
   JSON5Parser: TGocciaJSON5Parser;
@@ -106,7 +107,7 @@ begin
         on E: EGocciaJSON5ParseError do
           raise TGocciaRuntimeError.Create(
             Format('Failed to parse JSON5 module "%s": %s',
-              [AResolvedPath, E.Message]),
+              [ASpecifier, E.Message]),
             0, 0, AResolvedPath, nil);
       end;
     finally
