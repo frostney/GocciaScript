@@ -238,7 +238,7 @@ The `GocciaBenchmarkRunner` program:
 
 | Exit Code | Meaning |
 |-----------|---------|
-| `0` | All benchmarks completed successfully with non-zero measurements |
+| `0` | All benchmarks completed successfully with non-zero measurements (under `--profile-deterministic`, throughput fields are placeholders and are not checked) |
 | `1` | One or more benchmarks failed — an error occurred (access violation, exception), a benchmark produced zero ops/sec or zero mean ms (outside `--profile-deterministic`), or an input file registered no benchmarks. Also an unknown option or a missing path |
 | `2` | A removed pre-0.14 option, such as `--allow-node-modules` |
 
