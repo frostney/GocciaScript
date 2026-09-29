@@ -15,6 +15,7 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 - The relevant focused checks pass before broader checks.
 - **JavaScript suite gate** — Always run `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode`. `-P` accepts the test configs' permission requests for that run only; AI assistants always use it and never run `--trust`. Humans who prefer may instead trust the suite once per checkout or worktree with `./build/GocciaTestRunner --trust tests/` (again after a permission block changes) and drop `-P`.
 - **Format gate** — Run `./format.pas --check` before push or PR.
+- **Platform gate** — A platform-sensitive change has a green `ci.yml` run dispatched for its current head (see [Workflow — Stacked pull requests](docs/contributing/workflow.md#stacked-pull-requests)); PR CI covers Linux x64 only.
 - If a clean build is needed to rule out stale FPC artifacts, the relevant `./build.pas --clean <target>` check has been run before diagnosing source failures.
 
 ## Documentation and Decisions
@@ -26,6 +27,6 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 ## Handoff
 
 - The diff has been self-reviewed against the issue or mini-spec criterion by criterion.
-- The changeset has been code reviewed by a separate review pass from the implementation work, using `/review` when available or a documented manual diff review when it is not.
+- The changeset has been code reviewed by a separate review pass from the implementation work, using `/code-review` when available or a documented manual diff review when it is not.
 - Any reviewer-facing context is captured in the PR body: summary, constraints, tests run, docs updated, ADR links, and any intentionally deferred work.
 - There are no unrelated changes mixed into the handoff unless the user explicitly requested them.

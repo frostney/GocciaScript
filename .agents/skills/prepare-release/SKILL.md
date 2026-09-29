@@ -83,6 +83,7 @@ Also refresh `README.md` and `VISION.md` so claims and feature lists match shipp
 
 ### 6. Changelog categorization preview
 - Dry-run `git cliff --unreleased` and scan for miscategorized commits or `📖 Other` bloat. Fix `cliff.toml` **now**, before `/create-release` renders the real changelog.
+- Cross-check every flag or config key the preview names against the removed-option lists in `source/app/Goccia.CLI.Options.pas` (`AddRemovedOptions` and each runner's `FRemoved`). An entry that advertises an option introduced since the last tag and renamed or removed before this release gets a `cliff.toml` `postprocessors` annotation naming what actually ships (see the 0.14.0 entries for #1190, #1248 and #1257). An option removed after it shipped belongs in `docs/permissions.md` § Removed flags and keys, not in an annotation.
 
 ### 7. Housekeeping
 - `skills-lock.json` is current and any installed good-known-route skill updates are committed. (This skill is **repo-native** and is **not** tracked in `skills-lock.json`.)

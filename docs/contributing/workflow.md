@@ -109,11 +109,19 @@ are worth knowing before starting a stack:
   sweep.
 
 The PR workflow itself runs for every pull request whatever its base; it
-previously filtered on `main`, which skipped stacked layers entirely. Full CI
-(`ci.yml`) still runs only on `main`, tags, and manual dispatch, so use
-`gh workflow run ci.yml --ref <branch>` when a stacked branch needs the full
-matrix, and check the result against the branch's current head SHA rather than
-the newest run — a dispatched run belongs to the commit it started from.
+previously filtered on `main`, which skipped stacked layers entirely. It builds
+and tests on ubuntu-latest x64 only. Full CI (`ci.yml`, six targets including
+Windows, macOS and AArch64) runs only on `main`, tags, and manual dispatch.
+Before marking a pull request ready, run `gh workflow run ci.yml --ref <branch>`
+for every stacked branch and for any platform-sensitive change: file-system
+paths, processes, sockets or TLS, FFI, time zones, `Int64`/`Double` conversion
+or byte layout (see
+[Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
+or any `{$IFDEF}` platform branch. A dispatched run's checks do not appear on
+the pull request, so wait on the run itself for the branch's current head SHA
+(`delivery-wait`'s `wait workflow-terminal --run-id <id> --head <sha>`), not on
+the pull request's checks or the newest run. A dispatched run belongs to the
+commit it started from.
 
 ## Verify changes
 
