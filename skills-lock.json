@@ -109,6 +109,12 @@
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
       "computedHash": "2449db6ab1ded9581f69fcc56c1f64818112d05e271fd4c5da23c6523f9d3d9d"
     },
+    "milestone-rush": {
+      "source": "frostney/known-good-route",
+      "sourceType": "github",
+      "skillPath": "milestone-rush/SKILL.md",
+      "computedHash": "9aa777f138f0ddda52cb390c0f6a0cc34007ec2b2bf050da3dec84c3dd7f1ef7"
+    },
     "native-nostalgia-stack": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
