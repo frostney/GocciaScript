@@ -48,7 +48,7 @@ Use `spec.search` when you do not know the clause id, `clause.get` when you do, 
 ./format.pas --check # before push / PR
 ```
 
-Assistants run the test runner with `-P`, which accepts the test configs' permission requests for that run only. Do not run `--trust`: it writes the user's per-user trust store, which is the user's decision (see [Permissions — Config trust](docs/permissions.md#config-trust)).
+Assistants pass `-P` and never run `--trust`; [Testing requirements](CONTRIBUTING.md#3-testing-requirements) explains why.
 
 ## Quick reference
 

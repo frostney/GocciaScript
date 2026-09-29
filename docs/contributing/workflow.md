@@ -7,7 +7,7 @@
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
 - **Change workflow** — Git and pull request mechanics follow known-good-route `git-workflow`; a GocciaScript change adds spec verification, tests, and docs or ADR updates
 - **Pull request titles** — Conventional Commits, because `cliff.toml` builds the changelog from the squash-merge subject
-- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode`. `-P` accepts the test configs' permission requests for that run only; humans who prefer may trust the suite once with `--trust tests/` instead, but assistants never run `--trust`
+- **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode` ([Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`)
 
 ## Local setup
 
@@ -98,9 +98,8 @@ stacked branch also needs a [full CI](#full-ci) run before it is marked ready.
 ./build/GocciaTestRunner -P tests --mode=bytecode
 ```
 
-`-P` accepts the test configs' permission requests for the run without writing
-the trust store. [Testing requirements](../../CONTRIBUTING.md#3-testing-requirements)
-describes the one-time `--trust` alternative, which is for humans only.
+[Testing requirements](../../CONTRIBUTING.md#3-testing-requirements) explains `-P`
+and the one-time `--trust` alternative.
 
 For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
 

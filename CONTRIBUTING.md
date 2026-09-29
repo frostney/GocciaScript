@@ -79,9 +79,12 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
   ```
 
   `-P` accepts the test configs' permission requests for that run only and
-  never touches the trust store; AI assistants always use it. If you prefer
-  to trust the suite once, run `./build/GocciaTestRunner --trust tests/` per
-  checkout or worktree (again after a permission block changes) and drop `-P`.
+  never touches the trust store. AI assistants always use it and never run
+  `--trust`, which writes the user's per-user trust store and is the user's
+  decision. If you prefer to trust the suite once, run
+  `./build/GocciaTestRunner --trust tests/` per checkout or worktree (again
+  after a permission block changes) and drop `-P`. See
+  [Permissions: Config trust](docs/permissions.md#config-trust).
 
 See [docs/testing.md](docs/testing.md) for the full testing guide including directory structure, naming conventions, and platform-specific rules.
 
