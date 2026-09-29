@@ -5,13 +5,9 @@
 This file is GocciaScript's repository policy for multi-agent work (Milestone
 Rush and any coordinator that runs parallel lanes). It is subordinate to
 [`AGENTS.md`](./AGENTS.md), [`DEFINITION_OF_DONE.md`](./DEFINITION_OF_DONE.md),
-and the safety gates of the invoked workflow. It names capability classes,
-never products, models, or harnesses.
-
-A consumer classifies this policy before it plans or spawns work: **valid**
-(apply it), **invalid** or **contradictory** (block spawning and name the
-rule), or **unsupported** (block and report the missing capability). Only a
-missing file permits a generic fallback.
+and the safety gates of the invoked workflow. The Milestone Rush
+[policy gate](.agents/skills/milestone-rush/references/orchestration.md#policy-gate) defines how a
+consumer validates this file and what it does when the file is absent.
 
 ## Capability classes
 
@@ -29,17 +25,15 @@ missing file permits a generic fallback.
 - Usage limits are shared across every workstream on the same account.
   When the maintainer reports other concurrent workstreams, lower the cap
   before dispatching.
-- Lanes that change the same files are sequenced, or delivered as a native
-  stack, rather than run in parallel.
+- Lanes that would conflict are sequenced through the Milestone Rush
+  [dependency and conflict graph](.agents/skills/milestone-rush/SKILL.md#reconcile-and-plan).
 
 ## Durable checkpoints
 
-- Every lane works in its own worktree and pushes its branch at each durable
-  transition (settled decision, completed step, new exact head), so a killed
-  lane loses at most its current step.
-- On a usage-limit or rate-limit failure, do not retry before the
-  host-reported reset. Resume each lane from its checkpoint and report the
-  lost window.
+- Every lane pushes its branch at each durable transition (settled decision,
+  completed step, new exact head), so a killed lane loses at most its current
+  step. After a usage-limit reset, resume each lane from that checkpoint and
+  report the lost window.
 
 ## Context limits
 
@@ -53,24 +47,21 @@ missing file permits a generic fallback.
 
 ## Context packets
 
-Lanes start with no inherited conversation. A packet carries the applicable
-decision IDs and text, the issue and exact head, the owned scope,
-dependencies, acceptance criteria, and the required gates.
+Lane packets follow the Milestone Rush
+[worker packet](.agents/skills/milestone-rush/references/orchestration.md#stable-decisions-and-worker-packets)
+contract.
 
 ## Usage ledger
 
-Record per-lane and per-class usage (inferences; input, cached, output, and
-reasoning tokens; tool calls; wall time) from the host's own usage records,
-such as completion metadata or transcripts. Mark a field unavailable only
-when the host exposes no record of it. When records cannot be attributed to
-a lane or class, mark that breakdown unavailable rather than apportioning
-totals by estimate; a per-lane threshold then uses the lane's own most
-recent inference size, which every host reports.
+Record usage through the Milestone Rush
+[event ledger](.agents/skills/milestone-rush/references/event-ledger.md). When usage cannot be
+attributed to a lane, the per-lane context threshold above uses the lane's own
+most recent inference size, which every host reports.
 
 ## Waiting
 
-External state (CI, merges, releases) is awaited with non-model watchers.
-A model is invoked only on changed, terminal, or exceptional state.
+External state is awaited through the Milestone Rush
+[event-driven waits](.agents/skills/milestone-rush/references/orchestration.md#event-driven-waits).
 
 A lane never waits more than five minutes inside its own context. Before a
 longer wait (CI, a queued build or test run, a release workflow, or a

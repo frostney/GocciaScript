@@ -13,19 +13,15 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 
 ## Expectations for assistants
 
-- **Read [CONTRIBUTING.md](CONTRIBUTING.md)** before substantive edits—especially [Critical rules](CONTRIBUTING.md#critical-rules) and [Code style](docs/contributing/code-style.md).
-- **Run verification yourself** when the environment allows (tests, format check); do not only tell the human what to run unless execution is impossible.
-- **Match the project's workflow**: branch from `main`, focused diffs, tests and docs updated per CONTRIBUTING.
 - **Follow the [known-good-route operating loop](https://github.com/frostney/known-good-route#operating-loop)** for repository work. A defect in its skills or helpers is fixed upstream in known-good-route, not worked around here.
-- **Treat project-local skills as external playbooks**: files under `.agents/skills/` are not normal repo documentation. Do not edit them unless the user explicitly asks to change that skill. Put repo-specific assistant expectations in this file, or create/update a separate skill only when explicitly requested.
+- **Vendored vs repo-native skills**: skills listed in `skills-lock.json` are vendored by the skills CLI. Never hand-edit them; fix them upstream (known-good-route for its skills). Edit a repo-native skill (`prepare-release`, `gocciascript-issue-validation`, `optimize-runtime`, `profile-report-review`) only when the user asks to change that skill.
 - **Infer architecture boundaries during planning**: when a change touches website routes, API handlers, generated reports, external services, credentials, artifacts, caches, CI outputs, or deployment/build steps, identify where the work belongs (build time, request time, client time, CI/scheduled time) and compare against existing project patterns before implementing. Do not rely on the user or a skill checklist to spell this out.
 - **Search the real source layout**: when prompts, automations, or audits search this repo, target `source/units`, `source/shared`, `source/app`, `tests`, `scripts`, and `website/src` explicitly. Do not assume a generic root `src/` tree; `source/generated` is generated data and should only be inspected or regenerated when the task specifically requires it.
-- **Do source deep-dives before policy claims**: when a question asks how a runtime, standard, engine, or dependency behaves, treat README text, docs, comments, and prior notes as leads—not proof. Check the normative source first when there is one (for ECMAScript, ECMA-262/ECMA-402), then inspect the actual implementation paths in this repo and in any comparison engines or libraries named in the question. Record the specific clauses, files, gates/flags, and code paths that support the conclusion before recommending policy, scope, or architecture. If the answer depends on whether behavior is shim-level, parser-level, runtime-level, or object-model-level, classify each surface by the mechanism it actually needs.
+- **Do source deep-dives before policy claims**: follow the [investigation discipline](.agents/skills/software-engineering-excellence/references/investigation.md). For ECMAScript the normative source is ECMA-262/ECMA-402 (see [TC39 spec lookup](#tc39-spec-lookup)); classify each surface as shim-, parser-, runtime-, or object-model-level by the mechanism it needs.
 - **Clean first for stale FPC failures**: after a merge, branch switch, PR sync,
   generated resource change, or unexplained compiler/resource error, retry with
   `./build.pas --clean <target>` (or `./build.pas --clean`) before diagnosing the
   reported source line. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
-- **Do not paste large chunks of CONTRIBUTING into this file** when CONTRIBUTING changes—edit CONTRIBUTING instead, and keep AGENTS short.
 
 ## TC39 spec lookup
 
@@ -64,7 +60,6 @@ runtime command lists here.
 
 ## Where to go next
 
-- **Contribution requirements:** [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Engine shape:** [docs/architecture.md](docs/architecture.md), [docs/interpreter.md](docs/interpreter.md), [docs/bytecode-vm.md](docs/bytecode-vm.md), [docs/core-patterns.md](docs/core-patterns.md)
 - **Optional extended agent skills:** [.agents/skills/](.agents/skills/) (installable playbooks; not a substitute for CONTRIBUTING)
 - **Runtime optimization waves:** [.agents/skills/optimize-runtime/SKILL.md](.agents/skills/optimize-runtime/SKILL.md) — Use when closing the bytecode-vs-QuickJS gap or running a measured runtime optimization wave. Benchmark-gated; keep only measured wins

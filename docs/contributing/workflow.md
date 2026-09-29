@@ -1,11 +1,12 @@
 # Workflow
 
-*Branch workflow, local setup, and verification for every contributor.*
+*Local setup, GocciaScript change steps, and verification for every contributor.*
 
 ## Executive Summary
 
 - **Local setup** — Install Lefthook for pre-commit formatting, then `lefthook install`
-- **Branch workflow** — Branch from `main`, implement with [implementation principles](../../CONTRIBUTING.md#implementation-principles), [critical rules](../../CONTRIBUTING.md#critical-rules), and [code style](code-style.md), add tests, update docs, commit
+- **Change workflow** — Git and pull request mechanics follow known-good-route `git-workflow`; a GocciaScript change adds spec verification, tests, and docs or ADR updates
+- **Pull request titles** — Conventional Commits, because `cliff.toml` builds the changelog from the squash-merge subject
 - **Verification** — Run the all-executor JavaScript suite before every push: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode`. `-P` accepts the test configs' permission requests for that run only; humans who prefer may trust the suite once with `--trust tests/` instead, but assistants never run `--trust`
 
 ## Local setup
@@ -47,31 +48,18 @@ Formatting, editor integration, and CI behavior are covered in [Tooling](tooling
 
 ## Feature workflow
 
-Every change should follow this sequence:
+Branching, commits, pushes, and pull requests follow known-good-route
+[`git-workflow`](https://github.com/frostney/known-good-route/tree/main/git-workflow). A GocciaScript change also needs:
 
-1. **Create a branch** from `main` with a descriptive name (for example `feature/string-prototype-repeat`, `fix/nan-comparison`).
-2. **Implement** on that branch, following [Implementation principles](../../CONTRIBUTING.md#implementation-principles), [Critical rules](../../CONTRIBUTING.md#critical-rules), [Code style](code-style.md), and the relevant architecture docs for the area you touch.
-3. **Verify and annotate spec references** — For ECMAScript behavior, verify semantics against the current official ECMA-262 text, then add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
-4. **Add or update tests** — JavaScript tests under `tests/` are primary; Pascal units under `source/units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md) and [Critical rules](../../CONTRIBUTING.md#critical-rules).
-5. **Update documentation** that your change affects (`README.md`, `docs/*`, and CONTRIBUTING.md when workflow, rules, or style change). Edit **AGENTS.md** only when **agent-specific** guidance changes—not to duplicate CONTRIBUTING. If the change introduces a new **architectural or design decision** (not just a feature addition), create an ADR under [`docs/adr/`](../adr/).
-6. **Commit** with a clear message. Do not commit directly to `main`.
-
-```bash
-git add .
-git commit -m "Short imperative description of the change"
-```
+1. **Implementation** that follows [Implementation principles](../../CONTRIBUTING.md#implementation-principles), [Critical rules](../../CONTRIBUTING.md#critical-rules), [Code style](code-style.md), and the architecture docs for the area you touch.
+2. **Spec verification and annotation.** For ECMAScript behavior, verify semantics against the current official ECMA-262 text, then add `// ESYYYY` spec comments as described in [ECMAScript spec annotations](code-style.md#ecmascript-spec-annotations).
+3. **Tests.** JavaScript tests under `tests/` are primary. Add Pascal units under `source/units/*.Test.pas` when you touch AST, evaluator, or value types. See [testing.md](../testing.md).
+4. **Documentation** per [CONTRIBUTING: Documentation](../../CONTRIBUTING.md#documentation). Record a new architectural or design decision as an ADR under [`docs/adr/`](../adr/).
 
 ## Issues and pull requests
 
-- **Issues:** Use `.github/ISSUE_TEMPLATE/default.md` (Summary, Why, current vs expected behavior, scope).
-- **Pull requests:** Use `.github/pull_request_template.md` (Summary with constraints and links, testing checklist).
-- **Pull request titles are Conventional Commits.** Pull requests are
-  squash-merged, so the title — not the branch's commits — becomes the commit
-  subject on `main`, and `cliff.toml` parses that subject to build the changelog.
-  A title that does not match `type(scope): summary` still merges and is then
-  silently absent from the release notes. Pick the type from the change as a
-  whole: `feat` when the net effect is new capability, even if most of the
-  commits under it are fixes.
+Pull request titles are Conventional Commits ([`git-workflow` § Merge](https://github.com/frostney/known-good-route/blob/main/git-workflow/SKILL.md#merge)):
+`cliff.toml` builds the changelog from the squash-merge subject.
 
 ### Code review scope
 
@@ -92,24 +80,14 @@ paused, and rate-limited notices.
 
 ### Stacked pull requests
 
-A stacked pull request targets the layer below it rather than `main`, and
-automation treats that base differently from a normal branch. Two consequences
-are worth knowing before starting a stack:
+A stacked pull request targets the layer below it rather than `main`, so
+CodeRabbit, which reviews only pull requests based on the default branch, skips
+it. Request each layer's review through `/address-feedback`, whose CodeRabbit
+adapter owns the trigger and the exact-head completion check; its
+[stack reference](https://github.com/frostney/known-good-route/blob/main/address-feedback/references/stack.md)
+owns when a review round ends.
 
-- **Automatic review does not fire.** CodeRabbit reviews only pull requests
-  based on the default branch, so every layer needs a review trigger, requested
-  through `/address-feedback`. A layer that is never triggered shows no review
-  at all, and an instant acknowledgement of an already-reviewed commit is not a
-  review of the current head.
-- **A review round ends when its own fix layer reviews clean**, not when the
-  findings from the layer below are dispositioned. A round that fixes findings
-  creates a new top layer, and that layer needs its own review like any other.
-  Confirm every layer has a review before calling a stack finished — the
-  terminating one is the easiest to miss, because nothing after it prompts a
-  sweep.
-
-The PR workflow itself runs for every pull request whatever its base; it
-previously filtered on `main`, which skipped stacked layers entirely. Every
+The PR workflow itself runs for every pull request whatever its base. Every
 stacked branch also needs a [full CI](#full-ci) run before it is marked ready.
 
 ## Verify changes
