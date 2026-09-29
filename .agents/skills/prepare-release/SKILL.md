@@ -22,7 +22,7 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 2. Present **one consolidated readiness report** (see below).
 3. Stop for the user to approve or veto **per category** (e.g. "skip the website this cycle").
 4. Apply approved fixes (each category's diff visible), then **re-run the verify gate**.
-5. Open a **draft** prep PR via `/create-pr` — the final review gate.
+5. Open the prep PR via `/create-pr` — the final review gate.
 
 ### Hard blockers — stop and report
 - The `DEFINITION_OF_DONE` gate is red (build, `tests`, `tests --mode=bytecode`, or `format --check` fails).
@@ -34,7 +34,7 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 ## Steps
 
 ### 1. Preflight
-- `git fetch origin`; confirm the branch is a fresh branch off the default branch and the tree is clean. Stop if not.
+- Apply `git-workflow`'s clean-worktree and fresh-base preflight; stop if it fails.
 - After a merge, branch switch, or generated-resource change, build clean to rule out stale FPC artifacts before trusting any failure: `./build.pas --clean <target>` (see `docs/contributing/tooling.md` § Stale FPC Build Artifacts).
 
 ### 2. Verify green — the DEFINITION_OF_DONE gate (reused, not restated)
@@ -83,13 +83,14 @@ Also refresh `README.md` and `VISION.md` so claims and feature lists match shipp
 
 ### 6. Changelog categorization preview
 - Dry-run `git cliff --unreleased` and scan for miscategorized commits or `📖 Other` bloat. Fix `cliff.toml` **now**, before `/create-release` renders the real changelog.
+- Cross-check every flag or config key the preview names against the removed-option lists in `source/app/Goccia.CLI.Options.pas` (`AddRemovedOptions` and each runner's `FRemoved`). An entry that advertises an option introduced since the last tag and renamed or removed before this release gets a `cliff.toml` `postprocessors` annotation naming what actually ships (see the 0.14.0 entries for #1190, #1248 and #1257). An option removed after it shipped belongs in `docs/permissions.md` § Removed flags and keys, not in an annotation.
 
 ### 7. Housekeeping
 - `skills-lock.json` is current and any installed good-known-route skill updates are committed. (This skill is **repo-native** and is **not** tracked in `skills-lock.json`.)
-- No unrelated changes are mixed in (per `DEFINITION_OF_DONE`).
+- No unrelated changes are mixed in (per `/create-pr`).
 
 ### 8. Hand off
-- Open the prep PR via `/create-pr` as a **draft**, using a **content-reflecting conventional prefix** — default `docs:` for a truth-sync-heavy run; **never `chore(release):`**, which is reserved for `/create-release`'s release commit and is skipped by `cliff.toml`. Split into focused PRs if the categories diverge (e.g. docs vs tooling).
+- Open the prep PR via `/create-pr`, using a **content-reflecting conventional prefix** — default `docs:` for a truth-sync-heavy run; **never `chore(release):`**, which is reserved for `/create-release`'s release commit and is skipped by `cliff.toml`. Split into focused PRs if the categories diverge (e.g. docs vs tooling).
 - File any **deferred follow-ups** the run surfaced — offer to open them via `/create-issue` (do **not** auto-run it mid-flow; do **not** silently drop them). Canonical cases: the committed `.ts/.tsx` conformance-number **sentinel** that hardens Layer 1 so the "80%" class can't silently recur, and any genuine conformance regression.
 - Once the prep PR is merged, the repo is ready for `/create-release` — a **separate** invocation.
 

@@ -27,9 +27,8 @@ bytecode VM, sharing the same runtime objects and GC.
    `docs/core-patterns.md`, `docs/testing.md`, `docs/benchmarks.md`,
    `docs/profiling.md`, `docs/bytecode-vm.md`, and the ADRs governing the
    affected seam (especially 0005, 0014, 0065, 0076, 0081, 0087, 0088, 0091).
-2. Apply `git-workflow`. Require a clean tree, fetch the remote default, and
-   start from its exact tip on a focused branch. Never benchmark an unexplained
-   dirty or mixed-revision tree.
+2. Apply `git-workflow`. Never benchmark an unexplained dirty or
+   mixed-revision tree.
 3. State the target workload, affected execution mode (bytecode unless the
    user names the interpreter), expected invariant, guard workloads, platforms,
    and non-goals before editing.
@@ -157,7 +156,7 @@ to at least one representative AWFY (or JetStream) guard before integration.
 
 1. Begin from the current accepted integration head, not the original baseline.
 2. Merge one accepted lane at a time into a disposable integration branch or
-   worktree. Never rebase or force-push.
+   worktree.
 3. Rebuild and compare the combined candidate against the immediately previous
    accepted head under the same serialized protocol.
 4. Advance the delivery branch only when the combined state remains positive
@@ -196,8 +195,7 @@ Update `.agent/HANDOFF.md` with:
 - cross-architecture results and virtualization caveats;
 - the remaining QuickJS gap and next profiled bottlenecks.
 
-Use `create-pr` when delivery is requested. Keep its PR draft until the
-Definition of Ready is satisfied and exact-head CI is green, then mark it ready.
+Use `create-pr` when delivery is requested.
 
 ## Stop conditions
 

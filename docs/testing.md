@@ -11,7 +11,7 @@
 - **One method per file** — Each test file focuses on a single method; edge cases are co-located with happy-path tests
 - **Cover the contract, not only the example** — Include boundaries, invalid inputs and receivers, coercion/order, state transitions, descriptors, and both execution modes when those perspectives apply
 - **Structure is checked in CI** — Run `bun run scripts/check-test-structure.ts` before submitting test-suite organization changes
-- **Run with**: `./build.pas testrunner`, `./build/GocciaTestRunner tests`, and `./build/GocciaTestRunner tests --mode=bytecode`, after `./build/GocciaTestRunner --trust tests/` once per checkout or worktree (and again after a permission block changes)
+- **Run with**: `./build.pas testrunner`, `./build/GocciaTestRunner -P tests`, and `./build/GocciaTestRunner -P tests --mode=bytecode` (see [Testing requirements](../CONTRIBUTING.md#3-testing-requirements) for `-P` and the one-time `--trust` alternative)
 
 GocciaScript uses three testing layers in priority order:
 
@@ -314,7 +314,7 @@ so the full JavaScript suite can run the folder-configured FFI tests locally.
 
 Both execution modes must pass. Test subtrees that require opt-in parser or runtime behavior declare it with a local `goccia.json` (for example, `tests/language/asi/goccia.json` enables ASI). Subtrees that reach outside their own directory declare the grant in a `permissions` block, with scopes relative to that config file: `tests/built-ins/FFI` (`allow-ffi` for the repo's `fixtures/ffi`), `tests/built-ins/fetch` (`allow-net` for the loopback test server and `example.com`), `tests/built-ins/ShadowRealm`, `tests/language/modules/**`, and `tests/language/source-type` (`allow-read` for shared fixtures and helpers), and `tests/language/modules/node-modules` (also `allow-import` for its committed `node_modules`). Declaring the grant beside the tests that need it, rather than passing `--allow-*` to the whole run, keeps every other folder under the default profile; see [Permissions](permissions.md#config-files). CI runs the full suite in interpreter mode and bytecode mode as separate matrix jobs.
 
-Those permission blocks, and the `unsafe-*` keys some folders set, only take effect once trusted. Run `./build/GocciaTestRunner --trust tests/` once per checkout or worktree, and again after a permission block changes; until then the runner refuses the whole run and lists each untrusted config (see [Config trust](permissions.md#config-trust)). CI and assistants pass `-P` instead, which accepts the requests for that run without recording anything.
+Those permission blocks, and the `unsafe-*` keys some folders set, only take effect once the configs are accepted; without that, the runner refuses the whole run and lists each untrusted config. [Testing requirements](../CONTRIBUTING.md#3-testing-requirements) covers `-P` and `--trust`.
 
 ### Run a Specific Test File
 

@@ -6,7 +6,7 @@
 
 | Guide | What it covers |
 |-------|---------------|
-| [Workflow](docs/contributing/workflow.md) | Local setup, branch workflow, issues & PRs, verification |
+| [Workflow](docs/contributing/workflow.md) | Local setup, GocciaScript change steps, PR-title/changelog rule, review and CI specifics, verification |
 | [Code Style](docs/contributing/code-style.md) | Pascal naming, constants, spec annotations, generics, hash maps, file organization |
 | [Tooling](docs/contributing/tooling.md) | Auto-formatting, Lefthook, editor config, platform-specific pitfalls |
 | [CLI Conventions](docs/contributing/cli-conventions.md) | Stdin and no-argument rules, exit codes, stdout/stderr discipline, help output |
@@ -40,8 +40,7 @@ Before implementation, use [DEFINITION_OF_READY.md](DEFINITION_OF_READY.md) to c
 
 ## Implementation principles
 
-- **Prefer modifying existing code** — Update, simplify, or replace the existing implementation before adding parallel code paths or new helpers.
-- **Simplify and centralize** — Keep the smallest complete implementation. When the same logic is needed more than once, centralize it so behavior, validation, and error formatting do not drift. Centralization must follow the existing architecture, ownership boundaries, and project patterns in [Architecture](docs/architecture.md), [Core Patterns](docs/core-patterns.md), and [Code Style](docs/contributing/code-style.md); do not create a new abstraction that cuts across those boundaries without a clear design reason.
+- **Change the owning layer, not a parallel path** — Follow the known-good-route [engineering bar](https://github.com/frostney/known-good-route/tree/main/software-engineering-excellence). In GocciaScript, the owning layer and any shared helper must fit [Architecture](docs/architecture.md), [Core Patterns](docs/core-patterns.md), and [Code Style](docs/contributing/code-style.md).
 - **Verify against the official spec** — For ECMAScript behavior, check the current official ECMA-262 text before implementing or reviewing semantics. Use spec comments as described in [Code Style](docs/contributing/code-style.md#ecmascript-spec-annotations), but do not treat comments as a substitute for reading the spec. When behavior is ambiguous or bug reports appear to conflict with the spec, compare against other JavaScript engine implementations such as V8, SpiderMonkey, JavaScriptCore, or Node.js before deciding the expected behavior.
 
 ## Critical rules
@@ -80,9 +79,12 @@ JavaScript end-to-end tests are the **primary** way of testing GocciaScript. Whe
   ```
 
   `-P` accepts the test configs' permission requests for that run only and
-  never touches the trust store; AI assistants always use it. If you prefer
-  to trust the suite once, run `./build/GocciaTestRunner --trust tests/` per
-  checkout or worktree (again after a permission block changes) and drop `-P`.
+  never touches the trust store. AI assistants always use it and never run
+  `--trust`, which writes the user's per-user trust store and is the user's
+  decision. If you prefer to trust the suite once, run
+  `./build/GocciaTestRunner --trust tests/` per checkout or worktree (again
+  after a permission block changes) and drop `-P`. See
+  [Permissions: Config trust](docs/permissions.md#config-trust).
 
 See [docs/testing.md](docs/testing.md) for the full testing guide including directory structure, naming conventions, and platform-specific rules.
 
