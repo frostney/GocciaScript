@@ -118,13 +118,22 @@ jobs:
 
           targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
 
+          # Build artifacts are kept for one day, so a successful run can have
+          # lost some of them. A partial set fails here, before the release
+          # step, and the existing nightly stays untouched.
+          missing=()
+          for target in "${targets[@]}"; do
+            if [ ! -d "artifacts/gocciascript-${target}" ]; then
+              missing+=("$target")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing build artifacts for: ${missing[*]}. The existing nightly release was not changed."
+            exit 1
+          fi
+
           for target in "${targets[@]}"; do
             artifact_dir="artifacts/gocciascript-${target}"
-            if [ ! -d "$artifact_dir" ]; then
-              echo "Skipping $target (no artifact found)"
-              continue
-            fi
-
             display="${DISPLAY_NAMES[$target]}"
             archive_name="gocciascript-nightly-${display}"
             pkg_dir="${archive_name}"
@@ -151,6 +160,24 @@ jobs:
           COMMIT="$(git rev-parse --short HEAD)"
           TARGET_SHA="$(git rev-parse HEAD)"
           DATE="$(date -u +'%Y-%m-%d')"
+
+          # Replace the release only when every target's archive exists.
+          missing=()
+          for archive in \
+            gocciascript-nightly-macos-arm64.tar.gz \
+            gocciascript-nightly-macos-x64.tar.gz \
+            gocciascript-nightly-linux-x64.tar.gz \
+            gocciascript-nightly-linux-arm64.tar.gz \
+            gocciascript-nightly-windows-x64.zip \
+            gocciascript-nightly-windows-x86.zip; do
+            if [ ! -s "$archive" ]; then
+              missing+=("$archive")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing nightly archives: ${missing[*]}. The existing nightly release was not changed."
+            exit 1
+          fi
 
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
 
