@@ -162,10 +162,14 @@ jobs:
           DATE="$(date -u +'%Y-%m-%d')"
 
           # Replace the release only when every target's archive exists.
+          # The packaging step zips every target matching *win*, which
+          # includes the darwin targets, so the macOS archives are .zip;
+          # published asset names, Homebrew and the website installers
+          # depend on that.
           missing=()
           for archive in \
-            gocciascript-nightly-macos-arm64.tar.gz \
-            gocciascript-nightly-macos-x64.tar.gz \
+            gocciascript-nightly-macos-arm64.zip \
+            gocciascript-nightly-macos-x64.zip \
             gocciascript-nightly-linux-x64.tar.gz \
             gocciascript-nightly-linux-arm64.tar.gz \
             gocciascript-nightly-windows-x64.zip \
