@@ -87,7 +87,7 @@ Also refresh `README.md` and `VISION.md` so claims and feature lists match shipp
 
 ### 7. Housekeeping
 - `skills-lock.json` is current and any installed good-known-route skill updates are committed. (This skill is **repo-native** and is **not** tracked in `skills-lock.json`.)
-- No unrelated changes are mixed in (per `DEFINITION_OF_DONE`).
+- No unrelated changes are mixed in (per `/create-pr`).
 
 ### 8. Hand off
 - Open the prep PR via `/create-pr` as a **draft**, using a **content-reflecting conventional prefix** — default `docs:` for a truth-sync-heavy run; **never `chore(release):`**, which is reserved for `/create-release`'s release commit and is skipped by `cliff.toml`. Split into focused PRs if the categories diverge (e.g. docs vs tooling).

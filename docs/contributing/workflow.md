@@ -109,17 +109,8 @@ are worth knowing before starting a stack:
   sweep.
 
 The PR workflow itself runs for every pull request whatever its base; it
-previously filtered on `main`, which skipped stacked layers entirely. It builds
-and tests on ubuntu-latest x64 only. Full CI (`ci.yml`, six targets including
-Windows, macOS and AArch64) runs only on `main`, tags, and manual dispatch.
-Before marking a pull request ready, run `gh workflow run ci.yml --ref <branch>`
-for every stacked branch and for any platform-sensitive change: file-system
-paths, processes, sockets or TLS, FFI, time zones, `Int64`/`Double` conversion
-or byte layout (see
-[Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
-or any `{$IFDEF}` platform branch. A dispatched run's checks do not appear on
-the pull request, and it belongs to the commit it started from, so check the
-run for the branch's current head SHA rather than the newest run.
+previously filtered on `main`, which skipped stacked layers entirely. Every
+stacked branch also needs a [full CI](#full-ci) run before it is marked ready.
 
 ## Verify changes
 
@@ -134,3 +125,16 @@ the trust store. [Testing requirements](../../CONTRIBUTING.md#3-testing-requirem
 describes the one-time `--trust` alternative, which is for humans only.
 
 For interpreter/VM internals, also run native Pascal tests as described under [Testing](../testing.md).
+
+### Full CI
+
+The PR workflow builds and tests on ubuntu-latest x64 only. Full CI (`ci.yml`,
+six targets including Windows, macOS and AArch64) runs only on `main`, tags,
+and manual dispatch. Before marking a pull request ready, run
+`gh workflow run ci.yml --ref <branch>` for every stacked branch and for any
+platform-sensitive change: file-system paths, processes, sockets or TLS, FFI,
+time zones, `Int64`/`Double` conversion or byte layout (see
+[Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
+or any `{$IFDEF}` platform branch. A dispatched run's checks do not appear on
+the pull request, and it belongs to the commit it started from, so check the
+run for the branch's current head SHA rather than the newest run.
