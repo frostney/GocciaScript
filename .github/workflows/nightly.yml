@@ -1,0 +1,167 @@
+name: Nightly
+
+# Publishes the rolling `nightly` prerelease from the build artifacts of a CI
+# run that succeeded for a push to main, at most once per UTC day.
+#
+# It lives outside ci.yml because a newer main push cancels the superseded CI
+# run as a whole. Inside ci.yml, that cancellation could land between deleting
+# and recreating the `nightly` release. A cancelled or failed CI run never
+# triggers a publish here, because only a successful run qualifies.
+#
+# workflow_run always uses this file as it exists on the default branch, so a
+# change here takes effect only after it merges.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    # Only a successful run for a push to main in this repository. A
+    # workflow_dispatch run on main also reports head_branch main, so the event
+    # check keeps dispatched runs from publishing, as before.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    concurrency:
+      group: nightly-release
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      # Download the build artifacts of the triggering CI run.
+      actions: read
+      # Delete and recreate the `nightly` release and tag.
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check if nightly already published today
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TODAY="$(date -u +'%Y-%m-%d')"
+          PUBLISHED="$(gh release view nightly --json publishedAt --jq .publishedAt 2>/dev/null || echo "")"
+          if [ -n "$PUBLISHED" ] && echo "$PUBLISHED" | grep -q "^${TODAY}"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Nightly already published today (${PUBLISHED}) — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A newer push may already have moved main past this commit, with its CI
+      # run still in progress. This run still publishes under the same
+      # once-per-day rule the in-workflow job used: holding off for the newer
+      # run would leave the day without a nightly whenever that run fails or is
+      # cancelled by yet another push. The newer commit then ships in the next
+      # day's nightly. The check only reports the situation, so a failed lookup
+      # never blocks publishing.
+      - name: Report whether main has moved past this commit
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGERING_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha 2>/dev/null || echo "")"
+          if [ -z "$MAIN_SHA" ]; then
+            echo "::warning::Could not read main's tip; publishing ${HEAD_SHA}."
+            exit 0
+          fi
+          if [ "$MAIN_SHA" = "$HEAD_SHA" ]; then
+            echo "main is still at ${HEAD_SHA}."
+            exit 0
+          fi
+          NEWER_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20" \
+            --jq "[.workflow_runs[] | select(.status != \"completed\" and .id != ${TRIGGERING_RUN_ID}) | \"\(.id) (\(.head_sha[0:8]))\"] | join(\", \")" \
+            2>/dev/null || echo "")"
+          if [ -n "$NEWER_RUNS" ]; then
+            echo "::notice::main has moved to ${MAIN_SHA} and CI run(s) ${NEWER_RUNS} are still in progress; publishing ${HEAD_SHA} because no nightly exists for today."
+          else
+            echo "::notice::main has moved to ${MAIN_SHA}; publishing ${HEAD_SHA} because no nightly exists for today."
+          fi
+
+      - name: Download the CI run's build artifacts
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: gocciascript-*
+          path: artifacts/
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Package nightly builds
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          declare -A DISPLAY_NAMES=(
+            ["aarch64-darwin"]="macos-arm64"
+            ["x86_64-darwin"]="macos-x64"
+            ["x86_64-linux"]="linux-x64"
+            ["aarch64-linux"]="linux-arm64"
+            ["x86_64-win64"]="windows-x64"
+            ["i386-win32"]="windows-x86"
+          )
+
+          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
+
+          for target in "${targets[@]}"; do
+            artifact_dir="artifacts/gocciascript-${target}"
+            if [ ! -d "$artifact_dir" ]; then
+              echo "Skipping $target (no artifact found)"
+              continue
+            fi
+
+            display="${DISPLAY_NAMES[$target]}"
+            archive_name="gocciascript-nightly-${display}"
+            pkg_dir="${archive_name}"
+            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
+
+            cp -r tests/ "$pkg_dir/tests/"
+            cp -r benchmarks/ "$pkg_dir/benchmarks/"
+            cp -r examples/ "$pkg_dir/examples/"
+
+            if [[ "$target" == *win* ]]; then
+              zip -r "${archive_name}.zip" "$pkg_dir/"
+            else
+              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
+            fi
+
+            rm -rf "$pkg_dir"
+          done
+
+      - name: Update nightly release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT="$(git rev-parse --short HEAD)"
+          TARGET_SHA="$(git rev-parse HEAD)"
+          DATE="$(date -u +'%Y-%m-%d')"
+
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create nightly \
+            --title "Nightly Build (${DATE})" \
+            --notes "$(cat <<EOF
+          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
+
+          Built on ${DATE}. This pre-release is replaced by each new nightly build.
+          EOF
+          )" \
+            --prerelease \
+            --target "$TARGET_SHA" \
+            gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip

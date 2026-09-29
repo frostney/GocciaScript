@@ -730,10 +730,10 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 
 ## CI Integration
 
-GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a post-build job fan-out plus release packaging:
+GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a post-build job fan-out plus release packaging. A newer push to `main` cancels the superseded `main` run; tag and dispatched runs are never cancelled. See [Build System](build-system.md#ciyml--push-to-main--tags) for the concurrency rules.
 
 ```text
-toolchain → build → test             → artifacts (main), nightly (main), release (tags)
+toolchain → build → test             → artifacts (main), release (tags)
                   → toml-compliance  →
                   → json5-compliance →
                   → awfy             →
@@ -765,7 +765,7 @@ test-structure
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`nightly`** (same gates, `main` only) — Publishes the day's nightly builds, at most once per day.
+**`nightly`** (`.github/workflows/nightly.yml`) — Runs after a `CI` run for a push to `main` succeeds, and publishes that run's builds as the `nightly` prerelease at most once per day. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 

@@ -8,6 +8,18 @@ on:
       - '*'
   workflow_dispatch:
 
+# A newer push to main cancels the superseded main run as a whole, so its
+# builds stop holding macOS runners, the scarcest ones this workflow uses. Runs
+# join this group when they are created, which follows push order, so an older
+# run cannot cancel a newer one. Tag runs and every workflow_dispatch run,
+# including a dispatch on main, get a group of their own and are never
+# cancelled. The nightly release is published by nightly.yml after a main run
+# succeeds, outside this cancellable scope, and the report jobs below use
+# !cancelled() so a cancelled run publishes nothing.
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
 permissions:
   contents: read
 
@@ -36,17 +48,6 @@ jobs:
   build:
     needs: toolchain
     runs-on: macos-latest
-    # Every target cross-compiles on macOS runners, the scarcest ones this
-    # workflow uses. A newer main push cancels a superseded main run's builds
-    # while they are queued or running; that run's dependent jobs are then
-    # skipped, and its always() report jobs publish nothing without shard
-    # reports. Concurrency sits on this job rather than the workflow, so a run
-    # already publishing its nightly release is never interrupted. Tag runs and
-    # dispatched runs, including a dispatch on main, get a group of their own
-    # and are never cancelled.
-    concurrency:
-      group: ${{ github.workflow }}-build-${{ matrix.target }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main' || github.run_id }}
-      cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
@@ -649,7 +650,10 @@ jobs:
 
   test262-merge:
     needs: test262
-    if: always()
+    # Runs when a shard failed, but not when the run was cancelled: always()
+    # would keep this job, and its main-only baseline cache and dashboard
+    # publish, running after a newer main push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -813,8 +817,10 @@ jobs:
           if-no-files-found: ignore
           path: awfy-report.json
 
+      # !cancelled() rather than always(): a run cancelled by a newer main push
+      # must not publish a report for the superseded commit.
       - name: Publish AWFY report
-        if: always() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != '' }}
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -928,7 +934,11 @@ jobs:
 
   jetstream:
     needs: jetstream-workload
-    if: always()
+    # Runs when a workload failed, so a degraded report is still published on
+    # main, but not when a newer main push cancelled the run: the workload
+    # shards that finished before the cancellation would otherwise merge into a
+    # partial report for the superseded commit.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -968,7 +978,7 @@ jobs:
           path: jetstream-report.json
 
       - name: Publish JetStream report
-        if: always() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != '' }}
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -1072,7 +1082,9 @@ jobs:
 
   web-tooling:
     needs: web-tooling-workload
-    if: always()
+    # Runs when a workload failed, but not when a newer main push cancelled the
+    # run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -1457,106 +1469,6 @@ jobs:
           name: gocciascript-release-${{ matrix.target }}
           if-no-files-found: ignore
           path: release-artifacts/*
-
-  nightly:
-    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
-    if: github.ref == 'refs/heads/main'
-    concurrency:
-      group: nightly-release
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check if nightly already published today
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TODAY="$(date -u +'%Y-%m-%d')"
-          PUBLISHED="$(gh release view nightly --json publishedAt --jq .publishedAt 2>/dev/null || echo "")"
-          if [ -n "$PUBLISHED" ] && echo "$PUBLISHED" | grep -q "^${TODAY}"; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Nightly already published today (${PUBLISHED}) — skipping."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download all build artifacts
-        if: steps.check.outputs.skip != 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          path: artifacts/
-
-      - name: Package nightly builds
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          declare -A DISPLAY_NAMES=(
-            ["aarch64-darwin"]="macos-arm64"
-            ["x86_64-darwin"]="macos-x64"
-            ["x86_64-linux"]="linux-x64"
-            ["aarch64-linux"]="linux-arm64"
-            ["x86_64-win64"]="windows-x64"
-            ["i386-win32"]="windows-x86"
-          )
-
-          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
-
-          for target in "${targets[@]}"; do
-            artifact_dir="artifacts/gocciascript-${target}"
-            if [ ! -d "$artifact_dir" ]; then
-              echo "Skipping $target (no artifact found)"
-              continue
-            fi
-
-            display="${DISPLAY_NAMES[$target]}"
-            archive_name="gocciascript-nightly-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
-          done
-
-      - name: Update nightly release
-        if: steps.check.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          COMMIT="$(git rev-parse --short HEAD)"
-          TARGET_SHA="$(git rev-parse HEAD)"
-          DATE="$(date -u +'%Y-%m-%d')"
-
-          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
-
-          gh release create nightly \
-            --title "Nightly Build (${DATE})" \
-            --notes "$(cat <<EOF
-          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
-
-          Built on ${DATE}. This pre-release is replaced by each new nightly build.
-          EOF
-          )" \
-            --prerelease \
-            --target "$TARGET_SHA" \
-            gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
     needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
