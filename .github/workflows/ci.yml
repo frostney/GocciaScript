@@ -15,7 +15,103 @@ env:
   FPC_VERSION: "3.2.2"
 
 jobs:
+  # A newer push to main cancels the CI run of any older main commit as a whole,
+  # so superseded builds stop holding macOS runners, the scarcest ones this
+  # workflow uses. GitHub does not order runs by push, so this job compares
+  # commits instead of relying on a concurrency group: a run whose commit is an
+  # ancestor of this one is cancelled, and this run cancels itself when its own
+  # commit is an ancestor of another in-flight main run. Runs for the same
+  # commit (re-runs) and diverged commits are left alone. Tag runs and every
+  # workflow_dispatch run are never cancelled, and a failed API call only logs
+  # a warning. The job always runs and gates its step instead, because a skipped
+  # job can also skip jobs further down the chain, such as build, even when
+  # toolchain itself is allowed to run.
+  # The nightly release is published by nightly.yml after a main run succeeds,
+  # outside this cancellable scope, and the report jobs below use !cancelled()
+  # so a cancelled run publishes nothing.
+  supersede:
+    runs-on: ubuntu-latest
+    permissions:
+      # List and cancel CI runs.
+      actions: write
+      # Compare commits.
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Cancel CI runs for older main commits
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          repo="$GITHUB_REPOSITORY"
+          own_run="$GITHUB_RUN_ID"
+          own_sha="$GITHUB_SHA"
+
+          warn() {
+            echo "::warning::$1; continuing without cancelling."
+          }
+
+          workflow_id="$(gh api "repos/${repo}/actions/runs/${own_run}" --jq .workflow_id)"
+          if ! [[ "$workflow_id" =~ ^[0-9]+$ ]]; then
+            warn "Could not read this run's workflow"
+            exit 0
+          fi
+
+          runs=""
+          for status in queued in_progress waiting requested pending; do
+            if ! page="$(gh api "repos/${repo}/actions/workflows/${workflow_id}/runs?branch=main&event=push&status=${status}&per_page=100" \
+              --jq ".workflow_runs[] | select(.id != ${own_run}) | \"\(.id) \(.head_sha)\"")"; then
+              warn "Could not list ${status} main runs"
+              continue
+            fi
+            runs+="${page}"$'\n'
+          done
+
+          newer_run=""
+          while read -r run_id run_sha; do
+            [ -n "$run_id" ] || continue
+            if [ "$run_sha" = "$own_sha" ]; then
+              echo "Run ${run_id} is for the same commit; leaving it."
+              continue
+            fi
+            relation="$(gh api "repos/${repo}/compare/${run_sha}...${own_sha}?per_page=1" --jq .status)"
+            case "$relation" in
+              ahead)
+                echo "Run ${run_id} is for ${run_sha}, an ancestor of ${own_sha}; cancelling it."
+                gh api -X POST "repos/${repo}/actions/runs/${run_id}/cancel" > /dev/null \
+                  || warn "Could not cancel run ${run_id}"
+                ;;
+              behind)
+                echo "Run ${run_id} is for ${run_sha}, which descends from ${own_sha}."
+                newer_run="$run_id"
+                ;;
+              identical|diverged)
+                echo "Run ${run_id} is for ${run_sha} (${relation} relative to ${own_sha}); leaving it."
+                ;;
+              *)
+                warn "Could not compare ${run_sha} with ${own_sha}"
+                ;;
+            esac
+          done <<< "$(printf '%s' "$runs" | sort -u)"
+
+          if [ -n "$newer_run" ]; then
+            echo "Run ${newer_run} tests a newer main commit; cancelling this run."
+            if gh api -X POST "repos/${repo}/actions/runs/${own_run}/cancel" > /dev/null; then
+              # Hold this job until the cancellation reaches it, so toolchain
+              # never starts macOS work for a superseded commit.
+              for _ in $(seq 1 30); do sleep 10; done
+              echo "::warning::This run is still active five minutes after cancelling itself; continuing."
+            else
+              warn "Could not cancel this run"
+            fi
+          fi
+          exit 0
+
   toolchain:
+    needs: supersede
     uses: ./.github/workflows/toolchain.yml
 
   test-structure:
@@ -251,6 +347,9 @@ jobs:
 
   test:
     needs: build
+    # A healthy run takes at most 5 minutes on every target; a hung test binary
+    # would otherwise hold its runner for the 360-minute default.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -635,7 +734,10 @@ jobs:
 
   test262-merge:
     needs: test262
-    if: always()
+    # Runs when a shard failed, but not when the run was cancelled: always()
+    # would keep this job, and its main-only baseline cache and dashboard
+    # publish, running after a newer main push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -799,8 +901,10 @@ jobs:
           if-no-files-found: ignore
           path: awfy-report.json
 
+      # !cancelled() rather than always(): a run cancelled by a newer main push
+      # must not publish a report for the superseded commit.
       - name: Publish AWFY report
-        if: always() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != ''
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && hashFiles('awfy-report.json') != '' }}
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           AWFY_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -914,7 +1018,11 @@ jobs:
 
   jetstream:
     needs: jetstream-workload
-    if: always()
+    # Runs when a workload failed, so a degraded report is still published on
+    # main, but not when a newer main push cancelled the run: the workload
+    # shards that finished before the cancellation would otherwise merge into a
+    # partial report for the superseded commit.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -954,7 +1062,7 @@ jobs:
           path: jetstream-report.json
 
       - name: Publish JetStream report
-        if: always() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != ''
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && hashFiles('jetstream-report.json') != '' }}
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           JETSTREAM_RUN_CREATED_AT: ${{ github.event.repository.pushed_at }}
@@ -1058,7 +1166,9 @@ jobs:
 
   web-tooling:
     needs: web-tooling-workload
-    if: always()
+    # Runs when a workload failed, but not when a newer main push cancelled the
+    # run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -1443,106 +1553,6 @@ jobs:
           name: gocciascript-release-${{ matrix.target }}
           if-no-files-found: ignore
           path: release-artifacts/*
-
-  nightly:
-    needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
-    if: github.ref == 'refs/heads/main'
-    concurrency:
-      group: nightly-release
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check if nightly already published today
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TODAY="$(date -u +'%Y-%m-%d')"
-          PUBLISHED="$(gh release view nightly --json publishedAt --jq .publishedAt 2>/dev/null || echo "")"
-          if [ -n "$PUBLISHED" ] && echo "$PUBLISHED" | grep -q "^${TODAY}"; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Nightly already published today (${PUBLISHED}) — skipping."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download all build artifacts
-        if: steps.check.outputs.skip != 'true'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          path: artifacts/
-
-      - name: Package nightly builds
-        if: steps.check.outputs.skip != 'true'
-        run: |
-          declare -A DISPLAY_NAMES=(
-            ["aarch64-darwin"]="macos-arm64"
-            ["x86_64-darwin"]="macos-x64"
-            ["x86_64-linux"]="linux-x64"
-            ["aarch64-linux"]="linux-arm64"
-            ["x86_64-win64"]="windows-x64"
-            ["i386-win32"]="windows-x86"
-          )
-
-          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
-
-          for target in "${targets[@]}"; do
-            artifact_dir="artifacts/gocciascript-${target}"
-            if [ ! -d "$artifact_dir" ]; then
-              echo "Skipping $target (no artifact found)"
-              continue
-            fi
-
-            display="${DISPLAY_NAMES[$target]}"
-            archive_name="gocciascript-nightly-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
-          done
-
-      - name: Update nightly release
-        if: steps.check.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          COMMIT="$(git rev-parse --short HEAD)"
-          TARGET_SHA="$(git rev-parse HEAD)"
-          DATE="$(date -u +'%Y-%m-%d')"
-
-          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
-
-          gh release create nightly \
-            --title "Nightly Build (${DATE})" \
-            --notes "$(cat <<EOF
-          Automated nightly build from \`main\` at [\`${COMMIT}\`](https://github.com/${{ github.repository }}/commit/${COMMIT}).
-
-          Built on ${DATE}. This pre-release is replaced by each new nightly build.
-          EOF
-          )" \
-            --prerelease \
-            --target "$TARGET_SHA" \
-            gocciascript-nightly-*.tar.gz gocciascript-nightly-*.zip
 
   release:
     needs: [test, toml-compliance, json5-compliance, awfy, jetstream, web-tooling, benchmark, cli]
