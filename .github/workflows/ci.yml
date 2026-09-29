@@ -41,11 +41,12 @@ jobs:
     # while they are queued or running; that run's dependent jobs are then
     # skipped, and its always() report jobs publish nothing without shard
     # reports. Concurrency sits on this job rather than the workflow, so a run
-    # already publishing its nightly release is never interrupted. Tag and
-    # dispatched runs get a group of their own and are never cancelled.
+    # already publishing its nightly release is never interrupted. Tag runs and
+    # dispatched runs, including a dispatch on main, get a group of their own
+    # and are never cancelled.
     concurrency:
-      group: ${{ github.workflow }}-build-${{ matrix.target }}-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
-      cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+      group: ${{ github.workflow }}-build-${{ matrix.target }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
