@@ -97,12 +97,10 @@ automation treats that base differently from a normal branch. Two consequences
 are worth knowing before starting a stack:
 
 - **Automatic review does not fire.** CodeRabbit reviews only pull requests
-  based on the default branch, so every layer needs a review trigger. Request
-  it through `/address-feedback`, whose CodeRabbit adapter posts the trigger
-  and honors the account's stated waits; never type `@coderabbitai review` by
-  hand. A layer that is never triggered shows no review at all, and an instant
-  acknowledgement of an already-reviewed commit is not a review of the current
-  head.
+  based on the default branch, so every layer needs a review trigger, requested
+  through `/address-feedback`. A layer that is never triggered shows no review
+  at all, and an instant acknowledgement of an already-reviewed commit is not a
+  review of the current head.
 - **A review round ends when its own fix layer reviews clean**, not when the
   findings from the layer below are dispositioned. A round that fixes findings
   creates a new top layer, and that layer needs its own review like any other.
@@ -120,10 +118,8 @@ paths, processes, sockets or TLS, FFI, time zones, `Int64`/`Double` conversion
 or byte layout (see
 [Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
 or any `{$IFDEF}` platform branch. A dispatched run's checks do not appear on
-the pull request, so wait on the run itself for the branch's current head SHA
-(`delivery-wait`'s `wait workflow-terminal --run-id <id> --head <sha>`), not on
-the pull request's checks or the newest run. A dispatched run belongs to the
-commit it started from.
+the pull request, and it belongs to the commit it started from, so check the
+run for the branch's current head SHA rather than the newest run.
 
 ## Verify changes
 
