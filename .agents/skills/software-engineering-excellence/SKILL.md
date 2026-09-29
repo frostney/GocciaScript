@@ -138,6 +138,8 @@ an isolated context; include recent conversation only when needed to understand
 the deliverable. Request an outcome, changed state, observed validation,
 limitations and facts needed by dependent work. Keep investigation logs local
 to the worker. Bring material choices or conflicting evidence to the coordinator.
+A packet that includes publication or merge follows the delegation rule in
+[deliver](../deliver/SKILL.md).
 
 While workers run, continue the coordinator's work that does not depend on
 their results. Check each returned result's evidence before accepting and

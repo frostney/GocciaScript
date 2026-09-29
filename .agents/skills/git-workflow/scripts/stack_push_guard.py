@@ -14,6 +14,8 @@ import sys
 from datetime import datetime, timezone
 import uuid
 
+sys.dont_write_bytecode = True  # Keep installed skill trees free of __pycache__.
+
 
 class GuardError(RuntimeError):
     pass
@@ -241,6 +243,11 @@ def hook(config_path, remote, url):
         write_once(root / ("check-" + str(uuid.uuid4()) + ".json"), receipt)
 
 
+# 0.1.1 leaves the guarded submit, push and link paths and internal/git unchanged
+# from 0.1.0; its ListStacks pagination and init trunk fallback do not push.
+VALIDATED_NATIVE_VERSIONS = frozenset({"gh stack version 0.1.0", "gh stack version 0.1.1"})
+
+
 def validate_native_command(command, admission):
     if len(command) < 3 or Path(command[0]).name != "gh" or command[1] != "stack":
         raise GuardError("run requires an explicit native gh stack command")
@@ -279,7 +286,7 @@ def main(argv=None):
     if args.operation == "run":
         validate_native_command(command, admission)
         version = subprocess.run([command[0], "stack", "--version"], capture_output=True, text=True, check=True)
-        if version.stdout.strip() != "gh stack version 0.1.0":
+        if version.stdout.strip() not in VALIDATED_NATIVE_VERSIONS:
             raise GuardError("native stack CLI version has not been validated")
     prepared = prepare(admission)
     if args.operation == "prepare":

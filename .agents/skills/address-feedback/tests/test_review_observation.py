@@ -271,5 +271,104 @@ class ReviewPaginationTest(unittest.TestCase):
                 self.assertEqual(sum("review" in variables for _, variables in gh.calls), 2)
 
 
+CODERABBIT_POLICY = {"automations": [{"id": "coderabbit", "actors": ["coderabbitai", "coderabbitai[bot]"],
+    "check_contexts": ["CodeRabbit"], "check_app_slugs": ["coderabbitai", "coderabbitai[bot]"],
+    "terminal_check_conclusions": ["success"], "terminal_review_states": ["COMMENTED"],
+    "nonterminal_review_markers": ["Review rate limited"]}]}
+
+# frostney/GocciaScript#1287, recorded 2026-09-28 with bodies shortened. The
+# maintainer replied and resolved the thread; CodeRabbit then confirmed the fix
+# in the same thread. That confirmation must not reopen the reply gate.
+RECORDED_CONFIRMATION_THREAD = {"id": "PRRT_kwDOOwYnRM6mzATz", "isResolved": True, "comments": [
+    {"id": "PRRC_kwDOOwYnRM714zoK", "databaseId": 4125309450, "createdAt": "2026-09-28T17:47:08Z",
+     "author": {"login": "coderabbitai"}, "authorAssociation": "CONTRIBUTOR", "replyTo": None,
+     "body": "**Correct the two mismatched skill hashes.**"},
+    {"id": "PRRC_kwDOOwYnRM7143nx", "databaseId": 4125325809, "createdAt": "2026-09-28T17:49:05Z",
+     "author": {"login": "frostney"}, "authorAssociation": "OWNER", "replyTo": {"id": "PRRC_kwDOOwYnRM714zoK"},
+     "body": "Valid, but the lock hashes were right: the directories were wrong."},
+    {"id": "PRRC_kwDOOwYnRM715PRn", "databaseId": 4125422695, "createdAt": "2026-09-28T18:00:03Z",
+     "author": {"login": "coderabbitai"}, "authorAssociation": "CONTRIBUTOR", "replyTo": {"id": "PRRC_kwDOOwYnRM714zoK"},
+     "body": "`@frostney`, the corrected check confirms the fix.\n✅ Review thread resolved."},
+]}
+
+
+def thread_comment(number, at, author, association, reply_to=None):
+    return {"id": f"c{number}", "databaseId": number, "createdAt": at, "author": {"login": author},
+            "authorAssociation": association, "replyTo": {"id": reply_to} if reply_to else None,
+            "body": f"comment {number}"}
+
+
+def bot(number, at, reply_to=None):
+    return thread_comment(number, at, "reviewer[bot]", "NONE", reply_to)
+
+
+def owner(number, at, reply_to="c1"):
+    return thread_comment(number, at, "owner", "OWNER", reply_to)
+
+
+T4 = "2026-09-06T01:04:00Z"
+
+
+class AutomationThreadReplyTest(unittest.TestCase):
+    """The reply gate: every automation finding needs a maintainer reply after it."""
+
+    def snapshot(self, thread, policy=POLICY):
+        gh = StaticGH()
+        thread = dict(thread, comments={"nodes": thread["comments"], "pageInfo": {"hasNextPage": False}})
+        gh.pull["reviewThreads"]["nodes"] = [thread]
+        return review.review_snapshot(gh, "owner/repo", 1, policy)
+
+    def surface(self, observation):
+        return next((s for s in observation["findingSurfaces"] if s["kind"] == "inline-thread"), None)
+
+    def test_recorded_coderabbit_confirmation_after_reply_is_answered_and_still_read(self):
+        observation = self.snapshot(deepcopy(RECORDED_CONFIRMATION_THREAD), CODERABBIT_POLICY)
+        self.assertEqual(observation["unansweredAutomationThreads"], 0)
+        self.assertEqual(observation["unresolvedThreads"], 0)
+        self.assertTrue(observation["threads"][0]["maintainerReply"])
+        surface = self.surface(observation)
+        self.assertIsNotNone(surface, "the follow-up must stay visible for judgment")
+        self.assertEqual(surface["automationFollowUps"], [4125422695])
+
+    def test_follow_up_in_an_unresolved_thread_still_needs_a_reply(self):
+        thread = deepcopy(RECORDED_CONFIRMATION_THREAD)
+        thread["isResolved"] = False
+        observation = self.snapshot(thread, CODERABBIT_POLICY)
+        self.assertEqual(observation["unansweredAutomationThreads"], 1)
+        self.assertFalse(observation["threads"][0]["maintainerReply"])
+
+    def test_resolving_without_a_reply_does_not_answer_the_finding(self):
+        observation = self.snapshot({"id": "t", "isResolved": True, "comments": [bot(1, T1)]})
+        self.assertEqual(observation["unansweredAutomationThreads"], 1)
+        self.assertIsNotNone(self.surface(observation))
+
+    def test_automation_addendum_before_any_maintainer_reply_still_needs_one(self):
+        observation = self.snapshot({"id": "t", "isResolved": True, "comments": [
+            bot(1, T1), bot(2, T2, reply_to="c1")]})
+        self.assertEqual(observation["unansweredAutomationThreads"], 1)
+
+    def test_reply_between_addendum_and_follow_up_answers_both(self):
+        observation = self.snapshot({"id": "t", "isResolved": True, "comments": [
+            bot(1, T1), bot(2, T2, reply_to="c1"), owner(3, T3), bot(4, T4, reply_to="c1")]})
+        self.assertEqual(observation["unansweredAutomationThreads"], 0)
+        self.assertEqual(self.surface(observation)["automationFollowUps"], [4])
+
+    def test_answered_follow_up_leaves_no_surface(self):
+        observation = self.snapshot({"id": "t", "isResolved": True, "comments": [
+            bot(1, T1), owner(2, T2), bot(3, T3, reply_to="c1"), owner(4, T4)]})
+        self.assertEqual(observation["unansweredAutomationThreads"], 0)
+        self.assertIsNone(self.surface(observation))
+
+    def test_reply_from_a_non_maintainer_does_not_count(self):
+        observation = self.snapshot({"id": "t", "isResolved": True, "comments": [
+            bot(1, T1), thread_comment(2, T2, "passerby", "NONE", "c1"), bot(3, T3, reply_to="c1")]})
+        self.assertEqual(observation["unansweredAutomationThreads"], 1)
+
+    def test_readiness_is_not_satisfied_while_a_follow_up_awaits_judgment(self):
+        observation = self.snapshot(deepcopy(RECORDED_CONFIRMATION_THREAD), CODERABBIT_POLICY)
+        observation["automations"] = [{"terminal": True}]
+        self.assertEqual(review.classify("head", observation)[0], "judgment-required")
+
+
 if __name__ == "__main__":
     unittest.main()

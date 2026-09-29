@@ -20,8 +20,9 @@ The caller supplies the repository, expected identity, absolute deadline, and
 an optional state path. The command reconciles any saved state with fresh
 GitHub state, waits while nothing relevant changes, and exits with one result.
 Use `--json` from workflow skills; human output is for direct terminal use.
-Skills default state files beneath gitignored `.agent/waits/`; another harness
-may supply any private state path through `--state`.
+Skills default state files beneath `.agent/waits/`, which the consuming
+repository must gitignore; another harness may supply any private state path
+through `--state`.
 
 ## Invocation
 
@@ -30,12 +31,31 @@ may supply any private state path through `--state`.
 same identity flags without `--deadline`, `--interval`, or `--state`. Each kind
 requires its own identity flags:
 
-- `checks-terminal`: `--pr <number>`, `--head <sha>`, and one `--check <name>`
-  per expected check context. Repeat `--check` for every context the caller
-  needs; a run with no `--check` exits with an operational error instead of
-  waiting.
+- `checks-terminal`: `--pr <number>`, `--head <sha>`, and `--all-workflows`,
+  one `--check <name>` per expected check context, or both. A run with neither
+  exits with an operational error instead of waiting.
+  - `--all-workflows` needs no check names. It finds every GitHub Actions
+    workflow run for the exact head and every job in each run's latest attempt.
+    It waits while there is no run, or while any run or job is queued, in
+    progress, waiting, pending or requested. It reports `changed` as soon as a
+    run or job ends in failure, cancelled, timed out, action required or
+    another non-success conclusion. It reports `satisfied` only when every run
+    and job succeeded, was skipped or was neutral, and two consecutive
+    observations one interval apart show the same census. Jobs added by later
+    matrix or `needs` stages keep their run in progress. A run started after
+    another run finishes shows up in the second observation. `inspect` cannot
+    confirm a stable census, so it reports `waiting` instead of `satisfied` for
+    an all-success snapshot.
+  - `--all-workflows` does not cover commit statuses or check runs from other
+    apps, such as CodeRabbit or Vercel. Add a `--check` for each one the caller
+    needs; the wait then also requires those contexts to succeed.
+  - `--check` alone judges only the named contexts, whatever else is still
+    running for the head. Use it only when the complete expected set is known,
+    such as the repository's required status checks. Checks visible at wait
+    time are not that set: workflows add jobs in stages.
 - `pr-merged`: `--pr <number>` and `--head <sha>`.
-- `workflow-terminal`: `--run-id <id>` and `--head <sha>`.
+- `workflow-terminal`: `--run-id <id>` and `--head <sha>`. Use it for a
+  dispatched or other run whose checks do not appear on the pull request.
 - `tag-target`: `--tag <name>` and `--head <sha>`.
 - `release-assets`: `--tag <name>`, `--head <sha>`, and one `--asset <name>` per
   required asset.

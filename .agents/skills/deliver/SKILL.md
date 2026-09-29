@@ -71,6 +71,12 @@ service as an incidental fix.
   the delivered revision contains the integrated change and that its acceptance
   evidence still applies. A green deployment job or merge alone is insufficient.
 
+Delegated work runs through the same skills. A worker packet routes each step
+it hands over through the skill that owns it, such as `/implement`,
+`/create-pr`, `/update-pr` or `/address-feedback`. It never prescribes raw
+publication or merge commands such as `gh pr create` or `gh pr merge`; those
+bypass the skill's gates, native stack detection and readiness checks.
+
 Use required companion skills when available; when one is unavailable, follow
 its reachable documented contract directly or report the specific missing
 capability. Do not invent a successful handoff. Reuse matching evidence for
