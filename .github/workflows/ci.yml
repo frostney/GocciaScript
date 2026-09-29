@@ -36,6 +36,16 @@ jobs:
   build:
     needs: toolchain
     runs-on: macos-latest
+    # Every target cross-compiles on macOS runners, the scarcest ones this
+    # workflow uses. A newer main push cancels a superseded main run's builds
+    # while they are queued or running; that run's dependent jobs are then
+    # skipped, and its always() report jobs publish nothing without shard
+    # reports. Concurrency sits on this job rather than the workflow, so a run
+    # already publishing its nightly release is never interrupted. Tag and
+    # dispatched runs get a group of their own and are never cancelled.
+    concurrency:
+      group: ${{ github.workflow }}-build-${{ matrix.target }}-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+      cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
     strategy:
       fail-fast: false
       matrix:
@@ -251,6 +261,9 @@ jobs:
 
   test:
     needs: build
+    # A healthy run takes at most 5 minutes on every target; a hung test binary
+    # would otherwise hold its runner for the 360-minute default.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
