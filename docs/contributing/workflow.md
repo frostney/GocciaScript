@@ -97,10 +97,12 @@ automation treats that base differently from a normal branch. Two consequences
 are worth knowing before starting a stack:
 
 - **Automatic review does not fire.** CodeRabbit reviews only pull requests
-  based on the default branch, so every layer needs an explicit
-  `@coderabbitai review` comment. A layer that is never triggered shows no
-  review at all, and an instant acknowledgement of an already-reviewed commit
-  is not a review of the current head.
+  based on the default branch, so every layer needs a review trigger. Request
+  it through `/address-feedback`, whose CodeRabbit adapter posts the trigger
+  and honors the account's stated waits; never type `@coderabbitai review` by
+  hand. A layer that is never triggered shows no review at all, and an instant
+  acknowledgement of an already-reviewed commit is not a review of the current
+  head.
 - **A review round ends when its own fix layer reviews clean**, not when the
   findings from the layer below are dispositioned. A round that fixes findings
   creates a new top layer, and that layer needs its own review like any other.
