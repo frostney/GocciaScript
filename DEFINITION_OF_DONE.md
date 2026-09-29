@@ -26,7 +26,5 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 
 ## Handoff
 
-- The diff has been self-reviewed against the issue or mini-spec criterion by criterion.
-- The changeset has been code reviewed by a separate review pass from the implementation work, using `/code-review` when available or a documented manual diff review when it is not.
 - Any reviewer-facing context is captured in the PR body: summary, constraints, tests run, docs updated, ADR links, and any intentionally deferred work.
 - There are no unrelated changes mixed into the handoff unless the user explicitly requested them.
