@@ -33,7 +33,8 @@ failing.
 
 ## Conditional references
 
-- When the branch belongs to a native GitHub stack, read
+- When the branch belongs to a native GitHub stack or builds on an unmerged
+  PR (step 1), read
   [../git-workflow/references/github-stacks.md](../git-workflow/references/github-stacks.md).
   The request then authorizes submission and metadata reconciliation for the
   confirmed stack layers owned by the current change, not unrelated branches.
@@ -57,6 +58,31 @@ readiness. Recording a walkthrough does not replace behavior testing.
 1. Inspect the working tree, staged diff, recent commits, remote default branch,
    stack topology when applicable, and any existing remote head. Preserve
    unrelated local work.
+
+   PRs target the remote default branch. The exception is a long-lived base
+   branch that the user names or that project instructions such as `AGENTS.md`
+   or `CONTRIBUTING.md` document, such as a release branch for a backport: the
+   named base. A branch that is only an open PR's feature head is never a named
+   base. Outside a named base and the stack reference's native stack
+   operations, never set a PR base to a non-default branch by hand.
+
+   Before choosing a base, check whether the change builds on an unmerged PR.
+   List open PRs with
+   `gh pr list --state open --limit 1000 --json number,headRefName,headRefOid,isCrossRepository,baseRefName`.
+   A listing with as many rows as the limit may be truncated: re-list with a
+   higher limit until it returns fewer rows, or stop and report. Fetch the
+   heads in one `git fetch REMOTE pull/A/head pull/B/head ...` from the remote
+   of the repository that list queried. Skip this branch's own PR, any PR whose
+   head contains this branch's head, and any same-repository PR whose head
+   branch is the named base. The change builds on PR N when N is from this
+   repository and its head branch is the intended base, or when
+   `git rev-list HEAD ^BASE ^DEFAULT` and `git rev-list HEAD-OID ^BASE ^DEFAULT`
+   share a commit. DEFAULT is the fetched remote default, BASE the fetched
+   named base or DEFAULT, and HEAD-OID N's `headRefOid`. Stop and report a
+   match from a fork (`isCrossRepository`), which cannot be a base here. With
+   a named base, also stop and report a match based on any other branch, so a
+   backport never stacks on the default trunk. Publish any other match as a
+   native stack under the stack reference's "When to start a stack".
 2. Stop if there are no relevant changes or commits ahead of the remote base.
    Continue without an empty commit when the work is already committed.
 3. If currently on the base branch, create a focused branch named from the issue
@@ -96,10 +122,11 @@ readiness. Recording a walkthrough does not replace behavior testing.
    that completes that issue.
 9. After the publication checks pass, or under the preview-only draft rule
    above, push an ordinary branch normally and set its upstream when needed,
-   then open one draft PR against the remote default.
+   then open one draft PR against the remote default or the named base.
    For a verified native stack, follow the stack reference: a new top layer
    above frozen approved PRs uses protected push, separate PR creation and
-   native append; broader authorized submissions use `gh stack submit`. Require
+   native append; a new stack on a frozen lower PR uses protected
+   `gh stack link`; broader authorized submissions use `gh stack submit`. Require
    current evidence for every published layer. Only guarded official stack
    operations may rebase or push with force-with-lease. Preserve bottom-to-top
    topology and keep each layer draft.
@@ -113,8 +140,14 @@ readiness. Recording a walkthrough does not replace behavior testing.
     for the same PR and verify its new head. Continue until all verified
     requirement gaps are resolved.
 12. Invoke `delivery-wait`'s foreground `wait checks-terminal` operation with
-    the repository, PR number, exact head, required `--check` contexts, absolute
-    deadline and `--json`. Passively await meaningful transitions; do not
+    the repository, PR number, exact head, `--all-workflows`, absolute deadline
+    and `--json`. `--all-workflows` waits for every GitHub Actions run and job
+    on the head, including jobs that later stages add. Add one `--check` per
+    commit status or other app's check that applies, such as a deployment
+    preview. Do not build the `--check` list from the checks visible when the
+    wait starts; that set is often partial. For a dispatched run whose checks
+    do not appear on the PR, also run `wait workflow-terminal --run-id <id>
+    --head <sha>`. Passively await meaningful transitions; do not
     substitute repeated model turns for a passive wait, and report an
     unavailable host capability. Inspect failed logs and return established
     in-scope causes to step 11. If expected PR checks have no run, inspect

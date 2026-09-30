@@ -12,17 +12,21 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+sys.dont_write_bytecode = True  # Keep installed skill trees free of __pycache__.
+
 from kgr_github import (
     Gh,
     Metrics,
     RateLimited,
     StateLock,
+    TransientError,
     WaitError,
     default_state_path,
     emit,
     parse_time,
     positive_interval,
     result_envelope,
+    stable_digest,
     wait_for_transition,
 )
 
@@ -154,6 +158,189 @@ def classify_pr(
     return "satisfied", "all expected checks are terminal-success"
 
 
+HEAD_QUERY = """
+query($owner:String!,$name:String!,$number:Int!){
+  repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid}}
+}
+"""
+
+
+# GitHub Actions run and job conclusions that pass, matching the check-context
+# convention in classify_pr. Every other terminal conclusion is a failure.
+PASSING_WORKFLOW_CONCLUSIONS = {"success", "neutral", "skipped"}
+
+
+def pr_head(gh: Gh, repo: str, number: int) -> Any:
+    owner, name = repo_parts(repo)
+    try:
+        data = gh.graphql(HEAD_QUERY, {"owner": owner, "name": name, "number": number})
+        pull = (data.get("repository") or {}).get("pullRequest")
+        if not isinstance(pull, dict):
+            raise WaitError(f"pull request {repo}#{number} was not found")
+        return pull.get("headRefOid")
+    except RateLimited:
+        gh.metrics.rate_limit_fallbacks += 1
+        return (gh.rest(f"repos/{repo}/pulls/{number}").get("head") or {}).get("sha")
+
+
+def rest_census(pages: list[Any], field: str, label: str) -> list[dict[str, Any]]:
+    """Join REST pages; never convert partial or racing data to absence."""
+    items: list[dict[str, Any]] = []
+    ids: set[int] = set()
+    total = None
+    for page in pages:
+        if not isinstance(page, dict) or type(page.get("total_count")) is not int:
+            raise WaitError(f"missing {label} total count")
+        if not isinstance(page.get(field), list):
+            raise WaitError(f"missing {label} list")
+        if total is None:
+            total = page["total_count"]
+        elif page["total_count"] != total:
+            raise TransientError(f"{label} count changed during pagination")
+        for item in page[field]:
+            if not isinstance(item, dict) or type(item.get("id")) is not int:
+                raise WaitError(f"missing {label} identity")
+            if item["id"] in ids:
+                raise TransientError(f"duplicate {label} across pages")
+            ids.add(item["id"])
+            items.append(item)
+    if total is None:
+        raise WaitError(f"missing {label} pages")
+    if len(items) != total:
+        raise TransientError(f"incomplete {label} census: {len(items)} of {total}")
+    return sorted(items, key=lambda item: item["id"])
+
+
+def workflow_census(gh: Gh, repo: str, number: int, head: str, checks: bool) -> dict[str, Any]:
+    """Every GitHub Actions run for the pull request's exact head, with its jobs."""
+    snapshot = pr_snapshot(gh, repo, number) if checks else {"head": pr_head(gh, repo, number)}
+    observed = snapshot.get("head")
+    if not isinstance(observed, str) or not observed:
+        raise WaitError(f"pull request {repo}#{number} has no verified head")
+    observation: dict[str, Any] = {"head": observed}
+    if checks:
+        observation["checks"] = snapshot["checks"]
+    if observed != head:
+        return observation
+    runs = rest_census(
+        gh.rest_pages(f"repos/{repo}/actions/runs?head_sha={quote(head, safe='')}&per_page=100"),
+        "workflow_runs",
+        "workflow run",
+    )
+    observation["runs"] = []
+    for run in runs:
+        if run.get("head_sha") != head:
+            raise WaitError(f"workflow run {run['id']} is for head {run.get('head_sha')}, not {head}")
+        jobs = rest_census(
+            gh.rest_pages(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100"),
+            "jobs",
+            f"workflow run {run['id']} job",
+        )
+        for job in jobs:
+            if job.get("run_id") != run["id"]:
+                raise WaitError(f"job {job['id']} belongs to run {job.get('run_id')}, not {run['id']}")
+        observation["runs"].append({
+            "id": run["id"],
+            "name": run.get("name"),
+            "event": run.get("event"),
+            "attempt": run.get("run_attempt"),
+            "status": run.get("status"),
+            "conclusion": run.get("conclusion"),
+            "url": run.get("html_url"),
+            "jobs": [
+                {
+                    "id": job["id"],
+                    "name": job.get("name"),
+                    "status": job.get("status"),
+                    "conclusion": job.get("conclusion"),
+                    "completedAt": job.get("completed_at"),
+                }
+                for job in jobs
+            ],
+        })
+    return observation
+
+
+def workflow_failures(observation: dict[str, Any]) -> list[str]:
+    failures = []
+    for run in observation.get("runs", []):
+        conclusion = run.get("conclusion")
+        if run.get("status") == "completed" and conclusion and conclusion not in PASSING_WORKFLOW_CONCLUSIONS:
+            failures.append(f"{run.get('name')}: {conclusion}")
+        for job in run.get("jobs", []):
+            conclusion = job.get("conclusion")
+            terminal = job.get("status") == "completed" or job.get("completedAt") is not None
+            if terminal and conclusion and conclusion not in PASSING_WORKFLOW_CONCLUSIONS:
+                failures.append(f"{run.get('name')} / {job.get('name')}: {conclusion}")
+    return sorted(failures)
+
+
+class WorkflowCensusGate:
+    """Classify a workflow census; success needs two identical observations.
+
+    A job added by a later matrix or `needs` stage keeps its run in progress,
+    and a run triggered after another run finishes appears only later, so one
+    all-success snapshot cannot establish the complete census.
+    """
+
+    def __init__(self, head: str, checks: set[str], confirm: bool) -> None:
+        self.head = head
+        self.checks = checks
+        self.confirm = confirm
+        self.previous: str | None = None
+
+    def failures(self, observation: dict[str, Any]) -> list[str]:
+        failures = workflow_failures(observation)
+        if self.checks and classify_pr("checks-terminal", self.head, self.checks, observation)[0] == "changed":
+            failures += sorted(
+                f"check {check.get('name')}: {str(check.get('conclusion')).lower()}"
+                for check in observation.get("checks", [])
+                if check.get("name") in self.checks and check_is_terminal(check)
+                and str(check.get("conclusion", "")).upper() not in {"SUCCESS", "NEUTRAL", "SKIPPED"}
+            )
+        return failures
+
+    def __call__(self, observation: dict[str, Any]) -> tuple[str, str]:
+        if observation.get("head") != self.head:
+            self.previous = None
+            return "invalidated", f"expected head {self.head}, observed {observation.get('head')}"
+        failures = self.failures(observation)
+        if failures:
+            self.previous = None
+            return "changed", "a workflow run, job or check reached a non-success terminal result: " + "; ".join(failures)
+        runs = observation.get("runs", [])
+        jobs = [job for run in runs for job in run.get("jobs", [])]
+        pending_runs = [run for run in runs if run.get("status") != "completed" or not run.get("conclusion")]
+        pending_jobs = [
+            job for job in jobs
+            if not job.get("conclusion") or (job.get("status") != "completed" and job.get("completedAt") is None)
+        ]
+        reason = None
+        if not runs:
+            reason = "no workflow runs have appeared for the head"
+        elif pending_runs or pending_jobs:
+            reason = (
+                f"{len(pending_runs)} of {len(runs)} workflow runs and "
+                f"{len(pending_jobs)} of {len(jobs)} jobs are not terminal"
+            )
+        elif self.checks:
+            state, check_reason = classify_pr("checks-terminal", self.head, self.checks, observation)
+            if state != "satisfied":
+                reason = check_reason
+        if reason:
+            self.previous = None
+            return "waiting", reason
+        summary = f"{len(runs)} workflow runs and {len(jobs)} jobs"
+        if not self.confirm:
+            return "waiting", f"all {summary} succeeded in this snapshot; only wait can confirm the census is stable"
+        digest = stable_digest(observation)
+        confirmed = digest == self.previous
+        self.previous = digest
+        if not confirmed:
+            return "waiting", f"all {summary} succeeded; confirming the census is stable"
+        return "satisfied", f"all {summary} on the head succeeded across two identical observations"
+
+
 def workflow_snapshot(gh: Gh, repo: str, run_id: int) -> dict[str, Any]:
     run = gh.rest(f"repos/{repo}/actions/runs/{run_id}")
     return {"runId": run.get("id"), "head": run.get("head_sha"), "status": run.get("status"), "conclusion": run.get("conclusion"), "url": run.get("html_url")}
@@ -211,6 +398,7 @@ def parser() -> argparse.ArgumentParser:
         sub.add_argument("--tag")
         sub.add_argument("--asset", action="append", default=[])
         sub.add_argument("--check", action="append", default=[])
+        sub.add_argument("--all-workflows", action="store_true")
         sub.add_argument("--json", action="store_true")
         if command == "wait":
             sub.add_argument("--deadline", required=True)
@@ -231,6 +419,9 @@ def main() -> int:
         "checks": sorted(args.check),
         "assets": sorted(args.asset),
     }
+    if args.all_workflows:
+        # Added only when requested, so existing checkpoints keep their identity.
+        identity["allWorkflows"] = True
     try:
         # wake-at observes nothing external, so it keeps no checkpoint.
         state_path = (
@@ -257,13 +448,22 @@ def main() -> int:
             if not args.repo:
                 raise WaitError("--repo is required")
             gh = Gh(metrics)
+            if args.all_workflows and args.kind != "checks-terminal":
+                raise WaitError("--all-workflows applies only to checks-terminal")
             if args.kind in {"checks-terminal", "pr-merged"}:
                 if not args.pr or not args.head:
                     raise WaitError("--pr and --head are required")
-                observe = lambda: pr_snapshot(gh, args.repo, args.pr)
-                if args.kind == "checks-terminal" and not args.check:
-                    raise WaitError("checks-terminal requires at least one --check context")
-                classify = lambda value: classify_pr(args.kind, args.head, set(args.check), value)
+                if args.kind == "checks-terminal" and not args.check and not args.all_workflows:
+                    raise WaitError(
+                        "checks-terminal requires --all-workflows or at least one --check context"
+                    )
+                if args.all_workflows:
+                    observe = lambda: workflow_census(gh, args.repo, args.pr, args.head, bool(args.check))
+                    gate = WorkflowCensusGate(args.head, set(args.check), args.command == "wait")
+                    classify = gate
+                else:
+                    observe = lambda: pr_snapshot(gh, args.repo, args.pr)
+                    classify = lambda value: classify_pr(args.kind, args.head, set(args.check), value)
             elif args.kind == "workflow-terminal":
                 if not args.run_id or not args.head:
                     raise WaitError("--run-id and --head are required")
@@ -306,6 +506,9 @@ def main() -> int:
                 output = result_envelope(args.kind, state, identity, observation, metrics, reason)
             else:
                 def transition_key(value: dict[str, Any]) -> Any:
+                    if args.all_workflows:
+                        # The gate is stateful, so the key must not call it.
+                        return {"head": value.get("head"), "failures": gate.failures(value)}
                     if args.kind == "checks-terminal":
                         terminal = classify(value)[0]
                         return {

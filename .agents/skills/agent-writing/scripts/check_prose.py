@@ -6,8 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Iterable
+
+sys.dont_write_bytecode = True  # Keep installed skill trees free of __pycache__.
 
 
 BANNED_WORDS = re.compile(

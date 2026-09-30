@@ -50,7 +50,8 @@ issue or PR identity, branch and exact head, owned scope, dependencies,
 requirements, applicable gates, capability class, context envelope, and
 the required structured transition output. Include a small recent-turn slice
 only when immediately relevant. Full-history inheritance requires a recorded,
-scoped exception.
+scoped exception. Publication and merge in a packet follow the delegation rule
+in [deliver](../../deliver/SKILL.md).
 
 Before starting a worker, identify its actual model from host metadata. Deliver
 the applicable role, scope, authority, completion condition, and required skill

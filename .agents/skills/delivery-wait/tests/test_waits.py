@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -88,6 +89,18 @@ if endpoint.endswith("/comments?per_page=100"):
     output([scenario.get("comments", [])] if "--slurp" in args else scenario.get("comments", []))
 if endpoint.endswith("/replies"):
     output({"id":901,"body":"created"})
+if "/actions/runs?" in endpoint:
+    census_path = pathlib.Path(os.environ["FAKE_GH_COUNTER"] + ".census")
+    index = int(census_path.read_text()) if census_path.exists() else 0
+    census_path.write_text(str(index + 1))
+    states = scenario["census"]
+    output(states[min(index, len(states) - 1)]["runPages"])
+if "/actions/runs/" in endpoint and "/jobs" in endpoint:
+    census_path = pathlib.Path(os.environ["FAKE_GH_COUNTER"] + ".census")
+    index = int(census_path.read_text()) - 1
+    states = scenario["census"]
+    run_id = endpoint.split("/actions/runs/", 1)[1].split("/", 1)[0]
+    output(states[min(index, len(states) - 1)]["jobPages"][run_id])
 if "/actions/runs/" in endpoint:
     output(scenario["workflow"])
 print("unexpected fake gh invocation: " + repr(args), file=sys.stderr)
@@ -124,6 +137,58 @@ def pull(head: str, checks: list[dict], merged: bool = False) -> dict:
         "mergeCommit": {"oid": "merge-sha"} if merged else None,
         "commits": {"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":checks}}}}]},
     }
+
+
+def workflow_job(job_id: int, name: str, status: str = "completed", conclusion: str | None = "success", run_id: int = 101) -> dict:
+    return {
+        "id": job_id,
+        "run_id": run_id,
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "completed_at": "2026-08-12T08:05:00Z" if status == "completed" else None,
+    }
+
+
+def workflow_run(
+    run_id: int,
+    jobs: list[dict],
+    status: str = "completed",
+    conclusion: str | None = "success",
+    head: str = "head-1",
+    name: str = "PR",
+) -> dict:
+    return {
+        "run": {
+            "id": run_id,
+            "name": name,
+            "event": "pull_request",
+            "run_attempt": 1,
+            "head_sha": head,
+            "status": status,
+            "conclusion": conclusion,
+            "html_url": f"https://example.invalid/runs/{run_id}",
+        },
+        "jobs": jobs,
+    }
+
+
+def census(*runs: dict) -> dict:
+    """One observation of every workflow run on a head and each run's jobs."""
+    return {
+        "runPages": [{"total_count": len(runs), "workflow_runs": [item["run"] for item in runs]}],
+        "jobPages": {
+            str(item["run"]["id"]): [{"total_count": len(item["jobs"]), "jobs": item["jobs"]}]
+            for item in runs
+        },
+    }
+
+
+def matrix_jobs(count: int, status: str = "completed", conclusion: str | None = "success", start: int = 0, run_id: int = 101) -> list[dict]:
+    return [
+        workflow_job(1000 + index, f"test ({index})", status, conclusion, run_id)
+        for index in range(start, start + count)
+    ]
 
 
 class WaitCommandsTest(unittest.TestCase):
@@ -701,6 +766,204 @@ class WaitCommandsTest(unittest.TestCase):
         )
         self.assertEqual(output["state"], "satisfied")
         self.assertTrue(output["observation"]["resolved"])
+
+    def short_deadline(self) -> str:
+        return (datetime.now(timezone.utc) + timedelta(seconds=0.3)).isoformat()
+
+    def reset_census(self) -> None:
+        """Start a subtest with a fresh fake census and no saved checkpoint."""
+        self.counter.with_name("counter.census").unlink(missing_ok=True)
+        shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+
+    def census_wait(self, *extra: str, deadline: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+        return self.run_json(
+            DELIVERY, "wait", "checks-terminal", "--repo", "owner/repo", "--pr", "7",
+            "--head", "head-1", "--all-workflows", *extra,
+            "--deadline", deadline or self.deadline(), "--interval", "0.01",
+        )
+
+    def test_checks_terminal_without_a_selector_names_all_workflows(self) -> None:
+        self.write_scenario()
+        result, output = self.run_json(
+            DELIVERY, "wait", "checks-terminal", "--repo", "owner/repo", "--pr", "7",
+            "--head", "head-1", "--deadline", self.deadline(), "--interval", "0.01",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(output["state"], "operational-error")
+        self.assertIn("--all-workflows", output["reason"])
+        self.assertIn("--check", output["reason"])
+        self.assertEqual(output["metrics"]["apiRequests"], 0)
+
+    def test_all_workflows_is_not_satisfied_by_the_jobs_visible_so_far(self) -> None:
+        # GocciaScript#1287: 4 checks were visible while 35 more were pending.
+        partial = census(workflow_run(101, matrix_jobs(4), status="in_progress", conclusion=None))
+        self.write_scenario(census=[partial])
+        _, inspected = self.run_json(
+            DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo",
+            "--pr", "7", "--head", "head-1", "--all-workflows",
+        )
+        self.assertEqual(inspected["state"], "waiting")
+        self.reset_census()
+        _, waited = self.census_wait(deadline=self.short_deadline())
+        self.assertEqual(waited["state"], "timed-out")
+        self.assertGreater(waited["metrics"]["observations"], 1)
+
+    def test_all_workflows_waits_for_jobs_that_spawn_later(self) -> None:
+        self.write_scenario(census=[
+            census(workflow_run(101, matrix_jobs(4), status="in_progress", conclusion=None)),
+            census(workflow_run(101, matrix_jobs(4) + matrix_jobs(35, "queued", None, start=4), status="in_progress", conclusion=None)),
+            census(workflow_run(101, matrix_jobs(39))),
+        ])
+        result, output = self.census_wait()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(len(output["observation"]["runs"][0]["jobs"]), 39)
+        # Two identical all-success observations follow the two pending ones.
+        self.assertEqual(output["metrics"]["observations"], 4)
+
+    def test_all_workflows_requires_a_stable_census_before_success(self) -> None:
+        # A run triggered after the first run completes must not be missed.
+        first = workflow_run(101, matrix_jobs(4))
+        later = workflow_run(202, matrix_jobs(35, run_id=202), name="Follow-up")
+        self.write_scenario(census=[
+            census(first),
+            census(first, workflow_run(202, [], status="queued", conclusion=None, name="Follow-up")),
+            census(first, later),
+        ])
+        _, output = self.census_wait()
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual([run["id"] for run in output["observation"]["runs"]], [101, 202])
+        self.assertEqual(sum(len(run["jobs"]) for run in output["observation"]["runs"]), 39)
+        self.assertEqual(output["metrics"]["observations"], 4)
+
+    def test_all_workflows_stable_success_is_satisfied(self) -> None:
+        self.write_scenario(census=[census(
+            workflow_run(101, matrix_jobs(3) + [
+                workflow_job(2000, "optional", conclusion="skipped"),
+                workflow_job(2001, "advisory", conclusion="neutral"),
+            ]),
+            workflow_run(202, matrix_jobs(2, run_id=202), name="Lint"),
+        )])
+        result, output = self.census_wait()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(output["metrics"]["observations"], 2)
+        self.assertEqual(len(output["observation"]["runs"]), 2)
+
+    def test_all_workflows_inspect_cannot_confirm_stability(self) -> None:
+        self.write_scenario(census=[census(workflow_run(101, matrix_jobs(2)))])
+        _, output = self.run_json(
+            DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo",
+            "--pr", "7", "--head", "head-1", "--all-workflows",
+        )
+        self.assertEqual(output["state"], "waiting")
+        self.assertIn("stable", output["reason"])
+
+    def test_all_workflows_reports_a_later_failure(self) -> None:
+        for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
+            with self.subTest(conclusion=conclusion):
+                self.reset_census()
+                self.write_scenario(census=[
+                    census(workflow_run(101, matrix_jobs(4) + matrix_jobs(2, "in_progress", None, start=4), status="in_progress", conclusion=None)),
+                    census(workflow_run(101, matrix_jobs(4) + [
+                        workflow_job(1004, "test (4)", conclusion=conclusion),
+                        workflow_job(1005, "test (5)", "in_progress", None),
+                    ], status="in_progress", conclusion=None)),
+                ])
+                result, output = self.census_wait()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output["state"], "changed")
+                self.assertIn("test (4)", output["reason"])
+                self.assertIn(conclusion, output["reason"])
+                self.assertEqual(output["metrics"]["observations"], 2)
+
+    def test_all_workflows_reports_a_failed_run_without_failed_jobs(self) -> None:
+        self.write_scenario(census=[census(workflow_run(101, [], conclusion="startup_failure"))])
+        _, output = self.census_wait()
+        self.assertEqual(output["state"], "changed")
+        self.assertIn("startup_failure", output["reason"])
+
+    def test_all_workflows_keeps_waiting_while_any_run_is_not_terminal(self) -> None:
+        for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+            with self.subTest(status=status):
+                self.reset_census()
+                self.write_scenario(census=[census(
+                    workflow_run(101, matrix_jobs(3)),
+                    workflow_run(202, [], status=status, conclusion=None, name="Deploy"),
+                )])
+                _, output = self.census_wait(deadline=self.short_deadline())
+                self.assertEqual(output["state"], "timed-out")
+
+    def test_all_workflows_waits_when_no_run_has_appeared(self) -> None:
+        self.write_scenario(census=[census()])
+        _, output = self.census_wait(deadline=self.short_deadline())
+        self.assertEqual(output["state"], "timed-out")
+        self.assertEqual(output["observation"]["runs"], [])
+
+    def test_all_workflows_invalidates_a_changed_head(self) -> None:
+        self.write_scenario(pull=pull("head-2", []), census=[census(workflow_run(101, matrix_jobs(2)))])
+        _, output = self.census_wait()
+        self.assertEqual(output["state"], "invalidated")
+        self.assertEqual(output["observation"]["head"], "head-2")
+
+    def test_all_workflows_refuses_a_pull_request_without_a_head(self) -> None:
+        self.write_scenario(pull={"headRefOid": None}, census=[census(workflow_run(101, matrix_jobs(2)))])
+        result, output = self.census_wait()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(output["state"], "operational-error")
+        self.assertIn("head", output["reason"])
+
+    def test_all_workflows_refuses_malformed_run_or_job_pages(self) -> None:
+        good = census(workflow_run(101, matrix_jobs(2)))
+        missing_run_total = dict(good, runPages=[{"workflow_runs": good["runPages"][0]["workflow_runs"]}])
+        missing_runs = dict(good, runPages=[{"total_count": 1}])
+        missing_job_total = dict(good, jobPages={"101": [{"jobs": matrix_jobs(2)}]})
+        other_head = census(workflow_run(101, matrix_jobs(2), head="head-2"))
+        for name, state in (
+            ("missing run total", missing_run_total),
+            ("missing runs", missing_runs),
+            ("missing job total", missing_job_total),
+            ("run on another head", other_head),
+        ):
+            with self.subTest(name):
+                self.reset_census()
+                self.write_scenario(census=[state])
+                result, output = self.census_wait()
+                self.assertEqual(result.returncode, 2, name)
+                self.assertEqual(output["state"], "operational-error", name)
+
+    def test_all_workflows_never_treats_an_incomplete_census_as_complete(self) -> None:
+        good = census(workflow_run(101, matrix_jobs(2)))
+        short_runs = dict(good, runPages=[{"total_count": 2, "workflow_runs": good["runPages"][0]["workflow_runs"]}])
+        short_jobs = dict(good, jobPages={"101": [{"total_count": 39, "jobs": matrix_jobs(2)}]})
+        racing = dict(good, runPages=[
+            {"total_count": 1, "workflow_runs": good["runPages"][0]["workflow_runs"]},
+            {"total_count": 2, "workflow_runs": []},
+        ])
+        for name, state in (("runs", short_runs), ("jobs", short_jobs), ("racing pages", racing)):
+            with self.subTest(name):
+                self.reset_census()
+                self.write_scenario(census=[state])
+                _, output = self.census_wait(deadline=self.short_deadline())
+                self.assertEqual(output["state"], "timed-out", name)
+                self.assertGreater(output["metrics"]["retries"], 0, name)
+
+    def test_all_workflows_also_gates_named_third_party_checks(self) -> None:
+        workflows = census(workflow_run(101, matrix_jobs(2)))
+        self.write_scenario(
+            pull=pull("head-1", [check("Vercel", "IN_PROGRESS", None)]),
+            census=[workflows],
+        )
+        _, output = self.census_wait("--check", "Vercel", deadline=self.short_deadline())
+        self.assertEqual(output["state"], "timed-out")
+        self.reset_census()
+        self.write_scenario(
+            pull=pull("head-1", [check("Vercel", "COMPLETED", "SUCCESS")]),
+            census=[workflows],
+        )
+        _, output = self.census_wait("--check", "Vercel")
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(output["observation"]["checks"][0]["name"], "Vercel")
 
 
 if __name__ == "__main__":

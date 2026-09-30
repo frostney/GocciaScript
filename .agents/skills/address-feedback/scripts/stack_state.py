@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+sys.dont_write_bytecode = True  # Keep installed skill trees free of __pycache__.
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "delivery-wait" / "scripts"))
 
 from kgr_github import (  # noqa: E402

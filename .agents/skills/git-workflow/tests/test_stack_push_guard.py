@@ -204,20 +204,35 @@ class StandaloneTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((self.repo / ".git/kgr-push-guards").exists())
 
-    def test_run_cli_preserves_guard_and_child_exit_without_an_sdk(self):
+    def run_with_native_version(self, version):
         # Native argv routing is tested here with a tiny gh stand-in; live tests
         # separately exercise the installed official extension against GitHub.
         gh = self.root / "gh"
-        gh.write_text(f'#!/bin/sh\nif [ "$2" = "--version" ]; then printf "gh stack version 0.1.0\\n"; exit 0; fi\nexec git push origin {shlex.quote(self.ref + ":" + self.ref)}\n')
+        gh.write_text(f'#!/bin/sh\nif [ "$2" = "--version" ]; then printf "gh stack version {version}\\n"; exit 0; fi\nexec git push origin {shlex.quote(self.ref + ":" + self.ref)}\n')
         gh.chmod(0o755)
-        result = subprocess.run([sys.executable, str(self.helper), "run", "--admission", "-", "--", str(gh),
-                                 "stack", "submit", "--auto", "--remote", "origin"],
-                                input=json.dumps(self.admission), capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), f"{self.head}\t{self.ref}")
+        return subprocess.run([sys.executable, str(self.helper), "run", "--admission", "-", "--", str(gh),
+                               "stack", "submit", "--auto", "--remote", "origin"],
+                              input=json.dumps(self.admission), capture_output=True, text=True)
+
+    def test_run_cli_preserves_guard_and_child_exit_without_an_sdk(self):
+        for version in ["0.1.0", "0.1.1"]:
+            with self.subTest(version=version):
+                self.git("push", "--quiet", "origin", "--delete", self.ref, check=False)
+                result = self.run_with_native_version(version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), f"{self.head}\t{self.ref}")
         receipts = list((self.repo / ".git/kgr-push-guards").glob("*/run.json"))
-        self.assertEqual(len(receipts), 1)
-        self.assertEqual(json.loads(receipts[0].read_text())["exitCode"], 0)
+        self.assertEqual(len(receipts), 2)
+        self.assertEqual([json.loads(r.read_text())["exitCode"] for r in receipts], [0, 0])
+
+    def test_unvalidated_native_version_runs_nothing(self):
+        for version in ["0.0.8", "0.1.2", "0.2.0"]:
+            with self.subTest(version=version):
+                result = self.run_with_native_version(version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("has not been validated", result.stderr)
+                self.assertEqual(self.git("ls-remote", "--heads", "origin", self.ref), "")
+                self.assertFalse((self.repo / ".git/kgr-push-guards").exists())
 
 
 if __name__ == "__main__":
