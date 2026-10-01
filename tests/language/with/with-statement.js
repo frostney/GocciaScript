@@ -1,4 +1,32 @@
+const TOP_LEVEL_LIMIT = 16;
+
 describe("with statement", () => {
+  test("an object property shadows a top-level const of the same name", () => {
+    const shadowing = { TOP_LEVEL_LIMIT: 5 };
+    const readInside = () => {
+      with (shadowing) {
+        return TOP_LEVEL_LIMIT;
+      }
+    };
+    const readThroughClosure = () => {
+      with (shadowing) {
+        return (() => TOP_LEVEL_LIMIT)();
+      }
+    };
+    const readWithoutProperty = () => {
+      with ({}) {
+        return TOP_LEVEL_LIMIT;
+      }
+    };
+
+    expect(readInside()).toBe(5);
+    expect(readThroughClosure()).toBe(5);
+    expect(readWithoutProperty()).toBe(16);
+    shadowing.TOP_LEVEL_LIMIT = 6;
+    expect(readInside()).toBe(6);
+    expect((() => TOP_LEVEL_LIMIT)()).toBe(16);
+  });
+
   test("reads and writes object properties before outer bindings", () => {
     const obj = { x: 2 };
     let result = 0;
