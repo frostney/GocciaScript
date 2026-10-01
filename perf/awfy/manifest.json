@@ -83,6 +83,13 @@
       "tags": ["arithmetic", "loops"]
     },
     {
+      "name": "typed-array-update-loop",
+      "file": "perf/probes/typed-array-update-loop.js",
+      "focusAreas": ["dispatch", "loop", "typed-array"],
+      "defaultInnerIterations": 40,
+      "tags": ["typed-array", "for-of", "locals"]
+    },
+    {
       "name": "fib-recursive",
       "file": "perf/probes/fib-recursive.js",
       "focusAreas": ["call-path", "recursion"],
