@@ -5184,6 +5184,76 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
   }
 });
 
+await section("TestRunner: a file that fails with work still queued does not reach the next file...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A queued job belongs to the engine that queued it. When a file ends
+    // abnormally the job used to stay on the worker thread and run inside the
+    // next file, against an engine that had been freed: an access violation
+    // that aborted the whole run and named the innocent file. The jobs build
+    // their message, so a code frame quoting the source cannot match it.
+    const clean = 'describe("next file", () => { test("is clean", async () => { await null; expect(1 + 1).toBe(2); }); });\n';
+    const cases: { name: string; first: string; args: string[]; error: string }[] = [
+      {
+        name: "file timeout",
+        first: [
+          'describe("slow", () => {',
+          '  test("queues a job and then exceeds the file timeout", () => {',
+          '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+          "    const spin = () => Array.from({ length: 1000 }).some(() => false);",
+          "    Array.from({ length: 100000000 }).some(() => spin());",
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+        args: ["--timeout=300ms", "--test-timeout=0"],
+        error: "file timed out after 300ms",
+      },
+      {
+        name: "top-level throw",
+        first: [
+          'queueMicrotask(() => console.log("leaked " + "job ran"));',
+          'Promise.resolve().then(() => console.log("leaked " + "job ran"));',
+          'throw new Error("top-level throw");',
+          "",
+        ].join("\n"),
+        args: [],
+        error: "Error: top-level throw",
+      },
+    ];
+    for (const testCase of cases) {
+      const dir = join(tmp, testCase.name.replace(/ /g, "-"));
+      mkdirSync(dir);
+      writeFileSync(join(dir, "a-first.test.js"), testCase.first);
+      writeFileSync(join(dir, "b-second.test.js"), clean);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        const label = `TestRunner (${testCase.name}, ${mode})`;
+        if (proc.exitCode !== 1 || /Integrity fault|leaked job ran/.test(output))
+          throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+        const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          error: String(file.errorMessage ?? "").includes(testCase.error),
+        }));
+        const expected = [
+          { file: "a-first.test.js", ok: false, passed: 0, error: true },
+          { file: "b-second.test.js", ok: true, passed: 1, error: false },
+        ];
+        if (JSON.stringify(files) !== JSON.stringify(expected))
+          throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json keeps stdout clean when script logs to console...", async () => {
   const tmp = makeTmp();
   try {

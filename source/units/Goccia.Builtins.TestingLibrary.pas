@@ -762,6 +762,18 @@ begin
   Result := FormatForDisplay(AValue);
 end;
 
+{ Drops everything a unit of test work left pending on the thread: queued
+  microtasks, the promises tracked as rejected, fetch completions and
+  real-mode timers. Used wherever that work must not reach what runs next —
+  the next test, or the next file once this one's engine is gone. }
+procedure DiscardPendingHostWork;
+begin
+  if (TGocciaMicrotaskQueue.Instance <> nil) then
+    TGocciaMicrotaskQueue.Instance.ClearQueue;
+  DiscardFetchCompletions;
+  DiscardRealTimers;
+end;
+
 { How the reason of a rejected returned Promise is reported. The reason is the
   only evidence the failure line carries, and an Error keeps "name" on its
   prototype and "message" non-enumerable, so serializing the value rendered
@@ -3911,10 +3923,7 @@ begin
             as the per-test arm: later files run in this process. }
           on E: TGocciaMemoryLimitError do
           begin
-            if (TGocciaMicrotaskQueue.Instance <> nil) then
-              TGocciaMicrotaskQueue.Instance.ClearQueue;
-            DiscardFetchCompletions;
-            DiscardRealTimers;
+            DiscardPendingHostWork;
             raise;
           end;
           on E: Exception do
@@ -3923,10 +3932,7 @@ begin
             begin
               { Terminal like the refusal above: clear pending host work before
                 unwinding, because later files run in this process. }
-              if (TGocciaMicrotaskQueue.Instance <> nil) then
-                TGocciaMicrotaskQueue.Instance.ClearQueue;
-              DiscardFetchCompletions;
-              DiscardRealTimers;
+              DiscardPendingHostWork;
               raise;
             end;
             if not FSuppressOutput then
@@ -4362,10 +4368,7 @@ begin
               begin
                 if E.Scope = tsTest then
                 begin
-                  if (TGocciaMicrotaskQueue.Instance <> nil) then
-                    TGocciaMicrotaskQueue.Instance.ClearQueue;
-                  DiscardFetchCompletions;
-                  DiscardRealTimers;
+                  DiscardPendingHostWork;
                   AssertionFailed('test execution',
                     Format('Test exceeded per-test timeout of %dms',
                       [E.DurationMs]));
@@ -4391,10 +4394,7 @@ begin
                 completions from the aborted file must not leak into them. }
               on E: TGocciaMemoryLimitError do
               begin
-                if (TGocciaMicrotaskQueue.Instance <> nil) then
-                  TGocciaMicrotaskQueue.Instance.ClearQueue;
-                DiscardFetchCompletions;
-                DiscardRealTimers;
+                DiscardPendingHostWork;
                 TerminalUnwinding := True;
                 raise;
               end;
@@ -4407,17 +4407,11 @@ begin
                     pending host work must not leak into the next file and the
                     guest afterEach / onTestFinished hooks must not run on a
                     heap that is no longer sound. }
-                  if (TGocciaMicrotaskQueue.Instance <> nil) then
-                    TGocciaMicrotaskQueue.Instance.ClearQueue;
-                  DiscardFetchCompletions;
-                  DiscardRealTimers;
+                  DiscardPendingHostWork;
                   TerminalUnwinding := True;
                   raise;
                 end;
-                if (TGocciaMicrotaskQueue.Instance <> nil) then
-                  TGocciaMicrotaskQueue.Instance.ClearQueue;
-                DiscardFetchCompletions;
-                DiscardRealTimers;
+                DiscardPendingHostWork;
                 if E is TGocciaError then
                 begin
                   ExceptionDetail := TGocciaError(E).GetDetailedMessage;
@@ -4687,10 +4681,7 @@ begin
             completions from the aborted file must not leak into them. }
           on E: TGocciaMemoryLimitError do
           begin
-            if (TGocciaMicrotaskQueue.Instance <> nil) then
-              TGocciaMicrotaskQueue.Instance.ClearQueue;
-            DiscardFetchCompletions;
-            DiscardRealTimers;
+            DiscardPendingHostWork;
             raise;
           end;
           on E: TGocciaThrowValue do
@@ -4704,10 +4695,7 @@ begin
                 same bookkeeping: the run is unwinding to the host, so pending
                 host work must not leak into the next file and the remaining
                 hooks must not run on a heap that is no longer sound. }
-              if (TGocciaMicrotaskQueue.Instance <> nil) then
-                TGocciaMicrotaskQueue.Instance.ClearQueue;
-              DiscardFetchCompletions;
-              DiscardRealTimers;
+              DiscardPendingHostWork;
               raise;
             end;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
@@ -5242,6 +5230,7 @@ var
   SnapshotErrors: TStringList;
   UnhandledReason: string;
   UnhandledPromise: TGocciaValue;
+  Completed: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
   FailedDetailsRoot: TGocciaTempRoot;
   ResultObjRoot: TGocciaTempRoot;
@@ -5251,7 +5240,14 @@ begin
     runner calls this after the engine's run has already drained and raised
     it; the bytecode runner calls it from the end of the module body, where
     the queued jobs that could still attach a handler have yet to run. }
-  DrainMicrotasksAndFetchCompletions;
+  try
+    DrainMicrotasksAndFetchCompletions;
+  except
+    { The drain stopped part-way: a job threw, or a deadline expired. What is
+      still queued belongs to this file and goes with it. }
+    DiscardPendingHostWork;
+    raise;
+  end;
   if Assigned(TGocciaMicrotaskQueue.Instance) and
      TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(
        UnhandledPromise) then
@@ -5290,6 +5286,7 @@ begin
 
     FailedTestDetails := TStringList.Create;
     SuiteNames := TStringList.Create;
+    Completed := False;
     try
     ClearNestedRegistrations(FRootSuite);
     FCurrentRegistrationSuite := FRootSuite;
@@ -5456,6 +5453,7 @@ begin
     end;
 
     Result := ResultObj;
+    Completed := True;
     finally
       Goccia.GarbageCollector.RemoveTempRootIfNeeded(ResultObjRoot);
       Goccia.GarbageCollector.RemoveTempRootIfNeeded(FailedDetailsRoot);
@@ -5463,10 +5461,17 @@ begin
     finally
       FailedTestDetails.Free;
       SuiteNames.Free;
-      { Every test and hook has been checked on its own. Whatever is still
-        tracked — a run cut short by --bail, a terminal unwind — ends with
-        this file instead of failing the next one on the thread. }
-      if Assigned(TGocciaMicrotaskQueue.Instance) then
+      { A run that an expired file or describe deadline, a refused allocation
+        or a fault cut short leaves jobs queued. They end with this file: the
+        next file on the thread would otherwise run them against this file's
+        engine, which is gone by then. A flag rather than the RTL's exception
+        object, which SEH targets do not populate while a finally runs. }
+      if not Completed then
+        DiscardPendingHostWork
+      { Every test and hook has been checked on its own. A promise still
+        tracked as rejected — a run stopped early by --bail — ends with this
+        file too, instead of failing the next one. }
+      else if Assigned(TGocciaMicrotaskQueue.Instance) then
         TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
     end;
   finally
