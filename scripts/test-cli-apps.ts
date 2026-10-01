@@ -5192,22 +5192,24 @@ await section("TestRunner: a file that fails with work still queued does not rea
     // next file, against an engine that had been freed: an access violation
     // that aborted the whole run and named the innocent file. The jobs build
     // their message, so a code frame quoting the source cannot match it.
-    const clean = 'describe("next file", () => { test("is clean", async () => { await null; expect(1 + 1).toBe(2); }); });\n';
-    const cases: { name: string; first: string; args: string[]; error: string }[] = [
+    const passingFile = 'describe("next file", () => { test("is clean", async () => { await null; expect(1 + 1).toBe(2); }); });\n';
+    const cases: { name: string; first: string; args: string[]; error: string; firstPassed: number }[] = [
       {
         name: "file timeout",
         first: [
           'describe("slow", () => {',
           '  test("queues a job and then exceeds the file timeout", () => {',
           '    queueMicrotask(() => console.log("leaked " + "job ran"));',
-          "    const spin = () => Array.from({ length: 1000 }).some(() => false);",
-          "    Array.from({ length: 100000000 }).some(() => spin());",
+          // Small arrays: a single huge one is refused on 32-bit targets.
+          "    const until = Date.now() + 10000;",
+          "    Array.from({ length: 10000 }).some(() => Array.from({ length: 1000 }).some(() => Date.now() > until));",
           "  });",
           "});",
           "",
         ].join("\n"),
         args: ["--timeout=300ms", "--test-timeout=0"],
         error: "file timed out after 300ms",
+        firstPassed: 0,
       },
       {
         name: "top-level throw",
@@ -5219,13 +5221,29 @@ await section("TestRunner: a file that fails with work still queued does not rea
         ].join("\n"),
         args: [],
         error: "Error: top-level throw",
+        firstPassed: 0,
+      },
+      {
+        // The file reaches its end, so nothing unwinds; the hook failed
+        // before its job could run.
+        name: "throwing hook",
+        first: [
+          'describe("hook", () => {',
+          '  afterAll(() => { queueMicrotask(() => console.log("leaked " + "job ran")); throw new Error("afterAll throws"); });',
+          '  test("passes", () => { expect(1).toBe(1); });',
+          "});",
+          "",
+        ].join("\n"),
+        args: [],
+        error: "",
+        firstPassed: 1,
       },
     ];
     for (const testCase of cases) {
       const dir = join(tmp, testCase.name.replace(/ /g, "-"));
       mkdirSync(dir);
       writeFileSync(join(dir, "a-first.test.js"), testCase.first);
-      writeFileSync(join(dir, "b-second.test.js"), clean);
+      writeFileSync(join(dir, "b-second.test.js"), passingFile);
       for (const mode of ["interpreted", "bytecode"]) {
         const proc = Bun.spawnSync(
           [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", `--mode=${mode}`, ...testCase.args],
@@ -5233,20 +5251,30 @@ await section("TestRunner: a file that fails with work still queued does not rea
         );
         const output = proc.stdout.toString() + proc.stderr.toString();
         const label = `TestRunner (${testCase.name}, ${mode})`;
-        if (proc.exitCode !== 1 || /Integrity fault|leaked job ran/.test(output))
+        if (proc.exitCode !== 1 || output.includes("Integrity fault"))
           throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
         const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
           file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
           ok: file.ok,
           passed: file.passed,
-          error: String(file.errorMessage ?? "").includes(testCase.error),
+          error: testCase.error !== "" && String(file.errorMessage ?? "").includes(testCase.error),
         }));
         const expected = [
-          { file: "a-first.test.js", ok: false, passed: 0, error: true },
+          { file: "a-first.test.js", ok: false, passed: testCase.firstPassed, error: testCase.error !== "" },
           { file: "b-second.test.js", ok: true, passed: 1, error: false },
         ];
         if (JSON.stringify(files) !== JSON.stringify(expected))
           throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
+
+        // The JSON reporter mutes the console, so only a plain run can show a
+        // leaked job that ran without faulting.
+        const plain = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const plainOutput = plain.stdout.toString() + plain.stderr.toString();
+        if (plain.exitCode !== 1 || /Integrity fault|leaked job ran/.test(plainOutput))
+          throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
       }
     }
   } finally {

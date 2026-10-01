@@ -3935,6 +3935,10 @@ begin
               DiscardPendingHostWork;
               raise;
             end;
+            { A describe callback that throws, or whose deadline expired,
+              aborts collection and nothing of the file runs. What it had
+              queued goes with it. }
+            DiscardPendingHostWork;
             if not FSuppressOutput then
               WriteLn('Error in describe block "', ChildSuite.GetFullName,
                 '": ', E.Message);
@@ -4702,10 +4706,12 @@ begin
           end;
         end;
 
-        { A hook that threw never reached the check above. Its failure is
-          recorded; what it left rejected goes with it. }
+        { A hook that threw never reached the drain and the check above. Its
+          failure is recorded; the jobs it queued and what it left rejected
+          go with it instead of running in the next unit. After a hook that
+          returned there is nothing left to drop. }
         if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
+          TGocciaMicrotaskQueue.Instance.ClearQueue;
       end;
     end;
   finally
@@ -5240,14 +5246,7 @@ begin
     runner calls this after the engine's run has already drained and raised
     it; the bytecode runner calls it from the end of the module body, where
     the queued jobs that could still attach a handler have yet to run. }
-  try
-    DrainMicrotasksAndFetchCompletions;
-  except
-    { The drain stopped part-way: a job threw, or a deadline expired. What is
-      still queued belongs to this file and goes with it. }
-    DiscardPendingHostWork;
-    raise;
-  end;
+  DrainMicrotasksAndFetchCompletions;
   if Assigned(TGocciaMicrotaskQueue.Instance) and
      TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(
        UnhandledPromise) then
@@ -5317,6 +5316,10 @@ begin
         FailedTestDetails.Add('Uncaught exception outside a test: ' +
           DescribeThrownValue(E.Value));
         Inc(FTestStats.SuiteErrors);
+        { The drain stopped at the job that threw; the jobs behind it belong
+          to the same describe bodies and go with it. }
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.ClearQueue;
       end;
       on E: Exception do
       begin
@@ -5325,6 +5328,8 @@ begin
         FailedTestDetails.Add('Uncaught exception outside a test: ' +
           E.Message);
         Inc(FTestStats.SuiteErrors);
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.ClearQueue;
       end;
     end;
 
@@ -5461,18 +5466,19 @@ begin
     finally
       FailedTestDetails.Free;
       SuiteNames.Free;
-      { A run that an expired file or describe deadline, a refused allocation
-        or a fault cut short leaves jobs queued. They end with this file: the
-        next file on the thread would otherwise run them against this file's
-        engine, which is gone by then. A flag rather than the RTL's exception
-        object, which SEH targets do not populate while a finally runs. }
+      { Nothing this file queued may outlive it: the next file on the thread
+        would run a leftover job against this file's engine, which is gone by
+        then. A run that an expired deadline, a refused allocation or a fault
+        cut short drops everything it left pending. One that reached its end
+        has drained after every test and hook, so its queue is empty unless a
+        unit failed part-way through a drain; jobs and tracked rejections go,
+        and timers keep the lifetime they already had. A flag rather than the
+        RTL's exception object, which SEH targets do not populate while a
+        finally runs. }
       if not Completed then
         DiscardPendingHostWork
-      { Every test and hook has been checked on its own. A promise still
-        tracked as rejected — a run stopped early by --bail — ends with this
-        file too, instead of failing the next one. }
       else if Assigned(TGocciaMicrotaskQueue.Instance) then
-        TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
+        TGocciaMicrotaskQueue.Instance.ClearQueue;
     end;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
