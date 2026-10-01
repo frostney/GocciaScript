@@ -48,6 +48,8 @@ type
     function SetElement(const AIndex: Integer; const AValue: TGocciaValue): Boolean;
     function TryAppendDenseElementFast(const AIndex: Integer;
       const AValue: TGocciaValue): Boolean;
+    function TrySetDenseElementFast(const AIndex: Integer;
+      const AValue: TGocciaValue): Boolean;
     procedure SetIndexProperty(const AIndex: Integer; const AValue: TGocciaValue);
     function TypeName: string; override;
     function GetProperty(const AName: string): TGocciaValue; override;
@@ -1397,6 +1399,30 @@ begin
     Exit;
 
   FElements.Add(AValue);
+  if Int64(AIndex) + 1 > FLength then
+    FLength := Int64(AIndex) + 1;
+  FHasEverHadIndexedOwnProperty := True;
+  Result := True;
+end;
+
+function TGocciaArrayValue.TrySetDenseElementFast(
+  const AIndex: Integer; const AValue: TGocciaValue): Boolean;
+begin
+  { An existing dense element of an array that holds no descriptor is an own
+    writable data property, so [[Set]] writes its slot: a descriptor for an
+    index, whether an accessor or a non-writable value, lives in the property
+    map and leaves a hole here. Any uncertainty falls back to the complete
+    [[Set]] implementation. This function must keep no managed locals. }
+  Result := False;
+  if (AIndex < 0) or (AIndex >= FElements.Count) or
+     (FProperties.Count <> 0) or FFrozen then
+    Exit;
+  if (Int64(AIndex) >= FLength) and not FLengthWritable then
+    Exit;
+  if IsArrayHole(FElements[AIndex]) then
+    Exit;
+
+  FElements[AIndex] := AValue;
   if Int64(AIndex) + 1 > FLength then
     FLength := Int64(AIndex) + 1;
   FHasEverHadIndexedOwnProperty := True;

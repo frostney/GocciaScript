@@ -269,6 +269,16 @@ type
     procedure ExecSetComputedProperty(const ATargetIndex: Integer;
       AKeyReg, AValueReg: TGocciaRegister;
       const AOptions: TGocciaComputedAccessOptions);
+    // The complete computed get/set semantics. They declare managed locals
+    // (a property key and its name), so every entry pays for initializing and
+    // finalizing them and for an exception frame; ExecGetComputedProperty and
+    // ExecSetComputedProperty serve element accesses that need no key first.
+    procedure ExecGetComputedPropertyGeneric(const ADest: Integer;
+      AObjReg, AKeyReg: TGocciaRegister;
+      const AOptions: TGocciaComputedAccessOptions);
+    procedure ExecSetComputedPropertyGeneric(const ATargetIndex: Integer;
+      AKeyReg, AValueReg: TGocciaRegister;
+      const AOptions: TGocciaComputedAccessOptions);
     procedure ExecDeleteComputedProperty(const ADest: Integer;
       AObjReg, AKeyReg: TGocciaRegister;
       const AThrowOnFailure: Boolean);
@@ -8616,6 +8626,53 @@ procedure TGocciaVM.ExecGetComputedProperty(const ADest: Integer;
   AObjReg, AKeyReg: TGocciaRegister;
   const AOptions: TGocciaComputedAccessOptions);
 var
+  FastIndex: Integer;
+  FastElement: Double;
+  Elements: TGocciaElementList;
+  Element: TGocciaValue;
+begin
+  // Element reads that resolve without a property key. This procedure must
+  // keep no managed locals: that is what makes these paths cheap.
+  if AObjReg.Kind = grkObject then
+  begin
+    if AObjReg.ObjectValue is TGocciaTypedArrayValue then
+    begin
+      // Typed-array unboxed element read: the element goes straight into the
+      // destination register as a scalar. Non-index keys, BigInt kinds, and
+      // out-of-range indices take the generic core.
+      if TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+         TGocciaTypedArrayValue(AObjReg.ObjectValue)
+           .TryReadIndexedScalar(FastIndex, FastElement) then
+      begin
+        FRegisters[ADest] := RegisterFromDouble(FastElement);
+        Exit;
+      end;
+    end
+    else if (AKeyReg.Kind = grkInt) and
+            (AObjReg.ObjectValue is TGocciaArrayValue) then
+    begin
+      // Dense array element at an integer index. A hole, an out-of-range
+      // index, or an accessor-shadowed slot takes the generic core.
+      Elements := TGocciaArrayValue(AObjReg.ObjectValue).Elements;
+      if (AKeyReg.IntValue >= 0) and (AKeyReg.IntValue < Elements.Count) then
+      begin
+        Element := Elements[AKeyReg.IntValue];
+        if Element <> TGocciaHoleValue.HoleValue then
+        begin
+          FRegisters[ADest] := VMValueToRegisterFast(Element);
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
+  ExecGetComputedPropertyGeneric(ADest, AObjReg, AKeyReg, AOptions);
+end;
+
+procedure TGocciaVM.ExecGetComputedPropertyGeneric(const ADest: Integer;
+  AObjReg, AKeyReg: TGocciaRegister;
+  const AOptions: TGocciaComputedAccessOptions);
+var
   Key: TGocciaPropertyKey;
   KeyName: string;
   ReceiverArray: TGocciaArrayValue;
@@ -8720,6 +8777,47 @@ begin
 end;
 
 procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
+  AKeyReg, AValueReg: TGocciaRegister;
+  const AOptions: TGocciaComputedAccessOptions);
+var
+  FastIndex: Integer;
+  Target: TGocciaValue;
+begin
+  // Element writes that resolve without a property key. This procedure must
+  // keep no managed locals: that is what makes these paths cheap. Everything
+  // else, including the nullish target check, runs in the generic core.
+  if FRegisters[ATargetIndex].Kind = grkObject then
+  begin
+    Target := FRegisters[ATargetIndex].ObjectValue;
+    if Target is TGocciaTypedArrayValue then
+    begin
+      // Typed-array unboxed element write: a numeric-scalar value going to a
+      // valid integer index stores directly.
+      if RegisterIsNumericScalar(AValueReg) and
+         TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+         TGocciaTypedArrayValue(Target).TryWriteIndexedScalar(FastIndex,
+           RegisterToDouble(AValueReg)) then
+        Exit;
+    end
+    else if (AKeyReg.Kind = grkInt) and
+            not (caoHomeObjectAllReceivers in AOptions) and
+            (Target is TGocciaArrayValue) and
+            (AKeyReg.IntValue >= 0) and
+            (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
+    begin
+      // Overwriting a dense array element. The array declines when the slot is
+      // a hole or the store needs the complete [[Set]]; the value boxed here
+      // is then simply dropped and the generic core boxes its own.
+      if TGocciaArrayValue(Target).TrySetDenseElementFast(AKeyReg.IntValue,
+           RegisterToValue(AValueReg)) then
+        Exit;
+    end;
+  end;
+
+  ExecSetComputedPropertyGeneric(ATargetIndex, AKeyReg, AValueReg, AOptions);
+end;
+
+procedure TGocciaVM.ExecSetComputedPropertyGeneric(const ATargetIndex: Integer;
   AKeyReg, AValueReg: TGocciaRegister;
   const AOptions: TGocciaComputedAccessOptions);
 var

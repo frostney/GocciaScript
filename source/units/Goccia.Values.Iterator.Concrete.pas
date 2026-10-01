@@ -127,6 +127,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
+  Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.SetValue,
   Goccia.Values.ToObject,
@@ -195,12 +196,35 @@ begin
     Result := LengthOfArrayLike(TGocciaObjectValue(ASource));
 end;
 
-function GetArrayIteratorElement(const ASource: TGocciaValue; const AIndex: Integer): TGocciaValue;
+function GetArrayIteratorElementByName(const ASource: TGocciaValue;
+  const AIndex: Integer): TGocciaValue;
 begin
   // ES2026 §23.1.5.2.1 step 15.b: Let elementValue be ? Get(array, elementKey).
   Result := TGocciaObjectValue(ASource).GetProperty(IntToStr(AIndex));
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function GetArrayIteratorElement(const ASource: TGocciaValue; const AIndex: Integer): TGocciaValue;
+var
+  Elements: TGocciaElementList;
+begin
+  // A dense element of an array is the value its [[Get]] returns, so it is
+  // read without building the index name. A hole or an index past the dense
+  // elements takes the named lookup, which consults descriptors and the
+  // prototype chain. The name's string temporary lives in the helper so that
+  // this path pays for no managed local.
+  if ASource is TGocciaArrayValue then
+  begin
+    Elements := TGocciaArrayValue(ASource).Elements;
+    if (AIndex >= 0) and (AIndex < Elements.Count) then
+    begin
+      Result := Elements[AIndex];
+      if Result <> TGocciaHoleValue.HoleValue then
+        Exit;
+    end;
+  end;
+  Result := GetArrayIteratorElementByName(ASource, AIndex);
 end;
 
 function TGocciaArrayIteratorValue.AdvanceNext: TGocciaObjectValue;

@@ -352,6 +352,22 @@ The identifier lookups themselves — `GetValue`, `ResolveIdentifier` and `Conta
 - **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, bit-pattern compares) where the call overhead is significant relative to the method body.
 - **Measurable on hot paths** — Scope lookups happen on every identifier reference. Eliminating function call overhead here compounds across deeply nested expressions.
 
+### Managed Locals on Hot Paths
+
+A procedure that declares a managed local — a `string`, a dynamic array, or a record holding one, such as `TGocciaPropertyKey` — pays for it on every call, whether or not the path taken uses it. FPC initializes the local on entry, installs an implicit exception frame (`fpc_pushexceptaddr`, `fpc_setjmp`, two thread-variable lookups), and finalizes it on exit.
+
+On x86-64 that came to about 700 of the 1,280 machine instructions of one typed-array element read through `ExecGetComputedProperty`, although the read itself never touched the property key.
+
+Keep such a fast path in a procedure with no managed locals, and call the procedure that owns them only on a miss:
+
+| Fast path, no managed locals | Core holding the managed locals |
+|------------------------------|----------------------------------|
+| `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
+| `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
+| `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |
+
+The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, and to a function that returns a managed record by value.
+
 ### Singleton Special Values
 
 Special values like `undefined`, `null`, `true`, `false`, `NaN`, `Infinity`, and `-Infinity` are singletons:
