@@ -382,13 +382,15 @@ Compatibility features that alter identifier lookup still compile to explicit VM
 
 ### Compiler Optimizer
 
-Bytecode compilation includes a small compile-time value optimizer. It folds pure primitive constant expressions, propagates immutable local `const` bindings initialized from compile-time constants, and omits branches or statement tails that are provably unreachable.
+Bytecode compilation includes a small compile-time value optimizer. It folds pure primitive constant expressions, propagates immutable `const` bindings initialized from compile-time constants, and omits branches or statement tails that are provably unreachable.
 
 The optimizer is intentionally compiler-side only:
 
 - it does not add opcodes or change the `.gbc` format
-- it does not track mutable bindings, imports, destructuring, function/class declarations, or global-backed top-level bindings
+- it does not track mutable bindings, imports, destructuring, or function/class declarations
 - it only uses `--strict-types` for conservative algebraic simplifications where the strict type alone preserves JavaScript semantics
+
+A top-level `const` of a script or an imported module lives in the global or module environment rather than in a register, so that other code can reach it by name. Its value is propagated only to reads compiled after the declaration. Top-level statements run in source order and hoisted function declarations are compiled before all of them, so no such read can run while the binding is in its temporal dead zone; a read compiled earlier keeps `OP_GET_GLOBAL` and throws `ReferenceError` there. The binding is still declared, defined and exported, so direct `eval`, later scripts and importing modules observe it unchanged. Two cases keep the named read: non-strict compatibility mode, where a sloppy direct `eval` can shadow the name with a function-level `var` at run time, and BigInt values, whose constant load rebuilds the value and costs more than the cached global read.
 
 When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
 

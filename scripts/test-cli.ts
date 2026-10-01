@@ -71,6 +71,39 @@ for (const [label, source] of [
     throw new Error(`Top-level ${label} self-reference should throw ReferenceError, got ${json.error?.type}`);
 }
 
+console.log("Top-level const with a mismatched strict type...");
+for (const mode of ["interpreted", "bytecode"]) {
+  const { exitCode, json } = runLoaderJson(
+    "const limit: string = 16;\nconst read = () => limit;\nread();\n",
+    [`--mode=${mode}`, "--strict-types"],
+  );
+  if (exitCode === 0) throw new Error(`Mismatched top-level const type should fail (${mode})`);
+  if (json.error?.type !== "TypeError")
+    throw new Error(`Mismatched top-level const type should throw TypeError (${mode}), got ${json.error?.type}`);
+}
+
+console.log("REPL top-level const across inputs...");
+for (const mode of ["interpreted", "bytecode"]) {
+  const repl = Bun.spawnSync([REPL, `--mode=${mode}`], {
+    stdin: new TextEncoder().encode(
+      [
+        "const limit = 16; const readSameInput = () => limit;",
+        "const readLaterInput = () => limit + 1;",
+        "const limit = 17;",
+        "[readSameInput(), readLaterInput(), limit].join(\",\");",
+        "",
+      ].join("\n"),
+    ),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+  if (repl.exitCode !== 0 || !output.includes("16,17,16"))
+    throw new Error(`REPL (${mode}) top-level const across inputs expected 16,17,16, got: ${output}`);
+  if (!output.includes("SyntaxError"))
+    throw new Error(`REPL (${mode}) should reject redeclaring a top-level const, got: ${output}`);
+}
+
 // -- Stdin smoke (TestRunner) --------------------------------------------------
 
 console.log("Stdin smoke (TestRunner)...");
@@ -401,6 +434,33 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
       wideDirectEval.stdout.toString() + wideDirectEval.stderr.toString();
     if (wideDirectEval.exitCode !== 0 || wideDirectEval.stdout.toString().trim() !== "259")
       throw new Error(`Test262 Runner bytecode wide direct eval expected 259, got: ${wideDirectEvalOut}`);
+
+    // A sloppy direct eval declares a function-level var that shadows a
+    // top-level const for later reads in that function and its closures; a
+    // strict one keeps its var to itself.
+    const evalShadowSource = [
+      "const SHADOWED = 16;",
+      'const shadowedByVar = function () { eval("var SHADOWED = 5"); return SHADOWED; };',
+      'const shadowedInClosure = function () { eval("var SHADOWED = 7"); return (() => SHADOWED)(); };',
+      'const readByEval = function () { return eval("SHADOWED"); };',
+      'const strictEval = function () { "use strict"; eval("var SHADOWED = 9"); return SHADOWED; };',
+      'print([shadowedByVar(), shadowedInClosure(), readByEval(), strictEval()].join(","));',
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalShadow = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalShadowSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalShadowOut =
+        evalShadow.stdout.toString() + evalShadow.stderr.toString();
+      if (evalShadow.exitCode !== 0 || evalShadow.stdout.toString().trim() !== "5,7,16,16")
+        throw new Error(`Test262 Runner ${mode} direct eval shadowing a top-level const expected 5,7,16,16, got: ${evalShadowOut}`);
+    }
 
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(

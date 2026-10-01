@@ -3,13 +3,20 @@ description: A function in an imported module reads that module's top-level bind
 features: [modules]
 ---*/
 
+import * as bindings from "./helpers/top-level-binding-read.js";
 import {
   bumpImportedCounter,
+  EXPORTED_LIMIT,
+  HALF_LIMIT,
+  limitAfterInitialization,
+  limitBeforeInitialization,
   readAfterInitialization,
   readBeforeInitialization,
+  readExportedLimit,
   readImportedCounter,
   readLate,
   readLimit,
+  readLimitEarly,
   readSettings,
   setLate,
 } from "./helpers/top-level-binding-read.js";
@@ -45,6 +52,21 @@ describe("top-level binding reads in a module that has imports", () => {
       setLate(value);
       expect(Object.is(readLate(), value)).toBe(true);
     }
+  });
+
+  test("a const with a literal initializer has a dead zone too", () => {
+    expect(limitBeforeInitialization).toBe("ReferenceError");
+    expect(limitAfterInitialization).toBe("16");
+    expect(readLimitEarly()).toBe(16);
+  });
+
+  test("an exported const reaches importers and the module's own functions", () => {
+    expect(EXPORTED_LIMIT).toBe(32);
+    expect(HALF_LIMIT).toBe(16);
+    expect(readExportedLimit()).toBe(48);
+    expect(bindings.EXPORTED_LIMIT).toBe(32);
+    expect(bindings.HALF_LIMIT).toBe(16);
+    expect(Object.keys(bindings).includes("EXPORTED_LIMIT")).toBe(true);
   });
 
   test("repeated reads of a const return the same value", () => {
