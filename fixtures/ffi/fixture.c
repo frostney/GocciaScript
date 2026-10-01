@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -31,6 +32,17 @@ int negate_i32(int a) {
 
 int identity_i32(int a) {
   return a;
+}
+
+// -- Booleans ---------------------------------------------------------------
+
+int32_t ffi_v2_select_by_flag(bool flag, int32_t value) {
+  return flag ? value : -value;
+}
+
+int32_t ffi_v2_select_by_flag_and_label(const char* label, bool flag, int32_t value) {
+  int32_t total = value + (int32_t)strlen(label);
+  return flag ? total : -total;
 }
 
 int32_t ffi_v2_signed_i8_to_i32(int8_t value) {
