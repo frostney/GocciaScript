@@ -4688,9 +4688,17 @@ begin
             DiscardPendingHostWork;
             raise;
           end;
+          { A hook that threw never reached its drain. Its failure is recorded;
+            the jobs, timers and fetch completions it left go with it instead
+            of running in whatever is next — a sibling suite still runs after
+            a failed beforeAll. A hook that returned keeps the timers it
+            scheduled, as before. }
           on E: TGocciaThrowValue do
+          begin
+            DiscardPendingHostWork;
             AssertionFailed('callback execution',
               'Callback threw an exception: ' + DescribeThrownValue(E.Value));
+          end;
           on E: Exception do
           begin
             if IsEngineIntegrityFault(E) then
@@ -4702,16 +4710,10 @@ begin
               DiscardPendingHostWork;
               raise;
             end;
+            DiscardPendingHostWork;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
           end;
         end;
-
-        { A hook that threw never reached the drain and the check above. Its
-          failure is recorded; the jobs it queued and what it left rejected
-          go with it instead of running in the next unit. After a hook that
-          returned there is nothing left to drop. }
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.ClearQueue;
       end;
     end;
   finally

@@ -5277,6 +5277,36 @@ await section("TestRunner: a file that fails with work still queued does not rea
           throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
       }
     }
+
+    // The same holds inside one file: a sibling suite still runs after a
+    // failed beforeAll, and is not handed the timer or the job it left.
+    const siblings = join(tmp, "siblings.test.js");
+    writeFileSync(
+      siblings,
+      [
+        'describe("failed hook", () => {',
+        "  beforeAll(() => {",
+        '    setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '    throw new Error("beforeAll throws");',
+        "  });",
+        '  test("is skipped", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("sibling suite", () => {',
+        '  test("runs", async () => { await null; expect(1).toBe(1); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", siblings, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
   } finally {
     clean(tmp);
   }
