@@ -4623,6 +4623,7 @@ var
   Callback, CallbackResult: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   HookFailed: Boolean;
+  PriorFailures: Boolean;
   Promise: TGocciaPromiseValue;
   RejectionReason: string;
 begin
@@ -4633,6 +4634,12 @@ begin
       Callback := ACallbacks.GetElement(I);
       if Callback.IsCallable then
       begin
+        { The failure flag covers this callback alone while it runs, so that
+          an `expect` that fails without throwing marks this hook as failed
+          and an earlier hook's failure does not mark this one. }
+        PriorFailures := FTestStats.CurrentTestHasFailures;
+        FTestStats.CurrentTestHasFailures := False;
+        try
         try
           HookFailed := False;
           CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -4646,15 +4653,9 @@ begin
               Promise.MarkHandled;
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
-              begin
-                HookFailed := True;
-                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult));
-              end
+                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult))
               else if Promise.State = gpsPending then
-              begin
-                HookFailed := True;
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
-              end;
             end
             else
               DrainMicrotasksAndFetchCompletions;
@@ -4674,14 +4675,14 @@ begin
           if TakeUnhandledRejectionReason(RejectionReason) then
           begin
             HookFailed := True;
-            if not FTestStats.CurrentTestHasFailures then
+            if not (PriorFailures or FTestStats.CurrentTestHasFailures) then
               AssertionFailed('callback execution',
                 'Unhandled promise rejection: ' + RejectionReason);
           end;
-          { A hook that failed without throwing, through its returned promise
-            or a rejection it left, gives up what it left pending like one
-            that threw. }
-          if HookFailed then
+          { A hook that failed without throwing, through a failed assertion,
+            its returned promise or a rejection it left, gives up what it left
+            pending like one that threw. }
+          if HookFailed or FTestStats.CurrentTestHasFailures then
             DiscardPendingHostWork;
         except
           { Timeout errors flag a describe/file/test deadline expiring;
@@ -4729,6 +4730,10 @@ begin
             DiscardPendingHostWork;
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
           end;
+        end;
+        finally
+          FTestStats.CurrentTestHasFailures :=
+            FTestStats.CurrentTestHasFailures or PriorFailures;
         end;
       end;
     end;

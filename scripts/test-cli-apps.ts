@@ -5348,6 +5348,8 @@ await section("TestRunner: a file that fails with work still queued does not rea
     const failedAsyncHooks: { name: string; hook: string; error: string }[] = [
       { name: "rejected", hook: 'async () => { TIMER; throw new Error("beforeAll rejects"); }', error: "beforeAll rejects" },
       { name: "unhandled", hook: '() => { TIMER; Promise.reject(new Error("beforeAll leaves a rejection")); }', error: "beforeAll leaves a rejection" },
+      // A failed expect records the failure and returns.
+      { name: "asserting", hook: '() => { TIMER; expect("hook value").toBe("expected"); }', error: 'Hook "beforeAll" in suite "failed hook" failed' },
     ];
     for (const failedHook of failedAsyncHooks) {
       const file = join(tmp, `async-hook-${failedHook.name}.test.js`);
@@ -5376,6 +5378,32 @@ await section("TestRunner: a file that fails with work still queued does not rea
         if (proc.exitCode !== 1 || !output.includes(failedHook.error) || /leaked timer ran/.test(output))
           throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
       }
+    }
+
+    // Only the hook that failed loses its timer: one that succeeds after it
+    // keeps the timer it scheduled, which runs at the end of the next test.
+    const keptTimer = join(tmp, "kept-timer.test.js");
+    writeFileSync(
+      keptTimer,
+      [
+        'describe("hooks", () => {',
+        '  beforeEach(() => { setTimeout(() => console.log("leaked " + "timer ran"), 0); expect("hook value").toBe("expected"); });',
+        '  beforeEach(() => { setTimeout(() => console.log("kept " + "timer ran"), 0); });',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", keptTimer, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("kept timer ran") || /leaked timer ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop only the failed hook's timer, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
 
     // A describe body whose queued job throws fails the file, and the tests
