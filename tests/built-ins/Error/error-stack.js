@@ -3,6 +3,12 @@ description: Error objects have a stack property with a formatted stack trace
 features: [Error, stack]
 ---*/
 
+import {
+  importedAfterConstruction,
+  importedAfterFunctionCall,
+  importedAfterMethodCall,
+} from "./helpers/stack-after-operation.js";
+
 test("Error has stack property", () => {
   const error = new Error("test message");
   expect(typeof error.stack).toBe("string");
@@ -195,4 +201,100 @@ test("a built-in call that succeeds does not relocate a later error", () => {
 
   // Seven lines apart: the two successful calls in between leave no trace.
   expect(secondPosition.line - firstPosition.line).toBe(7);
+});
+
+// An error that a nested call caught. Its stack lists every frame below the
+// failure, so the frame that called this shows up as it was left, without that
+// frame throwing or calling a built-in itself.
+const absent = { value: null };
+const failInNestedCall = () => {
+  const fail = () => {
+    try {
+      absent.value.x;
+    } catch (e) {
+      return e;
+    }
+  };
+  const error = fail();
+  return error;
+};
+
+// The stacks a scenario yields when it skips and when it performs its
+// operation. Both runs are reached from one call site, so the stacks can differ
+// only by what the operation left on the scenario's own frame. A scenario binds
+// the error before returning it: a call in tail position would replace the
+// frame being examined.
+const stacksAroundOperation = (scenario) =>
+  [false, true].map((perform) => scenario(perform).stack);
+
+const expectFrameUnchanged = (scenario) => {
+  const [skipped, performed] = stacksAroundOperation(scenario);
+
+  expect(performed).toBe(skipped);
+  expect(performed.includes("at " + scenario.name + " (")).toBe(true);
+};
+
+const magnitude = Math.abs;
+
+test("a built-in function call that returns leaves its caller's frame as it found it", () => {
+  const afterFunctionCall = (perform) => {
+    if (perform) magnitude(-1);
+    const error = failInNestedCall();
+    return error;
+  };
+  const locatedThenFunctionCall = (perform) => {
+    try {
+      absent.value.x;
+    } catch (e) {}
+    if (perform) magnitude(-1);
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterFunctionCall);
+  expectFrameUnchanged(locatedThenFunctionCall);
+});
+
+test("a built-in method call that returns leaves its caller's frame as it found it", () => {
+  const afterMethodCall = (perform) => {
+    if (perform) Math.max(1, 2);
+    const error = failInNestedCall();
+    return error;
+  };
+  const locatedThenMethodCall = (perform) => {
+    try {
+      absent.value.x;
+    } catch (e) {}
+    if (perform) Math.max(1, 2);
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterMethodCall);
+  expectFrameUnchanged(locatedThenMethodCall);
+});
+
+test("constructing a built-in leaves the constructing frame as it found it", () => {
+  const afterConstruction = (perform) => {
+    if (perform) new Map();
+    const error = failInNestedCall();
+    return error;
+  };
+  const locatedThenConstruction = (perform) => {
+    try {
+      absent.value.x;
+    } catch (e) {}
+    if (perform) new Map();
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterConstruction);
+  expectFrameUnchanged(locatedThenConstruction);
+});
+
+test("a built-in call or construction in an imported function leaves its frame as it found it", () => {
+  expectFrameUnchanged(importedAfterFunctionCall);
+  expectFrameUnchanged(importedAfterMethodCall);
+  expectFrameUnchanged(importedAfterConstruction);
 });

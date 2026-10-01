@@ -1384,6 +1384,34 @@ for (const { label, args } of [
     throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
 }
 
+// A built-in belongs to the realm that created it and runs there. Called from
+// another realm it has to hand control back to the caller's: the array literal
+// evaluated straight after the call must take the caller's Array.prototype.
+// Nothing may be called between the two, because calling one of the caller's
+// own built-ins would put the caller's realm back by itself.
+await section("Test262 Runner: calling another realm's built-in returns to the caller's realm...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode([
+        "const child = Goccia.test262.createRealm();",
+        "const childAbs = child.global.Math.abs;",
+        "const magnitude = childAbs(-3);",
+        "const after = [];",
+        "print(magnitude);",
+        "print(Object.getPrototypeOf(after) === Array.prototype);",
+        "print(Object.getPrototypeOf(after) === child.global.Array.prototype);",
+        "",
+      ].join("\n")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} cross-realm built-in call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "3\ntrue\nfalse")
+      throw new Error(`Test262 Runner ${mode} stayed in the callee's realm after a cross-realm built-in call: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
@@ -2305,6 +2333,68 @@ await section("Loader: --audit-log records capability decisions with source loca
           allowEvents[0].decision !== "allow" ||
           allowEvents[0].source?.line !== 1)
         throw new Error(`Loader Function allow audit ${mode} mismatch: ${JSON.stringify(allowEvents)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// FFI.open coerces its argument before it asks for the capability, and the
+// coercion here calls a built-in of its own. That nested call must hand the
+// call site back whole: the decision and the refusal are located at FFI.open,
+// exactly as they are when nothing runs in between.
+await section("Loader: a capability decision keeps its call site across a nested built-in call...", async () => {
+  const tmp = makeTmp();
+  try {
+    const script = join(tmp, "nested-call-site.js");
+    writeFileSync(
+      script,
+      [
+        'const outside = "./outside/library";',
+        "const coerced = { toString() { Math.abs(1); return outside; } };",
+        "try { FFI.open(outside); } catch (e) {}",
+        "try { FFI.open(coerced); } catch (e) {}",
+        "FFI.open(coerced);",
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(tmp, "allowed"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `nested-call-site-${mode}.jsonl`);
+      const proc = Bun.spawnSync(
+        [
+          RUNNER,
+          script,
+          `--mode=${mode}`,
+          `--allow-ffi=${join(tmp, "allowed")}`,
+          `--audit-log=${audit}`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1)
+        throw new Error(`Nested call site ${mode} should exit 1 on the uncaught refusal, got ${proc.exitCode}: ${output}`);
+      const { events } = readCapabilityEvents(audit);
+      if (events.length !== 3 ||
+          events.some((event) => event.kind !== "ffi.open" || event.decision !== "deny"))
+        throw new Error(`Nested call site ${mode} expected three ffi.open refusals, got ${JSON.stringify(events)}`);
+      const [direct, nested, uncaught] = events.map((event) => event.source);
+      if (direct?.line !== 3 || typeof direct?.column !== "number" || direct.column <= 0)
+        throw new Error(`Nested call site ${mode} direct refusal is not located: ${JSON.stringify(direct)}`);
+      // Lines 3 and 4 lay the call out identically; line 5 drops the "try { ".
+      if (nested?.file !== direct.file || nested?.line !== 4 || nested?.column !== direct.column)
+        throw new Error(`Nested call site ${mode} lost the call site across the nested call: ${JSON.stringify(nested)} vs ${JSON.stringify(direct)}`);
+      const uncaughtColumn = direct.column - "try { ".length;
+      if (uncaught?.file !== direct.file || uncaught?.line !== 5 || uncaught?.column !== uncaughtColumn)
+        throw new Error(`Nested call site ${mode} mislocated the uncaught refusal: ${JSON.stringify(uncaught)}`);
+      for (const expected of [
+        "PermissionDenied: ffi: ./outside/library",
+        `nested-call-site.js:5:${uncaughtColumn}`,
+        "5 | FFI.open(coerced);",
+      ]) {
+        if (!output.includes(expected))
+          throw new Error(`Nested call site ${mode} should report "${expected}", got: ${output}`);
+      }
     }
   } finally {
     clean(tmp);
