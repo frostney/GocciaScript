@@ -1751,10 +1751,10 @@ var
 begin
   if not Assigned(AValue) then
     Exit(RegisterUndefined);
-  // The primitive value classes have no descendants, so an exact class
-  // compare answers `is` without walking the parent chain: a heap object
-  // costs one class load and five pointer compares rather than three failed
-  // inheritance walks and three thread-local singleton reads.
+  // The undefined, null and number value classes are sealed, so an exact
+  // class compare answers `is` without walking the parent chain: a heap
+  // object costs one class load and five pointer compares rather than three
+  // failed inheritance walks and three thread-local singleton reads.
   ValueClass := AValue.ClassType;
   if ValueClass = TGocciaNumberLiteralValue then
   begin
