@@ -10,6 +10,7 @@ uses
   BigInteger,
 
   Goccia.Arguments.Collection,
+  Goccia.BinaryData,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.SharedPrototype,
@@ -36,6 +37,9 @@ type
     FByteOffset: Integer;
     FLength: Integer;
     FKind: TGocciaTypedArrayKind;
+    // Derived from FKind once, so an element access does not recompute them.
+    FElementSize: Integer;
+    FBinaryElementKind: TGocciaBinaryElementKind;
     FAutoLength: Boolean;
     FUsesFixedLengthIndexedStorage: Boolean;
 
@@ -193,7 +197,6 @@ uses
   Math,
 
   Goccia.Arithmetic,
-  Goccia.BinaryData,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error.Messages,
@@ -458,9 +461,9 @@ begin
   // calling here. Every other backing kind refreshes the data block as before.
   if not FUsesFixedLengthIndexedStorage then
     SyncBufferData;
-  Offset := FByteOffset + AIndex * BytesPerElement(FKind);
+  Offset := FByteOffset + AIndex * FElementSize;
   Result := ReadBinaryNumberElement(FBufferData, Offset,
-    ToBinaryElementKind(FKind), TYPED_ARRAY_LITTLE_ENDIAN);
+    FBinaryElementKind, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
 function TGocciaTypedArrayValue.ReadElement(const AIndex: Integer): Double;
@@ -481,8 +484,8 @@ begin
   // was validated by the indexed fast path; other backing kinds refresh here.
   if not FUsesFixedLengthIndexedStorage then
     SyncBufferData;
-  Offset := FByteOffset + AIndex * BytesPerElement(FKind);
-  WriteBinaryNumberElement(FBufferData, Offset, ToBinaryElementKind(FKind),
+  Offset := FByteOffset + AIndex * FElementSize;
+  WriteBinaryNumberElement(FBufferData, Offset, FBinaryElementKind,
     AValue, TYPED_ARRAY_LITTLE_ENDIAN);
 end;
 
@@ -825,6 +828,8 @@ var
 begin
   inherited Create(nil);
   FKind := AKind;
+  FElementSize := BytesPerElement(AKind);
+  FBinaryElementKind := ToBinaryElementKind(AKind);
   FByteOffset := 0;
   FLength := ALength;
   FAutoLength := False;
@@ -854,6 +859,8 @@ var
 begin
   inherited Create(nil);
   FKind := AKind;
+  FElementSize := BytesPerElement(AKind);
+  FBinaryElementKind := ToBinaryElementKind(AKind);
   FBufferValue := ABuffer;
   FBufferData := ABuffer.Data;
   FByteOffset := AByteOffset;
@@ -885,6 +892,8 @@ var
 begin
   inherited Create(nil);
   FKind := AKind;
+  FElementSize := BytesPerElement(AKind);
+  FBinaryElementKind := ToBinaryElementKind(AKind);
   FBufferValue := ASharedBuffer;
   FBufferData := ASharedBuffer.Data;
   FByteOffset := AByteOffset;

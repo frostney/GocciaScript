@@ -290,4 +290,82 @@ describe("TypedArray unboxed element fast path", () => {
       expect(ta[len - 1]).toBe(-32768);
     });
   });
+
+  describe("element byte layout through an index", () => {
+    test("stores every integer width little-endian", () => {
+      const buffer = new ArrayBuffer(16);
+      const bytes = new Uint8Array(buffer);
+
+      new Uint16Array(buffer, 0, 1)[0] = 0x1234;
+      new Int16Array(buffer, 2, 1)[0] = -2;
+      new Uint32Array(buffer, 4, 1)[0] = 0x89abcdef;
+      new Int32Array(buffer, 8, 1)[0] = -0x01020304;
+      new Int8Array(buffer, 12, 1)[0] = -128;
+      new Uint8ClampedArray(buffer, 13, 1)[0] = 300;
+
+      expect(Array.from(bytes)).toEqual([
+        0x34, 0x12,
+        0xfe, 0xff,
+        0xef, 0xcd, 0xab, 0x89,
+        0xfc, 0xfc, 0xfd, 0xfe,
+        0x80,
+        0xff,
+        0, 0,
+      ]);
+    });
+
+    test("reads every integer width back from little-endian bytes", () => {
+      const buffer = new ArrayBuffer(16);
+      const bytes = new Uint8Array(buffer);
+      bytes.set([
+        0x34, 0x12,
+        0xfe, 0xff,
+        0xef, 0xcd, 0xab, 0x89,
+        0xfc, 0xfc, 0xfd, 0xfe,
+        0x80,
+        0xff,
+      ]);
+
+      expect(new Uint16Array(buffer, 0, 1)[0]).toBe(0x1234);
+      expect(new Int16Array(buffer, 2, 1)[0]).toBe(-2);
+      expect(new Uint32Array(buffer, 4, 1)[0]).toBe(0x89abcdef);
+      expect(new Int32Array(buffer, 8, 1)[0]).toBe(-0x01020304);
+      expect(new Int8Array(buffer, 12, 1)[0]).toBe(-128);
+      expect(new Uint8ClampedArray(buffer, 13, 1)[0]).toBe(255);
+    });
+
+    test("stores and reads float64 and float32 bit patterns", () => {
+      const buffer = new ArrayBuffer(16);
+      const bytes = new Uint8Array(buffer);
+      const doubles = new Float64Array(buffer, 0, 1);
+      const singles = new Float32Array(buffer, 8, 2);
+
+      doubles[0] = -1.5;
+      singles[0] = 0.1;
+      singles[1] = -2;
+
+      // -1.5 is 0xBFF8000000000000; Math.fround(0.1) is 0x3DCCCCCD; -2 is
+      // 0xC0000000.
+      expect(Array.from(bytes)).toEqual([
+        0, 0, 0, 0, 0, 0, 0xf8, 0xbf,
+        0xcd, 0xcc, 0xcc, 0x3d,
+        0, 0, 0, 0xc0,
+      ]);
+      expect(doubles[0]).toBe(-1.5);
+      expect(singles[0]).toBe(Math.fround(0.1));
+      expect(singles[1]).toBe(-2);
+    });
+
+    test("stores NaN with the canonical bit pattern", () => {
+      const buffer = new ArrayBuffer(12);
+      const bytes = new Uint8Array(buffer);
+      new Float64Array(buffer, 0, 1)[0] = NaN;
+      new Float32Array(buffer, 8, 1)[0] = NaN;
+
+      expect(Array.from(bytes)).toEqual([
+        0, 0, 0, 0, 0, 0, 0xf8, 0x7f,
+        0, 0, 0xc0, 0x7f,
+      ]);
+    });
+  });
 });
