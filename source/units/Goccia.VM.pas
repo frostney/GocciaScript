@@ -1747,10 +1747,17 @@ end;
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   NumberValue: Double;
+  ValueClass: TClass;
 begin
-  if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
+  if not Assigned(AValue) then
     Exit(RegisterUndefined);
-  if AValue is TGocciaNullLiteralValue then
+  // The undefined, null and number value classes have no descendants, so an
+  // exact class comparison decides what `is` would, without walking the
+  // parent chain of every object that is none of them.
+  ValueClass := AValue.ClassType;
+  if ValueClass = TGocciaUndefinedLiteralValue then
+    Exit(RegisterUndefined);
+  if ValueClass = TGocciaNullLiteralValue then
     Exit(RegisterNull);
   if AValue = TGocciaHoleValue.HoleValue then
     Exit(RegisterHole);
@@ -1758,7 +1765,7 @@ begin
     Exit(RegisterBoolean(True));
   if AValue = TGocciaBooleanLiteralValue.FalseValue then
     Exit(RegisterBoolean(False));
-  if AValue is TGocciaNumberLiteralValue then
+  if ValueClass = TGocciaNumberLiteralValue then
   begin
     NumberValue := TGocciaNumberLiteralValue(AValue).Value;
     if NumberValue = 0.0 then
