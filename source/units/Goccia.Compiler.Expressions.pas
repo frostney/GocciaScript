@@ -30,7 +30,8 @@ procedure CompileUnary(const ACtx: TGocciaCompilationContext;
 procedure CompileAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaAssignmentExpression; const ADest: UInt16);
 procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaArrowFunctionExpression; const ADest: UInt16);
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
@@ -68,7 +69,8 @@ procedure CompileReturnValueTailAware(const ACtx: TGocciaCompilationContext;
 procedure CompileNewExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaNewExpression; const ADest: UInt16);
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
 procedure CompilePropertyCompoundAssignment(const ACtx: TGocciaCompilationContext;
@@ -1986,6 +1988,48 @@ begin
 end;
 
 
+// A const local whose declaration has already been compiled keeps its value in
+// its own register for the rest of its scope: nothing can assign it, and a read
+// compiled after the declaration cannot run before it. Such a read needs
+// neither the TDZ check nor a copy, so an instruction may take the register as
+// its operand.
+function TryResolveSettledLocalRegister(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+var
+  LocalIdx: Integer;
+  Local: TGocciaCompilerLocal;
+  Name: string;
+begin
+  Result := False;
+  if not (AExpr is TGocciaIdentifierExpression) then
+    Exit;
+  Name := TGocciaIdentifierExpression(AExpr).Name;
+  if ShouldTryWithBinding(ACtx.Scope, Name) then
+    Exit;
+  LocalIdx := ACtx.Scope.ResolveLocal(Name);
+  if LocalIdx < 0 then
+    Exit;
+  Local := ACtx.Scope.GetLocal(LocalIdx);
+  if (not Local.IsConst) or (not Local.IsInitialized) or Local.IsVar or
+     Local.IsImportBinding or Local.IsGlobalBacked then
+    Exit;
+  ARegister := Local.Slot;
+  Result := True;
+end;
+
+// Compiles AExpr as a read-only instruction operand. Returns True when
+// ARegister is a temporary that the caller releases with FreeRegister. The
+// instruction that consumes the operand must not write to ARegister.
+function CompileOperand(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+begin
+  if TryResolveSettledLocalRegister(ACtx, AExpr, ARegister) then
+    Exit(False);
+  ARegister := ACtx.Scope.AllocateRegister;
+  ACtx.CompileExpression(AExpr, ARegister);
+  Result := True;
+end;
+
 function IsArithmeticCompoundAssign(const ATokenType: TGocciaTokenType;
   out AArithOp: TGocciaTokenType): Boolean;
 begin
@@ -2033,6 +2077,7 @@ var
   LeftType, RightType: TGocciaLocalType;
   PrivateExpr: TGocciaPrivateMemberExpression;
   Immediate: Int16;
+  OwnsRegB, OwnsRegC: Boolean;
 begin
   if TryFoldBinary(ACtx, AExpr, ADest) then
     Exit;
@@ -2084,11 +2129,11 @@ begin
      HasExactNumberProof(ACtx.Scope, AExpr.Left) and
      TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
   begin
-    RegB := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.Left, RegB);
+    OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
     EmitInstruction(ACtx, EncodeABC(OP_SUB_NUM_IMM, ADest, RegB,
       UInt16(Immediate)));
-    ACtx.Scope.FreeRegister;
+    if OwnsRegB then
+      ACtx.Scope.FreeRegister;
     Exit;
   end;
 
@@ -2097,30 +2142,27 @@ begin
     if HasExactNumberProof(ACtx.Scope, AExpr.Left) and
        TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
     begin
-      RegB := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(AExpr.Left, RegB);
+      OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
       EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
         UInt16(Immediate)));
-      ACtx.Scope.FreeRegister;
+      if OwnsRegB then
+        ACtx.Scope.FreeRegister;
       Exit;
     end;
     if HasExactNumberProof(ACtx.Scope, AExpr.Right) and
        TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
     begin
-      RegB := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(AExpr.Right, RegB);
+      OwnsRegB := CompileOperand(ACtx, AExpr.Right, RegB);
       EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
         UInt16(Immediate)));
-      ACtx.Scope.FreeRegister;
+      if OwnsRegB then
+        ACtx.Scope.FreeRegister;
       Exit;
     end;
   end;
 
-  RegB := ACtx.Scope.AllocateRegister;
-  RegC := ACtx.Scope.AllocateRegister;
-
-  ACtx.CompileExpression(AExpr.Left, RegB);
-  ACtx.CompileExpression(AExpr.Right, RegC);
+  OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
+  OwnsRegC := CompileOperand(ACtx, AExpr.Right, RegC);
 
   LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
   RightType := ExpressionType(ACtx.Scope, AExpr.Right);
@@ -2140,8 +2182,10 @@ begin
       EmitInstruction(ACtx, EncodeABC(Op, ADest, RegB, RegC));
   end;
 
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsRegC then
+    ACtx.Scope.FreeRegister;
+  if OwnsRegB then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileDelete(const ACtx: TGocciaCompilationContext;
@@ -2676,10 +2720,12 @@ begin
 end;
 
 procedure CompilePropertyAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaPropertyAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   BaseReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt16;
   KeyIdx: UInt16;
+  OwnsObjReg, OwnsValReg: Boolean;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -2704,19 +2750,18 @@ begin
     Exit;
   end;
 
-  ObjReg := ACtx.Scope.AllocateRegister;
-  ValReg := ACtx.Scope.AllocateRegister;
-
-  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
-  ACtx.CompileExpression(AExpr.Value, ValReg);
+  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg);
+  OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, ValReg);
 
-  if ADest <> ValReg then
+  if ANeedsResult and (ADest <> ValReg) then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
 
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsValReg then
+    ACtx.Scope.FreeRegister;
+  if OwnsObjReg then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure EmitUndefinedCheck(const ACtx: TGocciaCompilationContext;
@@ -4778,7 +4823,7 @@ procedure CompileMember(const ACtx: TGocciaCompilationContext;
 var
   ObjReg, IdxReg, BaseReg, SuperReg, KeyReg: UInt16;
   LocalIdx: Integer;
-  ObjectRegisterAllocated: Boolean;
+  ObjectRegisterAllocated, OwnsIdxReg: Boolean;
   Local: TGocciaCompilerLocal;
   PropIdx: UInt16;
   EndJump, JumpIndex: Integer;
@@ -4870,6 +4915,9 @@ begin
       end;
     end;
   end;
+  if ObjectRegisterAllocated and
+     TryResolveSettledLocalRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+    ObjectRegisterAllocated := False;
   if ObjectRegisterAllocated then
   begin
     ObjReg := ACtx.Scope.AllocateRegister;
@@ -4882,10 +4930,10 @@ begin
 
   if AExpr.Computed then
   begin
-    IdxReg := ACtx.Scope.AllocateRegister;
-    ACtx.CompileExpression(AExpr.PropertyExpression, IdxReg);
+    OwnsIdxReg := CompileOperand(ACtx, AExpr.PropertyExpression, IdxReg);
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
-    ACtx.Scope.FreeRegister;
+    if OwnsIdxReg then
+      ACtx.Scope.FreeRegister;
   end
   else
     EmitLoadPropertyByName(ACtx, ADest, ObjReg, AExpr.PropertyName);
@@ -4908,6 +4956,7 @@ function TryEmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
 var
   Binary: TGocciaBinaryExpression;
   LeftReg, RightReg: UInt16;
+  OwnsLeftReg, OwnsRightReg: Boolean;
 begin
   Result := False;
   if not (ACondition is TGocciaBinaryExpression) then
@@ -4915,13 +4964,13 @@ begin
   Binary := TGocciaBinaryExpression(ACondition);
   if Binary.Operator <> gttLess then
     Exit;
-  LeftReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(Binary.Left, LeftReg);
-  RightReg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(Binary.Right, RightReg);
+  OwnsLeftReg := CompileOperand(ACtx, Binary.Left, LeftReg);
+  OwnsRightReg := CompileOperand(ACtx, Binary.Right, RightReg);
   AJumpIndex := EmitJumpIfNotLessThan(ACtx, LeftReg, RightReg);
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsRightReg then
+    ACtx.Scope.FreeRegister;
+  if OwnsLeftReg then
+    ACtx.Scope.FreeRegister;
   Result := True;
 end;
 
@@ -5902,9 +5951,11 @@ begin
 end;
 
 procedure CompileComputedPropertyAssignment(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16);
+  const AExpr: TGocciaComputedPropertyAssignmentExpression; const ADest: UInt16;
+  const ANeedsResult: Boolean = True);
 var
   BaseReg, KeyReg, ObjReg, SuperReg, ThisReg, ValReg: UInt16;
+  OwnsObjReg, OwnsKeyReg, OwnsValReg: Boolean;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -5930,23 +5981,22 @@ begin
     Exit;
   end;
 
-  ObjReg := ACtx.Scope.AllocateRegister;
-  KeyReg := ACtx.Scope.AllocateRegister;
-  ValReg := ACtx.Scope.AllocateRegister;
-
-  ACtx.CompileExpression(AExpr.ObjectExpr, ObjReg);
-  ACtx.CompileExpression(AExpr.PropertyExpression, KeyReg);
-  ACtx.CompileExpression(AExpr.Value, ValReg);
+  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg);
+  OwnsKeyReg := CompileOperand(ACtx, AExpr.PropertyExpression, KeyReg);
+  OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), ObjReg, KeyReg,
     ValReg));
 
-  if ADest <> ValReg then
+  if ANeedsResult and (ADest <> ValReg) then
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ValReg, 0));
 
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
-  ACtx.Scope.FreeRegister;
+  if OwnsValReg then
+    ACtx.Scope.FreeRegister;
+  if OwnsKeyReg then
+    ACtx.Scope.FreeRegister;
+  if OwnsObjReg then
+    ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileFunctionExpression(const ACtx: TGocciaCompilationContext;
