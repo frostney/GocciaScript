@@ -1074,10 +1074,14 @@ begin
       // function declarations, which can run earlier, are compiled before
       // all of them. Non-strict compatibility mode keeps the named read,
       // because a sloppy direct eval can shadow the name with a
-      // function-level var at run time.
+      // function-level var at run time. So does a coverage run: a ternary or
+      // logical expression decided by the constant would be folded and lose
+      // its branch records.
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
-        not (IsTopLevelGlobalBacked and ACtx.CompatibilityNonStrictMode) and
+        not (IsTopLevelGlobalBacked and
+          (ACtx.CompatibilityNonStrictMode or
+           ACtx.OptimizationOptions.PreserveCoverageShape)) and
         HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
 

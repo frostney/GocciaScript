@@ -2002,6 +2002,22 @@ begin
   finally
     Module.Free;
   end;
+
+  // A logical expression and a ternary decided by the constant keep their
+  // branches under coverage as well: the constant is not propagated at all.
+  Module := CompileSource(
+    'const on = false; const f = (g) => on && g(); ' +
+    'const h = (g) => (on ? g() : 2);', False, True, True);
+  try
+    Expect<Boolean>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_JUMP_IF_FALSE) > 0).ToBe(True);
+    Expect<Boolean>(
+      CountOp(Module.TopLevel.GetFunction(1), OP_JUMP_IF_FALSE) > 0).ToBe(True);
+    Expect<Boolean>(CountOpRecursive(Module.TopLevel, OP_GET_GLOBAL) >= 2)
+      .ToBe(True);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestConstantEvaluationOptionsAreIndependent;
