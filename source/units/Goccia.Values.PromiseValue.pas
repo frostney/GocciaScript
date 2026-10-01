@@ -834,7 +834,10 @@ begin
       Reaction.OnRejected := AOnRejected;
       Reaction.ResultPromise := CapabilityHost;
       Reaction.Context := CurrentAsyncContext;
-      Reaction.Scope := CurrentMicrotaskScope;
+      if Assigned(Queue) then
+        Reaction.Scope := Queue.CurrentScope
+      else
+        Reaction.Scope := 0;
       if not Assigned(APromise.FReactions) then
         APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
       APromise.FReactions.Add(Reaction);

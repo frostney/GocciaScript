@@ -414,6 +414,11 @@ begin
   Task := AMicrotask;
   Task.Context := AContext;
   AddQueuedRoots(Task);
+  if AScope = FScopeId then
+  begin
+    FQueue.Add(Task);
+    Exit;
+  end;
   OuterIndex := FindOuterScope(AScope);
   if OuterIndex < 0 then
     FQueue.Add(Task)
