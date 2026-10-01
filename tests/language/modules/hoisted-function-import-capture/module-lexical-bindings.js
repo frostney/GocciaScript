@@ -14,6 +14,12 @@ import defaultExpressionReadsConst, {
 } from "./helpers/module-lexical-bindings.js";
 import mutableDefaultFunction from "./helpers/module-default-declaration.js";
 import {
+  exportedAfterInitialization,
+  exportedBeforeInitialization,
+  internalAfterInitialization,
+  internalBeforeInitialization,
+} from "./helpers/module-internal-function-const.js";
+import {
   linkedFunctionMatches,
   observedCycleRead,
   readCycleValue,
@@ -43,6 +49,13 @@ describe("imported module functions capture module lexical bindings", () => {
   test("named default declarations retain their mutable module binding", () => {
     expect(mutableDefaultFunction()).toBe("initial");
     expect(mutableDefaultFunction).toBe("changed");
+  });
+
+  test("function declarations called above a const with a literal value see its dead zone", () => {
+    expect(internalBeforeInitialization).toBe("ReferenceError");
+    expect(exportedBeforeInitialization).toBe("ReferenceError");
+    expect(internalAfterInitialization).toBe("16");
+    expect(exportedAfterInitialization).toBe("16");
   });
 
   test("cyclic reads preserve TDZ and initialize for later calls", () => {
