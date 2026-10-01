@@ -120,6 +120,10 @@ function CurrentRealm: TGocciaRealm; {$IFDEF FPC}inline;{$ENDIF}
 // other host code generally should not call this directly.
 procedure SetCurrentRealm(const ARealm: TGocciaRealm);
 
+// Installs ARealm as the current realm and returns the one it replaces, with
+// one thread-local lookup instead of the two a read followed by a write costs.
+function ExchangeCurrentRealm(const ARealm: TGocciaRealm): TGocciaRealm;
+
 procedure PushCurrentFunctionExecutionContext(const AScope: TObject;
   const AFunctionValue: TObject);
 procedure PopCurrentFunctionExecutionContext;
@@ -213,6 +217,15 @@ end;
 procedure SetCurrentRealm(const ARealm: TGocciaRealm);
 begin
   GCurrentRealm := ARealm;
+end;
+
+function ExchangeCurrentRealm(const ARealm: TGocciaRealm): TGocciaRealm;
+var
+  Current: ^TGocciaRealm;
+begin
+  Current := @GCurrentRealm;
+  Result := Current^;
+  Current^ := ARealm;
 end;
 
 procedure PushCurrentFunctionExecutionContext(const AScope: TObject;

@@ -76,6 +76,16 @@ type
     Context: TGocciaExecutionContext;
     PreviousRealm: TGocciaRealm;
   end;
+  PGocciaExecutionContextStackEntry = ^TGocciaExecutionContextStackEntry;
+
+  // The stack and its depth live in one thread variable. Every reference to a
+  // thread variable is a thread-local lookup, and Push and Pop run on each VM
+  // call, so they resolve this record once and work through the pointer.
+  TGocciaExecutionContextThreadState = record
+    Entries: array of TGocciaExecutionContextStackEntry;
+    Count: Integer;
+  end;
+  PGocciaExecutionContextThreadState = ^TGocciaExecutionContextThreadState;
 
 threadvar
   // Non-owning context stack.  Scope and FunctionValue are GC-managed objects
@@ -120,8 +130,7 @@ threadvar
   // A push site that cannot point at such a root makes this array the last
   // reference to a collectible object; it would then need a real
   // TGCRootSource (see TGocciaAsyncContextRoots for the shape).
-  GExecutionContextStack: array of TGocciaExecutionContextStackEntry;
-  GExecutionContextStackCount: Integer;
+  GExecutionContextState: TGocciaExecutionContextThreadState;
   GInternedSourcePaths: PGocciaInternedSourcePath;
 
 function InternSourcePath(const ASourcePath: string): Pointer;
@@ -180,40 +189,48 @@ end;
 
 class procedure TGocciaExecutionContextStack.Push(
   const AContext: TGocciaExecutionContext);
+var
+  State: PGocciaExecutionContextThreadState;
+  Entry: PGocciaExecutionContextStackEntry;
 begin
   if not Assigned(AContext.Realm) then
     raise Exception.Create('Execution context requires a realm.');
 
-  if GExecutionContextStackCount >= Length(GExecutionContextStack) then
-    SetLength(GExecutionContextStack, GExecutionContextStackCount * 2 + 8);
+  State := @GExecutionContextState;
+  if State^.Count >= Length(State^.Entries) then
+    SetLength(State^.Entries, State^.Count * 2 + 8);
 
-  GExecutionContextStack[GExecutionContextStackCount].Context := AContext;
-  GExecutionContextStack[GExecutionContextStackCount].PreviousRealm :=
-    Goccia.Realm.CurrentRealm;
-  Inc(GExecutionContextStackCount);
-
-  SetCurrentRealm(AContext.Realm);
+  Entry := @State^.Entries[State^.Count];
+  Entry^.Context := AContext;
+  Entry^.PreviousRealm := ExchangeCurrentRealm(AContext.Realm);
+  Inc(State^.Count);
 end;
 
 class function TGocciaExecutionContextStack.Pop: TGocciaExecutionContext;
 var
+  State: PGocciaExecutionContextThreadState;
+  Entry: PGocciaExecutionContextStackEntry;
   PreviousRealm: TGocciaRealm;
 begin
-  if GExecutionContextStackCount <= 0 then
+  State := @GExecutionContextState;
+  if State^.Count <= 0 then
     raise Exception.Create('Execution context stack underflow.');
 
-  Dec(GExecutionContextStackCount);
-  Result := GExecutionContextStack[GExecutionContextStackCount].Context;
-  PreviousRealm := GExecutionContextStack[GExecutionContextStackCount].PreviousRealm;
-  GExecutionContextStack[GExecutionContextStackCount] :=
-    Default(TGocciaExecutionContextStackEntry);
+  Dec(State^.Count);
+  Entry := @State^.Entries[State^.Count];
+  Result := Entry^.Context;
+  PreviousRealm := Entry^.PreviousRealm;
+  Entry^ := Default(TGocciaExecutionContextStackEntry);
   SetCurrentRealm(PreviousRealm);
 end;
 
 class function TGocciaExecutionContextStack.Running: TGocciaExecutionContext;
+var
+  State: PGocciaExecutionContextThreadState;
 begin
-  if GExecutionContextStackCount > 0 then
-    Result := GExecutionContextStack[GExecutionContextStackCount - 1].Context
+  State := @GExecutionContextState;
+  if State^.Count > 0 then
+    Result := State^.Entries[State^.Count - 1].Context
   else
     Result := Default(TGocciaExecutionContext);
 
@@ -232,13 +249,16 @@ end;
 
 class function TGocciaExecutionContextStack.HasRunning: Boolean;
 begin
-  Result := GExecutionContextStackCount > 0;
+  Result := GExecutionContextState.Count > 0;
 end;
 
 class function TGocciaExecutionContextStack.CurrentRealm: TGocciaRealm;
+var
+  State: PGocciaExecutionContextThreadState;
 begin
-  if GExecutionContextStackCount > 0 then
-    Result := GExecutionContextStack[GExecutionContextStackCount - 1].Context.Realm
+  State := @GExecutionContextState;
+  if State^.Count > 0 then
+    Result := State^.Entries[State^.Count - 1].Context.Realm
   else
     Result := Goccia.Realm.CurrentRealm;
 end;
@@ -281,7 +301,7 @@ end;
 initialization
 
 finalization
-  SetLength(GExecutionContextStack, 0);
-  GExecutionContextStackCount := 0;
+  SetLength(GExecutionContextState.Entries, 0);
+  GExecutionContextState.Count := 0;
 
 end.
