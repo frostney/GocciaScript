@@ -952,6 +952,11 @@ function TGocciaFetchManagerImpl.PumpCompletions: Integer;
 var
   Completion: TGocciaFetchCompletion;
 begin
+  { A request's socket gives up when the run's deadline does, so its failure
+    reaches this queue at the same instant the run should end. The deadline
+    wins: an expired run is ended by its TimeoutError, not handed a rejected
+    promise it could catch and run past. }
+  CheckExecutionTimeoutNow;
   Result := RejectAbortedFetches;
   while PopCompletion(Completion) do
   begin
@@ -985,7 +990,7 @@ begin
 
     while HasPending and (PumpCompletions = 0) do
     begin
-      CheckExecutionTimeout;
+      CheckExecutionTimeoutNow;
       Sleep(FETCH_POLL_INTERVAL_MS);
     end;
   end;
@@ -1010,7 +1015,7 @@ begin
       Break;
     while HasPendingFor(ARealm) and (PumpCompletions = 0) do
     begin
-      CheckExecutionTimeout;
+      CheckExecutionTimeoutNow;
       Sleep(FETCH_POLL_INTERVAL_MS);
     end;
   until False;
@@ -1111,7 +1116,7 @@ begin
     if APromise.State <> gpsPending then
       Exit(True);
 
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
     CheckInstructionLimit;
 
     Manager := TGocciaFetchManager.Instance;

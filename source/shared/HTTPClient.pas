@@ -780,6 +780,13 @@ var
   begin
     ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
     Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+    { A read that the socket timeout cut short returns nothing, exactly like
+      a peer that closed the connection. With the deadline passed it is the
+      timeout, and is reported as one rather than as whatever a short
+      response would otherwise be taken for. }
+    if (Result <= 0) and (ADeadlineNs <> 0) and
+       (GetNanoseconds >= ADeadlineNs) then
+      raise EHTTPError.Create('HTTP request timed out');
   end;
 begin
   Result.StatusCode := 0;
