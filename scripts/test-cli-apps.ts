@@ -3069,6 +3069,41 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
 
+    console.log("Loader: line coverage of an expression spread over several lines...");
+    // Each operand sits on its own line. The compiler can use a const local's
+    // register as an operand without emitting an instruction for it, and a
+    // line with no instruction would be reported as never executed.
+    const operandSourcePath = join(tmp, "operand-coverage.js");
+    writeFileSync(
+      operandSourcePath,
+      [
+        "const id = (x) => x;",
+        "const price = (unitPrice, quantity, discount) => {",
+        "  const subtotal = id(unitPrice);",
+        "  const count = id(quantity);",
+        "  const rebate = id(discount);",
+        "  const total =",
+        "    subtotal *",
+        "    count -",
+        "    rebate;",
+        "  return total;",
+        "};",
+        "console.log(price(10, 3, 5));",
+        "",
+      ].join("\n"),
+    );
+    const operandLcovPath = join(tmp, "operand-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${operandLcovPath} ${operandSourcePath}`.quiet();
+    const operandLcov = readFileSync(operandLcovPath, "utf-8");
+    for (const line of [8, 9]) {
+      if (!operandLcov.includes(`DA:${line},1`)) {
+        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${operandLcov}`);
+      }
+    }
+    if (/^DA:\d+,0$/m.test(operandLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
+    }
+
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(
