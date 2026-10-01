@@ -124,6 +124,7 @@ uses
   Goccia.Executor.Interpreter,
   Goccia.InstructionLimit,
   Goccia.MemoryLimit,
+  Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.Timeout,
   Goccia.Values.ArrayValue,
@@ -451,6 +452,8 @@ var
   EngineCapabilities: TGocciaCapabilities;
   RenderScope: TGocciaDiagnosticSourceScope;
   ExpectedPrincipal: Int64;
+  MicrotaskQueue: TGocciaMicrotaskQueue;
+  CloneScopeToken: Integer;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Ok := False;
@@ -537,11 +540,22 @@ begin
         PushInstructionLimitScope(FMaxInstructions);
         ScriptResult := Engine.Execute;
         ExecutionRealm := CurrentRealm;
+        { Cloning reads the run's result, and reading can run its getters.
+          The run's microtask scope has ended, so without one of its own for
+          the clone, a job a getter queued would run in the caller, and a
+          promise it left rejected would fail the caller. Both end with the
+          clone instead. }
+        MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
+        CloneScopeToken := 0;
+        if Assigned(MicrotaskQueue) then
+          CloneScopeToken := MicrotaskQueue.EnterScope;
         try
           SetCurrentRealm(CloneRealm);
           Result.ResultValue := CloneResultValue(ScriptResult.Result);
         finally
           SetCurrentRealm(ExecutionRealm);
+          if Assigned(MicrotaskQueue) then
+            MicrotaskQueue.LeaveScope(CloneScopeToken);
         end;
         Result.Ok := True;
         Result.ExitCode := 0;

@@ -117,6 +117,8 @@ begin
     if AValue is TGocciaPromiseValue then
     begin
       Promise := TGocciaPromiseValue(AValue);
+      // Await performs PerformPromiseThen on the promise, which handles it.
+      Promise.MarkHandled;
       if (TGarbageCollector.Instance <> nil) then
       begin
         TGarbageCollector.Instance.AddTempRoot(Promise);
@@ -126,6 +128,9 @@ begin
     else
     begin
       Promise := TGocciaPromiseValue.Create;
+      // The awaiting frame is this promise's handler: its rejection is
+      // rethrown below, into whatever catches around the await.
+      Promise.MarkHandled;
       if (TGarbageCollector.Instance <> nil) then
       begin
         TGarbageCollector.Instance.AddTempRoot(Promise);

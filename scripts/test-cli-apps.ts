@@ -3033,6 +3033,111 @@ await section("Loader: jobs a --globals JS module leaves pending run with the sc
   }
 });
 
+await section("Loader: an unhandled promise rejection fails the run...", async () => {
+  const tmp = makeTmp();
+  try {
+    // ES2026 §27.2.1.9 HostPromiseRejectionTracker: a promise still rejected
+    // with no handler once the run has nothing left to do is reported like an
+    // uncaught throw. A handler that arrives before then cancels the report.
+    // The runner prints an uncaught error where it prints an uncaught throw.
+    const cases: { name: string; source: string; exitCode: number; stdout: string; error: string | null }[] = [
+      {
+        name: "left unhandled",
+        source: 'Promise.reject(new Error("left unhandled"));\nconsole.log("end of script");\n',
+        exitCode: 1,
+        stdout: "end of script",
+        error: "Error: left unhandled",
+      },
+      {
+        name: "unawaited async throw",
+        source: 'const fail = async () => { throw new TypeError("async throw"); };\nfail();\nconsole.log("end of script");\n',
+        exitCode: 1,
+        stdout: "end of script",
+        error: "TypeError: async throw",
+      },
+      {
+        name: "handled from a queued job",
+        source: 'const rejected = Promise.reject(new Error("handled later"));\nqueueMicrotask(() => rejected.catch(() => console.log("handled")));\nconsole.log("end of script");\n',
+        exitCode: 0,
+        stdout: "end of script\nhandled",
+        error: null,
+      },
+      {
+        name: "caught around an await",
+        source: 'const run = async () => { try { await Promise.reject(new Error("caught")); } catch (error) { console.log("caught " + error.message); } };\nrun();\n',
+        exitCode: 0,
+        stdout: "caught caught",
+        error: null,
+      },
+      {
+        name: "member of a handled Promise.all",
+        source: 'Promise.all([Promise.reject(new Error("member")), Promise.resolve(1)]).catch((error) => console.log("all " + error.message));\n',
+        exitCode: 0,
+        stdout: "all member",
+        error: null,
+      },
+    ];
+    for (const testCase of cases) {
+      const file = join(tmp, "script.js");
+      writeFileSync(file, testCase.source);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
+        const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+        const label = `Unhandled rejection (${testCase.name}, ${mode})`;
+        if (proc.exitCode !== testCase.exitCode)
+          throw new Error(`${label} should exit ${testCase.exitCode}, got ${proc.exitCode}: ${output}`);
+        if (!output.includes(testCase.stdout))
+          throw new Error(`${label} should print ${JSON.stringify(testCase.stdout)}, got: ${output}`);
+        if (testCase.error === null ? /Error:/.test(output) : !output.includes(testCase.error))
+          throw new Error(`${label} should ${testCase.error === null ? "report nothing" : `report ${testCase.error}`}, got: ${output}`);
+      }
+    }
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      const { json } = runLoaderJson('Promise.reject(new RangeError("in json"));\n', [`--mode=${mode}`]);
+      if (json.ok !== false || json.error?.type !== "RangeError" || json.error?.message !== "in json")
+        throw new Error(`Unhandled rejection (${mode}) should be the JSON envelope's error, got: ${JSON.stringify({ ok: json.ok, error: json.error })}`);
+    }
+
+    // import() settles from the module's evaluation: a module whose top-level
+    // await rejects is the importer's to catch, and one still awaiting holds
+    // the import back until its exports are initialized.
+    writeFileSync(join(tmp, "rejects.mjs"), 'await Promise.reject(new Error("top-level await rejects"));\n');
+    writeFileSync(join(tmp, "settles.mjs"), 'await null;\nawait null;\nexport const ready = "ready";\n');
+    const importer = join(tmp, "importer.mjs");
+    writeFileSync(
+      importer,
+      [
+        'try { await import("./rejects.mjs"); console.log("not caught"); } catch (error) { console.log("caught " + error.message); }',
+        'await import("./rejects.mjs").catch((error) => console.log("again " + error.message));',
+        'console.log((await import("./settles.mjs")).ready);',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync([RUNNER, importer, "--source-type=module", `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
+      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      if (proc.exitCode !== 0 || !output.includes("caught top-level await rejects\nagain top-level await rejects\nready\n"))
+        throw new Error(`Dynamic import (${mode}) should settle from the module's evaluation, got exit ${proc.exitCode}: ${output}`);
+    }
+
+    // A file that fails takes what it left rejected with it: the next file on
+    // the same thread is not blamed for it.
+    const files = join(tmp, "files");
+    mkdirSync(files);
+    writeFileSync(join(files, "a.js"), 'Promise.reject(new Error("left by a")); throw new Error("a throws");\n');
+    writeFileSync(join(files, "b.js"), 'console.log("b is clean");\n');
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync([RUNNER, files, "--jobs=1", `--mode=${mode}`], { stdout: "pipe", stderr: "pipe" });
+      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      if (!output.includes("Error: a throws") || !output.includes("b is clean") || output.includes("Error: left by a"))
+        throw new Error(`A failed file's rejection (${mode}) should not reach the next file, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global cannot override built-in...", async () => {
   const res = await $`echo '1;' | ${RUNNER} --global console=1 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Overriding built-in should fail");
@@ -4935,6 +5040,150 @@ for (const modeArgs of [[], ["--mode=bytecode"]]) {
   }
 }
 
+await section("TestRunner: an unhandled promise rejection fails whatever left it...", async () => {
+  const tmp = makeTmp();
+  try {
+    const kinds = join(tmp, "kinds.test.js");
+    writeFileSync(
+      kinds,
+      [
+        'describe("describe body", () => {',
+        '  Promise.reject(new Error("describe rejection"));',
+        '  test("still runs", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("tests", () => {',
+        '  afterEach(() => { globalThis.afterEachRan = true; });',
+        '  test("leaves a rejection", () => { Promise.reject(new Error("test rejection")); });',
+        '  test("unawaited async throw", () => { (async () => { throw new TypeError("async throw"); })(); });',
+        '  test("handles it later", async () => { const rejected = Promise.reject(new Error("handled")); await null; await rejected.catch(() => {}); });',
+        '  test("asserts on it", async () => { await expect(Promise.reject(new Error("asserted"))).rejects.toThrow("asserted"); });',
+        '  test("is not blamed for its neighbours", () => { expect(globalThis.afterEachRan).toBe(true); });',
+        "});",
+        'describe("hooks", () => {',
+        '  beforeAll(() => { Promise.reject(new Error("hook rejection")); });',
+        '  test("is skipped", () => { expect(1).toBe(1); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const topLevel = join(tmp, "top-level.test.js");
+    writeFileSync(
+      topLevel,
+      [
+        'Promise.reject(new Error("top-level rejection"));',
+        'describe("suite", () => { test("never runs", () => { expect(1).toBe(1); }); });',
+        "",
+      ].join("\n"),
+    );
+    const throwingHooks = join(tmp, "throwing-hooks");
+    mkdirSync(throwingHooks);
+    writeFileSync(
+      join(throwingHooks, "a-first.test.js"),
+      [
+        'describe("throws before", () => {',
+        '  beforeAll(() => { Promise.reject(new Error("left by beforeAll")); throw new Error("beforeAll throws"); });',
+        '  test("is skipped", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("is not blamed", () => { test("passes", () => { expect(1).toBe(1); }); });',
+        'describe("throws after", () => {',
+        '  afterAll(() => { Promise.reject(new Error("left by afterAll")); throw new Error("afterAll throws"); });',
+        '  test("passes", () => { expect(1).toBe(1); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const throwingJobs = join(tmp, "throwing-jobs.test.js");
+    writeFileSync(
+      throwingJobs,
+      [
+        'describe("describe body", () => {',
+        '  queueMicrotask(() => { throw new Error("job from a describe body"); });',
+        '  test("still runs", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("hook", () => {',
+        '  beforeEach(() => { queueMicrotask(() => { throw new Error("job from a hook"); }); return Promise.resolve(); });',
+        '  test("fails with the hook", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("later suite", () => { test("still runs", () => { expect(1).toBe(1); }); });',
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(throwingHooks, "b-second.test.js"),
+      'describe("next file", () => { test("is clean", () => { expect(1).toBe(1); }); });\n',
+    );
+    const run = (file: string, mode: string, extraArgs: string[] = []): any => {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", file, "--no-progress", "--output=json", `--mode=${mode}`, ...extraArgs],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 1)
+        throw new Error(`TestRunner (${mode}) should exit 1 for an unhandled rejection, got ${proc.exitCode}: ${proc.stderr.toString()}`);
+      return JSON.parse(proc.stdout.toString());
+    };
+    for (const mode of ["interpreted", "bytecode"]) {
+      const kindsFile = run(kinds, mode).files[0];
+      const failures = kindsFile.failedTests.join("\n");
+      const expected = [
+        "Unhandled promise rejection outside a test: Error: describe rejection",
+        'Test "leaves a rejection" in suite "tests": unhandled promise rejection: Error: test rejection',
+        'Test "unawaited async throw" in suite "tests": unhandled promise rejection: TypeError: async throw',
+        'Hook "beforeAll" in suite "hooks" failed: Unhandled promise rejection: Error: hook rejection',
+      ];
+      for (const line of expected)
+        if (!failures.includes(line))
+          throw new Error(`TestRunner (${mode}) should report ${JSON.stringify(line)}, got:\n${failures}`);
+      if (kindsFile.failedTests.length !== expected.length)
+        throw new Error(`TestRunner (${mode}) should fail only what left a rejection, got:\n${failures}`);
+      if (kindsFile.passed !== 4 || kindsFile.failed !== 2 || kindsFile.suiteErrors !== 2)
+        throw new Error(`TestRunner (${mode}) should count 4 passed, 2 failed and 2 suite errors, got ${JSON.stringify({ passed: kindsFile.passed, failed: kindsFile.failed, suiteErrors: kindsFile.suiteErrors })}`);
+
+      // What the file's own top level leaves rejected fails the file before
+      // anything is collected, like a top-level throw.
+      const topLevelFile = run(topLevel, mode).files[0];
+      if (!String(topLevelFile.errorMessage).includes("Error: top-level rejection") || topLevelFile.passed !== 0)
+        throw new Error(`TestRunner (${mode}) should fail the file for a top-level rejection, got ${JSON.stringify({ errorMessage: topLevelFile.errorMessage, passed: topLevelFile.passed })}`);
+
+      // A hook that throws still owns what it left rejected: neither the next
+      // suite's tests nor the next file on the thread are blamed for it.
+      const hookRun = run(throwingHooks, mode, ["--jobs=1"]);
+      const observed = hookRun.files.map((file: any) => ({
+        file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+        ok: file.ok,
+        passed: file.passed,
+        failed: file.failed,
+        failures: file.failedTests,
+      }));
+      const expectedHooks = [
+        {
+          file: "a-first.test.js",
+          ok: false,
+          passed: 2,
+          failed: 0,
+          failures: [
+            'Hook "beforeAll" in suite "throws before" failed: Callback threw an exception: Error: beforeAll throws',
+            'Hook "afterAll" in suite "throws after" failed: Callback threw an exception: Error: afterAll throws',
+          ],
+        },
+        { file: "b-second.test.js", ok: true, passed: 1, failed: 0, failures: [] },
+      ];
+      if (JSON.stringify(observed) !== JSON.stringify(expectedHooks))
+        throw new Error(`TestRunner (${mode}) should keep a throwing hook's rejection with the hook, got ${JSON.stringify(observed)}`);
+
+      // A queued job that throws fails the unit that queued it; the rest of
+      // the file still runs.
+      const jobsFile = run(throwingJobs, mode).files[0];
+      const jobFailures = jobsFile.failedTests.join("\n");
+      if (jobsFile.passed !== 2 || jobsFile.failed !== 1 || jobsFile.suiteErrors !== 1 ||
+          !jobFailures.includes("Uncaught exception outside a test: Error: job from a describe body") ||
+          !jobFailures.includes("job from a hook"))
+        throw new Error(`TestRunner (${mode}) should fail only the unit whose queued job threw, got ${JSON.stringify({ passed: jobsFile.passed, failed: jobsFile.failed, suiteErrors: jobsFile.suiteErrors, failures: jobsFile.failedTests, errorMessage: jobsFile.errorMessage })}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json keeps stdout clean when script logs to console...", async () => {
   const tmp = makeTmp();
   try {
@@ -5852,6 +6101,34 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
 // GocciaREPL
 // ============================================================================
 
+await section("BenchmarkRunner: a rejection a bench body leaves is forgotten, not kept alive...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A benchmark measures and does not assert, and its bodies run after the
+    // engine's own run has ended. A promise left rejected there used to stay
+    // rooted past the engine's life, and the next collection walked into it.
+    const file = join(tmp, "rejects.js");
+    writeFileSync(
+      file,
+      microbenchModule([
+        'group("rejections", () => {',
+        '  bench("leaves a rejection", () => { Promise.reject("err"); });',
+        "});",
+      ]),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const sourceType of [[], ["--source-type=module"]]) {
+        const proc = Bun.spawnSync([BENCHRUNNER, file, `--mode=${mode}`, ...sourceType], { stdout: "pipe", stderr: "pipe" });
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0 || !output.includes("leaves a rejection") || /violation|Error:/i.test(output))
+          throw new Error(`BenchmarkRunner (${mode} ${sourceType.join(" ")}) should run a bench that leaves a rejection, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("REPL: banner (interpreted)...", async () => {
   const out = await $`echo '' | ${REPL} 2>&1`.text();
   if (!out.includes("Goccia REPL")) throw new Error(`Banner should contain "Goccia REPL", got: ${out.slice(0, 200)}`);
@@ -5876,6 +6153,24 @@ await section("REPL: ASI mode...", async () => {
 await section("REPL: error recovery...", async () => {
   const out = await $`printf 'const x = ;\n2 + 2;\n' | ${REPL} 2>&1`.text();
   if (!out.includes("4")) throw new Error(`After error, second expression should produce 4, got: ${out}`);
+});
+
+await section("REPL: an unhandled promise rejection is reported and the session continues...", async () => {
+  for (const mode of ["interpreted", "bytecode"]) {
+    const out = await $`printf 'Promise.reject(new Error("repl rejection"));\n6 * 7;\n' | ${REPL} --mode=${mode} 2>&1`.text();
+    // Reported as an uncaught error, not echoed as a value. Where the terminal
+    // does not echo piped input the report follows the prompt on its line.
+    if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("Error: repl rejection")) || out.includes("Promise {"))
+      throw new Error(`REPL (${mode}) should report the unhandled rejection, got: ${out}`);
+    if (!normalizeLineEndings(out).split("\n").some((line) => line.endsWith("42")))
+      throw new Error(`REPL (${mode}) should keep evaluating after an unhandled rejection, got: ${out}`);
+
+    // A line that fails takes what it left rejected with it: the next line is
+    // not blamed for it.
+    const next = await $`printf 'Promise.reject(new Error("left by a failing line")); throw new Error("line throws");\n10 + 1;\n' | ${REPL} --mode=${mode} 2>&1`.text();
+    if (!next.includes("Error: line throws") || !normalizeLineEndings(next).split("\n").some((line) => line.endsWith("11")) || next.includes("Error: left by a failing line"))
+      throw new Error(`REPL (${mode}) should not carry a failed line's rejection into the next line, got: ${next}`);
+  }
 });
 
 await section("REPL: bytecode evaluation...", async () => {
@@ -6436,6 +6731,58 @@ await section("Runner sandbox mode: a nested run neither runs nor drops its call
         if (normalizeLineEndings(result.stdout) !== (failing ? "" : "child: sync\nchild: job\n"))
           throw new Error(`Sandbox mode ${mode} ${result.tag} child's stdout should hold only its own output, got: ${JSON.stringify(result.stdout)}`);
       }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: an unhandled promise rejection fails the run that left it...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const report = (child) => JSON.stringify({ ok: child.ok, failureKind: child.failureKind, stdout: child.stdout, stderr: child.stderr.split(/\\r?\\n/)[0] });',
+          'console.log(report(runScript("/rejects.js")));',
+          // Reading a child's result runs its getters after its run has ended;
+          // what a getter leaves rejected ends with the child, not the caller.
+          'console.log(report(runScript("/getter.js")));',
+          // The caller's own rejection is still unhandled while a clean child
+          // runs: it is the caller's failure, not the child's.
+          'Promise.reject(new Error("caller rejection"));',
+          'console.log(report(runScript("/clean.js")));',
+        ].join("\n"),
+      },
+      { path: "/rejects.js", text: 'Promise.reject(new Error("child rejection")); console.log("child: ran");' },
+      { path: "/clean.js", text: 'console.log("child: clean");' },
+      { path: "/getter.js", text: 'console.log("child: getter"); ({ get value() { Promise.reject(new Error("from a result getter")); return 1; } });' },
+    ]);
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+      );
+      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+      const output = normalizeLineEndings(proc.stdout.toString() + proc.stderr.toString());
+      if (proc.exitCode !== 1 || !output.includes("Error: caller rejection"))
+        throw new Error(`Sandbox mode ${mode} should fail with the caller's own rejection, got exit ${proc.exitCode}: ${output}`);
+      if (output.includes("from a result getter"))
+        throw new Error(`Sandbox mode ${mode} should not report a rejection a child's result getter left, got: ${output}`);
+      const observed = lines.slice(0, 3).map((line) => {
+        const child = JSON.parse(line);
+        // The child's stdout uses the platform's line ending.
+        return { ...child, stdout: normalizeLineEndings(child.stdout) };
+      });
+      const expected = [
+        { ok: false, failureKind: "script-error", stdout: "child: ran\n", stderr: "Error: child rejection" },
+        { ok: true, failureKind: "none", stdout: "child: getter\n", stderr: "" },
+        { ok: true, failureKind: "none", stdout: "child: clean\n", stderr: "" },
+      ];
+      if (JSON.stringify(observed) !== JSON.stringify(expected))
+        throw new Error(`Sandbox mode ${mode} should fail only the child that left a rejection, got: ${lines.join("\n")}`);
     }
   } finally {
     clean(tmp);

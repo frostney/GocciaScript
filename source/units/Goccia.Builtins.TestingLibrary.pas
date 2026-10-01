@@ -250,6 +250,7 @@ type
     procedure CollectSuiteNames(const ASuite: TGocciaTestSuite;
       const ANames: TStringList);
     procedure RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
+    function TakeUnhandledRejectionReason(out AReason: string): Boolean;
     procedure AssertionPassed(const ATestName: string);
     procedure AssertionFailed(const ATestName, AMessage: string);
     procedure StartTest(const ATestName: string);
@@ -3358,6 +3359,8 @@ begin
     end;
 
     Promise := TGocciaPromiseValue(FActualValue);
+    // The assertion consumes the promise's outcome, rejection included.
+    Promise.MarkHandled;
     WaitForFetchPromise(Promise);
 
     if Promise.State = gpsFulfilled then
@@ -3396,6 +3399,8 @@ begin
     end;
 
     Promise := TGocciaPromiseValue(FActualValue);
+    // The assertion consumes the promise's outcome, rejection included.
+    Promise.MarkHandled;
     WaitForFetchPromise(Promise);
 
     if Promise.State = gpsRejected then
@@ -4240,6 +4245,7 @@ begin
               try
                 if TestResult is TGocciaPromiseValue then
                 begin
+                  TGocciaPromiseValue(TestResult).MarkHandled;
                   WaitForFetchPromise(TGocciaPromiseValue(TestResult));
                   if TGocciaPromiseValue(TestResult).State = gpsRejected then
                   begin
@@ -4316,6 +4322,26 @@ begin
                     AFailedTestDetails.Add('Test "' + TestCase.Name +
                       '": uncaught exception in a timer callback: ' +
                       RejectionReason);
+                  FailureRecorded := True;
+                end;
+
+                { A promise the test left rejected with no handler, once
+                  nothing of the test is left to run, is the same kind of
+                  uncaught error. The wait above returns as soon as a returned
+                  promise is settled, so whatever is still queued runs first:
+                  a handler attached from a job counts. }
+                DrainMicrotasksAndFetchCompletions;
+                if TakeUnhandledRejectionReason(RejectionReason) then
+                begin
+                  AssertionFailed('promise rejection',
+                    'Unhandled promise rejection: ' + RejectionReason);
+                  if FTestStats.CurrentSuiteName <> '' then
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '" in suite "' + FTestStats.CurrentSuiteName +
+                      '": unhandled promise rejection: ' + RejectionReason)
+                  else
+                    AFailedTestDetails.Add('Test "' + TestCase.Name +
+                      '": unhandled promise rejection: ' + RejectionReason);
                   FailureRecorded := True;
                 end;
               finally
@@ -4563,12 +4589,43 @@ begin
   FFocusNextTest := False;
 end;
 
+{ Takes the oldest promise that was rejected and never handled since the last
+  call, described for a failure message. The caller is at a point where
+  everything it started has run, so a handler can no longer arrive. }
+function TGocciaTestAssertions.TakeUnhandledRejectionReason(
+  out AReason: string): Boolean;
+var
+  Queue: TGocciaMicrotaskQueue;
+  Promise: TGocciaValue;
+  PromiseRoot: TGocciaTempRoot;
+begin
+  AReason := '';
+  Queue := TGocciaMicrotaskQueue.Instance;
+  Result := Assigned(Queue) and Queue.TakeUnhandledRejection(Promise);
+  if not Result then
+    Exit;
+  { Taking the promise released the queue's root, and describing its reason
+    reads guest properties, which can run code and collect. }
+  InitializeTempRoot(PromiseRoot);
+  Goccia.GarbageCollector.AddTempRootIfNeeded(PromiseRoot, Promise);
+  try
+    AReason := DescribeRejectionReason(
+      TGocciaPromiseValue(Promise).PromiseResult);
+  finally
+    Goccia.GarbageCollector.RemoveTempRootIfNeeded(PromiseRoot);
+    { A getter on the reason is guest code too; what it leaves rejected is
+      part of this report, not the next unit's. }
+    Queue.DiscardUnhandledRejections;
+  end;
+end;
+
 procedure TGocciaTestAssertions.RunCallbacks(const ACallbacks: TGocciaArgumentsCollection);
 var
   I: Integer;
   Callback, CallbackResult: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   Promise: TGocciaPromiseValue;
+  RejectionReason: string;
 begin
   EmptyArgs := TGocciaArgumentsCollection.Create;
   try
@@ -4586,6 +4643,7 @@ begin
             if CallbackResult is TGocciaPromiseValue then
             begin
               Promise := TGocciaPromiseValue(CallbackResult);
+              Promise.MarkHandled;
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
                 AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult))
@@ -4598,6 +4656,19 @@ begin
             if (TGarbageCollector.Instance <> nil) then
               TGarbageCollector.Instance.RemoveTempRoot(CallbackResult);
           end;
+
+          { What the hook left rejected belongs to the hook, not to the test
+            that happens to run next. A settled returned promise skips the
+            wait's drain, so whatever is still queued runs first: a handler
+            attached from a job counts. Inside the try, because both steps run
+            guest code — a queued job that throws, a reason whose `message` is
+            a getter — and that is the hook's failure too. A hook that already
+            failed keeps its own message. }
+          DrainMicrotasksAndFetchCompletions;
+          if TakeUnhandledRejectionReason(RejectionReason) and
+             not FTestStats.CurrentTestHasFailures then
+            AssertionFailed('callback execution',
+              'Unhandled promise rejection: ' + RejectionReason);
         except
           { Timeout errors flag a describe/file/test deadline expiring;
             they must propagate so the outer ExecuteSuite handler can
@@ -4642,6 +4713,11 @@ begin
             AssertionFailed('callback execution', 'Callback threw an exception: ' + E.Message);
           end;
         end;
+
+        { A hook that threw never reached the check above. Its failure is
+          recorded; what it left rejected goes with it. }
+        if Assigned(TGocciaMicrotaskQueue.Instance) then
+          TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
       end;
     end;
   finally
@@ -5164,10 +5240,24 @@ var
   HasFocusedEntries: Boolean;
   ShouldStop: Boolean;
   SnapshotErrors: TStringList;
+  UnhandledReason: string;
+  UnhandledPromise: TGocciaValue;
   FloatingPointState: TGocciaFloatingPointState;
   FailedDetailsRoot: TGocciaTempRoot;
   ResultObjRoot: TGocciaTempRoot;
 begin
+  { What the file's own top level left rejected is the file's failure, raised
+    like an uncaught throw before anything is collected. The interpreted
+    runner calls this after the engine's run has already drained and raised
+    it; the bytecode runner calls it from the end of the module body, where
+    the queued jobs that could still attach a handler have yet to run. }
+  DrainMicrotasksAndFetchCompletions;
+  if Assigned(TGocciaMicrotaskQueue.Instance) and
+     TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(
+       UnhandledPromise) then
+    raise TGocciaThrowValue.Create(
+      TGocciaPromiseValue(UnhandledPromise).PromiseResult);
+
   ExitOnFirstFailure := False;
   ShowTestResults := True;
   EnterGocciaFloatingPointScope(FloatingPointState);
@@ -5204,6 +5294,42 @@ begin
     ClearNestedRegistrations(FRootSuite);
     FCurrentRegistrationSuite := FRootSuite;
     BuildNestedRegistrations(FRootSuite, FailedTestDetails);
+
+    { A rejection left by a describe body belongs to no test. Whatever was
+      started there runs first, so a handler attached from a queued job still
+      counts. The file fails through `suiteErrors`, as it does for a hook;
+      collection itself succeeded, so the tests run. }
+    try
+      DrainMicrotasksAndFetchCompletions;
+      if TakeUnhandledRejectionReason(UnhandledReason) then
+      begin
+        FailedTestDetails.Add('Unhandled promise rejection outside a test: ' +
+          UnhandledReason);
+        Inc(FTestStats.SuiteErrors);
+      end;
+    except
+      { A job a describe body queued can throw. That fails the file like the
+        rejection above and the tests still run; the terminal faults unwind
+        as they do everywhere else in the runner. }
+      on E: TGocciaTimeoutError do
+        raise;
+      on E: TGocciaMemoryLimitError do
+        raise;
+      on E: TGocciaThrowValue do
+      begin
+        FailedTestDetails.Add('Uncaught exception outside a test: ' +
+          DescribeThrownValue(E.Value));
+        Inc(FTestStats.SuiteErrors);
+      end;
+      on E: Exception do
+      begin
+        if IsEngineIntegrityFault(E) then
+          raise;
+        FailedTestDetails.Add('Uncaught exception outside a test: ' +
+          E.Message);
+        Inc(FTestStats.SuiteErrors);
+      end;
+    end;
 
     HasFocusedEntries := SuiteHasSelectedEntries(FRootSuite, True);
     ShouldStop := False;
@@ -5337,6 +5463,11 @@ begin
     finally
       FailedTestDetails.Free;
       SuiteNames.Free;
+      { Every test and hook has been checked on its own. Whatever is still
+        tracked — a run cut short by --bail, a terminal unwind — ends with
+        this file instead of failing the next one on the thread. }
+      if Assigned(TGocciaMicrotaskQueue.Instance) then
+        TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
     end;
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);

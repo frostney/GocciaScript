@@ -425,6 +425,8 @@ A Promise a timer will settle also works, and settles instantly: the [virtual ti
 
 When a returned Promise rejects, the failure line reports the reason as `Returned Promise rejected: <reason>`. An `Error` is named and described --- `Error: boom`, or the class name for a subclass that does not set its own `name`, such as `MyError: boom` --- because its `name` lives on the prototype and its `message` is non-enumerable, so serializing the object alone would render it as `{}`. Any other reason is serialized as a value.
 
+**Unhandled rejections:** A promise left rejected with no handler ([Errors](errors.md#unhandled-promise-rejections)) fails whatever left it. Each test and each hook is checked on its own, once the microtasks it queued have run, so a handler attached from a job still counts but one attached by a later test or hook is too late. Left by a test, it fails that test as `unhandled promise rejection: <reason>`; by `beforeAll` or `afterAll`, it fails the hook; by `beforeEach` or `afterEach`, it fails the test the hook wraps; by a `describe` body, it fails the file as `Unhandled promise rejection outside a test`; by the file's own top level, it fails the file before anything is collected, like a top-level throw. A test that rejects a promise on purpose gives it a handler — `promise.catch(() => {})`, or `await expect(promise).rejects…`.
+
 **Testing intentionally-pending Promises:** When testing behavior around forever-pending Promises (e.g., verifying that `reject()` after `resolve(pendingPromise)` is ignored), never return the pending Promise. Instead, use a separate settled Promise chain to verify state after microtasks drain:
 
 ```javascript

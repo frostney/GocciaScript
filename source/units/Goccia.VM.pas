@@ -2615,34 +2615,6 @@ type
     procedure MarkReferences; override;
   end;
 
-  TGocciaVMDynamicImportFulfillValue = class(TGocciaFunctionBase)
-  private
-    FPromise: TGocciaPromiseValue;
-    FNamespace: TGocciaValue;
-  protected
-    function GetFunctionLength: Integer; override;
-    function GetFunctionName: string; override;
-  public
-    constructor Create(const APromise: TGocciaPromiseValue;
-      const ANamespace: TGocciaValue);
-    function Call(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
-  end;
-
-  TGocciaVMDynamicImportRejectValue = class(TGocciaFunctionBase)
-  private
-    FPromise: TGocciaPromiseValue;
-  protected
-    function GetFunctionLength: Integer; override;
-    function GetFunctionName: string; override;
-  public
-    constructor Create(const APromise: TGocciaPromiseValue);
-    function Call(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure MarkReferences; override;
-  end;
-
   TGocciaVMDynamicImportStartValue = class(TGocciaFunctionBase)
   private
     FVM: TGocciaVM;
@@ -4921,81 +4893,6 @@ begin
   inherited;
   if Assigned(FContinuation) then
     FContinuation.MarkReferences;
-  if Assigned(FPromise) then
-    FPromise.MarkReferences;
-end;
-
-{ TGocciaVMDynamicImportFulfillValue }
-
-constructor TGocciaVMDynamicImportFulfillValue.Create(
-  const APromise: TGocciaPromiseValue; const ANamespace: TGocciaValue);
-begin
-  inherited Create;
-  FPromise := APromise;
-  FNamespace := ANamespace;
-end;
-
-function TGocciaVMDynamicImportFulfillValue.GetFunctionLength: Integer;
-begin
-  Result := 1;
-end;
-
-function TGocciaVMDynamicImportFulfillValue.GetFunctionName: string;
-begin
-  Result := 'dynamic-import-fulfill';
-end;
-
-function TGocciaVMDynamicImportFulfillValue.Call(
-  const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Assigned(FPromise) then
-    FPromise.Resolve(FNamespace);
-end;
-
-procedure TGocciaVMDynamicImportFulfillValue.MarkReferences;
-begin
-  if GCMarked then Exit;
-  inherited;
-  if Assigned(FPromise) then
-    FPromise.MarkReferences;
-  if Assigned(FNamespace) then
-    FNamespace.MarkReferences;
-end;
-
-{ TGocciaVMDynamicImportRejectValue }
-
-constructor TGocciaVMDynamicImportRejectValue.Create(
-  const APromise: TGocciaPromiseValue);
-begin
-  inherited Create;
-  FPromise := APromise;
-end;
-
-function TGocciaVMDynamicImportRejectValue.GetFunctionLength: Integer;
-begin
-  Result := 1;
-end;
-
-function TGocciaVMDynamicImportRejectValue.GetFunctionName: string;
-begin
-  Result := 'dynamic-import-reject';
-end;
-
-function TGocciaVMDynamicImportRejectValue.Call(
-  const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if Assigned(FPromise) then
-    FPromise.Reject(VMArgumentOrUndefined(AArguments));
-end;
-
-procedure TGocciaVMDynamicImportRejectValue.MarkReferences;
-begin
-  if GCMarked then Exit;
-  inherited;
   if Assigned(FPromise) then
     FPromise.MarkReferences;
 end;
@@ -9954,7 +9851,6 @@ end;
 procedure TGocciaVM.ResolveDynamicImportPromise(
   const APromise: TGocciaPromiseValue; const APath, AReferrer: string);
 var
-  EvaluationPromise: TGocciaPromiseValue;
   Module: TGocciaModule;
   Namespace: TGocciaValue;
 begin
@@ -9965,19 +9861,8 @@ begin
   Namespace := CreateModuleNamespaceObject(Module);
   if Assigned(Module) and
      (Module.EvaluationPromise is TGocciaPromiseValue) then
-  begin
-    EvaluationPromise := TGocciaPromiseValue(Module.EvaluationPromise);
-    case EvaluationPromise.State of
-      gpsFulfilled:
-        APromise.Resolve(Namespace);
-      gpsRejected:
-        APromise.Reject(EvaluationPromise.PromiseResult);
-      gpsPending:
-        EvaluationPromise.InvokeThen(
-          TGocciaVMDynamicImportFulfillValue.Create(APromise, Namespace),
-          TGocciaVMDynamicImportRejectValue.Create(APromise));
-    end;
-  end
+    SettlePromiseFromPromise(APromise,
+      TGocciaPromiseValue(Module.EvaluationPromise), Namespace)
   else
     APromise.Resolve(Namespace);
 end;

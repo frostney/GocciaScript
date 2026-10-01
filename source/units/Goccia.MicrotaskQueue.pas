@@ -38,11 +38,17 @@ type
     that has ended is recognised as ended rather than taken for a later one. }
   TGocciaMicrotaskScopeId = Int64;
 
+  { Promises rejected with no handler yet, each with the order it was rejected
+    in. A dictionary because a rejection is usually handled a moment later,
+    and that removal has to stay constant-time when thousands are pending. }
+  TGocciaRejectionTracker = TDictionary<TGocciaValue, Int64>;
+
   { The jobs of a scope that an inner one is currently hiding. }
   TGocciaMicrotaskOuterScope = record
     Id: TGocciaMicrotaskScopeId;
     Queue: TList<TGocciaMicrotask>;
     FinalizationQueue: TList<TGocciaMicrotask>;
+    UnhandledRejections: TGocciaRejectionTracker;
     Head: Integer;
     FinalizationHead: Integer;
   end;
@@ -52,6 +58,10 @@ type
     FQueue: TList<TGocciaMicrotask>;
     FFinalizationQueue: TList<TGocciaMicrotask>;
     FJobs: TDictionary<TGocciaValue, TGocciaMicrotaskJob>;
+    { Per scope, like the jobs: a rejection belongs to the engine that owns
+      the promise. }
+    FUnhandledRejections: TGocciaRejectionTracker;
+    FLastRejectionOrder: Int64;
     FHead: Integer;
     FFinalizationHead: Integer;
     FScopeId: TGocciaMicrotaskScopeId;
@@ -97,6 +107,24 @@ type
     procedure DrainQueue;
     procedure ClearQueue;
     function HasPending: Boolean;
+
+    { ES2026 §27.2.1.9 HostPromiseRejectionTracker. TrackRejection is the
+      "reject" operation: APromise was rejected while it had no handler.
+      UntrackRejection is "handle": it got one afterwards. What is still
+      tracked when its scope has nothing left to run is an unhandled
+      rejection, and the host that drained the scope takes it from here.
+
+      A tracked promise is kept alive, as the spec allows for "reject".
+      ClearQueue forgets the current scope's tracked promises together with
+      its jobs. }
+    procedure TrackRejection(const APromise: TGocciaValue;
+      const AScope: TGocciaMicrotaskScopeId);
+    procedure UntrackRejection(const APromise: TGocciaValue);
+    { Hands over the oldest tracked promise of the current scope and forgets
+      the others: one report is enough to fail whatever left them. The caller
+      roots the promise for as long as it needs it. }
+    function TakeUnhandledRejection(out APromise: TGocciaValue): Boolean;
+    procedure DiscardUnhandledRejections;
 
     { The bracket an engine holds around an Execute that starts while a
       different engine is running.
@@ -369,6 +397,8 @@ begin
   FQueue := TList<TGocciaMicrotask>.Create;
   FFinalizationQueue := TList<TGocciaMicrotask>.Create;
   FJobs := TDictionary<TGocciaValue, TGocciaMicrotaskJob>.Create;
+  FUnhandledRejections := TGocciaRejectionTracker.Create;
+  FLastRejectionOrder := 0;
   FHead := 0;
   FFinalizationHead := 0;
   FScopeId := 0;
@@ -381,6 +411,7 @@ begin
   LeaveScope(0);
   ClearQueue;
   FJobs.Free;
+  FUnhandledRejections.Free;
   FFinalizationQueue.Free;
   FQueue.Free;
   inherited;
@@ -813,6 +844,75 @@ begin
   FFinalizationQueue.Clear;
   FHead := 0;
   FFinalizationHead := 0;
+  DiscardUnhandledRejections;
+end;
+
+procedure TGocciaMicrotaskQueue.TrackRejection(const APromise: TGocciaValue;
+  const AScope: TGocciaMicrotaskScopeId);
+var
+  OuterIndex: Integer;
+  Tracker: TGocciaRejectionTracker;
+begin
+  OuterIndex := FindOuterScope(AScope);
+  if OuterIndex < 0 then
+    Tracker := FUnhandledRejections
+  else
+    Tracker := FOuterScopes[OuterIndex].UnhandledRejections;
+  if Tracker.ContainsKey(APromise) then
+    Exit;
+  Inc(FLastRejectionOrder);
+  Tracker.Add(APromise, FLastRejectionOrder);
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.AddQueuedRoot(APromise);
+end;
+
+procedure TGocciaMicrotaskQueue.UntrackRejection(const APromise: TGocciaValue);
+var
+  I: Integer;
+  Removed: Boolean;
+begin
+  Removed := FUnhandledRejections.ContainsKey(APromise);
+  if Removed then
+    FUnhandledRejections.Remove(APromise);
+  I := FOuterScopeCount - 1;
+  while (not Removed) and (I >= 0) do
+  begin
+    Removed := FOuterScopes[I].UnhandledRejections.ContainsKey(APromise);
+    if Removed then
+      FOuterScopes[I].UnhandledRejections.Remove(APromise);
+    Dec(I);
+  end;
+  if Removed and Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RemoveQueuedRoot(APromise);
+end;
+
+function TGocciaMicrotaskQueue.TakeUnhandledRejection(
+  out APromise: TGocciaValue): Boolean;
+var
+  Entry: TPair<TGocciaValue, Int64>;
+  OldestOrder: Int64;
+begin
+  APromise := nil;
+  OldestOrder := 0;
+  for Entry in FUnhandledRejections do
+    if (not Assigned(APromise)) or (Entry.Value < OldestOrder) then
+    begin
+      APromise := Entry.Key;
+      OldestOrder := Entry.Value;
+    end;
+  Result := Assigned(APromise);
+  if Result then
+    DiscardUnhandledRejections;
+end;
+
+procedure TGocciaMicrotaskQueue.DiscardUnhandledRejections;
+var
+  Promise: TGocciaValue;
+begin
+  if Assigned(TGarbageCollector.Instance) then
+    for Promise in FUnhandledRejections.Keys do
+      TGarbageCollector.Instance.RemoveQueuedRoot(Promise);
+  FUnhandledRejections.Clear;
 end;
 
 function TGocciaMicrotaskQueue.HasPending: Boolean;
@@ -824,15 +924,19 @@ end;
 function TGocciaMicrotaskQueue.EnterScope: Integer;
 var
   ScopeQueue, ScopeFinalizationQueue: TList<TGocciaMicrotask>;
+  ScopeUnhandledRejections: TGocciaRejectionTracker;
 begin
   { Everything that can fail happens before the current scope is hidden, so a
     refused allocation leaves the caller's queue exactly as it was. }
   if FOuterScopeCount >= Length(FOuterScopes) then
     SetLength(FOuterScopes, FOuterScopeCount * 2 + 4);
   ScopeQueue := TList<TGocciaMicrotask>.Create;
+  ScopeFinalizationQueue := nil;
   try
     ScopeFinalizationQueue := TList<TGocciaMicrotask>.Create;
+    ScopeUnhandledRejections := TGocciaRejectionTracker.Create;
   except
+    ScopeFinalizationQueue.Free;
     ScopeQueue.Free;
     raise;
   end;
@@ -841,12 +945,14 @@ begin
   FOuterScopes[FOuterScopeCount].Id := FScopeId;
   FOuterScopes[FOuterScopeCount].Queue := FQueue;
   FOuterScopes[FOuterScopeCount].FinalizationQueue := FFinalizationQueue;
+  FOuterScopes[FOuterScopeCount].UnhandledRejections := FUnhandledRejections;
   FOuterScopes[FOuterScopeCount].Head := FHead;
   FOuterScopes[FOuterScopeCount].FinalizationHead := FFinalizationHead;
   Inc(FOuterScopeCount);
 
   FQueue := ScopeQueue;
   FFinalizationQueue := ScopeFinalizationQueue;
+  FUnhandledRejections := ScopeUnhandledRejections;
   FHead := 0;
   FFinalizationHead := 0;
   Inc(FLastScopeId);
@@ -858,6 +964,7 @@ begin
   while FOuterScopeCount > AToken do
   begin
     ClearQueue;
+    FUnhandledRejections.Free;
     FFinalizationQueue.Free;
     FQueue.Free;
 
@@ -865,6 +972,8 @@ begin
     FScopeId := FOuterScopes[FOuterScopeCount].Id;
     FQueue := FOuterScopes[FOuterScopeCount].Queue;
     FFinalizationQueue := FOuterScopes[FOuterScopeCount].FinalizationQueue;
+    FUnhandledRejections :=
+      FOuterScopes[FOuterScopeCount].UnhandledRejections;
     FHead := FOuterScopes[FOuterScopeCount].Head;
     FFinalizationHead := FOuterScopes[FOuterScopeCount].FinalizationHead;
   end;

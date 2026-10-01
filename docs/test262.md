@@ -292,6 +292,7 @@ cannot sit inside the negative-runtime `try` wrapper.
 | Body assertion fails (`Test262Error` thrown)          | JS throw escapes the engine              | conformance fail   |
 | Body throws another value                             | JS throw escapes the engine              | conformance fail   |
 | Async body never calls `$DONE`                        | no captured `Test262:Async*` marker      | conformance fail   |
+| Body leaves a promise rejected with no handler        | none: the runner's engines set `UnhandledRejections := urIgnore` ([Errors](errors.md#unhandled-promise-rejections)) | not a failure |
 | Cooperative deadline expires                          | `TGocciaTimeoutError`                    | timeout            |
 | Pascal-side exception during engine execution         | structured engine diagnostic              | conformance fail |
 | Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |

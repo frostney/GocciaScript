@@ -76,6 +76,10 @@ type
       the whole thread — that job still belongs to the engine that owns the
       promise. }
     FScope: TGocciaMicrotaskScopeId;
+    { ES2026 §27.2.6 [[PromiseIsHandled]]: whether the promise has ever had a
+      handler, or been consumed by the host in a way that reports its
+      rejection (an await, a module evaluation that rethrows it). }
+    FIsHandled: Boolean;
 
     procedure TriggerReactions;
     procedure InitializePrototype;
@@ -86,6 +90,9 @@ type
     procedure Resolve(const AValue: TGocciaValue);
     procedure Reject(const AReason: TGocciaValue);
     procedure SubscribeTo(const APromise: TGocciaPromiseValue);
+    { Sets [[PromiseIsHandled]]. On a promise that is already rejected this is
+      HostPromiseRejectionTracker's "handle" operation. }
+    procedure MarkHandled;
 
     function DoResolve(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DoReject(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -104,6 +111,7 @@ type
 
     property State: TGocciaPromiseState read FState;
     property PromiseResult: TGocciaValue read FResult;
+    property IsHandled: Boolean read FIsHandled;
   published
     function PromiseThen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseCatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -114,6 +122,14 @@ function GetPromiseIntrinsicPrototypeForRealm(
   const ARealm: TGocciaRealm): TGocciaObjectValue;
 function PromiseResolveIntrinsic(
   const AValue: TGocciaValue): TGocciaPromiseValue;
+
+{ Settles ATarget from ASource's outcome: fulfilled with AFulfillmentValue once
+  ASource is fulfilled, rejected with ASource's reason once it is rejected.
+  Dynamic import uses it in both execution modes — `import()` settles from the
+  module's evaluation promise but fulfils with the namespace (ES2026 §13.3.10.3
+  ContinueDynamicImport). Consuming the source this way handles it. }
+procedure SettlePromiseFromPromise(const ATarget, ASource: TGocciaPromiseValue;
+  const AFulfillmentValue: TGocciaValue);
 
 implementation
 
@@ -550,6 +566,133 @@ end;
 
 { TGocciaPromiseValue }
 
+type
+  { The two reactions SettlePromiseFromPromise registers on a pending source. }
+  TGocciaPromiseForwardFulfill = class(TGocciaFunctionBase)
+  private
+    FTarget: TGocciaPromiseValue;
+    FValue: TGocciaValue;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const ATarget: TGocciaPromiseValue;
+      const AValue: TGocciaValue);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
+
+  TGocciaPromiseForwardReject = class(TGocciaFunctionBase)
+  private
+    FTarget: TGocciaPromiseValue;
+  protected
+    function GetFunctionLength: Integer; override;
+    function GetFunctionName: string; override;
+  public
+    constructor Create(const ATarget: TGocciaPromiseValue);
+    function Call(const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue; override;
+    procedure MarkReferences; override;
+  end;
+
+{ TGocciaPromiseForwardFulfill }
+
+constructor TGocciaPromiseForwardFulfill.Create(
+  const ATarget: TGocciaPromiseValue; const AValue: TGocciaValue);
+begin
+  inherited Create;
+  FTarget := ATarget;
+  FValue := AValue;
+end;
+
+function TGocciaPromiseForwardFulfill.GetFunctionLength: Integer;
+begin
+  Result := 1;
+end;
+
+function TGocciaPromiseForwardFulfill.GetFunctionName: string;
+begin
+  Result := 'dynamic-import-fulfill';
+end;
+
+function TGocciaPromiseForwardFulfill.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if Assigned(FTarget) then
+    FTarget.Resolve(FValue);
+end;
+
+procedure TGocciaPromiseForwardFulfill.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FTarget) then
+    FTarget.MarkReferences;
+  if Assigned(FValue) then
+    FValue.MarkReferences;
+end;
+
+{ TGocciaPromiseForwardReject }
+
+constructor TGocciaPromiseForwardReject.Create(
+  const ATarget: TGocciaPromiseValue);
+begin
+  inherited Create;
+  FTarget := ATarget;
+end;
+
+function TGocciaPromiseForwardReject.GetFunctionLength: Integer;
+begin
+  Result := 1;
+end;
+
+function TGocciaPromiseForwardReject.GetFunctionName: string;
+begin
+  Result := 'dynamic-import-reject';
+end;
+
+function TGocciaPromiseForwardReject.Call(
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not Assigned(FTarget) then
+    Exit;
+  if AArguments.Length > 0 then
+    FTarget.Reject(AArguments.GetElement(0))
+  else
+    FTarget.Reject(TGocciaUndefinedLiteralValue.UndefinedValue);
+end;
+
+procedure TGocciaPromiseForwardReject.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FTarget) then
+    FTarget.MarkReferences;
+end;
+
+procedure SettlePromiseFromPromise(const ATarget, ASource: TGocciaPromiseValue;
+  const AFulfillmentValue: TGocciaValue);
+begin
+  case ASource.State of
+    gpsFulfilled:
+      ATarget.Resolve(AFulfillmentValue);
+    gpsRejected:
+      begin
+        ASource.MarkHandled;
+        ATarget.Reject(ASource.PromiseResult);
+      end;
+    gpsPending:
+      ASource.InvokeThen(
+        TGocciaPromiseForwardFulfill.Create(ATarget, AFulfillmentValue),
+        TGocciaPromiseForwardReject.Create(ATarget));
+  end;
+end;
+
 constructor TGocciaPromiseValue.Create;
 var
   Shared: TGocciaSharedPrototype;
@@ -657,10 +800,8 @@ begin
 
   if AValue = Self then
   begin
-    FState := gpsRejected;
-    FResult := Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
-      SErrorPromiseChainingCycle);
-    TriggerReactions;
+    Reject(Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
+      SErrorPromiseChainingCycle));
     Exit;
   end;
 
@@ -703,13 +844,36 @@ begin
   TriggerReactions;
 end;
 
+// ES2026 §27.2.1.7 RejectPromise ( promise, reason )
 procedure TGocciaPromiseValue.Reject(const AReason: TGocciaValue);
+var
+  Queue: TGocciaMicrotaskQueue;
 begin
   if FState <> gpsPending then Exit;
 
   FState := gpsRejected;
   FResult := AReason;
+  // Step 7: HostPromiseRejectionTracker(promise, "reject").
+  if not FIsHandled then
+  begin
+    Queue := TGocciaMicrotaskQueue.Instance;
+    if Assigned(Queue) then
+      Queue.TrackRejection(Self, FScope);
+  end;
   TriggerReactions;
+end;
+
+procedure TGocciaPromiseValue.MarkHandled;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  if FIsHandled then Exit;
+
+  FIsHandled := True;
+  if FState <> gpsRejected then Exit;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if Assigned(Queue) then
+    Queue.UntrackRejection(Self);
 end;
 
 procedure TGocciaPromiseValue.SubscribeTo(const APromise: TGocciaPromiseValue);
@@ -718,6 +882,7 @@ var
   Task: TGocciaMicrotask;
   Queue: TGocciaMicrotaskQueue;
 begin
+  APromise.MarkHandled;
   case APromise.FState of
     gpsFulfilled, gpsRejected:
     begin
@@ -826,6 +991,8 @@ begin
   CapabilityHost := TGocciaPromiseReactionCapability.Create(
     ACapability.Promise, ACapability.Resolve, ACapability.Reject);
   Queue := TGocciaMicrotaskQueue.Instance;
+  // ES2026 §27.2.5.4.1 steps 11.c and 12.
+  APromise.MarkHandled;
 
   case APromise.FState of
     gpsPending:

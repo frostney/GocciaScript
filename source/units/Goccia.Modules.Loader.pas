@@ -1835,7 +1835,10 @@ var
 
         case EvalPromise.State of
           gpsRejected:
-            raise TGocciaThrowValue.Create(EvalPromise.PromiseResult);
+            begin
+              EvalPromise.MarkHandled;
+              raise TGocciaThrowValue.Create(EvalPromise.PromiseResult);
+            end;
           gpsPending:
             PendingPromises.Add(EvalPromise);
         end;
@@ -2959,8 +2962,11 @@ begin
                   (LoadedModule.EvaluationPromise is TGocciaPromiseValue) and
                   (TGocciaPromiseValue(LoadedModule.EvaluationPromise).State =
                   gpsRejected) then
+          begin
+            TGocciaPromiseValue(LoadedModule.EvaluationPromise).MarkHandled;
             raise TGocciaThrowValue.Create(
               TGocciaPromiseValue(LoadedModule.EvaluationPromise).PromiseResult);
+          end;
           Exit;
         end;
 
