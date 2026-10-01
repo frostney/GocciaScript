@@ -82,14 +82,37 @@ function ReadUnsignedRaw(const AData: TBytes; const AOffset, ASize: Integer;
 var
   I: Integer;
 begin
-  Result := 0;
   if ALittleEndian then
   begin
+    // The element sizes typed arrays use, composed without a loop. The
+    // expressions name the bytes in order, so they hold on any host.
+    case ASize of
+      8:
+        Exit(UInt64(AData[AOffset]) or
+          (UInt64(AData[AOffset + 1]) shl 8) or
+          (UInt64(AData[AOffset + 2]) shl 16) or
+          (UInt64(AData[AOffset + 3]) shl 24) or
+          (UInt64(AData[AOffset + 4]) shl 32) or
+          (UInt64(AData[AOffset + 5]) shl 40) or
+          (UInt64(AData[AOffset + 6]) shl 48) or
+          (UInt64(AData[AOffset + 7]) shl 56));
+      4:
+        Exit(UInt64(AData[AOffset]) or
+          (UInt64(AData[AOffset + 1]) shl 8) or
+          (UInt64(AData[AOffset + 2]) shl 16) or
+          (UInt64(AData[AOffset + 3]) shl 24));
+      2:
+        Exit(UInt64(AData[AOffset]) or (UInt64(AData[AOffset + 1]) shl 8));
+      1:
+        Exit(UInt64(AData[AOffset]));
+    end;
+    Result := 0;
     for I := ASize - 1 downto 0 do
       Result := (Result shl 8) or UInt64(AData[AOffset + I]);
   end
   else
   begin
+    Result := 0;
     for I := 0 to ASize - 1 do
       Result := (Result shl 8) or UInt64(AData[AOffset + I]);
   end;
@@ -102,6 +125,40 @@ var
 begin
   if ALittleEndian then
   begin
+    // The element sizes typed arrays use, stored without a loop.
+    case ASize of
+      8:
+      begin
+        AData[AOffset] := Byte(AValue);
+        AData[AOffset + 1] := Byte(AValue shr 8);
+        AData[AOffset + 2] := Byte(AValue shr 16);
+        AData[AOffset + 3] := Byte(AValue shr 24);
+        AData[AOffset + 4] := Byte(AValue shr 32);
+        AData[AOffset + 5] := Byte(AValue shr 40);
+        AData[AOffset + 6] := Byte(AValue shr 48);
+        AData[AOffset + 7] := Byte(AValue shr 56);
+        Exit;
+      end;
+      4:
+      begin
+        AData[AOffset] := Byte(AValue);
+        AData[AOffset + 1] := Byte(AValue shr 8);
+        AData[AOffset + 2] := Byte(AValue shr 16);
+        AData[AOffset + 3] := Byte(AValue shr 24);
+        Exit;
+      end;
+      2:
+      begin
+        AData[AOffset] := Byte(AValue);
+        AData[AOffset + 1] := Byte(AValue shr 8);
+        Exit;
+      end;
+      1:
+      begin
+        AData[AOffset] := Byte(AValue);
+        Exit;
+      end;
+    end;
     for I := 0 to ASize - 1 do
       AData[AOffset + I] := Byte((AValue shr (I * 8)) and $FF);
   end
