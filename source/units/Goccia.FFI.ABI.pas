@@ -41,16 +41,23 @@ type
     UsesHiddenPointer: Boolean;
   end;
 
+  PGocciaFFIArgumentPlan = ^TGocciaFFIArgumentPlan;
+  PGocciaFFIReturnPlan = ^TGocciaFFIReturnPlan;
+
   TGocciaFFICompiledSignature = class
   private
     FABI: TGocciaFFIABI;
     FArguments: array of TGocciaFFIArgumentPlan;
+    FArgumentDataOffsets: array of Integer;
+    FArgumentDataSize: Integer;
     FReturnPlan: TGocciaFFIReturnPlan;
     FStackSize: Integer;
     FScratchSize: Integer;
     FGPRCount: Integer;
     FFPRCount: Integer;
     FVariadicStartIndex: Integer;
+    FHasCallbackArguments: Boolean;
+    FHasStringArguments: Boolean;
     function GetArgumentCount: Integer;
     function GetArgument(const AIndex: Integer): TGocciaFFIArgumentPlan;
   public
@@ -59,15 +66,31 @@ type
       const AReturnType: TGocciaFFITypeDescriptor;
       const AVariadicStartIndex: Integer = -1);
     destructor Destroy; override;
+    { The per-call path reads the plans through these pointers: Arguments[]
+      and ReturnPlan return records holding a dynamic array, which the
+      compiler copies through its RTTI helper on every read. The pointers stay
+      valid for as long as the signature does. }
+    function ArgumentPlanAt(const AIndex: Integer): PGocciaFFIArgumentPlan; {$IFDEF FPC}inline;{$ENDIF}
+    function ReturnPlanPointer: PGocciaFFIReturnPlan; {$IFDEF FPC}inline;{$ENDIF}
+    function ArgumentTypeAt(const AIndex: Integer): TGocciaFFITypeDescriptor; {$IFDEF FPC}inline;{$ENDIF}
+    { Where argument AIndex's marshalled bytes sit in the single buffer a call
+      packs its arguments into; ArgumentDataSize is that buffer's size. }
+    function ArgumentDataOffset(const AIndex: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
     property ABI: TGocciaFFIABI read FABI;
     property ArgumentCount: Integer read GetArgumentCount;
     property Arguments[const AIndex: Integer]: TGocciaFFIArgumentPlan
       read GetArgument;
+    property ArgumentDataSize: Integer read FArgumentDataSize;
     property ReturnPlan: TGocciaFFIReturnPlan read FReturnPlan;
     property StackSize: Integer read FStackSize;
     property ScratchSize: Integer read FScratchSize;
     property GPRCount: Integer read FGPRCount;
     property FPRCount: Integer read FFPRCount;
+    { Whether any argument is callback-typed, and whether any is a string
+      (utf8string or a nullable string): the only arguments whose marshalling
+      produces a callback handle or a temporary string buffer. }
+    property HasCallbackArguments: Boolean read FHasCallbackArguments;
+    property HasStringArguments: Boolean read FHasStringArguments;
   end;
 
 function CurrentFFIABI: TGocciaFFIABI;
@@ -76,6 +99,11 @@ implementation
 
 uses
   SysUtils;
+
+const
+  // Each argument's bytes start on this boundary in the packed per-call
+  // argument buffer.
+  FFI_ARGUMENT_DATA_ALIGNMENT = 8;
 
 type
   TSysVEightbyteClass = (secNone, secInteger, secSSE, secMemory);
@@ -748,6 +776,7 @@ constructor TGocciaFFICompiledSignature.Create(const AABI: TGocciaFFIABI;
   const AVariadicStartIndex: Integer);
 var
   I, GPRCount, FPRCount, Position, StackOffset, ScratchOffset: Integer;
+  PackedOffset: Integer;
 begin
   inherited Create;
   if Length(AArguments) > MAX_FFI_ARGS then
@@ -762,11 +791,13 @@ begin
   FReturnPlan.TypeDescriptor := AReturnType;
   AReturnType.AddReference;
   SetLength(FArguments, Length(AArguments));
+  SetLength(FArgumentDataOffsets, Length(AArguments));
   GPRCount := 0;
   FPRCount := 0;
   Position := 0;
   StackOffset := 0;
   ScratchOffset := 0;
+  PackedOffset := 0;
 
   case FABI of
     fabiSysVX64: CompileSysVReturn(FReturnPlan, GPRCount);
@@ -784,6 +815,18 @@ begin
       raise EArgumentException.Create('FFI signature argument cannot be void');
     FArguments[I].TypeDescriptor := AArguments[I];
     AArguments[I].AddReference;
+    FArgumentDataOffsets[I] := PackedOffset;
+    Inc(PackedOffset, AlignFFIOffset(AArguments[I].Size,
+      FFI_ARGUMENT_DATA_ALIGNMENT));
+    case AArguments[I].Kind of
+      ftkCallback:
+        FHasCallbackArguments := True;
+      ftkNullable:
+        FHasStringArguments := True;
+      ftkScalar:
+        if AArguments[I].ScalarType = fftUTF8String then
+          FHasStringArguments := True;
+    end;
     case FABI of
       fabiSysVX64:
         CompileSysVArgument(FArguments[I], GPRCount, FPRCount, StackOffset);
@@ -810,6 +853,7 @@ begin
   else
     FStackSize := AlignFFIOffset(StackOffset, 4);
   FScratchSize := AlignFFIOffset(ScratchOffset, 16);
+  FArgumentDataSize := PackedOffset;
   FGPRCount := GPRCount;
   FFPRCount := FPRCount;
 end;
@@ -835,6 +879,29 @@ function TGocciaFFICompiledSignature.GetArgument(
   const AIndex: Integer): TGocciaFFIArgumentPlan;
 begin
   Result := FArguments[AIndex];
+end;
+
+function TGocciaFFICompiledSignature.ArgumentPlanAt(
+  const AIndex: Integer): PGocciaFFIArgumentPlan;
+begin
+  Result := @FArguments[AIndex];
+end;
+
+function TGocciaFFICompiledSignature.ReturnPlanPointer: PGocciaFFIReturnPlan;
+begin
+  Result := @FReturnPlan;
+end;
+
+function TGocciaFFICompiledSignature.ArgumentTypeAt(
+  const AIndex: Integer): TGocciaFFITypeDescriptor;
+begin
+  Result := FArguments[AIndex].TypeDescriptor;
+end;
+
+function TGocciaFFICompiledSignature.ArgumentDataOffset(
+  const AIndex: Integer): Integer;
+begin
+  Result := FArgumentDataOffsets[AIndex];
 end;
 
 end.

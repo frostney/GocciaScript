@@ -80,6 +80,11 @@ end;
 const
   FFI_LIBRARY_TAG = 'FFILibrary';
 
+  // A call keeps its marshalled arguments and its native result in the
+  // caller's stack frame when they fit in this many bytes.
+  FFI_INLINE_ARGUMENT_BYTES = 256;
+  FFI_INLINE_RESULT_BYTES = 64;
+
   PROP_FFI_PATH   = 'path';
   PROP_FFI_CLOSED = 'closed';
 
@@ -95,9 +100,21 @@ type
     FName: string;
     FLibraryGuard: TGocciaFFILibraryGuard;
     FVariadic: Boolean;
+    // Whether calls take InvokeDirect: a fixed signature whose arguments all
+    // marshal without per-call bookkeeping (no strings, no callbacks) and
+    // whose arguments and result fit the inline buffers.
+    FDirect: Boolean;
 
     function Invoke(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function InvokeDirect(
+      const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+    function InvokeGeneral(
+      const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+    // Failure paths, kept out of the invoke routines so that formatting their
+    // messages costs a call that succeeds nothing.
+    procedure ThrowLibraryClosed;
+    procedure ThrowArgumentCount(const AActualCount: Integer);
   public
     constructor Create(const ASymbol: Pointer;
       const ASignature: TGocciaFFICompiledSignature; const AName: string;
@@ -116,6 +133,12 @@ begin
   FSignature := ASignature;
   FName := AName;
   FVariadic := AVariadic;
+  FDirect := not AVariadic and
+    not ASignature.HasStringArguments and
+    not ASignature.HasCallbackArguments and
+    (ASignature.ArgumentDataSize <= FFI_INLINE_ARGUMENT_BYTES) and
+    (ASignature.ReturnPlanPointer^.TypeDescriptor.Size <=
+      FFI_INLINE_RESULT_BYTES);
   ALibraryGuard.RetainDependent;
   FLibraryGuard := ALibraryGuard;
 end;
@@ -126,6 +149,29 @@ begin
   if Assigned(FLibraryGuard) then
     FLibraryGuard.ReleaseDependent;
   inherited;
+end;
+
+{ The failure helpers in this unit each hold their message in a local: a
+  routine with a managed local is never inlined, and inlined back into its
+  caller a helper would return the temporary strings, and the exception frame
+  guarding them, that it exists to keep off the successful path. }
+
+procedure TGocciaFFIBoundFunctionValue.ThrowLibraryClosed;
+var
+  Message: string;
+begin
+  Message := Format(SErrorFFICallLibraryClosed, [FName]);
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
+procedure TGocciaFFIBoundFunctionValue.ThrowArgumentCount(
+  const AActualCount: Integer);
+var
+  Message: string;
+begin
+  Message := Format(SErrorFFIFuncArgCount,
+    [FName, FSignature.ArgumentCount, AActualCount]);
+  ThrowTypeError(Message, SSuggestFFIUsage);
 end;
 
 function PointerFromFFIValue(const AValue: TGocciaValue;
@@ -169,14 +215,44 @@ begin
       [AArgumentIndex]), SSuggestFFIUsage);
 end;
 
-function MarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
+{ Marshalling runs once per argument of every native call, so its failure
+  paths live in these helpers: a message read where it is raised would leave
+  the caller holding temporary strings, and with them an exception frame, on
+  every call that does not fail. }
+
+procedure ThrowFFIAggregateArgumentValue;
+var
+  Message: string;
+begin
+  Message := SErrorFFIAggregateArgumentValue;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
+procedure ThrowFFIAggregateArgumentType;
+var
+  Message: string;
+begin
+  Message := SErrorFFIAggregateArgumentType;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
+procedure ThrowFFIVoidNotValidArgument;
+var
+  Message: string;
+begin
+  Message := SErrorFFIVoidNotValidArg;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
+{ Writes AValue's native representation, AType.Size bytes, at ADestination,
+  which the caller has zeroed, for the argument types that need nothing kept
+  for the duration of the call: aggregates, numbers, booleans and pointers.
+  The rest (strings and callbacks) go through MarshalFFIValue. }
+procedure MarshalFFIPlainValue(const AType: TGocciaFFITypeDescriptor;
   const AValue: TGocciaValue; const AArgumentIndex: Integer;
-  var ATemporaryString: TBytes;
-  out ACallback: TGocciaFFICallbackValue;
-  out ATemporaryCallback: Boolean): TBytes;
+  const ADestination: PByte);
 var
   Aggregate: TGocciaFFIAggregateValue;
-  BufferData: TBytes;
   PointerValue: Pointer;
   Signed8: ShortInt;
   Unsigned8: Byte;
@@ -189,11 +265,107 @@ var
   Float32: Single;
   Float64: Double;
 begin
+  if AType.IsAggregate then
+  begin
+    if not (AValue is TGocciaFFIAggregateValue) then
+      ThrowFFIAggregateArgumentValue;
+    Aggregate := TGocciaFFIAggregateValue(AValue);
+    if Aggregate.Descriptor <> AType then
+      ThrowFFIAggregateArgumentType;
+    Aggregate.CopyTo(ADestination);
+    Exit;
+  end;
+
+  case AType.ScalarType of
+    fftVoid:
+      ThrowFFIVoidNotValidArgument;
+    fftBool:
+      if AValue.ToBooleanLiteral.Value then ADestination^ := 1;
+    fftI8:
+    begin
+      Signed8 := ShortInt(ToInt32Value(AValue));
+      Move(Signed8, ADestination^, SizeOf(Signed8));
+    end;
+    fftU8:
+    begin
+      Unsigned8 := Byte(ToUint32Value(AValue));
+      Move(Unsigned8, ADestination^, SizeOf(Unsigned8));
+    end;
+    fftI16:
+    begin
+      Signed16 := SmallInt(ToInt32Value(AValue));
+      Move(Signed16, ADestination^, SizeOf(Signed16));
+    end;
+    fftU16:
+    begin
+      Unsigned16 := Word(ToUint32Value(AValue));
+      Move(Unsigned16, ADestination^, SizeOf(Unsigned16));
+    end;
+    fftI32:
+    begin
+      Signed32 := ToInt32Value(AValue);
+      Move(Signed32, ADestination^, SizeOf(Signed32));
+    end;
+    fftU32:
+    begin
+      Unsigned32 := ToUint32Value(AValue);
+      Move(Unsigned32, ADestination^, SizeOf(Unsigned32));
+    end;
+    fftI64:
+    begin
+      Signed64 := ToInt64Value(AValue);
+      Move(Signed64, ADestination^, SizeOf(Signed64));
+    end;
+    fftU64:
+    begin
+      Unsigned64 := UInt64(ToInt64Value(AValue));
+      Move(Unsigned64, ADestination^, SizeOf(Unsigned64));
+    end;
+    fftF32:
+    begin
+      Float32 := AValue.ToNumberLiteral.Value;
+      Move(Float32, ADestination^, SizeOf(Float32));
+    end;
+    fftF64:
+    begin
+      Float64 := AValue.ToNumberLiteral.Value;
+      Move(Float64, ADestination^, SizeOf(Float64));
+    end;
+    fftPointer:
+    begin
+      PointerValue := PointerFromFFIValue(AValue, AArgumentIndex);
+      Move(PointerValue, ADestination^, SizeOf(Pointer));
+    end;
+  end;
+end;
+
+{ Whether an argument of AType marshals through MarshalFFIPlainValue. }
+function IsPlainFFIArgumentType(
+  const AType: TGocciaFFITypeDescriptor): Boolean;
+begin
+  Result := AType.IsAggregate or
+    ((AType.Kind = ftkScalar) and (AType.ScalarType <> fftUTF8String));
+end;
+
+{ Marshals any argument. ATemporaryString receives the encoded bytes of a
+  string argument, which must outlive the call; ACallback and
+  ATemporaryCallback report the handle a callback-typed argument resolved to
+  and whether this call created it. }
+procedure MarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
+  const AValue: TGocciaValue; const AArgumentIndex: Integer;
+  const ADestination: PByte; var ATemporaryString: TBytes;
+  out ACallback: TGocciaFFICallbackValue;
+  out ATemporaryCallback: Boolean);
+var
+  PointerValue: Pointer;
+begin
   ACallback := nil;
   ATemporaryCallback := False;
-  SetLength(Result, AType.Size);
-  if Length(Result) > 0 then
-    FillChar(Result[0], Length(Result), 0);
+  if IsPlainFFIArgumentType(AType) then
+  begin
+    MarshalFFIPlainValue(AType, AValue, AArgumentIndex, ADestination);
+    Exit;
+  end;
   if AType.Kind = ftkNullable then
   begin
     if AValue is TGocciaNullLiteralValue then
@@ -207,22 +379,7 @@ begin
           SSuggestFFIUsage);
       PointerValue := @ATemporaryString[0];
     end;
-    Move(PointerValue, Result[0], SizeOf(Pointer));
-    Exit;
-  end;
-  if AType.IsAggregate then
-  begin
-    if not (AValue is TGocciaFFIAggregateValue) then
-      ThrowTypeError(SErrorFFIAggregateArgumentValue,
-        SSuggestFFIUsage);
-    Aggregate := TGocciaFFIAggregateValue(AValue);
-    if Aggregate.Descriptor <> AType then
-      ThrowTypeError(SErrorFFIAggregateArgumentType,
-        SSuggestFFIUsage);
-    Aggregate.EnsureBackingStore;
-    BufferData := Aggregate.Buffer.Data;
-    if AType.Size > 0 then
-      Move(BufferData[Aggregate.ByteOffset], Result[0], AType.Size);
+    Move(PointerValue, ADestination^, SizeOf(Pointer));
     Exit;
   end;
   if AType.Kind = ftkCallback then
@@ -242,86 +399,64 @@ begin
         SSuggestFFIUsage);
     ACallback.EnsureOpen;
     PointerValue := Pointer(ACallback.Pointer);
-    Move(PointerValue, Result[0], SizeOf(Pointer));
+    Move(PointerValue, ADestination^, SizeOf(Pointer));
     Exit;
   end;
 
-  case AType.ScalarType of
-    fftVoid:
-      ThrowTypeError(SErrorFFIVoidNotValidArg, SSuggestFFIUsage);
-    fftBool:
-      if AValue.ToBooleanLiteral.Value then Result[0] := 1;
-    fftI8:
-    begin
-      Signed8 := ShortInt(ToInt32Value(AValue));
-      Move(Signed8, Result[0], SizeOf(Signed8));
-    end;
-    fftU8:
-    begin
-      Unsigned8 := Byte(ToUint32Value(AValue));
-      Move(Unsigned8, Result[0], SizeOf(Unsigned8));
-    end;
-    fftI16:
-    begin
-      Signed16 := SmallInt(ToInt32Value(AValue));
-      Move(Signed16, Result[0], SizeOf(Signed16));
-    end;
-    fftU16:
-    begin
-      Unsigned16 := Word(ToUint32Value(AValue));
-      Move(Unsigned16, Result[0], SizeOf(Unsigned16));
-    end;
-    fftI32:
-    begin
-      Signed32 := ToInt32Value(AValue);
-      Move(Signed32, Result[0], SizeOf(Signed32));
-    end;
-    fftU32:
-    begin
-      Unsigned32 := ToUint32Value(AValue);
-      Move(Unsigned32, Result[0], SizeOf(Unsigned32));
-    end;
-    fftI64:
-    begin
-      Signed64 := ToInt64Value(AValue);
-      Move(Signed64, Result[0], SizeOf(Signed64));
-    end;
-    fftU64:
-    begin
-      Unsigned64 := UInt64(ToInt64Value(AValue));
-      Move(Unsigned64, Result[0], SizeOf(Unsigned64));
-    end;
-    fftF32:
-    begin
-      Float32 := AValue.ToNumberLiteral.Value;
-      Move(Float32, Result[0], SizeOf(Float32));
-    end;
-    fftF64:
-    begin
-      Float64 := AValue.ToNumberLiteral.Value;
-      Move(Float64, Result[0], SizeOf(Float64));
-    end;
-    fftPointer:
-    begin
-      PointerValue := PointerFromFFIValue(AValue, AArgumentIndex);
-      Move(PointerValue, Result[0], SizeOf(Pointer));
-    end;
-    fftUTF8String:
-    begin
-      if not TryEncodeFFIUTF8String(AValue.ToStringLiteral.Value,
-         ATemporaryString) then
-        ThrowTypeError(SErrorFFIUTF8StringArgument, SSuggestFFIUsage);
-      PointerValue := @ATemporaryString[0];
-      Move(PointerValue, Result[0], SizeOf(Pointer));
-    end;
-  end;
+  // fftUTF8String: the one scalar that is not plain.
+  if not TryEncodeFFIUTF8String(AValue.ToStringLiteral.Value,
+     ATemporaryString) then
+    ThrowTypeError(SErrorFFIUTF8StringArgument, SSuggestFFIUsage);
+  PointerValue := @ATemporaryString[0];
+  Move(PointerValue, ADestination^, SizeOf(Pointer));
 end;
 
-function UnmarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
-  const AData: TBytes; const ALibraryGuard: TGocciaFFILibraryGuard): TGocciaValue;
+{ The return types whose value is an object the call has to build or guard: an
+  aggregate, a pointer, a callback pointer or a string. }
+function UnmarshalFFIReferenceValue(const AType: TGocciaFFITypeDescriptor;
+  const AData: PByte; const ALibraryGuard: TGocciaFFILibraryGuard): TGocciaValue;
 var
   Aggregate: TGocciaFFIAggregateValue;
   PointerValue: Pointer;
+  Text: string;
+begin
+  if AType.IsAggregate then
+  begin
+    Aggregate := TGocciaFFIAggregateValue.Create(AType);
+    if AType.Size > 0 then
+    begin
+      Aggregate.CopyFrom(AData);
+      Aggregate.AttachLibraryPointerFields(ALibraryGuard);
+    end;
+    Exit(Aggregate);
+  end;
+  if (AType.Kind = ftkCallback) or (AType.ScalarType = fftPointer) then
+  begin
+    PointerValue := nil;
+    Move(AData^, PointerValue, SizeOf(Pointer));
+    if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
+      ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
+    Exit(TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard));
+  end;
+  if AType.ScalarType = fftUTF8String then
+  begin
+    PointerValue := nil;
+    Move(AData^, PointerValue, SizeOf(Pointer));
+    if not Assigned(PointerValue) then
+      Exit(TGocciaNullLiteralValue.NullValue);
+    if not TryDecodeFFIUTF8String(PAnsiChar(PointerValue), Text) then
+      ThrowTypeError(SErrorFFIUTF8StringResult, SSuggestFFIUsage);
+    Exit(TGocciaStringLiteralValue.Create(Text));
+  end;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ Builds the JavaScript value for a native result of AType held at AData. The
+  void, boolean and numeric returns are handled here, free of managed
+  temporaries; the rest go through UnmarshalFFIReferenceValue. }
+function UnmarshalFFIValue(const AType: TGocciaFFITypeDescriptor;
+  const AData: PByte; const ALibraryGuard: TGocciaFFILibraryGuard): TGocciaValue;
+var
   Signed8: ShortInt;
   Unsigned8: Byte;
   Signed16: SmallInt;
@@ -332,77 +467,39 @@ var
   Unsigned64: UInt64;
   Float32: Single;
   Float64: Double;
-  Text: string;
 begin
-  if AType.IsAggregate then
-  begin
-    Aggregate := TGocciaFFIAggregateValue.Create(AType);
-    if AType.Size > 0 then
-    begin
-      Aggregate.CopyFrom(@AData[0]);
-      Aggregate.AttachLibraryPointerFields(ALibraryGuard);
-    end;
-    Exit(Aggregate);
-  end;
-  if AType.Kind = ftkCallback then
-  begin
-    PointerValue := nil;
-    Move(AData[0], PointerValue, SizeOf(Pointer));
-    if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
-      ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
-    Exit(TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard));
-  end;
+  if AType.Kind <> ftkScalar then
+    Exit(UnmarshalFFIReferenceValue(AType, AData, ALibraryGuard));
   case AType.ScalarType of
     fftVoid:
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     fftBool:
-      if AData[0] <> 0 then
+      if AData^ <> 0 then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
     fftI8:
-    begin Move(AData[0], Signed8, SizeOf(Signed8)); Result := TGocciaNumberLiteralValue.Create(Signed8); end;
+    begin Move(AData^, Signed8, SizeOf(Signed8)); Result := TGocciaNumberLiteralValue.Create(Signed8); end;
     fftU8:
-    begin Move(AData[0], Unsigned8, SizeOf(Unsigned8)); Result := TGocciaNumberLiteralValue.Create(Unsigned8); end;
+    begin Move(AData^, Unsigned8, SizeOf(Unsigned8)); Result := TGocciaNumberLiteralValue.Create(Unsigned8); end;
     fftI16:
-    begin Move(AData[0], Signed16, SizeOf(Signed16)); Result := TGocciaNumberLiteralValue.Create(Signed16); end;
+    begin Move(AData^, Signed16, SizeOf(Signed16)); Result := TGocciaNumberLiteralValue.Create(Signed16); end;
     fftU16:
-    begin Move(AData[0], Unsigned16, SizeOf(Unsigned16)); Result := TGocciaNumberLiteralValue.Create(Unsigned16); end;
+    begin Move(AData^, Unsigned16, SizeOf(Unsigned16)); Result := TGocciaNumberLiteralValue.Create(Unsigned16); end;
     fftI32:
-    begin Move(AData[0], Signed32, SizeOf(Signed32)); Result := TGocciaNumberLiteralValue.Create(Signed32); end;
+    begin Move(AData^, Signed32, SizeOf(Signed32)); Result := TGocciaNumberLiteralValue.Create(Signed32); end;
     fftU32:
-    begin Move(AData[0], Unsigned32, SizeOf(Unsigned32)); Result := TGocciaNumberLiteralValue.Create(Unsigned32); end;
+    begin Move(AData^, Unsigned32, SizeOf(Unsigned32)); Result := TGocciaNumberLiteralValue.Create(Unsigned32); end;
     fftI64:
-    begin Move(AData[0], Signed64, SizeOf(Signed64)); Result := TGocciaNumberLiteralValue.Create(Signed64); end;
+    begin Move(AData^, Signed64, SizeOf(Signed64)); Result := TGocciaNumberLiteralValue.Create(Signed64); end;
     fftU64:
-    begin Move(AData[0], Unsigned64, SizeOf(Unsigned64)); Result := TGocciaNumberLiteralValue.Create(Unsigned64); end;
+    begin Move(AData^, Unsigned64, SizeOf(Unsigned64)); Result := TGocciaNumberLiteralValue.Create(Unsigned64); end;
     fftF32:
-    begin Move(AData[0], Float32, SizeOf(Float32)); Result := TGocciaNumberLiteralValue.Create(Float32); end;
+    begin Move(AData^, Float32, SizeOf(Float32)); Result := TGocciaNumberLiteralValue.Create(Float32); end;
     fftF64:
-    begin Move(AData[0], Float64, SizeOf(Float64)); Result := TGocciaNumberLiteralValue.Create(Float64); end;
-    fftPointer:
-    begin
-      PointerValue := nil;
-      Move(AData[0], PointerValue, SizeOf(Pointer));
-      if Assigned(ALibraryGuard) and ALibraryGuard.IsClosed then
-        ThrowTypeError(SErrorFFIPointerLibraryClosed, SSuggestFFIUsage);
-      Result := TGocciaFFIPointerValue.Create(PointerValue, ALibraryGuard);
-    end;
-    fftUTF8String:
-    begin
-      PointerValue := nil;
-      Move(AData[0], PointerValue, SizeOf(Pointer));
-      if Assigned(PointerValue) then
-      begin
-        if not TryDecodeFFIUTF8String(PAnsiChar(PointerValue), Text) then
-          ThrowTypeError(SErrorFFIUTF8StringResult, SSuggestFFIUsage);
-        Result := TGocciaStringLiteralValue.Create(Text);
-      end
-      else
-        Result := TGocciaNullLiteralValue.NullValue;
-    end;
+    begin Move(AData^, Float64, SizeOf(Float64)); Result := TGocciaNumberLiteralValue.Create(Float64); end;
   else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := UnmarshalFFIReferenceValue(AType, AData, ALibraryGuard);
   end;
 end;
 
@@ -420,12 +517,70 @@ begin
   Result.AddReference;
 end;
 
+procedure ThrowFFICallbackForeignThread;
+var
+  Message: string;
+begin
+  Message := SErrorFFICallbackForeignThread;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
 function TGocciaFFIBoundFunctionValue.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if FDirect then
+    Result := InvokeDirect(AArgs)
+  else
+    Result := InvokeGeneral(AArgs);
+end;
+
+{ The common call: see FDirect. Everything it needs lives in this frame, so it
+  runs without managed locals and with the one exception frame the call
+  context requires. InvokeGeneral is the same protocol with the bookkeeping
+  the other signatures need. }
+function TGocciaFFIBoundFunctionValue.InvokeDirect(
+  const AArgs: TGocciaArgumentsCollection): TGocciaValue;
 var
-  NativeArguments: array of TBytes;
-  NativeResult: TBytes;
+  ArgumentData: array[0..FFI_INLINE_ARGUMENT_BYTES - 1] of Byte;
+  ResultStorage: array[0..FFI_INLINE_RESULT_BYTES + FFI_BUFFER_ALIGNMENT - 1] of Byte;
+  ResultData: PByte;
+  CallContext: TGocciaFFICallContext;
+  I: Integer;
+begin
+  if FLibraryGuard.IsClosed then
+    ThrowLibraryClosed;
+  if AArgs.Length < FSignature.ArgumentCount then
+    ThrowArgumentCount(AArgs.Length);
+
+  if FSignature.ArgumentDataSize > 0 then
+    FillChar(ArgumentData[0], FSignature.ArgumentDataSize, 0);
+  for I := 0 to FSignature.ArgumentCount - 1 do
+    MarshalFFIPlainValue(FSignature.ArgumentTypeAt(I), AArgs.GetElement(I), I,
+      @ArgumentData[FSignature.ArgumentDataOffset(I)]);
+  // Marshalling can run JavaScript (a coercion), which can close the library.
+  if FLibraryGuard.IsClosed then
+    ThrowLibraryClosed;
+
+  ResultData := FFIAlignBuffer(@ResultStorage[0]);
+  BeginFFICallContext(CallContext);
+  try
+    FFIInvokeCompiled(FSymbol, FSignature, @ArgumentData[0], ResultData);
+  finally
+    FinishFFICallContext(CallContext);
+  end;
+  if ConsumeFFICallbackThreadViolationsForCurrentThread then
+    ThrowFFICallbackForeignThread;
+  Result := UnmarshalFFIValue(FSignature.ReturnPlanPointer^.TypeDescriptor,
+    ResultData, FLibraryGuard);
+end;
+
+function TGocciaFFIBoundFunctionValue.InvokeGeneral(
+  const AArgs: TGocciaArgumentsCollection): TGocciaValue;
+var
+  // The marshalled arguments, one after another (see ArgumentDataOffset), and
+  // the native result.
+  ArgumentData, ResultStorage: TBytes;
   TemporaryStrings: array of TBytes;
   Callbacks: array of TGocciaFFICallbackValue;
   TemporaryCallbacks: array of Boolean;
@@ -439,12 +594,10 @@ var
   I, FixedCount, TotalCount: Integer;
 begin
   if FLibraryGuard.IsClosed then
-    ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
-      SSuggestFFIUsage);
+    ThrowLibraryClosed;
   FixedCount := FSignature.ArgumentCount;
   if AArgs.Length < FixedCount then
-    ThrowTypeError(Format(SErrorFFIFuncArgCount,
-      [FName, FixedCount, AArgs.Length]), SSuggestFFIUsage);
+    ThrowArgumentCount(AArgs.Length);
 
   CallSignature := nil;
   VarArgs := nil;
@@ -463,14 +616,15 @@ begin
         [FName, MAX_FFI_ARGS]), SSuggestFFIUsage);
     SetLength(CombinedTypes, TotalCount);
     for I := 0 to FixedCount - 1 do
-      CombinedTypes[I] := FSignature.Arguments[I].TypeDescriptor;
+      CombinedTypes[I] := FSignature.ArgumentTypeAt(I);
     try
       for I := 0 to VarArgs.Count - 1 do
         CombinedTypes[FixedCount + I] :=
           PromoteVariadicType(VarArgs.TypeAt(I));
       try
         CallSignature := TGocciaFFICompiledSignature.Create(CurrentFFIABI,
-          CombinedTypes, FSignature.ReturnPlan.TypeDescriptor, FixedCount);
+          CombinedTypes, FSignature.ReturnPlanPointer^.TypeDescriptor,
+          FixedCount);
       except
         on E: EArgumentOutOfRangeException do
           ThrowRangeError(SErrorFFICallLayoutLimit, SSuggestFFIUsage);
@@ -486,7 +640,11 @@ begin
     Signature := CallSignature;
   end;
 
-  SetLength(NativeArguments, TotalCount);
+  // SetLength zero-fills. The slack keeps an empty buffer addressable and
+  // leaves room to start the result on its alignment boundary.
+  SetLength(ArgumentData, Signature.ArgumentDataSize + 1);
+  SetLength(ResultStorage,
+    Signature.ReturnPlanPointer^.TypeDescriptor.Size + FFI_BUFFER_ALIGNMENT);
   SetLength(TemporaryStrings, TotalCount);
   SetLength(Callbacks, TotalCount);
   SetLength(TemporaryCallbacks, TotalCount);
@@ -498,19 +656,19 @@ begin
         ArgumentValue := AArgs.GetElement(I)
       else
         ArgumentValue := VarArgs.ValueAt(I - FixedCount);
-      NativeArguments[I] := MarshalFFIValue(
-        Signature.Arguments[I].TypeDescriptor, ArgumentValue, I,
+      MarshalFFIValue(Signature.ArgumentTypeAt(I), ArgumentValue, I,
+        @ArgumentData[Signature.ArgumentDataOffset(I)],
         TemporaryStrings[I], Callbacks[I], TemporaryCallbacks[I]);
     end;
     if FLibraryGuard.IsClosed then
-      ThrowTypeError(Format(SErrorFFICallLibraryClosed, [FName]),
-        SSuggestFFIUsage);
+      ThrowLibraryClosed;
 
     BeginFFICallContext(CallContext);
     CallContextActive := True;
     try
       try
-        FFIInvokeCompiled(FSymbol, Signature, NativeArguments, NativeResult);
+        FFIInvokeCompiled(FSymbol, Signature, @ArgumentData[0],
+          FFIAlignBuffer(@ResultStorage[0]));
       finally
         try
           FinishFFICallContext(CallContext);
@@ -519,12 +677,12 @@ begin
         end;
       end;
       if ConsumeFFICallbackThreadViolationsForCurrentThread then
-        ThrowTypeError(SErrorFFICallbackForeignThread,
-          SSuggestFFIUsage);
+        ThrowFFICallbackForeignThread;
       for I := 0 to High(Callbacks) do
         if Assigned(Callbacks[I]) then Callbacks[I].EnsureOpen;
-      Result := UnmarshalFFIValue(Signature.ReturnPlan.TypeDescriptor,
-        NativeResult, FLibraryGuard);
+      Result := UnmarshalFFIValue(
+        Signature.ReturnPlanPointer^.TypeDescriptor,
+        FFIAlignBuffer(@ResultStorage[0]), FLibraryGuard);
     finally
       if CallContextActive then CancelFFICallContext(CallContext);
     end;
