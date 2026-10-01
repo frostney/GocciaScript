@@ -1751,9 +1751,9 @@ var
 begin
   if not Assigned(AValue) then
     Exit(RegisterUndefined);
-  // The undefined, null and number value classes have no descendants, so an
-  // exact class comparison decides what `is` would, without walking the
-  // parent chain of every object that is none of them.
+  // The undefined, null and number value classes are sealed, so an exact class
+  // comparison decides what `is` would, without walking the parent chain of
+  // every object that is none of them.
   ValueClass := AValue.ClassType;
   if ValueClass = TGocciaUndefinedLiteralValue then
     Exit(RegisterUndefined);
