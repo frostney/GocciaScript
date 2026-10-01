@@ -2001,6 +2001,10 @@ var
   Name: string;
 begin
   Result := False;
+  // Coverage counts a line as hit when one of its instructions runs. A line
+  // holding only such an operand would emit none, so coverage keeps the copy.
+  if ACtx.OptimizationOptions.PreserveCoverageShape then
+    Exit;
   if not (AExpr is TGocciaIdentifierExpression) then
     Exit;
   Name := TGocciaIdentifierExpression(AExpr).Name;
