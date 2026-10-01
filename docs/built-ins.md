@@ -770,7 +770,7 @@ console.log(await $`echo ${name}`.text());
 | `failureKind` | Meaning |
 |---------------|---------|
 | `"none"` | The run completed. `ok` is `true` and `error` is `null` |
-| `"script-error"` | The child failed: it threw, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a `copy` source |
+| `"script-error"` | The child failed: it threw, left a promise rejected with no handler, failed to parse or link, or named a path the sandbox filesystem does not have — its own entry path, or a `copy` source |
 | `"resource-limit"` | A host-set ceiling refused the run: `--max-memory`, `--max-instructions`, the sandbox filesystem quota, or the `runScript` nesting depth |
 | `"timeout"` | The `--timeout` deadline elapsed |
 | `"host-error"` | The runner itself could not carry the run out. Nothing the child does produces this |

@@ -130,6 +130,17 @@ type
   TGocciaEngineExtensionClass = class of TGocciaEngineExtension;
   TGocciaEngineExtensionList = TObjectList<TGocciaEngineExtension>;
 
+  { What a run does about a promise that is still rejected with no handler
+    once the run has nothing left to do (ES2026 §27.2.1.9
+    HostPromiseRejectionTracker). }
+  TGocciaUnhandledRejectionMode = (
+    { Raise the rejection reason from the run, like an uncaught throw. }
+    urThrow,
+    { Leave it tracked on the microtask queue for the host to take with
+      TakeUnhandledRejection; whatever is left goes when the queue is
+      cleared. }
+    urIgnore);
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
@@ -198,6 +209,7 @@ type
     FFunctionConstructor: TGocciaFunctionConstructorClassValue;
     FTypedArrayIntrinsic: TGocciaClassValue;
     FSuppressWarnings: Boolean;
+    FUnhandledRejections: TGocciaUnhandledRejectionMode;
     { The async-context bracket this engine holds for its whole lifetime; see
       EnterEngineAsyncContext. }
     FAsyncContextToken: Integer;
@@ -296,6 +308,9 @@ type
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
     procedure WaitForRuntimeIdle;
+    procedure RaiseUnhandledRejection;
+    procedure DiscardUnhandledRejectionsOfFailedRun(
+      const AOuterRunningEngine: TGocciaEngine);
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule;
     procedure RetainModule(const AModule: TGocciaCompiledModule);
@@ -435,6 +450,8 @@ type
     property GocciaGlobal: TGocciaObjectValue read FGocciaGlobal;
     property Realm: TGocciaRealm read FRealm;
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
+    property UnhandledRejections: TGocciaUnhandledRejectionMode
+      read FUnhandledRejections write FUnhandledRejections;
     property LastTiming: TGocciaScriptResult read FLastTiming;
     // Source map from the most recent source pipeline run, if any.
     // Ownership transfers to the caller when read (set to nil after access).
@@ -986,6 +1003,7 @@ begin
   else
     FCapabilities := ACapabilities;
   FProjectRoot := DiscoverCapabilityProjectRoot(AFileName);
+  FUnhandledRejections := urThrow;
   { Not a valid token until EnterEngineAsyncContext returns one, so a
     constructor that fails before then cannot make Destroy unwind past an
     enclosing engine's entry. }
@@ -1193,6 +1211,16 @@ begin
     current when it was constructed — engines nest on one thread, so clearing
     the thread outright would strip an outer engine's context mid-run. }
   LeaveEngineAsyncContext(FAsyncContextToken);
+
+  { The thread's queue keeps a promise left rejected alive until a host takes
+    it. Code a host calls after the engine's own run — a benchmark body, a
+    test — has no run whose end would report or drop it, so drop it here,
+    before the realm it lives in goes away. An engine freed inside another
+    engine's run (a sandbox child, a ShadowRealm) leaves that run's
+    rejections alone. }
+  if (not Assigned(GRunningEngine)) and
+     Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
 
   { ApplyCapabilityPolicy wired this engine into the resolver, and a host
     can pass in a loader that outlives the engine. A method pointer left
@@ -2077,6 +2105,37 @@ begin
   end;
 end;
 
+{ Called once a run has nothing left to do. A promise that was rejected and
+  still has no handler will never get one from this run, so the rejection is
+  the run's failure, raised like an uncaught throw. }
+procedure TGocciaEngine.RaiseUnhandledRejection;
+var
+  Queue: TGocciaMicrotaskQueue;
+  Promise: TGocciaValue;
+begin
+  if FUnhandledRejections <> urThrow then
+    Exit;
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if (not Assigned(Queue)) or (not Queue.TakeUnhandledRejection(Promise)) then
+    Exit;
+  raise TGocciaThrowValue.Create(TGocciaPromiseValue(Promise).PromiseResult);
+end;
+
+{ A run that fails has reported itself by failing. What it left rejected goes
+  with it, so the next run on the thread is not blamed for it. Execute gets
+  this from clearing its queue or leaving its scope; ExecuteProgram and
+  RunModule clear nothing, so they call this when they exit by exception.
+  Only the outermost run does: a failure inside another run may be caught by
+  the script that is still running, and its own rejections are still its. }
+procedure TGocciaEngine.DiscardUnhandledRejectionsOfFailedRun(
+  const AOuterRunningEngine: TGocciaEngine);
+begin
+  if Assigned(AOuterRunningEngine) then
+    Exit;
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
+end;
+
 procedure TGocciaEngine.DoRetainModule(const AModule: TObject);
 begin
   FRetainedModules.Add(AModule);
@@ -2594,10 +2653,14 @@ var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
+  { A flag rather than the RTL's exception object: on SEH targets that object
+    is not populated while a finally runs during unwinding. }
+  Completed: Boolean;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
+  Completed := False;
   try
     Result := FExecutor.RunCompiledModule(AModule);
     GC := TGarbageCollector.Instance;
@@ -2605,11 +2668,15 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
+      RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Completed := True;
   finally
+    if not Completed then
+      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
@@ -2622,10 +2689,14 @@ var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PreviousRunningEngine: TGocciaEngine;
+  { A flag rather than the RTL's exception object: on SEH targets that object
+    is not populated while a finally runs during unwinding. }
+  Completed: Boolean;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
+  Completed := False;
   try
     Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
     GC := TGarbageCollector.Instance;
@@ -2633,11 +2704,15 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
+      RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Completed := True;
   finally
+    if not Completed then
+      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
@@ -2929,6 +3004,7 @@ begin
                 if EntryPromise.State = gpsRejected then
                   raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
               end;
+              RaiseUnhandledRejection;
               FLastTiming.Result := ModuleResult;
             finally
               if FExecutor is TGocciaBytecodeExecutor then
@@ -3003,12 +3079,14 @@ var
   FloatingPointState: TGocciaFloatingPointState;
   PrevScope: TGocciaDiagnosticSourceScope;
   PreviousRunningEngine: TGocciaEngine;
+  Completed: Boolean;
 begin
   PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
     FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
   PreviousRunningEngine := GRunningEngine;
   GRunningEngine := Self;
+  Completed := False;
   try
     Result := FExecutor.ExecuteProgram(AProgram);
     GC := TGarbageCollector.Instance;
@@ -3016,11 +3094,15 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
+      RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Completed := True;
   finally
+    if not Completed then
+      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);

@@ -827,7 +827,7 @@ end;
 | `TGocciaRuntimeError` | Execution errors (type errors, reference errors, throw statements) |
 | `TGocciaTypeError` | Type-specific runtime error |
 | `TGocciaReferenceError` | Undefined variable access |
-| `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError` |
+| `TGocciaThrowValue` | JavaScript `throw` — wraps any thrown value including `RangeError`. Also raised from `Execute`, `ExecuteProgram`, `RunModule`, and `RunModuleInScope` with the reason of a promise the run left rejected with no handler ([Errors](errors.md#unhandled-promise-rejections)). `Engine.UnhandledRejections := urIgnore` turns that off: the promises then stay on the microtask queue, where `TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection` hands the oldest to a host and forgets the others. A host can ask while the run is in progress (from a native callback) or after an `ExecuteProgram` / `RunModule` that returned normally; `Execute` clears its queue before it returns, and freeing an engine while none is running clears the thread's, so nothing is left to take after either |
 | `EObjectCheck`, `EAccessViolation`, `EInvalidPointer`, `EDivByZero`, `EPrivilege`, `EExternalException` | Engine-integrity faults. The engine re-raises these past every guest `catch`, so they escape `Engine.Execute` even while guest code is running: they mean a pointer, a mapping, or the heap is no longer trustworthy. Report and exit — do not resume the process, and do not treat one as a script failure. `EOutOfMemory` is deliberately *not* one of them and stays catchable. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md) |
 
 ## Execution Limits

@@ -8,6 +8,8 @@ describe("Response.prototype.json", () => {
     const r = new Response();
     const p = r.json();
     expect(p).toHaveProperty("then");
+    // An empty body is not valid JSON; the rejection is not what is under test.
+    p.catch(() => {});
   });
 
   test("sets bodyUsed to true after consumption", async () => {

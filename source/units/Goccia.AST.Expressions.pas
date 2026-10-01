@@ -2680,8 +2680,18 @@ begin
           // ES2026 §13.3.10.1 step 6-7: HostLoadImportedModule
           Module := AContext.LoadModule(ModuleRequest,
             AContext.CurrentFilePath);
-          // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
-          Promise.Resolve(Module.GetNamespaceObject);
+          // ES2026 §13.3.10.3 ContinueDynamicImport: import() settles from
+          // the module's evaluation promise, so a module whose top-level
+          // await is still running holds it back and one whose top-level
+          // await threw rejects it, as in the VM twin.
+          if Assigned(Module) and
+             (Module.EvaluationPromise is TGocciaPromiseValue) then
+            SettlePromiseFromPromise(Promise,
+              TGocciaPromiseValue(Module.EvaluationPromise),
+              Module.GetNamespaceObject)
+          else
+            // ES2026 §13.3.10.1 step 11: Resolve promise with namespace
+            Promise.Resolve(Module.GetNamespaceObject);
         end;
       finally
         LeaveGocciaCallSite(PreviousCallSite);
