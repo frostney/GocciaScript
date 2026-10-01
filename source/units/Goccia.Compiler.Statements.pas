@@ -1068,10 +1068,24 @@ begin
     if LocalIdx >= 0 then
     begin
       ACtx.Scope.ClearLocalConstantValue(LocalIdx);
+      // The value reaches only reads compiled after this point. For a
+      // global-backed top-level binding those cannot run inside its temporal
+      // dead zone: top-level statements run in source order, and hoisted
+      // function declarations, which can run earlier, are compiled before
+      // all of them. Non-strict compatibility mode keeps the named read,
+      // because a sloppy direct eval can shadow the name with a
+      // function-level var at run time.
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
-        not IsTopLevelGlobalBacked and HasRealInitializer and Assigned(Info.Initializer) and
+        not (IsTopLevelGlobalBacked and ACtx.CompatibilityNonStrictMode) and
+        HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
+
+      // Loading a BigInt constant rebuilds it from its digits, which costs
+      // more than the cached global read it would replace.
+      if CanTrackConstant and IsTopLevelGlobalBacked and
+         (ConstantValue.Kind = ctvkBigInt) then
+        CanTrackConstant := False;
 
       if CanTrackConstant and IsStrict then
       begin

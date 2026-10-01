@@ -1756,25 +1756,16 @@ end;
 
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
-  NumberValue: Double;
   ValueClass: TClass;
+  NumberValue: Double;
 begin
   if not Assigned(AValue) then
     Exit(RegisterUndefined);
-  // The undefined, null and number value classes are sealed, so an exact class
-  // comparison decides what `is` would, without walking the parent chain of
-  // every object that is none of them.
+  // The undefined, null and number value classes are sealed, so an exact
+  // class compare answers `is` without walking the parent chain: a heap
+  // object costs one class load and five pointer compares rather than three
+  // failed inheritance walks and three thread-local singleton reads.
   ValueClass := AValue.ClassType;
-  if ValueClass = TGocciaUndefinedLiteralValue then
-    Exit(RegisterUndefined);
-  if ValueClass = TGocciaNullLiteralValue then
-    Exit(RegisterNull);
-  if AValue = TGocciaHoleValue.HoleValue then
-    Exit(RegisterHole);
-  if AValue = TGocciaBooleanLiteralValue.TrueValue then
-    Exit(RegisterBoolean(True));
-  if AValue = TGocciaBooleanLiteralValue.FalseValue then
-    Exit(RegisterBoolean(False));
   if ValueClass = TGocciaNumberLiteralValue then
   begin
     NumberValue := TGocciaNumberLiteralValue(AValue).Value;
@@ -1786,14 +1777,28 @@ begin
     end;
     if NumberValue = 1.0 then
       Exit(RegisterInt(1));
-    if (not TGocciaNumberLiteralValue(AValue).IsNaN) and
-       (not TGocciaNumberLiteralValue(AValue).IsInfinite) and
-       (Frac(NumberValue) = 0.0) and
-       (NumberValue >= Low(LongInt)) and
-       (NumberValue <= High(LongInt)) then
+    // NaN and both infinities fail the range test, and a finite value in
+    // range is integral exactly when truncation leaves it unchanged.
+    if (NumberValue >= Low(LongInt)) and
+       (NumberValue <= High(LongInt)) and
+       (Trunc(NumberValue) = NumberValue) then
       Exit(RegisterInt(Trunc(NumberValue)));
     Exit(RegisterFloat(NumberValue));
   end;
+  if ValueClass = TGocciaUndefinedLiteralValue then
+    Exit(RegisterUndefined);
+  if ValueClass = TGocciaNullLiteralValue then
+    Exit(RegisterNull);
+  if ValueClass = TGocciaBooleanLiteralValue then
+  begin
+    if AValue = TGocciaBooleanLiteralValue.TrueValue then
+      Exit(RegisterBoolean(True));
+    if AValue = TGocciaBooleanLiteralValue.FalseValue then
+      Exit(RegisterBoolean(False));
+  end
+  else if (ValueClass = TGocciaHoleValue) and
+          (AValue = TGocciaHoleValue.HoleValue) then
+    Exit(RegisterHole);
   Result := RegisterObject(AValue);
 end;
 
@@ -8015,7 +8020,7 @@ var
   I: Integer;
   TemplateKey: string;
 begin
-  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex)^;
   Slot := Integer(Constant.IntValue);
   TemplateKey := 'bc:' + IntToHex(ATemplate.TemplateSiteId, 16) + ':' +
     IntToStr(Slot);
@@ -8075,7 +8080,7 @@ var
   Slot: Integer;
   Cached, UpdatedCache: TObject;
 begin
-  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex)^;
   Slot := Integer(Constant.IntValue);
   Cached := ATemplate.GetRegExpProgramCache(Slot);
   Result := CreateRegExpLiteralObject(
@@ -8394,7 +8399,7 @@ begin
 
   for I := 0 to ATemplate.ConstantCount - 1 do
   begin
-    ConstantValue := ATemplate.GetConstantUnchecked(I);
+    ConstantValue := ATemplate.GetConstantUnchecked(I)^;
     if (ConstantValue.Kind = bckString) and
        IsBytecodePrivateKey(ConstantValue.StringValue) then
       DeclareBytecodePrivateNameForClass(AClassValue, ConstantValue.StringValue);
@@ -14452,7 +14457,7 @@ var
   DoneFlag: Boolean;
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
-  Constant: TGocciaBytecodeConstant;
+  Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;

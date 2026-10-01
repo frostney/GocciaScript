@@ -341,7 +341,6 @@ Small, frequently-called non-virtual methods are marked `inline` to eliminate ca
 | Method | Unit | Rationale |
 |--------|------|-----------|
 | `ContainsOwnLexicalBinding(Name)` | `Goccia.Scope` | Own-scope dictionary lookup wrapper |
-| `TryGetLexicalValueAt(EntryIndex, Version, Value)` | `Goccia.Scope` | Inline-cache re-read of an own lexical binding by entry index |
 | `GetIsNegativeZero` (the `IsNegativeZero` property) | `Goccia.Values.Primitives` | Wraps `NumberBits.IsNegativeZero`, a sign-bit pattern compare |
 
 The identifier lookups themselves — `GetValue`, `ResolveIdentifier` and `Contains` — are `virtual` on `TGocciaScope`, so they are not inlined.
@@ -351,6 +350,7 @@ The identifier lookups themselves — `GetValue`, `ResolveIdentifier` and `Conta
 - **Virtual methods cannot be inlined** — `GetProperty`, `IsPrimitive`, `IsCallable`, and scope chain walkers (`GetThisValue`, `GetOwningClass`, `GetSuperClass`) rely on VMT dispatch and are never candidates for inlining.
 - **Only non-virtual wrappers** — Inlined methods are thin wrappers (dictionary lookups, bit-pattern compares) where the call overhead is significant relative to the method body.
 - **Measurable on hot paths** — Scope lookups happen on every identifier reference. Eliminating function call overhead here compounds across deeply nested expressions.
+- **Not into the bytecode dispatch loop by default** — `ExecuteClosureRegistersInternal` is too large for FPC to keep values in registers, so a body inlined there works through stack slots. `TryGetLexicalValueAt`, the `OP_GET_GLOBAL` cache re-read, is deliberately a small out-of-line leaf: 44 instructions per read including the call, against 54 inlined. Measure before marking a dispatch-loop helper `inline`.
 
 ### Managed Locals on Hot Paths
 

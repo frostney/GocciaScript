@@ -52,6 +52,7 @@ type
     function RunMissingImportBinding(const ADetachModule: Boolean): string;
     procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
     procedure TestMissingImportBindingNamesSpecifier;
+    procedure TestGlobalReadCacheFollowsBindingTurnedImport;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -104,6 +105,8 @@ begin
     TestDetachedModuleNamespaceImportRaisesSyntaxError);
   Test('Missing import binding names the specifier, not the host path',
     TestMissingImportBindingNamesSpecifier);
+  Test('Global read cache follows a binding that becomes an import',
+    TestGlobalReadCacheFollowsBindingTurnedImport);
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -794,6 +797,53 @@ procedure TTestGocciaVM.TestMissingImportBindingNamesSpecifier;
 begin
   Expect<string>(RunMissingImportBinding(False)).ToBe(
     'SyntaxError: Module "./dependency.js" has no export named "missing"');
+end;
+
+procedure TTestGocciaVM.TestGlobalReadCacheFollowsBindingTurnedImport;
+var
+  Module: TGocciaModule;
+  Scope: TGocciaScope;
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+begin
+  Module := TGocciaModule.Create('/host/project/dependency.js');
+  Scope := TGocciaScope.Create(nil, skGlobal, 'import-cache');
+  Template := TGocciaFunctionTemplate.Create('import-cache');
+  VM := TGocciaVM.Create;
+  try
+    Scope.DefineLexicalBinding('value', TGocciaNumberLiteralValue.Create(3),
+      dtLet);
+    VM.GlobalScope := Scope;
+    VM.Realm := FRealm;
+    Template.MaxRegisters := 1;
+    Template.EmitInstruction(EncodeABx(OP_GET_GLOBAL, 0,
+      Template.AddConstantString('value')));
+    Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+
+    // The first read fills the site's cache; the later ones are served by it
+    // and must still observe the binding's current value.
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(3);
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(3);
+    Scope.AssignBinding('value', TGocciaNumberLiteralValue.Create(4));
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(4);
+
+    // Turning the name into an import binding keeps its entry in place, so
+    // the cached site has to notice and resolve through the import from then
+    // on, including later changes of the exported value.
+    Module.AddExportValue('value', TGocciaNumberLiteralValue.Create(7));
+    Scope.CreateImportBinding('value', Module, 'value');
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(7);
+    Module.UpdateExportValue('value', TGocciaNumberLiteralValue.Create(8));
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(8);
+    Expect<Double>(VM.ExecuteFunction(Template).ToNumberLiteral.Value).ToBe(8);
+  finally
+    VM.GlobalScope := nil;
+    VM.Realm := nil;
+    VM.Free;
+    Template.Free;
+    Scope.Free;
+    Module.Free;
+  end;
 end;
 
 begin
