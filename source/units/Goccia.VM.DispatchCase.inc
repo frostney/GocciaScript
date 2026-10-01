@@ -33,7 +33,7 @@
                 FRegisters[A] := RegisterObject(LeftValue);
               end;
           else
-            FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
+            FRegisters[A] := ValueToRegister(ConstantToValue(Constant^));
           end;
         end;
 

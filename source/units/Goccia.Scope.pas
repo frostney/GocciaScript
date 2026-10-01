@@ -62,6 +62,10 @@ type
       const ALine, AColumn: Integer);
     procedure ResolveImportBindingValue(const AName: string;
       var ABinding: TLexicalBinding);
+    // Out-of-line remainder of TryGetLexicalValueAt: TDZ, global-object-backed
+    // built-ins, and import bindings, all of which need the binding's name.
+    function TryGetNamedLexicalValueAt(const AEntryIndex: Integer;
+      const ALexicalBinding: TLexicalBinding; out AValue: TGocciaValue): Boolean;
   protected
     function GetThisValue: TGocciaValue; virtual;
     function GetOwningClass: TGocciaValue; virtual;
@@ -133,17 +137,19 @@ type
     // Inline-cache fast path: re-read an own lexical binding by the entry
     // index obtained from TryGetBindingValueFillCache, validated against the
     // binding map's entry version.  TDZ still raises.  Returns False on any
-    // stale cache so the caller can fall back to the named lookup.
+    // stale cache so the caller can fall back to the named lookup.  The index
+    // must come from TryGetBindingValueFillCache: an import binding is never
+    // given one, and creating an import binding re-stamps the entry version.
     function TryGetLexicalValueAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
     function HasLexicalBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal): Boolean;
     function IsGlobalBuiltInObjectBindingAt(const AEntryIndex: Integer;
-      const AVersion: Cardinal): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+      const AVersion: Cardinal): Boolean;
     // Named lookup that reports the own-lexical entry index and map version
     // for inline caching.  AEntryIndex is -1 when the value was resolved
-    // through the global this-object, var bindings, or the parent chain —
-    // those resolutions are not cacheable.
+    // through an import binding, the global this-object, var bindings, or the
+    // parent chain — those resolutions are not cacheable.
     function TryGetBindingValueFillCache(const AName: string;
       out AEntryIndex: Integer; out AVersion: Cardinal;
       out AValue: TGocciaValue): Boolean;
@@ -434,6 +440,10 @@ begin
   FLexicalBindings.AddOrSetValue(AName, LexicalBinding);
   FImportBindings.AddOrSetValue(AName,
     TGocciaModuleImportBinding.Create(ATargetModule, ATargetExportName));
+  // A read cached against this entry while it was an ordinary binding must
+  // not keep serving its stored value: TryGetBindingValueFillCache declines
+  // import bindings, so the next read re-resolves through the import.
+  FLexicalBindings.InvalidateEntryIndexCaches;
 end;
 
 function TGocciaScope.CreateChild(const AScopeKind: TGocciaScopeKind = skUnknown; const ACustomLabel: string = ''; const ACapacity: Integer = 0): TGocciaScope;
@@ -1364,14 +1374,36 @@ end;
 function TGocciaScope.TryGetLexicalValueAt(const AEntryIndex: Integer;
   const AVersion: Cardinal; out AValue: TGocciaValue): Boolean;
 var
-  LexicalBinding: TLexicalBinding;
+  LexicalBinding: PLexicalBinding;
 begin
-  if (AVersion <> FLexicalBindings.EntryVersion) or
-     not FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) then
+  LexicalBinding := nil;
+  if AVersion = FLexicalBindings.EntryVersion then
+    LexicalBinding := FLexicalBindings.ValueAddressAtEntry(AEntryIndex);
+  if not Assigned(LexicalBinding) then
   begin
     AValue := nil;
     Exit(False);
   end;
+  // Hit path: an initialized binding that is not a global-object-backed
+  // built-in is its stored value. TryGetBindingValueFillCache never reports
+  // an entry index for an import binding, so none is tested for here.
+  // Everything else needs the binding's name, which is a managed string, so
+  // it stays out of line to keep this path free of string temporaries.
+  if LexicalBinding^.Initialized and
+     not (LexicalBinding^.BuiltIn and LexicalBinding^.GlobalObjectBacked) then
+  begin
+    AValue := LexicalBinding^.Value;
+    Exit(True);
+  end;
+  Result := TryGetNamedLexicalValueAt(AEntryIndex, LexicalBinding^, AValue);
+end;
+
+function TGocciaScope.TryGetNamedLexicalValueAt(const AEntryIndex: Integer;
+  const ALexicalBinding: TLexicalBinding; out AValue: TGocciaValue): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  LexicalBinding := ALexicalBinding;
   if not LexicalBinding.IsAccessible then
     RaiseBindingNotInitialized(FLexicalBindings.KeyAtEntry(AEntryIndex), 0, 0);
   if IsGlobalBuiltInObjectBinding(LexicalBinding) then
@@ -1394,20 +1426,20 @@ end;
 function TGocciaScope.IsGlobalBuiltInObjectBindingAt(
   const AEntryIndex: Integer; const AVersion: Cardinal): Boolean;
 var
-  LexicalBinding: TLexicalBinding;
+  LexicalBinding: PLexicalBinding;
 begin
-  Result := (AVersion = FLexicalBindings.EntryVersion) and
-    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding) and
-    IsGlobalBuiltInObjectBinding(LexicalBinding);
+  if AVersion <> FLexicalBindings.EntryVersion then
+    Exit(False);
+  LexicalBinding := FLexicalBindings.ValueAddressAtEntry(AEntryIndex);
+  Result := Assigned(LexicalBinding) and
+    IsGlobalBuiltInObjectBinding(LexicalBinding^);
 end;
 
 function TGocciaScope.HasLexicalBindingAt(const AEntryIndex: Integer;
   const AVersion: Cardinal): Boolean;
-var
-  LexicalBinding: TLexicalBinding;
 begin
   Result := (AVersion = FLexicalBindings.EntryVersion) and
-    FLexicalBindings.TryGetValueAtEntry(AEntryIndex, LexicalBinding);
+    Assigned(FLexicalBindings.ValueAddressAtEntry(AEntryIndex));
 end;
 
 function TGocciaScope.TryGetBindingValueFillCache(const AName: string;
@@ -1434,6 +1466,13 @@ begin
       AVersion := 0;
       AValue := nil;
       Exit(False);
+    end;
+    // An import binding resolves through its exporting module on every
+    // read, so its entry index is withheld and the read stays uncached.
+    if Assigned(FImportBindings) and FImportBindings.ContainsKey(AName) then
+    begin
+      AEntryIndex := -1;
+      AVersion := 0;
     end;
     ResolveImportBindingValue(AName, LexicalBinding);
     AValue := LexicalBinding.Value;
