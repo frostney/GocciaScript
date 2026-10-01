@@ -4622,6 +4622,7 @@ var
   I: Integer;
   Callback, CallbackResult: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
+  HookFailed: Boolean;
   Promise: TGocciaPromiseValue;
   RejectionReason: string;
 begin
@@ -4633,6 +4634,7 @@ begin
       if Callback.IsCallable then
       begin
         try
+          HookFailed := False;
           CallbackResult := TGocciaFunctionBase(Callback).Call(EmptyArgs, TGocciaUndefinedLiteralValue.UndefinedValue);
 
           if (TGarbageCollector.Instance <> nil) then
@@ -4644,9 +4646,15 @@ begin
               Promise.MarkHandled;
               WaitForFetchPromise(Promise);
               if Promise.State = gpsRejected then
-                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult))
+              begin
+                HookFailed := True;
+                AssertionFailed('callback execution', 'Async callback rejected: ' + DescribeThrownValue(Promise.PromiseResult));
+              end
               else if Promise.State = gpsPending then
+              begin
+                HookFailed := True;
                 AssertionFailed('callback execution', 'Async callback Promise still pending after microtask drain');
+              end;
             end
             else
               DrainMicrotasksAndFetchCompletions;
@@ -4663,10 +4671,18 @@ begin
             a getter — and that is the hook's failure too. A hook that already
             failed keeps its own message. }
           DrainMicrotasksAndFetchCompletions;
-          if TakeUnhandledRejectionReason(RejectionReason) and
-             not FTestStats.CurrentTestHasFailures then
-            AssertionFailed('callback execution',
-              'Unhandled promise rejection: ' + RejectionReason);
+          if TakeUnhandledRejectionReason(RejectionReason) then
+          begin
+            HookFailed := True;
+            if not FTestStats.CurrentTestHasFailures then
+              AssertionFailed('callback execution',
+                'Unhandled promise rejection: ' + RejectionReason);
+          end;
+          { A hook that failed without throwing, through its returned promise
+            or a rejection it left, gives up what it left pending like one
+            that threw. }
+          if HookFailed then
+            DiscardPendingHostWork;
         except
           { Timeout errors flag a describe/file/test deadline expiring;
             they must propagate so the outer ExecuteSuite handler can

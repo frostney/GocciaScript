@@ -5343,6 +5343,41 @@ await section("TestRunner: a file that fails with work still queued does not rea
         throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
 
+    // A hook fails the same way when its promise rejects or it leaves a
+    // rejection behind, without throwing.
+    const failedAsyncHooks: { name: string; hook: string; error: string }[] = [
+      { name: "rejected", hook: 'async () => { TIMER; throw new Error("beforeAll rejects"); }', error: "beforeAll rejects" },
+      { name: "unhandled", hook: '() => { TIMER; Promise.reject(new Error("beforeAll leaves a rejection")); }', error: "beforeAll leaves a rejection" },
+    ];
+    for (const failedHook of failedAsyncHooks) {
+      const file = join(tmp, `async-hook-${failedHook.name}.test.js`);
+      writeFileSync(
+        file,
+        [
+          'describe("failed hook", () => {',
+          `  beforeAll(${failedHook.hook.replace("TIMER", 'setTimeout(() => console.log("leaked " + "timer ran"), 0)')});`,
+          '  test("is skipped", () => { expect(1).toBe(1); });',
+          "});",
+          'describe("sibling suite", () => {',
+          '  test("runs", async () => {',
+          "    await new Promise((resolve) => setTimeout(resolve, 30));",
+          "    expect(1).toBe(1);",
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", file, "--no-progress", `--mode=${mode}`],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || /leaked timer ran/.test(output))
+          throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+      }
+    }
+
     // A describe body whose queued job throws fails the file, and the tests
     // still run. The first of them pumps timers, and must not be handed the
     // one the describe body left.
