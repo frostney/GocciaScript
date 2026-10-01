@@ -727,7 +727,7 @@ begin
     end;
     PumpCurrentThreadWork;
     CheckInstructionLimit;
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
     Sleep(1);
   until False;
   CallbackArgs := TGocciaArgumentsCollection.Create([BroadcastValue]);
@@ -778,7 +778,7 @@ begin
   repeat
     PumpCurrentThreadWork;
     CheckInstructionLimit;
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
     NowMilliseconds := GetMilliseconds;
     if NowMilliseconds >= Deadline then
       Break;
@@ -843,7 +843,7 @@ begin
     if not HasPendingAtomicsWaitAsyncCompletions then
       Break;
     CheckInstructionLimit;
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
     Sleep(1);
   until False;
 end;
