@@ -207,3 +207,107 @@ test("setting length below max array index does not range check in bytecode", ()
   expect(array[2]).toBeUndefined();
   expect(array[4294967294]).toBeUndefined();
 });
+
+describe("storing to an existing index", () => {
+  test("replaces the element and keeps the length", () => {
+    const arr = [1, 2, 3];
+    const index = 1;
+    arr[index] = "two";
+    arr[0] = arr[index] + "!";
+    expect(arr).toEqual(["two!", "two", 3]);
+    expect(arr.length).toBe(3);
+  });
+
+  test("stores numbers, objects and undefined unchanged", () => {
+    const arr = [0, 0, 0, 0];
+    const box = { id: 1 };
+    const index = 2;
+    arr[0] = -0;
+    arr[1] = 1.5;
+    arr[index] = box;
+    arr[3] = undefined;
+    expect(Object.is(arr[0], -0)).toBe(true);
+    expect(arr[1]).toBe(1.5);
+    expect(arr[2]).toBe(box);
+    expect(arr[3]).toBeUndefined();
+    expect(3 in arr).toBe(true);
+  });
+
+  test("throws on a frozen array and leaves it unchanged", () => {
+    const arr = Object.freeze([1, 2, 3]);
+    const index = 1;
+    expect(() => {
+      arr[index] = 9;
+    }).toThrow(TypeError);
+    expect(Array.from(arr)).toEqual([1, 2, 3]);
+  });
+
+  test("writes through a sealed or non-extensible array", () => {
+    const sealed = Object.seal([1, 2, 3]);
+    const fixed = Object.preventExtensions([1, 2, 3]);
+    const index = 1;
+    sealed[index] = "s";
+    fixed[index] = "f";
+    expect(Array.from(sealed)).toEqual([1, "s", 3]);
+    expect(Array.from(fixed)).toEqual([1, "f", 3]);
+  });
+
+  test("throws for an index made non-writable", () => {
+    const arr = [1, 2, 3];
+    Object.defineProperty(arr, "1", { value: 2, writable: false });
+    const index = 1;
+    expect(() => {
+      arr[index] = 9;
+    }).toThrow(TypeError);
+    arr[0] = "ok";
+    expect(Array.from(arr)).toEqual(["ok", 2, 3]);
+  });
+
+  test("runs the setter of an index defined as an accessor", () => {
+    const arr = [1, 2, 3];
+    const written = [];
+    Object.defineProperty(arr, "1", {
+      get() {
+        return "computed";
+      },
+      set(value) {
+        written.push(value);
+      },
+      configurable: true,
+    });
+    const index = 1;
+    arr[index] = "a";
+    arr[1] = "b";
+    expect(written).toEqual(["a", "b"]);
+    expect(arr[1]).toBe("computed");
+  });
+
+  test("works on an array that also has named properties", () => {
+    const arr = [1, 2, 3];
+    arr.label = "tagged";
+    const index = 2;
+    arr[index] = "three";
+    expect(arr).toEqual([1, 2, "three"]);
+    expect(arr.label).toBe("tagged");
+  });
+
+  test("a hole is filled by a store to its index", () => {
+    const arr = [1, , 3];
+    const index = 1;
+    arr[index] = "filled";
+    expect(arr).toEqual([1, "filled", 3]);
+    expect(Object.keys(arr)).toEqual(["0", "1", "2"]);
+  });
+
+  test("the stored element is enumerable, writable and configurable", () => {
+    const arr = [1, 2];
+    const index = 0;
+    arr[index] = "new";
+    expect(Object.getOwnPropertyDescriptor(arr, "0")).toEqual({
+      value: "new",
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+});
