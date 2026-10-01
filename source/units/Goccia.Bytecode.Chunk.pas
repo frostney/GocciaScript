@@ -282,6 +282,12 @@ type
       is False when none was (binary-loaded bytecode, or a call the compiler
       emits itself rather than from a source call expression). }
     function CallSiteAt(const APC: UInt32): TGocciaCallSiteEntry;
+    { The recorded position of the call site for the instruction starting at
+      APC, without copying its callee descriptor: CallSiteAt returns a record
+      of three strings, which is too much work for a lookup every native call
+      makes. False when none was recorded. }
+    function TryGetCallSitePosition(const APC: UInt32;
+      out ALine, AColumn: Integer): Boolean;
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
     function AddConstantInteger(const AValue: Int64): UInt16;
@@ -550,6 +556,32 @@ begin
     else
       High := Middle - 1;
   end;
+end;
+
+function TGocciaFunctionTemplate.TryGetCallSitePosition(const APC: UInt32;
+  out ALine, AColumn: Integer): Boolean;
+var
+  Low, High, Middle: Integer;
+begin
+  ALine := 0;
+  AColumn := 0;
+  Low := 0;
+  High := FCallSiteCount - 1;
+  while Low <= High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if FCallSites[Middle].PC = APC then
+    begin
+      ALine := FCallSites[Middle].Line;
+      AColumn := FCallSites[Middle].Column;
+      Exit(FCallSites[Middle].Recorded);
+    end
+    else if FCallSites[Middle].PC < APC then
+      Low := Middle + 1
+    else
+      High := Middle - 1;
+  end;
+  Result := False;
 end;
 
 procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;

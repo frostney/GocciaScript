@@ -124,3 +124,75 @@ test("error thrown inside a native callback preserves a trace", () => {
   expect(caughtStack.startsWith("Error: in forEach")).toBe(true);
   expect(caughtStack.includes("    at ")).toBe(true);
 });
+
+// The position a stack line ends with: "    at name (file:line:column)".
+const positionOf = (stackLine) => {
+  const match = stackLine.match(/:(\d+):(\d+)\)$/);
+  return { line: Number(match[1]), column: Number(match[2]) };
+};
+
+test("an error a built-in creates is located at the call that reached it", () => {
+  let first;
+  let second;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    first = e;
+  }
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    second = e;
+  }
+  const firstPosition = positionOf(first.stack.split("\n")[1]);
+  const secondPosition = positionOf(second.stack.split("\n")[1]);
+
+  // The two calls sit five lines apart, at the same column.
+  expect(first.stack.startsWith("SyntaxError: ")).toBe(true);
+  expect(secondPosition.line - firstPosition.line).toBe(5);
+  expect(secondPosition.column).toBe(firstPosition.column);
+  expect(firstPosition.column).toBeGreaterThan(0);
+});
+
+test("an error a built-in method creates is located at the method call", () => {
+  const text = "abc";
+  let fromFunction;
+  let fromMethod;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    fromFunction = e;
+  }
+  try {
+    text.repeat(-1);
+  } catch (e) {
+    fromMethod = e;
+  }
+  const functionPosition = positionOf(fromFunction.stack.split("\n")[1]);
+  const methodPosition = positionOf(fromMethod.stack.split("\n")[1]);
+
+  expect(fromMethod.stack.startsWith("RangeError: ")).toBe(true);
+  expect(methodPosition.line - functionPosition.line).toBe(5);
+});
+
+test("a built-in call that succeeds does not relocate a later error", () => {
+  let first;
+  let second;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    first = e;
+  }
+  Math.max(1, 2);
+  "abc".toUpperCase();
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    second = e;
+  }
+  const firstPosition = positionOf(first.stack.split("\n")[1]);
+  const secondPosition = positionOf(second.stack.split("\n")[1]);
+
+  // Seven lines apart: the two successful calls in between leave no trace.
+  expect(secondPosition.line - firstPosition.line).toBe(7);
+});

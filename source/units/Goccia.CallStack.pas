@@ -30,6 +30,7 @@ type
     HasExplicitLocation: Boolean;
   end;
 
+  PGocciaCallFrame = ^TGocciaCallFrame;
   TGocciaCallFrameArray = array of TGocciaCallFrame;
 
   TGocciaCallStack = class
@@ -69,7 +70,7 @@ type
       interpreter `new` whose native constructor captures a trace) and must
       leave it exactly as it found it — otherwise the stamp leaks into the next
       statement's diagnostics. }
-    function TryGetTopFrame(out AFrame: TGocciaCallFrame): Boolean;
+    function TryGetTopFrame(var AFrame: TGocciaCallFrame): Boolean;
     procedure SetTopFrame(const AFrame: TGocciaCallFrame);
     procedure Pop;
 
@@ -175,17 +176,42 @@ begin
   end;
 end;
 
-function TGocciaCallStack.TryGetTopFrame(out AFrame: TGocciaCallFrame): Boolean;
+{ The snapshot and its restore bracket every native call the bytecode VM
+  makes, so both copy the frame field by field: a whole-record assignment of a
+  record holding strings goes through the compiler's RTTI-driven copy helper,
+  which costs several times the copy itself. AFrame is a var parameter for the
+  same reason (an out parameter would be finalized and re-initialized first);
+  it is written only when the result is True. }
+
+function TGocciaCallStack.TryGetTopFrame(var AFrame: TGocciaCallFrame): Boolean;
+var
+  Top: PGocciaCallFrame;
 begin
   Result := FCount > 0;
-  if Result then
-    AFrame := FFrames[FCount - 1];
+  if not Result then
+    Exit;
+  Top := @FFrames[FCount - 1];
+  AFrame.Template := Top^.Template;
+  AFrame.FunctionName := Top^.FunctionName;
+  AFrame.FilePath := Top^.FilePath;
+  AFrame.Line := Top^.Line;
+  AFrame.Column := Top^.Column;
+  AFrame.HasExplicitLocation := Top^.HasExplicitLocation;
 end;
 
 procedure TGocciaCallStack.SetTopFrame(const AFrame: TGocciaCallFrame);
+var
+  Top: PGocciaCallFrame;
 begin
-  if FCount > 0 then
-    FFrames[FCount - 1] := AFrame;
+  if FCount = 0 then
+    Exit;
+  Top := @FFrames[FCount - 1];
+  Top^.Template := AFrame.Template;
+  Top^.FunctionName := AFrame.FunctionName;
+  Top^.FilePath := AFrame.FilePath;
+  Top^.Line := AFrame.Line;
+  Top^.Column := AFrame.Column;
+  Top^.HasExplicitLocation := AFrame.HasExplicitLocation;
 end;
 
 procedure TGocciaCallStack.Pop;
