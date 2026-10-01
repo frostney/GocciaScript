@@ -27,6 +27,7 @@ uses
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FileExtensions,
   Goccia.Packages.Address,
   Goccia.Packages.Store,
   Goccia.Packages.Transport,
@@ -56,9 +57,8 @@ const
   {$ENDIF}
 
 type
-  { A package file with a module extension that a runtime extension
-    registers. Read is the expression that yields Name from the imported
-    namespace `m`. }
+  { A package file that is imported as data rather than compiled. Read is the
+    expression that yields Name from the imported namespace `m`. }
   TRuntimeModuleFixture = record
     Path: string;
     Content: string;
@@ -68,9 +68,12 @@ type
   end;
 
 const
-  { One per file extension the loader profile registers. The verify-on-load
-    test fails for a registered extension that has no fixture here. }
-  RUNTIME_MODULE_FIXTURES: array[0..9] of TRuntimeModuleFixture = (
+  { One per file extension that the engine or the loader profile loads as a
+    data module. The verify-on-load test fails for such an extension that has
+    no fixture here. }
+  RUNTIME_MODULE_FIXTURES: array[0..10] of TRuntimeModuleFixture = (
+    (Path: 'vendor/config.json'; Content: '{"name": "json"}';
+     Tampered: '{"name": "evil"}'; Read: 'm.name'; Name: 'json'),
     (Path: 'vendor/config.toml'; Content: 'name = "toml"';
      Tampered: 'name = "evil"'; Read: 'm.name'; Name: 'toml'),
     (Path: 'vendor/config.yaml'; Content: 'name: yaml';
@@ -135,7 +138,7 @@ type
       const ACapabilities: TGocciaCapabilities;
       const ABytecode: Boolean): TRunOutcome;
     function HasEvent(const AEvent: string): Boolean;
-    function LoaderProfileModuleExtensions: TStringList;
+    function DataModuleExtensions: TStringList;
     procedure WritePackage;
     procedure TestExactEntryRunsWithGrant;
     procedure TestCachedPackageNeedsNoNetwork;
@@ -152,7 +155,8 @@ type
     procedure TestFFIOpensAVerifiedPackageLibraryByURL;
     procedure TestFFIRefusesATamperedPackageLibrary;
     procedure TestReloadOfATamperedFileReportsTheChange;
-    procedure TestVerifyOnLoadCoversEveryRuntimeModuleExtension;
+    procedure TestVerifyOnLoadCoversEveryDataModuleExtension;
+    procedure TestVerifyOnLoadCoversTextAndBytesImports;
     procedure TestImportMetaResolveOfAProviderKeyIsLexical;
     procedure TestComputedImportsThroughAProviderNeedOnlyImport;
     procedure TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
@@ -276,8 +280,10 @@ begin
     TestFFIRefusesATamperedPackageLibrary);
   Test('Reloading a file tampered after it was loaded reports the change',
     TestReloadOfATamperedFileReportsTheChange);
-  Test('Verify on load covers every module extension of the loader profile',
-    TestVerifyOnLoadCoversEveryRuntimeModuleExtension);
+  Test('Verify on load covers every data module extension',
+    TestVerifyOnLoadCoversEveryDataModuleExtension);
+  Test('Verify on load covers text and bytes imports',
+    TestVerifyOnLoadCoversTextAndBytesImports);
   Test('import.meta.resolve of a provider key answers with its address',
     TestImportMetaResolveOfAProviderKeyIsLexical);
   Test('A computed import through a provider needs only the import grant',
@@ -362,7 +368,7 @@ begin
     'export const open = () => FFI.open(new URL("../native/libfixture" + ' +
     'FFI.suffix, import.meta.url));');
   AddFile('index.ts', 'export const root = "root";');
-  { Files whose module extensions the runtime extensions register. }
+  { Files imported as data, one per extension that loads that way. }
   for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
     AddFile(RUNTIME_MODULE_FIXTURES[I].Path,
       RUNTIME_MODULE_FIXTURES[I].Content);
@@ -796,11 +802,11 @@ begin
   end;
 end;
 
-{ The file extensions the loader profile's runtime extensions register as
-  modules, lowercased. The caller owns the list. }
-function TProviderImportTests.LoaderProfileModuleExtensions: TStringList;
+{ The file extensions that load as data modules: the engine's own that are
+  not scripts, and those the loader profile's runtime extensions register.
+  The caller owns the list. }
+function TProviderImportTests.DataModuleExtensions: TStringList;
 var
-  Collected: TStringList;
   Engine: TGocciaEngine;
   Executor: TGocciaExecutor;
   I: Integer;
@@ -810,97 +816,142 @@ begin
   Result := TStringList.Create;
   Result.Sorted := True;
   Result.Duplicates := dupIgnore;
-  Collected := TStringList.Create;
   Source := TStringList.Create;
   Executor := TGocciaInterpreterExecutor.Create;
   Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
     TGocciaCapabilities.None);
   try
-    Runtime := AttachRuntime(Engine);
-    ApplyLoaderRuntimeProfile(Runtime);
-    Runtime.CollectModuleExtensions(Collected);
-    for I := 0 to Collected.Count - 1 do
-      Result.Add(LowerCase(Collected[I]));
+    try
+      for I := Low(EngineModuleImportExtensions) to
+          High(EngineModuleImportExtensions) do
+        if not IsScriptExtension(EngineModuleImportExtensions[I]) then
+          Result.Add(EngineModuleImportExtensions[I]);
+      Runtime := AttachRuntime(Engine);
+      ApplyLoaderRuntimeProfile(Runtime);
+      Runtime.CollectModuleExtensions(Result);
+    except
+      Result.Free;
+      raise;
+    end;
   finally
     Engine.Free;
     Executor.Free;
     Source.Free;
-    Collected.Free;
   end;
 end;
 
-{ A file with an extension that a runtime extension registers is parsed from
-  the bytes verified against the pin, like every other package file, whether
-  the extension loads it or the module loader does. The cases come from what
-  the loader profile registers, so a loader added to it fails here until it
-  has a fixture, and then has to pass. }
-procedure TProviderImportTests.TestVerifyOnLoadCoversEveryRuntimeModuleExtension;
+{ A file imported as data is parsed from the bytes verified against the pin,
+  like every other package file, whether a runtime extension loads it or the
+  module loader does. The cases come from the extensions that load this way,
+  so a loader added to the loader profile fails here until it has a fixture,
+  and then has to pass. }
+procedure TProviderImportTests.TestVerifyOnLoadCoversEveryDataModuleExtension;
 var
   Bytecode: Boolean;
   Covered: TStringList;
   Extension: string;
   Extensions: TStringList;
+  Failures: TStringList;
   Fixture: TRuntimeModuleFixture;
   I: Integer;
+  Mode: string;
   Outcome: TRunOutcome;
-  Refused: Integer;
 begin
-  Extensions := LoaderProfileModuleExtensions;
-  Covered := TStringList.Create;
+  Failures := TStringList.Create;
   try
-    for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
-    begin
-      Extension := ExtractFileExt(RUNTIME_MODULE_FIXTURES[I].Path);
-      Covered.Add(Extension);
-      { A fixture for an extension nothing registers proves nothing. }
-      if Extensions.IndexOf(Extension) < 0 then
-        Fail('The loader profile registers no module extension ' +
-          Extension + '; remove its fixture or install its loader');
+    Extensions := DataModuleExtensions;
+    Covered := TStringList.Create;
+    try
+      for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+      begin
+        Extension := ExtractFileExt(RUNTIME_MODULE_FIXTURES[I].Path);
+        Covered.Add(Extension);
+        { A fixture for an extension nothing loads as data proves nothing. }
+        if Extensions.IndexOf(Extension) < 0 then
+          Failures.Add('Nothing loads ' + Extension +
+            ' as a data module; its fixture tests nothing');
+      end;
+      for I := 0 to Extensions.Count - 1 do
+        if Covered.IndexOf(Extensions[I]) < 0 then
+          Failures.Add('No verify-on-load fixture for the module extension ' +
+            Extensions[I] + '; add one to RUNTIME_MODULE_FIXTURES');
+    finally
+      Covered.Free;
+      Extensions.Free;
     end;
-    for I := 0 to Extensions.Count - 1 do
-      if Covered.IndexOf(Extensions[I]) < 0 then
-        Fail('No verify-on-load fixture for the module extension ' +
-          Extensions[I] + '; add one to RUNTIME_MODULE_FIXTURES');
+
+    FInstallLoaderProfile := True;
+    for Bytecode := False to True do
+      for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+      begin
+        Fixture := RUNTIME_MODULE_FIXTURES[I];
+        if Bytecode then
+          Mode := ' (bytecode)'
+        else
+          Mode := ' (interpreted)';
+        { Untampered, the pinned bytes load. }
+        FSwapPath := '';
+        Outcome := Run('import { value } from "raylib";' + sLineBreak +
+          'const m = await import("raypkg/' + Fixture.Path + '");' +
+          sLineBreak + 'globalThis.result = ' + Fixture.Read + ';',
+          TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+        if (Outcome.ErrorMessage <> '') or (Outcome.Result <> Fixture.Name) then
+          Failures.Add(Fixture.Path + Mode +
+            ' did not load its pinned content: got "' + Outcome.Result +
+            '", error "' + Outcome.ErrorMessage + '"');
+
+        { Tampered after materialization, it is refused before parsing. }
+        FSwapPath := CachePath(Fixture.Path);
+        FSwapText := Fixture.Tampered;
+        Outcome := Run('import { value } from "raylib";' + sLineBreak +
+          'swap();' + sLineBreak +
+          'try { const m = await import("raypkg/' + Fixture.Path + '");' +
+          sLineBreak + 'globalThis.result = ' + Fixture.Read + '; }' +
+          sLineBreak + 'catch (error) { globalThis.result = error.message; }',
+          TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+        if Outcome.Result <> 'Provider package file ' + PACKAGE_KEY + '/' +
+           Fixture.Path + ' changed after it was verified' then
+          Failures.Add(Fixture.Path + Mode +
+            ' was not refused after it changed: got "' + Outcome.Result + '"');
+        { Materialize afresh for the next file. }
+        DeleteTree(ProjectPath('.goccia/packages'));
+      end;
+
+    { Fail carries the list; Expect could only report its length. }
+    if Failures.Count > 0 then
+      Fail(Trim(Failures.Text));
+    Expect<Integer>(Failures.Count).ToBe(0);
   finally
-    Covered.Free;
-    Extensions.Free;
+    Failures.Free;
   end;
+end;
 
-  FInstallLoaderProfile := True;
-  Refused := 0;
+{ An import attribute picks the loader whatever the file's extension, and
+  `bytes` reads through its own path. }
+procedure TProviderImportTests.TestVerifyOnLoadCoversTextAndBytesImports;
+const
+  ATTRIBUTE_TYPES: array[0..1] of string = ('text', 'bytes');
+var
+  Bytecode: Boolean;
+  I: Integer;
+  Outcome: TRunOutcome;
+begin
   for Bytecode := False to True do
-    for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+    for I := Low(ATTRIBUTE_TYPES) to High(ATTRIBUTE_TYPES) do
     begin
-      Fixture := RUNTIME_MODULE_FIXTURES[I];
-      { Untampered, the pinned bytes load. }
-      FSwapPath := '';
-      Outcome := Run('import { value } from "raylib";' + sLineBreak +
-        'const m = await import("raypkg/' + Fixture.Path + '");' +
-        sLineBreak + 'globalThis.result = ' + Fixture.Read + ';',
-        TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
-      { Fail rather than Expect, so that the message names the file. }
-      if (Outcome.ErrorMessage <> '') or (Outcome.Result <> Fixture.Name) then
-        Fail(Fixture.Path + ' did not load its pinned content: got "' +
-          Outcome.Result + '", error "' + Outcome.ErrorMessage + '"');
-
-      { Tampered after materialization, it is refused before parsing. }
-      FSwapPath := CachePath(Fixture.Path);
-      FSwapText := Fixture.Tampered;
+      FSwapPath := CachePath('bindings/late.ts');
+      FSwapText := 'export const late = "evil";';
       Outcome := Run('import { value } from "raylib";' + sLineBreak +
         'swap();' + sLineBreak +
-        'try { const m = await import("raypkg/' + Fixture.Path + '");' +
-        sLineBreak + 'globalThis.result = ' + Fixture.Read + '; }' +
-        sLineBreak + 'catch (error) { globalThis.result = error.message; }',
+        'try { const m = await import("ray/late.ts", { with: { type: "' +
+        ATTRIBUTE_TYPES[I] + '" } }); globalThis.result = "loaded " + ' +
+        'm.default.length; }' + sLineBreak +
+        'catch (error) { globalThis.result = error.message; }',
         TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
-      if Outcome.Result <> 'Provider package file ' + PACKAGE_KEY + '/' +
-         Fixture.Path + ' changed after it was verified' then
-        Fail(Fixture.Path + ' was not refused after it changed: got "' +
-          Outcome.Result + '"');
-      Inc(Refused);
-      { Materialize afresh for the next file. }
+      Expect<string>(Outcome.Result).ToBe('Provider package file ' +
+        PACKAGE_KEY + '/bindings/late.ts changed after it was verified');
       DeleteTree(ProjectPath('.goccia/packages'));
     end;
-  Expect<Integer>(Refused).ToBe(2 * Length(RUNTIME_MODULE_FIXTURES));
 end;
 
 procedure TProviderImportTests.TestImportMetaResolveOfAProviderKeyIsLexical;

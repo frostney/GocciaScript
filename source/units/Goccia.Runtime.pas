@@ -80,8 +80,8 @@ type
       TGocciaRuntimeExtension;
     function FindRuntimeExtension(
       const AClass: TGocciaRuntimeExtensionClass): TGocciaRuntimeExtension;
-    { Adds the file extensions the installed runtime extensions load as
-      modules. The list is the caller's; set its duplicate handling there. }
+    { Adds the file extensions the installed runtime extensions register as
+      modules. Two extensions can register the same one. }
     procedure CollectModuleExtensions(const AExtensions: TStrings);
 
     procedure RegisterRuntimeGlobalName(const AName: string);
