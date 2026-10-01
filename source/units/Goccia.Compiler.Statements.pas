@@ -4780,6 +4780,12 @@ begin
     begin
       CaseClause := AStmt.Cases[I];
 
+      // All clauses share one scope, and a clause can be entered without
+      // running the declarations of the clauses before it. A constant tracked
+      // for such a declaration must not replace a read in a later clause:
+      // that read has to observe the TDZ.
+      ACtx.Scope.ClearConstantValuesAtDepth(ACtx.Scope.Depth);
+
       if I = DefaultIndex then
       begin
         if DefaultJump >= 0 then

@@ -137,6 +137,7 @@ type
     procedure SetLocalConstantValue(const AIndex: Integer;
       const AValue: TGocciaCompileTimeValue);
     procedure ClearLocalConstantValue(const AIndex: Integer);
+    procedure ClearConstantValuesAtDepth(const ADepth: Integer);
     procedure MarkImportBinding(const AIndex: Integer;
       const APhase: TGocciaImportCallPhase; const AModulePath,
       AExportName: string);
@@ -581,6 +582,20 @@ procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
   FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+end;
+
+procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
+  const ADepth: Integer);
+var
+  I: Integer;
+begin
+  for I := FLocalCount - 1 downto 0 do
+  begin
+    if FLocals[I].Depth < ADepth then
+      Break;
+    if FLocals[I].Depth = ADepth then
+      ClearLocalConstantValue(I);
+  end;
 end;
 
 procedure TGocciaCompilerScope.MarkImportBinding(const AIndex: Integer;
