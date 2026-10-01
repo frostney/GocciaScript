@@ -49,6 +49,8 @@ type
     CookedValid: TGocciaBytecodeTemplateCookedValid;    // for bckTemplateObject
   end;
 
+  PGocciaBytecodeConstant = ^TGocciaBytecodeConstant;
+
   TGocciaUpvalueDescriptor = record
     Name: string;
     IsLocal: Boolean;
@@ -322,7 +324,11 @@ type
     function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
     function GetFunction(const AIndex: Integer): TGocciaFunctionTemplate;
     function GetInstructionUnchecked(const AIndex: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
-    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
+    // The constant in place, not a copy: the record carries managed strings
+    // and arrays, so returning it by value costs a reference-counted copy of
+    // every one of them at each use. The address is valid until the constant
+    // pool next grows, which does not happen once a template executes.
+    function GetConstantUnchecked(const AIndex: Integer): PGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
     function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
@@ -962,9 +968,9 @@ begin
 end;
 
 function TGocciaFunctionTemplate.GetConstantUnchecked(
-  const AIndex: Integer): TGocciaBytecodeConstant;
+  const AIndex: Integer): PGocciaBytecodeConstant;
 begin
-  Result := FConstants[AIndex];
+  Result := @FConstants[AIndex];
 end;
 
 function TGocciaFunctionTemplate.GetFunction(

@@ -42,7 +42,8 @@ type
       const AEnableConstantFolding: Boolean = True;
       const AEnableConstPropagation: Boolean = True;
       const AEnableDeadBranchElimination: Boolean = True;
-      const ATraditionalForLoops: Boolean = False): TGocciaBytecodeModule;
+      const ATraditionalForLoops: Boolean = False;
+      const ANonStrictMode: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -79,6 +80,11 @@ type
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
     procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
+    procedure TestInitializedConstOperandsSkipGetLocal;
+    procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
+    procedure TestSwitchClauseForgetsInitializedConsts;
+    procedure TestCoverageKeepsConstOperandCopies;
+    procedure TestDiscardedStoreSkipsResultMove;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
@@ -94,7 +100,10 @@ type
     procedure TestConstPropagation;
     procedure TestConstPropagationBigInt;
     procedure TestConstPropagationSkipsMutable;
-    procedure TestConstPropagationSkipsGlobalBacked;
+    procedure TestConstPropagationReachesGlobalBackedReads;
+    procedure TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier;
+    procedure TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+    procedure TestConstPropagationSkipsGlobalBackedBigInt;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
     procedure TestClosedNumericFibonacciUsesSuperinstructions;
@@ -123,6 +132,7 @@ type
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
     procedure TestCoveragePreservesConstantBranch;
+    procedure TestCoveragePreservesGlobalBackedConstantBranch;
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
     procedure TestSwitchExitJumpsCloseUpvalues;
@@ -143,6 +153,16 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('Initialized const operands skip OP_GET_LOCAL',
+    TestInitializedConstOperandsSkipGetLocal);
+  Test('Const operands before the declaration keep OP_GET_LOCAL',
+    TestConstOperandsBeforeDeclarationKeepGetLocal);
+  Test('Switch clause forgets initialized consts',
+    TestSwitchClauseForgetsInitializedConsts);
+  Test('Coverage keeps const operand copies',
+    TestCoverageKeepsConstOperandCopies);
+  Test('Discarded store skips the result move',
+    TestDiscardedStoreSkipsResultMove);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -170,7 +190,14 @@ begin
   Test('Const propagation', TestConstPropagation);
   Test('Const propagation with BigInt', TestConstPropagationBigInt);
   Test('Const propagation skips mutable bindings', TestConstPropagationSkipsMutable);
-  Test('Const propagation skips global-backed bindings', TestConstPropagationSkipsGlobalBacked);
+  Test('Const propagation reaches later reads of a global-backed binding',
+    TestConstPropagationReachesGlobalBackedReads);
+  Test('Const propagation skips global-backed reads compiled before the declaration',
+    TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier);
+  Test('Const propagation skips global-backed bindings in non-strict mode',
+    TestConstPropagationSkipsGlobalBackedInNonStrictMode);
+  Test('Const propagation skips global-backed BigInt bindings',
+    TestConstPropagationSkipsGlobalBackedBigInt);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
   Test('Closed numeric Fibonacci uses superinstructions',
@@ -210,6 +237,8 @@ begin
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
+  Test('Coverage preserves a branch on a global-backed constant',
+    TestCoveragePreservesGlobalBackedConstantBranch);
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
@@ -285,7 +314,8 @@ function TTestCompiler.CompileSource(
   const AEnableConstantFolding: Boolean;
   const AEnableConstPropagation: Boolean;
   const AEnableDeadBranchElimination: Boolean;
-  const ATraditionalForLoops: Boolean): TGocciaBytecodeModule;
+  const ATraditionalForLoops: Boolean;
+  const ANonStrictMode: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -310,6 +340,7 @@ begin
   try
     Compiler.StrictTypes := AStrictTypes;
     Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+    Compiler.NonStrictMode := ANonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape := APreserveCoverageShape;
     Options.EnableConstantFolding := AEnableConstantFolding;
@@ -686,6 +717,103 @@ begin
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL_PROP_CONST)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(0);
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestInitializedConstOperandsSkipGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (p, q) => { const a = p.x; const b = q.x; ' +
+    'return a * b + a; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstOperandsBeforeDeclarationKeepGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const early = (p) => { const r = a * p.x; const a = p.y; return r; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // The early read of `a` keeps its TDZ check; the other is `return r`.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestSwitchClauseForgetsInitializedConsts;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const pick = (p) => { switch (p.k) { ' +
+    'case 0: const a = p.x; return a * a; ' +
+    'case 1: return a * p.y; } return 0; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // Only the read in the second clause still needs its TDZ check.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCoverageKeepsConstOperandCopies;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (p, q) => { const a = p.x; const b = q.x; ' +
+    'return a * b + a; };', False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDiscardedStoreSkipsResultMove;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const store = (p, q) => { const list = p.items; const value = q.x; ' +
+    'list[0] = value; p.last = value; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ARRAY_SET);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      // The two declarations move their initializer into the binding; the
+      // two stores move nothing.
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
     end;
   finally
     Module.Free;
@@ -1218,14 +1346,72 @@ begin
   end;
 end;
 
-procedure TTestCompiler.TestConstPropagationSkipsGlobalBacked;
+procedure TTestCompiler.TestConstPropagationReachesGlobalBackedReads;
+var
+  Module: TGocciaBytecodeModule;
+  Reader: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const a = 2; const b = a * 4; const f = () => a + b; f();',
+    False, False, True);
+  try
+    // The bindings themselves are still declared and defined.
+    Expect<Integer>(
+      CountOp(Module.TopLevel, OP_DEFINE_GLOBAL_CONST_LONG)).ToBe(3);
+    Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
+
+    Reader := Module.TopLevel.GetFunction(0);
+    Expect<Integer>(CountOp(Reader, OP_GET_GLOBAL)).ToBe(0);
+    Expect<Integer>(CountArithmeticOps(Reader)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Reader, 10)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier;
 var
   Module: TGocciaBytecodeModule;
 begin
-  Module := CompileSource('const a = 2; const b = a * 4; b;',
+  // f can run while a is still uninitialized, so it keeps the named read
+  // that raises; g cannot exist before a is initialized.
+  Module := CompileSource(
+    'const f = () => a; const a = 2; const g = () => a; f() + g();',
     False, False, True);
   try
-    Expect<Boolean>(CountArithmeticOps(Module.TopLevel) > 0).ToBe(True);
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(1), OP_GET_GLOBAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A sloppy direct eval can shadow the name with a function-level var.
+  Module := CompileSource('const a = 2; const f = () => a; f();',
+    False, False, True, True, True, True, False, True);
+  try
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedBigInt;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const a = 2n; const f = () => a; f();',
+    False, False, True);
+  try
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -1789,6 +1975,46 @@ begin
     False, True);
   try
     Expect<Boolean>(CountOp(Module.TopLevel, OP_JUMP_IF_FALSE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCoveragePreservesGlobalBackedConstantBranch;
+const
+  SOURCE = 'const on = false; ' +
+    'const f = () => { if (on) { return 1; } return 2; }; f();';
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(SOURCE, False, False, True);
+  try
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_JUMP_IF_FALSE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(SOURCE, False, True, True);
+  try
+    Expect<Boolean>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_JUMP_IF_FALSE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  // A logical expression and a ternary decided by the constant keep their
+  // branches under coverage as well: the constant is not propagated at all.
+  Module := CompileSource(
+    'const on = false; const f = (g) => on && g(); ' +
+    'const h = (g) => (on ? g() : 2);', False, True, True);
+  try
+    Expect<Boolean>(
+      CountOp(Module.TopLevel.GetFunction(0), OP_JUMP_IF_FALSE) > 0).ToBe(True);
+    Expect<Boolean>(
+      CountOp(Module.TopLevel.GetFunction(1), OP_JUMP_IF_FALSE) > 0).ToBe(True);
+    Expect<Boolean>(CountOpRecursive(Module.TopLevel, OP_GET_GLOBAL) >= 2)
+      .ToBe(True);
   finally
     Module.Free;
   end;

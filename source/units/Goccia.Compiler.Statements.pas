@@ -354,16 +354,8 @@ begin
   end;
 end;
 
-procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaExpressionStatement);
-var
-  Reg: UInt16;
-begin
-  Reg := ACtx.Scope.AllocateRegister;
-  ACtx.CompileExpression(AStmt.Expression, Reg);
-  ACtx.Scope.FreeRegister;
-end;
-
+// Compiles an expression whose value nobody reads. A store to a property or an
+// element then skips the move that would make the stored value the result.
 procedure CompileDiscardedExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression);
 var
@@ -373,11 +365,23 @@ begin
   try
     if AExpr is TGocciaIncrementExpression then
       CompileIncrement(ACtx, TGocciaIncrementExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaComputedPropertyAssignmentExpression then
+      CompileComputedPropertyAssignment(ACtx,
+        TGocciaComputedPropertyAssignmentExpression(AExpr), Reg, False)
+    else if AExpr.ClassType = TGocciaPropertyAssignmentExpression then
+      CompilePropertyAssignment(ACtx,
+        TGocciaPropertyAssignmentExpression(AExpr), Reg, False)
     else
       ACtx.CompileExpression(AExpr, Reg);
   finally
     ACtx.Scope.FreeRegister;
   end;
+end;
+
+procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaExpressionStatement);
+begin
+  CompileDiscardedExpression(ACtx, AStmt.Expression);
 end;
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -1064,10 +1068,28 @@ begin
     if LocalIdx >= 0 then
     begin
       ACtx.Scope.ClearLocalConstantValue(LocalIdx);
+      // The value reaches only reads compiled after this point. For a
+      // global-backed top-level binding those cannot run inside its temporal
+      // dead zone: top-level statements run in source order, and hoisted
+      // function declarations, which can run earlier, are compiled before
+      // all of them. Non-strict compatibility mode keeps the named read,
+      // because a sloppy direct eval can shadow the name with a
+      // function-level var at run time. So does a coverage run: a ternary or
+      // logical expression decided by the constant would be folded and lose
+      // its branch records.
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
-        not IsTopLevelGlobalBacked and HasRealInitializer and Assigned(Info.Initializer) and
+        not (IsTopLevelGlobalBacked and
+          (ACtx.CompatibilityNonStrictMode or
+           ACtx.OptimizationOptions.PreserveCoverageShape)) and
+        HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
+
+      // Loading a BigInt constant rebuilds it from its digits, which costs
+      // more than the cached global read it would replace.
+      if CanTrackConstant and IsTopLevelGlobalBacked and
+         (ConstantValue.Kind = ctvkBigInt) then
+        CanTrackConstant := False;
 
       if CanTrackConstant and IsStrict then
       begin
@@ -1077,6 +1099,12 @@ begin
 
       if CanTrackConstant then
         ACtx.Scope.SetLocalConstantValue(LocalIdx, ConstantValue);
+
+      // The initializer has completed, so later reads in this function see the
+      // value in the register: they need no TDZ check and no copy.
+      if AStmt.IsConst and (not AStmt.IsVar) and
+         (not IsTopLevelGlobalBacked) and Assigned(Info.Initializer) then
+        ACtx.Scope.MarkLocalInitialized(LocalIdx);
     end;
 
     if IsTopLevelGlobalBacked then
@@ -2684,6 +2712,9 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+      if AStmt.IsConst then
+        ACtx.Scope.MarkLocalInitialized(
+          ACtx.Scope.ResolveLocal(AStmt.BindingName));
 
       ElemAnnotation := ACtx.Scope.GetLocal(AArrayLocalIdx).ElementTypeAnnotation;
       if ElemAnnotation <> '' then
@@ -2845,6 +2876,9 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+      if AStmt.IsConst then
+        ACtx.Scope.MarkLocalInitialized(
+          ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
 
     if AStmt.IsUsing then
@@ -3132,6 +3166,9 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
+      if AStmt.IsConst then
+        ACtx.Scope.MarkLocalInitialized(
+          ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
 
     if Assigned(AStmt.MatchPattern) then
@@ -4781,9 +4818,11 @@ begin
       CaseClause := AStmt.Cases[I];
 
       // All clauses share one scope, and a clause can be entered without
-      // running the declarations of the clauses before it. A constant tracked
-      // for such a declaration must not replace a read in a later clause:
-      // that read has to observe the TDZ.
+      // running the declarations of the clauses before it. A read in a later
+      // clause must therefore observe the TDZ: it may neither use the
+      // register of such a declaration directly nor be replaced by a constant
+      // tracked for it.
+      ACtx.Scope.ClearInitializedAtDepth(ACtx.Scope.Depth);
       ACtx.Scope.ClearConstantValuesAtDepth(ACtx.Scope.Depth);
 
       if I = DefaultIndex then

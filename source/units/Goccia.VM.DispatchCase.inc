@@ -33,7 +33,7 @@
                 FRegisters[A] := RegisterObject(LeftValue);
               end;
           else
-            FRegisters[A] := ValueToRegister(ConstantToValue(Constant));
+            FRegisters[A] := ValueToRegister(ConstantToValue(Constant^));
           end;
         end;
 
@@ -136,14 +136,21 @@
       begin
         if Assigned(FCurrentClosure) then
         begin
-          Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-          ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-            DecodeBx(Instruction), Desc.Name);
-          if Assigned(ResolvedDynamicVarScope) then
+          // Only a dynamic var scope can redirect an upvalue read, and
+          // ResolveDynamicUpvalueScope answers nil without one. Checking here
+          // keeps the descriptor, a record holding a string, from being
+          // copied on every read.
+          if Assigned(FCurrentDynamicVarScope) then
           begin
-            FRegisters[A] := VMValueToRegisterFast(
-              ResolvedDynamicVarScope.GetValue(Desc.Name));
-            goto LDispatchNext;
+            Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
+            ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
+              DecodeBx(Instruction), Desc.Name);
+            if Assigned(ResolvedDynamicVarScope) then
+            begin
+              FRegisters[A] := VMValueToRegisterFast(
+                ResolvedDynamicVarScope.GetValue(Desc.Name));
+              goto LDispatchNext;
+            end;
           end;
 
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
