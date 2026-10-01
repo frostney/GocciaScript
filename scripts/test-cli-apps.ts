@@ -5342,6 +5342,35 @@ await section("TestRunner: a file that fails with work still queued does not rea
       if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || /leaked (timer|job) ran/.test(output))
         throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
+
+    // A describe body whose queued job throws fails the file, and the tests
+    // still run. The first of them pumps timers, and must not be handed the
+    // one the describe body left.
+    const collection = join(tmp, "collection.test.js");
+    writeFileSync(
+      collection,
+      [
+        'describe("collection", () => {',
+        '  setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '  queueMicrotask(() => { throw new Error("job from a describe body"); });',
+        '  queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "    expect(1).toBe(1);",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", collection, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a describe body left pending when its job throws, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
   } finally {
     clean(tmp);
   }

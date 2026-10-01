@@ -5318,10 +5318,10 @@ begin
         FailedTestDetails.Add('Uncaught exception outside a test: ' +
           DescribeThrownValue(E.Value));
         Inc(FTestStats.SuiteErrors);
-        { The drain stopped at the job that threw; the jobs behind it belong
-          to the same describe bodies and go with it. }
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.ClearQueue;
+        { The drain stopped at the job that threw. The jobs behind it, and
+          the timers and fetch completions the same describe bodies left,
+          go with it instead of running inside the first test. }
+        DiscardPendingHostWork;
       end;
       on E: Exception do
       begin
@@ -5330,8 +5330,7 @@ begin
         FailedTestDetails.Add('Uncaught exception outside a test: ' +
           E.Message);
         Inc(FTestStats.SuiteErrors);
-        if Assigned(TGocciaMicrotaskQueue.Instance) then
-          TGocciaMicrotaskQueue.Instance.ClearQueue;
+        DiscardPendingHostWork;
       end;
     end;
 
