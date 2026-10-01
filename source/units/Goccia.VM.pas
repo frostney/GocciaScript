@@ -8781,18 +8781,38 @@ procedure TGocciaVM.ExecSetComputedProperty(const ATargetIndex: Integer;
   const AOptions: TGocciaComputedAccessOptions);
 var
   FastIndex: Integer;
+  Target: TGocciaValue;
 begin
-  // Typed-array unboxed element write: a numeric-scalar value going to a valid
-  // integer index stores directly. This procedure must keep no managed locals:
-  // that is what makes the path cheap. Everything else, including the nullish
-  // target check, runs in the generic core.
-  if (FRegisters[ATargetIndex].Kind = grkObject) and
-     (FRegisters[ATargetIndex].ObjectValue is TGocciaTypedArrayValue) and
-     RegisterIsNumericScalar(AValueReg) and
-     TryGetArrayIndexRegister(AKeyReg, FastIndex) and
-     TGocciaTypedArrayValue(FRegisters[ATargetIndex].ObjectValue)
-       .TryWriteIndexedScalar(FastIndex, RegisterToDouble(AValueReg)) then
-    Exit;
+  // Element writes that resolve without a property key. This procedure must
+  // keep no managed locals: that is what makes these paths cheap. Everything
+  // else, including the nullish target check, runs in the generic core.
+  if FRegisters[ATargetIndex].Kind = grkObject then
+  begin
+    Target := FRegisters[ATargetIndex].ObjectValue;
+    if Target is TGocciaTypedArrayValue then
+    begin
+      // Typed-array unboxed element write: a numeric-scalar value going to a
+      // valid integer index stores directly.
+      if RegisterIsNumericScalar(AValueReg) and
+         TryGetArrayIndexRegister(AKeyReg, FastIndex) and
+         TGocciaTypedArrayValue(Target).TryWriteIndexedScalar(FastIndex,
+           RegisterToDouble(AValueReg)) then
+        Exit;
+    end
+    else if (AKeyReg.Kind = grkInt) and
+            not (caoHomeObjectAllReceivers in AOptions) and
+            (Target is TGocciaArrayValue) and
+            (AKeyReg.IntValue >= 0) and
+            (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
+    begin
+      // Overwriting a dense array element. The array declines when the slot is
+      // a hole or the store needs the complete [[Set]]; the value boxed here
+      // is then simply dropped and the generic core boxes its own.
+      if TGocciaArrayValue(Target).TrySetDenseElementFast(AKeyReg.IntValue,
+           RegisterToValue(AValueReg)) then
+        Exit;
+    end;
+  end;
 
   ExecSetComputedPropertyGeneric(ATargetIndex, AKeyReg, AValueReg, AOptions);
 end;
