@@ -33,4 +33,25 @@ describe("FFI.array", () => {
 
     expect(sum(input)).toBe(6);
   });
+
+  test("returns a large by-value array", () => {
+    const make = lib.bind("ffi_v2_make_large_byte_array", {
+      args: ["u8"],
+      returns: LargeByteArray,
+    });
+    const sum = lib.bind("ffi_v2_sum_large_byte_array", {
+      args: [LargeByteArray],
+      returns: "i32",
+    });
+    const output = make(7);
+
+    expect(output.length).toBe(8192);
+    expect(output[0]).toBe(7);
+    expect(output[1]).toBe(0);
+    expect(output[4096]).toBe(8);
+    expect(output[8190]).toBe(0);
+    expect(output[8191]).toBe(9);
+    expect(sum(output)).toBe(24);
+    expect(sum(make(254))).toBe(254 + 255 + 0);
+  });
 });

@@ -1054,16 +1054,28 @@ begin
     FBuffer.MarkReferences;
 end;
 
+// Kept out of EnsureBackingStore, which runs on every field access and every
+// by-value argument: a message read where it is raised would leave the caller
+// holding temporary strings, and an exception frame, on every successful
+// check. The local keeps this routine from being inlined back in.
+procedure ThrowFFIAggregateBackingStore;
+var
+  Message: string;
+begin
+  Message := SErrorFFIAggregateBackingStore;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
 procedure TGocciaFFIAggregateValue.EnsureBackingStore;
 var
   DataLength: Integer;
 begin
   if not Assigned(FBuffer) or FBuffer.Detached then
-    ThrowTypeError(SErrorFFIAggregateBackingStore, SSuggestFFIUsage);
+    ThrowFFIAggregateBackingStore;
   DataLength := Length(FBuffer.Data);
   if (FByteOffset < 0) or (FByteOffset > DataLength) or
      (FDescriptor.Size > DataLength - FByteOffset) then
-    ThrowTypeError(SErrorFFIAggregateBackingStore, SSuggestFFIUsage);
+    ThrowFFIAggregateBackingStore;
 end;
 
 function TGocciaFFIAggregateValue.DataPointer: Pointer;
@@ -1079,14 +1091,11 @@ begin
 end;
 
 procedure TGocciaFFIAggregateValue.CopyTo(const ADestination: Pointer);
-var
-  Data: TBytes;
 begin
   EnsureBackingStore;
   if (FDescriptor.Size = 0) or not Assigned(ADestination) then
     Exit;
-  Data := FBuffer.Data;
-  Move(Data[FByteOffset], ADestination^, FDescriptor.Size);
+  Move(FBuffer.Data[FByteOffset], ADestination^, FDescriptor.Size);
 end;
 
 procedure TGocciaFFIAggregateValue.CopyFrom(const ASource: Pointer);

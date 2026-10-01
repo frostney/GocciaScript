@@ -604,6 +604,15 @@ int32_t ffi_v2_sum_large_byte_array(ffi_v2_large_byte_array value) {
   return value.bytes[0] + value.bytes[4096] + value.bytes[8191];
 }
 
+ffi_v2_large_byte_array ffi_v2_make_large_byte_array(uint8_t seed) {
+  ffi_v2_large_byte_array result;
+  memset(result.bytes, 0, sizeof(result.bytes));
+  result.bytes[0] = seed;
+  result.bytes[4096] = (uint8_t)(seed + 1);
+  result.bytes[8191] = (uint8_t)(seed + 2);
+  return result;
+}
+
 int32_t ffi_v2_composite_header_offset(void) {
   return (int32_t)offsetof(ffi_v2_composite, header);
 }

@@ -87,6 +87,23 @@ var
   GCallbackSlots: array[0..MAX_FFI_CALLBACK_SLOTS - 1] of TGocciaFFICallbackSlot;
   GCallbackSlotLock: TGocciaCriticalSection;
   GDispatchHook: TGocciaFFICallbackDispatchHook;
+  // How many slots have ForeignThreadViolation set. Every native call asks
+  // whether one of its thread's slots does, and this lets it answer without
+  // scanning the table in the ordinary case that none is pending anywhere.
+  GPendingThreadViolationCount: Integer;
+
+// The only writer of a slot's ForeignThreadViolation, so that the pending
+// count stays exact. The caller holds GCallbackSlotLock.
+procedure SetSlotThreadViolation(const ASlot: Integer; const AValue: Boolean);
+begin
+  if GCallbackSlots[ASlot].ForeignThreadViolation = AValue then
+    Exit;
+  GCallbackSlots[ASlot].ForeignThreadViolation := AValue;
+  if AValue then
+    Inc(GPendingThreadViolationCount)
+  else
+    Dec(GPendingThreadViolationCount);
+end;
 
 {$IFDEF FPC}
 procedure FFICallbackDispatchPascal(const ASlot: NativeUInt;
@@ -120,7 +137,7 @@ begin
     if not GCallbackSlots[ASlot].Active then Exit;
     if GCallbackSlots[ASlot].OwnerThreadId <> GetGocciaThreadId then
     begin
-      GCallbackSlots[ASlot].ForeignThreadViolation := True;
+      SetSlotThreadViolation(ASlot, True);
       ForeignThread := True;
       HiddenResultLocation :=
         GCallbackSlots[ASlot].HiddenResultLocation;
@@ -738,7 +755,7 @@ begin
         GCallbackSlots[Result].Active := True;
         GCallbackSlots[Result].OwnerThreadId := GetGocciaThreadId;
         GCallbackSlots[Result].Context := AContext;
-        GCallbackSlots[Result].ForeignThreadViolation := False;
+        SetSlotThreadViolation(Result, False);
         GCallbackSlots[Result].HiddenResultLocation :=
           AHiddenResultLocation;
         GCallbackSlots[Result].HiddenResultSize := AHiddenResultSize;
@@ -780,7 +797,7 @@ begin
   CriticalSectionEnter(GCallbackSlotLock);
   try
     Result := GCallbackSlots[ASlot].ForeignThreadViolation;
-    GCallbackSlots[ASlot].ForeignThreadViolation := False;
+    SetSlotThreadViolation(ASlot, False);
   finally
     CriticalSectionLeave(GCallbackSlotLock);
   end;
@@ -792,15 +809,17 @@ var
   OwnerThreadId: TThreadID;
 begin
   Result := False;
-  OwnerThreadId := GetGocciaThreadId;
   CriticalSectionEnter(GCallbackSlotLock);
   try
+    if GPendingThreadViolationCount = 0 then
+      Exit;
+    OwnerThreadId := GetGocciaThreadId;
     for I := 0 to MAX_FFI_CALLBACK_SLOTS - 1 do
       if GCallbackSlots[I].Active and
          (GCallbackSlots[I].OwnerThreadId = OwnerThreadId) and
          GCallbackSlots[I].ForeignThreadViolation then
       begin
-        GCallbackSlots[I].ForeignThreadViolation := False;
+        SetSlotThreadViolation(I, False);
         Result := True;
       end;
   finally
