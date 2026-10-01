@@ -37,6 +37,10 @@ type
     function IsEmpty: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure Add(const AValue: TGocciaValue);
     procedure Clear;
+    // Empties the collection but keeps its backing store, for a collection
+    // that is about to be reused (the VM's argument pool). Clear gives the
+    // store back, so the next Add allocates again.
+    procedure ClearKeepingCapacity;
     procedure EnsureCapacity(const ACapacity: Integer);
     function Slice(AStartIndex: Integer = 0; AEndIndex: Integer = -1): TGocciaArgumentsCollection;
 
@@ -135,6 +139,14 @@ end;
 procedure TGocciaArgumentsCollection.Clear;
 begin
   FArgs.Clear;
+end;
+
+// Removes from the end, one element at a time: assigning Count would make the
+// list allocate a scratch copy of the removed range for its notifications.
+procedure TGocciaArgumentsCollection.ClearKeepingCapacity;
+begin
+  while FArgs.Count > 0 do
+    FArgs.Delete(FArgs.Count - 1);
 end;
 
 procedure TGocciaArgumentsCollection.EnsureCapacity(const ACapacity: Integer);
