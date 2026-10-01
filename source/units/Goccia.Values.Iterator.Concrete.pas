@@ -220,7 +220,7 @@ begin
     if (AIndex >= 0) and (AIndex < Elements.Count) then
     begin
       Result := Elements[AIndex];
-      if Result <> TGocciaHoleValue.HoleValue then
+      if Assigned(Result) and (Result <> TGocciaHoleValue.HoleValue) then
         Exit;
     end;
   end;
