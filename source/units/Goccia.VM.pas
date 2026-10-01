@@ -10392,18 +10392,24 @@ begin
   end;
 end;
 
+// Whether AKey starts with APrefix and continues past it. Compared in place:
+// the private-key tests below run on every named property access the VM does
+// not resolve through an inline cache, so they must not build a substring.
+function KeyExtendsPrefix(const AKey, APrefix: string): Boolean;
+begin
+  Result := (Length(AKey) > Length(APrefix)) and
+    CompareMem(Pointer(AKey), Pointer(APrefix),
+      Length(APrefix) * SizeOf(Char));
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean;
 begin
-  Result := (Length(AKey) > Length(BYTECODE_PRIVATE_SLOT_PREFIX)) and
-    (Copy(AKey, 1, Length(BYTECODE_PRIVATE_SLOT_PREFIX)) =
-      BYTECODE_PRIVATE_SLOT_PREFIX);
+  Result := KeyExtendsPrefix(AKey, BYTECODE_PRIVATE_SLOT_PREFIX);
 end;
 
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean;
 begin
-  Result := (Length(AKey) > Length(BYTECODE_PRIVATE_BRAND_PREFIX)) and
-    (Copy(AKey, 1, Length(BYTECODE_PRIVATE_BRAND_PREFIX)) =
-      BYTECODE_PRIVATE_BRAND_PREFIX);
+  Result := KeyExtendsPrefix(AKey, BYTECODE_PRIVATE_BRAND_PREFIX);
 end;
 
 function BytecodePrivateTokenForKey(const AKey,
