@@ -904,7 +904,7 @@ This means:
 - All synchronous code in the script runs to completion first.
 - All pending `.then()` callbacks fire after the script finishes.
 - Chained `.then()` handlers are processed in the same drain cycle.
-- On successful execution, the engine's pending `fetch()` requests complete before `Execute` returns; if execution throws, they are detached and their late completions are discarded. The engine neither waits for nor discards requests another engine on the same thread started, although its drain may settle those that have already completed. The microtask queue is still only used for Promise reactions, not for network I/O.
+- On successful execution, the engine's pending `fetch()` requests complete before `Execute` returns; if execution throws, they are detached and their late completions are discarded. The engine neither waits for nor discards requests another engine on the same thread started, although its drain may settle those that have already completed (their reactions still run in the engine that owns them). The microtask queue is still only used for Promise reactions, not for network I/O.
 
 The execution ordering follows ECMAScript specification semantics — the script is one macrotask, and microtasks drain after it completes. Thenable adoption is deferred via a microtask per the spec's PromiseResolveThenableJob.
 
@@ -914,7 +914,7 @@ Source.Text := 'Promise.resolve(42).then((v) => { globalThis.answer = v; });';
 Engine.Execute;  // microtasks drain before Execute returns
 ```
 
-For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block.
+For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while a different engine's run is in progress (a sandbox `runScript` child, or another engine's `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the scopes behind this.
 
 ## Garbage Collector
 

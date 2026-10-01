@@ -132,3 +132,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0120 — Native Test262 runner with isolated worker runtimes](0120-native-test262-runner.md)
 - 0121 — Reserved for the capability-gated provider imports proposal in [#1054](https://github.com/frostney/GocciaScript/pull/1054), which was withdrawn unmerged and superseded by [0122](0122-unified-capability-model.md); no record uses this number
 - [0122 — One capability model: explicit allow/deny grants, trusted config, one runner](0122-unified-capability-model.md)
+- [0123 — A nested engine run gets its own microtask scope](0123-per-execution-microtask-scopes.md)

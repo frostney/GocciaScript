@@ -783,6 +783,8 @@ if (child.failureKind === "resource-limit") {
 }
 ```
 
+A nested run is synchronous and runs only its own jobs. The caller's pending Promise callbacks, `queueMicrotask` callbacks, and `async` continuations do not run during the call, do not appear in the child's `stdout`, and are still pending when it returns, whether the child succeeds or fails. The same holds for `{ sandbox: true }` children and for shell `goccia`. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the mechanism.
+
 By default, nested execution shares the current virtual filesystem:
 
 ```javascript

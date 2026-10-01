@@ -8,6 +8,7 @@ uses
   Generics.Collections,
 
   Goccia.Arguments.Collection,
+  Goccia.MicrotaskQueue,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.SharedPrototype,
@@ -27,6 +28,10 @@ type
   private
     FCleanupCallback: TGocciaValue;
     FCells: TList<TGocciaFinalizationRegistryCell>;
+    { The microtask scope the registry was created in. A collection can run
+      while a nested engine is executing, and the cleanup job still belongs to
+      the engine that created the registry. }
+    FOwnerScope: TGocciaMicrotaskScopeId;
     procedure EnqueueCleanup(const AHeldValue: TGocciaValue);
     procedure InitializePrototype;
   public
@@ -58,7 +63,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue,
   Goccia.Values.ErrorHelper,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue,
@@ -83,6 +87,7 @@ begin
   inherited Create(AClass);
   FCleanupCallback := nil;
   FCells := TList<TGocciaFinalizationRegistryCell>.Create;
+  FOwnerScope := CurrentMicrotaskScope;
   InitializePrototype;
   Shared := GetFinalizationRegistryShared;
   if not Assigned(AClass) and Assigned(Shared) then
@@ -189,7 +194,8 @@ begin
   Task.ResultPromise := nil;
   Task.Value := AHeldValue;
   Task.ReactionType := prtFulfill;
-  TGocciaMicrotaskQueue.Instance.EnqueueFinalizationCleanup(Task);
+  TGocciaMicrotaskQueue.Instance.EnqueueFinalizationCleanup(Task,
+    FOwnerScope);
 end;
 
 procedure TGocciaFinalizationRegistryValue.SweepWeakReferences;

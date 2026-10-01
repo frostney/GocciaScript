@@ -3004,6 +3004,35 @@ await section("Loader: --globals from JS module...", async () => {
   }
 });
 
+await section("Loader: jobs a --globals JS module leaves pending run with the script...", async () => {
+  const tmp = makeTmp();
+  try {
+    // The module is evaluated before the entry script starts. The interpreter
+    // leaves its jobs queued for the script's own drain, so the script must
+    // still run them rather than start on an empty queue.
+    const moduleJsPath = join(tmp, "module.js");
+    writeFileSync(
+      moduleJsPath,
+      'export const settled = (async () => { await null; return "settled"; })();\n',
+    );
+    const source = [
+      'let seen = "pending";',
+      "settled.then((value) => { seen = value; });",
+      "await null; await null; await null; await null;",
+      'console.log("seen:" + seen);',
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const { json } = runLoaderJson(source, [`--globals=${moduleJsPath}`, "--source-type=module", `--mode=${mode}`]);
+      const stdout = normalizeLineEndings(String(json.files?.[0]?.stdout ?? "")).trim();
+      if (stdout !== "seen:settled")
+        throw new Error(`--globals JS module (${mode}) should settle its exported promise for the script, got: ${stdout} ${JSON.stringify(json.files?.[0]?.error)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --global cannot override built-in...", async () => {
   const res = await $`echo '1;' | ${RUNNER} --global console=1 2>&1`.nothrow();
   if (res.exitCode === 0) throw new Error("Overriding built-in should fail");
@@ -6331,6 +6360,160 @@ await section("Runner sandbox mode: a runScript child's stderr carries no host-s
         throw new Error(`Sandbox mode ${mode} child denial should reach the parent as stderr: ${stdout}${proc.stderr.toString()}`);
       if (stdout.includes("Suggestion") || stdout.includes("--allowed-host"))
         throw new Error(`Sandbox mode ${mode} leaked a host-side suggestion to the parent guest: ${stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a nested run neither runs nor drops its caller's pending jobs...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // ES2026 §9.5: a job runs only once its own agent's execution context
+    // stack is empty. A child engine is a separate agent executing inside its
+    // caller's statement, so the caller's jobs wait for the caller, whether
+    // the child succeeds or fails. runScript and the shell's `.run()` both
+    // execute the child before they return.
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { $, runScript } from "goccia";',
+          "const results = [];",
+          "const check = async (tag, run) => {",
+          "  const order = [];",
+          '  Promise.resolve().then(() => { order.push("then"); console.log("parent then " + tag); });',
+          '  queueMicrotask(() => { order.push("microtask"); console.log("parent microtask " + tag); });',
+          '  const resumed = (async () => { await null; order.push("async"); console.log("parent async " + tag); })();',
+          "  const started = run();",
+          '  order.push("returned");',
+          "  const child = await started;",
+          "  await resumed;",
+          "  results.push({ tag, ok: child.ok, stdout: child.stdout, order });",
+          "};",
+          'await check("shared", () => runScript("/child.js"));',
+          'await check("shared-failing", () => runScript("/failing.js"));',
+          'await check("isolated", () => runScript("/child.js", { sandbox: true, copy: ["/child.js"] }));',
+          'await check("isolated-failing", () => runScript("/failing.js", { sandbox: true, copy: ["/failing.js"] }));',
+          'await check("shell", () => $`goccia /child.js`.nothrow().run());',
+          'await check("shell-failing", () => $`goccia /failing.js`.nothrow().run());',
+          "console.log(JSON.stringify(results));",
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: 'console.log("child: sync"); Promise.resolve().then(() => console.log("child: job"));',
+      },
+      {
+        path: "/failing.js",
+        text: 'Promise.resolve().then(() => console.log("child: never")); throw new Error("child failed");',
+      },
+    ]);
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+      );
+      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+      if (proc.exitCode !== 0)
+        throw new Error(`Sandbox mode ${mode} nested job run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
+      let results: { tag: string; ok: boolean; stdout: string; order: string[] }[];
+      try {
+        results = JSON.parse(lines[lines.length - 1]);
+      } catch {
+        throw new Error(`Sandbox mode ${mode} nested job run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
+      }
+      const tags = results.map((result) => result.tag).join(",");
+      if (tags !== "shared,shared-failing,isolated,isolated-failing,shell,shell-failing")
+        throw new Error(`Sandbox mode ${mode} nested job run should report every child, got: ${tags}`);
+      for (const result of results) {
+        const failing = result.tag.endsWith("failing");
+        if (result.order.join(",") !== "returned,then,microtask,async")
+          throw new Error(`Sandbox mode ${mode} ${result.tag} child should leave its caller's jobs to run once, in order, after it returns; got: ${result.order.join(",")}`);
+        if (result.ok === failing)
+          throw new Error(`Sandbox mode ${mode} ${result.tag} child should report ok=${!failing}, got ${result.ok}`);
+        // The child's stdout uses the platform's line ending.
+        if (normalizeLineEndings(result.stdout) !== (failing ? "" : "child: sync\nchild: job\n"))
+          throw new Error(`Sandbox mode ${mode} ${result.tag} child's stdout should hold only its own output, got: ${JSON.stringify(result.stdout)}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner sandbox mode: a caller's cleanup and waitAsync jobs that come due during a nested run stay with the caller...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // Collection and the Atomics.waitAsync completion pump serve the whole
+    // thread. The child runs past the caller's wait timeout and collects the
+    // caller's registered target, so both jobs come due while the child is the
+    // engine draining.
+    const childBody = [
+      "const until = Date.now() + 60;",
+      "Array.from({ length: 3000 }).some(() => Array.from({ length: 1000 }).some(() => Date.now() >= until));",
+      "Goccia.gc();",
+      "await null;",
+      "Goccia.gc();",
+      "await null;",
+    ];
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          "const results = [];",
+          'for (const script of ["/child.js", "/failing.js"]) {',
+          "  const order = [];",
+          "  let cleaned;",
+          "  const cleanedUp = new Promise((resolve) => { cleaned = resolve; });",
+          '  const registry = new FinalizationRegistry((held) => { order.push("cleanup:" + held); console.log("parent cleanup"); cleaned(); });',
+          // A target stays alive until the job that registered it ends.
+          '  queueMicrotask(() => { registry.register({}, "token"); });',
+          "  await null;",
+          "  const view = new Int32Array(new SharedArrayBuffer(8));",
+          '  const woken = Atomics.waitAsync(view, 0, 0, 20).value.then((outcome) => { order.push("waitAsync:" + outcome); console.log("parent waitAsync"); });',
+          "  const child = runScript(script);",
+          '  order.push("returned");',
+          "  await woken;",
+          "  await cleanedUp;",
+          "  results.push({ script, ok: child.ok, stdout: child.stdout, order });",
+          "}",
+          "console.log(JSON.stringify(results));",
+        ].join("\n"),
+      },
+      { path: "/child.js", text: [...childBody, 'console.log("child: done");'].join("\n") },
+      { path: "/failing.js", text: [...childBody, 'throw new Error("child failed");'].join("\n") },
+    ]);
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const proc = Bun.spawnSync(
+        [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+      );
+      const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
+      if (proc.exitCode !== 0)
+        throw new Error(`Sandbox mode ${mode} nested cleanup run should exit 0, got ${proc.exitCode}: ${lines.join("\n")}${proc.stderr.toString()}`);
+      let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
+      try {
+        results = JSON.parse(lines[lines.length - 1]);
+      } catch {
+        throw new Error(`Sandbox mode ${mode} nested cleanup run should end with its results, got: ${lines.join("\n")}${proc.stderr.toString()}`);
+      }
+      // The two caller jobs are unordered relative to each other.
+      const observed = results.map((result) => ({
+        script: result.script,
+        ok: result.ok,
+        stdout: normalizeLineEndings(result.stdout),
+        first: result.order[0],
+        rest: result.order.slice(1).sort(),
+      }));
+      const rest = ["cleanup:token", "waitAsync:timed-out"];
+      const expected = [
+        { script: "/child.js", ok: true, stdout: "child: done\n", first: "returned", rest },
+        { script: "/failing.js", ok: false, stdout: "", first: "returned", rest },
+      ];
+      if (JSON.stringify(observed) !== JSON.stringify(expected))
+        throw new Error(`Sandbox mode ${mode} caller's cleanup and waitAsync jobs should run in the caller after each child returns, got: ${JSON.stringify(results)}`);
     }
   } finally {
     clean(tmp);
@@ -10513,6 +10696,80 @@ await section("Runner sandbox mode: a failing nested runScript keeps the parent'
       throw new Error(`${mode}: the nested child should fail, got:\n${run.combined}`);
     if (!run.stdout.includes(`parent:${PRIVATE_DENIAL}`))
       throw new Error(`${mode}: the parent's in-flight fetch should settle under its own policy, got:\n${run.combined}`);
+  }
+});
+
+await section("Runner sandbox mode: a parent's fetch that completes during a nested runScript settles in the parent...", async () => {
+  // The fetch completion pump serves the whole thread, so the child's own
+  // wait settles the parent's promise. Everything that follows from that —
+  // the parent's reactions, and the job that calls a thenable response's
+  // `then` — still belongs to the parent. The child's request is held back
+  // so that it is still waiting when the parent's response arrives.
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/slow")
+        await Bun.sleep(300);
+      return new Response(path.slice(1), { status: 200 });
+    },
+  });
+  try {
+    const base = `http://127.0.0.1:${server.port}`;
+    const main = [
+      "import { runScript } from 'goccia';",
+      "const results = [];",
+      "for (const [script, thenable] of [['/child.js', false], ['/failing.js', false], ['/child.js', true]]) {",
+      "  const order = [];",
+      "  if (thenable)",
+      "    Response.prototype.then = ({",
+      "      then(resolve) {",
+      "        delete Response.prototype.then;",
+      "        order.push('thenable');",
+      "        console.log('parent thenable job');",
+      "        resolve(this);",
+      "      },",
+      "    }).then;",
+      `  const settled = fetch('${base}/fast').then((response) => response.text())`,
+      "    .then((text) => { order.push('fetched:' + text); console.log('parent fetch job'); });",
+      "  const child = runScript(script);",
+      "  order.push('returned');",
+      "  await settled;",
+      "  results.push({ script, ok: child.ok, stdout: child.stdout, order });",
+      "}",
+      "console.log(JSON.stringify(results));",
+    ].join("\n");
+    const files = {
+      "/main.js": main,
+      "/child.js": `const response = await fetch('${base}/slow'); console.log('child: ' + (await response.text()));`,
+      // Awaited before the throw: a request abandoned at process exit can
+      // crash its still-running worker.
+      "/failing.js": `await fetch('${base}/slow'); throw new Error('child failed');`,
+    };
+    const expected = [
+      { script: "/child.js", ok: true, stdout: "child: slow\n", order: ["returned", "fetched:fast"] },
+      { script: "/failing.js", ok: false, stdout: "", order: ["returned", "fetched:fast"] },
+      { script: "/child.js", ok: true, stdout: "child: slow\n", order: ["returned", "thenable", "fetched:fast"] },
+    ];
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const run = await runNestedFetchSandbox(files, mode, []);
+      if (run.timedOut || run.exitCode !== 0)
+        throw new Error(`${mode}: the parent should finish (timed out: ${run.timedOut}, exit ${run.exitCode}):\n${run.combined}`);
+      const lines = run.stdout.split("\n");
+      let results: { script: string; ok: boolean; stdout: string; order: string[] }[];
+      try {
+        results = JSON.parse(lines[lines.length - 1]);
+      } catch {
+        throw new Error(`${mode}: the parent should end with its results, got:\n${run.combined}`);
+      }
+      // The child's stdout uses the platform's line ending.
+      const observed = results.map((result) => ({ ...result, stdout: normalizeLineEndings(result.stdout) }));
+      if (JSON.stringify(observed) !== JSON.stringify(expected))
+        throw new Error(`${mode}: the parent's fetch jobs should run in the parent after each child returns, got: ${JSON.stringify(results)}`);
+    }
+  } finally {
+    server.stop(true);
   }
 });
 
