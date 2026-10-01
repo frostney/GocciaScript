@@ -150,6 +150,17 @@ uses
   Goccia.Values.PromiseValue,
   Goccia.VM.Exception;
 
+{ Runs what a batch of iterations left queued, then forgets the promises it
+  left rejected. A benchmark measures and does not assert, and its bodies run
+  after the engine's own run has ended, so nothing would ever take them: left
+  tracked, they stay rooted for as long as the thread's queue lives. }
+procedure SettleBatch;
+begin
+  WaitForFetchIdle;
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
+end;
+
 const
   DEFAULT_WARMUP_ITERATIONS = 5;
   DEFAULT_MIN_CALIBRATION_MS = 200;
@@ -463,7 +474,7 @@ begin
   AGeneratorIterator := TGocciaIteratorValue(GeneratorValue);
   AActiveRoots.Add(AGeneratorIterator);
   YieldedValue := AGeneratorIterator.DirectNext(Done);
-  WaitForFetchIdle;
+  SettleBatch;
 
   if Done or not (YieldedValue is TGocciaFunctionBase) then
     ThrowTypeError('bench generator callback must yield a function');
@@ -623,7 +634,7 @@ begin
       InvokeBenchmarkFunction(ARunFunction, ASetupResult, ARunArgs);
       Inc(I);
     end;
-    WaitForFetchIdle;
+    SettleBatch;
     ElapsedNanoseconds := GetNanoseconds - StartNanoseconds;
 
     if ElapsedNanoseconds >= TargetNanoseconds then
@@ -822,7 +833,7 @@ begin
 
       for K := 1 to WARMUP_ITERATIONS do
         InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
-      WaitForFetchIdle;
+      SettleBatch;
 
       Iterations := CalibrateIterations(RunFunction, SetupResult, RunArgs);
 
@@ -853,7 +864,7 @@ begin
           InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
           Inc(I);
         end;
-        WaitForFetchIdle;
+        SettleBatch;
         RoundNanoseconds := GetNanoseconds - StartNanoseconds;
 
         if RoundNanoseconds > 0 then
@@ -929,7 +940,7 @@ begin
         SampleDuration := SampleDurationNanoseconds;
         SampleDurations[K] := SampleDuration;
       end;
-      WaitForFetchIdle;
+      SettleBatch;
       if SampleCount > 1 then
         QuickSortDoubles(SampleDurations, 0, SampleCount - 1);
       Result.SampleCount := SampleCount;
@@ -946,7 +957,7 @@ begin
       begin
         StartNanoseconds := GetNanoseconds;
         CloseIterator(GeneratorIterator);
-        WaitForFetchIdle;
+        SettleBatch;
         Result.TeardownMs := (GetNanoseconds - StartNanoseconds) / 1000000;
         GeneratorIterator := nil;
       end;
@@ -1015,12 +1026,12 @@ begin
           GeneratorIterator);
 
       InvokeBenchmarkFunction(RunFunction, SetupResult, RunArgs);
-      WaitForFetchIdle;
+      SettleBatch;
 
       if Assigned(GeneratorIterator) then
       begin
         CloseIterator(GeneratorIterator);
-        WaitForFetchIdle;
+        SettleBatch;
         GeneratorIterator := nil;
       end;
     except

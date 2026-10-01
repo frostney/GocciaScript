@@ -26,7 +26,8 @@ const PENDING_FROM_ASYNC =
   "  const iterable = {" +
   "    [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) })" +
   "  };" +
-  "  try { Array.fromAsync(iterable); } catch (error) { /* never settles */ }" +
+  // The wait gives up and rejects; the rejection is not what is under test.
+  "  Array.fromAsync(iterable).catch(() => {});" +
   "  return 'child-ran';" +
   "})()";
 
@@ -34,11 +35,8 @@ const pendingFromAsyncHere = () => {
   const iterable = {
     [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
   };
-  try {
-    Array.fromAsync(iterable);
-  } catch (error) {
-    // never settles
-  }
+  // The wait gives up and rejects; the rejection is not what is under test.
+  Array.fromAsync(iterable).catch(() => {});
   return "parent-ran";
 };
 

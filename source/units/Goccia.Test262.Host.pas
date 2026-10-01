@@ -226,6 +226,10 @@ begin
   if Assigned(AParentEnvironment) then
     AEngine.HostEnvironment.ConfigureAsChildOf(AParentEnvironment);
   AEngine.Compatibility := AOptions.Compatibility;
+  { Conformance tests leave promises rejected on purpose (a synchronous test
+    that only inspects what `Promise.reject` returns, an `import('')` syntax
+    test), and the harness reports asynchronous failures through $DONE. }
+  AEngine.UnhandledRejections := urIgnore;
   AEngine.LabelStatementsEnabled := True;
   AEngine.ForInLoopsEnabled := True;
   AEngine.ExperimentalJSModuleSourceEnabled :=

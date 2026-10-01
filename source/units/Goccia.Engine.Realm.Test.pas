@@ -17,13 +17,17 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
+  Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
   Goccia.Scope,
   Goccia.TestSetup,
+  Goccia.Values.Error,
   Goccia.Values.NativeFunction,
-  Goccia.Values.Primitives;
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
 
 type
   TTestEngineRealm = class(TTestSuite)
@@ -51,6 +55,13 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure AssertNestedExecuteLeavesOuterJobsWithExecutor(
       const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+    function UnhandledRejectionMessage(const AExecutor: TGocciaExecutor;
+      const ASource: string;
+      const AMode: TGocciaUnhandledRejectionMode): string;
+    function TakeRejectionProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure AssertUnhandledRejectionModesWithExecutor(
+      const AExecutor: TGocciaExecutor);
   public
     procedure SetupTests; override;
 
@@ -66,6 +77,8 @@ type
     procedure TestNestedEngineRestoresOuterAsyncContextOnDestroy;
     procedure TestInterpreterNestedExecuteLeavesOuterJobs;
     procedure TestBytecodeNestedExecuteLeavesOuterJobs;
+    procedure TestInterpreterExecuteRaisesUnhandledRejection;
+    procedure TestBytecodeExecuteRaisesUnhandledRejection;
     procedure TestEachEngineGetsADistinctRealm;
     procedure TestInterpreterExecutionContextUsesEngineRealm;
     procedure TestBytecodeExecutionContextUsesEngineRealm;
@@ -104,6 +117,12 @@ begin
     TestInterpreterNestedExecuteLeavesOuterJobs);
   Test('Bytecode nested Execute neither runs nor drops the outer jobs',
     TestBytecodeNestedExecuteLeavesOuterJobs);
+  Test('Interpreter Execute raises an unhandled rejection unless told to ' +
+    'ignore it',
+    TestInterpreterExecuteRaisesUnhandledRejection);
+  Test('Bytecode Execute raises an unhandled rejection unless told to ' +
+    'ignore it',
+    TestBytecodeExecuteRaisesUnhandledRejection);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
   Test('Interpreter execution context uses the engine realm',
@@ -685,6 +704,115 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor, True);
+  finally
+    Executor.Free;
+  end;
+end;
+
+{ What a host that attributes rejections itself does from inside the run:
+  takes the oldest promise left rejected and reports its reason. }
+function TTestEngineRealm.TakeRejectionProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaValue;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(Promise) then
+    Result := (TGocciaPromiseValue(Promise).PromiseResult as
+      TGocciaObjectValue).GetProperty('message');
+end;
+
+{ Runs ASource and returns the message of the error the run raised for a
+  promise left rejected, or '' when the run returned normally. }
+function TTestEngineRealm.UnhandledRejectionMessage(
+  const AExecutor: TGocciaExecutor; const ASource: string;
+  const AMode: TGocciaUnhandledRejectionMode): string;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+begin
+  Result := '';
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<unhandled-rejection>', Source, AExecutor);
+    Engine.UnhandledRejections := AMode;
+    Engine.InjectGlobal('takeRejection',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(TakeRejectionProbe,
+        'takeRejection', 0));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        Result := (E.Value as TGocciaObjectValue).GetProperty('message')
+          .ToStringLiteral.Value;
+    end;
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertUnhandledRejectionModesWithExecutor(
+  const AExecutor: TGocciaExecutor);
+const
+  LEFT_UNHANDLED = 'Promise.reject(new Error("left unhandled"));';
+  ASYNC_THROW =
+    'const fail = async () => { throw new Error("async throw"); };' +
+    'fail();';
+  HANDLED_LATER =
+    'const rejected = Promise.reject(new Error("handled later"));' +
+    'Promise.resolve().then(() => rejected.catch(() => {}));';
+  FIRST_OF_TWO =
+    'Promise.reject(new Error("first"));' +
+    'Promise.reject(new Error("second"));';
+  TAKEN_BY_THE_HOST =
+    'Promise.reject(new Error("taken"));' +
+    'if (takeRejection() !== "taken") throw new Error("not handed over");';
+begin
+  Expect<string>(UnhandledRejectionMessage(AExecutor, LEFT_UNHANDLED,
+    urThrow)).ToBe('left unhandled');
+  Expect<string>(UnhandledRejectionMessage(AExecutor, ASYNC_THROW,
+    urThrow)).ToBe('async throw');
+  Expect<string>(UnhandledRejectionMessage(AExecutor, FIRST_OF_TWO,
+    urThrow)).ToBe('first');
+  // A handler that arrives before the run has nothing left to do counts.
+  Expect<string>(UnhandledRejectionMessage(AExecutor, HANDLED_LATER,
+    urThrow)).ToBe('');
+  Expect<string>(UnhandledRejectionMessage(AExecutor, LEFT_UNHANDLED,
+    urIgnore)).ToBe('');
+  // A promise the host took during the run is the host's to report: the
+  // engine raises nothing for it under either setting.
+  Expect<string>(UnhandledRejectionMessage(AExecutor, TAKEN_BY_THE_HOST,
+    urIgnore)).ToBe('');
+  Expect<string>(UnhandledRejectionMessage(AExecutor, TAKEN_BY_THE_HOST,
+    urThrow)).ToBe('');
+  // One run's rejection is not the next run's.
+  Expect<string>(UnhandledRejectionMessage(AExecutor, '1 + 1;',
+    urThrow)).ToBe('');
+end;
+
+procedure TTestEngineRealm.TestInterpreterExecuteRaisesUnhandledRejection;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertUnhandledRejectionModesWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeExecuteRaisesUnhandledRejection;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertUnhandledRejectionModesWithExecutor(Executor);
   finally
     Executor.Free;
   end;
