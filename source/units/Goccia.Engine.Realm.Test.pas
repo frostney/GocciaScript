@@ -586,6 +586,12 @@ begin
     ChildEngine.InjectGlobal('report',
       TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedReportProbe,
         'report', 1));
+    // Values the outer engine hands over, as an embedder sharing them would.
+    if AArgs.Length >= 2 then
+    begin
+      ChildEngine.InjectGlobal('gate', AArgs.GetElement(0));
+      ChildEngine.InjectGlobal('open', AArgs.GetElement(1));
+    end;
     try
       ChildEngine.Execute;
     except
@@ -607,6 +613,14 @@ const
     'runChild();' +
     'report("returned");';
   CHILD_JOB = 'Promise.resolve().then(() => report("child job"));';
+  SHARING_OUTER_SOURCE =
+    'let open;' +
+    'const gate = new Promise((resolve) => { open = resolve; });' +
+    'runChild(gate, open);' +
+    'report("returned");';
+  SHARING_CHILD_SOURCE =
+    'gate.then((value) => report("child awaited " + value));' +
+    'open(2);';
 var
   Engine: TGocciaEngine;
   Source: TStringList;
@@ -636,6 +650,15 @@ begin
     Engine.Execute;
     Expect<string>(FNestedLog.CommaText).ToBe(
       '"child failed",returned,"outer job"');
+
+    // A reaction belongs to the engine that registered it, whoever created
+    // the promise: the child's callback on a promise the outer engine handed
+    // over runs in the child, not after the child is gone.
+    FNestedLog.Clear;
+    Source.Text := SHARING_OUTER_SOURCE;
+    FNestedChildSource := SHARING_CHILD_SOURCE;
+    Engine.Execute;
+    Expect<string>(FNestedLog.CommaText).ToBe('"child awaited 2",returned');
   finally
     Engine.Free;
     FreeAndNil(FNestedLog);

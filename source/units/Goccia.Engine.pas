@@ -496,10 +496,11 @@ uses
   Goccia.VM.Exception;
 
 threadvar
-  { Engine runs — Execute, ExecuteProgram, RunModule — in progress on this
-    thread. Non-zero when a run starts means it is nested: reached from inside
-    another engine's execution. }
-  GActiveRunCount: Integer;
+  { The engine whose run — Execute, ExecuteProgram, RunModule — is innermost
+    on this thread, or nil between runs. Compared, never dereferenced: a run
+    that starts while a different engine holds it is nested inside that
+    engine's execution. }
+  GRunningEngine: TGocciaEngine;
 
 { TGocciaEngineExtension }
 
@@ -2592,9 +2593,11 @@ function TGocciaEngine.RunModule(
 var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PreviousRunningEngine: TGocciaEngine;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
-  Inc(GActiveRunCount);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
   try
     Result := FExecutor.RunCompiledModule(AModule);
     GC := TGarbageCollector.Instance;
@@ -2607,7 +2610,7 @@ begin
         GC.RemoveTempRoot(Result);
     end;
   finally
-    Dec(GActiveRunCount);
+    GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
@@ -2618,9 +2621,11 @@ function TGocciaEngine.RunModuleInScope(
 var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
+  PreviousRunningEngine: TGocciaEngine;
 begin
   EnterGocciaFloatingPointScope(FloatingPointState);
-  Inc(GActiveRunCount);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
   try
     Result := FExecutor.RunCompiledModuleInScope(AModule, AScope);
     GC := TGarbageCollector.Instance;
@@ -2633,7 +2638,7 @@ begin
         GC.RemoveTempRoot(Result);
     end;
   finally
-    Dec(GActiveRunCount);
+    GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
@@ -2739,6 +2744,7 @@ var
   MicrotaskQueue: TGocciaMicrotaskQueue;
   MicrotaskScopeToken: Integer;
   NestedRun, OwnsMicrotaskScope: Boolean;
+  PreviousRunningEngine: TGocciaEngine;
 begin
   // Bind runtime-error code-frame capture to THIS engine's source scope for the
   // duration of its execution, restoring the caller's on exit. The previous
@@ -2790,13 +2796,16 @@ begin
       `runScript` child), and that engine's pending jobs are neither this
       run's to drain nor, on failure, this run's to discard. The outermost run
       keeps the thread's own scope, so jobs the host queued ahead of it — a
-      globals module loaded before the entry script — still drain with it.
+      globals module loaded before the entry script — still drain with it. A
+      host callback that re-enters this same engine shares its scope too.
       Per-invocation locals for the same reason as PrevDiagScope above. }
     MicrotaskQueue := TGocciaMicrotaskQueue.Instance;
-    NestedRun := GActiveRunCount > 0;
+    PreviousRunningEngine := GRunningEngine;
+    NestedRun := Assigned(PreviousRunningEngine) and
+      (PreviousRunningEngine <> Self);
     OwnsMicrotaskScope := False;
     MicrotaskScopeToken := 0;
-    Inc(GActiveRunCount);
+    GRunningEngine := Self;
     try
       if NestedRun and Assigned(MicrotaskQueue) then
       begin
@@ -2954,7 +2963,7 @@ begin
       end;
       FLastTiming.TotalTimeNanoseconds := ExecEnd - StartTime;
     finally
-      Dec(GActiveRunCount);
+      GRunningEngine := PreviousRunningEngine;
       ActiveOptionsScope.Free;
       { Either way this run's leftover jobs are discarded. Leaving the scope
         also puts the enclosing engine's jobs back. }
@@ -2993,11 +3002,13 @@ var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
   PrevScope: TGocciaDiagnosticSourceScope;
+  PreviousRunningEngine: TGocciaEngine;
 begin
   PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
     FModuleLoader.DiagnosticScope);
   EnterGocciaFloatingPointScope(FloatingPointState);
-  Inc(GActiveRunCount);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
   try
     Result := FExecutor.ExecuteProgram(AProgram);
     GC := TGarbageCollector.Instance;
@@ -3010,7 +3021,7 @@ begin
         GC.RemoveTempRoot(Result);
     end;
   finally
-    Dec(GActiveRunCount);
+    GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;

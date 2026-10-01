@@ -34,8 +34,8 @@ type
     Context: TGocciaAsyncContextSnapshot;
   end;
 
-  { Identifies one microtask scope. Never reused within a queue, so a job
-    addressed to a scope that has ended cannot land in a later one. }
+  { Identifies one microtask scope. Never reused within a queue, so a scope
+    that has ended is recognised as ended rather than taken for a later one. }
   TGocciaMicrotaskScopeId = Int64;
 
   { The jobs of a scope that an inner one is currently hiding. }
@@ -78,9 +78,9 @@ type
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
     procedure EnqueueJob(const AJob: TGocciaMicrotaskJob);
     { Both enqueue into the scope the job belongs to instead of the current
-      one. A promise's jobs belong to the scope the promise was created in and
-      a cleanup job to the scope that created its registry, and either can
-      come due while a nested engine is running: its drain pumps fetch and
+      one. A promise reaction belongs to the scope that registered it and a
+      cleanup job to the scope that created its registry, and either can come
+      due while a nested engine is running: its drain pumps fetch and
       Atomics.waitAsync completions for the whole thread, and its allocations
       can trigger a collection. A scope that has already ended falls back to
       the current one.
@@ -98,8 +98,8 @@ type
     procedure ClearQueue;
     function HasPending: Boolean;
 
-    { The bracket an engine holds around an Execute that is nested inside
-      another engine's run.
+    { The bracket an engine holds around an Execute that starts while a
+      different engine is running.
 
       ES2026 §9.5 runs a job only when the execution context stack of its
       agent is empty. Engines nest on one thread — `runScript` executes a child

@@ -31,6 +31,11 @@ type
       the context has to travel with the reaction rather than be read again
       when the promise settles. }
     Context: TGocciaAsyncContextSnapshot;
+    { The microtask scope the reaction was registered in. The promise can be
+      settled while another engine is the one running — a nested engine's
+      drain pumps completions for the whole thread — and the job still belongs
+      to the engine whose code registered it. }
+    Scope: TGocciaMicrotaskScopeId;
   end;
 
   TGocciaPromiseFinallyWrapper = class(TGocciaObjectValue)
@@ -65,10 +70,11 @@ type
     FResult: TGocciaValue;
     FReactions: TList<TGocciaPromiseReaction>;
     FAlreadyResolved: Boolean;
-    { The microtask scope the promise was created in. A nested engine's drain
-      can settle it — the fetch and Atomics.waitAsync completion pumps serve
-      the whole thread — and the jobs that follow still belong to the engine
-      that owns the promise. }
+    { The microtask scope the promise was created in. Resolving it with a
+      thenable enqueues a job that no reaction registered, and when a nested
+      engine's drain is what resolves it — the fetch completion pump serves
+      the whole thread — that job still belongs to the engine that owns the
+      promise. }
     FScope: TGocciaMicrotaskScopeId;
 
     procedure TriggerReactions;
@@ -734,6 +740,7 @@ begin
       Reaction.OnRejected := nil;
       Reaction.ResultPromise := Self;
       Reaction.Context := CurrentAsyncContext;
+      Reaction.Scope := CurrentMicrotaskScope;
       if not Assigned(APromise.FReactions) then
         APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
       APromise.FReactions.Add(Reaction);
@@ -763,7 +770,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtFulfill;
-        Queue.EnqueueInScope(Task, Reaction.Context, FScope);
+        Queue.EnqueueInScope(Task, Reaction.Context, Reaction.Scope);
       end;
       gpsRejected:
       begin
@@ -771,7 +778,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtReject;
-        Queue.EnqueueInScope(Task, Reaction.Context, FScope);
+        Queue.EnqueueInScope(Task, Reaction.Context, Reaction.Scope);
       end;
     end;
   end;
@@ -827,6 +834,7 @@ begin
       Reaction.OnRejected := AOnRejected;
       Reaction.ResultPromise := CapabilityHost;
       Reaction.Context := CurrentAsyncContext;
+      Reaction.Scope := CurrentMicrotaskScope;
       if not Assigned(APromise.FReactions) then
         APromise.FReactions := TList<TGocciaPromiseReaction>.Create;
       APromise.FReactions.Add(Reaction);

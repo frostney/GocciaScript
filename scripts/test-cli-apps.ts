@@ -6412,7 +6412,7 @@ await section("Runner sandbox mode: a nested run neither runs nor drops its call
     for (const mode of ["interpreted", "bytecode"] as const) {
       const proc = Bun.spawnSync(
         [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module", `--mode=${mode}`],
-        { stdout: "pipe", stderr: "pipe" },
+        { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
       );
       const lines = normalizeLineEndings(proc.stdout.toString()).trim().split("\n");
       if (proc.exitCode !== 0)

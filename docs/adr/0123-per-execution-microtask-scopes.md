@@ -26,24 +26,28 @@ hidden jobs back in their original order. Every drain, `HasPending` check and
 `ClearQueue` sees only the current scope, so no call site that pumps the queue
 (await, the fetch and timer pumps, the idle drain) needed a change.
 
-**Only a nested run is scoped.** `TGocciaEngine` counts the runs in progress
-on the thread (`Execute`, `ExecuteProgram`, `RunModule`). An `Execute` that
-starts while the count is non-zero enters a scope; the outermost one keeps the
-thread's own scope and clears it on exit, exactly as before. Hosts queue jobs
-ahead of the entry script — the runner evaluates a `--globals` module before
-`Execute` — and those jobs have to drain with it.
+**Only a run nested in a different engine is scoped.** The thread records
+which engine's run (`Execute`, `ExecuteProgram`, `RunModule`) is innermost. An
+`Execute` that starts while a different engine holds that place enters a
+scope. The outermost one keeps the thread's own scope and clears it on exit,
+exactly as before: hosts queue jobs ahead of the entry script — the runner
+evaluates a `--globals` module before `Execute` — and those jobs have to drain
+with it. An engine re-entered from its own native callback is the same agent
+and shares the scope it is already running in.
 
-**A promise's jobs belong to the scope the promise was created in**, and a
-`FinalizationRegistry` cleanup job to the scope that created the registry.
-Completion pumps and the collector serve the whole thread, so a nested engine's
-drain can settle its caller's fetch or `Atomics.waitAsync` promise and can
-collect its caller's registered targets. The resulting jobs — reactions, the
-job that calls a thenable's `then`, cleanup callbacks — are enqueued into the
-owning scope rather than the current one.
+**A job belongs to the scope of the code that asked for it.** A promise
+reaction belongs to the scope that registered it, which approximates the
+spec's rule that a reaction job is scheduled in its handler's realm. A `FinalizationRegistry`
+cleanup job belongs to the scope that created the registry. The job that calls
+a thenable's `then` has no registrant, so it belongs to the scope the promise
+being resolved was created in. Completion pumps and the collector serve the
+whole thread, so a nested engine's drain can settle its caller's fetch or
+`Atomics.waitAsync` promise and can collect its caller's registered targets;
+these jobs are enqueued into the owning scope rather than the current one.
 
 **A job whose scope has ended is enqueued into the current scope.** Scope
-identifiers are never reused, so such a job cannot land in an unrelated later
-scope by accident.
+identifiers are never reused, so an ended scope is always recognised as ended
+rather than taken for a later one.
 
 **A ShadowRealm shares its creator's scope.** It is a second realm of the same
 agent and never calls `Execute`.
@@ -63,6 +67,10 @@ agent and never calls `Execute`.
 - **Scope every `Execute`.** Simpler to state, and the first implementation.
   Rejected: jobs queued before `Execute` were never drained, which broke a
   `--globals` module's pending callbacks in interpreted mode.
+- **Route every job of a promise to the scope the promise was created in.**
+  One field instead of two. Rejected: a nested engine that registers a
+  callback on a promise handed over from the enclosing engine would have it
+  run after the nested engine is gone.
 - **Defer another engine's fetch completions instead of settling them.** Would
   keep even a `then` getter from running during the child. Rejected for this
   change: it reverses the settlement behavior [#1258](https://github.com/frostney/GocciaScript/pull/1258)
@@ -77,12 +85,14 @@ agent and never calls `Execute`.
 - Reading a thenable's `then` property still happens where the promise is
   resolved. A caller's `then` *getter* on a fetch response can therefore run
   during a nested drain; the job that calls `then` does not.
-- `TGocciaPromiseValue` and `TGocciaFinalizationRegistryValue` each carry one
-  scope identifier.
+- A nested run cannot make progress on work that depends on a job of the
+  enclosing engine; such a promise is still pending when the nested `Execute`
+  returns.
+- A nested engine that resolves a promise of the enclosing engine with one of
+  its own thenables leaves the `then` call to the enclosing engine.
+- Each promise, promise reaction and `FinalizationRegistry` carries one scope
+  identifier.
 
 ## Related
 
 - [Interpreter — Synchronous Microtask Queue](../interpreter.md#synchronous-microtask-queue)
-- [ADR 0112](0112-native-async-local-storage.md) — the engine-lifetime bracket
-  for the async context, which this bracket resembles but does not share: it
-  spans one `Execute`, not the engine's life.

@@ -914,7 +914,7 @@ Source.Text := 'Promise.resolve(42).then((v) => { globalThis.answer = v; });';
 Engine.Execute;  // microtasks drain before Execute returns
 ```
 
-For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while another engine run is in progress (a sandbox `runScript` child, or an `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the scopes behind this.
+For long-lived engines (REPL-style), each `Execute` call drains its own microtasks. Promise callbacks from one execution will not leak into the next — even if the script throws an exception, the engine clears any pending microtasks in a `finally` block. Engines can also nest on a thread: an `Execute` that starts while a different engine's run is in progress (a sandbox `runScript` child, or another engine's `Execute` called from a native callback) drains and discards only its own jobs and leaves the enclosing engine's jobs queued, while a nested `ExecuteProgram` or `RunModule` drains the queue it was called in. [Interpreter — Synchronous Microtask Queue](interpreter.md#synchronous-microtask-queue) describes the scopes behind this.
 
 ## Garbage Collector
 
