@@ -299,7 +299,7 @@ begin
   inherited;
   { Resume pushes an execution context naming FContext.Scope, and that entry
     holds the module scope as a raw pointer for the length of the resumption
-    (see the rooting note on GExecutionContextStack in
+    (see the rooting note on GExecutionContextState in
     Goccia.ExecutionContext.pas). FContinuation marks the same scope, but that
     is its bookkeeping, not this one's: mark it here so the execution-context
     contract does not depend on the continuation's internals. }
