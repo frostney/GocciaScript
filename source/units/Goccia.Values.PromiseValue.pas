@@ -9,6 +9,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.AsyncContext,
+  Goccia.MicrotaskQueue,
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.SharedPrototype,
@@ -64,6 +65,11 @@ type
     FResult: TGocciaValue;
     FReactions: TList<TGocciaPromiseReaction>;
     FAlreadyResolved: Boolean;
+    { The microtask scope the promise was created in. A nested engine's drain
+      can settle it — the fetch and Atomics.waitAsync completion pumps serve
+      the whole thread — and the jobs that follow still belong to the engine
+      that owns the promise. }
+    FScope: TGocciaMicrotaskScopeId;
 
     procedure TriggerReactions;
     procedure InitializePrototype;
@@ -112,7 +118,6 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
-  Goccia.MicrotaskQueue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -547,6 +552,7 @@ begin
   FState := gpsPending;
   FResult := TGocciaUndefinedLiteralValue.UndefinedValue;
   FAlreadyResolved := False;
+  FScope := CurrentMicrotaskScope;
   InitializePrototype;
   Shared := GetPromiseShared;
   if Assigned(Shared) then
@@ -680,7 +686,7 @@ begin
         Task.Value := AValue;
         Task.ResultPromise := Self;
         Task.ReactionType := prtThenableResolve;
-        Queue.Enqueue(Task);
+        Queue.EnqueueInScope(Task, CurrentAsyncContext, FScope);
       end;
       Exit;
     end;
@@ -757,7 +763,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtFulfill;
-        Queue.EnqueueWithContext(Task, Reaction.Context);
+        Queue.EnqueueInScope(Task, Reaction.Context, FScope);
       end;
       gpsRejected:
       begin
@@ -765,7 +771,7 @@ begin
         Task.Value := FResult;
         Task.ResultPromise := Reaction.ResultPromise;
         Task.ReactionType := prtReject;
-        Queue.EnqueueWithContext(Task, Reaction.Context);
+        Queue.EnqueueInScope(Task, Reaction.Context, FScope);
       end;
     end;
   end;

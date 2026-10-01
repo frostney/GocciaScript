@@ -160,6 +160,14 @@ GocciaScript implements ECMAScript Promises with a synchronous microtask queue (
 
 **The solution:** A singleton FIFO queue. When a Promise settles or `.then()` is called on an already-settled Promise, the reaction is enqueued rather than executed immediately. The engine drains the queue after the executor finishes the program (`TGocciaEngine.ExecuteProgram` → `WaitForRuntimeIdle`), in both execution modes.
 
+**Nested engines:** The singleton is per thread, and engines nest on a thread: a sandbox `runScript` child executes inside its caller's statement, and so does an `Execute` an embedder calls from a native callback. An `Execute` that starts while another engine run (`Execute`, `ExecuteProgram`, or `RunModule`) is in progress on the thread therefore runs in a microtask scope of its own (`TGocciaMicrotaskQueue.EnterScope` / `LeaveScope`):
+
+- Its drain runs only the jobs enqueued in that scope, so it returns before any of the enclosing engine's pending jobs run. They run afterwards, in the order they were enqueued, once the enclosing engine reaches its own drain.
+- Its cleanup discards only the jobs of that scope. A nested `Execute` that throws leaves the enclosing engine's callbacks and `async` continuations queued.
+- A Promise's jobs belong to the scope the Promise was created in, and a `FinalizationRegistry` cleanup job to the scope that created the registry. When a nested engine's drain settles an enclosing engine's Promise — a fetch that completed in the meantime — its reactions wait in the enclosing engine's scope instead of running inside the nested one. A job whose scope has already ended is enqueued into the scope that is current when it comes due.
+
+This is the ECMAScript job rule ([ES2026 §9.5](https://tc39.es/ecma262/#sec-jobs)): a job runs only when its agent's execution context stack is empty. A ShadowRealm is a second realm of the same agent rather than a separate execution, so it shares its creator's scope. The outermost `Execute` keeps the thread's own scope, so jobs the host queued before it — by evaluating a globals module ahead of the entry script — drain with it. Only `Execute` isolates: a nested `ExecuteProgram` or `RunModule` drains the scope it was called in. [ADR 0123](adr/0123-per-execution-microtask-scopes.md) records the decision.
+
 Fetch uses a separate fetch-specific completion pump: blocking HTTP work runs off-thread, the owning runtime thread settles the fetch Promise when a response or error is ready, and the resulting Promise reactions still run through this same microtask queue. The microtask queue itself is not used as an I/O queue.
 
 **Why drain after script execution (not during)?**
@@ -188,7 +196,7 @@ For fetch-backed Promises, these integration points also pump fetch completions 
 
 **`queueMicrotask`:** The global `queueMicrotask(callback)` function enqueues a user-provided callback into the same microtask queue used by Promise reactions. This matches the [HTML spec](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#microtask-queuing). If a `queueMicrotask` callback throws, the error is surfaced as an uncaught host callback error instead of being converted into a Promise rejection. Promise reaction handler errors still reject their result promises.
 
-**Error safety:** `TGocciaEngine.Execute` wraps the whole source pipeline and execution path in a `try..finally` that calls `ClearQueue` and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions; outstanding fetch workers are detached so cleanup does not wait on network I/O that can no longer affect the script. Lower-level callers that bypass `Execute` and call `ExecuteProgram` directly still get the idle drain, but they own any surrounding runtime cleanup.
+**Error safety:** `TGocciaEngine.Execute` wraps the whole source pipeline and execution path in a `try..finally` that calls `ClearQueue` — a nested run leaves its microtask scope instead, which discards only its own jobs — and discards pending fetch completions. If the interpreter throws, stale microtasks and fetch callbacks are discarded rather than leaking into subsequent executions; outstanding fetch workers are detached so cleanup does not wait on network I/O that can no longer affect the script. Lower-level callers that bypass `Execute` and call `ExecuteProgram` directly still get the idle drain, but they own any surrounding runtime cleanup.
 
 **GC safety:** During `DrainQueue`, each microtask's handler, value, and result promise are temp-rooted to prevent collection mid-callback. Queued microtasks and FinalizationRegistry cleanup jobs are also registered as queued GC roots until they run.
 

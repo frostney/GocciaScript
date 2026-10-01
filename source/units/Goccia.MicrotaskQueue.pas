@@ -34,6 +34,19 @@ type
     Context: TGocciaAsyncContextSnapshot;
   end;
 
+  { Identifies one microtask scope. Never reused within a queue, so a job
+    addressed to a scope that has ended cannot land in a later one. }
+  TGocciaMicrotaskScopeId = Int64;
+
+  { The jobs of a scope that an inner one is currently hiding. }
+  TGocciaMicrotaskOuterScope = record
+    Id: TGocciaMicrotaskScopeId;
+    Queue: TList<TGocciaMicrotask>;
+    FinalizationQueue: TList<TGocciaMicrotask>;
+    Head: Integer;
+    FinalizationHead: Integer;
+  end;
+
   TGocciaMicrotaskQueue = class
   private
     FQueue: TList<TGocciaMicrotask>;
@@ -41,6 +54,12 @@ type
     FJobs: TDictionary<TGocciaValue, TGocciaMicrotaskJob>;
     FHead: Integer;
     FFinalizationHead: Integer;
+    FScopeId: TGocciaMicrotaskScopeId;
+    FLastScopeId: TGocciaMicrotaskScopeId;
+    { Scopes hidden by the current one, innermost last. }
+    FOuterScopes: array of TGocciaMicrotaskOuterScope;
+    FOuterScopeCount: Integer;
+    function FindOuterScope(const AScope: TGocciaMicrotaskScopeId): Integer;
     procedure AddQueuedRoots(const AMicrotask: TGocciaMicrotask);
     procedure RemoveQueuedRoots(const AMicrotask: TGocciaMicrotask);
     procedure ExecuteTask(const ATask: TGocciaMicrotask);
@@ -54,20 +73,55 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    { Enqueue captures the async context in effect right now. Use
-      EnqueueWithContext for a job whose context was captured earlier — a
-      promise reaction registered on a promise that was still pending runs
-      under the context of its registration, not of its settlement. }
+    { Enqueue captures the async context in effect right now and enqueues
+      into the current scope. }
     procedure Enqueue(const AMicrotask: TGocciaMicrotask);
-    procedure EnqueueWithContext(const AMicrotask: TGocciaMicrotask;
-      const AContext: TGocciaAsyncContextSnapshot);
     procedure EnqueueJob(const AJob: TGocciaMicrotaskJob);
-    procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask);
+    { Both enqueue into the scope the job belongs to instead of the current
+      one. A promise's jobs belong to the scope the promise was created in and
+      a cleanup job to the scope that created its registry, and either can
+      come due while a nested engine is running: its drain pumps fetch and
+      Atomics.waitAsync completions for the whole thread, and its allocations
+      can trigger a collection. A scope that has already ended falls back to
+      the current one.
+
+      EnqueueInScope also takes the async context instead of reading it at
+      the call: a reaction registered on a promise that was still pending runs
+      under the context of its registration, not of its settlement. }
+    procedure EnqueueInScope(const AMicrotask: TGocciaMicrotask;
+      const AContext: TGocciaAsyncContextSnapshot;
+      const AScope: TGocciaMicrotaskScopeId);
+    procedure EnqueueFinalizationCleanup(const AMicrotask: TGocciaMicrotask;
+      const AScope: TGocciaMicrotaskScopeId);
     function DrainOneJob: Boolean;
     procedure DrainQueue;
     procedure ClearQueue;
     function HasPending: Boolean;
+
+    { The bracket an engine holds around an Execute that is nested inside
+      another engine's run.
+
+      ES2026 §9.5 runs a job only when the execution context stack of its
+      agent is empty. Engines nest on one thread — `runScript` executes a child
+      synchronously inside its caller — and each is its own agent, so the child
+      must neither run nor discard the jobs its caller still has pending.
+      EnterScope hides them and starts the child on an empty queue: until the
+      matching LeaveScope, HasPending, DrainOneJob, DrainQueue and ClearQueue
+      see only jobs that belong to the new scope. LeaveScope discards what the
+      scope left behind and puts the caller's jobs back, in the order they were
+      enqueued.
+
+      The token is the nesting depth at entry rather than a pop count, so
+      LeaveScope restores to the depth it was entered at even if an inner
+      scope was left open beneath it. }
+    function EnterScope: Integer;
+    procedure LeaveScope(const AToken: Integer);
+    property CurrentScope: TGocciaMicrotaskScopeId read FScopeId;
   end;
+
+{ The scope a job enqueued right now would belong to; 0 on a thread with no
+  queue, which is also the id of a queue's outermost scope. }
+function CurrentMicrotaskScope: TGocciaMicrotaskScopeId;
 
 implementation
 
@@ -107,6 +161,14 @@ type
     procedure RejectException(const AException: Exception);
     procedure MarkReferences; override;
   end;
+
+function CurrentMicrotaskScope: TGocciaMicrotaskScopeId;
+begin
+  if Assigned(MicrotaskQueueThreadInstance) then
+    Result := MicrotaskQueueThreadInstance.FScopeId
+  else
+    Result := 0;
+end;
 
 { TGocciaMicrotaskJob }
 
@@ -309,10 +371,14 @@ begin
   FJobs := TDictionary<TGocciaValue, TGocciaMicrotaskJob>.Create;
   FHead := 0;
   FFinalizationHead := 0;
+  FScopeId := 0;
+  FLastScopeId := 0;
+  FOuterScopeCount := 0;
 end;
 
 destructor TGocciaMicrotaskQueue.Destroy;
 begin
+  LeaveScope(0);
   ClearQueue;
   FJobs.Free;
   FFinalizationQueue.Free;
@@ -322,19 +388,37 @@ end;
 
 procedure TGocciaMicrotaskQueue.Enqueue(const AMicrotask: TGocciaMicrotask);
 begin
-  EnqueueWithContext(AMicrotask, CurrentAsyncContext);
+  EnqueueInScope(AMicrotask, CurrentAsyncContext, FScopeId);
 end;
 
-procedure TGocciaMicrotaskQueue.EnqueueWithContext(
+{ The index of a hidden scope, or -1 for the current scope and for one that
+  has ended. }
+function TGocciaMicrotaskQueue.FindOuterScope(
+  const AScope: TGocciaMicrotaskScopeId): Integer;
+begin
+  if AScope <> FScopeId then
+    for Result := FOuterScopeCount - 1 downto 0 do
+      if FOuterScopes[Result].Id = AScope then
+        Exit;
+  Result := -1;
+end;
+
+procedure TGocciaMicrotaskQueue.EnqueueInScope(
   const AMicrotask: TGocciaMicrotask;
-  const AContext: TGocciaAsyncContextSnapshot);
+  const AContext: TGocciaAsyncContextSnapshot;
+  const AScope: TGocciaMicrotaskScopeId);
 var
   Task: TGocciaMicrotask;
+  OuterIndex: Integer;
 begin
   Task := AMicrotask;
   Task.Context := AContext;
   AddQueuedRoots(Task);
-  FQueue.Add(Task);
+  OuterIndex := FindOuterScope(AScope);
+  if OuterIndex < 0 then
+    FQueue.Add(Task)
+  else
+    FOuterScopes[OuterIndex].Queue.Add(Task);
 end;
 
 procedure TGocciaMicrotaskQueue.EnqueueJob(const AJob: TGocciaMicrotaskJob);
@@ -378,14 +462,20 @@ begin
 end;
 
 procedure TGocciaMicrotaskQueue.EnqueueFinalizationCleanup(
-  const AMicrotask: TGocciaMicrotask);
+  const AMicrotask: TGocciaMicrotask;
+  const AScope: TGocciaMicrotaskScopeId);
 var
   Task: TGocciaMicrotask;
+  OuterIndex: Integer;
 begin
   Task := AMicrotask;
   Task.Context := CurrentAsyncContext;
   AddQueuedRoots(Task);
-  FFinalizationQueue.Add(Task);
+  OuterIndex := FindOuterScope(AScope);
+  if OuterIndex < 0 then
+    FFinalizationQueue.Add(Task)
+  else
+    FOuterScopes[OuterIndex].FinalizationQueue.Add(Task);
 end;
 
 procedure TGocciaMicrotaskQueue.AddQueuedRoots(
@@ -724,6 +814,55 @@ function TGocciaMicrotaskQueue.HasPending: Boolean;
 begin
   Result := (FHead < FQueue.Count) or
     (FFinalizationHead < FFinalizationQueue.Count);
+end;
+
+function TGocciaMicrotaskQueue.EnterScope: Integer;
+var
+  ScopeQueue, ScopeFinalizationQueue: TList<TGocciaMicrotask>;
+begin
+  { Everything that can fail happens before the current scope is hidden, so a
+    refused allocation leaves the caller's queue exactly as it was. }
+  if FOuterScopeCount >= Length(FOuterScopes) then
+    SetLength(FOuterScopes, FOuterScopeCount * 2 + 4);
+  ScopeQueue := TList<TGocciaMicrotask>.Create;
+  try
+    ScopeFinalizationQueue := TList<TGocciaMicrotask>.Create;
+  except
+    ScopeQueue.Free;
+    raise;
+  end;
+
+  Result := FOuterScopeCount;
+  FOuterScopes[FOuterScopeCount].Id := FScopeId;
+  FOuterScopes[FOuterScopeCount].Queue := FQueue;
+  FOuterScopes[FOuterScopeCount].FinalizationQueue := FFinalizationQueue;
+  FOuterScopes[FOuterScopeCount].Head := FHead;
+  FOuterScopes[FOuterScopeCount].FinalizationHead := FFinalizationHead;
+  Inc(FOuterScopeCount);
+
+  FQueue := ScopeQueue;
+  FFinalizationQueue := ScopeFinalizationQueue;
+  FHead := 0;
+  FFinalizationHead := 0;
+  Inc(FLastScopeId);
+  FScopeId := FLastScopeId;
+end;
+
+procedure TGocciaMicrotaskQueue.LeaveScope(const AToken: Integer);
+begin
+  while FOuterScopeCount > AToken do
+  begin
+    ClearQueue;
+    FFinalizationQueue.Free;
+    FQueue.Free;
+
+    Dec(FOuterScopeCount);
+    FScopeId := FOuterScopes[FOuterScopeCount].Id;
+    FQueue := FOuterScopes[FOuterScopeCount].Queue;
+    FFinalizationQueue := FOuterScopes[FOuterScopeCount].FinalizationQueue;
+    FHead := FOuterScopes[FOuterScopeCount].Head;
+    FFinalizationHead := FOuterScopes[FOuterScopeCount].FinalizationHead;
+  end;
 end;
 
 end.

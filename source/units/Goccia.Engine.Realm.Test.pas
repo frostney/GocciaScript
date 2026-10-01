@@ -29,6 +29,9 @@ type
   TTestEngineRealm = class(TTestSuite)
   private
     FExpectedRealm: TGocciaRealm;
+    FNestedLog: TStringList;
+    FNestedChildSource: string;
+    FNestedChildIsBytecode: Boolean;
     function RunInline(const ASource: string): TGocciaScriptResult;
     function RunRuntimeInline(const ASource: string): TGocciaScriptResult;
     function RealmProbe(const AArgs: TGocciaArgumentsCollection;
@@ -42,6 +45,12 @@ type
       const AExecutor: TGocciaExecutor);
     procedure AssertRepeatedTaggedTemplateExecutionWithExecutor(
       const AExecutor: TGocciaExecutor);
+    function NestedReportProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function NestedRunChildProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure AssertNestedExecuteLeavesOuterJobsWithExecutor(
+      const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
   public
     procedure SetupTests; override;
 
@@ -55,6 +64,8 @@ type
     procedure TestSequentialEnginesHaveFreshURLPrototype;
     procedure TestNestedEngineRestoresOuterRealmOnDestroy;
     procedure TestNestedEngineRestoresOuterAsyncContextOnDestroy;
+    procedure TestInterpreterNestedExecuteLeavesOuterJobs;
+    procedure TestBytecodeNestedExecuteLeavesOuterJobs;
     procedure TestEachEngineGetsADistinctRealm;
     procedure TestInterpreterExecutionContextUsesEngineRealm;
     procedure TestBytecodeExecutionContextUsesEngineRealm;
@@ -89,6 +100,10 @@ begin
     TestNestedEngineRestoresOuterRealmOnDestroy);
   Test('Destroying a nested engine restores the outer async context',
     TestNestedEngineRestoresOuterAsyncContextOnDestroy);
+  Test('Interpreter nested Execute neither runs nor drops the outer jobs',
+    TestInterpreterNestedExecuteLeavesOuterJobs);
+  Test('Bytecode nested Execute neither runs nor drops the outer jobs',
+    TestBytecodeNestedExecuteLeavesOuterJobs);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
   Test('Interpreter execution context uses the engine realm',
@@ -536,6 +551,119 @@ begin
   finally
     InnerExecutor.Free;
     OuterExecutor.Free;
+  end;
+end;
+
+function TTestEngineRealm.NestedReportProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FNestedLog.Add(AArgs.GetElement(0).ToStringLiteral.Value);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ What an embedder's native callback does when it runs another engine to
+  completion: the outer engine is mid-statement for the whole call. }
+function TTestEngineRealm.NestedRunChildProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  ChildEngine: TGocciaEngine;
+  ChildExecutor: TGocciaExecutor;
+  ChildSource: TStringList;
+begin
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  ChildSource := TStringList.Create;
+  ChildSource.Text := FNestedChildSource;
+  if FNestedChildIsBytecode then
+    ChildExecutor := TGocciaBytecodeExecutor.Create
+  else
+    ChildExecutor := TGocciaInterpreterExecutor.Create;
+  ChildEngine := nil;
+  try
+    ChildEngine := TGocciaEngine.Create('<nested-child>', ChildSource,
+      ChildExecutor);
+    ChildEngine.InjectGlobal('report',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedReportProbe,
+        'report', 1));
+    try
+      ChildEngine.Execute;
+    except
+      on E: Exception do
+        FNestedLog.Add('child failed');
+    end;
+  finally
+    ChildEngine.Free;
+    ChildExecutor.Free;
+    ChildSource.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertNestedExecuteLeavesOuterJobsWithExecutor(
+  const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+const
+  OUTER_SOURCE =
+    'Promise.resolve().then(() => report("outer job"));' +
+    'runChild();' +
+    'report("returned");';
+  CHILD_JOB = 'Promise.resolve().then(() => report("child job"));';
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Source.Text := OUTER_SOURCE;
+  FNestedLog := TStringList.Create;
+  FNestedChildIsBytecode := AIsBytecode;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<nested-outer>', Source, AExecutor);
+    Engine.InjectGlobal('report',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedReportProbe,
+        'report', 1));
+    Engine.InjectGlobal('runChild',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedRunChildProbe,
+        'runChild', 0));
+
+    FNestedChildSource := CHILD_JOB;
+    Engine.Execute;
+    Expect<string>(FNestedLog.CommaText).ToBe(
+      '"child job",returned,"outer job"');
+
+    // A child that fails discards its own leftover job, not the outer one.
+    FNestedLog.Clear;
+    FNestedChildSource := CHILD_JOB + 'throw new Error("child failed");';
+    Engine.Execute;
+    Expect<string>(FNestedLog.CommaText).ToBe(
+      '"child failed",returned,"outer job"');
+  finally
+    Engine.Free;
+    FreeAndNil(FNestedLog);
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterNestedExecuteLeavesOuterJobs;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor, False);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeNestedExecuteLeavesOuterJobs;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertNestedExecuteLeavesOuterJobsWithExecutor(Executor, True);
+  finally
+    Executor.Free;
   end;
 end;
 
