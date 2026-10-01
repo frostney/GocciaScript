@@ -4800,8 +4800,13 @@ begin
       CaseClause := AStmt.Cases[I];
 
       // All clauses share one scope, and a clause can be entered without
-      // running the declarations of the clauses before it.
+      // All clauses share one scope, and a clause can be entered without
+      // running the declarations of the clauses before it. A read in a later
+      // clause must therefore observe the TDZ: it may neither use the
+      // register of such a declaration directly nor be replaced by a constant
+      // tracked for it.
       ACtx.Scope.ClearInitializedAtDepth(ACtx.Scope.Depth);
+      ACtx.Scope.ClearConstantValuesAtDepth(ACtx.Scope.Depth);
 
       if I = DefaultIndex then
       begin
