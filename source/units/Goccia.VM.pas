@@ -8010,7 +8010,7 @@ var
   I: Integer;
   TemplateKey: string;
 begin
-  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex)^;
   Slot := Integer(Constant.IntValue);
   TemplateKey := 'bc:' + IntToHex(ATemplate.TemplateSiteId, 16) + ':' +
     IntToStr(Slot);
@@ -8070,7 +8070,7 @@ var
   Slot: Integer;
   Cached, UpdatedCache: TObject;
 begin
-  Constant := ATemplate.GetConstantUnchecked(AConstantIndex);
+  Constant := ATemplate.GetConstantUnchecked(AConstantIndex)^;
   Slot := Integer(Constant.IntValue);
   Cached := ATemplate.GetRegExpProgramCache(Slot);
   Result := CreateRegExpLiteralObject(
@@ -8389,7 +8389,7 @@ begin
 
   for I := 0 to ATemplate.ConstantCount - 1 do
   begin
-    ConstantValue := ATemplate.GetConstantUnchecked(I);
+    ConstantValue := ATemplate.GetConstantUnchecked(I)^;
     if (ConstantValue.Kind = bckString) and
        IsBytecodePrivateKey(ConstantValue.StringValue) then
       DeclareBytecodePrivateNameForClass(AClassValue, ConstantValue.StringValue);
@@ -14359,7 +14359,7 @@ var
   DoneFlag: Boolean;
   Running: Boolean;
   Template: TGocciaFunctionTemplate;
-  Constant: TGocciaBytecodeConstant;
+  Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;
