@@ -34,6 +34,8 @@ type
     property IsAccessible: Boolean read CanAccess;
   end;
 
+  PLexicalBinding = ^TLexicalBinding;
+
   TGocciaScopeBindingMap = TOrderedStringMap<TLexicalBinding>;
 
 implementation

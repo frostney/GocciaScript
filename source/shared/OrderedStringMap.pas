@@ -166,7 +166,16 @@ type
     function TryGetEntryIndex(const AKey: string; out AIndex: Integer): Boolean;
     function TryGetValueAtEntry(const AIndex: Integer;
       out AValue: TValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    // Address of the live value at an entry index, or nil when the index is
+    // out of range or the entry is inactive. Same EntryVersion pairing as
+    // TryGetValueAtEntry, without copying the value or default-filling a
+    // miss; the address is valid only until the map is next mutated.
+    function ValueAddressAtEntry(const AIndex: Integer): Pointer; {$IFDEF FPC}inline;{$ENDIF}
     function KeyAtEntry(const AIndex: Integer): string;
+    // Re-stamp EntryVersion for a change that keeps every entry index but
+    // alters what a cached entry stands for, so entry-index inline caches
+    // revalidate through a named lookup.
+    procedure InvalidateEntryIndexCaches; {$IFDEF FPC}inline;{$ENDIF}
 
     property Capacity: Integer read FBucketCount;
     property DeletedCount: Integer read FDeletedCount;
@@ -641,12 +650,26 @@ begin
     AValue := Default(TValue);
 end;
 
+function TOrderedStringMap<TValue>.ValueAddressAtEntry(
+  const AIndex: Integer): Pointer;
+begin
+  if (AIndex >= 0) and (AIndex < FEntryCount) and FEntries[AIndex].Active then
+    Result := @FEntries[AIndex].Value
+  else
+    Result := nil;
+end;
+
 function TOrderedStringMap<TValue>.KeyAtEntry(const AIndex: Integer): string;
 begin
   if (AIndex >= 0) and (AIndex < FEntryCount) then
     Result := FEntries[AIndex].Key
   else
     Result := '';
+end;
+
+procedure TOrderedStringMap<TValue>.InvalidateEntryIndexCaches;
+begin
+  FEntryVersion := NextEntryVersion;
 end;
 
 end.
