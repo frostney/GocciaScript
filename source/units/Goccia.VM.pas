@@ -1746,19 +1746,17 @@ end;
 
 function VMValueToRegisterFast(const AValue: TGocciaValue): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
+  ValueClass: TClass;
   NumberValue: Double;
 begin
-  if not Assigned(AValue) or (AValue is TGocciaUndefinedLiteralValue) then
+  if not Assigned(AValue) then
     Exit(RegisterUndefined);
-  if AValue is TGocciaNullLiteralValue then
-    Exit(RegisterNull);
-  if AValue = TGocciaHoleValue.HoleValue then
-    Exit(RegisterHole);
-  if AValue = TGocciaBooleanLiteralValue.TrueValue then
-    Exit(RegisterBoolean(True));
-  if AValue = TGocciaBooleanLiteralValue.FalseValue then
-    Exit(RegisterBoolean(False));
-  if AValue is TGocciaNumberLiteralValue then
+  // The primitive value classes have no descendants, so an exact class
+  // compare answers `is` without walking the parent chain: a heap object
+  // costs one class load and five pointer compares rather than three failed
+  // inheritance walks and three thread-local singleton reads.
+  ValueClass := AValue.ClassType;
+  if ValueClass = TGocciaNumberLiteralValue then
   begin
     NumberValue := TGocciaNumberLiteralValue(AValue).Value;
     if NumberValue = 0.0 then
@@ -1769,14 +1767,28 @@ begin
     end;
     if NumberValue = 1.0 then
       Exit(RegisterInt(1));
-    if (not TGocciaNumberLiteralValue(AValue).IsNaN) and
-       (not TGocciaNumberLiteralValue(AValue).IsInfinite) and
-       (Frac(NumberValue) = 0.0) and
-       (NumberValue >= Low(LongInt)) and
-       (NumberValue <= High(LongInt)) then
+    // NaN and both infinities fail the range test, and a finite value in
+    // range is integral exactly when truncation leaves it unchanged.
+    if (NumberValue >= Low(LongInt)) and
+       (NumberValue <= High(LongInt)) and
+       (Trunc(NumberValue) = NumberValue) then
       Exit(RegisterInt(Trunc(NumberValue)));
     Exit(RegisterFloat(NumberValue));
   end;
+  if ValueClass = TGocciaUndefinedLiteralValue then
+    Exit(RegisterUndefined);
+  if ValueClass = TGocciaNullLiteralValue then
+    Exit(RegisterNull);
+  if ValueClass = TGocciaBooleanLiteralValue then
+  begin
+    if AValue = TGocciaBooleanLiteralValue.TrueValue then
+      Exit(RegisterBoolean(True));
+    if AValue = TGocciaBooleanLiteralValue.FalseValue then
+      Exit(RegisterBoolean(False));
+  end
+  else if (ValueClass = TGocciaHoleValue) and
+          (AValue = TGocciaHoleValue.HoleValue) then
+    Exit(RegisterHole);
   Result := RegisterObject(AValue);
 end;
 
