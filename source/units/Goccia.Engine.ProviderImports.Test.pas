@@ -31,14 +31,9 @@ uses
   Goccia.Packages.Store,
   Goccia.Packages.Transport,
   Goccia.Runtime,
-  Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.FFI,
-  Goccia.RuntimeExtensions.JSON5,
-  Goccia.RuntimeExtensions.JSONL,
-  Goccia.RuntimeExtensions.TOML,
-  Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
-  Goccia.RuntimeExtensions.YAML,
+  Goccia.RuntimeProfiles.Loader,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
@@ -59,6 +54,43 @@ const
   LIBRARY_SUFFIX = '.so';
   {$ENDIF}
   {$ENDIF}
+
+type
+  { A package file with a module extension that a runtime extension
+    registers. Read is the expression that yields Name from the imported
+    namespace `m`. }
+  TRuntimeModuleFixture = record
+    Path: string;
+    Content: string;
+    Tampered: string;
+    Read: string;
+    Name: string;
+  end;
+
+const
+  { One per file extension the loader profile registers. The verify-on-load
+    test fails for a registered extension that has no fixture here. }
+  RUNTIME_MODULE_FIXTURES: array[0..9] of TRuntimeModuleFixture = (
+    (Path: 'vendor/config.toml'; Content: 'name = "toml"';
+     Tampered: 'name = "evil"'; Read: 'm.name'; Name: 'toml'),
+    (Path: 'vendor/config.yaml'; Content: 'name: yaml';
+     Tampered: 'name: evil'; Read: 'm.name'; Name: 'yaml'),
+    (Path: 'vendor/config.yml'; Content: 'name: yml';
+     Tampered: 'name: evil'; Read: 'm.name'; Name: 'yml'),
+    (Path: 'vendor/config.json5'; Content: '{ name: "json5" }';
+     Tampered: '{ name: "evil" }'; Read: 'm.name'; Name: 'json5'),
+    (Path: 'vendor/config.jsonc'; Content: '{ "name": "jsonc" } // pinned';
+     Tampered: '{ "name": "evil" }'; Read: 'm.name'; Name: 'jsonc'),
+    (Path: 'vendor/rows.csv'; Content: 'name' + #10 + 'csv';
+     Tampered: 'name' + #10 + 'evil'; Read: 'm[0].name'; Name: 'csv'),
+    (Path: 'vendor/rows.tsv'; Content: 'name' + #10 + 'tsv';
+     Tampered: 'name' + #10 + 'evil'; Read: 'm[0].name'; Name: 'tsv'),
+    (Path: 'vendor/rows.jsonl'; Content: '{"name": "jsonl"}';
+     Tampered: '{"name": "evil"}'; Read: 'm[0].name'; Name: 'jsonl'),
+    (Path: 'vendor/notes.txt'; Content: 'txt';
+     Tampered: 'evil'; Read: 'm.content'; Name: 'txt'),
+    (Path: 'vendor/notes.md'; Content: 'md';
+     Tampered: 'evil'; Read: 'm.content'; Name: 'md'));
 
 type
   TRunOutcome = record
@@ -91,7 +123,7 @@ type
     FEvents: TStringList;
     FCachedOnly: Boolean;
     FInstallFFI: Boolean;
-    FInstallDataFormats: Boolean;
+    FInstallLoaderProfile: Boolean;
     FSwapPath: string;
     FSwapText: string;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
@@ -103,6 +135,7 @@ type
       const ACapabilities: TGocciaCapabilities;
       const ABytecode: Boolean): TRunOutcome;
     function HasEvent(const AEvent: string): Boolean;
+    function LoaderProfileModuleExtensions: TStringList;
     procedure WritePackage;
     procedure TestExactEntryRunsWithGrant;
     procedure TestCachedPackageNeedsNoNetwork;
@@ -119,7 +152,7 @@ type
     procedure TestFFIOpensAVerifiedPackageLibraryByURL;
     procedure TestFFIRefusesATamperedPackageLibrary;
     procedure TestReloadOfATamperedFileReportsTheChange;
-    procedure TestVerifyOnLoadCoversRuntimeDataModules;
+    procedure TestVerifyOnLoadCoversEveryRuntimeModuleExtension;
     procedure TestImportMetaResolveOfAProviderKeyIsLexical;
     procedure TestComputedImportsThroughAProviderNeedOnlyImport;
     procedure TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
@@ -243,8 +276,8 @@ begin
     TestFFIRefusesATamperedPackageLibrary);
   Test('Reloading a file tampered after it was loaded reports the change',
     TestReloadOfATamperedFileReportsTheChange);
-  Test('Verify on load covers TOML, YAML, JSON5, CSV, TSV and JSONL modules',
-    TestVerifyOnLoadCoversRuntimeDataModules);
+  Test('Verify on load covers every module extension of the loader profile',
+    TestVerifyOnLoadCoversEveryRuntimeModuleExtension);
   Test('import.meta.resolve of a provider key answers with its address',
     TestImportMetaResolveOfAProviderKeyIsLexical);
   Test('A computed import through a provider needs only the import grant',
@@ -283,13 +316,14 @@ begin
   FTransport.Requests := 0;
   FCachedOnly := False;
   FInstallFFI := False;
-  FInstallDataFormats := False;
+  FInstallLoaderProfile := False;
   FSwapPath := '';
 end;
 
 procedure TProviderImportTests.WritePackage;
 var
   Artifacts: string;
+  I: Integer;
 
   procedure AddFile(const APath, AText: string);
   begin
@@ -328,13 +362,10 @@ begin
     'export const open = () => FFI.open(new URL("../native/libfixture" + ' +
     'FFI.suffix, import.meta.url));');
   AddFile('index.ts', 'export const root = "root";');
-  { Data modules parsed by runtime extensions rather than the module loader. }
-  AddFile('vendor/config.toml', 'name = "toml"');
-  AddFile('vendor/config.yaml', 'name: yaml');
-  AddFile('vendor/config.json5', '{ name: "json5" }');
-  AddFile('vendor/rows.csv', 'name' + #10 + 'csv');
-  AddFile('vendor/rows.tsv', 'name' + #10 + 'tsv');
-  AddFile('vendor/rows.jsonl', '{"name": "jsonl"}');
+  { Files whose module extensions the runtime extensions register. }
+  for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+    AddFile(RUNTIME_MODULE_FIXTURES[I].Path,
+      RUNTIME_MODULE_FIXTURES[I].Content);
   AddFile('bindings/dyn.ts',
     'export const load = (name) => import("./" + name);');
   { Relative specifiers that leave the package and land where a path key of
@@ -449,15 +480,8 @@ begin
       Runtime.Install(TGocciaURLRuntimeExtension.Create);
       InstallFFIIfGranted(Runtime);
     end;
-    if FInstallDataFormats then
-    begin
-      Runtime.Install(TGocciaCSVRuntimeExtension.Create);
-      Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
-      Runtime.Install(TGocciaJSONLRuntimeExtension.Create);
-      Runtime.Install(TGocciaTOMLRuntimeExtension.Create);
-      Runtime.Install(TGocciaTSVRuntimeExtension.Create);
-      Runtime.Install(TGocciaYAMLRuntimeExtension.Create);
-    end;
+    if FInstallLoaderProfile then
+      ApplyLoaderRuntimeProfile(Runtime);
     Engine.RegisterGlobal('swap',
       TGocciaNativeFunctionValue.Create(Swap, 'swap', 0));
     Engine.Resolver.ProviderTransport := FTransport;
@@ -772,51 +796,111 @@ begin
   end;
 end;
 
-{ Runtime extensions parse these formats, not the module loader; they must
-  parse the bytes verified against the pin, like every other package file. }
-procedure TProviderImportTests.TestVerifyOnLoadCoversRuntimeDataModules;
-const
-  DATA_FILES: array[0..5] of string = ('vendor/config.toml',
-    'vendor/config.yaml', 'vendor/config.json5', 'vendor/rows.csv',
-    'vendor/rows.tsv', 'vendor/rows.jsonl');
-  DATA_NAMES: array[0..5] of string = ('toml', 'yaml', 'json5', 'csv', 'tsv',
-    'jsonl');
-  TAMPERED_TEXT: array[0..5] of string = ('name = "evil"', 'name: evil',
-    '{ name: "evil" }', 'name' + #10 + 'evil', 'name' + #10 + 'evil',
-    '{"name": "evil"}');
-  READ_NAME = 'globalThis.result = ("name" in m) ? m.name : m[0].name;';
+{ The file extensions the loader profile's runtime extensions register as
+  modules, lowercased. The caller owns the list. }
+function TProviderImportTests.LoaderProfileModuleExtensions: TStringList;
+var
+  Collected: TStringList;
+  Engine: TGocciaEngine;
+  Executor: TGocciaExecutor;
+  I: Integer;
+  Runtime: TGocciaRuntimeCore;
+  Source: TStringList;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.Duplicates := dupIgnore;
+  Collected := TStringList.Create;
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+    TGocciaCapabilities.None);
+  try
+    Runtime := AttachRuntime(Engine);
+    ApplyLoaderRuntimeProfile(Runtime);
+    Runtime.CollectModuleExtensions(Collected);
+    for I := 0 to Collected.Count - 1 do
+      Result.Add(LowerCase(Collected[I]));
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+    Collected.Free;
+  end;
+end;
+
+{ A file with an extension that a runtime extension registers is parsed from
+  the bytes verified against the pin, like every other package file, whether
+  the extension loads it or the module loader does. The cases come from what
+  the loader profile registers, so a loader added to it fails here until it
+  has a fixture, and then has to pass. }
+procedure TProviderImportTests.TestVerifyOnLoadCoversEveryRuntimeModuleExtension;
 var
   Bytecode: Boolean;
+  Covered: TStringList;
+  Extension: string;
+  Extensions: TStringList;
+  Fixture: TRuntimeModuleFixture;
   I: Integer;
   Outcome: TRunOutcome;
+  Refused: Integer;
 begin
-  FInstallDataFormats := True;
-  for Bytecode := False to True do
-    for I := Low(DATA_FILES) to High(DATA_FILES) do
+  Extensions := LoaderProfileModuleExtensions;
+  Covered := TStringList.Create;
+  try
+    for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
     begin
-      { Untampered, the extension loads the pinned bytes. }
+      Extension := ExtractFileExt(RUNTIME_MODULE_FIXTURES[I].Path);
+      Covered.Add(Extension);
+      { A fixture for an extension nothing registers proves nothing. }
+      if Extensions.IndexOf(Extension) < 0 then
+        Fail('The loader profile registers no module extension ' +
+          Extension + '; remove its fixture or install its loader');
+    end;
+    for I := 0 to Extensions.Count - 1 do
+      if Covered.IndexOf(Extensions[I]) < 0 then
+        Fail('No verify-on-load fixture for the module extension ' +
+          Extensions[I] + '; add one to RUNTIME_MODULE_FIXTURES');
+  finally
+    Covered.Free;
+    Extensions.Free;
+  end;
+
+  FInstallLoaderProfile := True;
+  Refused := 0;
+  for Bytecode := False to True do
+    for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+    begin
+      Fixture := RUNTIME_MODULE_FIXTURES[I];
+      { Untampered, the pinned bytes load. }
       FSwapPath := '';
       Outcome := Run('import { value } from "raylib";' + sLineBreak +
-        'const m = await import("raypkg/' + DATA_FILES[I] + '");' +
-        sLineBreak + READ_NAME,
+        'const m = await import("raypkg/' + Fixture.Path + '");' +
+        sLineBreak + 'globalThis.result = ' + Fixture.Read + ';',
         TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
-      Expect<string>(Outcome.ErrorMessage).ToBe('');
-      Expect<string>(Outcome.Result).ToBe(DATA_NAMES[I]);
+      { Fail rather than Expect, so that the message names the file. }
+      if (Outcome.ErrorMessage <> '') or (Outcome.Result <> Fixture.Name) then
+        Fail(Fixture.Path + ' did not load its pinned content: got "' +
+          Outcome.Result + '", error "' + Outcome.ErrorMessage + '"');
 
       { Tampered after materialization, it is refused before parsing. }
-      FSwapPath := CachePath(DATA_FILES[I]);
-      FSwapText := TAMPERED_TEXT[I];
+      FSwapPath := CachePath(Fixture.Path);
+      FSwapText := Fixture.Tampered;
       Outcome := Run('import { value } from "raylib";' + sLineBreak +
         'swap();' + sLineBreak +
-        'try { const m = await import("raypkg/' + DATA_FILES[I] + '");' +
-        sLineBreak + READ_NAME + ' }' + sLineBreak +
-        'catch (error) { globalThis.result = error.message; }',
+        'try { const m = await import("raypkg/' + Fixture.Path + '");' +
+        sLineBreak + 'globalThis.result = ' + Fixture.Read + '; }' +
+        sLineBreak + 'catch (error) { globalThis.result = error.message; }',
         TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
-      Expect<string>(Outcome.Result).ToBe('Provider package file ' +
-        PACKAGE_KEY + '/' + DATA_FILES[I] + ' changed after it was verified');
+      if Outcome.Result <> 'Provider package file ' + PACKAGE_KEY + '/' +
+         Fixture.Path + ' changed after it was verified' then
+        Fail(Fixture.Path + ' was not refused after it changed: got "' +
+          Outcome.Result + '"');
+      Inc(Refused);
       { Materialize afresh for the next file. }
       DeleteTree(ProjectPath('.goccia/packages'));
     end;
+  Expect<Integer>(Refused).ToBe(2 * Length(RUNTIME_MODULE_FIXTURES));
 end;
 
 procedure TProviderImportTests.TestImportMetaResolveOfAProviderKeyIsLexical;

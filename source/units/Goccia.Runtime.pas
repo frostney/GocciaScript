@@ -80,6 +80,9 @@ type
       TGocciaRuntimeExtension;
     function FindRuntimeExtension(
       const AClass: TGocciaRuntimeExtensionClass): TGocciaRuntimeExtension;
+    { Adds the file extensions the installed runtime extensions load as
+      modules. The list is the caller's; set its duplicate handling there. }
+    procedure CollectModuleExtensions(const AExtensions: TStrings);
 
     procedure RegisterRuntimeGlobalName(const AName: string);
     procedure RegisterGlobalsFromObject(const AValue: TGocciaObjectValue;
@@ -320,6 +323,15 @@ begin
   Inc(ACount);
 end;
 
+procedure TGocciaRuntimeCore.CollectModuleExtensions(
+  const AExtensions: TStrings);
+var
+  I: Integer;
+begin
+  for I := 0 to FExtensions.Count - 1 do
+    FExtensions[I].AddModuleExtensions(AExtensions);
+end;
+
 procedure TGocciaRuntimeCore.RefreshModuleExtensions;
 var
   Count: Integer;
@@ -340,8 +352,7 @@ begin
   try
     RuntimeExtensions.CaseSensitive := False;
     RuntimeExtensions.Duplicates := dupIgnore;
-    for I := 0 to FExtensions.Count - 1 do
-      FExtensions[I].AddModuleExtensions(RuntimeExtensions);
+    CollectModuleExtensions(RuntimeExtensions);
     for I := 0 to RuntimeExtensions.Count - 1 do
       AddResolverExtension(Extensions, Count, RuntimeExtensions[I]);
   finally
