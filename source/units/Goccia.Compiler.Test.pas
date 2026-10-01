@@ -80,6 +80,11 @@ type
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
     procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
+    procedure TestInitializedConstOperandsSkipGetLocal;
+    procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
+    procedure TestSwitchClauseForgetsInitializedConsts;
+    procedure TestCoverageKeepsConstOperandCopies;
+    procedure TestDiscardedStoreSkipsResultMove;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
@@ -148,6 +153,16 @@ begin
   Test('Compile arithmetic', TestCompileArithmetic);
   Test('Compile variable', TestCompileVariable);
   Test('Compile function', TestCompileFunction);
+  Test('Initialized const operands skip OP_GET_LOCAL',
+    TestInitializedConstOperandsSkipGetLocal);
+  Test('Const operands before the declaration keep OP_GET_LOCAL',
+    TestConstOperandsBeforeDeclarationKeepGetLocal);
+  Test('Switch clause forgets initialized consts',
+    TestSwitchClauseForgetsInitializedConsts);
+  Test('Coverage keeps const operand copies',
+    TestCoverageKeepsConstOperandCopies);
+  Test('Discarded store skips the result move',
+    TestDiscardedStoreSkipsResultMove);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -702,6 +717,103 @@ begin
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL_PROP_CONST)).ToBe(1);
       Expect<Integer>(CountOp(Func, OP_GET_PROP_CONST)).ToBe(0);
       Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestInitializedConstOperandsSkipGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (p, q) => { const a = p.x; const b = q.x; ' +
+    'return a * b + a; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstOperandsBeforeDeclarationKeepGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const early = (p) => { const r = a * p.x; const a = p.y; return r; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // The early read of `a` keeps its TDZ check; the other is `return r`.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestSwitchClauseForgetsInitializedConsts;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const pick = (p) => { switch (p.k) { ' +
+    'case 0: const a = p.x; return a * a; ' +
+    'case 1: return a * p.y; } return 0; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // Only the read in the second clause still needs its TDZ check.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCoverageKeepsConstOperandCopies;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (p, q) => { const a = p.x; const b = q.x; ' +
+    'return a * b + a; };', False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDiscardedStoreSkipsResultMove;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const store = (p, q) => { const list = p.items; const value = q.x; ' +
+    'list[0] = value; p.last = value; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ARRAY_SET);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      // The two declarations move their initializer into the binding; the
+      // two stores move nothing.
+      Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
     end;
   finally
     Module.Free;

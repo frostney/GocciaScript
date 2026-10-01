@@ -90,9 +90,13 @@ describe("const temporal dead zone", () => {
 });
 
 describe("const bindings as operands", () => {
+  // The initializers go through a call so the compiler cannot fold the
+  // expressions below into constants.
+  const pass = (value) => value;
+
   test("arithmetic, comparison and logical operands read the declared value", () => {
-    const a = 7;
-    const b = 3;
+    const a = pass(7);
+    const b = pass(3);
     expect(a + b).toBe(10);
     expect(a - b).toBe(4);
     expect(a * b).toBe(21);
@@ -116,11 +120,42 @@ describe("const bindings as operands", () => {
   });
 
   test("the same binding can be both operands", () => {
-    const value = 6;
+    const value = pass(6);
     expect(value + value).toBe(12);
     expect(value * value).toBe(36);
     expect(value === value).toBe(true);
     expect(value < value).toBe(false);
+  });
+
+  test("float and mixed numeric operands keep their precision", () => {
+    const half = pass(0.5);
+    const third = pass(1 / 3);
+    const big = pass(2 ** 40);
+    expect(half + third).toBe(0.5 + 1 / 3);
+    expect(third * 3).toBe(1);
+    expect(big + half).toBe(1099511627776.5);
+    expect(big * big).toBe(2 ** 80);
+    expect(half - 1).toBe(-0.5);
+    expect(1 + half).toBe(1.5);
+    expect(big % 7).toBe(2);
+    expect(half < third).toBe(false);
+    expect(third <= half).toBe(true);
+  });
+
+  test("a comparison of bindings decides a branch and a conditional", () => {
+    const low = pass(1);
+    const high = pass(2);
+    const taken = [];
+    if (low < high) {
+      taken.push("if");
+    }
+    if (high < low) {
+      taken.push("not taken");
+    } else {
+      taken.push("else");
+    }
+    taken.push(low < high ? "then" : "otherwise");
+    expect(taken).toEqual(["if", "else", "then"]);
   });
 
   test("non-numeric values keep generic operator semantics", () => {
