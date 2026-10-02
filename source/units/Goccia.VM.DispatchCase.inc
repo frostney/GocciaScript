@@ -957,12 +957,6 @@
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
           RightValue := RegisterToValue(FRegisters[C]);
-          // A receiver of one of the three cached classes is not a class
-          // value; the exact comparisons spare it the class-chain walk.
-          if (not VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue)) and
-             (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
-            SetBytecodeHomeObject(RightValue,
-              RegisterToValue(FRegisters[A]));
           // Own writable-data write IC: (shape, entry index), same receiver
           // gate as the read cache. Hits skip the name hash. Accessors,
           // proxies, private fields, deletion, and non-writable descriptors
@@ -1052,9 +1046,6 @@
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        if (TargetValue is TGocciaClassValue) or
-           (TargetValue is TGocciaObjectValue) then
-          SetBytecodeHomeObject(RightValue, TargetValue);
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
@@ -1372,9 +1363,6 @@
         OperandRoots.Add(RightValue);
         OperandRoots.Add(TargetValue);
         try
-          if (TargetValue is TGocciaClassValue) or
-             (TargetValue is TGocciaObjectValue) then
-            SetBytecodeHomeObject(RightValue, TargetValue);
           if not ((TargetValue is TGocciaArrayValue) and
                   (FRegisters[B].Kind = grkInt) and
                   (FRegisters[B].IntValue >= 0) and
