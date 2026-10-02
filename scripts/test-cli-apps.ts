@@ -1432,6 +1432,11 @@ await section("Test262 Runner: operands see writes made by functions that direct
           'out.push("createdInLoop " + createdInLoop(1));',
           'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
           'out.push("inOperand " + inOperand(1));',
+          // The writer outlives the call that created it, and the second call
+          // reads its operand before it reaches its own eval.
+          "var saved;",
+          'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
+          'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
           'print(out.join("\n"));',
           "",
         ].join("\n")),
@@ -1439,7 +1444,7 @@ await section("Test262 Runner: operands see writes made by functions that direct
         stderr: "pipe",
       },
     );
-    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4"].join("\n");
+    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4", "beforeEval 1 2"].join("\n");
     if (proc.exitCode !== 0)
       throw new Error(`Test262 Runner ${mode} eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)

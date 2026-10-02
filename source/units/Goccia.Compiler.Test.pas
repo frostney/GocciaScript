@@ -934,6 +934,15 @@ begin
   // before the eval call and the const stay in place.
   Expect<Integer>(CopiesIn(
     'const f = (a) => { const before = a * 2; eval("0"); return a * 3 + before; };')).ToBe(1);
+
+  // In a loop the eval call comes back around, so the reads compiled ahead of
+  // it are copied as well: t and a in `t + a * 2`. The loop is examined before
+  // it is compiled. Both loops copy `items` to iterate over it.
+  Expect<Integer>(
+    CopiesIn(
+      'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; eval("0"); } return t; };') -
+    CopiesIn(
+      'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; evil("0"); } return t; };')).ToBe(2);
 end;
 
 procedure TTestCompiler.TestMethodParameterOperandsSkipGetLocal;

@@ -10,6 +10,12 @@ unit Goccia.Compiler.OperandSafety;
 // is not listed, including one added to the AST later, is rejected. Rejecting
 // costs a register copy. Accepting wrongly would read a stale value, so the
 // default has to be the copy.
+//
+// The compiler has older walkers that ask related questions as deny-lists
+// (StatementNeedsPerIterationEnvironment, ExpressionCreatesClosureBoundary,
+// ExpressionContainsDirectEval). They are not reused here: for them a node
+// class nobody listed means "no closure, no eval", which is the unsafe answer
+// for this purpose.
 
 interface
 

@@ -71,7 +71,6 @@ uses
   Goccia.Profiler,
   Goccia.Realm,
   Goccia.Scope.Redeclaration,
-  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue;
 
 { TGocciaBytecodeExecutor }
@@ -209,15 +208,13 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
-// Ordinary realms have no `eval`; a host that offers direct eval installs it
-// on the global object (the Test262 host, and a ShadowRealm created from such
-// a realm). A script that defines a global named eval itself only costs the
-// code compiled afterwards an optimization.
+// Ordinary realms have no `eval`. A host that offers direct eval (the Test262
+// host, and a ShadowRealm created from such a realm) says so on the realm when
+// it installs the function; the global `eval` property itself is not asked,
+// because a script can delete or move it while eval-created code lives on.
 function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
 begin
-  Result := Assigned(FRealm) and
-    (FRealm.GlobalObject is TGocciaObjectValue) and
-    TGocciaObjectValue(FRealm.GlobalObject).HasOwnProperty('eval');
+  Result := Assigned(FRealm) and FRealm.HostsDirectEval;
 end;
 
 function TGocciaBytecodeExecutor.CompileModule(
