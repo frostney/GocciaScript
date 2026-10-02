@@ -241,12 +241,12 @@ type
       const AConstantIndex: Integer): TGocciaValue;
     function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
-    procedure AcquireRegisters(const ACount: Integer);
-    procedure AcquireLocalCells(const ACount: Integer);
+    procedure AcquireRegisters(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure AcquireLocalCells(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure ClearStaleLocalCells(const AStart, AEnd: Integer);
     procedure NoteLocalCells(const AWindowCount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     function LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
-    procedure AcquireArgumentWindow(const ACount: Integer);
+    procedure AcquireArgumentWindow(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);

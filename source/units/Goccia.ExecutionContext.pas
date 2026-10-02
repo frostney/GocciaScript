@@ -26,7 +26,31 @@ type
     property SourcePath: string read GetSourcePath;
   end;
 
+  { The two records below are the context stack's own storage. They are
+    declared here only so that the call-path push and pop can be inlined into
+    the bytecode VM; nothing outside this unit should read or write them. }
+  TGocciaExecutionContextStackEntry = record
+    Context: TGocciaExecutionContext;
+    PreviousRealm: TGocciaRealm;
+  end;
+  PGocciaExecutionContextStackEntry = ^TGocciaExecutionContextStackEntry;
+
+  // The stack and its depth live in one thread variable. Every reference to a
+  // thread variable is a thread-local lookup, and Push and Pop run on each VM
+  // call, so they resolve this record once and work through the pointer.
+  TGocciaExecutionContextThreadState = record
+    Entries: array of TGocciaExecutionContextStackEntry;
+    Count: Integer;
+    // Goccia.Realm's current-realm variable for this thread, resolved by
+    // ThreadState so the call-path push and pop switch realms through it.
+    RealmSlot: PGocciaRealm;
+  end;
+  PGocciaExecutionContextThreadState = ^TGocciaExecutionContextThreadState;
+
   TGocciaExecutionContextStack = class
+  private
+    class procedure RaiseRealmRequired; static;
+    class procedure RaiseUnderflow; static;
   public
     class procedure Push(const AContext: TGocciaExecutionContext); static;
     class function Pop: TGocciaExecutionContext; static;
@@ -47,8 +71,10 @@ type
     class function ThreadState: Pointer; static;
     class procedure PushFunctionContext(const AThreadState: Pointer;
       const ARealm: TGocciaRealm; const AScope: TGocciaScope;
-      const AFunctionValue: TGocciaValue; const ASourcePathRef: Pointer); static;
-    class procedure PopFunctionContext(const AThreadState: Pointer); static;
+      const AFunctionValue: TGocciaValue; const ASourcePathRef: Pointer);
+      static; {$IFDEF FPC}inline;{$ENDIF}
+    class procedure PopFunctionContext(const AThreadState: Pointer);
+      static; {$IFDEF FPC}inline;{$ENDIF}
   end;
 
   TGocciaExecutionContextScope = class
@@ -93,24 +119,6 @@ type
     Next: PGocciaInternedSourcePath;
     Value: UnicodeString;
   end;
-
-  TGocciaExecutionContextStackEntry = record
-    Context: TGocciaExecutionContext;
-    PreviousRealm: TGocciaRealm;
-  end;
-  PGocciaExecutionContextStackEntry = ^TGocciaExecutionContextStackEntry;
-
-  // The stack and its depth live in one thread variable. Every reference to a
-  // thread variable is a thread-local lookup, and Push and Pop run on each VM
-  // call, so they resolve this record once and work through the pointer.
-  TGocciaExecutionContextThreadState = record
-    Entries: array of TGocciaExecutionContextStackEntry;
-    Count: Integer;
-    // Goccia.Realm's current-realm variable for this thread, resolved by
-    // ThreadState so the call-path push and pop switch realms through it.
-    RealmSlot: PGocciaRealm;
-  end;
-  PGocciaExecutionContextThreadState = ^TGocciaExecutionContextThreadState;
 
 threadvar
   // Non-owning context stack.  Scope and FunctionValue are GC-managed objects
@@ -249,6 +257,24 @@ begin
   SetCurrentRealm(PreviousRealm);
 end;
 
+{ The failure branches of the inlined call-path push and pop. They are kept
+  out of line so that inlining those two into the VM's frame setup and
+  teardown brings no exception construction with it. Automatic inlining is
+  switched off for them and back on after them by name: FPC 3.2.2 does not
+  save optimizer switches on $PUSH, so a $POP would leave it off for the rest
+  of the unit. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+class procedure TGocciaExecutionContextStack.RaiseRealmRequired;
+begin
+  raise Exception.Create('Execution context requires a realm.');
+end;
+
+class procedure TGocciaExecutionContextStack.RaiseUnderflow;
+begin
+  raise Exception.Create('Execution context stack underflow.');
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
+
 class function TGocciaExecutionContextStack.ThreadState: Pointer;
 var
   State: PGocciaExecutionContextThreadState;
@@ -268,7 +294,7 @@ var
   Entry: PGocciaExecutionContextStackEntry;
 begin
   if not Assigned(ARealm) then
-    raise Exception.Create('Execution context requires a realm.');
+    RaiseRealmRequired;
 
   State := PGocciaExecutionContextThreadState(AThreadState);
   if State^.Count >= Length(State^.Entries) then
@@ -294,7 +320,7 @@ var
 begin
   State := PGocciaExecutionContextThreadState(AThreadState);
   if State^.Count <= 0 then
-    raise Exception.Create('Execution context stack underflow.');
+    RaiseUnderflow;
 
   Dec(State^.Count);
   Entry := @State^.Entries[State^.Count];

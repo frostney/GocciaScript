@@ -54,7 +54,7 @@ type
     procedure Push(const AFunctionName, AFilePath: string; const ALine, AColumn: Integer);
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
-    procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string);
+    procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
     { Stamps the currently executing frame with a source position.
 
       A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
@@ -72,7 +72,7 @@ type
       statement's diagnostics. }
     function TryGetTopFrame(var AFrame: TGocciaCallFrame): Boolean;
     procedure SetTopFrame(const AFrame: TGocciaCallFrame);
-    procedure Pop;
+    procedure Pop; {$IFDEF FPC}inline;{$ENDIF}
 
     // Registers the resolver used to materialise deferred template frames.
     // Class-level: one registration applies to every thread's instance.
