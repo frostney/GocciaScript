@@ -2385,6 +2385,93 @@ begin
   end;
 end;
 
+// ES2026 §7.2.14 IsStrictlyEqual(x, y) decided on the registers, for the
+// operand pairs where materializing a value could not change the answer.
+//
+// vseUndecided sends the pair to the generic helper. That is every pair this
+// function cannot settle from the register kinds, one pointer compare and
+// IsPrimitive alone:
+//   - a hole, or an object register that holds nil (read as undefined);
+//   - an object register that holds a primitive, compared with anything but
+//     itself: a register is not guaranteed to hold its value in canonical
+//     form, so the object may be a boxed number, boolean, null or undefined
+//     that equals a scalar, or a string or BigInt that equals another by
+//     content;
+//   - a number object compared with itself, which is unequal when it is NaN.
+type
+  TGocciaVMStrictEquality = (vseUndecided, vseEqual, vseNotEqual);
+
+function VMStrictEqualRegisters(
+  const ALeft, ARight: TGocciaRegister): TGocciaVMStrictEquality;
+const
+  DECIDED: array[Boolean] of TGocciaVMStrictEquality = (vseNotEqual, vseEqual);
+var
+  LeftNumber, RightNumber: Double;
+begin
+  Result := vseUndecided;
+  case ALeft.Kind of
+    grkInt, grkFloat:
+      case ARight.Kind of
+        grkInt, grkFloat:
+        begin
+          LeftNumber := RegisterToDouble(ALeft);
+          RightNumber := RegisterToDouble(ARight);
+          // NaN is tested first rather than left to the comparison, as
+          // NumberValuesEqual does.
+          if IsNaN(LeftNumber) or IsNaN(RightNumber) then
+            Result := vseNotEqual
+          else
+            Result := DECIDED[LeftNumber = RightNumber];
+        end;
+        grkUndefined, grkNull, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkUndefined, grkNull:
+      case ARight.Kind of
+        grkUndefined, grkNull:
+          Result := DECIDED[ALeft.Kind = ARight.Kind];
+        grkInt, grkFloat, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkBoolean:
+      case ARight.Kind of
+        grkBoolean:
+          Result := DECIDED[ALeft.BoolValue = ARight.BoolValue];
+        grkInt, grkFloat, grkUndefined, grkNull:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkObject:
+      if Assigned(ALeft.ObjectValue) then
+        case ARight.Kind of
+          grkObject:
+            if ALeft.ObjectValue = ARight.ObjectValue then
+            begin
+              if ALeft.ObjectValue.ClassType <> TGocciaNumberLiteralValue then
+                Result := vseEqual;
+            end
+            else if Assigned(ARight.ObjectValue) and
+               not (ALeft.ObjectValue.IsPrimitive and
+                    ARight.ObjectValue.IsPrimitive) then
+              Result := vseNotEqual;
+          grkInt, grkFloat, grkUndefined, grkNull, grkBoolean:
+            if not ALeft.ObjectValue.IsPrimitive then
+              Result := vseNotEqual;
+        end;
+  end;
+end;
+
 function VMRegisterToStringFast(
   const AValue: TGocciaRegister): TGocciaStringLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin

@@ -560,37 +560,64 @@ begin
   Result := ALeft.Value = ARight.Value;
 end;
 
+// Reading a string value's text yields a managed temporary, and a function
+// that has one installs an implicit exception frame on every call. The string
+// comparison lives here so that ValuesEqual, which most callers leave before
+// reaching a string, has none (docs/core-patterns.md, "Managed Locals on Hot
+// Paths"). FPC would inline a function this small at -O3 and above and bring
+// the frame back with it.
+{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+function StringValuesEqual(
+  const ALeft, ARight: TGocciaStringLiteralValue): Boolean;
+begin
+  Result := UTF16StringsEqual(ALeft.Value, ARight.Value);
+end;
+{$IFDEF FPC}{$POP}{$ENDIF}
+
 function ValuesEqual(const ALeft, ARight: TGocciaValue;
   const ANumberKind: TGocciaNumberEqualityKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  LeftClass: TClass;
 begin
-  if (ALeft is TGocciaUndefinedLiteralValue) and
-     (ARight is TGocciaUndefinedLiteralValue) then
-    Exit(True);
+  if (not Assigned(ALeft)) or (not Assigned(ARight)) then
+    Exit(ALeft = ARight);
 
-  if (ALeft is TGocciaNullLiteralValue) and
-     (ARight is TGocciaNullLiteralValue) then
-    Exit(True);
-
-  if (ALeft is TGocciaBooleanLiteralValue) and
-     (ARight is TGocciaBooleanLiteralValue) then
-    Exit(TGocciaBooleanLiteralValue(ALeft).Value =
-      TGocciaBooleanLiteralValue(ARight).Value);
-
-  if (ALeft is TGocciaNumberLiteralValue) and
-     (ARight is TGocciaNumberLiteralValue) then
+  // The undefined, null and number value classes are sealed, so an exact
+  // class compare answers `is` without walking the parent chain. A value of
+  // one of them equals only a value of the same class.
+  LeftClass := ALeft.ClassType;
+  if LeftClass = TGocciaNumberLiteralValue then
+  begin
+    if ARight.ClassType <> TGocciaNumberLiteralValue then
+      Exit(False);
     Exit(NumberValuesEqual(TGocciaNumberLiteralValue(ALeft),
       TGocciaNumberLiteralValue(ARight), ANumberKind));
+  end;
+  if (LeftClass = TGocciaUndefinedLiteralValue) or
+     (LeftClass = TGocciaNullLiteralValue) then
+    Exit(ARight.ClassType = LeftClass);
 
-  if (ALeft is TGocciaStringLiteralValue) and
-     (ARight is TGocciaStringLiteralValue) then
-    Exit(UTF16StringsEqual(TGocciaStringLiteralValue(ALeft).Value,
-      TGocciaStringLiteralValue(ARight).Value));
+  // Every remaining kind of value equals itself, so only two distinct values
+  // need their contents compared.
+  if ALeft = ARight then
+    Exit(True);
 
-  if (ALeft is TGocciaBigIntValue) and (ARight is TGocciaBigIntValue) then
-    Exit(TGocciaBigIntValue(ALeft).Value.Equal(
-      TGocciaBigIntValue(ARight).Value));
+  if ALeft is TGocciaBooleanLiteralValue then
+    Exit((ARight is TGocciaBooleanLiteralValue) and
+      (TGocciaBooleanLiteralValue(ALeft).Value =
+       TGocciaBooleanLiteralValue(ARight).Value));
 
-  Result := ALeft = ARight;
+  if ALeft is TGocciaStringLiteralValue then
+    Exit((ARight is TGocciaStringLiteralValue) and
+      StringValuesEqual(TGocciaStringLiteralValue(ALeft),
+        TGocciaStringLiteralValue(ARight)));
+
+  if ALeft is TGocciaBigIntValue then
+    Exit((ARight is TGocciaBigIntValue) and
+      TGocciaBigIntValue(ALeft).Value.Equal(
+        TGocciaBigIntValue(ARight).Value));
+
+  Result := False;
 end;
 
 // ES2026 §7.2.14 IsStrictlyEqual(x, y)
