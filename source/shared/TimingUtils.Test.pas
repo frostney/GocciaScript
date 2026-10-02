@@ -39,7 +39,7 @@ begin
   Test('GetNanoseconds returns positive value', TestGetNanosecondsIsPositive);
   Test('GetMilliseconds returns positive value', TestGetMillisecondsIsPositive);
   Test('GetNanoseconds is monotonically non-decreasing', TestGetNanosecondsIsMonotonic);
-  Test('GetNanoseconds resolves intervals shorter than a microsecond',
+  Test('GetNanoseconds resolves intervals shorter than a microsecond on macOS',
     TestGetNanosecondsResolvesBelowAMicrosecond);
   Test('GetMilliseconds is consistent with GetNanoseconds', TestGetMillisecondsConsistentWithNanoseconds);
   Test('GetEpochNanoseconds returns positive value', TestGetEpochNanosecondsIsPositive);
@@ -78,30 +78,43 @@ begin
 end;
 
 procedure TTimingUtilsTests.TestGetNanosecondsResolvesBelowAMicrosecond;
+{$IFDEF DARWIN}
 const
   READINGS = 100000;
   NANOSECONDS_PER_MICROSECOND = 1000;
 var
   I: Integer;
+  Previous, Current, Elapsed: Int64;
   FinerThanMicrosecond: Boolean;
 begin
-  // A clock that advances in whole microseconds only ever reads a multiple of
-  // 1000 ns. Benchmark samples are differences of two readings, so on such a
-  // clock every sample shorter than a microsecond is 0 or 1000 ns.
+  // A benchmark sample is the difference of two readings. On a clock that
+  // advances in whole microseconds every difference is a multiple of 1000 ns,
+  // whatever offset the readings carry, so a sample shorter than a
+  // microsecond measures as 0 or 1000 ns. Darwin's CLOCK_MONOTONIC is such a
+  // clock; the one GetNanoseconds reads there must not be.
   FinerThanMicrosecond := False;
-  {$IF DEFINED(UNIX) OR DEFINED(MSWINDOWS)}
+  Previous := GetNanoseconds;
   for I := 1 to READINGS do
-    if GetNanoseconds mod NANOSECONDS_PER_MICROSECOND <> 0 then
+  begin
+    Current := GetNanoseconds;
+    Elapsed := Current - Previous;
+    if Elapsed mod NANOSECONDS_PER_MICROSECOND <> 0 then
     begin
       FinerThanMicrosecond := True;
       Break;
     end;
-  {$ELSE}
-  // The fallback clock is millisecond ticks; nothing to assert there.
-  FinerThanMicrosecond := True;
-  {$ENDIF}
+    Previous := Current;
+  end;
   Expect<Boolean>(FinerThanMicrosecond).ToBe(True);
 end;
+{$ELSE}
+begin
+  // The clocks read on Linux and Windows are not chosen by this unit for
+  // their resolution, which depends on the system, so nothing is required of
+  // them here.
+  Expect<Boolean>(GetNanoseconds > 0).ToBe(True);
+end;
+{$ENDIF}
 
 procedure TTimingUtilsTests.TestGetMillisecondsConsistentWithNanoseconds;
 var
