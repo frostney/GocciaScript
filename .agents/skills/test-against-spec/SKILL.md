@@ -6,6 +6,9 @@ description: >-
   specification or acceptance criteria, when the user runs /test-against-spec,
   or when a delivery workflow needs real-interface acceptance evidence.
 license: Unlicense OR MIT
+metadata:
+  agents-role: entry-point
+  agents-text: Test a change against its requirements through the real interface.
 ---
 
 # Test against spec

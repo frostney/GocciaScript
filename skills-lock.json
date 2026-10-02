@@ -5,49 +5,49 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "address-feedback/SKILL.md",
-      "computedHash": "0e9d6493bc23ef1e6e7efcb7050474b6b8061a2f9bacbb21f8d5f69fc27fd375"
+      "computedHash": "34b5d0a045caf7361e1ca2f02a3c76e9fb971627a2cba7f7ef19153d0b5743f4"
     },
     "agent-writing": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "agent-writing/SKILL.md",
-      "computedHash": "bfff6f0288e81bda68acb44d45c8f03ce24f62a76c0f83ab2017416131836270"
+      "computedHash": "4b376b352452fd5588a71113dd79ea5cbb8547102ecd556cd616892d415a0b83"
     },
     "code-review": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "code-review/SKILL.md",
-      "computedHash": "4676d1fbff75c61b0032a01dcb1552d36c32fc0e72290742d31423a486041e9b"
+      "computedHash": "ea3a4a2f5ba9eab05477ac2086f34104e1deaec194b2a12142165e9749b4263f"
     },
     "codebase-design": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/codebase-design/SKILL.md",
-      "computedHash": "5a17552cc1482f1a40124bf4e6c9dbd90ac0dbb47e71c07d47369f9e5f2ae3b5"
+      "computedHash": "b2888e4f4e8c0af3bfd557575a64b905c44e6248c3101d72077816882b3a92b9"
     },
     "create-issue": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-issue/SKILL.md",
-      "computedHash": "bbb44cdc9b3218d96a4a8deb871e5ec8ff2717267470fc023e1e91b0d76c5817"
+      "computedHash": "55f85b7c71389231a2de103a94783d195dc5421c4ee91b34c2b7a0d06887df1e"
     },
     "create-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-pr/SKILL.md",
-      "computedHash": "12eed00599d127e084c268715b6935cbb81d58938c1d7d49162a3609ffb6fef8"
+      "computedHash": "41a374336879106dc58202c6d9c1d4d47c63c790a3ac05795b94b9713df25317"
     },
     "create-release": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "create-release/SKILL.md",
-      "computedHash": "d4bab8df415e77ea1901048a9bcc38facb1c83eaa9ce9ed68dedb22a04a3498c"
+      "computedHash": "be71a395ea323fcb54516fc4563ae4df8ac8e02fea39d483da52e22cac896a40"
     },
     "deliver": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "deliver/SKILL.md",
-      "computedHash": "6baf5554b84737afe276117a9c627496bf8aa88a175c44a00f3afea40f36dd3b"
+      "computedHash": "88548285f77be323ee451ec5280bbaa6c59ded1d488ed0e797deb5dd68751136"
     },
     "delivery-wait": {
       "source": "frostney/known-good-route",
@@ -65,7 +65,7 @@
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/domain-modeling/SKILL.md",
-      "computedHash": "a11713c0ff7870efa3c331b2e273f09116158485246edc89ae5088eefd1b0b48"
+      "computedHash": "b3eb40152b81f0c98fd2095a023c019452dbdce56f7540cc67fece2972db8369"
     },
     "find-skills": {
       "source": "vercel-labs/skills",
@@ -77,7 +77,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "git-workflow/SKILL.md",
-      "computedHash": "e1d345f7f1305f1658926842dd03f29cf5af88d363df3b55f825031312dc9a17"
+      "computedHash": "3006d6c538f022813b7b2903e237083cfe67820afc9be09b7bf110f5d7c330a8"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
@@ -101,19 +101,19 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement/SKILL.md",
-      "computedHash": "4f67dd7be5a7f9a26f732d6fb2d46407dce9ec4eaa301de6f981b8d482a73f0a"
+      "computedHash": "3e3add8fd92b94a7061bd44b498b661c262976d99ccdd528a4b4a101b02e8977"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
-      "computedHash": "2449db6ab1ded9581f69fcc56c1f64818112d05e271fd4c5da23c6523f9d3d9d"
+      "computedHash": "ac2c94885f34ff8492dc12aa4543182f661f32ea1722b8d6b6c2c7045af33ae3"
     },
     "milestone-rush": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "milestone-rush/SKILL.md",
-      "computedHash": "b189f4cb923c5ea946cdf076b8f0184b16158c598f842085372deaacf39a1885"
+      "computedHash": "ab2a8431ee7a205b4db5d131a02a658ef4d56a4f92e5843fde2ffbf312ff43d0"
     },
     "native-nostalgia-stack": {
       "source": "frostney/known-good-route",
@@ -137,31 +137,31 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "roadmap-review/SKILL.md",
-      "computedHash": "c42419c1d03aa1f68b847eee15c37ddd2ccde175da591fafb1ccfeacc8f2271e"
+      "computedHash": "d282557052f7758b4b6a03b6670329e8ff97adfdde867138d5c356938f28cf16"
     },
     "run-retro": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "run-retro/SKILL.md",
-      "computedHash": "d3cc8b9075003c3f59e7f8d8207e257072c3139c35df18be225241c9cd954f39"
+      "computedHash": "a8921f514f78213dbc7f6e016792fea5f82c36b6f0ec034026f75b31110b10ad"
     },
     "software-engineering-excellence": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "software-engineering-excellence/SKILL.md",
-      "computedHash": "48b2792dbe6e09537c2b96d9398d1d49f2a179820e1aecbfcedaba7401a175e6"
+      "computedHash": "0f1f11ff94624688159343fef3fefa4ef7d16e1f3b20d7beaa6685b7fc4afc4d"
     },
     "test-against-spec": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "test-against-spec/SKILL.md",
-      "computedHash": "21606e16b066ad583a22b7d2a1100ffd7bac0a74d5cfe2ebff1d8045373dc43e"
+      "computedHash": "efb7657ffebceedaf282afe1ac4a6bebc300e3a28bcc0733ad0a7050f6c64806"
     },
     "update-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "update-pr/SKILL.md",
-      "computedHash": "4c20408ef596ebfd2f6e0766138a92afbee2b6fbf2e9d401823d523819c27e10"
+      "computedHash": "69046a60653c575e7f945790b2cb6ed3e0460ec1e0b56b04346cc9c7505d3058"
     }
   }
 }

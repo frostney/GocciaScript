@@ -391,6 +391,11 @@ def metric_value(event: dict[str, Any], path: str) -> int | float | None:
     return event[group][field]
 
 
+def states_blocker(event: dict[str, Any]) -> bool:
+    blocker = event["blocker"]
+    return isinstance(blocker, str) and bool(blocker.strip())
+
+
 def validate_run(
     events: list[dict[str, Any]], run_id: str, *, closure: bool = True
 ) -> dict[str, Any]:
@@ -494,6 +499,33 @@ def validate_run(
                         f"stream {source}/{stream_id} {path} decreased; start a new stream after reset"
                     )
                 previous = current
+
+    superseded: dict[str, bool] = {}
+    for event in by_id.values():
+        if event["type"] != "work_superseded":
+            continue
+        span_id = event["spanId"]
+        if not isinstance(span_id, str) or not span_id:
+            raise LedgerError(f"event {event['eventId']} work_superseded requires spanId")
+        superseded[span_id] = superseded.get(span_id, False) or states_blocker(event)
+    if closure:
+        unknown = sorted(set(superseded) - set(started))
+        if unknown:
+            raise LedgerError(
+                "superseded work names spans that never started: " + ", ".join(unknown)
+            )
+        unaccounted = sorted(
+            span_id
+            for span_id, blocked in superseded.items()
+            if not blocked
+            and finished[span_id]["result"] != "cancelled"
+            and not states_blocker(finished[span_id])
+        )
+        if unaccounted:
+            raise LedgerError(
+                "superseded work without a terminal cancellation or blocker: "
+                + ", ".join(unaccounted)
+            )
 
     return {
         "schemaVersion": 2,
