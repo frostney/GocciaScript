@@ -10,6 +10,9 @@ describe.runIf(hasMathClamp)("Math.clamp", () => {
     expect(Math.clamp(5, 0, 10)).toBe(5);
     expect(Math.clamp(-5, 0, 10)).toBe(0);
     expect(Math.clamp(15, 0, 10)).toBe(10);
+    expect(Math.clamp(3, 5, 5)).toBe(5);
+    expect(Math.clamp(7, 5, 5)).toBe(5);
+    expect(Math.clamp(5, 5, 5)).toBe(5);
   });
 
   test("supports Infinities", () => {

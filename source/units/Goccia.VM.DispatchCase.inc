@@ -2378,7 +2378,7 @@
                   RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
 	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
 	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
-	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
@@ -2475,7 +2475,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := ValueToRegister(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2500,7 +2500,7 @@
           begin
 	            if GetRegister(B) is TGocciaArrayValue then
 	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2787,7 +2787,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2812,7 +2812,7 @@
           begin
             if GetRegister(B) is TGocciaArrayValue then
               for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2905,7 +2905,7 @@
           SetLength(RegisterArgs, SpreadArray.Elements.Count);
           for I := 0 to SpreadArray.Elements.Count - 1 do
             RegisterArgs[I] := VMValueToRegisterFast(
-              SpreadArray.GetProperty(IntToStr(I)));
+              SpreadArray.GetProperty(IntegerToString(I)));
           FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
         end
@@ -2924,7 +2924,7 @@
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
-              CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
+              CallArgs.Add(SpreadArray.GetProperty(IntegerToString(I)));
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try
               SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
@@ -3909,7 +3909,7 @@
                  (DoneValue is TGocciaArrayValue) then
 	                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
 	                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
-	                    TGocciaArrayValue(DoneValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(DoneValue).GetProperty(IntegerToString(I)));
             end;
 
           COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:

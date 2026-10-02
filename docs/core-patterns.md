@@ -364,6 +364,7 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 |------------------------------|----------------------------------|
 | `ValuesEqual` (`IsStrictEqual`, `IsSameValue`, `IsSameValueZero`) | `StringValuesEqual` |
 | `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
+| `TGocciaVM.GetPropertyValue` | `GetPropertyValueGeneric` |
 | `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
 | `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |
 
