@@ -8,6 +8,9 @@ license: Unlicense OR MIT
 compatibility: >-
   Uses the project's implementation, GitHub and integration tools and available
   workflow skills; needs access to the selected delivery destination.
+metadata:
+  agents-role: entry-point
+  agents-text: Carry one feature, bug, issue, branch, or PR to its verified delivery endpoint.
 ---
 
 # Deliver

@@ -169,6 +169,8 @@ begin
       FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
+    FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -909,6 +911,15 @@ begin
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
+    // ES2026 §8.2.8 Static Semantics: VarDeclaredNames: for...of and
+    // for await...of contribute the BoundNames of a `var` ForBinding.
+    if ForOf.IsVar then
+    begin
+      if Assigned(ForOf.BindingPattern) then
+        CollectDestructuringVarBindings(ForOf.BindingPattern, AScope)
+      else if ForOf.BindingName <> '' then
+        AScope.DeclareVarLocal(ForOf.BindingName);
+    end;
     HoistVarLocals(ForOf.Body, AScope,
       AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
@@ -1200,6 +1211,7 @@ begin
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
+  FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try

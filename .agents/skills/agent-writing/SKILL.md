@@ -6,6 +6,9 @@ description: >-
   final response or report for engineering work, PR or issue text, or
   documentation.
 license: Unlicense OR MIT
+metadata:
+  agents-role: ambient
+  agents-text: Write replies, reports, PR and issue text, and docs that lead with the outcome and keep the evidence.
 ---
 
 # Agent writing

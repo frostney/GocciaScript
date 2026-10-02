@@ -934,6 +934,14 @@ begin
       Continue;
     if Binding.Kind = debGlobal then
       Continue;
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3.d: a var declared
+    // by sloppy direct eval conflicts only with the declarations between the
+    // eval's lexical environment and the caller's variable environment.  An
+    // upvalue belongs to an enclosing function, beyond that range, so it is
+    // resolved through the binding table and never declared here, where it
+    // would read as a lexical declaration of the calling function.
+    if Binding.Kind = debUpvalue then
+      Continue;
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
       Continue;
@@ -1393,7 +1401,11 @@ begin
 
   if TryFindBinding(AName, Binding) then
   begin
-    if (not Binding.IsConst) and ContainsOwnVarBinding(AName) then
+    // A var declared by this eval shadows an enclosing function's binding of
+    // the same name, const or not; a const of the calling function itself
+    // never coexists with one.
+    if ((not Binding.IsConst) or (Binding.Kind = debUpvalue)) and
+       ContainsOwnVarBinding(AName) then
       Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
@@ -1477,6 +1489,7 @@ end;
 
 function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
 var
+  Binding: TGocciaDirectEvalBindingInfo;
   WasOwnVarBinding: Boolean;
   WithObject: TGocciaObjectValue;
 begin
@@ -1484,6 +1497,13 @@ begin
     Exit(WithObject.DeleteProperty(AName));
 
   WasOwnVarBinding := ContainsOwnVarBinding(AName);
+  // An enclosing function's lexical binding is not declared in this scope, so
+  // the inherited walk would not find it: it stays undeletable unless a var
+  // declared by an earlier eval of the calling function shadows it.
+  if (not WasOwnVarBinding) and TryFindBinding(AName, Binding) and
+     (Binding.Kind = debUpvalue) and (not Binding.IsVarEnvironmentBinding) and
+     not Assigned(FVM.ResolveDynamicUpvalueScope(Binding.Index, AName)) then
+    Exit(False);
   Result := inherited DeleteBinding(AName);
   if Result and WasOwnVarBinding then
     MarkDeletedVarBinding(AName);
@@ -13260,18 +13280,22 @@ var
   ResolvedKey: TGocciaValue;
   PrivateBrandToken: string;
 begin
-  if (AObject is TGocciaNullLiteralValue) or
-     (AObject is TGocciaUndefinedLiteralValue) or
-     (AObject is TGocciaBooleanLiteralValue) or
-     (AObject is TGocciaNumberLiteralValue) or
-     (AObject is TGocciaStringLiteralValue) then
+  // ES2026 §13.10.1 RelationalExpression : RelationalExpression in
+  // ShiftExpression, step 5: a right-hand side that is not an Object throws.
+  if AObject.IsPrimitive then
   begin
+    // A Symbol has no string conversion, so it is named by its description.
     if AKey is TGocciaSymbolValue then
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [TGocciaSymbolValue(AKey).ToDisplayString.Value, AObject.ToStringLiteral.Value]),
+      KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
+    else
+      KeyStr := AKey.ToStringLiteral.Value;
+    if AObject is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        TGocciaSymbolValue(AObject).ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
-        SSuggestCheckNullBeforeAccess);
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        AObject.ToStringLiteral.Value]), SSuggestCheckNullBeforeAccess);
   end;
 
   if AObject is TGocciaObjectValue then
@@ -14371,6 +14395,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
+  I: Integer;
   IsGeneratorReturnCompletion: Boolean;
 begin
   // Proven numeric frames contain no handlers. Restore their generic entry
@@ -14391,6 +14416,13 @@ begin
       if IsGeneratorReturnCompletion and (Handler.Kind = bhkCatch) then
         Continue;
       AFrame.IP := Handler.CatchIP;
+      // ES2026 §14.2.2 Runtime Semantics: Evaluation (Block) steps 5-6 and
+      // Note 1: a Block's environment is left however control leaves it. The
+      // throw skipped the OP_CLOSE_UPVALUE of every scope it unwound, so
+      // detach their cells here. The compiler allocates a handler's register
+      // before the region it protects, so those scopes own the slots above it.
+      for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
+        FLocalCells[I] := nil;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;
