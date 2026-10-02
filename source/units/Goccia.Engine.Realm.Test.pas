@@ -55,6 +55,9 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     function FunctionContextProbe(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
+    function SourcePathProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RunSourcePathProbe(const AFileName, ASource: string): string;
     procedure AssertRealmProbeWithExecutor(const AExecutor: TGocciaExecutor);
     procedure AssertFunctionContextProbeWithExecutor(
       const AExecutor: TGocciaExecutor);
@@ -110,6 +113,7 @@ type
     procedure TestBytecodeFunctionExecutionContextUsesFunctionValue;
     procedure TestInterpreterConstructorExecutionContextUsesFunctionValue;
     procedure TestBytecodeConstructorExecutionContextUsesFunctionValue;
+    procedure TestBytecodeFunctionExecutionContextCarriesSourcePath;
     procedure TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeGlobalReadCacheRevalidatesLexicalShadow;
@@ -165,6 +169,8 @@ begin
     TestInterpreterConstructorExecutionContextUsesFunctionValue);
   Test('Bytecode constructor execution context carries function value',
     TestBytecodeConstructorExecutionContextUsesFunctionValue);
+  Test('Bytecode function execution context carries its source path',
+    TestBytecodeFunctionExecutionContextCarriesSourcePath);
   Test('Interpreter repeated engine execution gets fresh template sites',
     TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites);
   Test('Bytecode repeated engine execution gets fresh template sites',
@@ -231,6 +237,38 @@ begin
     (Running.Realm = FExpectedRealm) and
     Assigned(Running.Scope) and
     Assigned(Running.FunctionValue));
+end;
+
+function TTestEngineRealm.SourcePathProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaStringLiteralValue.Create(
+    RunningExecutionContext.SourcePath);
+end;
+
+function TTestEngineRealm.RunSourcePathProbe(const AFileName,
+  ASource: string): string;
+var
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
+  Source: TStringList;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(AFileName, Source, Executor);
+    Engine.InjectGlobal('sourcePathProbe',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(SourcePathProbe,
+        'sourcePathProbe', 0));
+    Result := (Engine.Execute.Result as TGocciaStringLiteralValue).Value;
+  finally
+    Engine.Free;
+    Source.Free;
+    Executor.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.AssertRealmProbeWithExecutor(
@@ -1193,6 +1231,40 @@ begin
   finally
     Executor.Free;
   end;
+end;
+
+{ The VM interns a function's source path once and reuses the reference for
+  later calls. Each call, each kind of call and each engine must still see the
+  path of the file its function was compiled from. }
+procedure TTestEngineRealm.TestBytecodeFunctionExecutionContextCarriesSourcePath;
+const
+  PROBE_SOURCE =
+    'const direct = () => sourcePathProbe();' +
+    'const nested = (a, b, c, d) => [a, b, c, d].map(() => direct()).join(",");' +
+    'class Holder { constructor() { this.path = sourcePathProbe(); } ' +
+    '  method() { return direct(); } }' +
+    '[direct(), direct(), nested(1, 2, 3, 4), new Holder().path, ' +
+    ' new Holder().method(), direct.call(null), direct.apply(null, [])]' +
+    '.join(",");';
+  FIRST_FILE = '<source-path-first>';
+  SECOND_FILE = '<source-path-second>';
+
+  function Repeated(const APath: string): string;
+  var
+    I: Integer;
+  begin
+    Result := APath;
+    for I := 2 to 10 do
+      Result := Result + ',' + APath;
+  end;
+
+begin
+  Expect<string>(RunSourcePathProbe(FIRST_FILE, PROBE_SOURCE))
+    .ToBe(Repeated(FIRST_FILE));
+  Expect<string>(RunSourcePathProbe(SECOND_FILE, PROBE_SOURCE))
+    .ToBe(Repeated(SECOND_FILE));
+  Expect<string>(RunSourcePathProbe(FIRST_FILE, PROBE_SOURCE))
+    .ToBe(Repeated(FIRST_FILE));
 end;
 
 procedure TTestEngineRealm.TestInterpreterConstructorExecutionContextUsesFunctionValue;

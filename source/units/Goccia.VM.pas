@@ -220,6 +220,11 @@ type
     // idle VM and every bytecode call inside that entry reuses them.
     FCallStack: TGocciaCallStack;
     FExecutionContextThread: Pointer;
+    // The source path most recently interned for an execution context, and its
+    // interned reference. Holding the string keeps its address from being
+    // reused, so a path at the same address is the same path.
+    FExecutionSourcePath: string;
+    FExecutionSourcePathRef: Pointer;
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
       const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
@@ -475,6 +480,7 @@ type
       const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
     procedure BindToCurrentThread;
+    procedure InternExecutionSourcePath(const ASourcePath: string);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
       const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
@@ -14117,7 +14123,22 @@ procedure TGocciaVM.BindToCurrentThread;
 begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
+  // Interned references belong to the thread that interned them.
+  if Pointer(FExecutionSourcePath) <> nil then
+    FExecutionSourcePath := '';
+  FExecutionSourcePathRef := nil;
 end;
+
+{ SetupNewFrame's slow path: the callee's source path is not the one the last
+  call interned. Kept out of line so that SetupNewFrame itself holds no
+  managed local or temporary and needs no implicit exception frame. }
+{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure TGocciaVM.InternExecutionSourcePath(const ASourcePath: string);
+begin
+  FExecutionSourcePathRef := InternSourcePath(ASourcePath);
+  FExecutionSourcePath := ASourcePath;
+end;
+{$IFDEF FPC}{$POP}{$ENDIF}
 
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
@@ -14127,15 +14148,16 @@ procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
   I: Integer;
-  ExecutionSourcePath: string;
   ExecutionRealm: TGocciaRealm;
+  HasOwnSourceFile: Boolean;
 begin
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
-  if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
-    ExecutionSourcePath := ATemplate.DebugInfo.SourceFile
-  else
-    ExecutionSourcePath := FCurrentModuleSourcePath;
+  // The frame's source path is the template's own source file, or the running
+  // module's path when it has none. This procedure runs on every call and must
+  // not hold that string: a managed local costs an implicit exception frame.
+  HasOwnSourceFile := Assigned(ATemplate.DebugInfo) and
+    (ATemplate.DebugInfo.SourceFile <> '');
 
   AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
   AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
@@ -14169,13 +14191,13 @@ begin
   // Push a deferred frame: store the template pointer and (only when the
   // template has no own source file) the module-path fallback, so an ordinary
   // call performs no per-call stack-trace string work. The resolver registered
-  // in the constructor reproduces ATemplate.Name and ExecutionSourcePath at
-  // capture time, keeping Error.stack output byte-identical.
+  // in the constructor reproduces ATemplate.Name and the frame's source path
+  // at capture time, keeping Error.stack output byte-identical.
   if Assigned(FCallStack) then
-    if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
+    if HasOwnSourceFile then
       FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
-      FCallStack.PushTemplate(Pointer(ATemplate), ExecutionSourcePath);
+      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
 
   AFrame := Default(TGocciaVMCallFrame);
   AFrame.Template := ATemplate;
@@ -14229,9 +14251,21 @@ begin
 
   if APushExecutionContext and Assigned(ExecutionRealm) then
   begin
+    // Consecutive calls almost always run code from one source file, so the
+    // interned reference of the last path is reused while the path is the
+    // same string.
+    if HasOwnSourceFile then
+    begin
+      if Pointer(ATemplate.DebugInfo.SourceFile) <>
+         Pointer(FExecutionSourcePath) then
+        InternExecutionSourcePath(ATemplate.DebugInfo.SourceFile);
+    end
+    else if Pointer(FCurrentModuleSourcePath) <>
+            Pointer(FExecutionSourcePath) then
+      InternExecutionSourcePath(FCurrentModuleSourcePath);
     TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
       ExecutionRealm, FGlobalScope, AClosure.FunctionValue,
-      InternSourcePath(ExecutionSourcePath));
+      FExecutionSourcePathRef);
     FCurrentExecutionContextPushed := True;
   end;
 
