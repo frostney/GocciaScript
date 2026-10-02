@@ -2592,7 +2592,10 @@ type
     procedure MarkReferences;
   end;
 
-  TGocciaBytecodeFunctionValue = class(TGocciaFunctionBase)
+  // Sealed: OP_CALL and OP_CALL_METHOD recognise a bytecode callee by an exact
+  // class comparison, which stands in for `is` only while nothing derives
+  // from this class.
+  TGocciaBytecodeFunctionValue = class sealed(TGocciaFunctionBase)
   private
     FClosure: TGocciaBytecodeClosure;
     FConstructClassValue: TGocciaValue;

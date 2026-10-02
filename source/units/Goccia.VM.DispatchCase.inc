@@ -2239,8 +2239,10 @@
           goto LDispatchNext;
         end;
         // A bytecode function is the usual callee and is neither a native nor
-        // a bound function. One exact class comparison lets it skip the two
-        // `is` tests below, each of which walks its whole class chain to fail.
+        // a bound function. Its class is sealed, so one exact class comparison
+        // decides it: a bytecode callee skips the two `is` tests below, and
+        // any other callee skips the one for a bytecode function, each of
+        // which would walk a whole class chain to fail.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and
           (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
@@ -2347,9 +2349,7 @@
           end;
         end;
 
-        if CalleeIsBytecodeFunction or
-           ((FRegisters[A].Kind = grkObject) and
-            (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue)) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2462,7 +2462,7 @@
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
-        // See OP_CALL: a bytecode function skips the native-function tests.
+        // See OP_CALL: an exact class comparison decides a bytecode callee.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and
           (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
@@ -2612,9 +2612,7 @@
           end;
         end;
 
-        if CalleeIsBytecodeFunction or
-           ((FRegisters[A].Kind = grkObject) and
-            (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue)) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
