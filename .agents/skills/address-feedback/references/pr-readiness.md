@@ -110,77 +110,49 @@ For an incomplete or rate-limited automation response:
 If no exact absolute time or duration exists, set no `retry_at` and remain
 `pending`. Do the same when timing statements conflict, cannot be parsed
 unambiguously, or do not clearly describe availability. Never infer a provider,
-account quota, hourly window, blind delay, or retry count. The one exception
-is the CodeRabbit allowance below, which reads CodeRabbit's own statements and
-may assume an hour only to hold longer.
+account quota, hourly window, blind delay, or retry count. CodeRabbit's
+retry times come only from its adapter; see [CodeRabbit](#coderabbit).
 
-## CodeRabbit allowance
+## CodeRabbit
 
-This section is the normative rule for `scripts/coderabbit_adapter.py`; other
-references link here.
+`scripts/coderabbit_adapter.py` alone decides when CodeRabbit is triggered,
+waited for, refused, or complete; its code and tests define how. Never post a
+CodeRabbit command or work out a CodeRabbit wait yourself.
 
-- **Statement.** The newest allowance statement in the scanned repositories'
-  summary comments and review bodies, for example "N included reviews remain
-  after this review" with "allowance at P reviews per hour". The April–May
-  2026 footer "Review rate limit: N/P reviews remaining, refill in M minutes"
-  counts too; it gives no rate unit but states when a review refills. A
-  statement is timed by when CodeRabbit made it: the review's submission, the
-  review object of the same Run ID, an unedited comment, or the comment's edit
-  history. A statement bound to a Run ID takes the earliest edit that showed
-  it under that Run ID. One without a Run ID, which CodeRabbit can repeat word
-  for word after separate reviews, takes the oldest edit of its latest unbroken
-  showing. A summary edited in place keeps showing an old
-  statement, so its last edit never dates it. A statement that cannot be dated
-  is ignored unless it reports none left or uses an unrecognized wording; then
-  its last edit times it. A statement is current until one window, or its
-  stated refill if longer, plus 60 seconds after it was made.
-- **Runs.** Each review counts once by its Run ID, from the statement's own
-  block and from review objects, at its earliest observed time. Automatic
-  reviews count. A rate-limit block's refused run, "Currently processing"
-  markers, and evidence without a Run ID do not.
-- **Used up.** The allowance is used up when the current statement reports
-  none left or uses a wording the adapter does not recognize, or when N counted
-  runs follow a statement of N. The window is rolling: the allowance frees
-  once enough of the counted runs in the window ending at that point have left
-  it that fewer than the allowance remain, plus 60 seconds. With several
-  reviews per window, that is the oldest such run leaving, not the statement's
-  own run. When no counted run can be tied to it, or the statement gives no
-  rate, it frees one window plus 60 seconds after the statement. A "0/P"
-  footer frees at its stated refill plus 60 seconds; the refill is when the
-  whole window has refilled, an upper bound for the next slot. A "0 remain"
-  statement therefore holds until then, even while it is still current. This
-  is the maintainer's ruling on PR #94. `availableNow` is the stated count
-  minus the counted runs since, 0 while used up, or `null` when unknown.
-- **Uncounted runs.** The counted-run time is never early only while every run
-  in the window is counted. Two kinds of run are missed. Reviews in a
-  repository that is not scanned are missed. So is a review that posts no
-  review object, such as one with no actionable comments, when a later review
-  on the same PR overwrites its summary block before a scan sees it. An early
-  time only risks a refusal, which the rate-limit rules then handle.
-- **Degraded.** `status` reports `degraded` without a current statement, and
-  then only stated waits gate triggers. It also reports `degraded` for a
-  current statement without a rate unit, with an unrecognized wording, or
-  without a date. These are read against one hour and still hold when used up.
-- **Waits and notices.** The gate candidates are stated waits, from the
-  account scan or from any of the PR's own comments, and the time a used-up
-  allowance frees. For a rate-limit notice comment, a candidate counts only if
-  it follows the notice: a wait posted at or after it, an allowance time after
-  it, or, when the statement is current and rated, the time the runs counted
-  before the notice free a slot.
-- **Scan horizon.** Repository-wide reads cover two hours plus 60 seconds.
-  When that scan finds a per-day statement, they cover two days plus 60
-  seconds; a per-day statement older than the two-hour scan is not found.
-  CodeRabbit's longest stated wait so far is 59 minutes, and a PR's own
-  comments are read without a horizon.
+- `status --repo <owner/repo> --pr <n> --head <n>=<sha> --json` reads each
+  head's state without posting, and names the run that holds the trigger
+  lock. Repeat `--pr` and `--head` for several pull requests.
+- `run --repo <owner/repo> --pr <n> --head <sha> --deadline <RFC 3339>
+  [--interval <seconds>] --json` takes the trigger lock, posts any trigger
+  the head needs, and waits until the head reaches a final state or the
+  deadline.
 
-For a head that needs a trigger, `status` decides as follows:
+`status` reports one state for the whole set and one for each head; `run`
+reports its head's state. A pending head state from `run` means its deadline
+came first.
 
-| Rate-limit notice | Gate candidates | State |
+| State | Reported by | Workflow |
 | --- | --- | --- |
-| reported only by the CodeRabbit check | any | `pending-retry-source` |
-| comment | none, as defined under **Waits and notices** | `pending-retry-source` |
-| none or comment | the latest candidate is in the future | `waiting`, `retry_at` of that candidate |
-| none or comment | every candidate has passed, or there is none and no notice | `trigger-*` |
+| `review-complete` | `run`, `status` | Classify every finding of the head's CodeRabbit review. |
+| `clean-complete` | `run`, `status` | CodeRabbit is complete for the head with no findings. |
+| `satisfied` | `status` | Every head is complete. |
+| `trigger-incremental`, `trigger-full` | `run`, `status` | Pending: `run`, which posts it. |
+| `awaiting-automatic`, `triggered`, `in-progress`, `waiting` | `run`, `status` | Pending: `run` waits; after its deadline, `run` again. |
+| `rate-limited-unknown-wait` | `run`, `status` | Pending: `run` again later; never trigger by hand. |
+| `pending` | `run`, `status` | A head is pending, or GitHub was unreachable until the deadline: `run` again. |
+| `lock-held` | `run` | Pending: another `run` holds the trigger lock; `run` again later. |
+| `draft` | `run`, `status` | Mark the PR ready when the workflow permits, then `run`. |
+| `blocked` | `status` | Act on each blocked head's state. |
+| `skipped` | `run`, `status` | Blocked: report the reason; a person must act. |
+| `paused` | `run`, `status` | Blocked: CodeRabbit paused its reviews of the PR. A person resumes them or triggers a review. |
+| `blocked-unanswered` | `run`, `status` | Blocked: CodeRabbit did not answer the trigger. A person checks CodeRabbit on the PR, then triggers again or pushes. |
+| `blocked-stalled` | `run`, `status` | Blocked: CodeRabbit's review never finished. A person checks CodeRabbit on the PR, then triggers again or pushes. |
+| `blocked-unknown-wait` | `run`, `status` | Blocked: CodeRabbit refused the head without a stated wait. A person reads its notice on the PR and triggers when it allows. |
+| `blocked-lock-loss` | `run`, `status` | Blocked: CodeRabbit stopped the head's review after lock loss again after one retry. A person checks CodeRabbit on the PR, then triggers again or pushes. |
+| `blocked-unconfirmed`, `unrecognized-status` | `run`, `status` | Blocked: escalate to a person. |
+| `closed` | `run`, `status` | Stop. |
+| `invalidated` | `run`, `status` | The head changed: restart on the new head. |
+| `operational-error` | `run`, `status` | Report the error; a person fixes the arguments or GitHub access. |
 
 ## Result contract
 

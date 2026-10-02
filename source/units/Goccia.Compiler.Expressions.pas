@@ -1156,6 +1156,8 @@ begin
         Exit;
       if UV.IsGlobalBacked then
         Exit;
+      if ACtx.Scope.DirectEvalMayShadow(UV.Name) then
+        Exit;
       Sig := UV.ParamTypeSignature;
     end;
   end;
@@ -1872,6 +1874,8 @@ begin
     for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
     begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.SuspendCount > 0 then
+        Continue;
       if HiddenWithBindingName(Local.Name) then
         AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
           Local.Slot, False)
@@ -7034,6 +7038,16 @@ begin
             PostNumericOp, AKeepResult);
           Exit;
         end;
+        // ES2026 §13.4 Update Expressions: GetValue and ToNumeric run before
+        // PutValue. A const still in its temporal dead zone therefore throws
+        // ReferenceError, and an initialized one converts its value, which can
+        // call user code, before the assignment TypeError. The update runs on
+        // a temporary and nothing is stored.
+        RegResult := ACtx.Scope.AllocateRegister;
+        CompileIdentifierAccessNoWith(ACtx, Ident, RegResult, False);
+        EmitIncrementStep(ACtx, AExpr, RegResult, RegResult, Op, NumericOp,
+          PostNumericOp, False);
+        ACtx.Scope.FreeRegister;
         EmitConstAssignmentError(ACtx);
         Exit;
       end;

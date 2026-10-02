@@ -7,8 +7,9 @@ Omit intermediate commits, abandoned approaches and line-count reduction during
 development unless they explain a material decision in the final change.
 
 Preserve explicit repository-template requirements. Otherwise omit routine
-"ran tests" narration, testing sections and command logs. Keep material risks,
-unverified behavior and accepted limitations visible. Detailed supporting logs
+"ran tests" narration, testing sections and command logs. Keep what the
+reader must act on or decide; the repository's template defines any other
+sections. Detailed supporting logs
 can go in a collapsed `<details>` block when useful; the final user handoff
 still reports observed validation.
 
