@@ -50,3 +50,58 @@ test("array iterator prototype owns next with spec descriptor", () => {
   expect(descriptor.enumerable).toBe(false);
   expect(descriptor.configurable).toBe(true);
 });
+
+test("a hole yields the value inherited from the prototype chain", () => {
+  const arr = [1, , 3];
+  expect([...arr.values()]).toEqual([1, undefined, 3]);
+  Array.prototype[1] = "inherited";
+  try {
+    expect([...arr.values()]).toEqual([1, "inherited", 3]);
+    const seen = [];
+    for (const value of arr) {
+      seen.push(value);
+    }
+    expect(seen).toEqual([1, "inherited", 3]);
+  } finally {
+    delete Array.prototype[1];
+  }
+});
+
+test("an index defined as an accessor runs its getter at each step", () => {
+  const arr = [1, 2, 3];
+  let reads = 0;
+  Object.defineProperty(arr, "1", {
+    get() {
+      reads += 1;
+      return "computed";
+    },
+    configurable: true,
+  });
+  expect([...arr.values()]).toEqual([1, "computed", 3]);
+  expect(reads).toBe(1);
+});
+
+test("elements appended or replaced during iteration are observed", () => {
+  const arr = [1, 2, 3];
+  const seen = [];
+  for (const value of arr) {
+    seen.push(value);
+    if (value === 1) {
+      arr[2] = "replaced";
+      arr.push("appended");
+    }
+  }
+  expect(seen).toEqual([1, 2, "replaced", "appended"]);
+});
+
+test("elements removed during iteration end it early", () => {
+  const arr = [1, 2, 3, 4];
+  const seen = [];
+  for (const value of arr) {
+    seen.push(value);
+    if (value === 2) {
+      arr.length = 2;
+    }
+  }
+  expect(seen).toEqual([1, 2]);
+});
