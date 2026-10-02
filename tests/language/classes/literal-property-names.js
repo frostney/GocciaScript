@@ -82,3 +82,23 @@ test("static literal accessor names in classes", () => {
   expect(stored).toBe(7);
   expect(C.if).toBe("static keyword getter");
 });
+
+test("a string literal field name that begins with '#' names a public field", () => {
+  class Box {
+    "#slot:" = 5;
+    "#brand:" = 6;
+
+    read() {
+      return this["#slot:"] + this["#brand:"];
+    }
+  }
+
+  const box = new Box();
+
+  expect(box.read()).toBe(11);
+  expect(box["#slot:"]).toBe(5);
+  expect("#slot:" in box).toBe(true);
+
+  box["#slot:"] = 7;
+  expect(box.read()).toBe(13);
+});

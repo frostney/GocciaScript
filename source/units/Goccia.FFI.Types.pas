@@ -71,6 +71,11 @@ type
     function FieldIndex(const AName: string): Integer;
     function FieldCount: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function FieldAt(const AIndex: Integer): TGocciaFFIFieldDescriptor;
+    // FieldAt's type and offset without the record copy, which carries the
+    // field's name: for a field access, which needs neither the name nor the
+    // string work of copying it.
+    function FieldTypeAt(const AIndex: Integer): TGocciaFFITypeDescriptor; {$IFDEF FPC}inline;{$ENDIF}
+    function FieldOffsetAt(const AIndex: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
     function CallbackArgumentCount: Integer; {$IFDEF FPC}inline;{$ENDIF}
     function CallbackArgumentAt(
       const AIndex: Integer): TGocciaFFITypeDescriptor;
@@ -425,6 +430,18 @@ function TGocciaFFITypeDescriptor.FieldAt(
   const AIndex: Integer): TGocciaFFIFieldDescriptor;
 begin
   Result := FFields[AIndex];
+end;
+
+function TGocciaFFITypeDescriptor.FieldTypeAt(
+  const AIndex: Integer): TGocciaFFITypeDescriptor;
+begin
+  Result := FFields[AIndex].TypeDescriptor;
+end;
+
+function TGocciaFFITypeDescriptor.FieldOffsetAt(
+  const AIndex: Integer): Integer;
+begin
+  Result := FFields[AIndex].Offset;
 end;
 
 function TGocciaFFITypeDescriptor.CallbackArgumentCount: Integer;

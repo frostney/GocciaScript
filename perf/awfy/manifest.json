@@ -83,6 +83,13 @@
       "tags": ["arithmetic", "loops"]
     },
     {
+      "name": "native-builtin-call",
+      "file": "perf/probes/native-builtin-call.js",
+      "focusAreas": ["call-path", "native-call"],
+      "defaultInnerIterations": 100000,
+      "tags": ["call", "built-ins"]
+    },
+    {
       "name": "fib-recursive",
       "file": "perf/probes/fib-recursive.js",
       "focusAreas": ["call-path", "recursion"],

@@ -795,7 +795,7 @@ begin
       Exit(False);
 
     CheckInstructionLimit;
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
     Sleep(1);
   end;
 
@@ -818,7 +818,7 @@ begin
 
   repeat
     CheckInstructionLimit;
-    CheckExecutionTimeout;
+    CheckExecutionTimeoutNow;
 
     if ATimeoutMilliseconds < 0 then
       Slice := 50

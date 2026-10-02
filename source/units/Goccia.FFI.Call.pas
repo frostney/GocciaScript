@@ -18,11 +18,26 @@ uses
   Goccia.FFI.ABI,
   Goccia.FFI.Types;
 
+{ Calls AFunc as APlan describes. AArgumentData holds every argument's
+  marshalled bytes, argument I at APlan.ArgumentDataOffset(I). AResult receives
+  the return value and must have room for the plan's return type; nothing is
+  written for a void return. }
 procedure FFIInvokeCompiled(
   const AFunc: Pointer;
   const APlan: TGocciaFFICompiledSignature;
-  const AArguments: array of TBytes;
-  out AResult: TBytes);
+  const AArgumentData: PByte;
+  const AResult: PByte);
+
+const
+  // Buffers handed to native code (a hidden result, an indirect argument's
+  // copy) start on this boundary, which covers every type the FFI can
+  // describe.
+  FFI_BUFFER_ALIGNMENT = 16;
+
+{ The first FFI_BUFFER_ALIGNMENT boundary at or after APointer. Storage meant
+  to be aligned this way is declared FFI_BUFFER_ALIGNMENT bytes larger than
+  the space it must provide. }
+function FFIAlignBuffer(const APointer: Pointer): PByte; {$IFDEF FPC}inline;{$ENDIF}
 
 procedure FFIDispatchCall(
   const AFunc: Pointer;
@@ -607,7 +622,7 @@ begin
 end;
 
 procedure CopyToPlacement(var AState: TGocciaFFIMachineState;
-  var AStackData: TBytes; const APlacement: TGocciaFFIPlacement;
+  const AStackData: PByte; const APlacement: TGocciaFFIPlacement;
   const ASource; const ASize: Integer);
 begin
   case APlacement.Kind of
@@ -629,7 +644,7 @@ begin
 end;
 
 procedure CopyDarwinARM64ScalarArgumentToPlacement(
-  var AState: TGocciaFFIMachineState; var AStackData: TBytes;
+  var AState: TGocciaFFIMachineState; const AStackData: PByte;
   const APlacement: TGocciaFFIPlacement;
   const AType: TGocciaFFITypeDescriptor; const ASource);
 var
@@ -694,109 +709,113 @@ begin
   end;
 end;
 
-procedure FFIInvokeCompiled(const AFunc: Pointer;
+const
+  // A call whose stack image and indirect-argument scratch both fit in this
+  // many bytes builds them in its own stack frame; a larger one (many
+  // stack-passed arguments, or big by-value aggregates) uses the heap.
+  FFI_INLINE_CALL_BYTES = 256;
+
+function FFIAlignBuffer(const APointer: Pointer): PByte;
+begin
+  Result := PByte((NativeUInt(APointer) + (FFI_BUFFER_ALIGNMENT - 1)) and
+    not NativeUInt(FFI_BUFFER_ALIGNMENT - 1));
+end;
+
+{ The call itself. AStackData and AScratchData are zeroed buffers of the
+  plan's StackSize and ScratchSize. Holds no managed locals and reads the plan
+  through pointers, so it runs without an exception frame or record copies. }
+procedure InvokeWithBuffers(const AFunc: Pointer;
   const APlan: TGocciaFFICompiledSignature;
-  const AArguments: array of TBytes; out AResult: TBytes);
+  const AArgumentData, AResult, AStackData, AScratchData: PByte);
 var
   State: TGocciaFFIMachineState;
-  StackData, ScratchData, PointerBytes: TBytes;
-  ArgumentPlan: TGocciaFFIArgumentPlan;
-  ReturnPlan: TGocciaFFIReturnPlan;
+  ArgumentPlan: PGocciaFFIArgumentPlan;
+  ReturnPlan: PGocciaFFIReturnPlan;
   Placement: TGocciaFFIPlacement;
+  ArgumentBytes: PByte;
   IndirectPointer: Pointer;
-  I, J, CopySize: Integer;
+  I, J, CopySize, ResultSize: Integer;
 begin
-  if Length(AArguments) <> APlan.ArgumentCount then
-    raise EArgumentException.Create('FFI native argument count does not match plan');
   FillChar(State, SizeOf(State), 0);
   State.FuncPtr := AFunc;
-  SetLength(StackData, APlan.StackSize);
-  if Length(StackData) > 0 then
-    FillChar(StackData[0], Length(StackData), 0);
-  SetLength(ScratchData, APlan.ScratchSize);
-  if Length(ScratchData) > 0 then
-    FillChar(ScratchData[0], Length(ScratchData), 0);
-  SetLength(PointerBytes, SizeOf(Pointer));
 
-  ReturnPlan := APlan.ReturnPlan;
-  SetLength(AResult, ReturnPlan.TypeDescriptor.Size);
-  if Length(AResult) > 0 then
-    FillChar(AResult[0], Length(AResult), 0);
-  if ReturnPlan.UsesHiddenPointer then
+  ReturnPlan := APlan.ReturnPlanPointer;
+  ResultSize := ReturnPlan^.TypeDescriptor.Size;
+  if ResultSize > 0 then
+    FillChar(AResult^, ResultSize, 0);
+  if ReturnPlan^.UsesHiddenPointer then
   begin
-    if Length(AResult) = 0 then
+    if ResultSize = 0 then
       raise EInvalidOpException.Create('FFI hidden return has no storage');
     case APlan.ABI of
       fabiSysVX64, fabiWin64:
         {$IF defined(GOCCIA_CPU_64)}
-        State.GPR[0] := UInt64(NativeUInt(@AResult[0]))
+        State.GPR[0] := UInt64(NativeUInt(AResult))
         {$ELSE}
         raise EInvalidOpException.Create('64-bit FFI plan on i386')
         {$ENDIF};
       fabiAAPCS64, fabiDarwinARM64:
         {$IF defined(GOCCIA_CPU_64)}
-        State.HiddenResult := @AResult[0]
+        State.HiddenResult := AResult
         {$ELSE}
         raise EInvalidOpException.Create('ARM64 FFI plan on i386')
         {$ENDIF};
       fabiI386Win:
       begin
-        IndirectPointer := @AResult[0];
-        Move(IndirectPointer, StackData[0], SizeOf(Pointer));
+        IndirectPointer := AResult;
+        Move(IndirectPointer, AStackData[0], SizeOf(Pointer));
       end;
     end;
   end;
 
   for I := 0 to APlan.ArgumentCount - 1 do
   begin
-    ArgumentPlan := APlan.Arguments[I];
-    if Length(AArguments[I]) < ArgumentPlan.TypeDescriptor.Size then
-      raise EArgumentException.Create('FFI native argument buffer is too small');
-    if ArgumentPlan.Indirect then
+    ArgumentPlan := APlan.ArgumentPlanAt(I);
+    ArgumentBytes := AArgumentData + APlan.ArgumentDataOffset(I);
+    if ArgumentPlan^.Indirect then
     begin
-      if ArgumentPlan.TypeDescriptor.Size > 0 then
-        Move(AArguments[I][0], ScratchData[ArgumentPlan.IndirectCopyOffset],
-          ArgumentPlan.TypeDescriptor.Size);
-      IndirectPointer := @ScratchData[ArgumentPlan.IndirectCopyOffset];
-      Move(IndirectPointer, PointerBytes[0], SizeOf(Pointer));
-      Placement := ArgumentPlan.Placements[0];
-      CopyToPlacement(State, StackData, Placement, PointerBytes[0],
+      if ArgumentPlan^.TypeDescriptor.Size > 0 then
+        Move(ArgumentBytes^, AScratchData[ArgumentPlan^.IndirectCopyOffset],
+          ArgumentPlan^.TypeDescriptor.Size);
+      IndirectPointer := @AScratchData[ArgumentPlan^.IndirectCopyOffset];
+      Placement := ArgumentPlan^.Placements[0];
+      CopyToPlacement(State, AStackData, Placement, IndirectPointer,
         SizeOf(Pointer));
       Continue;
     end;
-    for J := 0 to High(ArgumentPlan.Placements) do
+    for J := 0 to High(ArgumentPlan^.Placements) do
     begin
-      Placement := ArgumentPlan.Placements[J];
+      Placement := ArgumentPlan^.Placements[J];
       CopySize := Placement.Size;
       if CopySize > 0 then
       begin
         if APlan.ABI = fabiDarwinARM64 then
-          CopyDarwinARM64ScalarArgumentToPlacement(State, StackData,
-            Placement, ArgumentPlan.TypeDescriptor,
-            AArguments[I][Placement.ValueOffset])
+          CopyDarwinARM64ScalarArgumentToPlacement(State, AStackData,
+            Placement, ArgumentPlan^.TypeDescriptor,
+            ArgumentBytes[Placement.ValueOffset])
         else
-          CopyToPlacement(State, StackData, Placement,
-            AArguments[I][Placement.ValueOffset], CopySize);
+          CopyToPlacement(State, AStackData, Placement,
+            ArgumentBytes[Placement.ValueOffset], CopySize);
       end;
     end;
   end;
 
-  if Length(StackData) > 0 then
-    State.StackData := @StackData[0]
+  if APlan.StackSize > 0 then
+    State.StackData := AStackData
   else
     State.StackData := nil;
-  State.StackSize := Length(StackData);
+  State.StackSize := APlan.StackSize;
   {$IF (defined(GOCCIA_CPU_X86))}
-  if (Length(ReturnPlan.Placements) > 0) and
-     (ReturnPlan.Placements[0].Kind = fpkFPR) then
-    State.ReturnFloatSize := ReturnPlan.Placements[0].Size;
+  if (Length(ReturnPlan^.Placements) > 0) and
+     (ReturnPlan^.Placements[0].Kind = fpkFPR) then
+    State.ReturnFloatSize := ReturnPlan^.Placements[0].Size;
   {$ENDIF}
   FFIInvokeMachine(State);
 
-  if ReturnPlan.UsesHiddenPointer then Exit;
-  for I := 0 to High(ReturnPlan.Placements) do
+  if ReturnPlan^.UsesHiddenPointer then Exit;
+  for I := 0 to High(ReturnPlan^.Placements) do
   begin
-    Placement := ReturnPlan.Placements[I];
+    Placement := ReturnPlan^.Placements[I];
     case Placement.Kind of
       fpkGPR:
         Move(State.RetGPR[Placement.RegisterIndex],
@@ -812,6 +831,45 @@ begin
         raise EInvalidOpException.Create('FFI return cannot use stack placement');
     end;
   end;
+end;
+
+// The heap-backed route, kept apart so that the dynamic arrays (and the
+// exception frame they bring) are paid only by calls that need them.
+procedure InvokeWithHeapBuffers(const AFunc: Pointer;
+  const APlan: TGocciaFFICompiledSignature;
+  const AArgumentData, AResult: PByte);
+var
+  StackData, ScratchData: TBytes;
+begin
+  // SetLength zero-fills. One extra byte keeps an empty image addressable; the
+  // scratch slack leaves room to start it on its alignment boundary.
+  SetLength(StackData, APlan.StackSize + 1);
+  SetLength(ScratchData, APlan.ScratchSize + FFI_BUFFER_ALIGNMENT);
+  InvokeWithBuffers(AFunc, APlan, AArgumentData, AResult, @StackData[0],
+    FFIAlignBuffer(@ScratchData[0]));
+end;
+
+procedure FFIInvokeCompiled(const AFunc: Pointer;
+  const APlan: TGocciaFFICompiledSignature;
+  const AArgumentData: PByte; const AResult: PByte);
+var
+  StackData: array[0..FFI_INLINE_CALL_BYTES - 1] of Byte;
+  ScratchStorage: array[0..FFI_INLINE_CALL_BYTES + FFI_BUFFER_ALIGNMENT - 1] of Byte;
+  ScratchData: PByte;
+begin
+  if (APlan.StackSize > FFI_INLINE_CALL_BYTES) or
+     (APlan.ScratchSize > FFI_INLINE_CALL_BYTES) then
+  begin
+    InvokeWithHeapBuffers(AFunc, APlan, AArgumentData, AResult);
+    Exit;
+  end;
+  ScratchData := FFIAlignBuffer(@ScratchStorage[0]);
+  if APlan.StackSize > 0 then
+    FillChar(StackData[0], APlan.StackSize, 0);
+  if APlan.ScratchSize > 0 then
+    FillChar(ScratchData^, APlan.ScratchSize, 0);
+  InvokeWithBuffers(AFunc, APlan, AArgumentData, AResult, @StackData[0],
+    ScratchData);
 end;
 
 initialization

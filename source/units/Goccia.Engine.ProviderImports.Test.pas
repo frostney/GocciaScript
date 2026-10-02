@@ -27,18 +27,14 @@ uses
   Goccia.Executor,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
+  Goccia.FileExtensions,
   Goccia.Packages.Address,
   Goccia.Packages.Store,
   Goccia.Packages.Transport,
   Goccia.Runtime,
-  Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.FFI,
-  Goccia.RuntimeExtensions.JSON5,
-  Goccia.RuntimeExtensions.JSONL,
-  Goccia.RuntimeExtensions.TOML,
-  Goccia.RuntimeExtensions.TSV,
   Goccia.RuntimeExtensions.URL,
-  Goccia.RuntimeExtensions.YAML,
+  Goccia.RuntimeProfiles.Loader,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.NativeFunction,
@@ -59,6 +55,45 @@ const
   LIBRARY_SUFFIX = '.so';
   {$ENDIF}
   {$ENDIF}
+
+type
+  { A package file that is imported as data rather than compiled. Read is the
+    expression that yields Name from the imported namespace `m`. }
+  TRuntimeModuleFixture = record
+    Path: string;
+    Content: string;
+    Tampered: string;
+    Read: string;
+    Name: string;
+  end;
+
+const
+  { One per file extension that the engine or the loader profile loads as a
+    data module. The verify-on-load test fails for such an extension that has
+    no fixture here. }
+  RUNTIME_MODULE_FIXTURES: array[0..10] of TRuntimeModuleFixture = (
+    (Path: 'vendor/config.json'; Content: '{"name": "json"}';
+     Tampered: '{"name": "evil"}'; Read: 'm.name'; Name: 'json'),
+    (Path: 'vendor/config.toml'; Content: 'name = "toml"';
+     Tampered: 'name = "evil"'; Read: 'm.name'; Name: 'toml'),
+    (Path: 'vendor/config.yaml'; Content: 'name: yaml';
+     Tampered: 'name: evil'; Read: 'm.name'; Name: 'yaml'),
+    (Path: 'vendor/config.yml'; Content: 'name: yml';
+     Tampered: 'name: evil'; Read: 'm.name'; Name: 'yml'),
+    (Path: 'vendor/config.json5'; Content: '{ name: "json5" }';
+     Tampered: '{ name: "evil" }'; Read: 'm.name'; Name: 'json5'),
+    (Path: 'vendor/config.jsonc'; Content: '{ "name": "jsonc" } // pinned';
+     Tampered: '{ "name": "evil" }'; Read: 'm.name'; Name: 'jsonc'),
+    (Path: 'vendor/rows.csv'; Content: 'name' + #10 + 'csv';
+     Tampered: 'name' + #10 + 'evil'; Read: 'm[0].name'; Name: 'csv'),
+    (Path: 'vendor/rows.tsv'; Content: 'name' + #10 + 'tsv';
+     Tampered: 'name' + #10 + 'evil'; Read: 'm[0].name'; Name: 'tsv'),
+    (Path: 'vendor/rows.jsonl'; Content: '{"name": "jsonl"}';
+     Tampered: '{"name": "evil"}'; Read: 'm[0].name'; Name: 'jsonl'),
+    (Path: 'vendor/notes.txt'; Content: 'txt';
+     Tampered: 'evil'; Read: 'm.content'; Name: 'txt'),
+    (Path: 'vendor/notes.md'; Content: 'md';
+     Tampered: 'evil'; Read: 'm.content'; Name: 'md'));
 
 type
   TRunOutcome = record
@@ -91,7 +126,7 @@ type
     FEvents: TStringList;
     FCachedOnly: Boolean;
     FInstallFFI: Boolean;
-    FInstallDataFormats: Boolean;
+    FInstallLoaderProfile: Boolean;
     FSwapPath: string;
     FSwapText: string;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
@@ -103,6 +138,7 @@ type
       const ACapabilities: TGocciaCapabilities;
       const ABytecode: Boolean): TRunOutcome;
     function HasEvent(const AEvent: string): Boolean;
+    function DataModuleExtensions: TStringList;
     procedure WritePackage;
     procedure TestExactEntryRunsWithGrant;
     procedure TestCachedPackageNeedsNoNetwork;
@@ -119,7 +155,8 @@ type
     procedure TestFFIOpensAVerifiedPackageLibraryByURL;
     procedure TestFFIRefusesATamperedPackageLibrary;
     procedure TestReloadOfATamperedFileReportsTheChange;
-    procedure TestVerifyOnLoadCoversRuntimeDataModules;
+    procedure TestVerifyOnLoadCoversEveryDataModuleExtension;
+    procedure TestVerifyOnLoadCoversTextAndBytesImports;
     procedure TestImportMetaResolveOfAProviderKeyIsLexical;
     procedure TestComputedImportsThroughAProviderNeedOnlyImport;
     procedure TestLockKeysCompareOwnerAndRepositoryCaseInsensitively;
@@ -243,8 +280,10 @@ begin
     TestFFIRefusesATamperedPackageLibrary);
   Test('Reloading a file tampered after it was loaded reports the change',
     TestReloadOfATamperedFileReportsTheChange);
-  Test('Verify on load covers TOML, YAML, JSON5, CSV, TSV and JSONL modules',
-    TestVerifyOnLoadCoversRuntimeDataModules);
+  Test('Verify on load covers every data module extension',
+    TestVerifyOnLoadCoversEveryDataModuleExtension);
+  Test('Verify on load covers text and bytes imports',
+    TestVerifyOnLoadCoversTextAndBytesImports);
   Test('import.meta.resolve of a provider key answers with its address',
     TestImportMetaResolveOfAProviderKeyIsLexical);
   Test('A computed import through a provider needs only the import grant',
@@ -283,13 +322,14 @@ begin
   FTransport.Requests := 0;
   FCachedOnly := False;
   FInstallFFI := False;
-  FInstallDataFormats := False;
+  FInstallLoaderProfile := False;
   FSwapPath := '';
 end;
 
 procedure TProviderImportTests.WritePackage;
 var
   Artifacts: string;
+  I: Integer;
 
   procedure AddFile(const APath, AText: string);
   begin
@@ -328,13 +368,10 @@ begin
     'export const open = () => FFI.open(new URL("../native/libfixture" + ' +
     'FFI.suffix, import.meta.url));');
   AddFile('index.ts', 'export const root = "root";');
-  { Data modules parsed by runtime extensions rather than the module loader. }
-  AddFile('vendor/config.toml', 'name = "toml"');
-  AddFile('vendor/config.yaml', 'name: yaml');
-  AddFile('vendor/config.json5', '{ name: "json5" }');
-  AddFile('vendor/rows.csv', 'name' + #10 + 'csv');
-  AddFile('vendor/rows.tsv', 'name' + #10 + 'tsv');
-  AddFile('vendor/rows.jsonl', '{"name": "jsonl"}');
+  { Files imported as data, one per extension that loads that way. }
+  for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+    AddFile(RUNTIME_MODULE_FIXTURES[I].Path,
+      RUNTIME_MODULE_FIXTURES[I].Content);
   AddFile('bindings/dyn.ts',
     'export const load = (name) => import("./" + name);');
   { Relative specifiers that leave the package and land where a path key of
@@ -449,15 +486,8 @@ begin
       Runtime.Install(TGocciaURLRuntimeExtension.Create);
       InstallFFIIfGranted(Runtime);
     end;
-    if FInstallDataFormats then
-    begin
-      Runtime.Install(TGocciaCSVRuntimeExtension.Create);
-      Runtime.Install(TGocciaJSON5RuntimeExtension.Create);
-      Runtime.Install(TGocciaJSONLRuntimeExtension.Create);
-      Runtime.Install(TGocciaTOMLRuntimeExtension.Create);
-      Runtime.Install(TGocciaTSVRuntimeExtension.Create);
-      Runtime.Install(TGocciaYAMLRuntimeExtension.Create);
-    end;
+    if FInstallLoaderProfile then
+      ApplyLoaderRuntimeProfile(Runtime);
     Engine.RegisterGlobal('swap',
       TGocciaNativeFunctionValue.Create(Swap, 'swap', 0));
     Engine.Resolver.ProviderTransport := FTransport;
@@ -772,49 +802,154 @@ begin
   end;
 end;
 
-{ Runtime extensions parse these formats, not the module loader; they must
-  parse the bytes verified against the pin, like every other package file. }
-procedure TProviderImportTests.TestVerifyOnLoadCoversRuntimeDataModules;
+{ The file extensions that load as data modules: the engine's own that are
+  not scripts, and those the loader profile's runtime extensions register.
+  The caller owns the list. }
+function TProviderImportTests.DataModuleExtensions: TStringList;
+var
+  Engine: TGocciaEngine;
+  Executor: TGocciaExecutor;
+  I: Integer;
+  Runtime: TGocciaRuntimeCore;
+  Source: TStringList;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;
+  Result.Duplicates := dupIgnore;
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := TGocciaEngine.Create(ProjectPath('app.mjs'), Source, Executor,
+    TGocciaCapabilities.None);
+  try
+    try
+      for I := Low(EngineModuleImportExtensions) to
+          High(EngineModuleImportExtensions) do
+        if not IsScriptExtension(EngineModuleImportExtensions[I]) then
+          Result.Add(EngineModuleImportExtensions[I]);
+      Runtime := AttachRuntime(Engine);
+      ApplyLoaderRuntimeProfile(Runtime);
+      Runtime.CollectModuleExtensions(Result);
+    except
+      Result.Free;
+      raise;
+    end;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+{ A file imported as data is parsed from the bytes verified against the pin,
+  like every other package file, whether a runtime extension loads it or the
+  module loader does. The cases come from the extensions that load this way,
+  so a loader added to the loader profile fails here until it has a fixture,
+  and then has to pass. }
+procedure TProviderImportTests.TestVerifyOnLoadCoversEveryDataModuleExtension;
+var
+  Bytecode: Boolean;
+  Covered: TStringList;
+  Extension: string;
+  Extensions: TStringList;
+  Failures: TStringList;
+  Fixture: TRuntimeModuleFixture;
+  I: Integer;
+  Mode: string;
+  Outcome: TRunOutcome;
+begin
+  Failures := TStringList.Create;
+  try
+    Extensions := DataModuleExtensions;
+    Covered := TStringList.Create;
+    try
+      for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+      begin
+        Extension := ExtractFileExt(RUNTIME_MODULE_FIXTURES[I].Path);
+        Covered.Add(Extension);
+        { A fixture for an extension nothing loads as data proves nothing. }
+        if Extensions.IndexOf(Extension) < 0 then
+          Failures.Add('Nothing loads ' + Extension +
+            ' as a data module; its fixture tests nothing');
+      end;
+      for I := 0 to Extensions.Count - 1 do
+        if Covered.IndexOf(Extensions[I]) < 0 then
+          Failures.Add('No verify-on-load fixture for the module extension ' +
+            Extensions[I] + '; add one to RUNTIME_MODULE_FIXTURES');
+    finally
+      Covered.Free;
+      Extensions.Free;
+    end;
+
+    FInstallLoaderProfile := True;
+    for Bytecode := False to True do
+      for I := Low(RUNTIME_MODULE_FIXTURES) to High(RUNTIME_MODULE_FIXTURES) do
+      begin
+        Fixture := RUNTIME_MODULE_FIXTURES[I];
+        if Bytecode then
+          Mode := ' (bytecode)'
+        else
+          Mode := ' (interpreted)';
+        { Untampered, the pinned bytes load. }
+        FSwapPath := '';
+        Outcome := Run('import { value } from "raylib";' + sLineBreak +
+          'const m = await import("raypkg/' + Fixture.Path + '");' +
+          sLineBreak + 'globalThis.result = ' + Fixture.Read + ';',
+          TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+        if (Outcome.ErrorMessage <> '') or (Outcome.Result <> Fixture.Name) then
+          Failures.Add(Fixture.Path + Mode +
+            ' did not load its pinned content: got "' + Outcome.Result +
+            '", error "' + Outcome.ErrorMessage + '"');
+
+        { Tampered after materialization, it is refused before parsing. }
+        FSwapPath := CachePath(Fixture.Path);
+        FSwapText := Fixture.Tampered;
+        Outcome := Run('import { value } from "raylib";' + sLineBreak +
+          'swap();' + sLineBreak +
+          'try { const m = await import("raypkg/' + Fixture.Path + '");' +
+          sLineBreak + 'globalThis.result = ' + Fixture.Read + '; }' +
+          sLineBreak + 'catch (error) { globalThis.result = error.message; }',
+          TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
+        if Outcome.Result <> 'Provider package file ' + PACKAGE_KEY + '/' +
+           Fixture.Path + ' changed after it was verified' then
+          Failures.Add(Fixture.Path + Mode +
+            ' was not refused after it changed: got "' + Outcome.Result + '"');
+        { Materialize afresh for the next file. }
+        DeleteTree(ProjectPath('.goccia/packages'));
+      end;
+
+    { Fail carries the list; Expect could only report its length. }
+    if Failures.Count > 0 then
+      Fail(Trim(Failures.Text));
+    Expect<Integer>(Failures.Count).ToBe(0);
+  finally
+    Failures.Free;
+  end;
+end;
+
+{ An import attribute picks the loader whatever the file's extension, and
+  `bytes` reads through its own path. }
+procedure TProviderImportTests.TestVerifyOnLoadCoversTextAndBytesImports;
 const
-  DATA_FILES: array[0..5] of string = ('vendor/config.toml',
-    'vendor/config.yaml', 'vendor/config.json5', 'vendor/rows.csv',
-    'vendor/rows.tsv', 'vendor/rows.jsonl');
-  DATA_NAMES: array[0..5] of string = ('toml', 'yaml', 'json5', 'csv', 'tsv',
-    'jsonl');
-  TAMPERED_TEXT: array[0..5] of string = ('name = "evil"', 'name: evil',
-    '{ name: "evil" }', 'name' + #10 + 'evil', 'name' + #10 + 'evil',
-    '{"name": "evil"}');
-  READ_NAME = 'globalThis.result = ("name" in m) ? m.name : m[0].name;';
+  ATTRIBUTE_TYPES: array[0..1] of string = ('text', 'bytes');
 var
   Bytecode: Boolean;
   I: Integer;
   Outcome: TRunOutcome;
 begin
-  FInstallDataFormats := True;
   for Bytecode := False to True do
-    for I := Low(DATA_FILES) to High(DATA_FILES) do
+    for I := Low(ATTRIBUTE_TYPES) to High(ATTRIBUTE_TYPES) do
     begin
-      { Untampered, the extension loads the pinned bytes. }
-      FSwapPath := '';
-      Outcome := Run('import { value } from "raylib";' + sLineBreak +
-        'const m = await import("raypkg/' + DATA_FILES[I] + '");' +
-        sLineBreak + READ_NAME,
-        TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
-      Expect<string>(Outcome.ErrorMessage).ToBe('');
-      Expect<string>(Outcome.Result).ToBe(DATA_NAMES[I]);
-
-      { Tampered after materialization, it is refused before parsing. }
-      FSwapPath := CachePath(DATA_FILES[I]);
-      FSwapText := TAMPERED_TEXT[I];
+      FSwapPath := CachePath('bindings/late.ts');
+      FSwapText := 'export const late = "evil";';
       Outcome := Run('import { value } from "raylib";' + sLineBreak +
         'swap();' + sLineBreak +
-        'try { const m = await import("raypkg/' + DATA_FILES[I] + '");' +
-        sLineBreak + READ_NAME + ' }' + sLineBreak +
+        'try { const m = await import("ray/late.ts", { with: { type: "' +
+        ATTRIBUTE_TYPES[I] + '" } }); globalThis.result = "loaded " + ' +
+        'm.default.length; }' + sLineBreak +
         'catch (error) { globalThis.result = error.message; }',
         TGocciaCapabilities.None.Allow(gcImport, 'github'), Bytecode);
       Expect<string>(Outcome.Result).ToBe('Provider package file ' +
-        PACKAGE_KEY + '/' + DATA_FILES[I] + ' changed after it was verified');
-      { Materialize afresh for the next file. }
+        PACKAGE_KEY + '/bindings/late.ts changed after it was verified');
       DeleteTree(ProjectPath('.goccia/packages'));
     end;
 end;
