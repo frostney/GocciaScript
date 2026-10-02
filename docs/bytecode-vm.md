@@ -436,3 +436,4 @@ During code review, the following findings were investigated and determined to b
 - Do not add new bytecode/runtime concepts under old generic naming.
 - Prefer `TGoccia*` bytecode and VM types in new code.
 - Keep interpreter and bytecode semantics aligned through shared runtime objects, not conversion layers.
+- Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.
