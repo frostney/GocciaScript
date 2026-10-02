@@ -13843,59 +13843,63 @@ end;
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
   const ATemplate: TGocciaFunctionTemplate;
   const APrevCovLine: UInt32; const AProfileTimestamp: Int64);
+var
+  Saved: PGocciaVMCallFrame;
 begin
   CheckStackDepth(FFrameDepth + 1);
   if FFrameStackCount >= Length(FFrameStack) then
     SetLength(FFrameStack, FFrameStackCount * 2 + 8);
-  FFrameStack[FFrameStackCount].Template := ATemplate;
-  FFrameStack[FFrameStackCount].IP := AFrameIP;
-  FFrameStack[FFrameStackCount].ReturnRegister := AResultRegister;
-  FFrameStack[FFrameStackCount].RegisterBase := FRegisterBase;
-  FFrameStack[FFrameStackCount].RegisterCount := FRegisterCount;
-  FFrameStack[FFrameStackCount].LocalCellBase := FLocalCellBase;
-  FFrameStack[FFrameStackCount].LocalCellCount := FLocalCellCount;
-  FFrameStack[FFrameStackCount].ArgumentBase := FArgumentBase;
-  FFrameStack[FFrameStackCount].ArgCount := FArgCount;
-  FFrameStack[FFrameStackCount].Closure := FCurrentClosure;
-  FFrameStack[FFrameStackCount].HandlerCount := FHandlerStack.Count;
-  FFrameStack[FFrameStackCount].PrevCovLine := APrevCovLine;
-  FFrameStack[FFrameStackCount].ProfileEntryTimestamp := AProfileTimestamp;
-  FFrameStack[FFrameStackCount].NewTarget := Pointer(FCurrentNewTarget);
-  FFrameStack[FFrameStackCount].GlobalScope := Pointer(FGlobalScope);
-  FFrameStack[FFrameStackCount].DynamicVarScope :=
-    Pointer(FCurrentDynamicVarScope);
-  FFrameStack[FFrameStackCount].ExecutionContextPushed :=
-    FCurrentExecutionContextPushed;
+  // Through a pointer: indexing the array for each field recomputes the
+  // element address every time.
+  Saved := @FFrameStack[FFrameStackCount];
+  Saved^.Template := ATemplate;
+  Saved^.IP := AFrameIP;
+  Saved^.ReturnRegister := AResultRegister;
+  Saved^.RegisterBase := FRegisterBase;
+  Saved^.RegisterCount := FRegisterCount;
+  Saved^.LocalCellBase := FLocalCellBase;
+  Saved^.LocalCellCount := FLocalCellCount;
+  Saved^.ArgumentBase := FArgumentBase;
+  Saved^.ArgCount := FArgCount;
+  Saved^.Closure := FCurrentClosure;
+  Saved^.HandlerCount := FHandlerStack.Count;
+  Saved^.PrevCovLine := APrevCovLine;
+  Saved^.ProfileEntryTimestamp := AProfileTimestamp;
+  Saved^.NewTarget := Pointer(FCurrentNewTarget);
+  Saved^.GlobalScope := Pointer(FGlobalScope);
+  Saved^.DynamicVarScope := Pointer(FCurrentDynamicVarScope);
+  Saved^.ExecutionContextPushed := FCurrentExecutionContextPushed;
   Inc(FFrameStackCount);
 end;
 
 function TGocciaVM.PopFrame(var AFrame: TGocciaVMCallFrame;
   out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
+var
+  Saved: PGocciaVMCallFrame;
 begin
   Dec(FFrameStackCount);
-  ATemplate := FFrameStack[FFrameStackCount].Template;
-  AFrame.IP := FFrameStack[FFrameStackCount].IP;
+  Saved := @FFrameStack[FFrameStackCount];
+  ATemplate := Saved^.Template;
+  AFrame.IP := Saved^.IP;
   AFrame.Template := ATemplate;
-  FRegisterBase := FFrameStack[FFrameStackCount].RegisterBase;
-  FRegisterCount := FFrameStack[FFrameStackCount].RegisterCount;
+  FRegisterBase := Saved^.RegisterBase;
+  FRegisterCount := Saved^.RegisterCount;
   FRegisters := @FRegisterStack[FRegisterBase];
-  FLocalCellBase := FFrameStack[FFrameStackCount].LocalCellBase;
-  FLocalCellCount := FFrameStack[FFrameStackCount].LocalCellCount;
+  FLocalCellBase := Saved^.LocalCellBase;
+  FLocalCellCount := Saved^.LocalCellCount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
-  FArgumentBase := FFrameStack[FFrameStackCount].ArgumentBase;
-  FArgCount := FFrameStack[FFrameStackCount].ArgCount;
+  FArgumentBase := Saved^.ArgumentBase;
+  FArgCount := Saved^.ArgCount;
   FArguments := @FArgumentStack[FArgumentBase];
-  FCurrentClosure := FFrameStack[FFrameStackCount].Closure;
-  APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
-  AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
-  FCurrentNewTarget := TGocciaValue(FFrameStack[FFrameStackCount].NewTarget);
-  FGlobalScope := TGocciaScope(FFrameStack[FFrameStackCount].GlobalScope);
-  FCurrentDynamicVarScope :=
-    TGocciaScope(FFrameStack[FFrameStackCount].DynamicVarScope);
-  FCurrentExecutionContextPushed :=
-    FFrameStack[FFrameStackCount].ExecutionContextPushed;
-  Result := FFrameStack[FFrameStackCount].ReturnRegister;
+  FCurrentClosure := Saved^.Closure;
+  APrevCovLine := Saved^.PrevCovLine;
+  AProfileTimestamp := Saved^.ProfileEntryTimestamp;
+  FCurrentNewTarget := TGocciaValue(Saved^.NewTarget);
+  FGlobalScope := TGocciaScope(Saved^.GlobalScope);
+  FCurrentDynamicVarScope := TGocciaScope(Saved^.DynamicVarScope);
+  FCurrentExecutionContextPushed := Saved^.ExecutionContextPushed;
+  Result := Saved^.ReturnRegister;
 end;
 
 procedure TGocciaVM.TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
@@ -14152,6 +14156,7 @@ procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
 var
   I, RegisterWindow: Integer;
   ExecutionRealm: TGocciaRealm;
+  FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
 begin
   AProfileTimestamp := 0;
@@ -14198,7 +14203,10 @@ begin
     else
       FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
 
-  AFrame := Default(TGocciaVMCallFrame);
+  // The dispatch loop's frame record carries only the instruction pointer and
+  // the template; its other fields exist for the entries PushFrame saves and
+  // are never read from this record, so they are not cleared here.
+  AFrame.IP := 0;
   AFrame.Template := ATemplate;
 
   if not ATemplate.IsArrow then
@@ -14248,7 +14256,16 @@ begin
      not TemplateUsesGlobalEvalEnvironment(ATemplate) then
     EnsureCurrentDynamicVarScope;
 
-  ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
+  // BytecodeClosureExecutionRealm, with the class of a bytecode function
+  // compared first: it is what almost every closure belongs to, and an exact
+  // class comparison is one load where `is` is a call.
+  ExecutionRealm := FRealm;
+  FunctionValue := AClosure.FunctionValue;
+  if Assigned(FunctionValue) and
+     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
+      (FunctionValue is TGocciaFunctionBase)) and
+     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
+    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
 
   if APushExecutionContext and Assigned(ExecutionRealm) then
   begin
@@ -14265,8 +14282,7 @@ begin
             Pointer(FExecutionSourcePath) then
       InternExecutionSourcePath(FCurrentModuleSourcePath);
     TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
-      ExecutionRealm, FGlobalScope, AClosure.FunctionValue,
-      FExecutionSourcePathRef);
+      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
     FCurrentExecutionContextPushed := True;
   end;
 
