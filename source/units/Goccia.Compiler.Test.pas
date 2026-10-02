@@ -43,7 +43,9 @@ type
       const AEnableConstPropagation: Boolean = True;
       const AEnableDeadBranchElimination: Boolean = True;
       const ATraditionalForLoops: Boolean = False;
-      const ANonStrictMode: Boolean = False): TGocciaBytecodeModule;
+      const ANonStrictMode: Boolean = False;
+      const AVarDeclarations: Boolean = False;
+      const ADirectEvalAvailable: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -84,6 +86,23 @@ type
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
     procedure TestCoverageKeepsConstOperandCopies;
+    procedure TestParameterOperandsSkipGetLocal;
+    procedure TestDirectEvalHostKeepsOperandCopies;
+    procedure TestDirectEvalInFunctionKeepsLaterOperandCopies;
+    procedure TestMethodParameterOperandsSkipGetLocal;
+    procedure TestLetOperandsSkipGetLocal;
+    procedure TestLetOperandBeforeDeclarationKeepsGetLocal;
+    procedure TestOperandRebindingKeepsGetLocal;
+    procedure TestCapturedLetOperandKeepsGetLocal;
+    procedure TestLoopThatCreatesClosureKeepsGetLocal;
+    procedure TestSwitchClauseForgetsInitializedLets;
+    procedure TestDefaultParameterValueKeepsGetLocal;
+    procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
+    procedure TestCountedForVariableOperandSkipsGetLocal;
+    procedure TestCoverageKeepsLetAndParameterOperandCopies;
+    procedure TestAssignmentToInitializedLetSkipsProbe;
+    procedure TestCompoundAssignmentReadsInitializedLetDirectly;
+    procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
@@ -161,6 +180,40 @@ begin
     TestSwitchClauseForgetsInitializedConsts);
   Test('Coverage keeps const operand copies',
     TestCoverageKeepsConstOperandCopies);
+  Test('Parameter operands skip OP_GET_LOCAL',
+    TestParameterOperandsSkipGetLocal);
+  Test('A host with direct eval keeps the copy of let and parameter operands',
+    TestDirectEvalHostKeepsOperandCopies);
+  Test('A function keeps operand copies from its first direct eval onwards',
+    TestDirectEvalInFunctionKeepsLaterOperandCopies);
+  Test('Method parameter operands skip OP_GET_LOCAL',
+    TestMethodParameterOperandsSkipGetLocal);
+  Test('Initialized let operands skip OP_GET_LOCAL',
+    TestLetOperandsSkipGetLocal);
+  Test('Let operands before the declaration keep OP_GET_LOCAL',
+    TestLetOperandBeforeDeclarationKeepsGetLocal);
+  Test('An operand that a later operand rebinds keeps OP_GET_LOCAL',
+    TestOperandRebindingKeepsGetLocal);
+  Test('A captured let operand keeps OP_GET_LOCAL',
+    TestCapturedLetOperandKeepsGetLocal);
+  Test('A loop that creates a closure keeps OP_GET_LOCAL',
+    TestLoopThatCreatesClosureKeepsGetLocal);
+  Test('Switch clause forgets initialized lets',
+    TestSwitchClauseForgetsInitializedLets);
+  Test('A default parameter value keeps OP_GET_LOCAL',
+    TestDefaultParameterValueKeepsGetLocal);
+  Test('An operand that is its own destination keeps OP_GET_LOCAL',
+    TestOperandThatIsItsOwnDestinationKeepsGetLocal);
+  Test('A counted for variable operand skips OP_GET_LOCAL',
+    TestCountedForVariableOperandSkipsGetLocal);
+  Test('Coverage keeps let and parameter operand copies',
+    TestCoverageKeepsLetAndParameterOperandCopies);
+  Test('Assignment to an initialized let skips the TDZ probe',
+    TestAssignmentToInitializedLetSkipsProbe);
+  Test('Compound assignment reads an initialized let directly',
+    TestCompoundAssignmentReadsInitializedLetDirectly);
+  Test('A numeric immediate condition reads a parameter directly',
+    TestNumericImmediateConditionReadsParameterDirectly);
   Test('Discarded store skips the result move',
     TestDiscardedStoreSkipsResultMove);
   Test('this property read uses local register',
@@ -315,7 +368,9 @@ function TTestCompiler.CompileSource(
   const AEnableConstPropagation: Boolean;
   const AEnableDeadBranchElimination: Boolean;
   const ATraditionalForLoops: Boolean;
-  const ANonStrictMode: Boolean): TGocciaBytecodeModule;
+  const ANonStrictMode: Boolean;
+  const AVarDeclarations: Boolean;
+  const ADirectEvalAvailable: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -328,10 +383,11 @@ begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-  if ATraditionalForLoops then
+  if ATraditionalForLoops or AVarDeclarations then
   begin
     ParserOptions := Parser.Options;
-    ParserOptions.TraditionalForLoopsEnabled := True;
+    ParserOptions.TraditionalForLoopsEnabled := ATraditionalForLoops;
+    ParserOptions.VarDeclarationsEnabled := AVarDeclarations;
     Parser.ApplyOptions(ParserOptions);
   end;
   ProgramNode := Parser.Parse;
@@ -343,6 +399,7 @@ begin
     Compiler.NonStrictMode := ANonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape := APreserveCoverageShape;
+    Options.DirectEvalAvailable := ADirectEvalAvailable;
     Options.EnableConstantFolding := AEnableConstantFolding;
     Options.EnableConstPropagation := AEnableConstPropagation;
     Options.EnableDeadBranchElimination := AEnableDeadBranchElimination;
@@ -797,6 +854,488 @@ begin
   end;
 end;
 
+// The sources below read their inputs from properties (`p.x`) so that no
+// operand is a compile-time constant; a literal initializer would be folded
+// and the test would count nothing.
+
+procedure TTestCompiler.TestParameterOperandsSkipGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (a, b) => { a.r = a * b + a; a[b] = b; return a[b] < b; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_ARRAY_SET)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_ARRAY_GET)).ToBe(1);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDirectEvalHostKeepsOperandCopies;
+const
+  SOURCE =
+    'const sum = (a, b) => { let t = a * b; const k = a * 2; return t + a + k; };';
+
+  function CopiesWith(const ADirectEvalAvailable: Boolean): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(SOURCE, False, False, False, True, True, True,
+      False, False, False, ADirectEvalAvailable);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesWith(False)).ToBe(0);
+  // Each read of a parameter or of the let binding is copied again: a three
+  // times, b and t once. The const k is not: nothing can write it.
+  Expect<Integer>(CopiesWith(True)).ToBe(5);
+end;
+
+procedure TTestCompiler.TestDirectEvalInFunctionKeepsLaterOperandCopies;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // A call to any other global reads every operand in place.
+  Expect<Integer>(CopiesIn(
+    'const f = (a) => { const before = a * 2; evil("0"); return a * 3 + before; };')).ToBe(0);
+  // After a direct eval the parameter is copied again, for `a * 3`; the read
+  // before the eval call and the const stay in place.
+  Expect<Integer>(CopiesIn(
+    'const f = (a) => { const before = a * 2; eval("0"); return a * 3 + before; };')).ToBe(1);
+
+  // In a loop the eval call comes back around, so the reads compiled ahead of
+  // it are copied as well: t and a in `t + a * 2`. The loop is examined before
+  // it is compiled. Both loops copy `items` to iterate over it.
+  Expect<Integer>(
+    CopiesIn(
+      'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; eval("0"); } return t; };') -
+    CopiesIn(
+      'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; evil("0"); } return t; };')).ToBe(2);
+end;
+
+procedure TTestCompiler.TestMethodParameterOperandsSkipGetLocal;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesIn(
+    'const o = { m(a, b) { a.r = a * b; } };')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'class C { m(a, b) { a.r = a * b; } }')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'class C { static m(a, b) { a.r = a * b; } }')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const k = "m"; class C { [k](a, b) { a.r = a * b; } }')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'class C { constructor(a, b) { a.r = a * b; } }')).ToBe(0);
+  // A rest parameter is marked like any other; a destructured one is not.
+  Expect<Integer>(CopiesIn(
+    'const f = (a, ...rest) => { a.r = rest * a; };')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const f = ({ a }, b) => { b.r = a * b; };')).ToBe(1);
+end;
+
+procedure TTestCompiler.TestLetOperandsSkipGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (p) => { let x = p.x; let y; y = p.y; x = x * y + x; ' +
+    'p[y] = x; p.r = x < y ? x - y : y; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // The one copy left moves `y` into the conditional's result register.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLetOperandBeforeDeclarationKeepsGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const early = (p) => { p.r = x * p.y; let x = p.x; p.s = x * p.y; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // Only the read ahead of the declaration keeps its TDZ check.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestOperandRebindingKeepsGetLocal;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // No later operand writes a local: nothing is copied.
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (p.x + 1);')).ToBe(0);
+  // A call copies its receiver and its argument into the call window; the
+  // left operand is still read in place.
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * p.f(a);')).ToBe(2);
+  // The right operand rebinds the left one, which therefore keeps its copy.
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (a = p.x);')).ToBe(1);
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (a += p.x);')).ToBe(1);
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * a++;')).ToBe(1);
+  // The second copy is the TDZ probe of the destructuring assignment.
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * ([a] = p.x);')).ToBe(2);
+  // A write to any other local is refused as well; the check is by shape.
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (p = p.x);')).ToBe(1);
+  // The object and the key of a store are evaluated before the value, so
+  // both keep their copies when the value writes a local.
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; a[p] = (a = p.x); };')).ToBe(2);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; a[p] = (p = a.x); };')).ToBe(2);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; a.r = (a = p.x); };')).ToBe(1);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; a[p] = p.x; };')).ToBe(0);
+  // An element read takes its object before the index rebinds it; the store
+  // around it takes `p` before its value, which holds that assignment.
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; p.s = a[(a = p.x)]; };')).ToBe(2);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; p.s = a[p.x]; };')).ToBe(0);
+  // A less-than condition reads its left operand first.
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { p.r = a * 2; if (a < (a = p.x)) { p.s = 1; } };')).ToBe(1);
+end;
+
+procedure TTestCompiler.TestCapturedLetOperandKeepsGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const outer = (p) => { let x = p.x; let y = p.y; const w = () => { x = 1; }; ' +
+    'p.r = x * y; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // `x` lives in a cell once the closure exists; `y` and `p` do not.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLoopThatCreatesClosureKeepsGetLocal;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // A loop without a closure reads its operands in place.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.r = x * s; } };'))
+    .ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (let s of p.l) { p.r = x * s; } };'))
+    .ToBe(0);
+  // The closure is compiled after the read, so the loop is examined first.
+  // `p` (twice) and `x` are copied; the const `s` is not.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.r = x * s; ' +
+    'p.w = () => s; } };')).ToBe(3);
+  // A loop nested in such a loop inherits the answer.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { ' +
+    'for (const t of p.m) { p.r = x * t; } p.w = () => s; } };')).ToBe(3);
+  // The closure may hide in an accessor, a method or a class.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.r = x * s; ' +
+    'p.w = { get v() { return s; } }; } };')).ToBe(3);
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.r = x * s; ' +
+    'p.w = { m() { return s; } }; } };')).ToBe(3);
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.r = x * s; ' +
+    'p.w = class { m() { return s; } }; } };')).ToBe(3);
+  // Code after the loop is unaffected.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; for (const s of p.l) { p.w = () => s; } ' +
+    'p.r = x * x; };')).ToBe(1);
+end;
+
+procedure TTestCompiler.TestSwitchClauseForgetsInitializedLets;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const pick = (p) => { switch (p.k) { ' +
+    'case 0: let a = p.x; p.r = a * a; a = p.y; break; ' +
+    'case 1: p.r = a * p.y; a = p.x; } };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // The second clause keeps the TDZ check of its read and of its
+      // assignment; the first clause needs neither.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDefaultParameterValueKeepsGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('const f = (a, b = a * a) => a * b;');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // A default value runs while later parameters are still uninitialized,
+      // so its two reads keep the check; the body's reads do not.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestOperandThatIsItsOwnDestinationKeepsGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // `var a` redeclares the parameter, so the initializer is compiled straight
+  // into the register it also reads.
+  Module := CompileSource('const f = (a, p) => { var a = a * p.x; p.r = a; };',
+    False, False, False, True, True, True, False, False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCountedForVariableOperandSkipsGetLocal;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const f = (p) => { for (let i = 0; i < 3; i++) { p[i] = i * p.x; } };',
+    False, False, False, True, True, True, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCoverageKeepsLetAndParameterOperandCopies;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const sum = (a, p) => { let x = p.x; x = x * a + x; x += a; ' +
+    'return a < x ? x : a; };', False, True);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // x, a, x and the assignment probe; x and a for `+=`; a and x for `<`;
+      // one copy into the result register in each branch.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(10);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource(
+    'const sum = (a, p) => { let x = p.x; x = x * a + x; x += a; ' +
+    'return a < x ? x : a; };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      // Without coverage only the moves into a result register remain: the
+      // right-hand side of `+=` and the two branches of the conditional.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestAssignmentToInitializedLetSkipsProbe;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_SET_LOCAL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; x = p.y; };')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { a = p.y; };')).ToBe(0);
+  // An assignment compiled ahead of the declaration can run in the TDZ.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { x = p.y; let x = p.x; };')).ToBe(1);
+  // So can one inside the binding's own initializer.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = (x = p.y); };')).ToBe(1);
+end;
+
+procedure TTestCompiler.TestCompoundAssignmentReadsInitializedLetDirectly;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_SET_LOCAL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; x += p.y; };')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { a *= p.y; };')).ToBe(0);
+  // The old value is taken before a right-hand side that rebinds the target.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; x += (x = p.y); };')).ToBe(1);
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { x += p.y; let x = p.x; };')).ToBe(1);
+end;
+
+procedure TTestCompiler.TestNumericImmediateConditionReadsParameterDirectly;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const fib = (n) => n <= 1 ? n : fib(n - 1) + fib(n - 2);' +
+    '  fib(20);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_JUMP_IF_NUM_NOT_LTE_IMM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(2);
+      // The remaining copy moves `n` into the result register.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestDiscardedStoreSkipsResultMove;
 var
   Module: TGocciaBytecodeModule;
@@ -811,9 +1350,9 @@ begin
     if Assigned(Func) then
     begin
       // The two declarations move their initializer into the binding; the
-      // two stores move nothing.
+      // two stores move nothing, and neither copies an operand.
       Expect<Integer>(CountOp(Func, OP_MOVE)).ToBe(2);
-      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
     end;
   finally
     Module.Free;

@@ -435,6 +435,7 @@ type
     procedure ThrowBytecodePrivateTypeError(const AKey,
       AMessage: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
+    function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
@@ -565,6 +566,7 @@ uses
 
   BigInteger,
   NumberBits,
+  NumericText,
   OrderedStringMap,
   TextSemantics,
   TimingUtils,
@@ -634,6 +636,8 @@ uses
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
+  // First character of both prefixes above.
+  BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
@@ -2009,18 +2013,33 @@ end;
 
 // Presence probe for the holder level: pointer identity suffices — a
 // prefix shape's covered entries stay valid as the holder map grows, and
-// the descriptor is re-read by entry index on every hit.
+// the descriptor is re-read by entry index on every hit. The map's last
+// computed shape is compared first, as the own tier does: a holder shape is
+// never nil and never the dictionary sentinel (the fill declines both), so a
+// match there is a shape the map really went through, and a shaped map only
+// appends. EnsureShape runs only when that misses, for a map whose shape has
+// not caught up with its entries yet.
 function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Map: TGocciaShapedPropertyMap;
 begin
-  Result := Pointer(
-    TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
+  Map := TGocciaShapedPropertyMap(AObject.Properties);
+  Result := (Pointer(Map.Shape) = ACachedShape) or
+    (Pointer(Map.EnsureShape) = ACachedShape);
 end;
 
 // Absence probe for receiver/intermediate levels: pointer identity PLUS
 // full coverage (Depth = Count). A transition-capped map can grow while
 // EnsureShape keeps returning the same prefix pointer, so pointer equality
 // alone cannot prove a name is still absent.
+// The map's last computed shape is tried first. A shaped map only appends,
+// so a shape as deep as the map has entries (or no shape and no entries)
+// describes every entry: EnsureShape would have nothing to add to it, and
+// the check needs neither the call nor EnsureShape's read of the current
+// realm. Any other state, a stale shape included, goes through EnsureShape
+// as before. What the shortcut skips is EnsureShape's other duty: a map
+// owned by another realm is not switched to dictionary mode by a hit.
 function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -2028,15 +2047,29 @@ var
   LevelShape: TGocciaShape;
 begin
   Map := TGocciaShapedPropertyMap(AObject.Properties);
+  LevelShape := Map.Shape;
+  if Pointer(LevelShape) = ACachedShape then
+  begin
+    if Assigned(LevelShape) then
+    begin
+      if LevelShape.Depth = Map.CountFast then
+        Exit(True);
+    end
+    else if Map.CountFast = 0 then
+      Exit(True);
+  end;
   LevelShape := Map.EnsureShape;
   Result := (Pointer(LevelShape) = ACachedShape) and
     ((not Assigned(LevelShape)) or (LevelShape.Depth = Map.CountFast));
 end;
 
-// Validate a prototype-holder cache entry: receiver gate, fresh-shape
-// absence below the holder, fresh-shape presence at the holder, exact
-// TGocciaObjectValue chain levels (exotic objects may share shapes but not
-// lookup semantics), then re-read the holder descriptor by entry index.
+// Validate a prototype-holder cache entry: full-coverage shape absence below
+// the holder, shape presence at the holder (a stale prefix shape is enough
+// there), exact TGocciaObjectValue chain levels (exotic objects may share
+// shapes but not lookup semantics), then re-read the holder descriptor by
+// entry index.
+// Contract: AReceiver has passed VMPropertyReadCacheableReceiver. The one
+// caller, OP_GET_PROP_CONST, gates on it before either cache tier.
 function VMTryGetCachedProtoProperty(const AReceiver: TGocciaObjectValue;
   const ACache: PGocciaProtoReadCacheEntry;
   out AValue: TGocciaValue): Boolean;
@@ -2048,8 +2081,6 @@ begin
   AValue := nil;
   Result := False;
   if ACache^.HolderLevel = 0 then
-    Exit;
-  if not VMPropertyReadCacheableReceiver(AReceiver) then
     Exit;
   if not VMAbsenceShapeMatches(AReceiver, ACache^.Shapes[0]) then
     Exit;
@@ -2375,6 +2406,19 @@ begin
   end;
 end;
 
+// ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
+// opcodes. A grkInt operand is already an integer, so its low 32 bits are the
+// answer; a grkFloat operand goes through the same NumberToInt32 the boxed
+// operator helpers reach through ToInt32Value. ToUint32 is the same 32 bits
+// read as unsigned, so the shift opcodes cast this result to LongWord.
+function VMRegisterToInt32(const ARegister: TGocciaRegister): LongInt; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if ARegister.Kind = grkInt then
+    Result := LongInt(ARegister.IntValue)
+  else
+    Result := NumberToInt32(ARegister.FloatValue);
+end;
+
 // Rooted slow-path entry points for the binary operators.
 //
 // Materializing an operand register allocates: RegisterToValue builds a fresh
@@ -2431,6 +2475,93 @@ begin
   end;
 end;
 
+// ES2026 §7.2.14 IsStrictlyEqual(x, y) decided on the registers, for the
+// operand pairs where materializing a value could not change the answer.
+//
+// vseUndecided sends the pair to the generic helper. That is every pair this
+// function cannot settle from the register kinds, one pointer compare and
+// IsPrimitive alone:
+//   - a hole, or an object register that holds nil (read as undefined);
+//   - an object register that holds a primitive, compared with a scalar or
+//     with another primitive object: a register is not guaranteed to hold its
+//     value in canonical form, so the object may be an allocated number,
+//     boolean, null or undefined that equals a scalar, or a string or BigInt
+//     that equals another by content;
+//   - a number object compared with itself, which is unequal when it is NaN.
+type
+  TGocciaVMStrictEquality = (vseUndecided, vseEqual, vseNotEqual);
+
+function VMStrictEqualRegisters(
+  const ALeft, ARight: TGocciaRegister): TGocciaVMStrictEquality;
+const
+  DECIDED: array[Boolean] of TGocciaVMStrictEquality = (vseNotEqual, vseEqual);
+var
+  LeftNumber, RightNumber: Double;
+begin
+  Result := vseUndecided;
+  case ALeft.Kind of
+    grkInt, grkFloat:
+      case ARight.Kind of
+        grkInt, grkFloat:
+        begin
+          LeftNumber := RegisterToDouble(ALeft);
+          RightNumber := RegisterToDouble(ARight);
+          // NaN is tested first rather than left to the comparison, as
+          // NumberValuesEqual does.
+          if IsNaN(LeftNumber) or IsNaN(RightNumber) then
+            Result := vseNotEqual
+          else
+            Result := DECIDED[LeftNumber = RightNumber];
+        end;
+        grkUndefined, grkNull, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkUndefined, grkNull:
+      case ARight.Kind of
+        grkUndefined, grkNull:
+          Result := DECIDED[ALeft.Kind = ARight.Kind];
+        grkInt, grkFloat, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkBoolean:
+      case ARight.Kind of
+        grkBoolean:
+          Result := DECIDED[ALeft.BoolValue = ARight.BoolValue];
+        grkInt, grkFloat, grkUndefined, grkNull:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkObject:
+      if Assigned(ALeft.ObjectValue) then
+        case ARight.Kind of
+          grkObject:
+            if ALeft.ObjectValue = ARight.ObjectValue then
+            begin
+              if ALeft.ObjectValue.ClassType <> TGocciaNumberLiteralValue then
+                Result := vseEqual;
+            end
+            else if Assigned(ARight.ObjectValue) and
+               not (ALeft.ObjectValue.IsPrimitive and
+                    ARight.ObjectValue.IsPrimitive) then
+              Result := vseNotEqual;
+          grkInt, grkFloat, grkUndefined, grkNull, grkBoolean:
+            if not ALeft.ObjectValue.IsPrimitive then
+              Result := vseNotEqual;
+        end;
+  end;
+end;
+
 function VMRegisterToStringFast(
   const AValue: TGocciaRegister): TGocciaStringLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -2447,7 +2578,7 @@ begin
       else
         Exit(TGocciaStringLiteralValue.Create('false'));
     grkInt:
-      Exit(TGocciaStringLiteralValue.Create(IntToStr(AValue.IntValue)));
+      Exit(TGocciaStringLiteralValue.Create(IntegerToString(AValue.IntValue)));
     grkFloat:
       Exit(RegisterToValue(AValue).ToStringLiteral);
     grkObject:
@@ -8547,7 +8678,7 @@ begin
       else
         Result := 'false';
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := VMRegisterToStringFast(AKey).Value;
     grkObject:
@@ -8629,7 +8760,7 @@ end;
 function TGocciaVM.PropertyKeyName(const AKey: TGocciaPropertyKey): string;
 begin
   if AKey.Kind = pkkIndex then
-    Result := IntToStr(AKey.Index)
+    Result := IntegerToString(AKey.Index)
   else
     Result := AKey.Name;
 end;
@@ -8724,7 +8855,7 @@ begin
         else
           // Hole, out-of-range, or accessor-shadowed slot: take the slow
           // path so accessor descriptors and prototype lookups run.
-          SetRegister(ADest, ReceiverArray.GetProperty(IntToStr(Key.Index)));
+          SetRegister(ADest, ReceiverArray.GetProperty(IntegerToString(Key.Index)));
     else
       SetRegister(ADest, ReceiverArray.GetProperty(Key.Name));
     end;
@@ -9104,7 +9235,7 @@ function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
 begin
   case AKey.Kind of
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := FormatDouble(AKey.FloatValue);
     grkBoolean:
@@ -12720,7 +12851,44 @@ begin
 end;
 
 
+// A named read whose key is not private and whose receiver is not nullish:
+// the receiver's own lookup, then the primitive's prototype. The generic core
+// owns the private-name strings and the error messages, and with them an
+// implicit exception frame, so this procedure has neither
+// (docs/core-patterns.md, "Managed Locals on Hot Paths"). Both private key
+// prefixes start with '#'; every other key takes the ordinary path below,
+// which is the tail of the core.
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
+  const AKey: string): TGocciaValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if (not Assigned(AObject)) or
+     (AObject.ClassType = TGocciaNullLiteralValue) or
+     (AObject.ClassType = TGocciaUndefinedLiteralValue) or
+     ((AKey <> '') and (AKey[1] = BYTECODE_PRIVATE_KEY_LEAD)) then
+    Exit(GetPropertyValueGeneric(AObject, AKey));
+
+  Result := AObject.GetProperty(AKey);
+  if Assigned(Result) then
+    Exit;
+
+  // A method call on a string primitive reads the method here. Boxing the
+  // string for the read would allocate a String object, its property map and
+  // its hash tables on every call.
+  if (AObject is TGocciaStringLiteralValue) and
+     TryGetStringPrimitiveProperty(TGocciaStringLiteralValue(AObject), AKey,
+       Result) then
+    Exit;
+
+  Boxed := AObject.Box;
+  if Assigned(Boxed) then
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaVM.GetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Boxed: TGocciaObjectValue;

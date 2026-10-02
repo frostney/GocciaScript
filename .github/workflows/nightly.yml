@@ -1,99 +1,120 @@
 name: Nightly
 
-# Publishes the rolling `nightly` prerelease from the build artifacts of a CI
-# run that succeeded for a push to main, at most once per UTC day.
+# Publishes the rolling `nightly` prerelease from the build artifacts of the
+# newest CI run that succeeded for a push to main.
+#
+# It runs on a schedule, the pattern T3 Code uses: every three hours it asks
+# whether that newest passing commit is ahead of the commit the last nightly
+# was built from (or has diverged from it, after a rewritten main). If it is,
+# it publishes; if nothing new has passed CI, the run ends there. A quiet day
+# publishes nothing and a busy one at most eight times, where the earlier rule
+# was once per UTC day whatever landed later.
 #
 # It lives outside ci.yml because a newer main push cancels the superseded CI
 # run as a whole. Inside ci.yml, that cancellation could land between deleting
-# and recreating the `nightly` release. A cancelled or failed CI run never
-# triggers a publish here, because only a successful run qualifies.
+# and recreating the `nightly` release. A cancelled or failed CI run is never
+# published, because only a successful run is looked for.
 #
-# workflow_run always uses this file as it exists on the default branch, so a
+# "Run workflow" publishes the newest passing build at once, without asking
+# whether it is ahead of the last nightly.
+#
+# A scheduled workflow uses this file as it exists on the default branch, so a
 # change here takes effect only after it merges.
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
+  schedule:
+    # Every three hours, off the hour: GitHub delays or drops scheduled runs
+    # queued at minute zero.
+    - cron: "23 */3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   nightly:
-    # Only a successful run for a push to main in this repository. A
-    # workflow_dispatch run on main also reports head_branch main, so the event
-    # check keeps dispatched runs from publishing, as before.
+    # Never from a fork, and a manual run only from main: this job replaces
+    # the published release.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      github.repository == 'frostney/GocciaScript' &&
+      github.ref == 'refs/heads/main'
     concurrency:
       group: nightly-release
       cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
-      # Download the build artifacts of the triggering CI run.
+      # Download the build artifacts of the CI run being published.
       actions: read
       # Delete and recreate the `nightly` release and tag.
       contents: write
     defaults:
       run:
         shell: bash
-    env:
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check if nightly already published today
+      # Which build to publish, and whether there is anything new: the newest
+      # CI run that succeeded for a push to main, and whether its commit is
+      # ahead of (or diverged from) the one the `nightly` tag points at.
+      - name: Find the newest passing build
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TODAY="$(date -u +'%Y-%m-%d')"
-          PUBLISHED="$(gh release view nightly --json publishedAt --jq .publishedAt 2>/dev/null || echo "")"
-          if [ -n "$PUBLISHED" ] && echo "$PUBLISHED" | grep -q "^${TODAY}"; then
+          set -euo pipefail
+          RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
+            --jq '.workflow_runs[0] | select(. != null) | "\(.id) \(.head_sha)"')"
+          if [ -z "$RUN" ]; then
+            echo "No successful CI run for a push to main was found: nothing to publish."
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Nightly already published today (${PUBLISHED}) — skipping."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RUN_ID="${RUN%% *}"
+          HEAD_SHA="${RUN##* }"
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD_SHA}" >> "$GITHUB_OUTPUT"
+
+          # CI keeps build artifacts for one day. A passing run older than
+          # that has nothing left to publish, however far ahead it is.
+          LIVE="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select((.name | startswith("gocciascript-")) and (.expired | not))] | length')"
+          if [ "$LIVE" -eq 0 ]; then
+            echo "The build artifacts of CI run ${RUN_ID} (${HEAD_SHA::8}) have expired: nothing to publish until a newer run passes."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      # A newer push may already have moved main past this commit, with its CI
-      # run still in progress. This run still publishes under the same
-      # once-per-day rule the in-workflow job used: holding off for the newer
-      # run would leave the day without a nightly whenever that run fails or is
-      # cancelled by yet another push. The newer commit then ships in the next
-      # day's nightly. The check only reports the situation, so a failed lookup
-      # never blocks publishing.
-      - name: Report whether main has moved past this commit
-        if: steps.check.outputs.skip != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TRIGGERING_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha 2>/dev/null || echo "")"
-          if [ -z "$MAIN_SHA" ]; then
-            echo "::warning::Could not read main's tip; publishing ${HEAD_SHA}."
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Manual run: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$MAIN_SHA" = "$HEAD_SHA" ]; then
-            echo "main is still at ${HEAD_SHA}."
-            exit 0
+
+          if ! LAST="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/nightly" --jq .object.sha 2>lookup.err)"; then
+            if grep -q 'HTTP 404' lookup.err; then
+              echo "No nightly yet: publishing ${HEAD_SHA} from CI run ${RUN_ID}."
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::error::Could not read the nightly tag: $(cat lookup.err)"
+            exit 1
           fi
-          NEWER_RUNS="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20" \
-            --jq "[.workflow_runs[] | select(.status != \"completed\" and .id != ${TRIGGERING_RUN_ID}) | \"\(.id) (\(.head_sha[0:8]))\"] | join(\", \")" \
-            2>/dev/null || echo "")"
-          if [ -n "$NEWER_RUNS" ]; then
-            echo "::notice::main has moved to ${MAIN_SHA} and CI run(s) ${NEWER_RUNS} are still in progress; publishing ${HEAD_SHA} because no nightly exists for today."
+          STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${LAST}...${HEAD_SHA}" --jq .status)"
+          # `diverged` is main rewritten since the last nightly (a force
+          # push): the tag's commit is no longer an ancestor, and would never
+          # be again, so that counts as new too.
+          if [ "$STATUS" = "ahead" ] || [ "$STATUS" = "diverged" ]; then
+            echo "The newest passing commit (${HEAD_SHA::8}) is ${STATUS} relative to the last nightly (${LAST::8}): publishing from CI run ${RUN_ID}."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::main has moved to ${MAIN_SHA}; publishing ${HEAD_SHA} because no nightly exists for today."
+            echo "The newest passing commit (${HEAD_SHA::8}) is ${STATUS} relative to the last nightly (${LAST::8}): nothing to publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        if: steps.check.outputs.skip != 'true'
+        with:
+          ref: ${{ steps.check.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Download the CI run's build artifacts
         if: steps.check.outputs.skip != 'true'
@@ -101,7 +122,7 @@ jobs:
         with:
           pattern: gocciascript-*
           path: artifacts/
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.check.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Package nightly builds

@@ -87,7 +87,7 @@ Scalar Fast-Path:
 
 ### Shape Saturation (`--profile=opcodes`)
 
-Counts the times an object's layout could not be fully interned in the shape system: `Depth-limit prefixes` when a layout reached the transition depth limit (64 properties), and `Table-capacity events` when the realm's shape table was full. The object keeps the longest interned prefix of its layout, so property reads past that prefix lose the inline-cache fast path. The section, headed `Shape Saturation (degraded property-read caching):`, is printed only when either count is non-zero.
+Counts the times an object's layout could not be fully interned in the shape system: `Depth-limit prefixes` when a layout reached the transition depth limit (64 properties), and `Table-capacity events` when the realm's shape table was full. The object keeps the longest interned prefix of its layout, so property reads past that prefix lose the inline-cache fast path. An event is counted each time such a layout is interned again, which a cache site does when the shape it holds does not match; a site that keeps hitting on the prefix it already holds does not intern and does not count. The section, headed `Shape Saturation (degraded property-read caching):`, is printed only when either count is non-zero.
 
 ### Function Profile (`--profile=functions`)
 

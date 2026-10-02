@@ -765,7 +765,7 @@ test-structure
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`nightly`** (`.github/workflows/nightly.yml`) — Runs after a `CI` run for a push to `main` succeeds, and publishes that run's builds as the `nightly` prerelease at most once per day. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
+**`nightly`** (`.github/workflows/nightly.yml`) — Runs on a schedule, every three hours. It takes the newest `CI` run that succeeded for a push to `main` and publishes that run's builds as the `nightly` prerelease when its commit is ahead of the one the last nightly was built from, or has diverged from it after a rewritten `main`; when nothing new has passed, or the run's one-day build artifacts have expired, it publishes nothing. "Run workflow" on `main` publishes the newest passing build at once. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 

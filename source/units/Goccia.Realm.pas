@@ -57,6 +57,7 @@ type
     FGlobalEnv: TGCManagedObject;
     FHostDefined: TObject;
     FHostFinalize: TGocciaRealmHostFinalize;
+    FHostsDirectEval: Boolean;
     FIdentity: TGocciaRealmIdentity;
     FIntrinsics: TGocciaRealmIntrinsics;
     FLoadedModules: TObject;
@@ -97,6 +98,12 @@ type
     property LoadedModules: TObject read FLoadedModules write FLoadedModules;
     property HostDefined: TObject read FHostDefined write FHostDefined;
     property HostFinalize: TGocciaRealmHostFinalize read FHostFinalize write FHostFinalize;
+    // Set by a host when it installs a function that performs direct eval in
+    // this realm, and never cleared: code created by direct eval stays able to
+    // write the registers of running functions whatever a script later does
+    // with the global `eval` property. The bytecode compiler reads it to keep
+    // let bindings and parameters out of direct register reads.
+    property HostsDirectEval: Boolean read FHostsDirectEval write FHostsDirectEval;
     property Identity: TGocciaRealmIdentity read FIdentity;
   end;
 

@@ -139,7 +139,7 @@ end;
 
 `FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `ns` for values below 0.5μs, `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
 
-`TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
+`TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime` with `CLOCK_MONOTONIC` on Linux and `CLOCK_MONOTONIC_RAW` on macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
 ### Host-Controlled Time And Randomness
 
