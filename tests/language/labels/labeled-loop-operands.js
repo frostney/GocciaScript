@@ -1,6 +1,6 @@
 /*---
 description: let bindings used as operands stay correct when control leaves a loop body through a labeled break or continue
-features: [compat-label, let, closures]
+features: [compat-label, compat-traditional-for-loop, let, closures]
 ---*/
 
 const pass = (value) => value;
