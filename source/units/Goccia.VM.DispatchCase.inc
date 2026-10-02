@@ -1785,6 +1785,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) and
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) and
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
             GetRegister(B), GetRegister(C)));
@@ -1795,6 +1800,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) or
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) or
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseOr,
             GetRegister(B), GetRegister(C)));
@@ -1805,6 +1815,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) xor
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) xor
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseXor,
             GetRegister(B), GetRegister(C)));
@@ -1815,6 +1830,11 @@
           FRegisters[A] := RegisterInt(LongInt(
             LongWord(FRegisters[B].IntValue) shl
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(LongInt(
+            LongWord(VMRegisterToInt32(FRegisters[B])) shl
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateLeftShift,
             GetRegister(B), GetRegister(C)));
@@ -1825,6 +1845,11 @@
           FRegisters[A] := RegisterInt(SignedRightShiftInt32(
             LongInt(FRegisters[B].IntValue),
             LongWord(FRegisters[C].IntValue)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(SignedRightShiftInt32(
+            VMRegisterToInt32(FRegisters[B]),
+            LongWord(VMRegisterToInt32(FRegisters[C]))))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1835,6 +1860,11 @@
           FRegisters[A] := VMIntResult(Int64(LongWord(
             FRegisters[B].IntValue) shr
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMIntResult(Int64(LongWord(
+            VMRegisterToInt32(FRegisters[B])) shr
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateUnsignedRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1842,6 +1872,9 @@
       OP_BNOT:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := RegisterInt(not LongInt(FRegisters[B].IntValue))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := RegisterInt(
+            not NumberToInt32(FRegisters[B].FloatValue))
         else
           SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
