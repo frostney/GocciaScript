@@ -99,6 +99,16 @@ function IsNonConfigurableStringExoticProperty(
   const APrimitive: TGocciaStringLiteralValue;
   const AName: string): Boolean;
 
+// The value a named property read yields on a string primitive: what a String
+// object boxed from it for the read would answer, without creating one. Such a
+// box has no properties of its own beyond its characters and its length, so
+// the answer is one of those or String.prototype's, looked up with the
+// primitive as the receiver. False when the realm has no String.prototype
+// yet; the caller boxes, which creates it.
+function TryGetStringPrimitiveProperty(
+  const APrimitive: TGocciaStringLiteralValue; const AName: string;
+  out AValue: TGocciaValue): Boolean;
+
 
 implementation
 
@@ -131,6 +141,40 @@ uses
   Goccia.Values.SymbolValue,
   Goccia.Values.ToObject;
 
+// True when AName is the canonical decimal form of an integer in 0..MaxInt:
+// the names that can be a character index. The same strings pass
+// `TryStrToInt(AName, I) and (AName = IntToStr(I)) and (I >= 0)`, but those two
+// calls each convert between UnicodeString and AnsiString through the widestring
+// manager, on every property read of a string.
+function TryParseCanonicalIndex(const AName: string;
+  out AIndex: Integer): Boolean;
+const
+  MAXIMUM_DIGITS = 10;
+var
+  I, NameLength: Integer;
+  Accumulated: Int64;
+begin
+  AIndex := 0;
+  Result := False;
+  NameLength := Length(AName);
+  if (NameLength = 0) or (NameLength > MAXIMUM_DIGITS) then
+    Exit;
+  // A leading zero is canonical only as the single digit "0".
+  if (AName[1] = '0') and (NameLength > 1) then
+    Exit;
+  Accumulated := 0;
+  for I := 1 to NameLength do
+  begin
+    if (AName[I] < '0') or (AName[I] > '9') then
+      Exit;
+    Accumulated := Accumulated * 10 + (Ord(AName[I]) - Ord('0'));
+  end;
+  if Accumulated > High(Integer) then
+    Exit;
+  AIndex := Integer(Accumulated);
+  Result := True;
+end;
+
 function IsNonConfigurableStringExoticProperty(
   const APrimitive: TGocciaStringLiteralValue;
   const AName: string): Boolean;
@@ -142,11 +186,11 @@ begin
     Exit(True);
 
   Result := False;
-  if not TryStrToInt(AName, Index) or (AName <> IntToStr(Index)) then
+  if not TryParseCanonicalIndex(AName, Index) then
     Exit;
 
   StringValue := APrimitive.Value;
-  Result := (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue));
+  Result := Index < UTF16CodeUnitLength(StringValue);
 end;
 
 // String.prototype lives in a per-realm slot and is its own method host: the
@@ -218,10 +262,10 @@ begin
   Result := nil;
   // Canonical decimal string indices only; StringGetOwnProperty does not cover
   // "length", which is an ordinary own property created separately.
-  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
+  if TryParseCanonicalIndex(AName, Index) then
   begin
     StringValue := APrimitive.ToStringLiteral.Value;
-    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+    if Index < UTF16CodeUnitLength(StringValue) then
       Result := TGocciaPropertyDescriptorData.Create(
         TGocciaStringLiteralValue.Create(UTF16CodeUnitAt(StringValue, Index)),
         [pfEnumerable]);
@@ -588,22 +632,55 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
-function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+// The two kinds of own property a String exotic object has by construction:
+// a character at a canonical index inside the string, and its length.
+function TryGetStringExoticValue(const APrimitive: TGocciaStringLiteralValue;
+  const AName: string; out AValue: TGocciaValue): Boolean;
 var
   Index: Integer;
   StringValue: string;
 begin
-  StringValue := FPrimitive.ToStringLiteral.Value;
+  Result := True;
+  if TryParseCanonicalIndex(AName, Index) then
+  begin
+    StringValue := APrimitive.ToStringLiteral.Value;
+    if Index < UTF16CodeUnitLength(StringValue) then
+    begin
+      AValue := TGocciaStringLiteralValue.Create(
+        UTF16CodeUnitAt(StringValue, Index));
+      Exit;
+    end;
+  end
+  else if AName = PROP_LENGTH then
+  begin
+    StringValue := APrimitive.ToStringLiteral.Value;
+    AValue := TGocciaNumberLiteralValue.Create(
+      UTF16CodeUnitLength(StringValue));
+    Exit;
+  end;
+  AValue := nil;
+  Result := False;
+end;
 
-  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) and
-     (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
-    Exit(TGocciaStringLiteralValue.Create(
-      UTF16CodeUnitAt(StringValue, Index)));
+function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+begin
+  if not TryGetStringExoticValue(FPrimitive, AName, Result) then
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
+end;
 
-  if AName = PROP_LENGTH then
-    Exit(TGocciaNumberLiteralValue.Create(UTF16CodeUnitLength(StringValue)));
-
-  Result := inherited GetPropertyWithContext(AName, AThisContext);
+function TryGetStringPrimitiveProperty(
+  const APrimitive: TGocciaStringLiteralValue; const AName: string;
+  out AValue: TGocciaValue): Boolean;
+var
+  SharedPrototype: TGocciaObjectValue;
+begin
+  AValue := nil;
+  SharedPrototype := GetSharedStringPrototype;
+  Result := Assigned(SharedPrototype);
+  if not Result then
+    Exit;
+  if not TryGetStringExoticValue(APrimitive, AName, AValue) then
+    AValue := SharedPrototype.GetPropertyWithContext(AName, APrimitive);
 end;
 
 // ES2026 §10.4.3.6 StringExoticObject [[OwnPropertyKeys]]
@@ -685,8 +762,8 @@ begin
   begin
     if InheritedNames[I] = PROP_LENGTH then
       Continue;
-    if TryStrToInt(InheritedNames[I], Index) and
-       (InheritedNames[I] = IntToStr(Index)) and (Index >= LengthValue) then
+    if TryParseCanonicalIndex(InheritedNames[I], Index) and
+       (Index >= LengthValue) then
     begin
       NumericNames[NumericCount] := InheritedNames[I];
       Inc(NumericCount);
@@ -811,10 +888,10 @@ var
   StringValue: string;
 begin
   // Same canonical check as GetOwnPropertyDescriptor: reject "01", "-0", etc.
-  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
+  if TryParseCanonicalIndex(AName, Index) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
-    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+    if Index < UTF16CodeUnitLength(StringValue) then
       Exit(True);
   end;
   if AName = PROP_LENGTH then
@@ -833,10 +910,10 @@ begin
   if AName = PROP_LENGTH then
     Exit(False);
 
-  if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
+  if TryParseCanonicalIndex(AName, Index) then
   begin
     StringValue := FPrimitive.ToStringLiteral.Value;
-    if (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue)) then
+    if Index < UTF16CodeUnitLength(StringValue) then
       Exit(False);
   end;
 

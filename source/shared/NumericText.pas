@@ -18,6 +18,13 @@ function TryTextToUInt64(const AText: string; out AValue: UInt64): Boolean;
 // before delegating the decimal value conversion here.
 function DecimalTextToNumber(const AText: string): Double;
 
+// Decimal text of an integer, written as UTF-16 code units directly.
+// SysUtils.IntToStr returns an AnsiString, and assigning that to a
+// UnicodeString converts through the widestring manager (iconv on Unix):
+// about 800 machine instructions per call. Use this for a property key or any
+// other text built on a hot path.
+function IntegerToString(const AValue: Int64): string;
+
 // ES2026 Number::toString for radix 10. The result is the shortest decimal
 // representation that round-trips to AValue, laid out using ECMAScript's
 // fixed/scientific notation thresholds.
@@ -628,9 +635,9 @@ begin
       AResult := AMantissa[1] + '.' + Copy(AMantissa, 2,
         DigitCount - 1);
     if ScientificExponent >= 0 then
-      AResult := AResult + 'e+' + IntToStr(ScientificExponent)
+      AResult := AResult + 'e+' + IntegerToString(ScientificExponent)
     else
-      AResult := AResult + 'e-' + IntToStr(-ScientificExponent);
+      AResult := AResult + 'e-' + IntegerToString(-ScientificExponent);
   end;
 
   if ANegative then
@@ -638,6 +645,34 @@ begin
 end;
 
 // ES2026 §6.1.6.1.20 Number::toString ( x, radix ) for radix 10.
+function IntegerToString(const AValue: Int64): string;
+const
+  // Nineteen digits and a sign cover Low(Int64).
+  BUFFER_LENGTH = 20;
+var
+  Buffer: array[0..BUFFER_LENGTH - 1] of Char;
+  Position: Integer;
+  Magnitude: UInt64;
+begin
+  // Negate in unsigned arithmetic so that Low(Int64) has a magnitude.
+  if AValue < 0 then
+    Magnitude := UInt64(-(AValue + 1)) + 1
+  else
+    Magnitude := UInt64(AValue);
+  Position := BUFFER_LENGTH;
+  repeat
+    Dec(Position);
+    Buffer[Position] := Char(Ord('0') + Integer(Magnitude mod 10));
+    Magnitude := Magnitude div 10;
+  until Magnitude = 0;
+  if AValue < 0 then
+  begin
+    Dec(Position);
+    Buffer[Position] := '-';
+  end;
+  SetString(Result, PChar(@Buffer[Position]), BUFFER_LENGTH - Position);
+end;
+
 function NumberToString(const AValue: Double): string;
 var
   AbsoluteValue: Double;
@@ -661,7 +696,7 @@ begin
   else
     AbsoluteValue := AValue;
   Decimal := RyuShortestDecimal(AbsoluteValue);
-  FormatECMAScriptDecimal(IntToStr(Int64(Decimal.Mantissa)),
+  FormatECMAScriptDecimal(IntegerToString(Int64(Decimal.Mantissa)),
     Decimal.Exponent, Negative, Result);
 end;
 

@@ -415,6 +415,7 @@ type
     procedure ThrowBytecodePrivateTypeError(const AKey,
       AMessage: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
+    function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
@@ -541,6 +542,7 @@ uses
 
   BigInteger,
   NumberBits,
+  NumericText,
   OrderedStringMap,
   TextSemantics,
   TimingUtils,
@@ -611,6 +613,8 @@ uses
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
+  // First character of both prefixes above.
+  BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
@@ -2401,7 +2405,7 @@ begin
       else
         Exit(TGocciaStringLiteralValue.Create('false'));
     grkInt:
-      Exit(TGocciaStringLiteralValue.Create(IntToStr(AValue.IntValue)));
+      Exit(TGocciaStringLiteralValue.Create(IntegerToString(AValue.IntValue)));
     grkFloat:
       Exit(RegisterToValue(AValue).ToStringLiteral);
     grkObject:
@@ -8453,7 +8457,7 @@ begin
       else
         Result := 'false';
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := VMRegisterToStringFast(AKey).Value;
     grkObject:
@@ -8535,7 +8539,7 @@ end;
 function TGocciaVM.PropertyKeyName(const AKey: TGocciaPropertyKey): string;
 begin
   if AKey.Kind = pkkIndex then
-    Result := IntToStr(AKey.Index)
+    Result := IntegerToString(AKey.Index)
   else
     Result := AKey.Name;
 end;
@@ -8630,7 +8634,7 @@ begin
         else
           // Hole, out-of-range, or accessor-shadowed slot: take the slow
           // path so accessor descriptors and prototype lookups run.
-          SetRegister(ADest, ReceiverArray.GetProperty(IntToStr(Key.Index)));
+          SetRegister(ADest, ReceiverArray.GetProperty(IntegerToString(Key.Index)));
     else
       SetRegister(ADest, ReceiverArray.GetProperty(Key.Name));
     end;
@@ -9010,7 +9014,7 @@ function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
 begin
   case AKey.Kind of
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := FormatDouble(AKey.FloatValue);
     grkBoolean:
@@ -12626,7 +12630,44 @@ begin
 end;
 
 
+// A named read whose key is not private and whose receiver is not nullish:
+// the receiver's own lookup, then the primitive's prototype. The generic core
+// owns the private-name strings and the error messages, and with them an
+// implicit exception frame, so this procedure has neither
+// (docs/core-patterns.md, "Managed Locals on Hot Paths"). Both private key
+// prefixes start with '#'; every other key takes the ordinary path below,
+// which is the tail of the core.
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
+  const AKey: string): TGocciaValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if (not Assigned(AObject)) or
+     (AObject.ClassType = TGocciaNullLiteralValue) or
+     (AObject.ClassType = TGocciaUndefinedLiteralValue) or
+     ((AKey <> '') and (AKey[1] = BYTECODE_PRIVATE_KEY_LEAD)) then
+    Exit(GetPropertyValueGeneric(AObject, AKey));
+
+  Result := AObject.GetProperty(AKey);
+  if Assigned(Result) then
+    Exit;
+
+  // A method call on a string primitive reads the method here. Boxing the
+  // string for the read would allocate a String object, its property map and
+  // its hash tables on every call.
+  if (AObject is TGocciaStringLiteralValue) and
+     TryGetStringPrimitiveProperty(TGocciaStringLiteralValue(AObject), AKey,
+       Result) then
+    Exit;
+
+  Boxed := AObject.Box;
+  if Assigned(Boxed) then
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaVM.GetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Boxed: TGocciaObjectValue;
