@@ -644,7 +644,6 @@ begin
     AResult := '-' + AResult;
 end;
 
-// ES2026 §6.1.6.1.20 Number::toString ( x, radix ) for radix 10.
 function IntegerToString(const AValue: Int64): string;
 const
   // Nineteen digits and a sign cover Low(Int64).
@@ -673,6 +672,7 @@ begin
   SetString(Result, PChar(@Buffer[Position]), BUFFER_LENGTH - Position);
 end;
 
+// ES2026 §6.1.6.1.20 Number::toString ( x, radix ) for radix 10.
 function NumberToString(const AValue: Double): string;
 var
   AbsoluteValue: Double;

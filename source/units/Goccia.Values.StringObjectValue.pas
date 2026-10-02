@@ -202,9 +202,14 @@ var
   GStringPrototypeSlot: TGocciaRealmSlotId;
 
 function GetSharedStringPrototype: TGocciaObjectValue; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Realm: TGocciaRealm;
 begin
-  if (CurrentRealm <> nil) then
-    Result := TGocciaObjectValue(CurrentRealm.GetSlot(GStringPrototypeSlot))
+  // One read of the current realm: it is a thread-local lookup, and this runs
+  // on every property read of a string primitive.
+  Realm := CurrentRealm;
+  if Assigned(Realm) then
+    Result := TGocciaObjectValue(Realm.GetSlot(GStringPrototypeSlot))
   else
     Result := nil;
 end;
@@ -632,34 +637,50 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
+// The character at a canonical index, when the index lies inside the string.
+function TryGetStringCharacterValue(
+  const APrimitive: TGocciaStringLiteralValue; const AIndex: Integer;
+  out AValue: TGocciaValue): Boolean;
+var
+  StringValue: string;
+begin
+  StringValue := APrimitive.ToStringLiteral.Value;
+  Result := AIndex < UTF16CodeUnitLength(StringValue);
+  if Result then
+    AValue := TGocciaStringLiteralValue.Create(
+      UTF16CodeUnitAt(StringValue, AIndex))
+  else
+    AValue := nil;
+end;
+
+function StringLengthValue(
+  const APrimitive: TGocciaStringLiteralValue): TGocciaValue;
+var
+  StringValue: string;
+begin
+  StringValue := APrimitive.ToStringLiteral.Value;
+  Result := TGocciaNumberLiteralValue.Create(
+    UTF16CodeUnitLength(StringValue));
+end;
+
 // The two kinds of own property a String exotic object has by construction:
-// a character at a canonical index inside the string, and its length.
+// a character at a canonical index inside the string, and its length. Every
+// method read on a string passes through here twice, once for the string and
+// once for String.prototype, and is neither. The two functions above own the
+// string temporary, so that a name which is neither costs no exception frame
+// (docs/core-patterns.md, "Managed Locals on Hot Paths").
 function TryGetStringExoticValue(const APrimitive: TGocciaStringLiteralValue;
   const AName: string; out AValue: TGocciaValue): Boolean;
 var
   Index: Integer;
-  StringValue: string;
 begin
-  Result := True;
   if TryParseCanonicalIndex(AName, Index) then
-  begin
-    StringValue := APrimitive.ToStringLiteral.Value;
-    if Index < UTF16CodeUnitLength(StringValue) then
-    begin
-      AValue := TGocciaStringLiteralValue.Create(
-        UTF16CodeUnitAt(StringValue, Index));
-      Exit;
-    end;
-  end
-  else if AName = PROP_LENGTH then
-  begin
-    StringValue := APrimitive.ToStringLiteral.Value;
-    AValue := TGocciaNumberLiteralValue.Create(
-      UTF16CodeUnitLength(StringValue));
-    Exit;
-  end;
-  AValue := nil;
-  Result := False;
+    Exit(TryGetStringCharacterValue(APrimitive, Index, AValue));
+  Result := AName = PROP_LENGTH;
+  if Result then
+    AValue := StringLengthValue(APrimitive)
+  else
+    AValue := nil;
 end;
 
 function TGocciaStringObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;

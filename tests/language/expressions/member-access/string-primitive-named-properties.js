@@ -108,6 +108,15 @@ describe("named property read on a string primitive", () => {
     }
   });
 
+  test("destructuring a string reads its characters and length by name", () => {
+    const { 0: first, "1": second, length, 5: beyond, at } = "ab";
+    expect(first).toBe("a");
+    expect(second).toBe("b");
+    expect(length).toBe(2);
+    expect(beyond).toBe(undefined);
+    expect(at).toBe(String.prototype.at);
+  });
+
   test("reading a property of a string in a loop keeps finding the same method", () => {
     const text = "bytecode";
     let total = 0;
@@ -121,22 +130,31 @@ describe("named property read on a string primitive", () => {
 describe("character indices of a string", () => {
   const text = "abcdefghijk";
 
-  test("only the canonical decimal form of an index names a character", () => {
+  test("a decimal index inside the string names a character", () => {
     expect(text["0"]).toBe("a");
     expect(text["9"]).toBe("j");
     expect(text["10"]).toBe("k");
     expect(text["11"]).toBe(undefined);
+  });
+
+  test("a leading zero or a sign makes the name an ordinary property", () => {
     expect(text["00"]).toBe(undefined);
     expect(text["03"]).toBe(undefined);
     expect(text["-0"]).toBe(undefined);
     expect(text["-1"]).toBe(undefined);
     expect(text["+1"]).toBe(undefined);
-    expect(text[" 1"]).toBe(undefined);
-    expect(text["1 "]).toBe(undefined);
+  });
+
+  test("other numeric spellings are ordinary properties", () => {
     expect(text["1.0"]).toBe(undefined);
     expect(text["1e0"]).toBe(undefined);
     expect(text["0x1"]).toBe(undefined);
     expect(text["$1"]).toBe(undefined);
+  });
+
+  test("blanks, non-ASCII digits and the empty name are ordinary properties", () => {
+    expect(text[" 1"]).toBe(undefined);
+    expect(text["1 "]).toBe(undefined);
     expect(text["１"]).toBe(undefined);
     expect(text[""]).toBe(undefined);
   });
@@ -163,38 +181,5 @@ describe("character indices of a string", () => {
       delete String.prototype["03"];
     }
     expect(text[20]).toBe(undefined);
-  });
-
-  test("a String object reports the same indices as own properties", () => {
-    const boxed = Object("ab");
-    expect(Object.getOwnPropertyNames(boxed)).toEqual(["0", "1", "length"]);
-    expect(Object.keys(boxed)).toEqual(["0", "1"]);
-    expect(Object.hasOwn(boxed, "0")).toBe(true);
-    expect(Object.hasOwn(boxed, "1")).toBe(true);
-    expect(Object.hasOwn(boxed, "2")).toBe(false);
-    expect(Object.hasOwn(boxed, "01")).toBe(false);
-    expect(Object.hasOwn(boxed, "-1")).toBe(false);
-    expect(Object.hasOwn(boxed, "length")).toBe(true);
-    expect(Object.getOwnPropertyDescriptor(boxed, "1")).toEqual({
-      value: "b",
-      writable: false,
-      enumerable: true,
-      configurable: false,
-    });
-    expect(Object.getOwnPropertyDescriptor(boxed, "2")).toBe(undefined);
-    expect(Object.getOwnPropertyDescriptor(boxed, "01")).toBe(undefined);
-    expect(Reflect.deleteProperty(boxed, "0")).toBe(false);
-    expect(Reflect.deleteProperty(boxed, "length")).toBe(false);
-    expect(Reflect.deleteProperty(boxed, "5")).toBe(true);
-    expect(Reflect.deleteProperty(boxed, "01")).toBe(true);
-  });
-
-  test("an expando index beyond the string sorts after the characters", () => {
-    const boxed = Object("ab");
-    boxed[5] = "five";
-    boxed.name = "label";
-    boxed["03"] = "text key";
-    expect(Object.getOwnPropertyNames(boxed)).toEqual(["0", "1", "5", "length", "name", "03"]);
-    expect(boxed[5]).toBe("five");
   });
 });

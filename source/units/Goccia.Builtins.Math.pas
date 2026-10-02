@@ -592,8 +592,9 @@ begin
       Exit(TGocciaNumberLiteralValue.NaNValue);
 
     // Step 5: Return the largest value among the elements of coerced.
-    // No element is NaN here, so comparing the doubles is IsLessThan on two
-    // Numbers without the generic operator's coercion of each operand.
+    // No element is NaN here, so comparing the doubles gives what the
+    // generic relational operator gives for two Numbers, without its coercion
+    // of each operand.
     MaxVal := Coerced[0];
     for I := 1 to High(Coerced) do
     begin
