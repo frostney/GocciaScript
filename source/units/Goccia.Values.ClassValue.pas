@@ -92,6 +92,7 @@ type
     function GetStaticPropertySetter(const AName: string): TGocciaFunctionBase; {$IFDEF FPC}inline;{$ENDIF}
     function GetPrivatePropertyGetter(const AName: string): TGocciaFunctionBase;
     function GetPrivatePropertySetter(const AName: string): TGocciaFunctionBase;
+    procedure MaterializeIntrinsicProperty(const AName: string);
   public
     class procedure SetDefaultPrototype(const AProto: TGocciaObjectValue); static;
     class procedure PatchDefaultPrototype(const AClassValue: TGocciaClassValue); static;
@@ -2318,6 +2319,28 @@ begin
   Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
+// A class reports "name" and "length" as own properties without storing them:
+// GetOwnPropertyDescriptor synthesizes both. ES2026 §10.1.6.1
+// OrdinaryDefineOwnProperty validates a definition against the current own
+// property, so the synthesized one has to be in the property map before the
+// inherited definition runs. Otherwise the definition is taken as adding a
+// property, which a non-extensible class rejects (Object.freeze and
+// Object.seal define every own key after preventing extensions) and which
+// fills in a partial descriptor from the defaults instead of the current
+// attributes. A deleted property stays absent.
+procedure TGocciaClassValue.MaterializeIntrinsicProperty(const AName: string);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  if (AName <> PROP_NAME) and (AName <> PROP_LENGTH) then
+    Exit;
+  if FProperties.ContainsKey(AName) then
+    Exit;
+  Descriptor := GetOwnPropertyDescriptor(AName);
+  if Assigned(Descriptor) then
+    FProperties.Add(AName, Descriptor);
+end;
+
 procedure TGocciaClassValue.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
@@ -2333,11 +2356,12 @@ begin
       SSuggestCannotDeleteNonConfigurable);
   end;
 
+  MaterializeIntrinsicProperty(AName);
+  inherited DefineProperty(AName, ADescriptor);
   if AName = PROP_NAME then
     FNameDeleted := False
   else if AName = PROP_LENGTH then
     FLengthDeleted := False;
-  inherited DefineProperty(AName, ADescriptor);
 end;
 
 function TGocciaClassValue.TryDefineProperty(const AName: string;
@@ -2354,6 +2378,7 @@ begin
     Exit(False);
   end;
 
+  MaterializeIntrinsicProperty(AName);
   Result := inherited TryDefineProperty(AName, ADescriptor);
   if Result then
   begin

@@ -900,3 +900,80 @@ test("array length non-writable allows same-value redefinition", () => {
   expect(arr.length).toBe(3);
   expect(Object.getOwnPropertyDescriptor(arr, "length").writable).toBe(false);
 });
+
+test("Object.defineProperty changes only the given attributes of a class's length and name", () => {
+  class K {
+    constructor(a, b) {}
+  }
+
+  Object.defineProperty(K, "name", { enumerable: true });
+  expect(Object.getOwnPropertyDescriptor(K, "name")).toEqual({
+    value: "K",
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
+
+  Object.defineProperty(K, "length", { value: 5 });
+  expect(Object.getOwnPropertyDescriptor(K, "length")).toEqual({
+    value: 5,
+    writable: false,
+    enumerable: false,
+    configurable: true,
+  });
+  Object.defineProperty(K, "length", { value: 6 });
+  expect(K.length).toBe(6);
+
+  class Writable {}
+  Object.defineProperty(Writable, "name", { writable: true });
+  Writable.name = "Assigned";
+  expect(Object.getOwnPropertyDescriptor(Writable, "name")).toEqual({
+    value: "Assigned",
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+
+  class Untouched {}
+  Object.defineProperty(Untouched, "name", {});
+  expect(Object.getOwnPropertyDescriptor(Untouched, "name")).toEqual({
+    value: "Untouched",
+    writable: false,
+    enumerable: false,
+    configurable: true,
+  });
+
+  class WithGetter {}
+  Object.defineProperty(WithGetter, "name", { get: () => "computed" });
+  const accessor = Object.getOwnPropertyDescriptor(WithGetter, "name");
+  expect(WithGetter.name).toBe("computed");
+  expect(accessor.enumerable).toBe(false);
+  expect(accessor.configurable).toBe(true);
+});
+
+test("Object.defineProperty redefines the length and name of a non-extensible class", () => {
+  class K {}
+  Object.preventExtensions(K);
+
+  Object.defineProperty(K, "name", { value: "Renamed" });
+  Object.defineProperty(K, "length", { value: 7 });
+
+  expect(K.name).toBe("Renamed");
+  expect(K.length).toBe(7);
+  expect(() => Object.defineProperty(K, "added", { value: 1 })).toThrow(TypeError);
+});
+
+test("Object.defineProperty does not add back a deleted class length or name when the definition is rejected", () => {
+  class K {}
+  delete K.name;
+  delete K.length;
+  Object.preventExtensions(K);
+
+  expect(() => Object.defineProperty(K, "name", { value: "Back" })).toThrow(TypeError);
+  expect(() => Object.defineProperty(K, "length", { value: 1 })).toThrow(TypeError);
+  expect(Object.hasOwn(K, "name")).toBe(false);
+  expect(Object.hasOwn(K, "length")).toBe(false);
+  expect(Object.getOwnPropertyNames(K)).toEqual(["prototype"]);
+  expect(K.name).toBe("");
+  expect(K.length).toBe(0);
+});
