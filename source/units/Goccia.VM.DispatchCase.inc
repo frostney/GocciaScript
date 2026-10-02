@@ -3968,9 +3968,8 @@
       OP_RETURN:
       begin
         ReturnValue := FRegisters[A];
-        if Assigned(GActiveBytecodeGenerator) and
-           (GActiveBytecodeGenerator.FClosure = AClosure) then
-          GActiveBytecodeGenerator.FReturnRequiresAwait := B <> 0;
+        if Assigned(EntryGenerator) then
+          EntryGenerator.FReturnRequiresAwait := B <> 0;
         if FClosedNumericFrameStackCount >
            InitialClosedNumericFrameCount then
         begin

@@ -14453,6 +14453,7 @@ var
   DynImportTask: TGocciaMicrotask;
   AwaitPromise: TGocciaPromiseValue;
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
+  EntryGenerator: TGocciaBytecodeGeneratorObjectValue;
   SpreadArray: TGocciaArrayValue;
   RestoredContinuation: Boolean;
   ReturnAwaitAbrupt: Boolean;
@@ -14741,9 +14742,16 @@ begin
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
-    RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
-      (GActiveBytecodeGenerator.FClosure = AClosure) and
-      GActiveBytecodeGenerator.RestoreContinuation(
+    // The active generator when it is the one this entry runs, else nil. It
+    // is read once here: the thread variable is assigned only around a
+    // generator resume, which restores it before returning, so it holds this
+    // value at every instruction this entry dispatches, and OP_RETURN can test
+    // the local instead of reading the thread variable on every return.
+    EntryGenerator := GActiveBytecodeGenerator;
+    if Assigned(EntryGenerator) and (EntryGenerator.FClosure <> AClosure) then
+      EntryGenerator := nil;
+    RestoredContinuation := Assigned(EntryGenerator) and
+      EntryGenerator.RestoreContinuation(
         Frame, SavedHandlerCount, PrevCovLine);
     if RestoredContinuation then
     begin
