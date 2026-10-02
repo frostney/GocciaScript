@@ -23,6 +23,11 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 function RegExpInputCodeUnitLength(const AInput: string): Integer;
 
+{ The number of VM steps one match attempt may take on a subject of
+  AInputLength code units: proportional to the subject, never below the fixed
+  floor. Computed in 64 bits so a subject of any length gets its full budget. }
+function RegExpStepLimit(const AInputLength: Integer): Int64; {$IFDEF FPC}inline;{$ENDIF}
+
 { Release the per-thread input-decode memo. Registered with
   Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
   releases it on worker exit (ShutdownThreadRuntime) and on the main thread (the
@@ -532,6 +537,14 @@ begin
   Result := AInput.Length + 1;
 end;
 
+function RegExpStepLimit(const AInputLength: Integer): Int64;
+begin
+  // A 32-bit product overflows from 21,474,837 code units on.
+  Result := Int64(AInputLength) * STEPS_PER_INPUT_BYTE;
+  if Result < MIN_STEP_LIMIT then
+    Result := MIN_STEP_LIMIT;
+end;
+
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
@@ -544,8 +557,8 @@ var
   CodePoint: Cardinal;
   ByteLen: Integer;
   StackTop: Integer;
-  StepCount: Integer;
-  StepLimit: Integer;
+  StepCount: Int64;
+  StepLimit: Int64;
   Memo: TMemoTable;
   SlotCount: Integer;
   MatchCP: Cardinal;
@@ -804,9 +817,7 @@ begin
   PC := AStartPC;
   InputPos := AStartPos;
   StepCount := 0;
-  StepLimit := AInput.Length * STEPS_PER_INPUT_BYTE;
-  if StepLimit < MIN_STEP_LIMIT then
-    StepLimit := MIN_STEP_LIMIT;
+  StepLimit := RegExpStepLimit(AInput.Length);
   StackTop := -1;
   RepeatDepth := 0;
   MemoInit(Memo);
