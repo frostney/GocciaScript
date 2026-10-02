@@ -35,8 +35,9 @@ node_modules/
 
 __pycache__/
 
-# Wait-state files written by the delivery-wait and address-feedback helpers
-.agent/waits/
+# Local agent state: the session handoff, and the wait-state files written by
+# the delivery-wait and address-feedback helpers
+.agent/
 
 tests-wasm/*.wasm
 
