@@ -847,7 +847,7 @@
       OP_GET_PROP_CONST:
       LGetPropConstShared:
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
-           (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+           VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
         begin
           // Hot shape: per-site inline cache keyed by the name-constant
           // index, validated against (own-map identity, map entry version).
@@ -857,11 +857,14 @@
           // are megamorphic: they skip the cache and use the uncached
           // own-data fast path. A nil slot (out-of-range constant index in
           // corrupt bytecode) runs fully uncached.
+          // The gate above is the three exact classes the caches serve, not
+          // `is TGocciaObjectValue`: no tier below does anything for another
+          // receiver class but call GetPropertyValue, which the next branch
+          // does without walking the class chain first.
           PropertyReadCache := Template.PropertyReadCacheSlot(C);
           if Assigned(PropertyReadCache) and
              (PropertyReadCache^.MissStreak <
               PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-             VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
              VMTryGetCachedOwnDataProperty(
                TGocciaObjectValue(FRegisters[B].ObjectValue),
                PropertyReadCache, GlobalBindingValue) then
@@ -879,8 +882,7 @@
             else
             begin
               GlobalName := Template.GetConstantUnchecked(C).StringValue;
-              if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
-                 (not IsBytecodePrivateKey(GlobalName)) then
+              if not IsBytecodePrivateKey(GlobalName) then
               begin
                 // One own-map probe establishes own-data / own-non-data /
                 // absent; no fallback tier re-hashes the same name on this
@@ -955,7 +957,10 @@
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
           RightValue := RegisterToValue(FRegisters[C]);
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+          // A receiver of one of the three cached classes is not a class
+          // value; the exact comparisons spare it the class-chain walk.
+          if (not VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue)) and
+             (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
             SetBytecodeHomeObject(RightValue,
               RegisterToValue(FRegisters[A]));
           // Own writable-data write IC: (shape, entry index), same receiver
@@ -1510,8 +1515,14 @@
               SetRegisterRaw(A, RegisterInt(1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // ES2026 §13.4 Update Expressions: each form reads the old value with
+          // GetValue before ToNumeric. The four fused update opcodes can take
+          // a local's own register as B, where a hole is a lexical binding
+          // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1534,8 +1545,11 @@
               SetRegisterRaw(A, RegisterInt(-1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(-1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1595,11 +1609,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1666,11 +1683,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1785,6 +1805,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) and
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) and
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
             GetRegister(B), GetRegister(C)));
@@ -1795,6 +1820,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) or
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) or
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseOr,
             GetRegister(B), GetRegister(C)));
@@ -1805,6 +1835,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) xor
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) xor
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseXor,
             GetRegister(B), GetRegister(C)));
@@ -1815,6 +1850,11 @@
           FRegisters[A] := RegisterInt(LongInt(
             LongWord(FRegisters[B].IntValue) shl
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(LongInt(
+            LongWord(VMRegisterToInt32(FRegisters[B])) shl
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateLeftShift,
             GetRegister(B), GetRegister(C)));
@@ -1825,6 +1865,11 @@
           FRegisters[A] := RegisterInt(SignedRightShiftInt32(
             LongInt(FRegisters[B].IntValue),
             LongWord(FRegisters[C].IntValue)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(SignedRightShiftInt32(
+            VMRegisterToInt32(FRegisters[B]),
+            LongWord(VMRegisterToInt32(FRegisters[C]))))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1835,6 +1880,11 @@
           FRegisters[A] := VMIntResult(Int64(LongWord(
             FRegisters[B].IntValue) shr
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMIntResult(Int64(LongWord(
+            VMRegisterToInt32(FRegisters[B])) shr
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateUnsignedRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1842,6 +1892,9 @@
       OP_BNOT:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := RegisterInt(not LongInt(FRegisters[B].IntValue))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := RegisterInt(
+            not NumberToInt32(FRegisters[B].FloatValue))
         else
           SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
@@ -1857,7 +1910,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(True);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(False);
+          else
+            SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          end;
 
       OP_NEQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -1871,7 +1931,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(False);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(True);
+          else
+            SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          end;
 
       OP_LOOSE_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -2316,7 +2383,7 @@
                   RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
 	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
 	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
-	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
@@ -2413,7 +2480,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := ValueToRegister(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2438,7 +2505,7 @@
           begin
 	            if GetRegister(B) is TGocciaArrayValue then
 	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2725,7 +2792,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2750,7 +2817,7 @@
           begin
             if GetRegister(B) is TGocciaArrayValue then
               for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2843,7 +2910,7 @@
           SetLength(RegisterArgs, SpreadArray.Elements.Count);
           for I := 0 to SpreadArray.Elements.Count - 1 do
             RegisterArgs[I] := VMValueToRegisterFast(
-              SpreadArray.GetProperty(IntToStr(I)));
+              SpreadArray.GetProperty(IntegerToString(I)));
           FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
         end
@@ -2862,7 +2929,7 @@
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
-              CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
+              CallArgs.Add(SpreadArray.GetProperty(IntegerToString(I)));
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try
               SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
@@ -3847,7 +3914,7 @@
                  (DoneValue is TGocciaArrayValue) then
 	                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
 	                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
-	                    TGocciaArrayValue(DoneValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(DoneValue).GetProperty(IntegerToString(I)));
             end;
 
           COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:

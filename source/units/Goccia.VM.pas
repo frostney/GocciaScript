@@ -415,6 +415,7 @@ type
     procedure ThrowBytecodePrivateTypeError(const AKey,
       AMessage: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
+    function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
     procedure SetPropertyValueLoose(const AObject: TGocciaValue;
@@ -541,6 +542,7 @@ uses
 
   BigInteger,
   NumberBits,
+  NumericText,
   OrderedStringMap,
   TextSemantics,
   TimingUtils,
@@ -611,6 +613,8 @@ uses
 const
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
+  // First character of both prefixes above.
+  BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
@@ -907,6 +911,14 @@ begin
     if Binding.Kind in [debWithLocal, debWithUpvalue] then
       Continue;
     if Binding.Kind = debGlobal then
+      Continue;
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3.d: a var declared
+    // by sloppy direct eval conflicts only with the declarations between the
+    // eval's lexical environment and the caller's variable environment.  An
+    // upvalue belongs to an enclosing function, beyond that range, so it is
+    // resolved through the binding table and never declared here, where it
+    // would read as a lexical declaration of the calling function.
+    if Binding.Kind = debUpvalue then
       Continue;
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
@@ -1367,7 +1379,11 @@ begin
 
   if TryFindBinding(AName, Binding) then
   begin
-    if (not Binding.IsConst) and ContainsOwnVarBinding(AName) then
+    // A var declared by this eval shadows an enclosing function's binding of
+    // the same name, const or not; a const of the calling function itself
+    // never coexists with one.
+    if ((not Binding.IsConst) or (Binding.Kind = debUpvalue)) and
+       ContainsOwnVarBinding(AName) then
       Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
@@ -1451,6 +1467,7 @@ end;
 
 function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
 var
+  Binding: TGocciaDirectEvalBindingInfo;
   WasOwnVarBinding: Boolean;
   WithObject: TGocciaObjectValue;
 begin
@@ -1458,6 +1475,13 @@ begin
     Exit(WithObject.DeleteProperty(AName));
 
   WasOwnVarBinding := ContainsOwnVarBinding(AName);
+  // An enclosing function's lexical binding is not declared in this scope, so
+  // the inherited walk would not find it: it stays undeletable unless a var
+  // declared by an earlier eval of the calling function shadows it.
+  if (not WasOwnVarBinding) and TryFindBinding(AName, Binding) and
+     (Binding.Kind = debUpvalue) and (not Binding.IsVarEnvironmentBinding) and
+     not Assigned(FVM.ResolveDynamicUpvalueScope(Binding.Index, AName)) then
+    Exit(False);
   Result := inherited DeleteBinding(AName);
   if Result and WasOwnVarBinding then
     MarkDeletedVarBinding(AName);
@@ -1963,18 +1987,33 @@ end;
 
 // Presence probe for the holder level: pointer identity suffices — a
 // prefix shape's covered entries stay valid as the holder map grows, and
-// the descriptor is re-read by entry index on every hit.
+// the descriptor is re-read by entry index on every hit. The map's last
+// computed shape is compared first, as the own tier does: a holder shape is
+// never nil and never the dictionary sentinel (the fill declines both), so a
+// match there is a shape the map really went through, and a shaped map only
+// appends. EnsureShape runs only when that misses, for a map whose shape has
+// not caught up with its entries yet.
 function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Map: TGocciaShapedPropertyMap;
 begin
-  Result := Pointer(
-    TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
+  Map := TGocciaShapedPropertyMap(AObject.Properties);
+  Result := (Pointer(Map.Shape) = ACachedShape) or
+    (Pointer(Map.EnsureShape) = ACachedShape);
 end;
 
 // Absence probe for receiver/intermediate levels: pointer identity PLUS
 // full coverage (Depth = Count). A transition-capped map can grow while
 // EnsureShape keeps returning the same prefix pointer, so pointer equality
 // alone cannot prove a name is still absent.
+// The map's last computed shape is tried first. A shaped map only appends,
+// so a shape as deep as the map has entries (or no shape and no entries)
+// describes every entry: EnsureShape would have nothing to add to it, and
+// the check needs neither the call nor EnsureShape's read of the current
+// realm. Any other state, a stale shape included, goes through EnsureShape
+// as before. What the shortcut skips is EnsureShape's other duty: a map
+// owned by another realm is not switched to dictionary mode by a hit.
 function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -1982,15 +2021,29 @@ var
   LevelShape: TGocciaShape;
 begin
   Map := TGocciaShapedPropertyMap(AObject.Properties);
+  LevelShape := Map.Shape;
+  if Pointer(LevelShape) = ACachedShape then
+  begin
+    if Assigned(LevelShape) then
+    begin
+      if LevelShape.Depth = Map.CountFast then
+        Exit(True);
+    end
+    else if Map.CountFast = 0 then
+      Exit(True);
+  end;
   LevelShape := Map.EnsureShape;
   Result := (Pointer(LevelShape) = ACachedShape) and
     ((not Assigned(LevelShape)) or (LevelShape.Depth = Map.CountFast));
 end;
 
-// Validate a prototype-holder cache entry: receiver gate, fresh-shape
-// absence below the holder, fresh-shape presence at the holder, exact
-// TGocciaObjectValue chain levels (exotic objects may share shapes but not
-// lookup semantics), then re-read the holder descriptor by entry index.
+// Validate a prototype-holder cache entry: full-coverage shape absence below
+// the holder, shape presence at the holder (a stale prefix shape is enough
+// there), exact TGocciaObjectValue chain levels (exotic objects may share
+// shapes but not lookup semantics), then re-read the holder descriptor by
+// entry index.
+// Contract: AReceiver has passed VMPropertyReadCacheableReceiver. The one
+// caller, OP_GET_PROP_CONST, gates on it before either cache tier.
 function VMTryGetCachedProtoProperty(const AReceiver: TGocciaObjectValue;
   const ACache: PGocciaProtoReadCacheEntry;
   out AValue: TGocciaValue): Boolean;
@@ -2002,8 +2055,6 @@ begin
   AValue := nil;
   Result := False;
   if ACache^.HolderLevel = 0 then
-    Exit;
-  if not VMPropertyReadCacheableReceiver(AReceiver) then
     Exit;
   if not VMAbsenceShapeMatches(AReceiver, ACache^.Shapes[0]) then
     Exit;
@@ -2329,6 +2380,19 @@ begin
   end;
 end;
 
+// ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
+// opcodes. A grkInt operand is already an integer, so its low 32 bits are the
+// answer; a grkFloat operand goes through the same NumberToInt32 the boxed
+// operator helpers reach through ToInt32Value. ToUint32 is the same 32 bits
+// read as unsigned, so the shift opcodes cast this result to LongWord.
+function VMRegisterToInt32(const ARegister: TGocciaRegister): LongInt; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if ARegister.Kind = grkInt then
+    Result := LongInt(ARegister.IntValue)
+  else
+    Result := NumberToInt32(ARegister.FloatValue);
+end;
+
 // Rooted slow-path entry points for the binary operators.
 //
 // Materializing an operand register allocates: RegisterToValue builds a fresh
@@ -2385,6 +2449,93 @@ begin
   end;
 end;
 
+// ES2026 §7.2.14 IsStrictlyEqual(x, y) decided on the registers, for the
+// operand pairs where materializing a value could not change the answer.
+//
+// vseUndecided sends the pair to the generic helper. That is every pair this
+// function cannot settle from the register kinds, one pointer compare and
+// IsPrimitive alone:
+//   - a hole, or an object register that holds nil (read as undefined);
+//   - an object register that holds a primitive, compared with a scalar or
+//     with another primitive object: a register is not guaranteed to hold its
+//     value in canonical form, so the object may be an allocated number,
+//     boolean, null or undefined that equals a scalar, or a string or BigInt
+//     that equals another by content;
+//   - a number object compared with itself, which is unequal when it is NaN.
+type
+  TGocciaVMStrictEquality = (vseUndecided, vseEqual, vseNotEqual);
+
+function VMStrictEqualRegisters(
+  const ALeft, ARight: TGocciaRegister): TGocciaVMStrictEquality;
+const
+  DECIDED: array[Boolean] of TGocciaVMStrictEquality = (vseNotEqual, vseEqual);
+var
+  LeftNumber, RightNumber: Double;
+begin
+  Result := vseUndecided;
+  case ALeft.Kind of
+    grkInt, grkFloat:
+      case ARight.Kind of
+        grkInt, grkFloat:
+        begin
+          LeftNumber := RegisterToDouble(ALeft);
+          RightNumber := RegisterToDouble(ARight);
+          // NaN is tested first rather than left to the comparison, as
+          // NumberValuesEqual does.
+          if IsNaN(LeftNumber) or IsNaN(RightNumber) then
+            Result := vseNotEqual
+          else
+            Result := DECIDED[LeftNumber = RightNumber];
+        end;
+        grkUndefined, grkNull, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkUndefined, grkNull:
+      case ARight.Kind of
+        grkUndefined, grkNull:
+          Result := DECIDED[ALeft.Kind = ARight.Kind];
+        grkInt, grkFloat, grkBoolean:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkBoolean:
+      case ARight.Kind of
+        grkBoolean:
+          Result := DECIDED[ALeft.BoolValue = ARight.BoolValue];
+        grkInt, grkFloat, grkUndefined, grkNull:
+          Result := vseNotEqual;
+        grkObject:
+          if Assigned(ARight.ObjectValue) and
+             not ARight.ObjectValue.IsPrimitive then
+            Result := vseNotEqual;
+      end;
+    grkObject:
+      if Assigned(ALeft.ObjectValue) then
+        case ARight.Kind of
+          grkObject:
+            if ALeft.ObjectValue = ARight.ObjectValue then
+            begin
+              if ALeft.ObjectValue.ClassType <> TGocciaNumberLiteralValue then
+                Result := vseEqual;
+            end
+            else if Assigned(ARight.ObjectValue) and
+               not (ALeft.ObjectValue.IsPrimitive and
+                    ARight.ObjectValue.IsPrimitive) then
+              Result := vseNotEqual;
+          grkInt, grkFloat, grkUndefined, grkNull, grkBoolean:
+            if not ALeft.ObjectValue.IsPrimitive then
+              Result := vseNotEqual;
+        end;
+  end;
+end;
+
 function VMRegisterToStringFast(
   const AValue: TGocciaRegister): TGocciaStringLiteralValue; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -2401,7 +2552,7 @@ begin
       else
         Exit(TGocciaStringLiteralValue.Create('false'));
     grkInt:
-      Exit(TGocciaStringLiteralValue.Create(IntToStr(AValue.IntValue)));
+      Exit(TGocciaStringLiteralValue.Create(IntegerToString(AValue.IntValue)));
     grkFloat:
       Exit(RegisterToValue(AValue).ToStringLiteral);
     grkObject:
@@ -8453,7 +8604,7 @@ begin
       else
         Result := 'false';
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := VMRegisterToStringFast(AKey).Value;
     grkObject:
@@ -8535,7 +8686,7 @@ end;
 function TGocciaVM.PropertyKeyName(const AKey: TGocciaPropertyKey): string;
 begin
   if AKey.Kind = pkkIndex then
-    Result := IntToStr(AKey.Index)
+    Result := IntegerToString(AKey.Index)
   else
     Result := AKey.Name;
 end;
@@ -8630,7 +8781,7 @@ begin
         else
           // Hole, out-of-range, or accessor-shadowed slot: take the slow
           // path so accessor descriptors and prototype lookups run.
-          SetRegister(ADest, ReceiverArray.GetProperty(IntToStr(Key.Index)));
+          SetRegister(ADest, ReceiverArray.GetProperty(IntegerToString(Key.Index)));
     else
       SetRegister(ADest, ReceiverArray.GetProperty(Key.Name));
     end;
@@ -9010,7 +9161,7 @@ function TGocciaVM.KeyDisplaySafe(const AKey: TGocciaRegister): string;
 begin
   case AKey.Kind of
     grkInt:
-      Result := IntToStr(AKey.IntValue);
+      Result := IntegerToString(AKey.IntValue);
     grkFloat:
       Result := FormatDouble(AKey.FloatValue);
     grkBoolean:
@@ -12626,7 +12777,44 @@ begin
 end;
 
 
+// A named read whose key is not private and whose receiver is not nullish:
+// the receiver's own lookup, then the primitive's prototype. The generic core
+// owns the private-name strings and the error messages, and with them an
+// implicit exception frame, so this procedure has neither
+// (docs/core-patterns.md, "Managed Locals on Hot Paths"). Both private key
+// prefixes start with '#'; every other key takes the ordinary path below,
+// which is the tail of the core.
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
+  const AKey: string): TGocciaValue;
+var
+  Boxed: TGocciaObjectValue;
+begin
+  if (not Assigned(AObject)) or
+     (AObject.ClassType = TGocciaNullLiteralValue) or
+     (AObject.ClassType = TGocciaUndefinedLiteralValue) or
+     ((AKey <> '') and (AKey[1] = BYTECODE_PRIVATE_KEY_LEAD)) then
+    Exit(GetPropertyValueGeneric(AObject, AKey));
+
+  Result := AObject.GetProperty(AKey);
+  if Assigned(Result) then
+    Exit;
+
+  // A method call on a string primitive reads the method here. Boxing the
+  // string for the read would allocate a String object, its property map and
+  // its hash tables on every call.
+  if (AObject is TGocciaStringLiteralValue) and
+     TryGetStringPrimitiveProperty(TGocciaStringLiteralValue(AObject), AKey,
+       Result) then
+    Exit;
+
+  Boxed := AObject.Box;
+  if Assigned(Boxed) then
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaVM.GetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Boxed: TGocciaObjectValue;
@@ -13186,18 +13374,22 @@ var
   ResolvedKey: TGocciaValue;
   PrivateBrandToken: string;
 begin
-  if (AObject is TGocciaNullLiteralValue) or
-     (AObject is TGocciaUndefinedLiteralValue) or
-     (AObject is TGocciaBooleanLiteralValue) or
-     (AObject is TGocciaNumberLiteralValue) or
-     (AObject is TGocciaStringLiteralValue) then
+  // ES2026 §13.10.1 RelationalExpression : RelationalExpression in
+  // ShiftExpression, step 5: a right-hand side that is not an Object throws.
+  if AObject.IsPrimitive then
   begin
+    // A Symbol has no string conversion, so it is named by its description.
     if AKey is TGocciaSymbolValue then
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [TGocciaSymbolValue(AKey).ToDisplayString.Value, AObject.ToStringLiteral.Value]),
+      KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
+    else
+      KeyStr := AKey.ToStringLiteral.Value;
+    if AObject is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        TGocciaSymbolValue(AObject).ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
-        SSuggestCheckNullBeforeAccess);
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        AObject.ToStringLiteral.Value]), SSuggestCheckNullBeforeAccess);
   end;
 
   if AObject is TGocciaObjectValue then
@@ -14234,6 +14426,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
+  I: Integer;
   IsGeneratorReturnCompletion: Boolean;
 begin
   // Proven numeric frames contain no handlers. Restore their generic entry
@@ -14254,6 +14447,13 @@ begin
       if IsGeneratorReturnCompletion and (Handler.Kind = bhkCatch) then
         Continue;
       AFrame.IP := Handler.CatchIP;
+      // ES2026 §14.2.2 Runtime Semantics: Evaluation (Block) steps 5-6 and
+      // Note 1: a Block's environment is left however control leaves it. The
+      // throw skipped the OP_CLOSE_UPVALUE of every scope it unwound, so
+      // detach their cells here. The compiler allocates a handler's register
+      // before the region it protects, so those scopes own the slots above it.
+      for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
+        FLocalCells[I] := nil;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;

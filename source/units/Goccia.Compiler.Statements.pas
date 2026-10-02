@@ -94,6 +94,7 @@ function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
+function StatementIsIteration(const AStmt: TGocciaStatement): Boolean;
 function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean; overload;
 function StatementAlwaysAbrupt(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaStatement): Boolean; overload;
@@ -179,6 +180,9 @@ type
 
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
+    // Scope depth of the try statement that owns FinallyBlock, which is the
+    // scope the block resolves names in wherever it is compiled.
+    FinallyScopeDepth: Integer;
     // Non-nil when this entry represents a using block's disposal.
     // CompileReturnStatement emits the disposal sequence instead of
     // compiling a FinallyBlock when this array is populated.
@@ -519,7 +523,8 @@ begin
     else
     begin
       LocalIdx := AScope.ResolveUpvalue(TGocciaIdentifierExpression(AExpr).Name);
-      if LocalIdx >= 0 then
+      if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
+           TGocciaIdentifierExpression(AExpr).Name) then
         if AScope.GetUpvalue(LocalIdx).IsConst or
            AScope.GetUpvalue(LocalIdx).IsStrictlyTyped then
           Result := AScope.GetUpvalue(LocalIdx).TypeHint;
@@ -559,7 +564,8 @@ begin
       begin
         LocalIdx := AScope.ResolveUpvalue(
           TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-        if LocalIdx >= 0 then
+        if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
+             TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name) then
           Result := AScope.GetUpvalue(LocalIdx).ReturnTypeHint;
       end;
     end;
@@ -1100,10 +1106,10 @@ begin
       if CanTrackConstant then
         ACtx.Scope.SetLocalConstantValue(LocalIdx, ConstantValue);
 
-      // The initializer has completed, so later reads in this function see the
-      // value in the register: they need no TDZ check and no copy.
-      if AStmt.IsConst and (not AStmt.IsVar) and
-         (not IsTopLevelGlobalBacked) and Assigned(Info.Initializer) then
+      // The declaration has completed, with its initializer or with
+      // undefined for `let x;`, so a read compiled from here on cannot observe
+      // the TDZ hole.
+      if (not AStmt.IsVar) and (not IsTopLevelGlobalBacked) then
         ACtx.Scope.MarkLocalInitialized(LocalIdx);
     end;
 
@@ -1907,6 +1913,7 @@ var
   I: Integer;
   Local: TGocciaCompilerLocal;
   HandlerPopCount: Integer;
+  SuspendedBindings: TGocciaCompilerSuspendedBindings;
 begin
   HandlerPopCount := AEntry.HandlerPopCount;
   if HandlerPopCount <= 0 then
@@ -1927,7 +1934,22 @@ begin
   end;
 
   if Assigned(AEntry.FinallyBlock) then
-    CompileBlockStatement(ACtx, AEntry.FinallyBlock)
+  begin
+    // ES2026 §14.2.2 and §14.11.2 Runtime Semantics: Evaluation and §14.15.2
+    // Runtime Semantics: CatchClauseEvaluation restore the LexicalEnvironment
+    // however control leaves a Block, a with statement or a Catch, so the
+    // Finally of §14.15.3 Runtime Semantics: Evaluation runs in the
+    // environment of the try statement. This copy is compiled at the abrupt
+    // exit, where the bindings of the scopes being left are still declared:
+    // keep them out of name resolution.
+    SuspendedBindings := ACtx.Scope.SuspendBindingsDeeperThan(
+      AEntry.FinallyScopeDepth);
+    try
+      CompileBlockStatement(ACtx, AEntry.FinallyBlock);
+    finally
+      ACtx.Scope.ResumeBindings(SuspendedBindings);
+    end;
+  end
   else if Length(AEntry.UsingResources) > 0 then
   begin
     EmitDisposalSequence(ACtx, AEntry.UsingResources,
@@ -2434,7 +2456,10 @@ begin
       GPendingFinally := TList<TPendingFinallyEntry>.Create;
     FillChar(Entry, SizeOf(Entry), 0);
     if HasFinally then
+    begin
       Entry.FinallyBlock := AStmt.FinallyBlock;
+      Entry.FinallyScopeDepth := ACtx.Scope.Depth;
+    end;
     if HasCatch then
       if HasFinally then
         Entry.HandlerPopCount := 2
@@ -2661,6 +2686,26 @@ begin
   end;
 end;
 
+// ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: a var-binding head
+// assigns each value to the binding hoisted by VarDeclaredNames (§8.2.8)
+// instead of creating a per-iteration binding.
+procedure EmitForOfVarHeadBinding(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForOfStatement; const AValueReg: UInt16);
+begin
+  if Assigned(AStmt.BindingPattern) then
+  begin
+    CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope);
+    EmitDestructuring(ACtx, AStmt.BindingPattern, AValueReg,
+      ACtx.GlobalBackedTopLevel);
+  end
+  else if AStmt.BindingName <> '' then
+  begin
+    ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
+    EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, AValueReg,
+      ACtx.GlobalBackedTopLevel);
+  end;
+end;
+
 procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
 var
@@ -2703,6 +2748,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
@@ -2712,7 +2759,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
 
@@ -2867,6 +2914,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
@@ -2876,7 +2925,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
@@ -3157,6 +3206,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
@@ -3166,7 +3217,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
@@ -3537,6 +3588,7 @@ begin
     SetLabeledContinueCleanupBase(AStmt);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
+    ACtx.Scope.MarkLocalInitialized(ACtx.Scope.ResolveLocal(LoopName));
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -5198,6 +5250,8 @@ begin
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+  MarkParametersInitialized(ChildScope, AMethod.Parameters,
+    ArgumentsSlot >= 0);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -5656,6 +5710,8 @@ begin
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+  MarkParametersInitialized(ChildScope, AMethod.Parameters,
+    ArgumentsSlot >= 0);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;

@@ -321,6 +321,82 @@ describe("with statement", () => {
     expect(value).toBe(7);
   });
 
+  test("a finally block run by a return out of the body does not see the object environment", () => {
+    const x = "outer";
+    const seen = [];
+    const run = () => {
+      try {
+        with ({ x: "object" }) {
+          seen.push(x);
+          return seen;
+        }
+      } finally {
+        seen.push(x);
+        seen.push((() => x)());
+      }
+    };
+
+    expect(run()).toEqual(["object", "outer", "outer"]);
+  });
+
+  test("a finally block run by a break or continue out of the body does not see the object environment", () => {
+    const x = "outer";
+    const seen = [];
+    for (const item of [1, 2]) {
+      try {
+        with ({ x: "object" + item }) {
+          seen.push(x);
+          if (item === 1) continue;
+          break;
+        }
+      } finally {
+        seen.push(x);
+      }
+    }
+
+    expect(seen).toEqual(["object1", "outer", "object2", "outer"]);
+  });
+
+  test("a finally block inside the body still sees the object environment after a return out of a nested with", () => {
+    const x = "outer";
+    const y = "outer";
+    const seen = [];
+    const run = () => {
+      with ({ x: "object" }) {
+        let y = "body";
+        try {
+          with ({ x: "nested", y: "nested" }) {
+            seen.push(x + y);
+            return seen;
+          }
+        } finally {
+          seen.push(x + y);
+        }
+      }
+    };
+
+    expect(run()).toEqual(["nestednested", "objectbody"]);
+    expect(y).toBe("outer");
+  });
+
+  test("the object environment is back in place after a finally block runs in the body", () => {
+    const x = "outer";
+    const seen = [];
+    for (const item of [1, 2]) {
+      with ({ x: "object" }) {
+        let y = "body";
+        try {
+          if (item === 1) continue;
+        } finally {
+          seen.push(x + y);
+        }
+        seen.push(x + y);
+      }
+    }
+
+    expect(seen).toEqual(["objectbody", "objectbody", "objectbody"]);
+  });
+
   test("throws when the object expression cannot be converted to an object", () => {
     expect(() => {
       with (null) {

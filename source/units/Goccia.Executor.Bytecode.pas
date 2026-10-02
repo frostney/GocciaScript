@@ -24,6 +24,7 @@ type
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
+    function RealmExposesDirectEval: Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -136,6 +137,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
@@ -206,6 +208,15 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
+// Ordinary realms have no `eval`. A host that offers direct eval (the Test262
+// host, and a ShadowRealm created from such a realm) says so on the realm when
+// it installs the function; the global `eval` property itself is not asked,
+// because a script can delete or move it while eval-created code lives on.
+function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
+begin
+  Result := Assigned(FRealm) and FRealm.HostsDirectEval;
+end;
+
 function TGocciaBytecodeExecutor.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
 var
@@ -225,6 +236,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally

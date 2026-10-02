@@ -49,12 +49,17 @@ Each finding contains:
   "location": {"path": "string", "line": 1, "symbol": "string or null"},
   "evidence": ["string"],
   "impact": "string",
+  "gain": "string",
+  "ifNotDone": "string",
   "remedy": "string",
   "status": "open | fixed | deferred",
   "staticOnly": false,
   "churn": null
 }
 ```
+
+`gain` and `ifNotDone` were added within schema version 2; a reader accepts
+a version 2 finding without them.
 
 For `ARCHITECTURE_RISK`, replace `churn: null` with:
 

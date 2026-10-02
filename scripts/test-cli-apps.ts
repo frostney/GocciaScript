@@ -1412,6 +1412,46 @@ await section("Test262 Runner: calling another realm's built-in returns to the c
   }
 });
 
+// A function created by direct eval writes the locals of the function that
+// called eval, also after the eval call has returned. An operand read of such
+// a local has to see the write, in both modes: under a host with direct eval
+// the bytecode compiler does not read a let binding or a parameter straight
+// from its register.
+await section("Test262 Runner: operands see writes made by functions that direct eval created...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync(
+      [TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function", "--compat-var", "--compat-traditional-for-loop"],
+      {
+        stdin: new TextEncoder().encode([
+          "var out = [];",
+          'function afterEval(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); return x + w(50); }',
+          'out.push("afterEval " + afterEval(1));',
+          'function inLoop(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); let r = []; for (let i = 0; i < 2; i++) { r.push(x + w(i * 10)); } return r.join(); }',
+          'out.push("inLoop " + inLoop(1));',
+          'function createdInLoop(a) { let x = a; let r = []; let w = null; for (let i = 0; i < 3; i++) { r.push(x + (w ? w(i * 10) : 0)); w = eval("(function(v) { x = v; return 1; })"); } return r.join(); }',
+          'out.push("createdInLoop " + createdInLoop(1));',
+          'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
+          'out.push("inOperand " + inOperand(1));',
+          // The writer outlives the call that created it, and the second call
+          // reads its operand before it reaches its own eval.
+          "var saved;",
+          'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
+          'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
+          'print(out.join("\\n"));',
+          "",
+        ].join("\n")),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4", "beforeEval 1 2"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} operands missed a write by eval-created code: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
@@ -1608,6 +1648,126 @@ await section("Test262 Runner: bytecode eval var declarations shadow outer upval
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
+});
+
+await section("Test262 Runner: eval var declarations conflict only with the caller's own lexical declarations...", async () => {
+  const source = [
+    "function attempt(callback) {",
+    "  try { return callback(); } catch (error) { return error.name; }",
+    "}",
+    // An enclosing function's let/const lies beyond the caller's variable
+    // environment: the eval var shadows it, whatever its value or type. The
+    // callers are function expressions that follow the declaration, so they
+    // are compiled once its value and type are known.
+    "function outerConst() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = 5;'); return x; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerLet() {",
+    "  let x = 16;",
+    "  const inner = () => { eval('var x = 5;'); return x; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerConstTwoFunctionsUp() {",
+    "  const x = 16;",
+    "  const middle = function () {",
+    "    const inner = function () { return [eval('var x = 5; x'), x, (() => x)()].join(':'); };",
+    "    return [inner(), x].join(',');",
+    "  };",
+    "  return [middle(), x].join(',');",
+    "}",
+    "function outerConstOtherType() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = \"a\";'); return x + 1; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerTypedArrow() {",
+    "  const f = (a: number): number => a + 1;",
+    "  const inner = function () { eval('var f = function (a) { return \"r\" + a; };'); return f(5) + 1; };",
+    "  return [inner(), f(5)].join(',');",
+    "}",
+    // delete removes the eval var and leaves the enclosing binding alone.
+    "function outerLetDelete() {",
+    "  let x = 16;",
+    "  const inner = function () { return eval('delete x'); };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function evalVarDelete() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = 5;'); return [eval('delete x'), x].join(':'); };",
+    "  return [inner(), x].join(',');",
+    "}",
+    // A let/const between the eval and the caller's variable environment
+    // still conflicts.
+    "function ownConst() { const x = 16; eval('var x = 5;'); return x; }",
+    "function ownLet() { let x = 16; eval('var x = 5;'); return x; }",
+    "function ownBlockLet() { { let x = 16; eval('var x = 5;'); return x; } }",
+    "function ownOuterBlockConst() { { const x = 16; { eval('var x = 5;'); } return x; } }",
+    "function ownLetBelowOuterConst() {",
+    "  const x = 16;",
+    "  function inner() { let x = 1; { eval('var x = 5;'); } return x; }",
+    "  return inner();",
+    "}",
+    // Strict eval code keeps its var to itself, so nothing conflicts.
+    "function strictSourceBelowOuterConst() {",
+    "  const x = 16;",
+    "  function inner() { return [eval('\"use strict\"; var x = 5; x'), x].join(':'); }",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function strictSourceBesideOwnConst() {",
+    "  const x = 16;",
+    "  return [eval('\"use strict\"; var x = 5; x'), x].join(',');",
+    "}",
+    "function strictCallerBesideOwnConst() {",
+    "  'use strict';",
+    "  const x = 16;",
+    "  return [eval('var x = 5; x'), x].join(',');",
+    "}",
+    "for (const probe of [",
+    "  outerConst, outerLet, outerConstTwoFunctionsUp, outerConstOtherType, outerTypedArrow,",
+    "  outerLetDelete, evalVarDelete,",
+    "  ownConst, ownLet, ownBlockLet, ownOuterBlockConst, ownLetBelowOuterConst,",
+    "  strictSourceBelowOuterConst, strictSourceBesideOwnConst, strictCallerBesideOwnConst,",
+    "]) print(probe.name + ' ' + attempt(probe));",
+    "",
+  ].join("\n");
+  const expected = [
+    "outerConst 5,16",
+    "outerLet 5,16",
+    "outerConstTwoFunctionsUp 5:5:5,16,16",
+    "outerConstOtherType a1,16",
+    "outerTypedArrow r51,6",
+    "outerLetDelete false,16",
+    "evalVarDelete true:16,16",
+    "ownConst SyntaxError",
+    "ownLet SyntaxError",
+    "ownBlockLet SyntaxError",
+    "ownOuterBlockConst SyntaxError",
+    "ownLetBelowOuterConst SyntaxError",
+    "strictSourceBelowOuterConst 5:16,16",
+    "strictSourceBesideOwnConst 5,16",
+    "strictCallerBesideOwnConst 5,16",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval var conflict probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval var conflict probe got: ${proc.stdout.toString()}`);
+  }
 });
 
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
@@ -1822,6 +1982,48 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
       throw new Error(`Bare ${mode.label} Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
       throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
+  }
+});
+
+await section("Test262 Runner: eval in a finally block run by return or break resolves names outside the try block...", async () => {
+  const source = [
+    "const run = (exit) => {",
+    "  let label = 'outer';",
+    "  const seen = [];",
+    "  for (const item of [1]) {",
+    "    try {",
+    "      let label = 'inner';",
+    "      let onlyInTryBlock = 1;",
+    "      seen.push(label);",
+    "      if (exit === 'return') return seen;",
+    "      break;",
+    "    } finally {",
+    "      seen.push(eval('label'), eval('typeof onlyInTryBlock'));",
+    "    }",
+    "  }",
+    "  return seen;",
+    "};",
+    "print(run('return').join(','));",
+    "print(run('break').join(','));",
+    "",
+  ].join("\n");
+  const expected = [
+    "inner,outer,undefined",
+    "inner,outer,undefined",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} finally eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} finally eval probe got: ${proc.stdout.toString()}`);
   }
 });
 
@@ -3297,6 +3499,53 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     }
     if (/^DA:\d+,0$/m.test(operandLcov)) {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
+    }
+
+    console.log("Loader: line coverage of let and parameter operands spread over several lines...");
+    // The same holds for a let binding and a parameter, which the compiler
+    // reads in place where nothing can rebind them before they are used, and
+    // for the branch records of a conditional and a logical expression that
+    // such an operand decides.
+    const mutableOperandSourcePath = join(tmp, "mutable-operand-coverage.js");
+    writeFileSync(
+      mutableOperandSourcePath,
+      [
+        "const price = (unitPrice, quantity, discount) => {",
+        "  let total =",
+        "    unitPrice *",
+        "    quantity -",
+        "    discount;",
+        "  total =",
+        "    total +",
+        "    quantity;",
+        "  total +=",
+        "    discount;",
+        "  const label =",
+        "    total <",
+        "    quantity",
+        "      ? unitPrice",
+        "      : total;",
+        "  return discount &&",
+        "    label;",
+        "};",
+        "console.log(price(10, 3, 5));",
+        "",
+      ].join("\n"),
+    );
+    const mutableOperandLcovPath = join(tmp, "mutable-operand-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${mutableOperandLcovPath} ${mutableOperandSourcePath}`.quiet();
+    const mutableOperandLcov = readFileSync(mutableOperandLcovPath, "utf-8");
+    for (const line of [3, 4, 5, 7, 8, 10, 12, 13, 15, 17]) {
+      if (!mutableOperandLcov.includes(`DA:${line},1`)) {
+        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${mutableOperandLcov}`);
+      }
+    }
+    // Line 13 ends the conditional's test, line 16 holds the `&&`: each keeps
+    // one taken and one untaken branch record.
+    for (const branch of [/^BRDA:13,\d+,0,1$/m, /^BRDA:13,\d+,1,-$/m, /^BRDA:16,\d+,1,1$/m, /^BRDA:16,\d+,0,-$/m]) {
+      if (!branch.test(mutableOperandLcov)) {
+        throw new Error(`LCOV should keep the branch record ${branch}, got:\n${mutableOperandLcov}`);
+      }
     }
 
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
