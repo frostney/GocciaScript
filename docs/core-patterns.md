@@ -365,8 +365,25 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
 | `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
 | `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |
+| `TGocciaShapedPropertyMap.EnsureShape` | `ExtendShape` |
+| `ToPrimitive` | `ToPrimitiveGeneric` |
+| `TGocciaValue.AfterConstruction` | `ThrowMemoryLimitExceeded` |
+| `CheckStackDepth`, `CheckNativeReentryDepth` | `ThrowMaxCallStackExceeded` |
 
-The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, and to a function that returns a managed record by value.
+The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
+
+FPC inlines a small procedure on its own at `-O3` and above, which production builds use. A core of two or three lines is therefore folded back into its caller, frame included. Switch that off for the core, and check the disassembly of the fast path for `fpc_pushexceptaddr`:
+
+```pascal
+{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure ThrowMaxCallStackExceeded;
+begin
+  ThrowRangeError(SErrorMaxCallStackExceeded);
+end;
+{$IFDEF FPC}{$POP}{$ENDIF}
+```
+
+An explicit `try..finally` installs the same frame when control reaches it. Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 
 ### Singleton Special Values
 

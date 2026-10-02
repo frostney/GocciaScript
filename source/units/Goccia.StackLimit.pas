@@ -36,16 +36,28 @@ begin
   GMaxStackDepth := AMaxDepth;
 end;
 
+// Loading the resource string needs a managed temporary, and a procedure that
+// has one installs an implicit exception frame on every call. The throw lives
+// here so that the two checks, which run on each call, stay without one
+// (docs/core-patterns.md, "Managed Locals on Hot Paths"). FPC would inline a
+// procedure this small at -O3 and above and bring the frame back with it.
+{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure ThrowMaxCallStackExceeded;
+begin
+  ThrowRangeError(SErrorMaxCallStackExceeded);
+end;
+{$IFDEF FPC}{$POP}{$ENDIF}
+
 procedure CheckStackDepth(const ACurrentDepth: Integer);
 begin
   if (GMaxStackDepth > 0) and (ACurrentDepth > GMaxStackDepth) then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
 end;
 
 procedure CheckNativeReentryDepth(const ADepth: Integer);
 begin
   if ADepth > MAX_NATIVE_REENTRY_DEPTH then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
 end;
 
 end.

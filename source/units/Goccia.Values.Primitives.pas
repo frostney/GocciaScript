@@ -211,6 +211,24 @@ end;
 
 { TGocciaValue }
 
+// The throw loads two resource strings into managed temporaries, which costs
+// the procedure that owns them an implicit exception frame on every call. It
+// lives here so that AfterConstruction, which runs for each value allocated,
+// has none (docs/core-patterns.md, "Managed Locals on Hot Paths").
+procedure ThrowMemoryLimitExceeded(const AGC: TGarbageCollector;
+  const AValue: TGocciaValue);
+begin
+  // Unregister before throwing: AfterConstruction exceptions trigger
+  // automatic destruction, so the GC must not hold a dangling pointer.
+  AGC.UnregisterObject(AValue);
+  AGC.MemoryLimitFiring := True;
+  try
+    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  finally
+    AGC.MemoryLimitFiring := False;
+  end;
+end;
+
 procedure TGocciaValue.AfterConstruction;
 var
   GC: TGarbageCollector;
@@ -222,17 +240,7 @@ begin
     GC.RegisterObject(Self);
     if (GC.MaxBytes > 0) and (GC.BytesAllocated > GC.MaxBytes) and
        not GC.MemoryLimitFiring then
-    begin
-      // Unregister before throwing: AfterConstruction exceptions trigger
-      // automatic destruction, so the GC must not hold a dangling pointer.
-      GC.UnregisterObject(Self);
-      GC.MemoryLimitFiring := True;
-      try
-        ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
-      finally
-        GC.MemoryLimitFiring := False;
-      end;
-    end;
+      ThrowMemoryLimitExceeded(GC, Self);
   end;
   if GProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Instance.RecordAllocation;
