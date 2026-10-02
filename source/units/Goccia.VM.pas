@@ -14197,14 +14197,17 @@ end;
 
 { SetupNewFrame's slow path: the callee's source path is not the one the last
   call interned. Kept out of line so that SetupNewFrame itself holds no
-  managed local or temporary and needs no implicit exception frame. }
-{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+  managed local or temporary and needs no implicit exception frame. Automatic
+  inlining is switched off for this procedure and back on after it by name:
+  FPC 3.2.2 does not save optimizer switches on $PUSH, so a $POP would leave
+  it off for the rest of the unit. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
 procedure TGocciaVM.InternExecutionSourcePath(const ASourcePath: string);
 begin
   FExecutionSourcePathRef := InternSourcePath(ASourcePath);
   FExecutionSourcePath := ASourcePath;
 end;
-{$IFDEF FPC}{$POP}{$ENDIF}
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
 
 { AArguments points at AArgCount registers (nil when there are none). It may
   point into the caller's register window: the arguments are copied into the
