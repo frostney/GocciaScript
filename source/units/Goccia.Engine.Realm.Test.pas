@@ -12,6 +12,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.AST.Node,
   Goccia.AsyncContext,
+  Goccia.CallStack,
   Goccia.Engine,
   Goccia.ExecutionContext,
   Goccia.Executor,
@@ -37,6 +38,7 @@ type
   TTestEngineRealm = class(TTestSuite)
   private
     FExpectedRealm: TGocciaRealm;
+    FRecordedSourcePaths: TStringList;
     FNestedLog: TStringList;
     FNestedChildSource: string;
     FNestedChildIsBytecode: Boolean;
@@ -58,6 +60,8 @@ type
     function SourcePathProbe(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function RunSourcePathProbe(const AFileName, ASource: string): string;
+    function RecordSourcePathProbe(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure AssertRealmProbeWithExecutor(const AExecutor: TGocciaExecutor);
     procedure AssertFunctionContextProbeWithExecutor(
       const AExecutor: TGocciaExecutor);
@@ -114,6 +118,8 @@ type
     procedure TestInterpreterConstructorExecutionContextUsesFunctionValue;
     procedure TestBytecodeConstructorExecutionContextUsesFunctionValue;
     procedure TestBytecodeFunctionExecutionContextCarriesSourcePath;
+    procedure TestBytecodeFunctionExecutionContextFollowsCalleeModule;
+    procedure TestBytecodeEntryRebindsTheThreadCallStack;
     procedure TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeRepeatedEngineExecutionGetsFreshTemplateSites;
     procedure TestBytecodeGlobalReadCacheRevalidatesLexicalShadow;
@@ -171,6 +177,10 @@ begin
     TestBytecodeConstructorExecutionContextUsesFunctionValue);
   Test('Bytecode function execution context carries its source path',
     TestBytecodeFunctionExecutionContextCarriesSourcePath);
+  Test('Bytecode function execution context follows the callee''s module',
+    TestBytecodeFunctionExecutionContextFollowsCalleeModule);
+  Test('Bytecode entry rebinds the thread''s call stack',
+    TestBytecodeEntryRebindsTheThreadCallStack);
   Test('Interpreter repeated engine execution gets fresh template sites',
     TestInterpreterRepeatedEngineExecutionGetsFreshTemplateSites);
   Test('Bytecode repeated engine execution gets fresh template sites',
@@ -1265,6 +1275,135 @@ begin
     .ToBe(Repeated(SECOND_FILE));
   Expect<string>(RunSourcePathProbe(FIRST_FILE, PROBE_SOURCE))
     .ToBe(Repeated(FIRST_FILE));
+end;
+
+function TTestEngineRealm.RecordSourcePathProbe(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FRecordedSourcePaths.Add(RunningExecutionContext.SourcePath);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+{ One engine, three source files, calls alternating between them. The VM
+  reuses the reference it interned for the previous call's path while the
+  path is the same string; a reference that is not refreshed when the callee
+  comes from another file would report the earlier file here. }
+procedure TTestEngineRealm.TestBytecodeFunctionExecutionContextFollowsCalleeModule;
+const
+  MAIN_FILE = 'source-path-main.mjs';
+  FIRST_MODULE = 'source-path-first';
+  SECOND_MODULE = 'source-path-second';
+  MAIN_SOURCE =
+    'import { fromFirst, viaFirst } from "' + FIRST_MODULE + '";' +
+    'import { fromSecond } from "' + SECOND_MODULE + '";' +
+    'const own = () => recordSourcePath();' +
+    'fromFirst(); fromSecond(); own();' +
+    'fromFirst(); own(); fromSecond();' +
+    'fromSecond(); fromFirst();' +
+    'viaFirst(own); viaFirst(fromSecond);';
+  // The module each recorded call's function was compiled from: main (M),
+  // first (F) or second (S). viaFirst calls its argument from the first
+  // module, so the probe runs in the argument's own module.
+  EXPECTED_ORDER = 'FSMFMSSFMS';
+var
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  MainPath, FirstPath, SecondPath, Expected: string;
+  I: Integer;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  Source := TStringList.Create;
+  Source.Text := MAIN_SOURCE;
+  FRecordedSourcePaths := TStringList.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(MAIN_FILE, Source, Executor);
+    Engine.InjectGlobal('recordSourcePath',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(RecordSourcePathProbe,
+        'recordSourcePath', 0));
+    Engine.InjectModule(FIRST_MODULE,
+      'export const fromFirst = () => recordSourcePath();' +
+      'export const viaFirst = (callback) => callback();');
+    Engine.InjectModule(SECOND_MODULE,
+      'export const fromSecond = () => recordSourcePath();');
+    Engine.Execute;
+
+    Expect<Integer>(FRecordedSourcePaths.Count).ToBe(Length(EXPECTED_ORDER));
+    if FRecordedSourcePaths.Count = Length(EXPECTED_ORDER) then
+    begin
+      FirstPath := FRecordedSourcePaths[0];
+      SecondPath := FRecordedSourcePaths[1];
+      MainPath := FRecordedSourcePaths[2];
+      Expect<Boolean>(Pos(FIRST_MODULE, FirstPath) > 0).ToBe(True);
+      Expect<Boolean>(Pos(SECOND_MODULE, SecondPath) > 0).ToBe(True);
+      Expect<Boolean>(Pos(MAIN_FILE, MainPath) > 0).ToBe(True);
+      for I := 0 to FRecordedSourcePaths.Count - 1 do
+      begin
+        case EXPECTED_ORDER[I + 1] of
+          'F': Expected := FirstPath;
+          'S': Expected := SecondPath;
+        else
+          Expected := MainPath;
+        end;
+        Expect<string>(FRecordedSourcePaths[I]).ToBe(Expected);
+      end;
+    end;
+  finally
+    Engine.Free;
+    FreeAndNil(FRecordedSourcePaths);
+    Source.Free;
+    Executor.Free;
+  end;
+end;
+
+{ A VM resolves the thread's call stack when native code enters it while it
+  is running nothing, and must do so again on every such entry: between two
+  entries the thread's call stack can be a different object. The second run
+  below happens after the thread's call stack has been replaced, with a decoy
+  holding the old one's memory, and must record its frames on the new one. }
+procedure TTestEngineRealm.TestBytecodeEntryRebindsTheThreadCallStack;
+const
+  STACK_SOURCE =
+    'const inner = (tag) => new Error(tag).stack;' +
+    'const middle = (tag) => { const trace = inner(tag); return trace; };' +
+    'const outer = (tag) => { const trace = middle(tag); return trace; };' +
+    'outer("probe");';
+var
+  Executor: TGocciaBytecodeExecutor;
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Decoy: TGocciaCallStack;
+  FirstTrace, SecondTrace: string;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  Source := TStringList.Create;
+  Source.Text := STACK_SOURCE;
+  Engine := nil;
+  Decoy := nil;
+  try
+    Engine := TGocciaEngine.Create('<call-stack-rebind>', Source, Executor);
+    FirstTrace := (Engine.Execute.Result as TGocciaStringLiteralValue).Value;
+    Expect<Boolean>(Pos('at inner', FirstTrace) > 0).ToBe(True);
+    Expect<Boolean>(Pos('at middle', FirstTrace) > 0).ToBe(True);
+    Expect<Boolean>(Pos('at outer', FirstTrace) > 0).ToBe(True);
+
+    TGocciaCallStack.Shutdown;
+    Decoy := TGocciaCallStack.Create;
+    TGocciaCallStack.Initialize;
+    Expect<Boolean>(TGocciaCallStack.Instance <> Decoy).ToBe(True);
+
+    SecondTrace := (Engine.Execute.Result as TGocciaStringLiteralValue).Value;
+    Expect<string>(SecondTrace).ToBe(FirstTrace);
+    Expect<Integer>(Decoy.Count).ToBe(0);
+    Expect<Integer>(TGocciaCallStack.Instance.Count).ToBe(0);
+  finally
+    Engine.Free;
+    Decoy.Free;
+    Source.Free;
+    Executor.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.TestInterpreterConstructorExecutionContextUsesFunctionValue;
