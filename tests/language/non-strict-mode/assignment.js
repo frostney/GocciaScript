@@ -209,3 +209,89 @@ describe("non-strict assignment", () => {
     expect(Base.received).toBeUndefined();
   });
 });
+
+// ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor steps 3-7 with §6.2.5.6
+// PutValue step 3.e: assigning to an own accessor that has no setter is a
+// silent no-op in non-strict code. The accessor is never replaced.
+describe("non-strict assignment to an own accessor", () => {
+  class Plain {}
+
+  const receivers = [
+    ["a plain object", () => ({})],
+    ["a class instance", () => new Plain()],
+    ["an array", () => [1, 2, 3]],
+    ["a Uint8Array", () => new Uint8Array(2)],
+    ["a Map", () => new Map()],
+    ["a String object", () => new String("ab")],
+  ];
+
+  describe.each(receivers)("%s", (label, make) => {
+    test("a getter-only accessor silently keeps its value", () => {
+      const receiver = make();
+      Object.defineProperty(receiver, "x", {
+        get: () => "from getter",
+        configurable: true,
+      });
+
+      const result = (receiver.x = 1);
+
+      expect(result).toBe(1);
+      expect(receiver.x).toBe("from getter");
+      expect("get" in Object.getOwnPropertyDescriptor(receiver, "x")).toBe(true);
+    });
+
+    test("a setter is called with the receiver as this", () => {
+      const receiver = make();
+      const calls = [];
+      Object.defineProperty(receiver, "x", {
+        set(value) {
+          calls.push([this === receiver, value]);
+        },
+        configurable: true,
+      });
+
+      receiver.x = 7;
+
+      expect(calls).toEqual([[true, 7]]);
+      expect("set" in Object.getOwnPropertyDescriptor(receiver, "x")).toBe(true);
+    });
+
+    test("Object.assign still throws TypeError for a getter-only accessor", () => {
+      const receiver = make();
+      Object.defineProperty(receiver, "x", {
+        get: () => "from getter",
+        configurable: true,
+      });
+
+      expect(() => Object.assign(receiver, { x: 1 })).toThrow(TypeError);
+      expect(receiver.x).toBe("from getter");
+    });
+  });
+
+  test("a compound assignment to a getter-only accessor of a class instance is a no-op", () => {
+    const receiver = new Plain();
+    Object.defineProperty(receiver, "x", { get: () => 1, configurable: true });
+
+    const result = (receiver.x += 5);
+
+    expect(result).toBe(6);
+    expect(receiver.x).toBe(1);
+    expect("get" in Object.getOwnPropertyDescriptor(receiver, "x")).toBe(true);
+  });
+
+  test("a write inside a class body throws TypeError, because class code is strict", () => {
+    class ReadOnly {
+      constructor() {
+        Object.defineProperty(this, "x", { get: () => 1, configurable: true });
+      }
+
+      write() {
+        this.x = 2;
+      }
+    }
+    const receiver = new ReadOnly();
+
+    expect(() => receiver.write()).toThrow(TypeError);
+    expect(receiver.x).toBe(1);
+  });
+});
