@@ -362,6 +362,7 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 
 | Fast path, no managed locals | Core holding the managed locals |
 |------------------------------|----------------------------------|
+| `ValuesEqual` (`IsStrictEqual`, `IsSameValue`, `IsSameValueZero`) | `StringValuesEqual` |
 | `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
 | `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
 | `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |

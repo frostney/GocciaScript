@@ -1905,7 +1905,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(True);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(False);
+          else
+            SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          end;
 
       OP_NEQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -1919,7 +1926,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(False);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(True);
+          else
+            SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          end;
 
       OP_LOOSE_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
