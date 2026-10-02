@@ -6,8 +6,9 @@ name: Nightly
 # It runs on a schedule, the pattern T3 Code uses: every three hours it asks
 # whether that newest passing commit is ahead of the commit the last nightly
 # was built from (or has diverged from it, after a rewritten main). If it is,
-# it publishes; if nothing new has passed CI, the run ends there. A quiet day publishes nothing and a busy one at most eight
-# times, where the earlier rule was once per UTC day whatever landed later.
+# it publishes; if nothing new has passed CI, the run ends there. A quiet day
+# publishes nothing and a busy one at most eight times, where the earlier rule
+# was once per UTC day whatever landed later.
 #
 # It lives outside ci.yml because a newer main push cancels the superseded CI
 # run as a whole. Inside ci.yml, that cancellation could land between deleting
