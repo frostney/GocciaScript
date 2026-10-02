@@ -5219,6 +5219,228 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
   }
 });
 
+await section("TestRunner: a file that fails with work still queued does not reach the next file...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A queued job belongs to the engine that queued it. When a file ends
+    // abnormally the job used to stay on the worker thread and run inside the
+    // next file, against an engine that had been freed: an access violation
+    // that aborted the whole run and named the innocent file. The jobs build
+    // their message, so a code frame quoting the source cannot match it.
+    const passingFile = 'describe("next file", () => { test("is clean", async () => { await null; expect(1 + 1).toBe(2); }); });\n';
+    const cases: { name: string; first: string; args: string[]; error: string; firstPassed: number }[] = [
+      {
+        name: "file timeout",
+        first: [
+          'describe("slow", () => {',
+          '  test("queues a job and then exceeds the file timeout", () => {',
+          '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+          // Small arrays: a single huge one is refused on 32-bit targets.
+          "    const until = Date.now() + 10000;",
+          "    Array.from({ length: 10000 }).some(() => Array.from({ length: 1000 }).some(() => Date.now() > until));",
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+        args: ["--timeout=300ms", "--test-timeout=0"],
+        error: "file timed out after 300ms",
+        firstPassed: 0,
+      },
+      {
+        name: "top-level throw",
+        first: [
+          'queueMicrotask(() => console.log("leaked " + "job ran"));',
+          'Promise.resolve().then(() => console.log("leaked " + "job ran"));',
+          'throw new Error("top-level throw");',
+          "",
+        ].join("\n"),
+        args: [],
+        error: "Error: top-level throw",
+        firstPassed: 0,
+      },
+      {
+        // The file reaches its end, so nothing unwinds; the hook failed
+        // before its job could run.
+        name: "throwing hook",
+        first: [
+          'describe("hook", () => {',
+          '  afterAll(() => { queueMicrotask(() => console.log("leaked " + "job ran")); throw new Error("afterAll throws"); });',
+          '  test("passes", () => { expect(1).toBe(1); });',
+          "});",
+          "",
+        ].join("\n"),
+        args: [],
+        error: "",
+        firstPassed: 1,
+      },
+    ];
+    for (const testCase of cases) {
+      const dir = join(tmp, testCase.name.replace(/ /g, "-"));
+      mkdirSync(dir);
+      writeFileSync(join(dir, "a-first.test.js"), testCase.first);
+      writeFileSync(join(dir, "b-second.test.js"), passingFile);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        const label = `TestRunner (${testCase.name}, ${mode})`;
+        if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+          throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+        const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          error: testCase.error !== "" && String(file.errorMessage ?? "").includes(testCase.error),
+        }));
+        const expected = [
+          { file: "a-first.test.js", ok: false, passed: testCase.firstPassed, error: testCase.error !== "" },
+          { file: "b-second.test.js", ok: true, passed: 1, error: false },
+        ];
+        if (JSON.stringify(files) !== JSON.stringify(expected))
+          throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
+
+        // The JSON reporter mutes the console, so only a plain run can show a
+        // leaked job that ran without faulting.
+        const plain = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const plainOutput = plain.stdout.toString() + plain.stderr.toString();
+        if (plain.exitCode !== 1 || /Integrity fault|leaked job ran/.test(plainOutput))
+          throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
+      }
+    }
+
+    // The same holds inside one file: a sibling suite still runs after a
+    // failed beforeAll, and is not handed the timer or the job it left.
+    const siblings = join(tmp, "siblings.test.js");
+    writeFileSync(
+      siblings,
+      [
+        'describe("failed hook", () => {',
+        "  beforeAll(() => {",
+        '    setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '    throw new Error("beforeAll throws");',
+        "  });",
+        '  test("is skipped", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("sibling suite", () => {',
+        '  test("runs", async () => { await null; expect(1).toBe(1); console.log("sibling " + "suite ran"); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", siblings, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || !output.includes("sibling suite ran") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
+
+    // A hook fails the same way when its promise rejects or it leaves a
+    // rejection behind, without throwing.
+    const failedAsyncHooks: { name: string; hook: string; error: string }[] = [
+      { name: "rejected", hook: 'async () => { TIMER; throw new Error("beforeAll rejects"); }', error: "beforeAll rejects" },
+      { name: "unhandled", hook: '() => { TIMER; Promise.reject(new Error("beforeAll leaves a rejection")); }', error: "beforeAll leaves a rejection" },
+      // A failed expect records the failure and returns.
+      { name: "asserting", hook: '() => { TIMER; expect("hook value").toBe("expected"); }', error: 'Hook "beforeAll" in suite "failed hook" failed' },
+    ];
+    for (const failedHook of failedAsyncHooks) {
+      const file = join(tmp, `async-hook-${failedHook.name}.test.js`);
+      writeFileSync(
+        file,
+        [
+          'describe("failed hook", () => {',
+          `  beforeAll(${failedHook.hook.replace("TIMER", 'setTimeout(() => console.log("leaked " + "timer ran"), 0)')});`,
+          '  test("is skipped", () => { expect(1).toBe(1); });',
+          "});",
+          'describe("sibling suite", () => {',
+          '  test("runs", async () => {',
+          "    await new Promise((resolve) => setTimeout(resolve, 30));",
+          "    expect(1).toBe(1);",
+          '    console.log("sibling " + "suite ran");',
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", file, "--no-progress", `--mode=${mode}`],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || !output.includes("sibling suite ran") || /leaked timer ran/.test(output))
+          throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+      }
+    }
+
+    // Only the hook that failed loses its timer: one that succeeds after it
+    // keeps the timer it scheduled, which runs at the end of the next test.
+    const keptTimer = join(tmp, "kept-timer.test.js");
+    writeFileSync(
+      keptTimer,
+      [
+        'describe("hooks", () => {',
+        '  beforeEach(() => { setTimeout(() => console.log("leaked " + "timer ran"), 0); expect("hook value").toBe("expected"); });',
+        '  beforeEach(() => { setTimeout(() => console.log("kept " + "timer ran"), 0); });',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", keptTimer, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("kept timer ran") || /leaked timer ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop only the failed hook's timer, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
+
+    // A describe body whose queued job throws fails the file, and the tests
+    // still run. The first of them pumps timers, and must not be handed the
+    // one the describe body left.
+    const collection = join(tmp, "collection.test.js");
+    writeFileSync(
+      collection,
+      [
+        'describe("collection", () => {',
+        '  setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '  queueMicrotask(() => { throw new Error("job from a describe body"); });',
+        '  queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "    expect(1).toBe(1);",
+        '    console.log("first " + "test ran");',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", collection, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || !output.includes("first test ran") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a describe body left pending when its job throws, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json keeps stdout clean when script logs to console...", async () => {
   const tmp = makeTmp();
   try {
