@@ -1825,6 +1825,48 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
   }
 });
 
+await section("Test262 Runner: eval in a finally block run by return or break resolves names outside the try block...", async () => {
+  const source = [
+    "const run = (exit) => {",
+    "  let label = 'outer';",
+    "  const seen = [];",
+    "  for (const item of [1]) {",
+    "    try {",
+    "      let label = 'inner';",
+    "      let onlyInTryBlock = 1;",
+    "      seen.push(label);",
+    "      if (exit === 'return') return seen;",
+    "      break;",
+    "    } finally {",
+    "      seen.push(eval('label'), eval('typeof onlyInTryBlock'));",
+    "    }",
+    "  }",
+    "  return seen;",
+    "};",
+    "print(run('return').join(','));",
+    "print(run('break').join(','));",
+    "",
+  ].join("\n");
+  const expected = [
+    "inner,outer,undefined",
+    "inner,outer,undefined",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync(mode.args, {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} finally eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} finally eval probe got: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval reports strict delete identifier as SyntaxError...", async () => {
   const source = [
     "try {",
