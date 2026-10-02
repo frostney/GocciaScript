@@ -14234,6 +14234,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
+  I: Integer;
   IsGeneratorReturnCompletion: Boolean;
 begin
   // Proven numeric frames contain no handlers. Restore their generic entry
@@ -14254,6 +14255,13 @@ begin
       if IsGeneratorReturnCompletion and (Handler.Kind = bhkCatch) then
         Continue;
       AFrame.IP := Handler.CatchIP;
+      // ES2026 §14.2.2 Runtime Semantics: Evaluation (Block) steps 5-6 and
+      // Note 1: a Block's environment is left however control leaves it. The
+      // throw skipped the OP_CLOSE_UPVALUE of every scope it unwound, so
+      // detach their cells here. The compiler allocates a handler's register
+      // before the region it protects, so those scopes own the slots above it.
+      for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
+        FLocalCells[I] := nil;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;
