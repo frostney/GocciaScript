@@ -528,6 +528,10 @@ type
       const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
       const APushExecutionContext: Boolean = True): TGocciaValue;
+    function ExecuteClosureWithHeapArguments(
+      const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection;
+      const APushExecutionContext: Boolean): TGocciaValue;
   public
     constructor Create;
     destructor Destroy; override;
@@ -640,6 +644,9 @@ const
   // A pooled argument collection keeps its backing store only when the call
   // it served carried at most this many arguments.
   MAX_POOLED_ARGUMENT_COUNT = 32;
+  // Arguments of a native call into bytecode that are converted on the stack
+  // rather than in a heap array; see TGocciaVM.ExecuteClosure.
+  MAX_STACK_STAGED_ARGUMENT_COUNT = 8;
 
 type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
@@ -15089,8 +15096,37 @@ LInnerLoopsDone:
   end;
 end;
 
+{ Every call native code makes into a bytecode function comes through here: a
+  callback from Array.prototype.map, a getter, a comparator. The arguments are
+  converted on the stack, which keeps this procedure free of a managed local
+  (and so of an implicit exception frame, an allocation and a release per
+  call); SetupNewFrame copies them into the callee's argument window before
+  anything can collect. A call with more arguments than the buffer holds
+  stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
+  const APushExecutionContext: Boolean): TGocciaValue;
+var
+  StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
+    TGocciaRegister;
+  I, ArgumentCount: Integer;
+begin
+  ArgumentCount := AArguments.Length;
+  if ArgumentCount > MAX_STACK_STAGED_ARGUMENT_COUNT then
+    Exit(ExecuteClosureWithHeapArguments(AClosure, AThisValue, AArguments,
+      APushExecutionContext));
+  for I := 0 to ArgumentCount - 1 do
+    StackArguments[I] := VMValueToRegisterFast(AArguments.GetElement(I));
+  CheckExecutionTimeout;
+  CheckInstructionLimit;
+  Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
+    VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
+    APushExecutionContext));
+end;
+
+function TGocciaVM.ExecuteClosureWithHeapArguments(
+  const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
   const APushExecutionContext: Boolean): TGocciaValue;
 var
   RegisterArgs: TGocciaRegisterArray;
