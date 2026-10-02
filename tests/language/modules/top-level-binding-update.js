@@ -42,6 +42,20 @@ const constUpdateFromFunction = errorName(() => {
 let moduleCounter = 5;
 const MODULE_LIMIT = 5;
 
+const conversions = [];
+const MODULE_OBJECT = {
+  valueOf() {
+    conversions.push("valueOf");
+    return 1;
+  },
+};
+let objectUpdate = "none";
+try {
+  MODULE_OBJECT++;
+} catch (error) {
+  objectUpdate = error.constructor.name;
+}
+
 describe("update expressions on top-level module bindings", () => {
   test("an update before the declaration throws ReferenceError", () => {
     expect(letUpdate).toBe("ReferenceError");
@@ -66,5 +80,10 @@ describe("update expressions on top-level module bindings", () => {
       }),
     ).toBe("TypeError");
     expect(MODULE_LIMIT).toBe(5);
+  });
+
+  test("an update of a const converts its operand once before it throws", () => {
+    expect(objectUpdate).toBe("TypeError");
+    expect(conversions).toEqual(["valueOf"]);
   });
 });
