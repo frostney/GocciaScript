@@ -2022,9 +2022,13 @@ end;
 //      before they are compiled (StatementCreatesNoClosure) and keep the copy.
 //    - A parameter is not marked initialized when its function has an
 //      arguments object (see MarkParametersInitialized).
-//    Code created by direct eval is the one thing that writes this function's
-//    registers from inside a call. A function keeps the copy from its first
-//    direct eval onwards, and a loop that contains one keeps it throughout.
+//    Code created by direct eval is the one thing that writes a function's
+//    registers from inside a call, and a closure it creates goes on doing so
+//    after the eval call has returned, in whichever function calls it. So
+//    where the host offers direct eval at all (DirectEvalAvailable) every let
+//    binding and parameter keeps the copy. Independently of that, a function
+//    keeps the copy from its first direct eval onwards, and a loop that
+//    contains one keeps it throughout.
 //
 // 3. It takes the value before the following operands are evaluated:
 //    `a + (a = 2)` adds the old value. AEvaluatedLater1 and AEvaluatedLater2
@@ -2061,6 +2065,8 @@ begin
     Exit;
   if not Local.IsConst then
   begin
+    if ACtx.OptimizationOptions.DirectEvalAvailable then
+      Exit;
     if Local.IsCaptured or ACtx.Scope.MutableLocalsMayLeaveRegisters then
       Exit;
     if not ExpressionKeepsLocalRegisters(AEvaluatedLater1) or

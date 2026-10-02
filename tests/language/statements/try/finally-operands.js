@@ -124,3 +124,126 @@ describe("operands around try, catch and finally", () => {
     expect(run(pass([1, 2, 3]))).toEqual([2, 103, 107, 208]);
   });
 });
+
+// A finally block is compiled again at each return that leaves its try
+// statement. When that return sits inside a loop, the finally block's own
+// loops are compiled in the middle of a loop they are not part of.
+describe("a loop inside a finally block that runs for a return from another loop", () => {
+  test("a let binding rewritten by a closure is read afresh on each iteration", () => {
+    const run = () => {
+      let value = 1;
+      const seen = [];
+      try {
+        for (const item of [1]) {
+          return seen;
+        }
+      } finally {
+        for (const step of [1, 2, 3]) {
+          seen.push(value + 1);
+          const scale = () => {
+            value = value * 10;
+          };
+          scale();
+        }
+      }
+      return seen;
+    };
+
+    expect(run()).toEqual([2, 11, 101]);
+  });
+
+  test("a parameter rewritten by a closure is read afresh on each iteration", () => {
+    const run = (value) => {
+      const seen = [];
+      try {
+        for (const item of [1]) {
+          return seen;
+        }
+      } finally {
+        for (const step of [1, 2, 3]) {
+          seen.push(value + 1, value < 50);
+          const scale = () => {
+            value = value * 10;
+          };
+          scale();
+        }
+      }
+      return seen;
+    };
+
+    expect(run(pass(1))).toEqual([2, true, 11, true, 101, false]);
+  });
+
+  test("a store goes to the object the closure put in the binding", () => {
+    const run = () => {
+      const first = { hits: 0 };
+      const second = { hits: 0 };
+      let target = first;
+      try {
+        for (const item of [1]) {
+          return [first, second];
+        }
+      } finally {
+        for (const step of [1, 2]) {
+          target.hits = step;
+          const retarget = () => {
+            target = second;
+          };
+          retarget();
+        }
+      }
+      return [first, second];
+    };
+
+    expect(run()).toEqual([{ hits: 1 }, { hits: 2 }]);
+  });
+
+  test("the same holds when the return is two loops deep", () => {
+    const run = (limit) => {
+      let total = 0;
+      const seen = [];
+      try {
+        for (const outer of [1, 2]) {
+          for (const inner of [1, 2]) {
+            if (outer + inner === limit) {
+              return seen;
+            }
+            total = total + inner;
+          }
+        }
+      } finally {
+        for (const step of [1, 2, 3]) {
+          seen.push(total + step);
+          const bump = () => {
+            total = total + 100;
+          };
+          bump();
+        }
+      }
+      return seen;
+    };
+
+    expect(run(pass(4))).toEqual([5, 106, 207]);
+    expect(run(pass(9))).toEqual([7, 108, 209]);
+  });
+
+  test("a finally loop without a closure still sees writes made in its own body", () => {
+    const run = () => {
+      let value = 1;
+      const seen = [];
+      try {
+        for (const item of [1]) {
+          return seen;
+        }
+      } finally {
+        for (const step of [1, 2, 3]) {
+          seen.push(value + 1);
+          value = value * 10;
+        }
+      }
+      return seen;
+    };
+
+    expect(run()).toEqual([2, 11, 101]);
+  });
+});

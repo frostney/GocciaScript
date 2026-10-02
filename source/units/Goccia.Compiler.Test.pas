@@ -44,7 +44,8 @@ type
       const AEnableDeadBranchElimination: Boolean = True;
       const ATraditionalForLoops: Boolean = False;
       const ANonStrictMode: Boolean = False;
-      const AVarDeclarations: Boolean = False): TGocciaBytecodeModule;
+      const AVarDeclarations: Boolean = False;
+      const ADirectEvalAvailable: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -86,6 +87,8 @@ type
     procedure TestSwitchClauseForgetsInitializedConsts;
     procedure TestCoverageKeepsConstOperandCopies;
     procedure TestParameterOperandsSkipGetLocal;
+    procedure TestDirectEvalHostKeepsOperandCopies;
+    procedure TestDirectEvalInFunctionKeepsLaterOperandCopies;
     procedure TestMethodParameterOperandsSkipGetLocal;
     procedure TestLetOperandsSkipGetLocal;
     procedure TestLetOperandBeforeDeclarationKeepsGetLocal;
@@ -179,6 +182,10 @@ begin
     TestCoverageKeepsConstOperandCopies);
   Test('Parameter operands skip OP_GET_LOCAL',
     TestParameterOperandsSkipGetLocal);
+  Test('A host with direct eval keeps the copy of let and parameter operands',
+    TestDirectEvalHostKeepsOperandCopies);
+  Test('A function keeps operand copies from its first direct eval onwards',
+    TestDirectEvalInFunctionKeepsLaterOperandCopies);
   Test('Method parameter operands skip OP_GET_LOCAL',
     TestMethodParameterOperandsSkipGetLocal);
   Test('Initialized let operands skip OP_GET_LOCAL',
@@ -362,7 +369,8 @@ function TTestCompiler.CompileSource(
   const AEnableDeadBranchElimination: Boolean;
   const ATraditionalForLoops: Boolean;
   const ANonStrictMode: Boolean;
-  const AVarDeclarations: Boolean): TGocciaBytecodeModule;
+  const AVarDeclarations: Boolean;
+  const ADirectEvalAvailable: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -391,6 +399,7 @@ begin
     Compiler.NonStrictMode := ANonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape := APreserveCoverageShape;
+    Options.DirectEvalAvailable := ADirectEvalAvailable;
     Options.EnableConstantFolding := AEnableConstantFolding;
     Options.EnableConstPropagation := AEnableConstPropagation;
     Options.EnableDeadBranchElimination := AEnableDeadBranchElimination;
@@ -868,6 +877,63 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestDirectEvalHostKeepsOperandCopies;
+const
+  SOURCE =
+    'const sum = (a, b) => { let t = a * b; const k = a * 2; return t + a + k; };';
+
+  function CopiesWith(const ADirectEvalAvailable: Boolean): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(SOURCE, False, False, False, True, True, True,
+      False, False, False, ADirectEvalAvailable);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesWith(False)).ToBe(0);
+  // Each read of a parameter or of the let binding is copied again: a three
+  // times, b and t once. The const k is not: nothing can write it.
+  Expect<Integer>(CopiesWith(True)).ToBe(5);
+end;
+
+procedure TTestCompiler.TestDirectEvalInFunctionKeepsLaterOperandCopies;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // A call to any other global reads every operand in place.
+  Expect<Integer>(CopiesIn(
+    'const f = (a) => { const before = a * 2; evil("0"); return a * 3 + before; };')).ToBe(0);
+  // After a direct eval the parameter is copied again, for `a * 3`; the read
+  // before the eval call and the const stay in place.
+  Expect<Integer>(CopiesIn(
+    'const f = (a) => { const before = a * 2; eval("0"); return a * 3 + before; };')).ToBe(1);
 end;
 
 procedure TTestCompiler.TestMethodParameterOperandsSkipGetLocal;

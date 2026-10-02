@@ -1412,6 +1412,41 @@ await section("Test262 Runner: calling another realm's built-in returns to the c
   }
 });
 
+// A function created by direct eval writes the locals of the function that
+// called eval, also after the eval call has returned. An operand read of such
+// a local has to see the write, in both modes: under a host with direct eval
+// the bytecode compiler does not read a let binding or a parameter straight
+// from its register.
+await section("Test262 Runner: operands see writes made by functions that direct eval created...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync(
+      [TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function", "--compat-var", "--compat-traditional-for-loop"],
+      {
+        stdin: new TextEncoder().encode([
+          "var out = [];",
+          'function afterEval(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); return x + w(50); }',
+          'out.push("afterEval " + afterEval(1));',
+          'function inLoop(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); let r = []; for (let i = 0; i < 2; i++) { r.push(x + w(i * 10)); } return r.join(); }',
+          'out.push("inLoop " + inLoop(1));',
+          'function createdInLoop(a) { let x = a; let r = []; let w = null; for (let i = 0; i < 3; i++) { r.push(x + (w ? w(i * 10) : 0)); w = eval("(function(v) { x = v; return 1; })"); } return r.join(); }',
+          'out.push("createdInLoop " + createdInLoop(1));',
+          'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
+          'out.push("inOperand " + inOperand(1));',
+          'print(out.join("\n"));',
+          "",
+        ].join("\n")),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} operands missed a write by eval-created code: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([

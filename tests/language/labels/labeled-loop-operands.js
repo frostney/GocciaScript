@@ -109,4 +109,29 @@ describe("labeled jumps and operands", () => {
     expect(run(pass(true))).toBe(3);
     expect(run(pass(false))).toBe(24);
   });
+
+  test("a finally loop that runs for a labeled break out of another loop rereads a binding its closure writes", () => {
+    // The finally block is compiled again at the break, inside the loop the
+    // break leaves, although it is not part of that loop.
+    const run = (start) => {
+      let value = start;
+      const seen = [];
+      exit: try {
+        for (let index = 0; index < 3; index++) {
+          break exit;
+        }
+      } finally {
+        for (let step = 0; step < 3; step++) {
+          seen.push(value + 1);
+          const scale = () => {
+            value = value * 10;
+          };
+          scale();
+        }
+      }
+      return seen;
+    };
+
+    expect(run(pass(1))).toEqual([2, 11, 101]);
+  });
 });

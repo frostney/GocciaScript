@@ -107,6 +107,8 @@ type
     FWithBindingCount: Integer;
     FLoopDepth: Integer;
     FLoopMayCreateClosure: Boolean;
+    // FLoopMayCreateClosure as it was when each open loop was entered.
+    FOuterLoopMayCreateClosure: array of Boolean;
     FDirectEvalSeen: Boolean;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
@@ -196,6 +198,7 @@ type
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
     property LoopDepth: Integer read FLoopDepth;
+    property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -574,20 +577,25 @@ begin
       FLocals[I].IsInitialized := False;
 end;
 
-// AMayCreateClosure is consulted for the outermost loop only: it describes that
-// loop's whole subtree, so every loop nested in it inherits the answer.
+// AMayCreateClosure describes the subtree of the loop being entered. A loop
+// nested in one that may create a closure inherits that answer, and every loop
+// is asked for its own: a loop compiled while another is open is not always
+// part of that loop's subtree. A finally block is compiled again at each
+// return, break or continue that leaves its try statement, so a loop inside a
+// finally block can be compiled in the middle of a loop it does not belong to.
 procedure TGocciaCompilerScope.EnterLoop(const AMayCreateClosure: Boolean);
 begin
-  if FLoopDepth = 0 then
-    FLoopMayCreateClosure := AMayCreateClosure;
+  if FLoopDepth >= Length(FOuterLoopMayCreateClosure) then
+    SetLength(FOuterLoopMayCreateClosure, FLoopDepth * 2 + 4);
+  FOuterLoopMayCreateClosure[FLoopDepth] := FLoopMayCreateClosure;
+  FLoopMayCreateClosure := FLoopMayCreateClosure or AMayCreateClosure;
   Inc(FLoopDepth);
 end;
 
 procedure TGocciaCompilerScope.LeaveLoop;
 begin
   Dec(FLoopDepth);
-  if FLoopDepth = 0 then
-    FLoopMayCreateClosure := False;
+  FLoopMayCreateClosure := FOuterLoopMayCreateClosure[FLoopDepth];
 end;
 
 procedure TGocciaCompilerScope.MarkDirectEvalSeen;
@@ -604,6 +612,9 @@ end;
 //   read runs after the closure has written the binding's cell.
 // - Direct eval. Code it creates keeps writing the caller's registers after
 //   the eval call has returned, from inside calls the compiler cannot see.
+//   This covers the function that contains the eval call; a host that offers
+//   direct eval at all switches the direct read off for every function (see
+//   DirectEvalAvailable in TGocciaCompilerOptimizationOptions).
 function TGocciaCompilerScope.MutableLocalsMayLeaveRegisters: Boolean;
 begin
   Result := FLoopMayCreateClosure or FDirectEvalSeen;

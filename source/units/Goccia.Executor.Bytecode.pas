@@ -24,6 +24,7 @@ type
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
+    function RealmExposesDirectEval: Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -70,6 +71,7 @@ uses
   Goccia.Profiler,
   Goccia.Realm,
   Goccia.Scope.Redeclaration,
+  Goccia.Values.ObjectValue,
   Goccia.Values.PromiseValue;
 
 { TGocciaBytecodeExecutor }
@@ -136,6 +138,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
@@ -206,6 +209,17 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
+// Ordinary realms have no `eval`; a host that offers direct eval installs it
+// on the global object (the Test262 host, and a ShadowRealm created from such
+// a realm). A script that defines a global named eval itself only costs the
+// code compiled afterwards an optimization.
+function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
+begin
+  Result := Assigned(FRealm) and
+    (FRealm.GlobalObject is TGocciaObjectValue) and
+    TGocciaObjectValue(FRealm.GlobalObject).HasOwnProperty('eval');
+end;
+
 function TGocciaBytecodeExecutor.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
 var
@@ -225,6 +239,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally

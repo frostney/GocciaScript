@@ -314,17 +314,20 @@ begin
   // A loop is the only construct that sends control back to code compiled
   // earlier, so a closure created anywhere in it exists when the reads compiled
   // ahead of it run again. Those reads have to know that before they are
-  // compiled. The outermost loop is examined as a whole, and loops nested in
-  // it inherit the answer: a closure created in an outer loop also outlives
-  // the reads of an inner one, and each loop body is walked only once.
+  // compiled. A loop nested in one that may create a closure inherits the
+  // answer without being walked: a closure created in an outer loop also
+  // outlives the reads of an inner one. Any other loop is examined itself,
+  // even while another loop is open, because the compiler can be inside a loop
+  // that does not contain this one (an inlined finally block; see EnterLoop).
   if Goccia.Compiler.Statements.StatementIsIteration(AStmt) and
      (FLoopReentryStatement <> AStmt) then
   begin
     PreviousLoopReentryStatement := FLoopReentryStatement;
     LoopScope := FCurrentScope;
-    LoopScope.EnterLoop((LoopScope.LoopDepth = 0) and
+    LoopScope.EnterLoop(
       not FOptimizationOptions.PreserveCoverageShape and
-      not StatementCreatesNoClosure(AStmt));
+      (LoopScope.LoopMayCreateClosure or
+       not StatementCreatesNoClosure(AStmt)));
     FLoopReentryStatement := AStmt;
     try
       Exit(DoCompileStatement(AStmt));
