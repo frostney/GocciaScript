@@ -1437,7 +1437,7 @@ await section("Test262 Runner: operands see writes made by functions that direct
           "var saved;",
           'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
           'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
-          'print(out.join("\n"));',
+          'print(out.join("\\n"));',
           "",
         ].join("\n")),
         stdout: "pipe",
