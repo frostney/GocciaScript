@@ -5328,7 +5328,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
         '  test("is skipped", () => { expect(1).toBe(1); });',
         "});",
         'describe("sibling suite", () => {',
-        '  test("runs", async () => { await null; expect(1).toBe(1); });',
+        '  test("runs", async () => { await null; expect(1).toBe(1); console.log("sibling " + "suite ran"); });',
         "});",
         "",
       ].join("\n"),
@@ -5339,7 +5339,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
         { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || /leaked (timer|job) ran/.test(output))
+      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || !output.includes("sibling suite ran") || /leaked (timer|job) ran/.test(output))
         throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
 
@@ -5364,6 +5364,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
           '  test("runs", async () => {',
           "    await new Promise((resolve) => setTimeout(resolve, 30));",
           "    expect(1).toBe(1);",
+          '    console.log("sibling " + "suite ran");',
           "  });",
           "});",
           "",
@@ -5375,7 +5376,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
           { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
         );
         const output = proc.stdout.toString() + proc.stderr.toString();
-        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || /leaked timer ran/.test(output))
+        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || !output.includes("sibling suite ran") || /leaked timer ran/.test(output))
           throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
       }
     }
@@ -5420,6 +5421,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
         '  test("runs", async () => {',
         "    await new Promise((resolve) => setTimeout(resolve, 30));",
         "    expect(1).toBe(1);",
+        '    console.log("first " + "test ran");',
         "  });",
         "});",
         "",
@@ -5431,7 +5433,7 @@ await section("TestRunner: a file that fails with work still queued does not rea
         { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
       );
       const output = proc.stdout.toString() + proc.stderr.toString();
-      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || /leaked (timer|job) ran/.test(output))
+      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || !output.includes("first test ran") || /leaked (timer|job) ran/.test(output))
         throw new Error(`TestRunner (${mode}) should drop what a describe body left pending when its job throws, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
   } finally {
