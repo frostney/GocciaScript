@@ -255,6 +255,7 @@ begin
   EvalFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
     AEvalHost.Eval, 'eval', 1);
   EvalFunction.DirectEvalHost := True;
+  AEngine.Realm.HostsDirectEval := True;
   GlobalObject := TGocciaObjectValue(AEngine.Realm.GlobalObject);
   GlobalObject.DefineProperty('eval',
     TGocciaPropertyDescriptorData.Create(EvalFunction,
