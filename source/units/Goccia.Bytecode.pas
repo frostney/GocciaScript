@@ -182,7 +182,10 @@ const
   //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
   //               declaration's module request in C, so a missing-export
   //               SyntaxError names the specifier, not the host path.
-  GOCCIA_FORMAT_VERSION = 82;
+  //   v82 -> v83: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
+  //               publishes a global-backed script's named import to the
+  //               global scope so a later script against it reads the binding.
+  GOCCIA_FORMAT_VERSION = 83;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -470,7 +473,11 @@ type
     // No operands. Emitted immediately before a dynamic-import opcode whose
     // specifier is not a string literal, so the module loader treats the
     // request as outside the static module graph (ADR 0122).
-    OP_COMPUTED_IMPORT_SPECIFIER = 233
+    OP_COMPUTED_IMPORT_SPECIFIER = 233,
+    // A = module namespace register, B = local-name constant index,
+    // C = export-name constant index. Binds the global scope's predeclared
+    // local name to the module's live export.
+    OP_CREATE_GLOBAL_IMPORT_BINDING = 234
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;

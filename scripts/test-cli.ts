@@ -18,7 +18,7 @@ import {
   symlinkSync,
   linkSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import {
   RUNNER,
   BARE,
@@ -102,6 +102,58 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`REPL (${mode}) top-level const across inputs expected 16,17,16, got: ${output}`);
   if (!output.includes("SyntaxError"))
     throw new Error(`REPL (${mode}) should reject redeclaring a top-level const, got: ${output}`);
+}
+
+console.log("REPL import bindings across inputs...");
+{
+  const tmp = mkdtemp("goccia-repl-import-");
+  try {
+    writeFileSync(
+      join(tmp, "dep.mjs"),
+      [
+        "export const answer = 42;",
+        "export let count = 0;",
+        "export const increment = () => { count = count + 1; };",
+        'export default "fallback";',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const repl = Bun.spawnSync([resolve(REPL), `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode(
+          [
+            'import { answer, count, increment } from "./dep.mjs";',
+            'import { answer as renamed } from "./dep.mjs";',
+            'import fallback from "./dep.mjs";',
+            'import * as ns from "./dep.mjs";',
+            '[answer, renamed, fallback, ns.answer].join(",");',
+            "increment();",
+            '["live", count, ns.count].join(":");',
+            "answer = 1;",
+            "const answer = 2;",
+            '["kept", answer].join(":");',
+            "",
+          ].join("\n"),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+      if (repl.exitCode !== 0 || !output.includes("42,42,fallback,42"))
+        throw new Error(`REPL (${mode}) imports across inputs expected 42,42,fallback,42, got: ${output}`);
+      if (!output.includes("live:1:1"))
+        throw new Error(`REPL (${mode}) import binding should stay live across inputs, got: ${output}`);
+      if (!output.includes("TypeError: Assignment to constant variable 'answer'"))
+        throw new Error(`REPL (${mode}) should reject assigning to an import binding, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'answer' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject redeclaring an imported name, got: ${output}`);
+      if (!output.includes("kept:42"))
+        throw new Error(`REPL (${mode}) import binding should survive the rejected inputs, got: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------

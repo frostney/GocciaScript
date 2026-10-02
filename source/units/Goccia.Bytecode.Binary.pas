@@ -252,7 +252,7 @@ begin
       OP_PREDECLARE_GLOBAL_LET_LONG, OP_PREDECLARE_GLOBAL_CONST_LONG:
         RequireConstant(DecodeBx(Instruction));
 
-      OP_GET_IMPORT_BINDING:
+      OP_GET_IMPORT_BINDING, OP_CREATE_GLOBAL_IMPORT_BINDING:
         begin
           RequireConstant(B);
           RequireConstant(C);
