@@ -49,6 +49,8 @@ type
     CookedValid: TGocciaBytecodeTemplateCookedValid;    // for bckTemplateObject
   end;
 
+  PGocciaBytecodeConstant = ^TGocciaBytecodeConstant;
+
   TGocciaUpvalueDescriptor = record
     Name: string;
     IsLocal: Boolean;
@@ -282,6 +284,12 @@ type
       is False when none was (binary-loaded bytecode, or a call the compiler
       emits itself rather than from a source call expression). }
     function CallSiteAt(const APC: UInt32): TGocciaCallSiteEntry;
+    { The recorded position of the call site for the instruction starting at
+      APC, without copying its callee descriptor: CallSiteAt returns a record
+      of three strings, which is too much work for a lookup every native call
+      makes. False when none was recorded. }
+    function TryGetCallSitePosition(const APC: UInt32;
+      out ALine, AColumn: Integer): Boolean;
     function AddConstantNil: UInt16;
     function AddConstantBoolean(const AValue: Boolean): UInt16;
     function AddConstantInteger(const AValue: Int64): UInt16;
@@ -322,7 +330,11 @@ type
     function GetConstant(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
     function GetFunction(const AIndex: Integer): TGocciaFunctionTemplate;
     function GetInstructionUnchecked(const AIndex: Integer): UInt32; {$IFDEF FPC}inline;{$ENDIF}
-    function GetConstantUnchecked(const AIndex: Integer): TGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
+    // The constant in place, not a copy: the record carries managed strings
+    // and arrays, so returning it by value costs a reference-counted copy of
+    // every one of them at each use. The address is valid until the constant
+    // pool next grows, which does not happen once a template executes.
+    function GetConstantUnchecked(const AIndex: Integer): PGocciaBytecodeConstant; {$IFDEF FPC}inline;{$ENDIF}
     function GetFunctionUnchecked(const AIndex: Integer): TGocciaFunctionTemplate; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
@@ -550,6 +562,32 @@ begin
     else
       High := Middle - 1;
   end;
+end;
+
+function TGocciaFunctionTemplate.TryGetCallSitePosition(const APC: UInt32;
+  out ALine, AColumn: Integer): Boolean;
+var
+  Low, High, Middle: Integer;
+begin
+  ALine := 0;
+  AColumn := 0;
+  Low := 0;
+  High := FCallSiteCount - 1;
+  while Low <= High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if FCallSites[Middle].PC = APC then
+    begin
+      ALine := FCallSites[Middle].Line;
+      AColumn := FCallSites[Middle].Column;
+      Exit(FCallSites[Middle].Recorded);
+    end
+    else if FCallSites[Middle].PC < APC then
+      Low := Middle + 1
+    else
+      High := Middle - 1;
+  end;
+  Result := False;
 end;
 
 procedure TGocciaFunctionTemplate.PatchInstruction(const AIndex: Integer;
@@ -962,9 +1000,9 @@ begin
 end;
 
 function TGocciaFunctionTemplate.GetConstantUnchecked(
-  const AIndex: Integer): TGocciaBytecodeConstant;
+  const AIndex: Integer): PGocciaBytecodeConstant;
 begin
-  Result := FConstants[AIndex];
+  Result := @FConstants[AIndex];
 end;
 
 function TGocciaFunctionTemplate.GetFunction(

@@ -375,6 +375,32 @@ begin
   {$ENDIF}
 end;
 
+type
+  TSocketReadFailure = (srfOther, srfInterrupted, srfTimedOut);
+
+{ Why the SocketRecv that just returned a negative count failed. Call it
+  before anything else can replace the thread's last socket error. }
+function LastSocketReadFailure: TSocketReadFailure;
+begin
+  Result := srfOther;
+  {$IFDEF UNIX}
+  case fpGetErrNo of
+    ESysEINTR:
+      Result := srfInterrupted;
+    ESysEAGAIN:
+      Result := srfTimedOut;
+  end;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  case WSAGetLastError of
+    WSAEINTR:
+      Result := srfInterrupted;
+    WSAETIMEDOUT:
+      Result := srfTimedOut;
+  end;
+  {$ENDIF}
+end;
+
 procedure SocketClose(const ASock: TSocket); {$IFDEF FPC}inline;{$ENDIF}
 begin
   {$IFDEF UNIX}
@@ -777,9 +803,26 @@ var
 
   function Receive(var ABuffer: array of Byte;
     const ALength: Integer): Integer;
+  var
+    Failure: TSocketReadFailure;
   begin
-    ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
-    Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+    { A read that fails returns nothing, exactly like a peer that closed the
+      connection, and every caller takes "nothing" for the end of the
+      response. Two failures are not that. An interrupted read is tried
+      again. A read the socket timeout cut short is the request timing out,
+      and is reported as that rather than as whatever a short response would
+      be taken for: a missing header terminator, or a complete body. }
+    repeat
+      ConfigureSocketTimeout(ASock, RemainingTimeoutMilliseconds);
+      Result := RecvBytes(ASock, ATransport, ABuffer, ALength);
+      Failure := srfOther;
+      if (Result < 0) and not ATransport.Active then
+        Failure := LastSocketReadFailure;
+    until Failure <> srfInterrupted;
+    if (Result <= 0) and
+       ((Failure = srfTimedOut) or
+        ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs))) then
+      raise EHTTPError.Create('HTTP request timed out');
   end;
 begin
   Result.StatusCode := 0;

@@ -31,6 +31,23 @@ describe("FFI.union", () => {
     expect(firstByte(result)).toBe(result.asBytes[0]);
   });
 
+  test("a number written over a pointer field ends the pointer's tie to its library", () => {
+    const pointerLibrary = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
+    const Overlay = FFI.union({ pointer: "pointer", low: "u32", whole: "f64" });
+    const partly = Overlay.create({ pointer: pointerLibrary.symbol("get_answer") });
+    const wholly = Overlay.create({ pointer: pointerLibrary.symbol("get_answer") });
+    const untouched = Overlay.create({ pointer: pointerLibrary.symbol("get_answer") });
+
+    partly.low = 5;
+    wholly.whole = 0;
+    pointerLibrary.close();
+
+    expect(partly.pointer.address % 4294967296).toBe(5);
+    expect(wholly.pointer.address).toBe(0);
+    expect(wholly.pointer.isNull).toBe(true);
+    expect(() => untouched.pointer.address).toThrow(TypeError);
+  });
+
   test("classifies homogeneous floating-point unions", () => {
     const addToDoubleUnion = lib.bind("ffi_v2_add_to_double_union", {
       args: [DoubleUnion, "f64"],

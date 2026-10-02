@@ -23,6 +23,10 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
+    // True once the declaration that initializes this const binding has been
+    // compiled. A read compiled after that point cannot observe the TDZ hole,
+    // and a const never changes afterwards, so the read may use the register.
+    IsInitialized: Boolean;
     IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
     IsGlobalBacked: Boolean;
@@ -116,6 +120,8 @@ type
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
+    procedure MarkLocalInitialized(const AIndex: Integer);
+    procedure ClearInitializedAtDepth(const ADepth: Integer);
     procedure MarkNonStrictImmutable(const AIndex: Integer);
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
@@ -253,6 +259,7 @@ begin
   FLocals[FLocalCount].Slot := UInt16(FNextSlot);
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
+  FLocals[FLocalCount].IsInitialized := False;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := False;
@@ -306,6 +313,7 @@ begin
   FLocals[FLocalCount].Slot := UInt16(FNextSlot);
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
+  FLocals[FLocalCount].IsInitialized := False;
   FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := True;
@@ -510,6 +518,24 @@ end;
 procedure TGocciaCompilerScope.MarkCaptured(const AIndex: Integer);
 begin
   FLocals[AIndex].IsCaptured := True;
+end;
+
+procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);
+begin
+  FLocals[AIndex].IsInitialized := True;
+end;
+
+procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);
+var
+  I: Integer;
+begin
+  for I := FLocalCount - 1 downto 0 do
+  begin
+    if FLocals[I].Depth < ADepth then
+      Break;
+    if FLocals[I].Depth = ADepth then
+      FLocals[I].IsInitialized := False;
+  end;
 end;
 
 procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);

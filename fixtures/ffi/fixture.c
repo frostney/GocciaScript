@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -31,6 +32,17 @@ int negate_i32(int a) {
 
 int identity_i32(int a) {
   return a;
+}
+
+// -- Booleans ---------------------------------------------------------------
+
+int32_t ffi_v2_select_by_flag(bool flag, int32_t value) {
+  return flag ? value : -value;
+}
+
+int32_t ffi_v2_select_by_flag_and_label(const char* label, bool flag, int32_t value) {
+  int32_t total = value + (int32_t)strlen(label);
+  return flag ? total : -total;
 }
 
 int32_t ffi_v2_signed_i8_to_i32(int8_t value) {
@@ -602,6 +614,15 @@ ffi_v2_pointer_holder ffi_v2_get_answer_pointer_holder(void) {
 
 int32_t ffi_v2_sum_large_byte_array(ffi_v2_large_byte_array value) {
   return value.bytes[0] + value.bytes[4096] + value.bytes[8191];
+}
+
+ffi_v2_large_byte_array ffi_v2_make_large_byte_array(uint8_t seed) {
+  ffi_v2_large_byte_array result;
+  memset(result.bytes, 0, sizeof(result.bytes));
+  result.bytes[0] = seed;
+  result.bytes[4096] = (uint8_t)(seed + 1);
+  result.bytes[8191] = (uint8_t)(seed + 2);
+  return result;
 }
 
 int32_t ffi_v2_composite_header_offset(void) {

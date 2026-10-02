@@ -309,7 +309,7 @@ type
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
     procedure WaitForRuntimeIdle;
     procedure RaiseUnhandledRejection;
-    procedure DiscardUnhandledRejectionsOfFailedRun(
+    procedure ClearPendingWorkOfFailedRun(
       const AOuterRunningEngine: TGocciaEngine);
     function CompileModule(
       const AProgram: TGocciaProgram): TGocciaCompiledModule;
@@ -2121,19 +2121,22 @@ begin
   raise TGocciaThrowValue.Create(TGocciaPromiseValue(Promise).PromiseResult);
 end;
 
-{ A run that fails has reported itself by failing. What it left rejected goes
-  with it, so the next run on the thread is not blamed for it. Execute gets
-  this from clearing its queue or leaving its scope; ExecuteProgram and
-  RunModule clear nothing, so they call this when they exit by exception.
+{ A run that fails has reported itself by failing. The jobs it left queued,
+  the promises it left rejected and its pending fetches go with it: left on
+  the thread, the next run would execute those jobs against this engine's
+  state, which a host has usually freed by then, and be blamed for those
+  rejections. Execute gets this from clearing its queue or leaving its scope;
+  ExecuteProgram and RunModule call this when they exit by exception.
   Only the outermost run does: a failure inside another run may be caught by
-  the script that is still running, and its own rejections are still its. }
-procedure TGocciaEngine.DiscardUnhandledRejectionsOfFailedRun(
+  the script that is still running, and its own pending work is still its. }
+procedure TGocciaEngine.ClearPendingWorkOfFailedRun(
   const AOuterRunningEngine: TGocciaEngine);
 begin
   if Assigned(AOuterRunningEngine) then
     Exit;
   if Assigned(TGocciaMicrotaskQueue.Instance) then
-    TGocciaMicrotaskQueue.Instance.DiscardUnhandledRejections;
+    TGocciaMicrotaskQueue.Instance.ClearQueue;
+  DiscardRuntimePending;
 end;
 
 procedure TGocciaEngine.DoRetainModule(const AModule: TObject);
@@ -2676,7 +2679,7 @@ begin
     Completed := True;
   finally
     if not Completed then
-      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
@@ -2712,7 +2715,7 @@ begin
     Completed := True;
   finally
     if not Completed then
-      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
@@ -3102,7 +3105,7 @@ begin
     Completed := True;
   finally
     if not Completed then
-      DiscardUnhandledRejectionsOfFailedRun(PreviousRunningEngine);
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
     GRunningEngine := PreviousRunningEngine;
     LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);

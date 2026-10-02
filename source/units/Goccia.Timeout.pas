@@ -59,6 +59,11 @@ procedure PopTimeoutScope;
   raise propagates (see ExtendElementsWithHoles in Goccia.Values.HoleValue
   for the rollback pattern). }
 procedure CheckExecutionTimeout;
+{ CheckExecutionTimeout without the self-throttle: the clock is read on every
+  call. For a loop that sleeps or blocks between iterations, where one clock
+  read in 1024 would overshoot the deadline by the length of 1023 waits, and
+  for a point that must not let work finished after the deadline through. }
+procedure CheckExecutionTimeoutNow;
 function RemainingExecutionTimeoutMilliseconds: Integer;
 
 implementation
@@ -176,6 +181,14 @@ begin
   if (GMinDeadlineMs > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS) and
      ((GCheckCounter and (TIMEOUT_CHECK_INTERVAL - 1)) <> 0) then
     Exit;
+
+  if GetNanoseconds >= GMinDeadlineNs then
+    raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+end;
+
+procedure CheckExecutionTimeoutNow;
+begin
+  if GMinDeadlineNs = 0 then Exit;
 
   if GetNanoseconds >= GMinDeadlineNs then
     raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);

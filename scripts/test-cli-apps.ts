@@ -1384,6 +1384,34 @@ for (const { label, args } of [
     throw new Error(`Bare ${label} cross-realm weak constructor prototype mismatch: ${proc.stdout.toString()}`);
 }
 
+// A built-in belongs to the realm that created it and runs there. Called from
+// another realm it has to hand control back to the caller's: the array literal
+// evaluated straight after the call must take the caller's Array.prototype.
+// Nothing may be called between the two, because calling one of the caller's
+// own built-ins would put the caller's realm back by itself.
+await section("Test262 Runner: calling another realm's built-in returns to the caller's realm...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode([
+        "const child = Goccia.test262.createRealm();",
+        "const childAbs = child.global.Math.abs;",
+        "const magnitude = childAbs(-3);",
+        "const after = [];",
+        "print(magnitude);",
+        "print(Object.getPrototypeOf(after) === Array.prototype);",
+        "print(Object.getPrototypeOf(after) === child.global.Array.prototype);",
+        "",
+      ].join("\n")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} cross-realm built-in call exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== "3\ntrue\nfalse")
+      throw new Error(`Test262 Runner ${mode} stayed in the callee's realm after a cross-realm built-in call: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
@@ -2311,6 +2339,68 @@ await section("Loader: --audit-log records capability decisions with source loca
   }
 });
 
+// FFI.open coerces its argument before it asks for the capability, and the
+// coercion here calls a built-in of its own. That nested call must hand the
+// call site back whole: the decision and the refusal are located at FFI.open,
+// exactly as they are when nothing runs in between.
+await section("Loader: a capability decision keeps its call site across a nested built-in call...", async () => {
+  const tmp = makeTmp();
+  try {
+    const script = join(tmp, "nested-call-site.js");
+    writeFileSync(
+      script,
+      [
+        'const outside = "./outside/library";',
+        "const coerced = { toString() { Math.abs(1); return outside; } };",
+        "try { FFI.open(outside); } catch (e) {}",
+        "try { FFI.open(coerced); } catch (e) {}",
+        "FFI.open(coerced);",
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(tmp, "allowed"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const audit = join(tmp, `nested-call-site-${mode}.jsonl`);
+      const proc = Bun.spawnSync(
+        [
+          RUNNER,
+          script,
+          `--mode=${mode}`,
+          `--allow-ffi=${join(tmp, "allowed")}`,
+          `--audit-log=${audit}`,
+        ],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1)
+        throw new Error(`Nested call site ${mode} should exit 1 on the uncaught refusal, got ${proc.exitCode}: ${output}`);
+      const { events } = readCapabilityEvents(audit);
+      if (events.length !== 3 ||
+          events.some((event) => event.kind !== "ffi.open" || event.decision !== "deny"))
+        throw new Error(`Nested call site ${mode} expected three ffi.open refusals, got ${JSON.stringify(events)}`);
+      const [direct, nested, uncaught] = events.map((event) => event.source);
+      if (direct?.line !== 3 || typeof direct?.column !== "number" || direct.column <= 0)
+        throw new Error(`Nested call site ${mode} direct refusal is not located: ${JSON.stringify(direct)}`);
+      // Lines 3 and 4 lay the call out identically; line 5 drops the "try { ".
+      if (nested?.file !== direct.file || nested?.line !== 4 || nested?.column !== direct.column)
+        throw new Error(`Nested call site ${mode} lost the call site across the nested call: ${JSON.stringify(nested)} vs ${JSON.stringify(direct)}`);
+      const uncaughtColumn = direct.column - "try { ".length;
+      if (uncaught?.file !== direct.file || uncaught?.line !== 5 || uncaught?.column !== uncaughtColumn)
+        throw new Error(`Nested call site ${mode} mislocated the uncaught refusal: ${JSON.stringify(uncaught)}`);
+      for (const expected of [
+        "PermissionDenied: ffi: ./outside/library",
+        `nested-call-site.js:5:${uncaughtColumn}`,
+        "5 | FFI.open(coerced);",
+      ]) {
+        if (!output.includes(expected))
+          throw new Error(`Nested call site ${mode} should report "${expected}", got: ${output}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --audit-log fails closed when the output cannot be opened...", async () => {
   const tmp = makeTmp();
   try {
@@ -3173,6 +3263,41 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     if (!existsSync(jsonCovPath)) throw new Error("JSON coverage file should exist");
     const jsonCov = readFileSync(jsonCovPath, "utf-8");
     if (!jsonCov.includes('"path":')) throw new Error('JSON coverage should contain "path":');
+
+    console.log("Loader: line coverage of an expression spread over several lines...");
+    // Each operand sits on its own line. The compiler can use a const local's
+    // register as an operand without emitting an instruction for it, and a
+    // line with no instruction would be reported as never executed.
+    const operandSourcePath = join(tmp, "operand-coverage.js");
+    writeFileSync(
+      operandSourcePath,
+      [
+        "const id = (x) => x;",
+        "const price = (unitPrice, quantity, discount) => {",
+        "  const subtotal = id(unitPrice);",
+        "  const count = id(quantity);",
+        "  const rebate = id(discount);",
+        "  const total =",
+        "    subtotal *",
+        "    count -",
+        "    rebate;",
+        "  return total;",
+        "};",
+        "console.log(price(10, 3, 5));",
+        "",
+      ].join("\n"),
+    );
+    const operandLcovPath = join(tmp, "operand-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${operandLcovPath} ${operandSourcePath}`.quiet();
+    const operandLcov = readFileSync(operandLcovPath, "utf-8");
+    for (const line of [8, 9]) {
+      if (!operandLcov.includes(`DA:${line},1`)) {
+        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${operandLcov}`);
+      }
+    }
+    if (/^DA:\d+,0$/m.test(operandLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
+    }
 
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
@@ -5178,6 +5303,228 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
           !jobFailures.includes("Uncaught exception outside a test: Error: job from a describe body") ||
           !jobFailures.includes("job from a hook"))
         throw new Error(`TestRunner (${mode}) should fail only the unit whose queued job threw, got ${JSON.stringify({ passed: jobsFile.passed, failed: jobsFile.failed, suiteErrors: jobsFile.suiteErrors, failures: jobsFile.failedTests, errorMessage: jobsFile.errorMessage })}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("TestRunner: a file that fails with work still queued does not reach the next file...", async () => {
+  const tmp = makeTmp();
+  try {
+    // A queued job belongs to the engine that queued it. When a file ends
+    // abnormally the job used to stay on the worker thread and run inside the
+    // next file, against an engine that had been freed: an access violation
+    // that aborted the whole run and named the innocent file. The jobs build
+    // their message, so a code frame quoting the source cannot match it.
+    const passingFile = 'describe("next file", () => { test("is clean", async () => { await null; expect(1 + 1).toBe(2); }); });\n';
+    const cases: { name: string; first: string; args: string[]; error: string; firstPassed: number }[] = [
+      {
+        name: "file timeout",
+        first: [
+          'describe("slow", () => {',
+          '  test("queues a job and then exceeds the file timeout", () => {',
+          '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+          // Small arrays: a single huge one is refused on 32-bit targets.
+          "    const until = Date.now() + 10000;",
+          "    Array.from({ length: 10000 }).some(() => Array.from({ length: 1000 }).some(() => Date.now() > until));",
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+        args: ["--timeout=300ms", "--test-timeout=0"],
+        error: "file timed out after 300ms",
+        firstPassed: 0,
+      },
+      {
+        name: "top-level throw",
+        first: [
+          'queueMicrotask(() => console.log("leaked " + "job ran"));',
+          'Promise.resolve().then(() => console.log("leaked " + "job ran"));',
+          'throw new Error("top-level throw");',
+          "",
+        ].join("\n"),
+        args: [],
+        error: "Error: top-level throw",
+        firstPassed: 0,
+      },
+      {
+        // The file reaches its end, so nothing unwinds; the hook failed
+        // before its job could run.
+        name: "throwing hook",
+        first: [
+          'describe("hook", () => {',
+          '  afterAll(() => { queueMicrotask(() => console.log("leaked " + "job ran")); throw new Error("afterAll throws"); });',
+          '  test("passes", () => { expect(1).toBe(1); });',
+          "});",
+          "",
+        ].join("\n"),
+        args: [],
+        error: "",
+        firstPassed: 1,
+      },
+    ];
+    for (const testCase of cases) {
+      const dir = join(tmp, testCase.name.replace(/ /g, "-"));
+      mkdirSync(dir);
+      writeFileSync(join(dir, "a-first.test.js"), testCase.first);
+      writeFileSync(join(dir, "b-second.test.js"), passingFile);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", "--output=json", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        const label = `TestRunner (${testCase.name}, ${mode})`;
+        if (proc.exitCode !== 1 || output.includes("Integrity fault"))
+          throw new Error(`${label} should fail only the first file, got exit ${proc.exitCode}: ${output.slice(0, 600)}`);
+        const files = JSON.parse(proc.stdout.toString()).files.map((file: any) => ({
+          file: String(file.fileName).replace(/\\/g, "/").split("/").pop(),
+          ok: file.ok,
+          passed: file.passed,
+          error: testCase.error !== "" && String(file.errorMessage ?? "").includes(testCase.error),
+        }));
+        const expected = [
+          { file: "a-first.test.js", ok: false, passed: testCase.firstPassed, error: testCase.error !== "" },
+          { file: "b-second.test.js", ok: true, passed: 1, error: false },
+        ];
+        if (JSON.stringify(files) !== JSON.stringify(expected))
+          throw new Error(`${label} should report the first file's failure and run the next file, got ${JSON.stringify(files)}`);
+
+        // The JSON reporter mutes the console, so only a plain run can show a
+        // leaked job that ran without faulting.
+        const plain = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", dir, "--jobs=1", "--no-progress", `--mode=${mode}`, ...testCase.args],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const plainOutput = plain.stdout.toString() + plain.stderr.toString();
+        if (plain.exitCode !== 1 || /Integrity fault|leaked job ran/.test(plainOutput))
+          throw new Error(`${label} should not run the first file's queued job, got exit ${plain.exitCode}: ${plainOutput.slice(-600)}`);
+      }
+    }
+
+    // The same holds inside one file: a sibling suite still runs after a
+    // failed beforeAll, and is not handed the timer or the job it left.
+    const siblings = join(tmp, "siblings.test.js");
+    writeFileSync(
+      siblings,
+      [
+        'describe("failed hook", () => {',
+        "  beforeAll(() => {",
+        '    setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '    queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '    throw new Error("beforeAll throws");',
+        "  });",
+        '  test("is skipped", () => { expect(1).toBe(1); });',
+        "});",
+        'describe("sibling suite", () => {',
+        '  test("runs", async () => { await null; expect(1).toBe(1); console.log("sibling " + "suite ran"); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", siblings, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("beforeAll throws") || !output.includes("sibling suite ran") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a failed hook left pending, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
+
+    // A hook fails the same way when its promise rejects or it leaves a
+    // rejection behind, without throwing.
+    const failedAsyncHooks: { name: string; hook: string; error: string }[] = [
+      { name: "rejected", hook: 'async () => { TIMER; throw new Error("beforeAll rejects"); }', error: "beforeAll rejects" },
+      { name: "unhandled", hook: '() => { TIMER; Promise.reject(new Error("beforeAll leaves a rejection")); }', error: "beforeAll leaves a rejection" },
+      // A failed expect records the failure and returns.
+      { name: "asserting", hook: '() => { TIMER; expect("hook value").toBe("expected"); }', error: 'Hook "beforeAll" in suite "failed hook" failed' },
+    ];
+    for (const failedHook of failedAsyncHooks) {
+      const file = join(tmp, `async-hook-${failedHook.name}.test.js`);
+      writeFileSync(
+        file,
+        [
+          'describe("failed hook", () => {',
+          `  beforeAll(${failedHook.hook.replace("TIMER", 'setTimeout(() => console.log("leaked " + "timer ran"), 0)')});`,
+          '  test("is skipped", () => { expect(1).toBe(1); });',
+          "});",
+          'describe("sibling suite", () => {',
+          '  test("runs", async () => {',
+          "    await new Promise((resolve) => setTimeout(resolve, 30));",
+          "    expect(1).toBe(1);",
+          '    console.log("sibling " + "suite ran");',
+          "  });",
+          "});",
+          "",
+        ].join("\n"),
+      );
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync(
+          [resolve(TESTRUNNER), "-P", file, "--no-progress", `--mode=${mode}`],
+          { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+        );
+        const output = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 1 || !output.includes(failedHook.error) || !output.includes("sibling suite ran") || /leaked timer ran/.test(output))
+          throw new Error(`TestRunner (${failedHook.name} hook, ${mode}) should drop the timer a failed async hook left, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+      }
+    }
+
+    // Only the hook that failed loses its timer: one that succeeds after it
+    // keeps the timer it scheduled, which runs at the end of the next test.
+    const keptTimer = join(tmp, "kept-timer.test.js");
+    writeFileSync(
+      keptTimer,
+      [
+        'describe("hooks", () => {',
+        '  beforeEach(() => { setTimeout(() => console.log("leaked " + "timer ran"), 0); expect("hook value").toBe("expected"); });',
+        '  beforeEach(() => { setTimeout(() => console.log("kept " + "timer ran"), 0); });',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", keptTimer, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("kept timer ran") || /leaked timer ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop only the failed hook's timer, got exit ${proc.exitCode}: ${output.slice(-600)}`);
+    }
+
+    // A describe body whose queued job throws fails the file, and the tests
+    // still run. The first of them pumps timers, and must not be handed the
+    // one the describe body left.
+    const collection = join(tmp, "collection.test.js");
+    writeFileSync(
+      collection,
+      [
+        'describe("collection", () => {',
+        '  setTimeout(() => console.log("leaked " + "timer ran"), 0);',
+        '  queueMicrotask(() => { throw new Error("job from a describe body"); });',
+        '  queueMicrotask(() => console.log("leaked " + "job ran"));',
+        '  test("runs", async () => {',
+        "    await new Promise((resolve) => setTimeout(resolve, 30));",
+        "    expect(1).toBe(1);",
+        '    console.log("first " + "test ran");',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", collection, "--no-progress", `--mode=${mode}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const output = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 1 || !output.includes("Uncaught exception outside a test: Error: job from a describe body") || !output.includes("first test ran") || /leaked (timer|job) ran/.test(output))
+        throw new Error(`TestRunner (${mode}) should drop what a describe body left pending when its job throws, got exit ${proc.exitCode}: ${output.slice(-600)}`);
     }
   } finally {
     clean(tmp);
@@ -11117,6 +11464,156 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
     }
   } finally {
     server.stop(true);
+  }
+});
+
+await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
+  // A request's socket gives up when the run's deadline does. That used to
+  // reach the script as a catchable `TypeError: Invalid HTTP response: no
+  // header terminator`, so a script waiting on the network could catch the
+  // deadline and run past it, and the process exited 0.
+  const tmp = makeNativeTmp();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      // `/soon` answers just inside a 500 ms deadline; everything else long
+      // after it.
+      await Bun.sleep(new URL(request.url).pathname === "/soon" ? 400 : 5000);
+      return new Response("late", { status: 200 });
+    },
+  });
+  const spawn = async (command: string[]): Promise<{ exitCode: number | null; output: string }> => {
+    const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => proc.kill(), 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, output: normalizeLineEndings(stdout + stderr) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try {
+    const url = `http://127.0.0.1:${server.port}/`;
+    const awaited = join(tmp, "awaited.mjs");
+    writeFileSync(
+      awaited,
+      [
+        "try {",
+        `  await fetch("${url}");`,
+        '  console.log("fetched");',
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("ran past the deadline");',
+        "",
+      ].join("\n"),
+    );
+    const unawaited = join(tmp, "unawaited.mjs");
+    writeFileSync(
+      unawaited,
+      [`fetch("${url}").catch((error) => console.log("caught " + error.name));`, 'console.log("end of script");', ""].join("\n"),
+    );
+    // One response arrives inside the deadline and its reaction is slow
+    // enough to carry the run across it. The request still pending then must
+    // not be handed over as a rejection in the same pump.
+    const crossed = join(tmp, "crossed.mjs");
+    writeFileSync(
+      crossed,
+      [
+        `fetch("${url}soon").then(() => {`,
+        "  // Native calls that do not poll the deadline.",
+        '  const blocks = ["a", "b", "c", "d", "e", "f"].map((character) => character.repeat(40000000).length);',
+        '  console.log("reaction done " + blocks.length);',
+        "});",
+        "try {",
+        `  await fetch("${url}");`,
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("ran past the deadline");',
+        "",
+      ].join("\n"),
+    );
+    // The request's own deadline is still the request's: it rejects with the
+    // signal's reason and the run goes on.
+    const signalled = join(tmp, "signalled.mjs");
+    writeFileSync(
+      signalled,
+      [
+        "try {",
+        `  await fetch("${url}", { signal: AbortSignal.timeout(200) });`,
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("continued");',
+        "",
+      ].join("\n"),
+    );
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const child = runScript("/child.js");',
+          "console.log(JSON.stringify({ ok: child.ok, failureKind: child.failureKind, stdout: child.stdout }));",
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: `try { await fetch("${url}"); } catch (error) { console.log("caught " + error.name); }\nconsole.log("ran past the deadline");`,
+      },
+    ]);
+    const suite = join(tmp, "deadline.test.js");
+    writeFileSync(
+      suite,
+      [
+        'describe("deadlines", () => {',
+        '  test("is still waiting on a fetch", async () => {',
+        `    try { await fetch("${url}"); } catch (error) { globalThis.caught = error.name; }`,
+        "    globalThis.ranPast = true;",
+        "  });",
+        '  test("runs next", () => { expect([globalThis.caught, globalThis.ranPast]).toEqual([undefined, undefined]); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      const base = ["--source-type=module", "--allow-net=127.0.0.1", `--mode=${mode}`];
+      for (const [name, file] of [["awaited", awaited], ["unawaited", unawaited], ["crossed", crossed]]) {
+        const run = await spawn([RUNNER, file, "--timeout=500", ...base]);
+        if (run.exitCode !== 1 || !run.output.includes("file timed out after 500ms") || /caught|ran past|Invalid HTTP response/.test(run.output))
+          throw new Error(`Runner (${name}, ${mode}) should end with the timeout, got exit ${run.exitCode}: ${run.output}`);
+      }
+
+      const json = await spawn([RUNNER, awaited, "--timeout=500", "--output=json", ...base]);
+      const envelope = JSON.parse(json.output);
+      if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+        throw new Error(`Runner (${mode}) should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${JSON.stringify(envelope.error)}`);
+
+      const signal = await spawn([RUNNER, signalled, "--timeout=10000", ...base]);
+      if (signal.exitCode !== 0 || !signal.output.includes("caught TimeoutError\ncontinued"))
+        throw new Error(`Runner (${mode}) should reject a request at its own signal's deadline and go on, got exit ${signal.exitCode}: ${signal.output}`);
+
+      // A child that is waiting on a fetch when the deadline elapses fails
+      // as a timeout, the same result a CPU-bound child gets.
+      const sandbox = await spawn([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--timeout=500", ...base]);
+      if (!sandbox.output.includes('{"ok":false,"failureKind":"timeout","stdout":""}'))
+        throw new Error(`Sandbox child (${mode}) should fail with failureKind "timeout", got exit ${sandbox.exitCode}: ${sandbox.output}`);
+
+      const tests = await spawn([resolve(TESTRUNNER), "-P", suite, "--allow-net=127.0.0.1", "--test-timeout=500", "--no-progress", "--output=json", `--mode=${mode}`]);
+      const report = JSON.parse(tests.output).files[0];
+      if (report.passed !== 1 || report.failed !== 1 || !String(report.failedTests[0]).includes("TIMEOUT after 500ms"))
+        throw new Error(`TestRunner (${mode}) should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
+    }
+  } finally {
+    server.stop(true);
+    clean(tmp);
   }
 });
 

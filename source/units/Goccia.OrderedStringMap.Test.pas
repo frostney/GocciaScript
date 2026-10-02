@@ -57,6 +57,8 @@ type
     procedure TestEntryIndexSurvivesAddsAndSeesUpdates;
     procedure TestEntryVersionInvalidatesOnRemoveCompactClear;
     procedure TestEntryVersionsDifferAcrossInstances;
+    procedure TestValueAddressAtEntryTracksTheLiveEntry;
+    procedure TestInvalidateEntryIndexCachesRestampsOnly;
     procedure TestSmallMapNeverConsultsTheGate;
     procedure TestGrowingMapConsultsTheGateWithTheTransientSize;
     procedure TestRefusedGrowthLeavesTheMapUnchanged;
@@ -119,6 +121,10 @@ begin
     TestEntryVersionInvalidatesOnRemoveCompactClear);
   Test('Entry versions differ across instances',
     TestEntryVersionsDifferAcrossInstances);
+  Test('Value address at an entry tracks the live entry',
+    TestValueAddressAtEntryTracksTheLiveEntry);
+  Test('Invalidating entry index caches re-stamps without moving entries',
+    TestInvalidateEntryIndexCachesRestampsOnly);
   Test('Small map never consults the storage gate',
     TestSmallMapNeverConsultsTheGate);
   Test('Growing map consults the storage gate with the transient size',
@@ -262,6 +268,56 @@ begin
     end;
   finally
     First.Free;
+  end;
+end;
+
+procedure TTestOrderedStringMap.TestValueAddressAtEntryTracksTheLiveEntry;
+var
+  Map: TOrderedStringMap<Integer>;
+  Index, OutsideIndex: Integer;
+begin
+  Map := TOrderedStringMap<Integer>.Create(16);
+  try
+    Map.Add('cached', 1);
+    Map.Add('other', 5);
+    Expect<Boolean>(Map.TryGetEntryIndex('cached', Index)).ToBe(True);
+    Expect<Integer>(PInteger(Map.ValueAddressAtEntry(Index))^).ToBe(1);
+
+    // The address is the entry's own storage, so an update is visible there.
+    Map.Add('cached', 2);
+    Expect<Integer>(PInteger(Map.ValueAddressAtEntry(Index))^).ToBe(2);
+
+    OutsideIndex := -1;
+    Expect<Boolean>(Map.ValueAddressAtEntry(OutsideIndex) = nil).ToBe(True);
+    OutsideIndex := 2;
+    Expect<Boolean>(Map.ValueAddressAtEntry(OutsideIndex) = nil).ToBe(True);
+    Expect<Boolean>(Map.Remove('cached')).ToBe(True);
+    Expect<Boolean>(Map.ValueAddressAtEntry(Index) = nil).ToBe(True);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TTestOrderedStringMap.TestInvalidateEntryIndexCachesRestampsOnly;
+var
+  Map: TOrderedStringMap<Integer>;
+  Index, SameIndex, Value: Integer;
+  Version: Cardinal;
+begin
+  Map := TOrderedStringMap<Integer>.Create(16);
+  try
+    Map.Add('cached', 1);
+    Expect<Boolean>(Map.TryGetEntryIndex('cached', Index)).ToBe(True);
+    Version := Map.EntryVersion;
+
+    Map.InvalidateEntryIndexCaches;
+    Expect<Boolean>(Map.EntryVersion <> Version).ToBe(True);
+    Expect<Boolean>(Map.TryGetEntryIndex('cached', SameIndex)).ToBe(True);
+    Expect<Integer>(SameIndex).ToBe(Index);
+    Expect<Boolean>(Map.TryGetValueAtEntry(Index, Value)).ToBe(True);
+    Expect<Integer>(Value).ToBe(1);
+  finally
+    Map.Free;
   end;
 end;
 

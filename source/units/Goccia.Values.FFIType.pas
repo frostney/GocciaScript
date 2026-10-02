@@ -87,7 +87,13 @@ type
       out AType: TGocciaFFITypeDescriptor; out AOffset: Integer): Boolean;
     function ReadValue(const AType: TGocciaFFITypeDescriptor;
       const AOffset: Integer): TGocciaValue;
+    function ReadReferenceValue(const AType: TGocciaFFITypeDescriptor;
+      const AOffset: Integer): TGocciaValue;
     procedure WriteValue(const AType: TGocciaFFITypeDescriptor;
+      const AOffset: Integer; const AValue: TGocciaValue);
+    procedure WriteNumber(const AType: TGocciaFFITypeDescriptor;
+      const AOffset: Integer; const AValue: Double);
+    procedure WriteCoercedValue(const AType: TGocciaFFITypeDescriptor;
       const AOffset: Integer; const AValue: TGocciaValue);
     procedure ApplyInitializer(const AInitializer: TGocciaValue);
   public
@@ -145,6 +151,11 @@ uses
   Goccia.Values.NativeFunction;
 
 const
+  // The scalar field types stored as a JavaScript number through
+  // Goccia.BinaryData; 64-bit integers, pointers and booleans are not.
+  FFI_NUMBER_FIELD_TYPES = [fftI8, fftI16, fftI32, fftU8, fftU16, fftU32,
+    fftF32, fftF64];
+
   FFI_TYPE_DESCRIPTOR_TAG = 'FFIType';
   FFI_AGGREGATE_TAG = 'FFIAggregate';
   FFI_VARARGS_TAG = 'FFIVarArgs';
@@ -795,16 +806,14 @@ function TGocciaFFIAggregateValue.GetElementOrField(const AName: string;
   out AType: TGocciaFFITypeDescriptor; out AOffset: Integer): Boolean;
 var
   Index: Integer;
-  Field: TGocciaFFIFieldDescriptor;
 begin
   if FDescriptor.Kind in [ftkStruct, ftkUnion] then
   begin
     Index := FDescriptor.FieldIndex(AName);
     if Index >= 0 then
     begin
-      Field := FDescriptor.FieldAt(Index);
-      AType := Field.TypeDescriptor;
-      AOffset := FByteOffset + Field.Offset;
+      AType := FDescriptor.FieldTypeAt(Index);
+      AOffset := FByteOffset + FDescriptor.FieldOffsetAt(Index);
       Exit(True);
     end;
   end
@@ -819,7 +828,31 @@ begin
   Result := False;
 end;
 
+{ A number or boolean field, read straight out of the buffer; everything else
+  (a nested aggregate view, a pointer, a 64-bit integer) is built by
+  ReadReferenceValue. Kept free of managed locals so that the common read
+  carries no exception frame. }
 function TGocciaFFIAggregateValue.ReadValue(
+  const AType: TGocciaFFITypeDescriptor;
+  const AOffset: Integer): TGocciaValue;
+begin
+  if (AType.Kind <> ftkScalar) or
+     not (AType.ScalarType in FFI_NUMBER_FIELD_TYPES + [fftBool]) then
+    Exit(ReadReferenceValue(AType, AOffset));
+  EnsureBackingStore;
+  if AType.ScalarType = fftBool then
+  begin
+    if FBuffer.Data[AOffset] <> 0 then
+      Result := TGocciaBooleanLiteralValue.TrueValue
+    else
+      Result := TGocciaBooleanLiteralValue.FalseValue;
+  end
+  else
+    Result := TGocciaNumberLiteralValue.Create(ReadBinaryNumberElement(
+      FBuffer.Data, AOffset, NumericElementKind(AType.ScalarType), True));
+end;
+
+function TGocciaFFIAggregateValue.ReadReferenceValue(
   const AType: TGocciaFFITypeDescriptor;
   const AOffset: Integer): TGocciaValue;
 var
@@ -864,7 +897,40 @@ begin
   end;
 end;
 
+{ A number assigned to a numeric field is written directly; any other
+  combination goes through WriteCoercedValue. The direct write is limited to a
+  value that is already a number because coercing anything else can run
+  JavaScript, which may detach the buffer between the check and the write. }
 procedure TGocciaFFIAggregateValue.WriteValue(
+  const AType: TGocciaFFITypeDescriptor; const AOffset: Integer;
+  const AValue: TGocciaValue);
+begin
+  if (AType.Kind = ftkScalar) and
+     (AType.ScalarType in FFI_NUMBER_FIELD_TYPES) and
+     (AValue is TGocciaNumberLiteralValue) then
+  begin
+    EnsureBackingStore;
+    WriteNumber(AType, AOffset, TGocciaNumberLiteralValue(AValue).Value);
+  end
+  else
+    WriteCoercedValue(AType, AOffset, AValue);
+end;
+
+procedure TGocciaFFIAggregateValue.WriteNumber(
+  const AType: TGocciaFFITypeDescriptor; const AOffset: Integer;
+  const AValue: Double);
+var
+  Data: TBytes;
+begin
+  // Data shares the buffer's array, so the element is written in place and
+  // there is nothing to store back.
+  Data := FBuffer.Data;
+  WriteBinaryNumberElement(Data, AOffset,
+    NumericElementKind(AType.ScalarType), AValue, True);
+  FPointerGuards.ClearRange(AOffset, AType.Size);
+end;
+
+procedure TGocciaFFIAggregateValue.WriteCoercedValue(
   const AType: TGocciaFFITypeDescriptor; const AOffset: Integer;
   const AValue: TGocciaValue);
 var
@@ -1054,16 +1120,28 @@ begin
     FBuffer.MarkReferences;
 end;
 
+// Kept out of EnsureBackingStore, which runs on every field access and every
+// by-value argument: a message read where it is raised would leave the caller
+// holding temporary strings, and an exception frame, on every successful
+// check. The local keeps this routine from being inlined back in.
+procedure ThrowFFIAggregateBackingStore;
+var
+  Message: string;
+begin
+  Message := SErrorFFIAggregateBackingStore;
+  ThrowTypeError(Message, SSuggestFFIUsage);
+end;
+
 procedure TGocciaFFIAggregateValue.EnsureBackingStore;
 var
   DataLength: Integer;
 begin
   if not Assigned(FBuffer) or FBuffer.Detached then
-    ThrowTypeError(SErrorFFIAggregateBackingStore, SSuggestFFIUsage);
+    ThrowFFIAggregateBackingStore;
   DataLength := Length(FBuffer.Data);
   if (FByteOffset < 0) or (FByteOffset > DataLength) or
      (FDescriptor.Size > DataLength - FByteOffset) then
-    ThrowTypeError(SErrorFFIAggregateBackingStore, SSuggestFFIUsage);
+    ThrowFFIAggregateBackingStore;
 end;
 
 function TGocciaFFIAggregateValue.DataPointer: Pointer;
@@ -1079,14 +1157,11 @@ begin
 end;
 
 procedure TGocciaFFIAggregateValue.CopyTo(const ADestination: Pointer);
-var
-  Data: TBytes;
 begin
   EnsureBackingStore;
   if (FDescriptor.Size = 0) or not Assigned(ADestination) then
     Exit;
-  Data := FBuffer.Data;
-  Move(Data[FByteOffset], ADestination^, FDescriptor.Size);
+  Move(FBuffer.Data[FByteOffset], ADestination^, FDescriptor.Size);
 end;
 
 procedure TGocciaFFIAggregateValue.CopyFrom(const ASource: Pointer);
