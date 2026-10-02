@@ -14,6 +14,7 @@ type
     procedure TestGetNanosecondsIsPositive;
     procedure TestGetMillisecondsIsPositive;
     procedure TestGetNanosecondsIsMonotonic;
+    procedure TestGetNanosecondsResolvesBelowAMicrosecond;
     procedure TestGetMillisecondsConsistentWithNanoseconds;
     procedure TestGetEpochNanosecondsIsPositive;
     procedure TestGetEpochNanosecondsIsInReasonableRange;
@@ -38,6 +39,8 @@ begin
   Test('GetNanoseconds returns positive value', TestGetNanosecondsIsPositive);
   Test('GetMilliseconds returns positive value', TestGetMillisecondsIsPositive);
   Test('GetNanoseconds is monotonically non-decreasing', TestGetNanosecondsIsMonotonic);
+  Test('GetNanoseconds resolves intervals shorter than a microsecond',
+    TestGetNanosecondsResolvesBelowAMicrosecond);
   Test('GetMilliseconds is consistent with GetNanoseconds', TestGetMillisecondsConsistentWithNanoseconds);
   Test('GetEpochNanoseconds returns positive value', TestGetEpochNanosecondsIsPositive);
   Test('GetEpochNanoseconds is in a reasonable range (after 2020)', TestGetEpochNanosecondsIsInReasonableRange);
@@ -72,6 +75,32 @@ begin
   A := GetNanoseconds;
   B := GetNanoseconds;
   Expect<Boolean>(B >= A).ToBe(True);
+end;
+
+procedure TTimingUtilsTests.TestGetNanosecondsResolvesBelowAMicrosecond;
+const
+  READINGS = 100000;
+  NANOSECONDS_PER_MICROSECOND = 1000;
+var
+  I: Integer;
+  FinerThanMicrosecond: Boolean;
+begin
+  // A clock that advances in whole microseconds only ever reads a multiple of
+  // 1000 ns. Benchmark samples are differences of two readings, so on such a
+  // clock every sample shorter than a microsecond is 0 or 1000 ns.
+  FinerThanMicrosecond := False;
+  {$IF DEFINED(UNIX) OR DEFINED(MSWINDOWS)}
+  for I := 1 to READINGS do
+    if GetNanoseconds mod NANOSECONDS_PER_MICROSECOND <> 0 then
+    begin
+      FinerThanMicrosecond := True;
+      Break;
+    end;
+  {$ELSE}
+  // The fallback clock is millisecond ticks; nothing to assert there.
+  FinerThanMicrosecond := True;
+  {$ENDIF}
+  Expect<Boolean>(FinerThanMicrosecond).ToBe(True);
 end;
 
 procedure TTimingUtilsTests.TestGetMillisecondsConsistentWithNanoseconds;
