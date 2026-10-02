@@ -855,6 +855,9 @@ const
   FIRST_USED = 3;
 var
   Template: TGocciaFunctionTemplate;
+  FirstRead: PGocciaPropertyReadCacheEntry;
+  FirstProto: PGocciaProtoReadCacheEntry;
+  FirstWrite: PGocciaPropertyWriteCacheEntry;
   I, BelowPool, AbovePool: Integer;
 begin
   Template := TGocciaFunctionTemplate.Create('cache-slots');
@@ -876,16 +879,21 @@ begin
     Expect<Boolean>(Template.PropertyWriteCacheSlot(AbovePool) = nil).ToBe(True);
 
     // The first use of a constant assigns its slot; the same constant then
-    // resolves to that slot without the assignment path.
-    Template.PropertyReadCacheSlot(FIRST_USED)^.EntryIndex := 1000 + FIRST_USED;
-    Template.ProtoReadCacheSlot(FIRST_USED)^.EntryIndex := 2000 + FIRST_USED;
-    Template.PropertyWriteCacheSlot(FIRST_USED)^.EntryIndex := 3000 + FIRST_USED;
+    // resolves to that slot without the assignment path. The read and the
+    // prototype tier share one slot map, so the read's first use assigns the
+    // prototype slot too.
+    FirstRead := Template.PropertyReadCacheSlot(FIRST_USED);
+    FirstProto := Template.ProtoReadCacheSlot(FIRST_USED);
+    FirstWrite := Template.PropertyWriteCacheSlot(FIRST_USED);
     Expect<Boolean>(Template.PropertyReadCacheSlot(FIRST_USED) =
-      Template.PropertyReadCacheSlot(FIRST_USED)).ToBe(True);
+      FirstRead).ToBe(True);
     Expect<Boolean>(Template.ProtoReadCacheSlot(FIRST_USED) =
-      Template.ProtoReadCacheSlot(FIRST_USED)).ToBe(True);
+      FirstProto).ToBe(True);
     Expect<Boolean>(Template.PropertyWriteCacheSlot(FIRST_USED) =
-      Template.PropertyWriteCacheSlot(FIRST_USED)).ToBe(True);
+      FirstWrite).ToBe(True);
+    FirstRead^.EntryIndex := 1000 + FIRST_USED;
+    FirstProto^.EntryIndex := 2000 + FIRST_USED;
+    FirstWrite^.EntryIndex := 3000 + FIRST_USED;
 
     // Every other constant gets a slot of its own, in an order that is not
     // the constant order, and enough of them to grow the entry arrays.
