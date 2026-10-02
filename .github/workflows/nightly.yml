@@ -5,8 +5,8 @@ name: Nightly
 #
 # It runs on a schedule, the pattern T3 Code uses: every three hours it asks
 # whether that newest passing commit is ahead of the commit the last nightly
-# was built from. If it is, it publishes; if nothing new has passed CI, the
-# run ends there. A quiet day publishes nothing and a busy one at most eight
+# was built from (or has diverged from it, after a rewritten main). If it is,
+# it publishes; if nothing new has passed CI, the run ends there. A quiet day publishes nothing and a busy one at most eight
 # times, where the earlier rule was once per UTC day whatever landed later.
 #
 # It lives outside ci.yml because a newer main push cancels the superseded CI
@@ -52,7 +52,7 @@ jobs:
     steps:
       # Which build to publish, and whether there is anything new: the newest
       # CI run that succeeded for a push to main, and whether its commit is
-      # ahead of the one the `nightly` tag points at.
+      # ahead of (or diverged from) the one the `nightly` tag points at.
       - name: Find the newest passing build
         id: check
         env:
