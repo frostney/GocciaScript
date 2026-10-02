@@ -13186,18 +13186,22 @@ var
   ResolvedKey: TGocciaValue;
   PrivateBrandToken: string;
 begin
-  if (AObject is TGocciaNullLiteralValue) or
-     (AObject is TGocciaUndefinedLiteralValue) or
-     (AObject is TGocciaBooleanLiteralValue) or
-     (AObject is TGocciaNumberLiteralValue) or
-     (AObject is TGocciaStringLiteralValue) then
+  // ES2026 §13.10.1 RelationalExpression : RelationalExpression in
+  // ShiftExpression, step 5: a right-hand side that is not an Object throws.
+  if AObject.IsPrimitive then
   begin
+    // A Symbol has no string conversion, so it is named by its description.
     if AKey is TGocciaSymbolValue then
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [TGocciaSymbolValue(AKey).ToDisplayString.Value, AObject.ToStringLiteral.Value]),
+      KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
+    else
+      KeyStr := AKey.ToStringLiteral.Value;
+    if AObject is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        TGocciaSymbolValue(AObject).ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
-        SSuggestCheckNullBeforeAccess);
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        AObject.ToStringLiteral.Value]), SSuggestCheckNullBeforeAccess);
   end;
 
   if AObject is TGocciaObjectValue then
