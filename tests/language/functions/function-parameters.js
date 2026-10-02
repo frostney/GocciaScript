@@ -195,3 +195,28 @@ test("arguments captured by a closure survive the call", () => {
   expect(other[2]()).toBe(31);
   expect(first()).toBe(1);
 });
+
+test("far more arguments than the callee has registers", () => {
+  const none = () => "none";
+  const one = (a) => a.i;
+  const rest = (...r) => r.length;
+  const big = Array.from({ length: 30000 }, (_, i) => ({ i }));
+  const nested = (n) => (n === 0 ? [none(...big), one(...big), rest(...big)] : nested(n - 1));
+  const after = (a, b, c) => {
+    const o = { a, b, c };
+    return o.a + o.b + o.c;
+  };
+
+  expect([none(...big), one(...big), rest(...big)]).toEqual(["none", 0, 30000]);
+  expect([none.apply(null, big), one.apply(null, big), rest.apply(null, big)]).toEqual(["none", 0, 30000]);
+  expect([Reflect.apply(none, null, big), Reflect.apply(one, null, big), Reflect.apply(rest, null, big)]).toEqual([
+    "none",
+    0,
+    30000,
+  ]);
+  expect(nested(50)).toEqual(["none", 0, 30000]);
+  expect([1, 2].map(() => none(...big))).toEqual(["none", "none"]);
+  expect(after(1, 2, 3)).toBe(6);
+  expect(big.length).toBe(30000);
+  expect(big[29999].i).toBe(29999);
+});
