@@ -3299,6 +3299,53 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of let and parameter operands spread over several lines...");
+    // The same holds for a let binding and a parameter, which the compiler
+    // reads in place where nothing can rebind them before they are used, and
+    // for the branch records of a conditional and a logical expression that
+    // such an operand decides.
+    const mutableOperandSourcePath = join(tmp, "mutable-operand-coverage.js");
+    writeFileSync(
+      mutableOperandSourcePath,
+      [
+        "const price = (unitPrice, quantity, discount) => {",
+        "  let total =",
+        "    unitPrice *",
+        "    quantity -",
+        "    discount;",
+        "  total =",
+        "    total +",
+        "    quantity;",
+        "  total +=",
+        "    discount;",
+        "  const label =",
+        "    total <",
+        "    quantity",
+        "      ? unitPrice",
+        "      : total;",
+        "  return discount &&",
+        "    label;",
+        "};",
+        "console.log(price(10, 3, 5));",
+        "",
+      ].join("\n"),
+    );
+    const mutableOperandLcovPath = join(tmp, "mutable-operand-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${mutableOperandLcovPath} ${mutableOperandSourcePath}`.quiet();
+    const mutableOperandLcov = readFileSync(mutableOperandLcovPath, "utf-8");
+    for (const line of [3, 4, 5, 7, 8, 10, 12, 13, 15, 17]) {
+      if (!mutableOperandLcov.includes(`DA:${line},1`)) {
+        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${mutableOperandLcov}`);
+      }
+    }
+    // Line 13 ends the conditional's test, line 16 holds the `&&`: each keeps
+    // one taken and one untaken branch record.
+    for (const branch of [/^BRDA:13,\d+,0,1$/m, /^BRDA:13,\d+,1,-$/m, /^BRDA:16,\d+,1,1$/m, /^BRDA:16,\d+,0,-$/m]) {
+      if (!branch.test(mutableOperandLcov)) {
+        throw new Error(`LCOV should keep the branch record ${branch}, got:\n${mutableOperandLcov}`);
+      }
+    }
+
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(

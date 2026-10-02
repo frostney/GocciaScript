@@ -23,9 +23,11 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
-    // True once the declaration that initializes this const binding has been
-    // compiled. A read compiled after that point cannot observe the TDZ hole,
-    // and a const never changes afterwards, so the read may use the register.
+    // True once the code that initializes this binding has been compiled: its
+    // declaration, the for...of or counted-loop step that fills it, or the
+    // parameter preamble. A read compiled after that point cannot observe the
+    // TDZ hole. Whether the read may also take the register as an operand is
+    // decided where the operand is compiled; see TryResolveSettledLocalName.
     IsInitialized: Boolean;
     IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
@@ -88,6 +90,9 @@ type
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
     FWithBindingCount: Integer;
+    FLoopDepth: Integer;
+    FLoopMayCreateClosure: Boolean;
+    FDirectEvalSeen: Boolean;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
@@ -122,6 +127,10 @@ type
     procedure MarkCaptured(const AIndex: Integer);
     procedure MarkLocalInitialized(const AIndex: Integer);
     procedure ClearInitializedAtDepth(const ADepth: Integer);
+    procedure EnterLoop(const AMayCreateClosure: Boolean);
+    procedure LeaveLoop;
+    procedure MarkDirectEvalSeen;
+    function MutableLocalsMayLeaveRegisters: Boolean;
     procedure MarkNonStrictImmutable(const AIndex: Integer);
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
@@ -165,6 +174,7 @@ type
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
+    property LoopDepth: Integer read FLoopDepth;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -230,6 +240,9 @@ begin
   FPrivateNameCount := 0;
   FDirectEvalSyntheticArgumentsSlot := -1;
   FWithBindingCount := 0;
+  FLoopDepth := 0;
+  FLoopMayCreateClosure := False;
+  FDirectEvalSeen := False;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
     FWithBindingCount := AParent.FWithBindingCount;
@@ -536,6 +549,41 @@ begin
   for I := 0 to FLocalCount - 1 do
     if FLocals[I].Depth = ADepth then
       FLocals[I].IsInitialized := False;
+end;
+
+// AMayCreateClosure is consulted for the outermost loop only: it describes that
+// loop's whole subtree, so every loop nested in it inherits the answer.
+procedure TGocciaCompilerScope.EnterLoop(const AMayCreateClosure: Boolean);
+begin
+  if FLoopDepth = 0 then
+    FLoopMayCreateClosure := AMayCreateClosure;
+  Inc(FLoopDepth);
+end;
+
+procedure TGocciaCompilerScope.LeaveLoop;
+begin
+  Dec(FLoopDepth);
+  if FLoopDepth = 0 then
+    FLoopMayCreateClosure := False;
+end;
+
+procedure TGocciaCompilerScope.MarkDirectEvalSeen;
+begin
+  FDirectEvalSeen := True;
+end;
+
+// True where a let binding or a parameter of this function may hold its
+// current value somewhere other than its register, although no closure
+// compiled so far has captured it. Two things cause that:
+//
+// - A closure created later in an enclosing loop. It is compiled after the
+//   read, so the read cannot see IsCaptured, yet on the next iteration the
+//   read runs after the closure has written the binding's cell.
+// - Direct eval. Code it creates keeps writing the caller's registers after
+//   the eval call has returned, from inside calls the compiler cannot see.
+function TGocciaCompilerScope.MutableLocalsMayLeaveRegisters: Boolean;
+begin
+  Result := FLoopMayCreateClosure or FDirectEvalSeen;
 end;
 
 procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);

@@ -33,6 +33,7 @@ type
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
+    FLoopReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
@@ -84,6 +85,7 @@ uses
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.NumericProof,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
   Goccia.Keywords.Reserved,
@@ -291,6 +293,8 @@ function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Bool
 var
   Ctx: TGocciaCompilationContext;
   PreviousLabelReentryStatement: TGocciaStatement;
+  PreviousLoopReentryStatement: TGocciaStatement;
+  LoopScope: TGocciaCompilerScope;
 begin
   Result := False;
   Ctx := BuildContext;
@@ -302,6 +306,29 @@ begin
       Exit(Goccia.Compiler.Statements.CompileLabeledStatement(Ctx, AStmt));
     finally
       FLabelReentryStatement := PreviousLabelReentryStatement;
+    end;
+  end;
+
+  // A loop is the only construct that sends control back to code compiled
+  // earlier, so a closure created anywhere in it exists when the reads compiled
+  // ahead of it run again. Those reads have to know that before they are
+  // compiled. The outermost loop is examined as a whole, and loops nested in
+  // it inherit the answer: a closure created in an outer loop also outlives
+  // the reads of an inner one, and each loop body is walked only once.
+  if Goccia.Compiler.Statements.StatementIsIteration(AStmt) and
+     (FLoopReentryStatement <> AStmt) then
+  begin
+    PreviousLoopReentryStatement := FLoopReentryStatement;
+    LoopScope := FCurrentScope;
+    LoopScope.EnterLoop((LoopScope.LoopDepth = 0) and
+      not FOptimizationOptions.PreserveCoverageShape and
+      not StatementCreatesNoClosure(AStmt));
+    FLoopReentryStatement := AStmt;
+    try
+      Exit(DoCompileStatement(AStmt));
+    finally
+      FLoopReentryStatement := PreviousLoopReentryStatement;
+      LoopScope.LeaveLoop;
     end;
   end;
 
