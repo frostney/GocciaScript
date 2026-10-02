@@ -124,6 +124,9 @@ type
       the others: one report is enough to fail whatever left them. The caller
       roots the promise for as long as it needs it. }
     function TakeUnhandledRejection(out APromise: TGocciaValue): Boolean;
+    { The current scope's tracked promises, oldest first. They stay tracked. }
+    function UnhandledRejectionsInOrder: TArray<TGocciaValue>;
+    function IsRejectionTracked(const APromise: TGocciaValue): Boolean;
     procedure DiscardUnhandledRejections;
 
     { The bracket an engine holds around an Execute that starts while a
@@ -903,6 +906,47 @@ begin
   Result := Assigned(APromise);
   if Result then
     DiscardUnhandledRejections;
+end;
+
+function TGocciaMicrotaskQueue.UnhandledRejectionsInOrder:
+  TArray<TGocciaValue>;
+var
+  Entry: TPair<TGocciaValue, Int64>;
+  I, J: Integer;
+  Order: Int64;
+  Orders: TArray<Int64>;
+  Promise: TGocciaValue;
+begin
+  SetLength(Result, FUnhandledRejections.Count);
+  SetLength(Orders, FUnhandledRejections.Count);
+  I := 0;
+  for Entry in FUnhandledRejections do
+  begin
+    Result[I] := Entry.Key;
+    Orders[I] := Entry.Value;
+    Inc(I);
+  end;
+  { Insertion sort: a run rarely leaves more than a handful. }
+  for I := 1 to High(Result) do
+  begin
+    Promise := Result[I];
+    Order := Orders[I];
+    J := I - 1;
+    while (J >= 0) and (Orders[J] > Order) do
+    begin
+      Result[J + 1] := Result[J];
+      Orders[J + 1] := Orders[J];
+      Dec(J);
+    end;
+    Result[J + 1] := Promise;
+    Orders[J + 1] := Order;
+  end;
+end;
+
+function TGocciaMicrotaskQueue.IsRejectionTracked(
+  const APromise: TGocciaValue): Boolean;
+begin
+  Result := FUnhandledRejections.ContainsKey(APromise);
 end;
 
 procedure TGocciaMicrotaskQueue.DiscardUnhandledRejections;

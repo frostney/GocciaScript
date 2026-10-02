@@ -10,6 +10,7 @@ uses
   TestingPascalLibrary,
 
   Goccia.Arguments.Collection,
+  Goccia.AST.Node,
   Goccia.AsyncContext,
   Goccia.Engine,
   Goccia.ExecutionContext,
@@ -17,7 +18,9 @@ uses
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
+  Goccia.Lexer,
   Goccia.MicrotaskQueue,
+  Goccia.Parser,
   Goccia.Realm,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.URL,
@@ -27,7 +30,8 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.Values.PromiseValue;
+  Goccia.Values.PromiseValue,
+  Goccia.VM.Exception;
 
 type
   TTestEngineRealm = class(TTestSuite)
@@ -36,6 +40,10 @@ type
     FNestedLog: TStringList;
     FNestedChildSource: string;
     FNestedChildIsBytecode: Boolean;
+    FRejectionLog: TStringList;
+    FChildRejectionLog: TStringList;
+    FRejectionHookHandles: Boolean;
+    FRejectionHookHandlesAll: Boolean;
     function RunInline(const ASource: string): TGocciaScriptResult;
     function RunRuntimeInline(const ASource: string): TGocciaScriptResult;
     function RealmProbe(const AArgs: TGocciaArgumentsCollection;
@@ -62,6 +70,15 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure AssertUnhandledRejectionModesWithExecutor(
       const AExecutor: TGocciaExecutor);
+    procedure RecordRejection(const APromise: TGocciaValue;
+      const AReason: TGocciaValue);
+    procedure RecordChildRejection(const APromise: TGocciaValue;
+      const AReason: TGocciaValue);
+    function HookedRejections(const AExecutor: TGocciaExecutor;
+      const ASource: string; const AMode: TGocciaUnhandledRejectionMode;
+      out ARaised: string): string;
+    procedure AssertUnhandledRejectionHookWithExecutor(
+      const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
   public
     procedure SetupTests; override;
 
@@ -79,6 +96,8 @@ type
     procedure TestBytecodeNestedExecuteLeavesOuterJobs;
     procedure TestInterpreterExecuteRaisesUnhandledRejection;
     procedure TestBytecodeExecuteRaisesUnhandledRejection;
+    procedure TestInterpreterUnhandledRejectionHook;
+    procedure TestBytecodeUnhandledRejectionHook;
     procedure TestEachEngineGetsADistinctRealm;
     procedure TestInterpreterExecutionContextUsesEngineRealm;
     procedure TestBytecodeExecutionContextUsesEngineRealm;
@@ -123,6 +142,10 @@ begin
   Test('Bytecode Execute raises an unhandled rejection unless told to ' +
     'ignore it',
     TestBytecodeExecuteRaisesUnhandledRejection);
+  Test('Interpreter reports each unhandled rejection to the hook',
+    TestInterpreterUnhandledRejectionHook);
+  Test('Bytecode reports each unhandled rejection to the hook',
+    TestBytecodeUnhandledRejectionHook);
   Test('Each engine owns a distinct realm instance',
     TestEachEngineGetsADistinctRealm);
   Test('Interpreter execution context uses the engine realm',
@@ -605,6 +628,11 @@ begin
     ChildEngine.InjectGlobal('report',
       TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedReportProbe,
         'report', 1));
+    if Assigned(FChildRejectionLog) then
+    begin
+      ChildEngine.UnhandledRejections := urIgnore;
+      ChildEngine.OnUnhandledRejection := RecordChildRejection;
+    end;
     // Values the outer engine hands over, as an embedder sharing them would.
     if AArgs.Length >= 2 then
     begin
@@ -813,6 +841,204 @@ begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
     AssertUnhandledRejectionModesWithExecutor(Executor);
+  finally
+    Executor.Free;
+  end;
+end;
+
+function RejectionMessage(const AReason: TGocciaValue): string;
+begin
+  Result := (AReason as TGocciaObjectValue).GetProperty('message')
+    .ToStringLiteral.Value;
+end;
+
+procedure TTestEngineRealm.RecordRejection(const APromise: TGocciaValue;
+  const AReason: TGocciaValue);
+var
+  Tracked: TGocciaValue;
+begin
+  FRejectionLog.Add(RejectionMessage(AReason));
+  if FRejectionHookHandles then
+    TGocciaPromiseValue(APromise).MarkHandled;
+  if FRejectionHookHandlesAll then
+    for Tracked in TGocciaMicrotaskQueue.Instance.UnhandledRejectionsInOrder do
+      TGocciaPromiseValue(Tracked).MarkHandled;
+end;
+
+procedure TTestEngineRealm.RecordChildRejection(const APromise: TGocciaValue;
+  const AReason: TGocciaValue);
+begin
+  FChildRejectionLog.Add(RejectionMessage(AReason));
+end;
+
+{ Runs ASource with the hook installed. Returns what the hook was handed, in
+  order; ARaised is the message of the error the run raised, or ''. }
+function TTestEngineRealm.HookedRejections(const AExecutor: TGocciaExecutor;
+  const ASource: string; const AMode: TGocciaUnhandledRejectionMode;
+  out ARaised: string): string;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+begin
+  ARaised := '';
+  FRejectionLog.Clear;
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<rejection-hook>', Source, AExecutor);
+    Engine.UnhandledRejections := AMode;
+    Engine.OnUnhandledRejection := RecordRejection;
+    Engine.InjectGlobal('runChild',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(NestedRunChildProbe,
+        'runChild', 0));
+    try
+      Engine.Execute;
+    except
+      on E: TGocciaThrowValue do
+        ARaised := RejectionMessage(E.Value);
+      // What a bytecode run raises for a script's own throw.
+      on E: EGocciaBytecodeThrow do
+        ARaised := RejectionMessage(E.ThrownValue);
+    end;
+    Result := FRejectionLog.CommaText;
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.AssertUnhandledRejectionHookWithExecutor(
+  const AExecutor: TGocciaExecutor; const AIsBytecode: Boolean);
+const
+  TWO_LEFT =
+    'Promise.reject(new Error("first"));' +
+    'Promise.reject(new Error("second"));';
+  HANDLED_LATER =
+    'const rejected = Promise.reject(new Error("handled later"));' +
+    'Promise.resolve().then(() => rejected.catch(() => {}));';
+  LEFT_THEN_THROWN =
+    'Promise.reject(new Error("left"));' +
+    'throw new Error("thrown");';
+  OUTER_AND_CHILD =
+    'Promise.reject(new Error("outer"));' +
+    'runChild();';
+var
+  Engine: TGocciaEngine;
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Promise: TGocciaValue;
+  Raised: string;
+  Source: TStringList;
+begin
+  FRejectionLog := TStringList.Create;
+  FChildRejectionLog := nil;
+  FNestedLog := TStringList.Create;
+  FNestedChildIsBytecode := AIsBytecode;
+  FRejectionHookHandles := False;
+  FRejectionHookHandlesAll := False;
+  try
+    // Every rejection is reported, oldest first, and the mode still decides.
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urIgnore, Raised))
+      .ToBe('first,second');
+    Expect<string>(Raised).ToBe('');
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urThrow, Raised))
+      .ToBe('first,second');
+    Expect<string>(Raised).ToBe('first');
+
+    // A promise the hook gives a handler is handled.
+    FRejectionHookHandles := True;
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urThrow, Raised))
+      .ToBe('first,second');
+    Expect<string>(Raised).ToBe('');
+    FRejectionHookHandles := False;
+
+    // That includes one handled while an earlier promise was being reported:
+    // it is not reported after all.
+    FRejectionHookHandlesAll := True;
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urThrow, Raised))
+      .ToBe('first');
+    Expect<string>(Raised).ToBe('');
+    FRejectionHookHandlesAll := False;
+
+    // Nothing is reported for a promise that got a handler in time, or for a
+    // run that ends by exception.
+    Expect<string>(HookedRejections(AExecutor, HANDLED_LATER, urThrow, Raised))
+      .ToBe('');
+    Expect<string>(Raised).ToBe('');
+    Expect<string>(HookedRejections(AExecutor, LEFT_THEN_THROWN, urThrow,
+      Raised)).ToBe('');
+    Expect<string>(Raised).ToBe('thrown');
+
+    // A nested engine's rejections go to its own hook.
+    FChildRejectionLog := TStringList.Create;
+    FNestedChildSource := 'Promise.reject(new Error("inner"));';
+    Expect<string>(HookedRejections(AExecutor, OUTER_AND_CHILD, urIgnore,
+      Raised)).ToBe('outer');
+    Expect<string>(FChildRejectionLog.CommaText).ToBe('inner');
+    FreeAndNil(FChildRejectionLog);
+
+    // ExecuteProgram clears nothing, so a reported rejection has to be
+    // forgotten or the engine's next idle point would report it again.
+    FRejectionLog.Clear;
+    Source := TStringList.Create;
+    Engine := TGocciaEngine.Create('<rejection-hook-program>', Source,
+      AExecutor);
+    try
+      Engine.UnhandledRejections := urIgnore;
+      Engine.OnUnhandledRejection := RecordRejection;
+      Lexer := TGocciaLexer.Create(TWO_LEFT, '<rejection-hook-program>');
+      try
+        Source.Text := TWO_LEFT;
+        Parser := TGocciaParser.CreateFromLexer(Lexer,
+          '<rejection-hook-program>', Source);
+        try
+          ProgramNode := Parser.Parse;
+        finally
+          Parser.Free;
+        end;
+      finally
+        Lexer.Free;
+      end;
+      try
+        Engine.ExecuteProgram(ProgramNode);
+      finally
+        ProgramNode.Free;
+      end;
+      Expect<string>(FRejectionLog.CommaText).ToBe('first,second');
+      Expect<Boolean>(TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(
+        Promise)).ToBe(False);
+    finally
+      Engine.Free;
+      Source.Free;
+    end;
+  finally
+    FreeAndNil(FChildRejectionLog);
+    FreeAndNil(FNestedLog);
+    FreeAndNil(FRejectionLog);
+  end;
+end;
+
+procedure TTestEngineRealm.TestInterpreterUnhandledRejectionHook;
+var
+  Executor: TGocciaInterpreterExecutor;
+begin
+  Executor := TGocciaInterpreterExecutor.Create;
+  try
+    AssertUnhandledRejectionHookWithExecutor(Executor, False);
+  finally
+    Executor.Free;
+  end;
+end;
+
+procedure TTestEngineRealm.TestBytecodeUnhandledRejectionHook;
+var
+  Executor: TGocciaBytecodeExecutor;
+begin
+  Executor := TGocciaBytecodeExecutor.Create;
+  try
+    AssertUnhandledRejectionHookWithExecutor(Executor, True);
   finally
     Executor.Free;
   end;
