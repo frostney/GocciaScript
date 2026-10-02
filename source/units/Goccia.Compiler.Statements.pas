@@ -519,7 +519,8 @@ begin
     else
     begin
       LocalIdx := AScope.ResolveUpvalue(TGocciaIdentifierExpression(AExpr).Name);
-      if LocalIdx >= 0 then
+      if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
+           TGocciaIdentifierExpression(AExpr).Name) then
         if AScope.GetUpvalue(LocalIdx).IsConst or
            AScope.GetUpvalue(LocalIdx).IsStrictlyTyped then
           Result := AScope.GetUpvalue(LocalIdx).TypeHint;
@@ -559,7 +560,8 @@ begin
       begin
         LocalIdx := AScope.ResolveUpvalue(
           TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-        if LocalIdx >= 0 then
+        if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
+             TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name) then
           Result := AScope.GetUpvalue(LocalIdx).ReturnTypeHint;
       end;
     end;

@@ -1610,6 +1610,126 @@ await section("Test262 Runner: bytecode eval var declarations shadow outer upval
     throw new Error(`Bare bytecode sloppy eval upvalue shadow probe got: ${proc.stdout.toString()}`);
 });
 
+await section("Test262 Runner: eval var declarations conflict only with the caller's own lexical declarations...", async () => {
+  const source = [
+    "function attempt(callback) {",
+    "  try { return callback(); } catch (error) { return error.name; }",
+    "}",
+    // An enclosing function's let/const lies beyond the caller's variable
+    // environment: the eval var shadows it, whatever its value or type. The
+    // callers are function expressions that follow the declaration, so they
+    // are compiled once its value and type are known.
+    "function outerConst() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = 5;'); return x; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerLet() {",
+    "  let x = 16;",
+    "  const inner = () => { eval('var x = 5;'); return x; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerConstTwoFunctionsUp() {",
+    "  const x = 16;",
+    "  const middle = function () {",
+    "    const inner = function () { return [eval('var x = 5; x'), x, (() => x)()].join(':'); };",
+    "    return [inner(), x].join(',');",
+    "  };",
+    "  return [middle(), x].join(',');",
+    "}",
+    "function outerConstOtherType() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = \"a\";'); return x + 1; };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function outerTypedArrow() {",
+    "  const f = (a: number): number => a + 1;",
+    "  const inner = function () { eval('var f = function (a) { return \"r\" + a; };'); return f(5) + 1; };",
+    "  return [inner(), f(5)].join(',');",
+    "}",
+    // delete removes the eval var and leaves the enclosing binding alone.
+    "function outerLetDelete() {",
+    "  let x = 16;",
+    "  const inner = function () { return eval('delete x'); };",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function evalVarDelete() {",
+    "  const x = 16;",
+    "  const inner = function () { eval('var x = 5;'); return [eval('delete x'), x].join(':'); };",
+    "  return [inner(), x].join(',');",
+    "}",
+    // A let/const between the eval and the caller's variable environment
+    // still conflicts.
+    "function ownConst() { const x = 16; eval('var x = 5;'); return x; }",
+    "function ownLet() { let x = 16; eval('var x = 5;'); return x; }",
+    "function ownBlockLet() { { let x = 16; eval('var x = 5;'); return x; } }",
+    "function ownOuterBlockConst() { { const x = 16; { eval('var x = 5;'); } return x; } }",
+    "function ownLetBelowOuterConst() {",
+    "  const x = 16;",
+    "  function inner() { let x = 1; { eval('var x = 5;'); } return x; }",
+    "  return inner();",
+    "}",
+    // Strict eval code keeps its var to itself, so nothing conflicts.
+    "function strictSourceBelowOuterConst() {",
+    "  const x = 16;",
+    "  function inner() { return [eval('\"use strict\"; var x = 5; x'), x].join(':'); }",
+    "  return [inner(), x].join(',');",
+    "}",
+    "function strictSourceBesideOwnConst() {",
+    "  const x = 16;",
+    "  return [eval('\"use strict\"; var x = 5; x'), x].join(',');",
+    "}",
+    "function strictCallerBesideOwnConst() {",
+    "  'use strict';",
+    "  const x = 16;",
+    "  return [eval('var x = 5; x'), x].join(',');",
+    "}",
+    "for (const probe of [",
+    "  outerConst, outerLet, outerConstTwoFunctionsUp, outerConstOtherType, outerTypedArrow,",
+    "  outerLetDelete, evalVarDelete,",
+    "  ownConst, ownLet, ownBlockLet, ownOuterBlockConst, ownLetBelowOuterConst,",
+    "  strictSourceBelowOuterConst, strictSourceBesideOwnConst, strictCallerBesideOwnConst,",
+    "]) print(probe.name + ' ' + attempt(probe));",
+    "",
+  ].join("\n");
+  const expected = [
+    "outerConst 5,16",
+    "outerLet 5,16",
+    "outerConstTwoFunctionsUp 5:5:5,16,16",
+    "outerConstOtherType a1,16",
+    "outerTypedArrow r51,6",
+    "outerLetDelete false,16",
+    "evalVarDelete true:16,16",
+    "ownConst SyntaxError",
+    "ownLet SyntaxError",
+    "ownBlockLet SyntaxError",
+    "ownOuterBlockConst SyntaxError",
+    "ownLetBelowOuterConst SyntaxError",
+    "strictSourceBelowOuterConst 5:16,16",
+    "strictSourceBesideOwnConst 5,16",
+    "strictCallerBesideOwnConst 5,16",
+  ].join("\n");
+  for (const mode of [
+    { label: "interpreted", args: [TEST262RUNNER, "--eval-host", "--mode=interpreted"] },
+    { label: "bytecode", args: [TEST262RUNNER, "--eval-host", "--mode=bytecode"] },
+  ]) {
+    const proc = Bun.spawnSync([
+      ...mode.args,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode.label} eval var conflict probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode.label} eval var conflict probe got: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,
