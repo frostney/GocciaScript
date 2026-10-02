@@ -139,6 +139,53 @@ test("switch case lexical binding is in TDZ before declaration", () => {
   expect(value).toBe("outer");
 });
 
+test("a clause entered directly sees an earlier clause's const in TDZ", () => {
+  const read = (which) => {
+    switch (which) {
+      case 0:
+        const scale = 5;
+        return scale * 2;
+      case 1:
+        return scale * 2;
+    }
+    return "none";
+  };
+
+  expect(read(0)).toBe(10);
+  expect(() => read(1)).toThrow(ReferenceError);
+});
+
+test("a clause reached by falling through sees the earlier clause's const", () => {
+  const read = (which) => {
+    switch (which) {
+      case 0:
+        const scale = 5;
+      case 1:
+        return scale + 1;
+    }
+    return "none";
+  };
+
+  expect(read(0)).toBe(6);
+  expect(() => read(1)).toThrow(ReferenceError);
+});
+
+test("a nested block in a later clause sees the earlier clause's const in TDZ", () => {
+  const read = (which) => {
+    switch (which) {
+      case 0:
+        const label = "ready";
+        return label;
+      default: {
+        return label + "!";
+      }
+    }
+  };
+
+  expect(read(0)).toBe("ready");
+  expect(() => read(1)).toThrow(ReferenceError);
+});
+
 test("switch case test expression sees case lexical TDZ", () => {
   let value = "outer";
   let caught;

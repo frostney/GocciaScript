@@ -143,6 +143,7 @@ type
     procedure SetLocalConstantValue(const AIndex: Integer;
       const AValue: TGocciaCompileTimeValue);
     procedure ClearLocalConstantValue(const AIndex: Integer);
+    procedure ClearConstantValuesAtDepth(const ADepth: Integer);
     procedure MarkImportBinding(const AIndex: Integer;
       const APhase: TGocciaImportCallPhase; const AModulePath,
       AExportName: string);
@@ -529,13 +530,12 @@ procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);
 var
   I: Integer;
 begin
-  for I := FLocalCount - 1 downto 0 do
-  begin
-    if FLocals[I].Depth < ADepth then
-      Break;
+  // The locals of ADepth are not always the tail of FLocals: a `var` that was
+  // not hoisted (one in a class static block) is declared at depth 0 after
+  // them. Scan every local instead of stopping at the first shallower one.
+  for I := 0 to FLocalCount - 1 do
     if FLocals[I].Depth = ADepth then
       FLocals[I].IsInitialized := False;
-  end;
 end;
 
 procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);
@@ -607,6 +607,17 @@ procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
   FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+end;
+
+procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
+  const ADepth: Integer);
+var
+  I: Integer;
+begin
+  // See ClearInitializedAtDepth: the locals of ADepth need not be the tail.
+  for I := 0 to FLocalCount - 1 do
+    if FLocals[I].Depth = ADepth then
+      ClearLocalConstantValue(I);
 end;
 
 procedure TGocciaCompilerScope.MarkImportBinding(const AIndex: Integer;
