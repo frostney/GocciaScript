@@ -1871,6 +1871,8 @@ begin
     for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
     begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
+      if Local.SuspendCount > 0 then
+        Continue;
       if HiddenWithBindingName(Local.Name) then
         AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
           Local.Slot, False)

@@ -179,6 +179,9 @@ type
 
   TPendingFinallyEntry = record
     FinallyBlock: TGocciaBlockStatement;
+    // Scope depth of the try statement that owns FinallyBlock, which is the
+    // scope the block resolves names in wherever it is compiled.
+    FinallyScopeDepth: Integer;
     // Non-nil when this entry represents a using block's disposal.
     // CompileReturnStatement emits the disposal sequence instead of
     // compiling a FinallyBlock when this array is populated.
@@ -1923,6 +1926,7 @@ var
   I: Integer;
   Local: TGocciaCompilerLocal;
   HandlerPopCount: Integer;
+  SuspendedBindings: TGocciaCompilerSuspendedBindings;
 begin
   HandlerPopCount := AEntry.HandlerPopCount;
   if HandlerPopCount <= 0 then
@@ -1943,7 +1947,22 @@ begin
   end;
 
   if Assigned(AEntry.FinallyBlock) then
-    CompileBlockStatement(ACtx, AEntry.FinallyBlock)
+  begin
+    // ES2026 §14.2.2 and §14.11.2 Runtime Semantics: Evaluation and §14.15.2
+    // Runtime Semantics: CatchClauseEvaluation restore the LexicalEnvironment
+    // however control leaves a Block, a with statement or a Catch, so the
+    // Finally of §14.15.3 Runtime Semantics: Evaluation runs in the
+    // environment of the try statement. This copy is compiled at the abrupt
+    // exit, where the bindings of the scopes being left are still declared:
+    // keep them out of name resolution.
+    SuspendedBindings := ACtx.Scope.SuspendBindingsDeeperThan(
+      AEntry.FinallyScopeDepth);
+    try
+      CompileBlockStatement(ACtx, AEntry.FinallyBlock);
+    finally
+      ACtx.Scope.ResumeBindings(SuspendedBindings);
+    end;
+  end
   else if Length(AEntry.UsingResources) > 0 then
   begin
     EmitDisposalSequence(ACtx, AEntry.UsingResources,
@@ -2450,7 +2469,10 @@ begin
       GPendingFinally := TList<TPendingFinallyEntry>.Create;
     FillChar(Entry, SizeOf(Entry), 0);
     if HasFinally then
+    begin
       Entry.FinallyBlock := AStmt.FinallyBlock;
+      Entry.FinallyScopeDepth := ACtx.Scope.Depth;
+    end;
     if HasCatch then
       if HasFinally then
         Entry.HandlerPopCount := 2
