@@ -97,8 +97,11 @@ jobs:
             exit 1
           fi
           STATUS="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${LAST}...${HEAD_SHA}" --jq .status)"
-          if [ "$STATUS" = "ahead" ]; then
-            echo "The newest passing commit (${HEAD_SHA::8}) is ahead of the last nightly (${LAST::8}): publishing from CI run ${RUN_ID}."
+          # `diverged` is main rewritten since the last nightly (a force
+          # push): the tag's commit is no longer an ancestor, and would never
+          # be again, so that counts as new too.
+          if [ "$STATUS" = "ahead" ] || [ "$STATUS" = "diverged" ]; then
+            echo "The newest passing commit (${HEAD_SHA::8}) is ${STATUS} relative to the last nightly (${LAST::8}): publishing from CI run ${RUN_ID}."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           else
             echo "The newest passing commit (${HEAD_SHA::8}) is ${STATUS} relative to the last nightly (${LAST::8}): nothing to publish."
