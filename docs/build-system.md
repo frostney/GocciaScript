@@ -735,7 +735,7 @@ RegExp embeds this generated UCD resource by default through `source/units/Gocci
 
 ## CI/CD
 
-GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which publishes the nightly prerelease after `ci.yml` succeeds on `main`:
+GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which checks every three hours whether a newer commit has passed `ci.yml` on `main` and publishes it as the nightly prerelease if so:
 
 ### `ci.yml` — Push to main + tags
 
