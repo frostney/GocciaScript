@@ -148,6 +148,11 @@ type
     FLocalCellBase: Integer;
     FLocalCells: PGocciaBytecodeCell;
     FLocalCellCount: Integer;
+    // Every slot of FLocalCellStack at or above this index is nil. Most frames
+    // capture no local and so create no cell, which lets a new frame take its
+    // window without clearing it. Whatever stores a cell raises the mark
+    // (NoteLocalCells); taking a window clears only the part below it.
+    FLocalCellStaleTop: Integer;
     // Call arguments live in a growable arena window (FArgumentStack) with a
     // base+count window, mirroring the register and local-cell stacks. The
     // window holds the current frame's arguments; PushFrame/PopFrame and native
@@ -238,6 +243,9 @@ type
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
     procedure AcquireRegisters(const ACount: Integer);
     procedure AcquireLocalCells(const ACount: Integer);
+    procedure ClearStaleLocalCells(const AStart, AEnd: Integer);
+    procedure NoteLocalCells(const AWindowCount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    function LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
     procedure AcquireArgumentWindow(const ACount: Integer);
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
@@ -4328,6 +4336,7 @@ begin
   FVM.EnsureLocalCapacity(Length(FContinuationLocalCells));
   for I := 0 to High(FContinuationLocalCells) do
     FVM.FLocalCells[I] := FContinuationLocalCells[I];
+  FVM.NoteLocalCells(Length(FContinuationLocalCells));
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
@@ -6513,6 +6522,7 @@ begin
   FRegisters := nil;
   FRegisterCount := 0;
   SetLength(FLocalCellStack, INITIAL_STACK_SIZE);
+  FLocalCellStaleTop := 0;
   FLocalCellBase := 0;
   FLocalCells := nil;
   FLocalCellCount := 0;
@@ -8067,7 +8077,48 @@ begin
   FLocalCellBase := NewBase;
   FLocalCellCount := ACount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
-  FillChar(FLocalCells^, ACount * SizeOf(TGocciaBytecodeCell), 0);
+  // The GC marks every live window and a frame reads a slot before it stores
+  // one, so the new window must hold no cell. Only slots below the stale mark
+  // can hold one; an earlier frame that created none left them all nil.
+  if NewBase < FLocalCellStaleTop then
+    ClearStaleLocalCells(NewBase, Required);
+  Assert(LocalCellsAreClear(NewBase, Required),
+    'A new local-cell window holds a stale cell');
+end;
+
+// Clears the slots of [AStart, AEnd) that may hold a cell: those below the
+// stale mark. When the range reaches the mark, every slot from AStart up is
+// then nil, so the mark drops to AStart.
+procedure TGocciaVM.ClearStaleLocalCells(const AStart, AEnd: Integer);
+var
+  ClearEnd: Integer;
+begin
+  ClearEnd := AEnd;
+  if ClearEnd > FLocalCellStaleTop then
+    ClearEnd := FLocalCellStaleTop;
+  if ClearEnd > AStart then
+    FillChar(FLocalCellStack[AStart],
+      (ClearEnd - AStart) * SizeOf(TGocciaBytecodeCell), 0);
+  if (AEnd >= FLocalCellStaleTop) and (AStart < FLocalCellStaleTop) then
+    FLocalCellStaleTop := AStart;
+end;
+
+// Call after storing cells into the first AWindowCount slots of the current
+// window.
+procedure TGocciaVM.NoteLocalCells(const AWindowCount: Integer);
+begin
+  if FLocalCellBase + AWindowCount > FLocalCellStaleTop then
+    FLocalCellStaleTop := FLocalCellBase + AWindowCount;
+end;
+
+function TGocciaVM.LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := AStart to AEnd - 1 do
+    if Assigned(FLocalCellStack[I]) then
+      Exit(False);
+  Result := True;
 end;
 
 // Acquire a fresh argument window on the arena, stack-disciplined exactly like
@@ -8124,16 +8175,18 @@ end;
 
 procedure TGocciaVM.EnsureLocalCapacity(const ACount: Integer);
 var
-  Growth, Required: Integer;
+  GrowthStart, Required: Integer;
 begin
   if ACount > FLocalCellCount then
   begin
-    Growth := ACount - FLocalCellCount;
+    GrowthStart := FLocalCellBase + FLocalCellCount;
     Required := FLocalCellBase + ACount;
     if Required > Length(FLocalCellStack) then
       SetLength(FLocalCellStack, Required * 2);
-    FillChar(FLocalCellStack[FLocalCellBase + FLocalCellCount],
-      Growth * SizeOf(TGocciaBytecodeCell), 0);
+    if GrowthStart < FLocalCellStaleTop then
+      ClearStaleLocalCells(GrowthStart, Required);
+    Assert(LocalCellsAreClear(GrowthStart, Required),
+      'A grown local-cell window holds a stale cell');
     FLocalCellCount := ACount;
     FLocalCells := @FLocalCellStack[FLocalCellBase];
   end;
@@ -8143,8 +8196,11 @@ function TGocciaVM.GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
 begin
   EnsureLocalCapacity(AIndex + 1);
   if not Assigned(FLocalCells[AIndex]) then
+  begin
     FLocalCells[AIndex] := TGocciaBytecodeCell.Create(
       GetLocalRegister(AIndex));
+    NoteLocalCells(AIndex + 1);
+  end;
   Result := FLocalCells[AIndex];
 end;
 

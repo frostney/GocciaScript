@@ -131,7 +131,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - skip the result move of a property or element store whose value is discarded, as in the statement `list[index] = value;`
 - read standalone `this` properties directly from a non-captured local register, preserving the derived-constructor guard while avoiding a temporary-register move; captured, top-level, and method-call receiver paths retain their existing lowering
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
-- the register and local-cell window fills are GC-safety/correctness critical (the GC marks the whole live window, and a callee reads those slots before it writes them): they are deliberately retained rather than trimmed. The argument window is not cleared, because `SetupNewFrame` stores every slot of it before anything that can collect runs
+- the register window fill is GC-safety/correctness critical (the GC marks the whole live window, and a callee reads those slots before it writes them): it is deliberately retained rather than trimmed. A local-cell window must likewise hold no cell, but most frames capture no local and create none, so the VM keeps a mark above which every slot of the cell arena is nil (`FLocalCellStaleTop`, raised by whatever stores a cell) and clears only the part of a new window below it; development builds assert that each new window is clear. The argument window is not cleared, because `SetupNewFrame` stores every slot of it before anything that can collect runs
 
 ### Growing String Accumulators
 
