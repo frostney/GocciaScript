@@ -13201,18 +13201,22 @@ var
   ResolvedKey: TGocciaValue;
   PrivateBrandToken: string;
 begin
-  if (AObject is TGocciaNullLiteralValue) or
-     (AObject is TGocciaUndefinedLiteralValue) or
-     (AObject is TGocciaBooleanLiteralValue) or
-     (AObject is TGocciaNumberLiteralValue) or
-     (AObject is TGocciaStringLiteralValue) then
+  // ES2026 §13.10.1 RelationalExpression : RelationalExpression in
+  // ShiftExpression, step 5: a right-hand side that is not an Object throws.
+  if AObject.IsPrimitive then
   begin
+    // A Symbol has no string conversion, so it is named by its description.
     if AKey is TGocciaSymbolValue then
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [TGocciaSymbolValue(AKey).ToDisplayString.Value, AObject.ToStringLiteral.Value]),
+      KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
+    else
+      KeyStr := AKey.ToStringLiteral.Value;
+    if AObject is TGocciaSymbolValue then
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        TGocciaSymbolValue(AObject).ToDisplayString.Value]),
         SSuggestCheckNullBeforeAccess)
     else
-      ThrowTypeError(Format(SErrorCannotUseInOperator, [AKey.ToStringLiteral.Value, AObject.ToStringLiteral.Value]),
-        SSuggestCheckNullBeforeAccess);
+      ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
+        AObject.ToStringLiteral.Value]), SSuggestCheckNullBeforeAccess);
   end;
 
   if AObject is TGocciaObjectValue then
@@ -14249,6 +14253,7 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
+  I: Integer;
   IsGeneratorReturnCompletion: Boolean;
 begin
   // Proven numeric frames contain no handlers. Restore their generic entry
@@ -14269,6 +14274,13 @@ begin
       if IsGeneratorReturnCompletion and (Handler.Kind = bhkCatch) then
         Continue;
       AFrame.IP := Handler.CatchIP;
+      // ES2026 §14.2.2 Runtime Semantics: Evaluation (Block) steps 5-6 and
+      // Note 1: a Block's environment is left however control leaves it. The
+      // throw skipped the OP_CLOSE_UPVALUE of every scope it unwound, so
+      // detach their cells here. The compiler allocates a handler's register
+      // before the region it protects, so those scopes own the slots above it.
+      for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
+        FLocalCells[I] := nil;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;

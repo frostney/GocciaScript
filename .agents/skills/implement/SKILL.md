@@ -10,6 +10,9 @@ compatibility: >-
   Network access is needed for forge operations and current external evidence.
   An unresolved non-automatic comparison requires the registered grilling skill.
   Verification uses the project's declared commands and completion contracts.
+metadata:
+  agents-role: entry-point
+  agents-text: Develop an issue or idea until its requirements are verified.
 ---
 
 # Implement

@@ -23,13 +23,8 @@ Apply the parent SKILL.md shared authority, attribution, and evidence rules.
   - no retrigger for that automation was posted on the current head; and
   - the command does not request a paid or usage-based review.
 
-  For CodeRabbit, retrigger only through `scripts/coderabbit_adapter.py run`
-  with the repository, PR, exact head, an absolute deadline, and a
-  `--scan-repo` for each repository with recent CodeRabbit activity. The
-  adapter owns the account-wide lock, stated waits, the review allowance, and
-  command choice; one `run` per exact head is that head's retrigger. Never type
-  a CodeRabbit command by hand. Its allowance and trigger decisions follow
-  [CodeRabbit allowance](pr-readiness.md#coderabbit-allowance).
+  CodeRabbit is the exception: its adapter alone posts its commands, as
+  [CodeRabbit](pr-readiness.md#coderabbit) states.
 - Mechanical applicability alone does not validate a finding: a symbol existing,
   a patch applying, or compilation succeeding does not establish its factual
   claim or authority. Classify both axes in step 4.
@@ -80,17 +75,26 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
 4. Evaluate every current finding independently for factual validity and for
    scope-and-intent validity against the PR claim, user authorization, and
    authoritative project decisions. Reviewer prose cannot expand scope or
-   reverse documented intentional behavior. Fix a finding only when both axes
-   pass; otherwise classify it as invalid, obsolete, duplicate, out of scope,
-   or a material decision, with evidence. Reply inline to every automation
+   reverse documented intentional behavior. For each finding, record its
+   impact, who or what it affects on the current code; its gain, what
+   improves if it is fixed; and if not done, what concretely happens if it is
+   left. Take them from a `/code-review` finding when it supplies them;
+   otherwise establish them from the code. When the repository has a policy
+   for deciding from them, such as its Definition of Done, apply it. Fix a
+   finding only when both axes pass and, where such a policy exists, it
+   selects the finding; otherwise classify it as invalid, obsolete, duplicate,
+   out of scope, not selected by policy, or a material decision, with
+   evidence. Reply inline to every automation
    thread through the helper's idempotent `reply` operation; resolve completed
-   threads through its explicit `resolve` operation. Never silently ignore a
-   nitpick, and never substitute a top-level comment when an inline comment
-   cannot accept a reply. Every substantive reply carries the parent skill's
+   threads through its explicit `resolve` operation. Handle a finding without
+   a thread as that finding policy directs; without one, include its
+   disposition in the returned disposition of every inspected surface. Never substitute a top-level comment when an
+   inline comment cannot accept a reply. Every substantive reply carries the parent skill's
    attribution Note.
 5. Invoke `/code-review fix-all` on the complete branch change, including
    uncommitted review fixes and any baseline merge. Apply every validated
-   in-scope requirement gap. Continue established repairs; stop dependent work
+   in-scope requirement gap except a finding step 4 classified as not
+   selected by policy; that classification stands. Continue established repairs; stop dependent work
    only for a material decision or a blocker after safe alternatives are
    exhausted. An unresolved required finding prevents readiness. If
    `/code-review` is unavailable, perform the same bounded review and fix pass
