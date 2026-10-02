@@ -2711,10 +2711,15 @@ begin
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
-    if not Local.IsGlobalBacked then
+    if (not Local.IsGlobalBacked) and
+       not (Local.IsInitialized and
+         not ACtx.OptimizationOptions.PreserveCoverageShape) then
     begin
       // PutValue on an uninitialized lexical binding throws after the RHS has
-      // been evaluated. Probe the destination without disturbing ADest.
+      // been evaluated. Probe the destination without disturbing ADest. A
+      // binding whose initialization was compiled before this assignment
+      // cannot still be in its temporal dead zone (see
+      // TryResolveSettledLocalName, point 1), so it needs no probe.
       ErrorReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ErrorReg, Local.Slot));
       ACtx.Scope.FreeRegister;

@@ -97,6 +97,7 @@ type
     procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
     procedure TestCountedForVariableOperandSkipsGetLocal;
     procedure TestCoverageKeepsLetAndParameterOperandCopies;
+    procedure TestAssignmentToInitializedLetSkipsProbe;
     procedure TestCompoundAssignmentReadsInitializedLetDirectly;
     procedure TestNumericImmediateConditionReadsParameterDirectly;
     procedure TestDiscardedStoreSkipsResultMove;
@@ -200,6 +201,8 @@ begin
     TestCountedForVariableOperandSkipsGetLocal);
   Test('Coverage keeps let and parameter operand copies',
     TestCoverageKeepsLetAndParameterOperandCopies);
+  Test('Assignment to an initialized let skips the TDZ probe',
+    TestAssignmentToInitializedLetSkipsProbe);
   Test('Compound assignment reads an initialized let directly',
     TestCompoundAssignmentReadsInitializedLetDirectly);
   Test('A numeric immediate condition reads a parameter directly',
@@ -915,9 +918,8 @@ begin
     Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
-      // One copy moves `y` into the conditional's result register. The other
-      // two are the TDZ probes of the assignments to `y` and `x`.
-      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
+      // The one copy left moves `y` into the conditional's result register.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -966,33 +968,32 @@ begin
   // left operand is still read in place.
   Expect<Integer>(CopiesIn('const f = (a, p) => a * p.f(a);')).ToBe(2);
   // The right operand rebinds the left one, which therefore keeps its copy.
-  // An assignment adds one more: the probe that checks the target's TDZ.
-  Expect<Integer>(CopiesIn('const f = (a, p) => a * (a = p.x);')).ToBe(2);
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (a = p.x);')).ToBe(1);
   Expect<Integer>(CopiesIn('const f = (a, p) => a * (a += p.x);')).ToBe(1);
   Expect<Integer>(CopiesIn('const f = (a, p) => a * a++;')).ToBe(1);
   // The second copy is the TDZ probe of the destructuring assignment.
   Expect<Integer>(CopiesIn('const f = (a, p) => a * ([a] = p.x);')).ToBe(2);
   // A write to any other local is refused as well; the check is by shape.
-  Expect<Integer>(CopiesIn('const f = (a, p) => a * (p = p.x);')).ToBe(2);
+  Expect<Integer>(CopiesIn('const f = (a, p) => a * (p = p.x);')).ToBe(1);
   // The object and the key of a store are evaluated before the value, so
   // both keep their copies when the value writes a local.
   Expect<Integer>(CopiesIn(
-    'const f = (a, p) => { p.r = a * 2; a[p] = (a = p.x); };')).ToBe(3);
+    'const f = (a, p) => { p.r = a * 2; a[p] = (a = p.x); };')).ToBe(2);
   Expect<Integer>(CopiesIn(
-    'const f = (a, p) => { p.r = a * 2; a[p] = (p = a.x); };')).ToBe(3);
+    'const f = (a, p) => { p.r = a * 2; a[p] = (p = a.x); };')).ToBe(2);
   Expect<Integer>(CopiesIn(
-    'const f = (a, p) => { p.r = a * 2; a.r = (a = p.x); };')).ToBe(2);
+    'const f = (a, p) => { p.r = a * 2; a.r = (a = p.x); };')).ToBe(1);
   Expect<Integer>(CopiesIn(
     'const f = (a, p) => { p.r = a * 2; a[p] = p.x; };')).ToBe(0);
   // An element read takes its object before the index rebinds it; the store
   // around it takes `p` before its value, which holds that assignment.
   Expect<Integer>(CopiesIn(
-    'const f = (a, p) => { p.r = a * 2; p.s = a[(a = p.x)]; };')).ToBe(3);
+    'const f = (a, p) => { p.r = a * 2; p.s = a[(a = p.x)]; };')).ToBe(2);
   Expect<Integer>(CopiesIn(
     'const f = (a, p) => { p.r = a * 2; p.s = a[p.x]; };')).ToBe(0);
   // A less-than condition reads its left operand first.
   Expect<Integer>(CopiesIn(
-    'const f = (a, p) => { p.r = a * 2; if (a < (a = p.x)) { p.s = 1; } };')).ToBe(2);
+    'const f = (a, p) => { p.r = a * 2; if (a < (a = p.x)) { p.s = 1; } };')).ToBe(1);
 end;
 
 procedure TTestCompiler.TestCapturedLetOperandKeepsGetLocal;
@@ -1078,9 +1079,9 @@ begin
     Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
-      // The second clause keeps the TDZ check of its read. Both assignments
-      // probe their target.
-      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
+      // The second clause keeps the TDZ check of its read and of its
+      // assignment; the first clause needs neither.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(2);
   finally
     Module.Free;
   end;
@@ -1167,13 +1168,43 @@ begin
     Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
     Expect<Boolean>(Assigned(Func)).ToBe(True);
     if Assigned(Func) then
-      // Without coverage the assignment probe remains, and the moves into a
-      // result register: the right-hand side of `+=` and the two branches of
-      // the conditional.
-      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(4);
+      // Without coverage only the moves into a result register remain: the
+      // right-hand side of `+=` and the two branches of the conditional.
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(3);
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestAssignmentToInitializedLetSkipsProbe;
+
+  function CopiesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_SET_LOCAL);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = p.x; x = p.y; };')).ToBe(0);
+  Expect<Integer>(CopiesIn(
+    'const f = (a, p) => { a = p.y; };')).ToBe(0);
+  // An assignment compiled ahead of the declaration can run in the TDZ.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { x = p.y; let x = p.x; };')).ToBe(1);
+  // So can one inside the binding's own initializer.
+  Expect<Integer>(CopiesIn(
+    'const f = (p) => { let x = (x = p.y); };')).ToBe(1);
 end;
 
 procedure TTestCompiler.TestCompoundAssignmentReadsInitializedLetDirectly;
@@ -1199,10 +1230,9 @@ begin
     'const f = (p) => { let x = p.x; x += p.y; };')).ToBe(0);
   Expect<Integer>(CopiesIn(
     'const f = (a, p) => { a *= p.y; };')).ToBe(0);
-  // The old value is taken before a right-hand side that rebinds the target;
-  // the second copy is that assignment's TDZ probe.
+  // The old value is taken before a right-hand side that rebinds the target.
   Expect<Integer>(CopiesIn(
-    'const f = (p) => { let x = p.x; x += (x = p.y); };')).ToBe(2);
+    'const f = (p) => { let x = p.x; x += (x = p.y); };')).ToBe(1);
   Expect<Integer>(CopiesIn(
     'const f = (p) => { x += p.y; let x = p.x; };')).ToBe(1);
 end;
