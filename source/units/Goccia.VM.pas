@@ -13,6 +13,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
+  Goccia.CallStack,
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
@@ -213,6 +214,12 @@ type
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
+    // The running thread's call stack and execution-context stack. Both live
+    // behind thread variables, and each reference to one is a thread-local
+    // lookup, so BindToCurrentThread resolves them when native code enters an
+    // idle VM and every bytecode call inside that entry reuses them.
+    FCallStack: TGocciaCallStack;
+    FExecutionContextThread: Pointer;
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
       const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
@@ -467,6 +474,7 @@ type
     procedure PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
       const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
+    procedure BindToCurrentThread;
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
       const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
@@ -549,7 +557,6 @@ uses
   Goccia.Arithmetic,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.CallStack,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
@@ -13892,11 +13899,11 @@ begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
-  if (TGocciaCallStack.Instance <> nil) then
-    TGocciaCallStack.Instance.Pop;
+  if Assigned(FCallStack) then
+    FCallStack.Pop;
   if FCurrentExecutionContextPushed then
   begin
-    TGocciaExecutionContextStack.Pop;
+    TGocciaExecutionContextStack.PopFunctionContext(FExecutionContextThread);
     FCurrentExecutionContextPushed := False;
   end;
   while FHandlerStack.Count > ATargetHandlerCount do
@@ -13964,13 +13971,12 @@ begin
   AFrame.IP := 0;
 
   Inc(FFrameDepth);
-  if (TGocciaCallStack.Instance <> nil) then
+  if Assigned(FCallStack) then
     if Assigned(ATemplate.DebugInfo) and
        (ATemplate.DebugInfo.SourceFile <> '') then
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+      FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate),
-        FCurrentModuleSourcePath);
+      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -14019,8 +14025,8 @@ begin
      (ATemplate.ProfileIndex >= 0) then
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex,
       GetNanoseconds);
-  if (TGocciaCallStack.Instance <> nil) then
-    TGocciaCallStack.Instance.Pop;
+  if Assigned(FCallStack) then
+    FCallStack.Pop;
   Dec(FFrameDepth);
 
   Dec(FClosedNumericFrameStackCount);
@@ -14102,6 +14108,17 @@ begin
   FTempSavedStateRoots[FTempSavedStateRootCount].ArgCount := 0;
 end;
 
+{ Native code is entering a VM that is running nothing, so whatever thread the
+  VM last ran on has left it. Every nested entry happens inside this one, on
+  this thread, and so does every frame pushed or popped until it returns; the
+  call stack is created before a thread runs any engine and destroyed only
+  when the thread's runtime shuts down. }
+procedure TGocciaVM.BindToCurrentThread;
+begin
+  FCallStack := TGocciaCallStack.Instance;
+  FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
@@ -14154,11 +14171,11 @@ begin
   // call performs no per-call stack-trace string work. The resolver registered
   // in the constructor reproduces ATemplate.Name and ExecutionSourcePath at
   // capture time, keeping Error.stack output byte-identical.
-  if (TGocciaCallStack.Instance <> nil) then
+  if Assigned(FCallStack) then
     if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+      FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), ExecutionSourcePath);
+      FCallStack.PushTemplate(Pointer(ATemplate), ExecutionSourcePath);
 
   AFrame := Default(TGocciaVMCallFrame);
   AFrame.Template := ATemplate;
@@ -14212,9 +14229,9 @@ begin
 
   if APushExecutionContext and Assigned(ExecutionRealm) then
   begin
-    TGocciaExecutionContextStack.Push(
-      CreateExecutionContext(ExecutionRealm, FGlobalScope, ExecutionSourcePath,
-        nil, AClosure.FunctionValue));
+    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
+      ExecutionRealm, FGlobalScope, AClosure.FunctionValue,
+      InternSourcePath(ExecutionSourcePath));
     FCurrentExecutionContextPushed := True;
   end;
 
@@ -14620,6 +14637,8 @@ begin
   // below). Without this, generator resume / eval / native-callback recursion
   // overflows the native stack (SIGSEGV) instead of throwing RangeError.
   CheckNativeReentryDepth(FNativeExecutionDepth + 1);
+  if FNativeExecutionDepth = 0 then
+    BindToCurrentThread;
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
