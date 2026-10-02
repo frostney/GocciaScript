@@ -2238,7 +2238,14 @@
             UInt32(InstructionStartIP), Template.StrictCode));
           goto LDispatchNext;
         end;
-        if ((C and CALL_FLAG_SPREAD) = 0) and
+        // A bytecode function is the usual callee and is neither a native nor
+        // a bound function. One exact class comparison lets it skip the two
+        // `is` tests below, each of which walks its whole class chain to fail.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2265,7 +2272,8 @@
               end;
           end;
         end;
-        if (FRegisters[A].Kind = grkObject) and
+        if (not CalleeIsBytecodeFunction) and
+           (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
           BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
@@ -2339,8 +2347,9 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction or
+           ((FRegisters[A].Kind = grkObject) and
+            (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue)) then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2453,7 +2462,12 @@
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
-        if ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+        // See OP_CALL: a bytecode function skips the native-function tests.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2469,7 +2483,7 @@
               Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
           goto LDispatchNext;
         end;
-        if (C and 1) = 0 then
+        if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and
              (FRegisters[A].Kind = grkObject) and
@@ -2598,8 +2612,9 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction or
+           ((FRegisters[A].Kind = grkObject) and
+            (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue)) then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and

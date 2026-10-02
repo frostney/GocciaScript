@@ -14443,6 +14443,7 @@ var
   CallGlobalThisValue: TGocciaValue;
   ApplyArgRegisters: array[0..2] of TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
+  CalleeIsBytecodeFunction: Boolean;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
