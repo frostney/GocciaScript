@@ -141,6 +141,12 @@ type
       cleared. }
     urIgnore);
 
+  { Called for a promise a run left rejected with no handler; see
+    TGocciaEngine.OnUnhandledRejection. AReason is APromise's rejection
+    reason. }
+  TGocciaUnhandledRejectionEvent = procedure(const APromise: TGocciaValue;
+    const AReason: TGocciaValue) of object;
+
   TGocciaEngine = class
   public
     const DefaultPreprocessors: TGocciaPreprocessors = [ppJSX];
@@ -210,11 +216,14 @@ type
     FTypedArrayIntrinsic: TGocciaClassValue;
     FSuppressWarnings: Boolean;
     FUnhandledRejections: TGocciaUnhandledRejectionMode;
+    FOnUnhandledRejection: TGocciaUnhandledRejectionEvent;
+    FReportingUnhandledRejections: Boolean;
     { The async-context bracket this engine holds for its whole lifetime; see
       EnterEngineAsyncContext. }
     FAsyncContextToken: Integer;
     FLastTiming: TGocciaScriptResult;
     FLastSourceMap: TGocciaSourceMap;
+    procedure NotifyUnhandledRejections;
     procedure SetStrictTypes(const AValue: Boolean);
     function GetContentProvider: TGocciaModuleContentProvider;
     function GetModuleResolver: TGocciaModuleResolver;
@@ -452,6 +461,25 @@ type
     property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
+    { Observes what UnhandledRejections decides about. Once a run has nothing
+      left to do, and before the mode is applied, the hook is called for each
+      promise the current microtask scope holds as rejected with no handler,
+      oldest first. A promise the hook gives a handler is handled: the run
+      does not fail for it. A run that ends by exception reports nothing.
+      Under urIgnore the reported promises are forgotten afterwards, so
+      TakeUnhandledRejection finds nothing after the run.
+
+      Only a nested Execute has a scope of its own. An ExecuteProgram or
+      RunModule that runs inside another engine's run shares that run's
+      scope, and reports and forgets its rejections too.
+
+      The hook may run script; a rejection that script leaves is not
+      reported, and a run the hook starts on this engine reports nothing.
+      The queue keeps the promise alive while it is unhandled: a hook that
+      gives it a handler and goes on using it roots it itself. An exception
+      the hook raises ends the run. }
+    property OnUnhandledRejection: TGocciaUnhandledRejectionEvent
+      read FOnUnhandledRejection write FOnUnhandledRejection;
     property LastTiming: TGocciaScriptResult read FLastTiming;
     // Source map from the most recent source pipeline run, if any.
     // Ownership transfers to the caller when read (set to nil after access).
@@ -2113,12 +2141,50 @@ var
   Queue: TGocciaMicrotaskQueue;
   Promise: TGocciaValue;
 begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  { A run the hook started on this engine is still inside the report: the
+    promise being reported is tracked, and would be reported or raised again. }
+  if (not Assigned(Queue)) or FReportingUnhandledRejections then
+    Exit;
+  if Assigned(FOnUnhandledRejection) then
+  begin
+    NotifyUnhandledRejections;
+    { Reported. Left tracked, they would be reported again at this engine's
+      next idle point. }
+    if FUnhandledRejections = urIgnore then
+      Queue.DiscardUnhandledRejections;
+  end;
   if FUnhandledRejections <> urThrow then
     Exit;
-  Queue := TGocciaMicrotaskQueue.Instance;
-  if (not Assigned(Queue)) or (not Queue.TakeUnhandledRejection(Promise)) then
+  if not Queue.TakeUnhandledRejection(Promise) then
     Exit;
   raise TGocciaThrowValue.Create(TGocciaPromiseValue(Promise).PromiseResult);
+end;
+
+procedure TGocciaEngine.NotifyUnhandledRejections;
+var
+  I: Integer;
+  Promises: TArray<TGocciaValue>;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Instance;
+  Promises := Queue.UnhandledRejectionsInOrder;
+  FReportingUnhandledRejections := True;
+  try
+    for I := 0 to High(Promises) do
+    begin
+      { An earlier call can have given this promise a handler, and then the
+        queue no longer keeps it alive either. A tracked promise is alive, and
+        nothing here touches it once the hook has it: temp roots are a set,
+        so a root added here would be taken from whoever else holds one. }
+      if not Queue.IsRejectionTracked(Promises[I]) then
+        Continue;
+      FOnUnhandledRejection(Promises[I],
+        TGocciaPromiseValue(Promises[I]).PromiseResult);
+    end;
+  finally
+    FReportingUnhandledRejections := False;
+  end;
 end;
 
 { A run that fails has reported itself by failing. The jobs it left queued,
