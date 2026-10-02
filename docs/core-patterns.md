@@ -365,6 +365,8 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
 | `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
 | `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |
+| `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
+| `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
 
 The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, and to a function that returns a managed record by value.
 
