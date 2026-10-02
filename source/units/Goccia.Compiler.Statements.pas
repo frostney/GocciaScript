@@ -852,12 +852,28 @@ begin
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
+    // Under strict types a hint is enforced on every assignment, so a
+    // reassignable binding takes one only from the initializer forms
+    // InferLocalType names, the rule the interpreter applies. The wider
+    // inference is not kept as an unenforced hint there: typed opcodes do not
+    // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
       TypeHint := AnnotationType
-    else if (Info.TypeAnnotation = '') and HasRealInitializer then
-      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer)
+    else if (Info.TypeAnnotation <> '') or not HasRealInitializer then
+      TypeHint := sltUntyped
+    else if ACtx.StrictTypes and not AStmt.IsConst then
+      TypeHint := InferLocalType(Info.Initializer)
     else
-      TypeHint := sltUntyped;
+      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
+
+    // A var redeclaration assigns to the existing binding, so an initializer
+    // that brings no type of its own is checked against the enforced one.
+    if (TypeHint = sltUntyped) and IsVarRedeclaration then
+    begin
+      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
+        TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    end;
 
     { Strict-types enforcement is opt-in via --strict-types / config.
       When disabled, type annotations are parsed but not enforced. }
