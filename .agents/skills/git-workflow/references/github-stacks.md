@@ -79,10 +79,13 @@ when the extension offers restoration; never resolve ambiguity by invoking raw
 rebase or force-push commands.
 
 Ordinary branches never inherit this exception. Update them by merging the
-freshly fetched remote default and pushing normally.
+freshly fetched remote base and pushing normally.
 
 ## Submit, validate, and merge
 
+- Run the [publication guard](../SKILL.md#publication-guard) before every stack
+  push and every PR title or body write, including PR creation through
+  `gh api` and the reconciliation after `gh stack submit` or `gh stack link`.
 - Bind GitHub API and CLI calls to the verified host and repository, including
   child helpers. `gh api --hostname HOST` selects the API host; inherited
   `GH_HOST` and `GH_REPO` can otherwise alter command defaults. A Git remote or

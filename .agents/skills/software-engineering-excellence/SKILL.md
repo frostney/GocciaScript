@@ -6,6 +6,9 @@ description: >-
   complete authorized outcomes. Use during substantial implementation,
   debugging, refactoring, or multi-part delivery work.
 license: Unlicense OR MIT
+metadata:
+  agents-role: ambient
+  agents-text: Keep the agreed scope, ground claims in current evidence, and finish verified work during substantial technical tasks.
 ---
 
 # Software engineering excellence

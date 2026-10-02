@@ -10,6 +10,9 @@ compatibility: >-
   A CI-published
   conformance, coverage, or benchmark metric is used when present but is
   optional.
+metadata:
+  agents-role: entry-point
+  agents-text: Turn current project evidence into a verified version plan.
 ---
 
 # Roadmap review
