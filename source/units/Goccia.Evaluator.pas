@@ -183,6 +183,7 @@ uses
   Classes,
   SysUtils,
 
+  NumericText,
   OrderedStringMap,
   StringBuffer,
   TextSemantics,
@@ -3102,7 +3103,7 @@ begin
     SpreadArray := TGocciaArrayValue(ASpreadValue);
     for J := 0 to SpreadArray.Elements.Count - 1 do
     begin
-      Value := SpreadArray.GetProperty(IntToStr(J));
+      Value := SpreadArray.GetProperty(IntegerToString(J));
       if not Assigned(Value) then
         ATarget.Add(TGocciaUndefinedLiteralValue.UndefinedValue)
       else

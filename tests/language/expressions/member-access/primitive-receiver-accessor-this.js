@@ -1,6 +1,6 @@
 /*---
 description: Prototype accessors observe the primitive receiver as this on primitive property access
-features: [property-access, String.prototype, Number.prototype]
+features: [property-access, String.prototype, Number.prototype, Boolean.prototype]
 ---*/
 
 describe("prototype accessor receiver on primitive property access", () => {
@@ -64,6 +64,52 @@ describe("prototype accessor receiver on primitive property access", () => {
       expect(n[k]).toBe("number");
     } finally {
       delete Number.prototype.kindOfThis;
+    }
+  });
+
+  test("Number.prototype getter sees the number primitive on static access", () => {
+    Object.defineProperty(Number.prototype, "kindOfThis", {
+      get() {
+        return typeof this;
+      },
+      configurable: true,
+    });
+    Object.defineProperty(Number.prototype, "self", {
+      get() {
+        return this;
+      },
+      configurable: true,
+    });
+    try {
+      const n = 5;
+      expect(n.kindOfThis).toBe("number");
+      expect(n.self).toBe(5);
+    } finally {
+      delete Number.prototype.kindOfThis;
+      delete Number.prototype.self;
+    }
+  });
+
+  test("Boolean.prototype getter sees the boolean primitive on static access", () => {
+    Object.defineProperty(Boolean.prototype, "kindOfThis", {
+      get() {
+        return typeof this;
+      },
+      configurable: true,
+    });
+    Object.defineProperty(Boolean.prototype, "self", {
+      get() {
+        return this;
+      },
+      configurable: true,
+    });
+    try {
+      const flag = true;
+      expect(flag.kindOfThis).toBe("boolean");
+      expect(flag.self).toBe(true);
+    } finally {
+      delete Boolean.prototype.kindOfThis;
+      delete Boolean.prototype.self;
     }
   });
 

@@ -592,11 +592,14 @@ begin
       Exit(TGocciaNumberLiteralValue.NaNValue);
 
     // Step 5: Return the largest value among the elements of coerced.
+    // No element is NaN here, so comparing the doubles gives what the
+    // generic relational operator gives for two Numbers, without its coercion
+    // of each operand.
     MaxVal := Coerced[0];
     for I := 1 to High(Coerced) do
     begin
       NumVal := Coerced[I];
-      if NumVal.IsGreaterThan(MaxVal).Value or
+      if (NumVal.Value > MaxVal.Value) or
          ((NumVal.Value = 0) and (not NumVal.IsNegativeZero) and
           MaxVal.IsNegativeZero) then
         MaxVal := NumVal;
@@ -634,11 +637,12 @@ begin
       Exit(TGocciaNumberLiteralValue.NaNValue);
 
     // Step 5: Return the smallest value among the elements of coerced.
+    // No element is NaN here; see MathMax.
     MinVal := Coerced[0];
     for I := 1 to High(Coerced) do
     begin
       NumVal := Coerced[I];
-      if NumVal.IsLessThan(MinVal).Value or
+      if (NumVal.Value < MinVal.Value) or
          (NumVal.IsNegativeZero and (MinVal.Value = 0) and
           (not MinVal.IsNegativeZero)) then
         MinVal := NumVal;
@@ -710,17 +714,18 @@ begin
     Exit;
   end;
 
-  // Step 5: If lower > upper, throw a RangeError.
-  if MinVal.IsGreaterThan(MaxVal).Value then
+  // Step 5: If lower > upper, throw a RangeError. None of the three is NaN
+  // from here on, so the doubles are compared directly; see MathMax.
+  if MinVal.Value > MaxVal.Value then
   begin
     ThrowRangeError(SErrorMathClampInvalidRange, SSuggestNumberRange);
     Exit;
   end;
 
   // Step 6: Return max(lower, min(upper, x)).
-  if Value.IsLessThan(MinVal).Value then
+  if Value.Value < MinVal.Value then
     Result := MinVal
-  else if Value.IsGreaterThan(MaxVal).Value then
+  else if Value.Value > MaxVal.Value then
     Result := MaxVal
   else
     Result := Value;

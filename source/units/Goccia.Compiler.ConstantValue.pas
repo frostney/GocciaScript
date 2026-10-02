@@ -34,6 +34,11 @@ type
     EnableConstPropagation: Boolean;
     EnableDeadBranchElimination: Boolean;
     PreserveCoverageShape: Boolean;
+    // The host exposes direct eval. Code created by direct eval writes the
+    // registers of a running function by slot, also after the eval call has
+    // returned and from functions that contain no eval, so a let binding or
+    // a parameter is then never read as an operand straight from its register.
+    DirectEvalAvailable: Boolean;
   end;
 
 function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions; {$IFDEF FPC}inline;{$ENDIF}
@@ -76,6 +81,7 @@ begin
   Result.EnableConstPropagation := True;
   Result.EnableDeadBranchElimination := True;
   Result.PreserveCoverageShape := False;
+  Result.DirectEvalAvailable := False;
 end;
 
 function UnknownCompileTimeValue: TGocciaCompileTimeValue;

@@ -1412,6 +1412,46 @@ await section("Test262 Runner: calling another realm's built-in returns to the c
   }
 });
 
+// A function created by direct eval writes the locals of the function that
+// called eval, also after the eval call has returned. An operand read of such
+// a local has to see the write, in both modes: under a host with direct eval
+// the bytecode compiler does not read a let binding or a parameter straight
+// from its register.
+await section("Test262 Runner: operands see writes made by functions that direct eval created...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync(
+      [TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function", "--compat-var", "--compat-traditional-for-loop"],
+      {
+        stdin: new TextEncoder().encode([
+          "var out = [];",
+          'function afterEval(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); return x + w(50); }',
+          'out.push("afterEval " + afterEval(1));',
+          'function inLoop(a) { let x = a; let w = eval("(function(v) { x = v; return 1; })"); let r = []; for (let i = 0; i < 2; i++) { r.push(x + w(i * 10)); } return r.join(); }',
+          'out.push("inLoop " + inLoop(1));',
+          'function createdInLoop(a) { let x = a; let r = []; let w = null; for (let i = 0; i < 3; i++) { r.push(x + (w ? w(i * 10) : 0)); w = eval("(function(v) { x = v; return 1; })"); } return r.join(); }',
+          'out.push("createdInLoop " + createdInLoop(1));',
+          'function inOperand(a) { let x = a; x += eval("x = 100; 1"); let y = x * (eval("x = 7"), 2); return x + "," + y; }',
+          'out.push("inOperand " + inOperand(1));',
+          // The writer outlives the call that created it, and the second call
+          // reads its operand before it reaches its own eval.
+          "var saved;",
+          'function beforeEval(a, first) { let x = a; const r = x + (saved ? saved(50) : 0); if (first) saved = eval("(function(v) { x = v; return 1; })"); return r; }',
+          'out.push("beforeEval " + beforeEval(1, true) + " " + beforeEval(1, false));',
+          'print(out.join("\\n"));',
+          "",
+        ].join("\n")),
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const expected = ["afterEval 2", "inLoop 2,1", "createdInLoop 1,2,11", "inOperand 7,4", "beforeEval 1 2"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval-created writer probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} operands missed a write by eval-created code: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: bytecode eval is direct eval...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
@@ -3459,6 +3499,53 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     }
     if (/^DA:\d+,0$/m.test(operandLcov)) {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
+    }
+
+    console.log("Loader: line coverage of let and parameter operands spread over several lines...");
+    // The same holds for a let binding and a parameter, which the compiler
+    // reads in place where nothing can rebind them before they are used, and
+    // for the branch records of a conditional and a logical expression that
+    // such an operand decides.
+    const mutableOperandSourcePath = join(tmp, "mutable-operand-coverage.js");
+    writeFileSync(
+      mutableOperandSourcePath,
+      [
+        "const price = (unitPrice, quantity, discount) => {",
+        "  let total =",
+        "    unitPrice *",
+        "    quantity -",
+        "    discount;",
+        "  total =",
+        "    total +",
+        "    quantity;",
+        "  total +=",
+        "    discount;",
+        "  const label =",
+        "    total <",
+        "    quantity",
+        "      ? unitPrice",
+        "      : total;",
+        "  return discount &&",
+        "    label;",
+        "};",
+        "console.log(price(10, 3, 5));",
+        "",
+      ].join("\n"),
+    );
+    const mutableOperandLcovPath = join(tmp, "mutable-operand-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${mutableOperandLcovPath} ${mutableOperandSourcePath}`.quiet();
+    const mutableOperandLcov = readFileSync(mutableOperandLcovPath, "utf-8");
+    for (const line of [3, 4, 5, 7, 8, 10, 12, 13, 15, 17]) {
+      if (!mutableOperandLcov.includes(`DA:${line},1`)) {
+        throw new Error(`LCOV should count operand line ${line} as executed, got:\n${mutableOperandLcov}`);
+      }
+    }
+    // Line 13 ends the conditional's test, line 16 holds the `&&`: each keeps
+    // one taken and one untaken branch record.
+    for (const branch of [/^BRDA:13,\d+,0,1$/m, /^BRDA:13,\d+,1,-$/m, /^BRDA:16,\d+,1,1$/m, /^BRDA:16,\d+,0,-$/m]) {
+      if (!branch.test(mutableOperandLcov)) {
+        throw new Error(`LCOV should keep the branch record ${branch}, got:\n${mutableOperandLcov}`);
+      }
     }
 
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
