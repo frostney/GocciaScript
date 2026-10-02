@@ -1153,6 +1153,8 @@ begin
         Exit;
       if UV.IsGlobalBacked then
         Exit;
+      if ACtx.Scope.DirectEvalMayShadow(UV.Name) then
+        Exit;
       Sig := UV.ParamTypeSignature;
     end;
   end;

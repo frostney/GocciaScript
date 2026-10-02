@@ -169,6 +169,8 @@ begin
       FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
+    FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -1209,6 +1211,7 @@ begin
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
+  FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try

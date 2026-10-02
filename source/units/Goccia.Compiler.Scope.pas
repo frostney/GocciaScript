@@ -98,6 +98,7 @@ type
     FPrivatePrefixes: array of string;
     FPrivateNameCount: Integer;
     FIsArrow: Boolean;
+    FNonStrictCode: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
@@ -166,6 +167,7 @@ type
     function TryGetVisibleConstantValue(const AName: string;
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
+    function DirectEvalMayShadow(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
     function ResolvePrivatePrefixForName(const AName: string): string;
     procedure DeclarePrivateNamePrefix(const AName, APrefix: string);
@@ -181,6 +183,7 @@ type
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
   end;
@@ -696,6 +699,26 @@ begin
     Exit(True);
 
   Result := Assigned(FParent) and FParent.HasVisibleLocal(AName);
+end;
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation: a sloppy direct eval declares
+// its vars in the variable environment of the function that calls it, where
+// they shadow a same-named binding of any enclosing function. What the
+// compiler knows about such a binding, its constant value or its type, holds
+// for a reference only when no non-strict function lies between the reference
+// and the declaration.
+function TGocciaCompilerScope.DirectEvalMayShadow(const AName: string): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+begin
+  Scope := Self;
+  while Assigned(Scope) and (Scope.ResolveLocal(AName) < 0) do
+  begin
+    if Scope.FNonStrictCode then
+      Exit(True);
+    Scope := Scope.FParent;
+  end;
+  Result := False;
 end;
 
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;

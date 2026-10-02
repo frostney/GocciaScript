@@ -908,6 +908,14 @@ begin
       Continue;
     if Binding.Kind = debGlobal then
       Continue;
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3.d: a var declared
+    // by sloppy direct eval conflicts only with the declarations between the
+    // eval's lexical environment and the caller's variable environment.  An
+    // upvalue belongs to an enclosing function, beyond that range, so it is
+    // resolved through the binding table and never declared here, where it
+    // would read as a lexical declaration of the calling function.
+    if Binding.Kind = debUpvalue then
+      Continue;
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
       Continue;
@@ -1367,7 +1375,11 @@ begin
 
   if TryFindBinding(AName, Binding) then
   begin
-    if (not Binding.IsConst) and ContainsOwnVarBinding(AName) then
+    // A var declared by this eval shadows an enclosing function's binding of
+    // the same name, const or not; a const of the calling function itself
+    // never coexists with one.
+    if ((not Binding.IsConst) or (Binding.Kind = debUpvalue)) and
+       ContainsOwnVarBinding(AName) then
       Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
     BindingRuntimeValue := BindingValue(Binding);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
@@ -1451,6 +1463,7 @@ end;
 
 function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
 var
+  Binding: TGocciaDirectEvalBindingInfo;
   WasOwnVarBinding: Boolean;
   WithObject: TGocciaObjectValue;
 begin
@@ -1458,6 +1471,13 @@ begin
     Exit(WithObject.DeleteProperty(AName));
 
   WasOwnVarBinding := ContainsOwnVarBinding(AName);
+  // An enclosing function's lexical binding is not declared in this scope, so
+  // the inherited walk would not find it: it stays undeletable unless a var
+  // declared by an earlier eval of the calling function shadows it.
+  if (not WasOwnVarBinding) and TryFindBinding(AName, Binding) and
+     (Binding.Kind = debUpvalue) and (not Binding.IsVarEnvironmentBinding) and
+     not Assigned(FVM.ResolveDynamicUpvalueScope(Binding.Index, AName)) then
+    Exit(False);
   Result := inherited DeleteBinding(AName);
   if Result and WasOwnVarBinding then
     MarkDeletedVarBinding(AName);

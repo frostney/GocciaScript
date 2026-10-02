@@ -394,6 +394,8 @@ The optimizer is intentionally compiler-side only:
 
 A top-level `const` of a script or an imported module lives in the global or module environment rather than in a register, so that other code can reach it by name. Its value is propagated only to reads compiled after the declaration. Top-level statements run in source order and hoisted function declarations are compiled before all of them, so no such read can run while the binding is in its temporal dead zone; a read compiled earlier keeps `OP_GET_GLOBAL` and throws `ReferenceError` there. The binding is still declared, defined and exported, so direct `eval`, later scripts and importing modules observe it unchanged. Three cases keep the named read: non-strict compatibility mode, where a sloppy direct `eval` can shadow the name with a function-level `var` at run time; BigInt values, whose constant load rebuilds the value and costs more than the cached global read; and a coverage run, where a ternary or logical expression decided by the constant would otherwise be folded and lose its branch records.
 
+What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no non-strict function lies between the read and the declaration. A sloppy direct `eval` in such a function can declare a `var` of the same name, which shadows the enclosing binding at run time. Strict code, the default, is unaffected.
+
 When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
 
 ### How Opcode Additions Work
