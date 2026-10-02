@@ -27,6 +27,40 @@ describe("FFILibrary.prototype.bind", () => {
     expect(negate(0)).toBe(0);
   });
 
+  test("passes a bool argument by truthiness", () => {
+    const select = lib.bind("ffi_v2_select_by_flag", {
+      args: ["bool", "i32"],
+      returns: "i32",
+    });
+
+    expect(select(true, 7)).toBe(7);
+    expect(select(false, 7)).toBe(-7);
+    expect(select(0, 7)).toBe(-7);
+    expect(select("", 7)).toBe(-7);
+    expect(select(null, 7)).toBe(-7);
+    expect(select(undefined, 7)).toBe(-7);
+    expect(select(NaN, 7)).toBe(-7);
+    expect(select("false", 7)).toBe(7);
+    expect(select(1, 7)).toBe(7);
+    expect(select({}, 7)).toBe(7);
+    expect(select(false, 7)).toBe(-7);
+  });
+
+  test("passes a bool argument by truthiness beside a string argument", () => {
+    const select = lib.bind("ffi_v2_select_by_flag_and_label", {
+      args: ["utf8string", "bool", "i32"],
+      returns: "i32",
+    });
+
+    expect(select("ab", true, 7)).toBe(9);
+    expect(select("ab", false, 7)).toBe(-9);
+    expect(select("ab", 0, 7)).toBe(-9);
+    expect(select("ab", "", 7)).toBe(-9);
+    expect(select("ab", null, 7)).toBe(-9);
+    expect(select("ab", "false", 7)).toBe(9);
+    expect(select("", false, 7)).toBe(-7);
+  });
+
   test("binds and calls a void function", () => {
     const increment = lib.bind("increment_counter", { args: [], returns: "void" });
     const getCounter = lib.bind("get_counter", { args: [], returns: "i32" });

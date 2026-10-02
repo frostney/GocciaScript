@@ -607,6 +607,10 @@ const
   FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
+  MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
+  // A pooled argument collection keeps its backing store only when the call
+  // it served carried at most this many arguments.
+  MAX_POOLED_ARGUMENT_COUNT = 32;
 
 type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
@@ -7970,9 +7974,9 @@ begin
   if FArgumentPoolCount > 0 then
   begin
     Dec(FArgumentPoolCount);
+    // ReleaseArguments emptied it and left its backing store in place.
     Result := FArgumentPool[FArgumentPoolCount];
     FArgumentPool[FArgumentPoolCount] := nil;
-    Result.Clear;
     Result.EnsureCapacity(ACapacity);
     Exit;
   end;
@@ -7988,9 +7992,14 @@ procedure TGocciaVM.ReleaseArguments(
 begin
   if not Assigned(AArguments) then
     Exit;
-  AArguments.Clear;
-  if FArgumentPoolCount < 32 then
+  if FArgumentPoolCount < MAX_POOLED_ARGUMENT_COLLECTIONS then
   begin
+    // Keep the backing store for the next call unless this call was unusually
+    // wide (a large spread), so the pool never pins a big allocation.
+    if AArguments.Length > MAX_POOLED_ARGUMENT_COUNT then
+      AArguments.Clear
+    else
+      AArguments.ClearKeepingCapacity;
     if Length(FArgumentPool) <= FArgumentPoolCount then
       SetLength(FArgumentPool, FArgumentPoolCount + 8);
     FArgumentPool[FArgumentPoolCount] := AArguments;
@@ -10383,18 +10392,24 @@ begin
   end;
 end;
 
+// Whether AKey starts with APrefix and continues past it. Compared in place:
+// the private-key tests below run on every named property access the VM does
+// not resolve through an inline cache, so they must not build a substring.
+function KeyExtendsPrefix(const AKey, APrefix: string): Boolean;
+begin
+  Result := (Length(AKey) > Length(APrefix)) and
+    CompareMem(Pointer(AKey), Pointer(APrefix),
+      Length(APrefix) * SizeOf(Char));
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean;
 begin
-  Result := (Length(AKey) > Length(BYTECODE_PRIVATE_SLOT_PREFIX)) and
-    (Copy(AKey, 1, Length(BYTECODE_PRIVATE_SLOT_PREFIX)) =
-      BYTECODE_PRIVATE_SLOT_PREFIX);
+  Result := KeyExtendsPrefix(AKey, BYTECODE_PRIVATE_SLOT_PREFIX);
 end;
 
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean;
 begin
-  Result := (Length(AKey) > Length(BYTECODE_PRIVATE_BRAND_PREFIX)) and
-    (Copy(AKey, 1, Length(BYTECODE_PRIVATE_BRAND_PREFIX)) =
-      BYTECODE_PRIVATE_BRAND_PREFIX);
+  Result := KeyExtendsPrefix(AKey, BYTECODE_PRIVATE_BRAND_PREFIX);
 end;
 
 function BytecodePrivateTokenForKey(const AKey,
@@ -13343,11 +13358,23 @@ begin
   end;
 end;
 
+// Kept out of InvokeFunctionValue so that its string work, and the implicit
+// exception frame a managed local brings, are paid only on the failure path.
+procedure ThrowValueNotFunction(const ACallee: TGocciaValue);
+var
+  CalleeDesc: string;
+begin
+  if Assigned(ACallee) then
+    CalleeDesc := ACallee.TypeName
+  else
+    CalleeDesc := 'undefined';
+  ThrowTypeError(Format(SErrorValueNotFunction, [CalleeDesc]),
+    SSuggestNotFunctionType);
+end;
+
 function TGocciaVM.InvokeFunctionValue(const ACallee: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
-var
-  CalleeDesc: string;
 begin
   // ES2026 §28.1.1 [[Call]](thisArgument, argumentsList)
   if ACallee is TGocciaProxyValue then
@@ -13356,12 +13383,7 @@ begin
     Exit(TGocciaBytecodeFunctionValue(ACallee).Call(AArguments, AThisValue));
   if Assigned(ACallee) and ACallee.IsCallable then
     Exit(DispatchCall(ACallee, AArguments, AThisValue));
-  if Assigned(ACallee) then
-    CalleeDesc := ACallee.TypeName
-  else
-    CalleeDesc := 'undefined';
-  ThrowTypeError(Format(SErrorValueNotFunction, [CalleeDesc]),
-    SSuggestNotFunctionType);
+  ThrowValueNotFunction(ACallee);
 end;
 
 function HasDirectEvalTopLevelUsingDeclaration(
@@ -14333,16 +14355,10 @@ var
     evaluator uses, or the instruction's own when none was recorded
     (binary-loaded bytecode). }
   procedure CurrentCallExpressionLocation(out ALine, AColumn: Integer);
-  var
-    ImportSite: TGocciaCallSiteEntry;
   begin
-    ImportSite := CurrentCallSite;
-    if ImportSite.Recorded then
-    begin
-      ALine := ImportSite.Line;
-      AColumn := ImportSite.Column;
-    end
-    else
+    if not (Assigned(Template) and
+            Template.TryGetCallSitePosition(UInt32(InstructionStartIP), ALine,
+              AColumn)) then
       CurrentInstructionDebugLocation(ALine, AColumn);
   end;
 
@@ -14350,16 +14366,59 @@ var
     the tree-walk evaluator records for the call expression (ADR 0014), so a
     native callee's audit events and PermissionDenied locate identically. }
   procedure EnterCurrentInstructionCallSite(
-    out APrevious: TGocciaCallSite);
-  var
-    SourcePath: string;
+    var APrevious: TGocciaCallSite);
   begin
     CurrentCallExpressionLocation(DebugLine, DebugColumn);
     if Assigned(Template) and Assigned(Template.DebugInfo) then
-      SourcePath := Template.DebugInfo.SourceFile
+      EnterGocciaCallSite(Template.DebugInfo.SourceFile, DebugLine,
+        DebugColumn, APrevious)
     else
-      SourcePath := '';
-    EnterGocciaCallSite(SourcePath, DebugLine, DebugColumn, APrevious);
+      EnterGocciaCallSite('', DebugLine, DebugColumn, APrevious);
+  end;
+
+  { Stamps the frame with the call expression's own position, as
+    StampCallSiteLocation does for an entry it is handed, without copying the
+    entry: for the instructions that only need the position. }
+  procedure StampCurrentCallSiteLocation;
+  var
+    CallStack: TGocciaCallStack;
+  begin
+    CallStack := TGocciaCallStack.Instance;
+    if not Assigned(CallStack) then
+      Exit;
+    CurrentCallExpressionLocation(DebugLine, DebugColumn);
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+      CallStack.SetTopFrameLocation(Template.DebugInfo.SourceFile, DebugLine,
+        DebugColumn)
+    else
+      CallStack.SetTopFrameLocation('', DebugLine, DebugColumn);
+  end;
+
+  { EnterCurrentInstructionCallSite for a native callee, which additionally
+    stamps the executing frame with the same position so an error the callee
+    creates captures the call site (deferred frames are 0:0, ADR 0074). Both
+    positions are the call expression's, so one call-site lookup serves both;
+    this runs on every native call and must stay free of managed locals. }
+  procedure EnterNativeCallSite(var APrevious: TGocciaCallSite);
+  var
+    CallStack: TGocciaCallStack;
+  begin
+    CurrentCallExpressionLocation(DebugLine, DebugColumn);
+    CallStack := TGocciaCallStack.Instance;
+    if Assigned(Template) and Assigned(Template.DebugInfo) then
+    begin
+      EnterGocciaCallSite(Template.DebugInfo.SourceFile, DebugLine,
+        DebugColumn, APrevious);
+      if Assigned(CallStack) then
+        CallStack.SetTopFrameLocation(Template.DebugInfo.SourceFile,
+          DebugLine, DebugColumn);
+    end
+    else
+    begin
+      EnterGocciaCallSite('', DebugLine, DebugColumn, APrevious);
+      if Assigned(CallStack) then
+        CallStack.SetTopFrameLocation('', DebugLine, DebugColumn);
+    end;
   end;
 
   { Stamps the frame with the call expression's own position when the compiler

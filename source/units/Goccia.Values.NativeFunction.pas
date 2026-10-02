@@ -103,13 +103,15 @@ begin
   PreviousRealm := CurrentRealm;
   RealmSwitched := Assigned(FCreationRealm) and
     (FCreationRealm <> PreviousRealm);
-  if RealmSwitched then
-    SetCurrentRealm(FCreationRealm);
+  // A same-realm call, which is nearly every call, has nothing to restore and
+  // so needs no exception frame.
+  if not RealmSwitched then
+    Exit(FFunction(AArguments, AThisValue));
+  SetCurrentRealm(FCreationRealm);
   try
     Result := FFunction(AArguments, AThisValue);
   finally
-    if RealmSwitched then
-      SetCurrentRealm(PreviousRealm);
+    SetCurrentRealm(PreviousRealm);
   end;
 end;
 

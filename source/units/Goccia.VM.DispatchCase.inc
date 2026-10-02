@@ -2457,13 +2457,13 @@
                 TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
-            EnterCurrentInstructionCallSite(PreviousCallSite);
-            // Stamp the executing frame with this call's position so an error a
-            // native callee creates captures the call site (deferred frames are
-            // 0:0). Use the recorded call-site column, matching the tree-walk
-            // evaluator's per-call frame (the instruction line map resolves only
-            // to the enclosing statement). Snapshotted above and restored below.
-            StampCallSiteLocation(CurrentCallSite);
+            // Also stamps the executing frame with this call's position so an
+            // error a native callee creates captures the call site (deferred
+            // frames are 0:0). Uses the recorded call-site column, matching the
+            // tree-walk evaluator's per-call frame (the instruction line map
+            // resolves only to the enclosing statement). Snapshotted above and
+            // restored below.
+            EnterNativeCallSite(PreviousCallSite);
             try
               SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
                 TGocciaUndefinedLiteralValue.UndefinedValue));
@@ -2769,10 +2769,9 @@
                 TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
-            EnterCurrentInstructionCallSite(PreviousCallSite);
-            // See OP_CALL: stamp the recorded call-site position for a native
-            // callee's created error; snapshotted above, restored below.
-            StampCallSiteLocation(CurrentCallSite);
+            // See OP_CALL: also stamps the recorded call-site position for a
+            // native callee's created error; snapshotted above, restored below.
+            EnterNativeCallSite(PreviousCallSite);
             try
               SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
                 GetRegister(A - 1)));
@@ -2816,7 +2815,7 @@
               TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
-          StampCallSiteLocation(CurrentCallSite);
+          StampCurrentCallSiteLocation;
           CallArgs := AcquireArguments(C);
           try
             for I := 0 to C - 1 do
@@ -2859,7 +2858,7 @@
               TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
-          StampCallSiteLocation(CurrentCallSite);
+          StampCurrentCallSiteLocation;
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
