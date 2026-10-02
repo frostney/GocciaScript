@@ -11377,6 +11377,156 @@ await section("Runner sandbox mode: a parent's fetch that completes during a nes
   }
 });
 
+await section("Runner: a deadline that elapses while a fetch is pending ends the run, not the fetch...", async () => {
+  // A request's socket gives up when the run's deadline does. That used to
+  // reach the script as a catchable `TypeError: Invalid HTTP response: no
+  // header terminator`, so a script waiting on the network could catch the
+  // deadline and run past it, and the process exited 0.
+  const tmp = makeNativeTmp();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      // `/soon` answers just inside a 500 ms deadline; everything else long
+      // after it.
+      await Bun.sleep(new URL(request.url).pathname === "/soon" ? 400 : 5000);
+      return new Response("late", { status: 200 });
+    },
+  });
+  const spawn = async (command: string[]): Promise<{ exitCode: number | null; output: string }> => {
+    const proc = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => proc.kill(), 20_000);
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      return { exitCode, output: normalizeLineEndings(stdout + stderr) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try {
+    const url = `http://127.0.0.1:${server.port}/`;
+    const awaited = join(tmp, "awaited.mjs");
+    writeFileSync(
+      awaited,
+      [
+        "try {",
+        `  await fetch("${url}");`,
+        '  console.log("fetched");',
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("ran past the deadline");',
+        "",
+      ].join("\n"),
+    );
+    const unawaited = join(tmp, "unawaited.mjs");
+    writeFileSync(
+      unawaited,
+      [`fetch("${url}").catch((error) => console.log("caught " + error.name));`, 'console.log("end of script");', ""].join("\n"),
+    );
+    // One response arrives inside the deadline and its reaction is slow
+    // enough to carry the run across it. The request still pending then must
+    // not be handed over as a rejection in the same pump.
+    const crossed = join(tmp, "crossed.mjs");
+    writeFileSync(
+      crossed,
+      [
+        `fetch("${url}soon").then(() => {`,
+        "  // Native calls that do not poll the deadline.",
+        '  const blocks = ["a", "b", "c", "d", "e", "f"].map((character) => character.repeat(40000000).length);',
+        '  console.log("reaction done " + blocks.length);',
+        "});",
+        "try {",
+        `  await fetch("${url}");`,
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("ran past the deadline");',
+        "",
+      ].join("\n"),
+    );
+    // The request's own deadline is still the request's: it rejects with the
+    // signal's reason and the run goes on.
+    const signalled = join(tmp, "signalled.mjs");
+    writeFileSync(
+      signalled,
+      [
+        "try {",
+        `  await fetch("${url}", { signal: AbortSignal.timeout(200) });`,
+        "} catch (error) {",
+        '  console.log("caught " + error.name);',
+        "}",
+        'console.log("continued");',
+        "",
+      ].join("\n"),
+    );
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          'const child = runScript("/child.js");',
+          "console.log(JSON.stringify({ ok: child.ok, failureKind: child.failureKind, stdout: child.stdout }));",
+        ].join("\n"),
+      },
+      {
+        path: "/child.js",
+        text: `try { await fetch("${url}"); } catch (error) { console.log("caught " + error.name); }\nconsole.log("ran past the deadline");`,
+      },
+    ]);
+    const suite = join(tmp, "deadline.test.js");
+    writeFileSync(
+      suite,
+      [
+        'describe("deadlines", () => {',
+        '  test("is still waiting on a fetch", async () => {',
+        `    try { await fetch("${url}"); } catch (error) { globalThis.caught = error.name; }`,
+        "    globalThis.ranPast = true;",
+        "  });",
+        '  test("runs next", () => { expect([globalThis.caught, globalThis.ranPast]).toEqual([undefined, undefined]); });',
+        "});",
+        "",
+      ].join("\n"),
+    );
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      const base = ["--source-type=module", "--allow-net=127.0.0.1", `--mode=${mode}`];
+      for (const [name, file] of [["awaited", awaited], ["unawaited", unawaited], ["crossed", crossed]]) {
+        const run = await spawn([RUNNER, file, "--timeout=500", ...base]);
+        if (run.exitCode !== 1 || !run.output.includes("file timed out after 500ms") || /caught|ran past|Invalid HTTP response/.test(run.output))
+          throw new Error(`Runner (${name}, ${mode}) should end with the timeout, got exit ${run.exitCode}: ${run.output}`);
+      }
+
+      const json = await spawn([RUNNER, awaited, "--timeout=500", "--output=json", ...base]);
+      const envelope = JSON.parse(json.output);
+      if (json.exitCode !== 1 || envelope.ok !== false || envelope.error?.type !== "TimeoutError")
+        throw new Error(`Runner (${mode}) should report a TimeoutError in the JSON envelope, got exit ${json.exitCode}: ${JSON.stringify(envelope.error)}`);
+
+      const signal = await spawn([RUNNER, signalled, "--timeout=10000", ...base]);
+      if (signal.exitCode !== 0 || !signal.output.includes("caught TimeoutError\ncontinued"))
+        throw new Error(`Runner (${mode}) should reject a request at its own signal's deadline and go on, got exit ${signal.exitCode}: ${signal.output}`);
+
+      // A child that is waiting on a fetch when the deadline elapses fails
+      // as a timeout, the same result a CPU-bound child gets.
+      const sandbox = await spawn([RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--timeout=500", ...base]);
+      if (!sandbox.output.includes('{"ok":false,"failureKind":"timeout","stdout":""}'))
+        throw new Error(`Sandbox child (${mode}) should fail with failureKind "timeout", got exit ${sandbox.exitCode}: ${sandbox.output}`);
+
+      const tests = await spawn([resolve(TESTRUNNER), "-P", suite, "--allow-net=127.0.0.1", "--test-timeout=500", "--no-progress", "--output=json", `--mode=${mode}`]);
+      const report = JSON.parse(tests.output).files[0];
+      if (report.passed !== 1 || report.failed !== 1 || !String(report.failedTests[0]).includes("TIMEOUT after 500ms"))
+        throw new Error(`TestRunner (${mode}) should time the waiting test out and run the next one, got ${JSON.stringify({ passed: report.passed, failed: report.failed, failures: report.failedTests })}`);
+    }
+  } finally {
+    server.stop(true);
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a parent's fetch timeout observed during a nested runScript aborts in the parent's realm...", async () => {
   // The child's end-of-run drain is what notices the parent's expired
   // AbortSignal.timeout. The TimeoutError it creates must belong to the

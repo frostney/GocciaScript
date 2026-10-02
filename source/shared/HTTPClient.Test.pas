@@ -3,7 +3,7 @@ program HTTPClientTest;
 {$I Shared.inc}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}cthreads, BaseUnix, Sockets,{$ENDIF}
 
   SysUtils,
 
@@ -19,6 +19,9 @@ type
     procedure TestCanonicalAuthorityParsing;
     procedure TestAuditAuthorityOmitsUserInfo;
     procedure TestConnectionDeadlineBoundsBlockingWork;
+    {$IFDEF UNIX}
+    procedure TestReadCutShortByDeadlineIsATimeout;
+    {$ENDIF}
     procedure TestRejectsAmbiguousAuthority;
     procedure TestAcceptsValidIPv6Literals;
     procedure TestRejectsNonIPv6BracketedAuthority;
@@ -40,6 +43,10 @@ begin
   Test('Audit authority omits userinfo', TestAuditAuthorityOmitsUserInfo);
   Test('Connection deadline bounds blocking work',
     TestConnectionDeadlineBoundsBlockingWork);
+  {$IFDEF UNIX}
+  Test('A read cut short by the deadline is reported as a timeout',
+    TestReadCutShortByDeadlineIsATimeout);
+  {$ENDIF}
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
   Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
   Test('Rejects non-IPv6 bracketed authority',
@@ -108,6 +115,50 @@ begin
     ElapsedMilliseconds < MAX_TEST_DURATION_MILLISECONDS).ToBe(True);
   Expect<Boolean>(WorkersDrained).ToBe(True);
 end;
+
+{$IFDEF UNIX}
+{ A listener that is never accepted: the kernel completes the connection and
+  takes the request, and nothing ever answers. The read is then ended by the
+  request's deadline, which used to be reported as a malformed response
+  ("no header terminator"). Sockets are created here directly, so the test is
+  compiled where that API is the same as the client's. }
+procedure THTTPClientTests.TestReadCutShortByDeadlineIsATimeout;
+const
+  DEADLINE_MILLISECONDS = 150;
+var
+  Address: TInetSockAddr;
+  AddressLength: TSockLen;
+  ErrorMessage: string;
+  Headers: THTTPHeaders;
+  Listener: cint;
+begin
+  SetLength(Headers, 0);
+  ErrorMessage := '';
+  Listener := fpSocket(AF_INET, SOCK_STREAM, 0);
+  Expect<Boolean>(Listener >= 0).ToBe(True);
+  try
+    FillChar(Address, SizeOf(Address), 0);
+    Address.sin_family := AF_INET;
+    Address.sin_port := 0;
+    Address.sin_addr := StrToNetAddr('127.0.0.1');
+    Expect<Integer>(fpBind(Listener, @Address, SizeOf(Address))).ToBe(0);
+    Expect<Integer>(fpListen(Listener, 1)).ToBe(0);
+    AddressLength := SizeOf(Address);
+    Expect<Integer>(fpGetSockName(Listener, @Address,
+      @AddressLength)).ToBe(0);
+    try
+      HTTPGet(Format('http://127.0.0.1:%d/', [ntohs(Address.sin_port)]),
+        Headers, nil, DEADLINE_MILLISECONDS);
+    except
+      on E: EHTTPError do
+        ErrorMessage := E.Message;
+    end;
+  finally
+    CloseSocket(Listener);
+  end;
+  Expect<string>(ErrorMessage).ToBe('HTTP request timed out');
+end;
+{$ENDIF}
 
 procedure THTTPClientTests.TestRejectsAmbiguousAuthority;
 var
