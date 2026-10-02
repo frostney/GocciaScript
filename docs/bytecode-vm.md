@@ -118,7 +118,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - cache and reuse shared primitive values directly in registers
 - avoid eager allocation of closure cells for uncaptured locals
 - pre-size argument collections for calls and construction
-- hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying
+- hold call arguments in a stack-disciplined arena window (`FArgumentStack` with a base+count window, mirroring the register and local-cell stacks) instead of a per-call dynamic array, so an ordinary call performs no argument-array allocation; frame save/restore and native re-entry store `(base, count)` rather than copying. A call instruction hands `SetupNewFrame` a pointer to its argument registers, and `SetupNewFrame` copies them into the callee's window before it acquires any register, because acquiring registers can move the register arena or, on a tail call, clear the slots the arguments sit in
 - defer stack-trace frames on the hot call path: push the function-template pointer rather than copying its name/source strings, and materialise them only when a trace is captured (see [ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md))
 - keep `TGocciaExecutionContext` unmanaged on `Push`/`Pop`: intern source paths as pointers instead of copying a `UnicodeString` on every call (see [ADR 0114](adr/0114-unmanaged-execution-context-records.md))
 - execute compiler-proven closed-world numeric self-calls through `OP_CALL_SELF_NUM`: recursive calls with one to three scalar arguments use a compact register frame while sharing the generic entry frame's closure, lexical environment, local-cell and argument windows, realm, and execution context (see [ADR 0101](adr/0101-closed-numeric-scalar-self-call-frames.md))
@@ -131,7 +131,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - skip the result move of a property or element store whose value is discarded, as in the statement `list[index] = value;`
 - read standalone `this` properties directly from a non-captured local register, preserving the derived-constructor guard while avoiding a temporary-register move; captured, top-level, and method-call receiver paths retain their existing lowering
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
-- the register, local-cell, and argument window fills are GC-safety/correctness critical (the GC marks the whole live window): they are deliberately retained rather than trimmed
+- the register and local-cell window fills are GC-safety/correctness critical (the GC marks the whole live window, and a callee reads those slots before it writes them): they are deliberately retained rather than trimmed. The argument window is not cleared, because `SetupNewFrame` stores every slot of it before anything that can collect runs
 
 ### Growing String Accumulators
 

@@ -482,9 +482,8 @@ type
     procedure BindToCurrentThread;
     procedure InternExecutionSourcePath(const ASourcePath: string);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-      const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
+      const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+      const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
@@ -496,9 +495,8 @@ type
       const ASuggestionIsHostOnly: Boolean = False);
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-      const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean;
+      const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+      const AArgCount: Integer;
       const APushExecutionContext: Boolean;
       const AStopAtIP: Integer = -1;
       const AStopGenerator: TObject = nil): TGocciaRegister;
@@ -8073,13 +8071,12 @@ begin
 end;
 
 // Acquire a fresh argument window on the arena, stack-disciplined exactly like
-// AcquireRegisters/AcquireLocalCells. The window is zero-filled so the GC, which
-// marks the whole live arena ([0, top)), never dereferences stale slot contents:
-// this keeps argument acquisition GC-safe regardless of caller ordering, at the
-// cost of touching ACount register slots. (Scope (c) of #798 evaluated removing
-// this and the register/cell fills; they are GC-safety/correctness critical on
-// this hot path, so the substantive wins come from the allocation removal and
-// cheap stack-trace push above, not from trimming these fills.)
+// AcquireRegisters/AcquireLocalCells. The window is NOT cleared: the GC marks
+// the whole live arena ([0, top)), so the caller must store every one of the
+// ACount slots before anything that can allocate a collected object runs.
+// SetupNewFrame, the only caller, copies the call's arguments into the window
+// immediately. (The register and local-cell fills stay: a callee reads those
+// slots before it writes them.)
 procedure TGocciaVM.AcquireArgumentWindow(const ACount: Integer);
 var
   NewBase, Required: Integer;
@@ -8093,8 +8090,6 @@ begin
   FArgumentBase := NewBase;
   FArgCount := ACount;
   FArguments := @FArgumentStack[FArgumentBase];
-  if ACount > 0 then
-    FillChar(FArguments^, ACount * SizeOf(TGocciaRegister), 0);
 end;
 
 // Copy the current frame's live argument window out of the arena into a
@@ -13800,45 +13795,49 @@ function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosur
 begin
   CheckExecutionTimeout;
   CheckInstructionLimit;
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
-    Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
-    False, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    PGocciaRegister(AArguments), Length(AArguments), APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
 begin
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 0, RegisterUndefined, RegisterUndefined,
-    RegisterUndefined, True, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, nil, 0,
+    APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
 begin
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 1, AArg0, RegisterUndefined, RegisterUndefined,
-    True, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, @AArg0, 1,
+    APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Arguments: array[0..1] of TGocciaRegister;
 begin
+  Arguments[0] := AArg0;
+  Arguments[1] := AArg1;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 2, AArg0, AArg1, RegisterUndefined, True,
-    APushExecutionContext);
+    @Arguments[0], 2, APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Arguments: array[0..2] of TGocciaRegister;
 begin
+  Arguments[0] := AArg0;
+  Arguments[1] := AArg1;
+  Arguments[2] := AArg2;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 3, AArg0, AArg1, AArg2, True,
-    APushExecutionContext);
+    @Arguments[0], 3, APushExecutionContext);
 end;
 
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
@@ -14140,14 +14139,18 @@ begin
 end;
 {$IFDEF FPC}{$POP}{$ENDIF}
 
+{ AArguments points at AArgCount registers (nil when there are none). It may
+  point into the caller's register window: the arguments are copied into the
+  callee's argument window before any register is acquired, because acquiring
+  registers can move the register arena (growth) or clear the very slots the
+  arguments sit in (a tail call reuses the caller's window). }
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-  const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-  const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
+  const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+  const AArgCount: Integer; const APushExecutionContext: Boolean;
   var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
-  I: Integer;
+  I, RegisterWindow: Integer;
   ExecutionRealm: TGocciaRealm;
   HasOwnSourceFile: Boolean;
 begin
@@ -14159,25 +14162,21 @@ begin
   HasOwnSourceFile := Assigned(ATemplate.DebugInfo) and
     (ATemplate.DebugInfo.SourceFile <> '');
 
-  AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
-  AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
   // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
-  // FArguments) before reading the previous frame's FArgCount, then fill it.
+  // FArguments) and store every slot of it straight away: the window is not
+  // cleared, and nothing between here and the last store can collect.
   AcquireArgumentWindow(AArgCount);
   for I := 0 to AArgCount - 1 do
-    if AUseFixedArgs then
-      case I of
-        0:
-          FArguments[I] := AArg0;
-        1:
-          FArguments[I] := AArg1;
-        2:
-          FArguments[I] := AArg2;
-      else
-        FArguments[I] := RegisterUndefined;
-      end
-    else
-      FArguments[I] := AArguments[I];
+    FArguments[I] := AArguments[I];
+  // The register window holds `this` and one register per argument even when
+  // the callee declares fewer registers than it is passed arguments.
+  RegisterWindow := ATemplate.MaxRegisters;
+  if RegisterWindow < 1 then
+    RegisterWindow := 1;
+  AcquireLocalCells(RegisterWindow);
+  if RegisterWindow <= AArgCount then
+    RegisterWindow := AArgCount + 1;
+  AcquireRegisters(RegisterWindow);
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
@@ -14238,9 +14237,11 @@ begin
       ATemplate.ProfileIndex, AProfileTimestamp);
   end;
 
-  SetLocalRaw(0, AThisValue);
-  for I := 0 to FArgCount - 1 do
-    SetLocalRaw(I + 1, FArguments[I]);
+  // Both windows were acquired above and are still as acquired: the registers
+  // exist and no local slot has a cell yet, so these are plain stores.
+  FRegisters[0] := AThisValue;
+  for I := 0 to AArgCount - 1 do
+    FRegisters[I + 1] := FArguments[I];
   // ES2026 §10.2.11 FunctionDeclarationInstantiation steps 19-20: sloppy
   // parameter expressions need a separate var environment for direct eval.
   if (ATemplate.DirectEvalEnvironmentCount > 0) and
@@ -14337,12 +14338,8 @@ begin
   ExecuteClosureRegistersInternal(
     Generator.FClosure,
     Generator.FThisValue,
-    Generator.FArguments,
+    PGocciaRegister(Generator.FArguments),
     Length(Generator.FArguments),
-    RegisterUndefined,
-    RegisterUndefined,
-    RegisterUndefined,
-    False,
     True,
     Generator.FClosure.Template.ParameterPreambleSize,
     Generator);
@@ -14350,8 +14347,7 @@ end;
 
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
-  const AArguments: TGocciaRegisterArray; const AArgCount: Integer;
-  const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean;
+  const AArguments: PGocciaRegister; const AArgCount: Integer;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject): TGocciaRegister;
 label
@@ -14429,8 +14425,7 @@ var
   RegisterArgs: TGocciaRegisterArray;
   CallThisRegister: TGocciaRegister;
   CallGlobalThisValue: TGocciaValue;
-  FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
-  ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2: TGocciaRegister;
+  ApplyArgRegisters: array[0..2] of TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
@@ -14721,7 +14716,7 @@ begin
       FActiveTemplateProbe := PPointer(@Template);
       FActiveInstructionIPProbe := @InstructionStartIP;
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
-        AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
+        APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
