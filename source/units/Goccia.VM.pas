@@ -1987,18 +1987,33 @@ end;
 
 // Presence probe for the holder level: pointer identity suffices — a
 // prefix shape's covered entries stay valid as the holder map grows, and
-// the descriptor is re-read by entry index on every hit.
+// the descriptor is re-read by entry index on every hit. The map's last
+// computed shape is compared first, as the own tier does: a holder shape is
+// never nil and never the dictionary sentinel (the fill declines both), so a
+// match there is a shape the map really went through, and a shaped map only
+// appends. EnsureShape runs only when that misses, for a map whose shape has
+// not caught up with its entries yet.
 function VMHolderShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Map: TGocciaShapedPropertyMap;
 begin
-  Result := Pointer(
-    TGocciaShapedPropertyMap(AObject.Properties).EnsureShape) = ACachedShape;
+  Map := TGocciaShapedPropertyMap(AObject.Properties);
+  Result := (Pointer(Map.Shape) = ACachedShape) or
+    (Pointer(Map.EnsureShape) = ACachedShape);
 end;
 
 // Absence probe for receiver/intermediate levels: pointer identity PLUS
 // full coverage (Depth = Count). A transition-capped map can grow while
 // EnsureShape keeps returning the same prefix pointer, so pointer equality
 // alone cannot prove a name is still absent.
+// The map's last computed shape is tried first. A shaped map only appends,
+// so a shape as deep as the map has entries (or no shape and no entries)
+// describes every entry: EnsureShape would have nothing to add to it, and
+// the check needs neither the call nor EnsureShape's read of the current
+// realm. Any other state, a stale shape included, goes through EnsureShape
+// as before. What the shortcut skips is EnsureShape's other duty: a map
+// owned by another realm is not switched to dictionary mode by a hit.
 function VMAbsenceShapeMatches(const AObject: TGocciaObjectValue;
   const ACachedShape: Pointer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -2006,15 +2021,29 @@ var
   LevelShape: TGocciaShape;
 begin
   Map := TGocciaShapedPropertyMap(AObject.Properties);
+  LevelShape := Map.Shape;
+  if Pointer(LevelShape) = ACachedShape then
+  begin
+    if Assigned(LevelShape) then
+    begin
+      if LevelShape.Depth = Map.CountFast then
+        Exit(True);
+    end
+    else if Map.CountFast = 0 then
+      Exit(True);
+  end;
   LevelShape := Map.EnsureShape;
   Result := (Pointer(LevelShape) = ACachedShape) and
     ((not Assigned(LevelShape)) or (LevelShape.Depth = Map.CountFast));
 end;
 
-// Validate a prototype-holder cache entry: receiver gate, fresh-shape
-// absence below the holder, fresh-shape presence at the holder, exact
-// TGocciaObjectValue chain levels (exotic objects may share shapes but not
-// lookup semantics), then re-read the holder descriptor by entry index.
+// Validate a prototype-holder cache entry: full-coverage shape absence below
+// the holder, shape presence at the holder (a stale prefix shape is enough
+// there), exact TGocciaObjectValue chain levels (exotic objects may share
+// shapes but not lookup semantics), then re-read the holder descriptor by
+// entry index.
+// Contract: AReceiver has passed VMPropertyReadCacheableReceiver. The one
+// caller, OP_GET_PROP_CONST, gates on it before either cache tier.
 function VMTryGetCachedProtoProperty(const AReceiver: TGocciaObjectValue;
   const ACache: PGocciaProtoReadCacheEntry;
   out AValue: TGocciaValue): Boolean;
@@ -2026,8 +2055,6 @@ begin
   AValue := nil;
   Result := False;
   if ACache^.HolderLevel = 0 then
-    Exit;
-  if not VMPropertyReadCacheableReceiver(AReceiver) then
     Exit;
   if not VMAbsenceShapeMatches(AReceiver, ACache^.Shapes[0]) then
     Exit;
