@@ -847,7 +847,7 @@
       OP_GET_PROP_CONST:
       LGetPropConstShared:
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
-           (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+           VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
         begin
           // Hot shape: per-site inline cache keyed by the name-constant
           // index, validated against (own-map identity, map entry version).
@@ -857,11 +857,14 @@
           // are megamorphic: they skip the cache and use the uncached
           // own-data fast path. A nil slot (out-of-range constant index in
           // corrupt bytecode) runs fully uncached.
+          // The gate above is the three exact classes the caches serve, not
+          // `is TGocciaObjectValue`: no tier below does anything for another
+          // receiver class but call GetPropertyValue, which the next branch
+          // does without walking the class chain first.
           PropertyReadCache := Template.PropertyReadCacheSlot(C);
           if Assigned(PropertyReadCache) and
              (PropertyReadCache^.MissStreak <
               PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-             VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
              VMTryGetCachedOwnDataProperty(
                TGocciaObjectValue(FRegisters[B].ObjectValue),
                PropertyReadCache, GlobalBindingValue) then
@@ -879,8 +882,7 @@
             else
             begin
               GlobalName := Template.GetConstantUnchecked(C).StringValue;
-              if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
-                 (not IsBytecodePrivateKey(GlobalName)) then
+              if not IsBytecodePrivateKey(GlobalName) then
               begin
                 // One own-map probe establishes own-data / own-non-data /
                 // absent; no fallback tier re-hashes the same name on this
@@ -955,7 +957,10 @@
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
           RightValue := RegisterToValue(FRegisters[C]);
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+          // A receiver of one of the three cached classes is not a class
+          // value; the exact comparisons spare it the class-chain walk.
+          if (not VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue)) and
+             (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
             SetBytecodeHomeObject(RightValue,
               RegisterToValue(FRegisters[A]));
           // Own writable-data write IC: (shape, entry index), same receiver

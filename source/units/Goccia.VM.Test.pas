@@ -53,6 +53,7 @@ type
     procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
     procedure TestMissingImportBindingNamesSpecifier;
     procedure TestGlobalReadCacheFollowsBindingTurnedImport;
+    procedure TestPropertyCacheSlotsStayWithTheirConstant;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -107,6 +108,8 @@ begin
     TestMissingImportBindingNamesSpecifier);
   Test('Global read cache follows a binding that becomes an import',
     TestGlobalReadCacheFollowsBindingTurnedImport);
+  Test('Property cache slots stay with their constant and exist only inside the pool',
+    TestPropertyCacheSlotsStayWithTheirConstant);
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -843,6 +846,69 @@ begin
     Template.Free;
     Scope.Free;
     Module.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestPropertyCacheSlotsStayWithTheirConstant;
+const
+  CONSTANT_COUNT = 12;
+  FIRST_USED = 3;
+var
+  Template: TGocciaFunctionTemplate;
+  I, BelowPool, AbovePool: Integer;
+begin
+  Template := TGocciaFunctionTemplate.Create('cache-slots');
+  // Variables, not literals: the accessors are inlined, and FPC rejects a
+  // literal index it can see is out of range.
+  BelowPool := -1;
+  AbovePool := CONSTANT_COUNT;
+  try
+    for I := 0 to CONSTANT_COUNT - 1 do
+      Template.AddConstantString('name' + IntToStr(I));
+
+    // An index outside the constant pool has no slot: the VM writes through
+    // the pointer, so anything but nil there is a wild write.
+    Expect<Boolean>(Template.PropertyReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyReadCacheSlot(AbovePool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(AbovePool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(AbovePool) = nil).ToBe(True);
+
+    // The first use of a constant assigns its slot; the same constant then
+    // resolves to that slot without the assignment path.
+    Template.PropertyReadCacheSlot(FIRST_USED)^.EntryIndex := 1000 + FIRST_USED;
+    Template.ProtoReadCacheSlot(FIRST_USED)^.EntryIndex := 2000 + FIRST_USED;
+    Template.PropertyWriteCacheSlot(FIRST_USED)^.EntryIndex := 3000 + FIRST_USED;
+    Expect<Boolean>(Template.PropertyReadCacheSlot(FIRST_USED) =
+      Template.PropertyReadCacheSlot(FIRST_USED)).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(FIRST_USED) =
+      Template.ProtoReadCacheSlot(FIRST_USED)).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(FIRST_USED) =
+      Template.PropertyWriteCacheSlot(FIRST_USED)).ToBe(True);
+
+    // Every other constant gets a slot of its own, in an order that is not
+    // the constant order, and enough of them to grow the entry arrays.
+    for I := CONSTANT_COUNT - 1 downto 0 do
+      if I <> FIRST_USED then
+      begin
+        Template.PropertyReadCacheSlot(I)^.EntryIndex := 1000 + I;
+        Template.ProtoReadCacheSlot(I)^.EntryIndex := 2000 + I;
+        Template.PropertyWriteCacheSlot(I)^.EntryIndex := 3000 + I;
+      end;
+    for I := 0 to CONSTANT_COUNT - 1 do
+    begin
+      Expect<Integer>(Template.PropertyReadCacheSlot(I)^.EntryIndex).ToBe(1000 + I);
+      Expect<Integer>(Template.ProtoReadCacheSlot(I)^.EntryIndex).ToBe(2000 + I);
+      Expect<Integer>(Template.PropertyWriteCacheSlot(I)^.EntryIndex).ToBe(3000 + I);
+    end;
+
+    Expect<Boolean>(Template.PropertyReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(AbovePool) = nil).ToBe(True);
+    AbovePool := High(Integer);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(AbovePool) = nil).ToBe(True);
+  finally
+    Template.Free;
   end;
 end;
 
