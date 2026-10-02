@@ -23,7 +23,12 @@ uses
 const
   CLOCK_REALTIME_ID = 0;
   {$IFDEF DARWIN}
-  CLOCK_MONOTONIC_ID = 6;
+  // CLOCK_MONOTONIC_RAW. Darwin's CLOCK_MONOTONIC (6) advances in whole
+  // microseconds, so an interval shorter than that measures as 0 or 1000 ns:
+  // a benchmark sample under half a microsecond then has a median of zero.
+  // The raw clock counts Mach ticks at nanosecond resolution, is monotonic,
+  // and likewise keeps advancing while the system sleeps.
+  CLOCK_MONOTONIC_ID = 4;
   {$ELSE}
   CLOCK_MONOTONIC_ID = 1;
   {$ENDIF}
