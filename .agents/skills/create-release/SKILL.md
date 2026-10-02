@@ -10,6 +10,9 @@ compatibility: >-
   Requires git, Python 3.11 or newer, the GitHub CLI (gh) authenticated to the
   target repository, the internal `delivery-wait` skill, and network access.
   Supports the project's changelog tooling or a hand-maintained changelog.
+metadata:
+  agents-role: entry-point
+  agents-text: Prepare or publish a release through the repository's release workflow.
 ---
 
 # Create release

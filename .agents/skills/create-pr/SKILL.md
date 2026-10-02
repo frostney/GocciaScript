@@ -10,6 +10,9 @@ compatibility: >-
   Requires git, Python 3.11 or newer, the GitHub CLI (gh) 2.99 or newer
   authenticated to the target repository with push access, the internal
   `delivery-wait` skill, and network access.
+metadata:
+  agents-role: entry-point
+  agents-text: Publish the current change as a pull request and bring it to ready for review.
 ---
 
 # Create PR
@@ -110,7 +113,9 @@ readiness. Recording a walkthrough does not replace behavior testing.
 7. Commit uncommitted relevant work under `git-workflow`: stage only relevant
    files, excluding secrets and unrelated local work, and use a concise
    Conventional Commit subject. Never amend and never skip hooks. Preserve
-   already-published history and add a new commit for any correction.
+   already-published history and add a new commit for any correction. Run the
+   [publication guard](../git-workflow/SKILL.md#publication-guard) at each
+   commit, push and PR write.
 8. Title each pull request with a Conventional Commit subject covering the whole
    change; `git-workflow`'s squash merge makes that title the base-branch commit
    subject. Follow
@@ -158,5 +163,6 @@ readiness. Recording a walkthrough does not replace behavior testing.
     phases and all applicable CI is observed green for its exact head, mark it
     ready for review. Return every affected URL, native stack order when
     applicable, final states, metadata changes, supplied completion evidence,
-    and observed readiness and CI evidence. Include incomplete walkthrough
-    requirements and actionable remedies, even when the PR is ready.
+    what the publication guard rewrote, and observed readiness and CI evidence.
+    Include incomplete walkthrough requirements and actionable remedies, even
+    when the PR is ready.
