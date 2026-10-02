@@ -813,10 +813,14 @@
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
             FRegisters[A].ObjectValue);
+          // Copied out of the register window first: where a register is
+          // passed by reference (Win64), SetupNewFrame would otherwise read
+          // `this` through the window after acquiring registers moved it.
+          CallThisRegister := FRegisters[A];
           PushFrame(B, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
-            FRegisters[A], nil, 0, True,
+            CallThisRegister, nil, 0, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
           goto LDispatchNext;
         end
