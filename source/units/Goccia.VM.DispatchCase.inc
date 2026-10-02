@@ -1510,8 +1510,14 @@
               SetRegisterRaw(A, RegisterInt(1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // ES2026 §13.4 Update Expressions: each form reads the old value with
+          // GetValue before ToNumeric. The four fused update opcodes can take
+          // a local's own register as B, where a hole is a lexical binding
+          // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1534,8 +1540,11 @@
               SetRegisterRaw(A, RegisterInt(-1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(-1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1595,11 +1604,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1666,11 +1678,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then

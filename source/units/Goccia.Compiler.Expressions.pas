@@ -6924,6 +6924,12 @@ begin
             PostNumericOp, AKeepResult);
           Exit;
         end;
+        // ES2026 §13.4 Update Expressions: GetValue runs before PutValue, so
+        // a const still in its temporal dead zone throws ReferenceError
+        // rather than the assignment TypeError.
+        RegResult := ACtx.Scope.AllocateRegister;
+        CompileIdentifierAccessNoWith(ACtx, Ident, RegResult, False);
+        ACtx.Scope.FreeRegister;
         EmitConstAssignmentError(ACtx);
         Exit;
       end;
