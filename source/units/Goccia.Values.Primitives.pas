@@ -40,7 +40,7 @@ type
   TGocciaValueList = TObjectList<TGocciaValue>;
   TGocciaValueMap = TOrderedStringMap<TGocciaValue>;
 
-  TGocciaNullLiteralValue = class(TGocciaValue)
+  TGocciaNullLiteralValue = class sealed(TGocciaValue)
   private
     class var FNullValue: TGocciaNullLiteralValue;
   public
@@ -56,7 +56,7 @@ type
     function ToStringLiteral: TGocciaStringLiteralValue; override;
   end;
 
-  TGocciaUndefinedLiteralValue = class(TGocciaValue)
+  TGocciaUndefinedLiteralValue = class sealed(TGocciaValue)
   private
     class var FUndefinedValue: TGocciaUndefinedLiteralValue;
   public
@@ -96,7 +96,7 @@ type
     property Value: Boolean read FValue;
   end;
 
-  TGocciaNumberLiteralValue = class(TGocciaValue)
+  TGocciaNumberLiteralValue = class sealed(TGocciaValue)
   private
     FValue: Double;
 
