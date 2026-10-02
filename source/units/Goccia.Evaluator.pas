@@ -8061,6 +8061,17 @@ begin
   end;
 end;
 
+// ES2026 §7.3.32 DefineField step 6.b: a public field is created on the instance
+// with CreateDataPropertyOrThrow. It is not assigned, so it replaces a
+// configurable accessor the instance already has and never calls a setter,
+// own or inherited.
+procedure DefineInstanceField(const AInstance: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue);
+begin
+  AInstance.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
@@ -8127,7 +8138,7 @@ begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
           PropertyValue := EvaluateExpression(Expr, LocalContext);
-          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+          DefineInstanceField(AInstance, FOEntry.Name, PropertyValue);
         end;
       end;
     end;
@@ -8137,7 +8148,7 @@ begin
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
+      DefineInstanceField(AInstance, Entry.Key, PropertyValue);
     end;
   end;
 end;
@@ -8207,7 +8218,7 @@ begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
           PropertyValue := EvaluateExpression(Expr, LocalContext);
-          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+          DefineInstanceField(AInstance, FOEntry.Name, PropertyValue);
         end;
       end;
     end;
@@ -8217,7 +8228,7 @@ begin
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
+      DefineInstanceField(AInstance, Entry.Key, PropertyValue);
     end;
     InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
   end;
