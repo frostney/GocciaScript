@@ -23,6 +23,7 @@ type
     procedure TestStringValuePreservesUnicode;
     procedure TestStringValueAccountsForBackingStore;
     procedure TestStringValueMemoryLimitRaisesOnce;
+    procedure TestValueAllocationMemoryLimitRaisesAndRecovers;
     procedure TestStringConcatenationPreservesAliases;
     procedure TestStringConcatenationTracesPrefixes;
     procedure TestStringConcatenationMaterializationDoesNotCollect;
@@ -51,6 +52,8 @@ begin
     TestStringValueAccountsForBackingStore);
   Test('String value memory limit raises without recursion',
     TestStringValueMemoryLimitRaisesOnce);
+  Test('Value allocation past the memory limit raises and leaves the collector usable',
+    TestValueAllocationMemoryLimitRaisesAndRecovers);
   Test('String concatenation preserves aliases and UTF-16 contents',
     TestStringConcatenationPreservesAliases);
   Test('String concatenation traces prefixes and releases backing stores',
@@ -182,6 +185,57 @@ begin
     end;
     Expect<Boolean>(RaisedMemoryLimit).ToBe(True);
     Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
+  finally
+    GC.MaxBytes := OldMaxBytes;
+    GC.Collect;
+    if OwnsGarbageCollector then
+      TGarbageCollector.Shutdown;
+  end;
+end;
+
+procedure TTestPrimitives.TestValueAllocationMemoryLimitRaisesAndRecovers;
+var
+  GC: TGarbageCollector;
+  LiveBytes: Int64;
+  OldMaxBytes: Int64;
+  OwnsGarbageCollector: Boolean;
+  Attempt, RaisedCount: Integer;
+  Survivor: TGocciaNumberLiteralValue;
+begin
+  OwnsGarbageCollector := TGarbageCollector.Instance = nil;
+  if OwnsGarbageCollector then
+    TGarbageCollector.Initialize;
+  GC := TGarbageCollector.Instance;
+  OldMaxBytes := GC.MaxBytes;
+  RaisedCount := 0;
+  try
+    GC.Collect;
+    LiveBytes := GC.BytesAllocated;
+    // A number has no backing store, so the limit is met in AfterConstruction
+    // rather than in a reservation. Twice, to show the first failure left the
+    // limit armed.
+    for Attempt := 1 to 2 do
+    begin
+      // One byte of room: a limit of zero means no limit.
+      GC.MaxBytes := GC.BytesAllocated + 1;
+      try
+        TGocciaNumberLiteralValue.Create(1.5);
+      except
+        on E: TGocciaThrowValue do
+          Inc(RaisedCount);
+      end;
+      Expect<Boolean>(GC.MemoryLimitFiring).ToBe(False);
+    end;
+    Expect<Integer>(RaisedCount).ToBe(2);
+
+    // With room again, allocation works and the failed values left nothing
+    // behind once the errors they raised are collected.
+    GC.MaxBytes := OldMaxBytes;
+    GC.Collect;
+    Expect<Int64>(GC.BytesAllocated).ToBe(LiveBytes);
+    Survivor := TGocciaNumberLiteralValue.Create(2.5);
+    Expect<Double>(Survivor.Value).ToBe(2.5);
+    Expect<Int64>(GC.BytesAllocated - LiveBytes).ToBe(Survivor.InstanceSize);
   finally
     GC.MaxBytes := OldMaxBytes;
     GC.Collect;

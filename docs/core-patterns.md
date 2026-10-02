@@ -372,18 +372,26 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 
 The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
 
-FPC inlines a small procedure on its own at `-O3` and above, which production builds use. A core of two or three lines is therefore folded back into its caller, frame included. Switch that off for the core, and check the disassembly of the fast path for `fpc_pushexceptaddr`:
+Production builds switch on FPC's automatic inlining (`{$optimization autoInline}` in `Shared.inc`), which inlines a procedure of up to ten syntax-tree nodes into its callers. A core of two or three lines is therefore folded back into its fast path, frame included. Switch it off for the core, and check the disassembly of the fast path for `fpc_pushexceptaddr`:
 
 ```pascal
-{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
 procedure ThrowMaxCallStackExceeded;
 begin
   ThrowRangeError(SErrorMaxCallStackExceeded);
 end;
-{$IFDEF FPC}{$POP}{$ENDIF}
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
 ```
 
-An explicit `try..finally` installs the same frame when control reaches it. Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
+Turn the switch back on explicitly, as above. `{$PUSH}` and `{$POP}` do not save optimizer switches in FPC 3.2.2, so a `{$POP}` leaves automatic inlining off for the rest of the unit. Do not use `{$OPTIMIZATION DEFAULT}` either: it resets to the command line and drops the `NOFASTMATH` guard. A core that contains a `try` block, or that is well above ten nodes, is not inlined and needs no bracket.
+
+FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckNativeReentryDepth` as a compare and a branch.
+
+An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 
 ### Singleton Special Values
 

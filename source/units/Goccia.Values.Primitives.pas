@@ -214,13 +214,14 @@ end;
 // The throw loads two resource strings into managed temporaries, which costs
 // the procedure that owns them an implicit exception frame on every call. It
 // lives here so that AfterConstruction, which runs for each value allocated,
-// has none (docs/core-patterns.md, "Managed Locals on Hot Paths").
-procedure ThrowMemoryLimitExceeded(const AGC: TGarbageCollector;
-  const AValue: TGocciaValue);
+// and ReserveBackingStore have none (docs/core-patterns.md, "Managed Locals on
+// Hot Paths").
+//
+// The RangeError itself allocates. MemoryLimitFiring suppresses the limit
+// while it is built, so that a failed allocation cannot recurse until the
+// native stack overflows.
+procedure ThrowMemoryLimitExceeded(const AGC: TGarbageCollector);
 begin
-  // Unregister before throwing: AfterConstruction exceptions trigger
-  // automatic destruction, so the GC must not hold a dangling pointer.
-  AGC.UnregisterObject(AValue);
   AGC.MemoryLimitFiring := True;
   try
     ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
@@ -240,7 +241,12 @@ begin
     GC.RegisterObject(Self);
     if (GC.MaxBytes > 0) and (GC.BytesAllocated > GC.MaxBytes) and
        not GC.MemoryLimitFiring then
-      ThrowMemoryLimitExceeded(GC, Self);
+    begin
+      // Unregister before throwing: AfterConstruction exceptions trigger
+      // automatic destruction, so the GC must not hold a dangling pointer.
+      GC.UnregisterObject(Self);
+      ThrowMemoryLimitExceeded(GC);
+    end;
   end;
   if GProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Instance.RecordAllocation;
@@ -687,17 +693,7 @@ begin
       FDepth := 1;
     end;
     if not GC.TryReserveExternalBytes(ABytes, Self) then
-    begin
-      // The RangeError itself allocates short strings. Suppress accounting
-      // while constructing it so a failed reservation cannot recurse until
-      // the native stack overflows.
-      GC.MemoryLimitFiring := True;
-      try
-        ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
-      finally
-        GC.MemoryLimitFiring := False;
-      end;
-    end;
+      ThrowMemoryLimitExceeded(GC);
     Result := ABytes;
   end;
 end;
