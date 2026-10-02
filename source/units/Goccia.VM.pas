@@ -2330,9 +2330,11 @@ begin
   end;
 end;
 
-// ES2026 §6.1.6.1.4 Number::multiply: a zero product takes the exclusive-or of
-// the operand signs, so 0 * -1 is -0. That is the one integer operation whose
-// result an integer register cannot hold.
+// IEEE 754 multiplication gives a zero product the exclusive-or of the operand
+// signs, so 0 * -1 is -0. That is the one integer operation whose result an
+// integer register cannot hold. ES2026 §6.1.6.1.4 Number::multiply spells out
+// only the -0 operand cases (steps 4 and 5); read literally its last step gives
+// +0 here, but the float path and every engine follow IEEE 754.
 function VMIntProductResult(const ALeft, ARight: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   Product: Int64;
