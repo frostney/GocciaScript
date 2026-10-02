@@ -2349,6 +2349,19 @@ begin
   end;
 end;
 
+// ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
+// opcodes. A grkInt operand is already an integer, so its low 32 bits are the
+// answer; a grkFloat operand goes through the same NumberToInt32 the boxed
+// operator helpers reach through ToInt32Value. ToUint32 is the same 32 bits
+// read as unsigned, so the shift opcodes cast this result to LongWord.
+function VMRegisterToInt32(const ARegister: TGocciaRegister): LongInt; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if ARegister.Kind = grkInt then
+    Result := LongInt(ARegister.IntValue)
+  else
+    Result := NumberToInt32(ARegister.FloatValue);
+end;
+
 // Rooted slow-path entry points for the binary operators.
 //
 // Materializing an operand register allocates: RegisterToValue builds a fresh
