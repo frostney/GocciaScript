@@ -909,6 +909,15 @@ begin
   else if ANode is TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(ANode);
+    // ES2026 §8.2.8 Static Semantics: VarDeclaredNames: for...of and
+    // for await...of contribute the BoundNames of a `var` ForBinding.
+    if ForOf.IsVar then
+    begin
+      if Assigned(ForOf.BindingPattern) then
+        CollectDestructuringVarBindings(ForOf.BindingPattern, AScope)
+      else if ForOf.BindingName <> '' then
+        AScope.DeclareVarLocal(ForOf.BindingName);
+    end;
     HoistVarLocals(ForOf.Body, AScope,
       AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
