@@ -20,8 +20,8 @@ validation, verdict, and report.
    severities, or issue a verdict.
 4. Require each worker to return its lane ID, assigned review axis or findings,
    bounded scope, inspected supporting context, exact probes and observed
-   results, every evidence-supported candidate with evidence, impact, smallest
-   remedy, and any uncertainty or limitation, verified claims, limitations, and
+   results, every evidence-supported candidate with evidence, impact, gain, if not
+   done, smallest remedy, and any uncertainty or limitation, verified claims, limitations, and
    `complete` or `incomplete` status. Workers do not apply a severity or
    reporting threshold; the coordinator owns candidate filtering.
 5. Validate every candidate against the current checkout, apply the

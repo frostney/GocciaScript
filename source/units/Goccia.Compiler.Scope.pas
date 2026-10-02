@@ -27,6 +27,10 @@ type
     // compiled. A read compiled after that point cannot observe the TDZ hole,
     // and a const never changes afterwards, so the read may use the register.
     IsInitialized: Boolean;
+    // Above zero while the code being compiled is outside this local's scope
+    // although the local is still declared: ResolveLocal skips it then. See
+    // TGocciaCompilerScope.SuspendBindingsDeeperThan.
+    SuspendCount: Integer;
     IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
     IsGlobalBacked: Boolean;
@@ -68,6 +72,16 @@ type
     ExportNameCount: Integer;
   end;
 
+  // What TGocciaCompilerScope.SuspendBindingsDeeperThan took out of name
+  // resolution, for ResumeBindings to put back.
+  TGocciaCompilerSuspendedBindings = record
+    Depth: Integer;
+    LocalCount: Integer;
+    WithBindingNames: array of string;
+    WithBindingDepths: array of Integer;
+    WithBindingCount: Integer;
+  end;
+
   TGocciaCompilerScope = class
   private
     FParent: TGocciaCompilerScope;
@@ -84,6 +98,7 @@ type
     FPrivatePrefixes: array of string;
     FPrivateNameCount: Integer;
     FIsArrow: Boolean;
+    FNonStrictCode: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
@@ -152,6 +167,7 @@ type
     function TryGetVisibleConstantValue(const AName: string;
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
+    function DirectEvalMayShadow(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
     function ResolvePrivatePrefixForName(const AName: string): string;
     procedure DeclarePrivateNamePrefix(const AName, APrefix: string);
@@ -159,10 +175,15 @@ type
     procedure RestorePrivateNameMark(const AMark: Integer);
     procedure PushWithBinding(const AHiddenName: string);
     procedure PopWithBinding;
+    function SuspendBindingsDeeperThan(
+      const ADepth: Integer): TGocciaCompilerSuspendedBindings;
+    procedure ResumeBindings(
+      const ASuspended: TGocciaCompilerSuspendedBindings);
     function GetWithBindingName(const AIndex: Integer): string;
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
   end;
@@ -261,6 +282,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := False;
@@ -315,6 +337,7 @@ begin
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := True;
@@ -347,17 +370,17 @@ end;
 
 function TGocciaCompilerScope.ResolveLocal(const AName: string): Integer;
 var
-  I: Integer;
+  I, Newest: Integer;
 begin
-  if Assigned(FLocalIndex) then
-  begin
-    if FLocalIndex.TryGetValue(AName, Result) then
-      Exit;
+  // The index knows only the newest local of a name. When that one is
+  // suspended, the scan goes on to an older one.
+  Newest := FLocalCount - 1;
+  if Assigned(FLocalIndex) and
+     not FLocalIndex.TryGetValue(AName, Newest) then
     Exit(-1);
-  end;
 
-  for I := FLocalCount - 1 downto 0 do
-    if FLocals[I].Name = AName then
+  for I := Newest downto 0 do
+    if (FLocals[I].Name = AName) and (FLocals[I].SuspendCount = 0) then
       Exit(I);
   Result := -1;
 end;
@@ -678,6 +701,26 @@ begin
   Result := Assigned(FParent) and FParent.HasVisibleLocal(AName);
 end;
 
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation: a sloppy direct eval declares
+// its vars in the variable environment of the function that calls it, where
+// they shadow a same-named binding of any enclosing function. What the
+// compiler knows about such a binding, its constant value or its type, holds
+// for a reference only when no non-strict function lies between the reference
+// and the declaration.
+function TGocciaCompilerScope.DirectEvalMayShadow(const AName: string): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+begin
+  Scope := Self;
+  while Assigned(Scope) and (Scope.ResolveLocal(AName) < 0) do
+  begin
+    if Scope.FNonStrictCode then
+      Exit(True);
+    Scope := Scope.FParent;
+  end;
+  Result := False;
+end;
+
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;
 var
   S: TGocciaCompilerScope;
@@ -749,6 +792,52 @@ procedure TGocciaCompilerScope.PopWithBinding;
 begin
   if FWithBindingCount > 0 then
     Dec(FWithBindingCount);
+end;
+
+// Code compiled out of place, such as a finally block inlined at a `return`
+// inside its try block, runs in an outer scope while the locals and with
+// objects of the scopes it was inlined into are still declared. Suspending
+// the ones deeper than ADepth lets names in that code resolve as they do at
+// ADepth. The slots stay allocated, and suspensions may nest.
+function TGocciaCompilerScope.SuspendBindingsDeeperThan(
+  const ADepth: Integer): TGocciaCompilerSuspendedBindings;
+var
+  I, VisibleCount: Integer;
+begin
+  Result.Depth := ADepth;
+  Result.LocalCount := FLocalCount;
+  for I := 0 to FLocalCount - 1 do
+    if FLocals[I].Depth > ADepth then
+      Inc(FLocals[I].SuspendCount);
+
+  // The suspended with objects come off the stack. The code compiled
+  // meanwhile works on copies, so that a `with` in it cannot overwrite them.
+  Result.WithBindingNames := FWithBindingNames;
+  Result.WithBindingDepths := FWithBindingDepths;
+  Result.WithBindingCount := FWithBindingCount;
+  VisibleCount := FWithBindingCount;
+  while (VisibleCount > 0) and
+        (FWithBindingDepths[VisibleCount - 1] > ADepth) do
+    Dec(VisibleCount);
+  FWithBindingNames := Copy(FWithBindingNames, 0, VisibleCount);
+  FWithBindingDepths := Copy(FWithBindingDepths, 0, VisibleCount);
+  FWithBindingCount := VisibleCount;
+end;
+
+procedure TGocciaCompilerScope.ResumeBindings(
+  const ASuspended: TGocciaCompilerSuspendedBindings);
+var
+  I: Integer;
+begin
+  // Locals declared since then follow the first ASuspended.LocalCount ones
+  // and were never suspended.
+  for I := 0 to ASuspended.LocalCount - 1 do
+    if FLocals[I].Depth > ASuspended.Depth then
+      Dec(FLocals[I].SuspendCount);
+
+  FWithBindingNames := ASuspended.WithBindingNames;
+  FWithBindingDepths := ASuspended.WithBindingDepths;
+  FWithBindingCount := ASuspended.WithBindingCount;
 end;
 
 function TGocciaCompilerScope.GetWithBindingName(
