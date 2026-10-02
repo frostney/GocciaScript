@@ -1,10 +1,10 @@
 /*---
 description: |
   The bitwise and shift operators convert a number operand that is not a
-  32-bit integer with ToInt32 / ToUint32 (ES2026 §7.1.7 / §7.1.8): values at
+  32-bit integer with ToInt32 / ToUint32 (ES2026 §7.1.6 / §7.1.7): values at
   or beyond 2^31, fractions, values beyond 2^53 and 2^63, and denormals.
 
-  Every operand reaches its operator as a function parameter, so that constant
+  Operands reach their operator as function parameters, so that constant
   folding cannot decide the result and the bytecode VM applies the operator to
   a floating-point register rather than to an int32 one. A value produced by
   integer arithmetic that leaves the int32 range takes the same path.
@@ -144,9 +144,24 @@ test("a running total keeps its low bits after it outgrows int32", () => {
 });
 
 test("a mixed int32 and non-int32 pair gives the same result in either order", () => {
-  expect(and(4294967303, 5)).toBe(and(5, 4294967303));
-  expect(or(2147483648.5, 1)).toBe(or(1, 2147483648.5));
-  expect(xor(-2147483649.5, 6)).toBe(xor(6, -2147483649.5));
+  expect(and(4294967303, 5)).toBe(5);
+  expect(and(5, 4294967303)).toBe(5);
+  expect(or(2147483648.5, 1)).toBe(-2147483647);
+  expect(or(1, 2147483648.5)).toBe(-2147483647);
+  expect(xor(-2147483649.5, 6)).toBe(2147483641);
+  expect(xor(6, -2147483649.5)).toBe(2147483641);
+});
+
+test("a >>> result above the int32 range is an ordinary number in later arithmetic", () => {
+  // 4294967295 does not fit an int32. Squaring it is exact only if the shift
+  // handed on a number rather than a 32-bit integer that later wraps.
+  const squareOfUnsigned = (value) => {
+    const unsigned = value >>> 0;
+    return unsigned * unsigned;
+  };
+  expect(squareOfUnsigned(-1.5)).toBe(18446744065119617000);
+  expect(squareOfUnsigned(4294967295.5)).toBe(18446744065119617000);
+  expect(squareOfUnsigned(-2147483648.5)).toBe(4611686018427388000);
 });
 
 test("NaN, the infinities and negative zero convert to 0", () => {
@@ -163,11 +178,30 @@ test("NaN, the infinities and negative zero convert to 0", () => {
   expect(ushr(-0, 0)).toBe(0);
   expect(not(NaN)).toBe(-1);
   expect(not(-0)).toBe(-1);
-  // A division produces these at run time instead of loading a constant.
+});
+
+test("NaN, the infinities and negative zero convert to 0 wherever they come from", () => {
+  // The VM holds these four values in more than one form. A division result
+  // is an allocated number, which takes the generic operator path.
   const divide = (left, right) => left / right;
   expect(or(divide(0, 0), 0)).toBe(0);
   expect(or(divide(1, 0), 0)).toBe(0);
   expect(and(divide(-1, 0), 7)).toBe(0);
   expect(not(divide(0, 0))).toBe(-1);
   expect(Object.is(or(divide(-0.5, 1e308) * 0, 0), 0)).toBe(true);
+
+  // An element read from a Float64Array is a double in a register.
+  const doubles = new Float64Array([NaN, Infinity, -Infinity, -0]);
+  expect(or(doubles[0], 0)).toBe(0);
+  expect(or(doubles[1], 0)).toBe(0);
+  expect(and(doubles[2], 7)).toBe(0);
+  expect(or(doubles[3], 0)).toBe(0);
+  expect(Object.is(or(doubles[3], doubles[3]), 0)).toBe(true);
+  expect(not(doubles[0])).toBe(-1);
+  expect(not(doubles[3])).toBe(-1);
+  expect(shl(doubles[1], 3)).toBe(0);
+  expect(shl(3, doubles[0])).toBe(3);
+  expect(shr(doubles[2], 1)).toBe(0);
+  expect(ushr(doubles[3], 0)).toBe(0);
+  expect(xor(doubles[1], 7)).toBe(7);
 });

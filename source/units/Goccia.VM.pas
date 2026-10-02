@@ -2329,7 +2329,7 @@ begin
   end;
 end;
 
-// ES2026 §7.1.7 ToInt32 of a numeric scalar register, for the bitwise and shift
+// ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
 // opcodes. A grkInt operand is already an integer, so its low 32 bits are the
 // answer; a grkFloat operand goes through the same NumberToInt32 the boxed
 // operator helpers reach through ToInt32Value. ToUint32 is the same 32 bits
