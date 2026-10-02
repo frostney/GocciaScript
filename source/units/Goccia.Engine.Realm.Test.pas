@@ -44,6 +44,11 @@ type
     FChildRejectionLog: TStringList;
     FRejectionHookHandles: Boolean;
     FRejectionHookHandlesAll: Boolean;
+    FRejectionHookHandlesFirst: Boolean;
+    FRejectionHookRaises: Boolean;
+    FRejectionHookEngine: TGocciaEngine;
+    FRejectionHookProgram: TGocciaProgram;
+    function CreateProgram(const ASource: string): TGocciaProgram;
     function RunInline(const ASource: string): TGocciaScriptResult;
     function RunRuntimeInline(const ASource: string): TGocciaScriptResult;
     function RealmProbe(const AArgs: TGocciaArgumentsCollection;
@@ -858,11 +863,43 @@ var
   Tracked: TGocciaValue;
 begin
   FRejectionLog.Add(RejectionMessage(AReason));
-  if FRejectionHookHandles then
+  if FRejectionHookRaises then
+    raise Exception.Create('hook failed');
+  if FRejectionHookHandles or
+     (FRejectionHookHandlesFirst and (FRejectionLog.Count = 1)) then
     TGocciaPromiseValue(APromise).MarkHandled;
   if FRejectionHookHandlesAll then
     for Tracked in TGocciaMicrotaskQueue.Instance.UnhandledRejectionsInOrder do
       TGocciaPromiseValue(Tracked).MarkHandled;
+  // A host that runs script on the engine from the hook, and collects.
+  if Assigned(FRejectionHookProgram) then
+  begin
+    FRejectionHookEngine.ExecuteProgram(FRejectionHookProgram);
+    TGarbageCollector.Instance.Collect;
+  end;
+end;
+
+function TTestEngineRealm.CreateProgram(const ASource: string): TGocciaProgram;
+var
+  Lexer: TGocciaLexer;
+  Lines: TStringList;
+  Parser: TGocciaParser;
+begin
+  Lexer := TGocciaLexer.Create(ASource, '<rejection-hook-program>');
+  Lines := TStringList.Create;
+  try
+    Lines.Text := ASource;
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<rejection-hook-program>',
+      Lines);
+    try
+      Result := Parser.Parse;
+    finally
+      Parser.Free;
+    end;
+  finally
+    Lines.Free;
+    Lexer.Free;
+  end;
 end;
 
 procedure TTestEngineRealm.RecordChildRejection(const APromise: TGocciaValue;
@@ -900,6 +937,9 @@ begin
       // What a bytecode run raises for a script's own throw.
       on E: EGocciaBytecodeThrow do
         ARaised := RejectionMessage(E.ThrownValue);
+      // What the hook itself raised.
+      on E: Exception do
+        ARaised := E.Message;
     end;
     Result := FRejectionLog.CommaText;
   finally
@@ -925,8 +965,6 @@ const
     'runChild();';
 var
   Engine: TGocciaEngine;
-  Lexer: TGocciaLexer;
-  Parser: TGocciaParser;
   ProgramNode: TGocciaProgram;
   Promise: TGocciaValue;
   Raised: string;
@@ -938,6 +976,10 @@ begin
   FNestedChildIsBytecode := AIsBytecode;
   FRejectionHookHandles := False;
   FRejectionHookHandlesAll := False;
+  FRejectionHookHandlesFirst := False;
+  FRejectionHookRaises := False;
+  FRejectionHookEngine := nil;
+  FRejectionHookProgram := nil;
   try
     // Every rejection is reported, oldest first, and the mode still decides.
     Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urIgnore, Raised))
@@ -961,6 +1003,20 @@ begin
       .ToBe('first');
     Expect<string>(Raised).ToBe('');
     FRejectionHookHandlesAll := False;
+
+    // The oldest one the hook left unhandled is the one that fails the run.
+    FRejectionHookHandlesFirst := True;
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urThrow, Raised))
+      .ToBe('first,second');
+    Expect<string>(Raised).ToBe('second');
+    FRejectionHookHandlesFirst := False;
+
+    // An exception the hook raises ends the run.
+    FRejectionHookRaises := True;
+    Expect<string>(HookedRejections(AExecutor, TWO_LEFT, urIgnore, Raised))
+      .ToBe('first');
+    Expect<string>(Raised).ToBe('hook failed');
+    FRejectionHookRaises := False;
 
     // Nothing is reported for a promise that got a handler in time, or for a
     // run that ends by exception.
@@ -988,19 +1044,7 @@ begin
     try
       Engine.UnhandledRejections := urIgnore;
       Engine.OnUnhandledRejection := RecordRejection;
-      Lexer := TGocciaLexer.Create(TWO_LEFT, '<rejection-hook-program>');
-      try
-        Source.Text := TWO_LEFT;
-        Parser := TGocciaParser.CreateFromLexer(Lexer,
-          '<rejection-hook-program>', Source);
-        try
-          ProgramNode := Parser.Parse;
-        finally
-          Parser.Free;
-        end;
-      finally
-        Lexer.Free;
-      end;
+      ProgramNode := CreateProgram(TWO_LEFT);
       try
         Engine.ExecuteProgram(ProgramNode);
       finally
@@ -1009,6 +1053,21 @@ begin
       Expect<string>(FRejectionLog.CommaText).ToBe('first,second');
       Expect<Boolean>(TGocciaMicrotaskQueue.Instance.TakeUnhandledRejection(
         Promise)).ToBe(False);
+
+      // A hook that runs script on the engine and collects still gets each
+      // rejection once: the run it starts reports nothing itself.
+      FRejectionLog.Clear;
+      FRejectionHookEngine := Engine;
+      FRejectionHookProgram := CreateProgram('1 + 1;');
+      ProgramNode := CreateProgram(TWO_LEFT);
+      try
+        Engine.ExecuteProgram(ProgramNode);
+      finally
+        ProgramNode.Free;
+        FreeAndNil(FRejectionHookProgram);
+        FRejectionHookEngine := nil;
+      end;
+      Expect<string>(FRejectionLog.CommaText).ToBe('first,second');
     finally
       Engine.Free;
       Source.Free;

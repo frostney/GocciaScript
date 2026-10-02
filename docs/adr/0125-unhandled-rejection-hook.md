@@ -22,15 +22,20 @@ without failing the run, could not see anything.
 
 **`TGocciaEngine.OnUnhandledRejection` observes; `UnhandledRejections` still
 decides.** Once a run has nothing left to do, the engine calls the hook for
-each promise the run left rejected with no handler, oldest first, with the
-promise and its reason. Then the mode is applied as before: `urThrow` raises
+each promise its microtask scope holds as rejected with no handler, oldest
+first, with the promise and its reason. Then the mode is applied as before: `urThrow` raises
 the oldest rejection's reason, `urIgnore` raises nothing. With the hook unset
 nothing changes.
 
 **The hook is called where the run would fail**, after the idle drain and
 before `Execute` clears its queue, from `Execute`, `ExecuteProgram`,
-`RunModule` and `RunModuleInScope`, in both execution modes. A nested engine
-reports its own rejections to its own hook.
+`RunModule` and `RunModuleInScope`, in both execution modes.
+
+**The scope is the one [ADR 0123](0123-per-execution-microtask-scopes.md)
+defines.** An `Execute` nested in another engine's run has a scope of its own,
+so it reports its own rejections to its own hook and leaves the enclosing
+run's alone. A nested `ExecuteProgram` or `RunModule` shares the enclosing
+run's scope, as it shares its jobs.
 
 **A promise the hook gives a handler is handled.** The hook runs before the
 mode is applied, so a host that deals with a rejection there keeps the run
@@ -62,6 +67,17 @@ failing, and what it left rejected goes with it, as ADR 0124 decided.
 - The hook may run script, for example by reading the reason's `message`. A
   rejection that script leaves is not reported; under `urThrow` it can still
   fail the run if it is the oldest one left.
+- A run the hook starts on the same engine reports nothing itself. The promise
+  being reported is still tracked while the hook runs, so that inner run would
+  otherwise report it again.
+- An engine with a hook that runs through `ExecuteProgram` or `RunModule`
+  inside another engine's run also reports that run's pending rejections, and
+  under `urIgnore` forgets them, so the enclosing run no longer fails for
+  them. Giving those entry points a scope of their own is a separate change.
+- The queue keeps a promise alive while it is unhandled. A hook that gives the
+  promise a handler and goes on using it has to root it itself; the engine
+  adds no root of its own, because temp roots are a set and removing one would
+  take it from whoever else holds it.
 - An exception the hook raises ends the run like any other host error.
 - The CLI tools do not install a hook; their behavior is unchanged.
 
