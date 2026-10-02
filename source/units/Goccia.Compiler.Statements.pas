@@ -2663,6 +2663,26 @@ begin
   end;
 end;
 
+// ES2026 §14.7.5.7 ForIn/OfBodyEvaluation step 6.g: a var-binding head
+// assigns each value to the binding hoisted by VarDeclaredNames (§8.2.8)
+// instead of creating a per-iteration binding.
+procedure EmitForOfVarHeadBinding(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaForOfStatement; const AValueReg: UInt16);
+begin
+  if Assigned(AStmt.BindingPattern) then
+  begin
+    CollectDestructuringVarBindings(AStmt.BindingPattern, ACtx.Scope);
+    EmitDestructuring(ACtx, AStmt.BindingPattern, AValueReg,
+      ACtx.GlobalBackedTopLevel);
+  end
+  else if AStmt.BindingName <> '' then
+  begin
+    ACtx.Scope.DeclareVarLocal(AStmt.BindingName);
+    EmitBindingAssignmentFromRegister(ACtx, AStmt.BindingName, AValueReg,
+      ACtx.GlobalBackedTopLevel);
+  end;
+end;
+
 procedure CompileCountedForOf(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement; const AArrayLocalIdx: Integer);
 var
@@ -2705,6 +2725,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
@@ -2869,6 +2891,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);
@@ -3159,6 +3183,8 @@ begin
 
     if Assigned(AStmt.AssignmentTarget) then
       EmitDestructuring(ACtx, AStmt.AssignmentTarget, ValueReg, True)
+    else if AStmt.IsVar then
+      EmitForOfVarHeadBinding(ACtx, AStmt, ValueReg)
     else if Assigned(AStmt.BindingPattern) then
     begin
       CollectDestructuringBindings(AStmt.BindingPattern, ACtx.Scope, AStmt.IsConst);

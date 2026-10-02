@@ -11,6 +11,9 @@ compatibility: >-
   CI evidence. Selected tickets also require create-issue and access to the Git
   hosting service; selected immediate deliveries require deliver. Timing
   ledger analysis uses Python 3 when available telemetry calls for it.
+metadata:
+  agents-role: entry-point
+  agents-text: Review a workstream and agree process improvements.
 ---
 
 # Run retrospective

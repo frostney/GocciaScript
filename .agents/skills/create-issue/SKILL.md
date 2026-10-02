@@ -10,6 +10,9 @@ compatibility: >-
   Requires the GitHub CLI (gh) 2.99 or newer authenticated to the target
   repository with permission to create issues (triage access to apply labels,
   write access to create one), and network access.
+metadata:
+  agents-role: entry-point
+  agents-text: File a project-aligned GitHub issue from a short description.
 ---
 
 # Create issue
