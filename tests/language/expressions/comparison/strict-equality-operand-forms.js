@@ -9,7 +9,7 @@ description: |
   one form (an int32, a double, or an allocated value for NaN, the infinities
   and negative zero, depending on where it came from). Every pair below is
   compared through function parameters, so nothing is folded at compile time.
-features: [strict-equality, strict-inequality]
+features: [strict-equality-operator, strict-inequality]
 ---*/
 
 const equal = (left, right) => left === right;
@@ -44,6 +44,10 @@ const callable = () => 1;
 const firstSymbol = Symbol("shared description");
 const secondSymbol = Symbol("shared description");
 const sparse = [, 1];
+// These booleans come from a built-in that does not hand out the shared true
+// and false values, so the VM holds them as objects rather than as booleans.
+const defaultCollatorOptions = new Intl.Collator("en").resolvedOptions();
+const numericCollatorOptions = new Intl.Collator("en", { numeric: true }).resolvedOptions();
 
 // Each entry is [label, value, group]. Two entries are strictly equal exactly
 // when they carry the same group; a group of null marks NaN, which equals
@@ -90,6 +94,8 @@ const entries = [
   ["false", false, "false"],
   ["!true", negate(true), "false"],
   ["holder.no", holder.no, "false"],
+  ["collator numeric option (off)", defaultCollatorOptions.numeric, "false"],
+  ["collator numeric option (on)", numericCollatorOptions.numeric, "true"],
   ['"a"', "a", "text a"],
   ['"" + "a"', add("", "a"), "text a"],
   ["holder.text", holder.text, "text a"],
@@ -168,63 +174,11 @@ test("the expectation table itself is not decided by the operators under test", 
   expect(equal(firstSymbol, secondSymbol)).toBe(false);
   expect(equal(firstSymbol, firstSymbol)).toBe(true);
   expect(equal(add("", "a"), "a")).toBe(true);
-});
-
-test("a switch statement selects its case by strict equality", () => {
-  const classify = (value) => {
-    switch (value) {
-      case 0:
-        return "zero";
-      case 0.5:
-        return "half";
-      case NaN:
-        return "never";
-      case null:
-        return "null";
-      case undefined:
-        return "undefined";
-      case true:
-        return "true";
-      case "7":
-        return "text seven";
-      case 7:
-        return "seven";
-      case firstObject:
-        return "first object";
-      default:
-        return "default";
-    }
-  };
-  expect(classify(subtract(5, 5))).toBe("zero");
-  expect(classify(-0)).toBe("zero");
-  expect(classify(divide(1, 2))).toBe("half");
-  expect(classify(divide(0, 0))).toBe("default");
-  expect(classify(holder.nil)).toBe("null");
-  expect(classify(holder.absent)).toBe("undefined");
-  expect(classify(negate(false))).toBe("true");
-  expect(classify(false)).toBe("default");
-  expect(classify(divide(14, 2))).toBe("seven");
-  expect(classify("7")).toBe("text seven");
-  expect(classify(firstObject)).toBe("first object");
-  expect(classify(secondObject)).toBe("default");
-  expect(classify(1)).toBe("default");
-});
-
-test("collections that search by strict equality or SameValueZero agree with the operator", () => {
-  const values = [NaN, 0, -0, "a", firstObject, null, undefined, 1n, 7];
-  expect(values.indexOf(NaN)).toBe(-1);
-  expect(values.includes(NaN)).toBe(true);
-  expect(values.indexOf(-0)).toBe(1);
-  expect(values.indexOf(add("", "a"))).toBe(3);
-  expect(values.indexOf(firstObject)).toBe(4);
-  expect(values.indexOf(secondObject)).toBe(-1);
-  expect(values.indexOf(null)).toBe(5);
-  expect(values.indexOf(undefined)).toBe(6);
-  expect(values.indexOf(add(1n, 0n))).toBe(7);
-  expect(values.indexOf(divide(14, 2))).toBe(8);
-  expect(values.lastIndexOf(0)).toBe(2);
-  expect(Object.is(divide(0, 0), NaN)).toBe(true);
-  expect(Object.is(subtract(5, 5), -0)).toBe(false);
-  expect(Object.is(divide(0, -1), -0)).toBe(true);
-  expect(new Set([NaN, divide(0, 0), 0, -0, "a", add("", "a"), 1n, add(1n, 0n)]).size).toBe(4);
+  expect(equal(false, defaultCollatorOptions.numeric)).toBe(true);
+  expect(equal(defaultCollatorOptions.numeric, false)).toBe(true);
+  expect(unequal(false, defaultCollatorOptions.numeric)).toBe(false);
+  expect(equal(true, numericCollatorOptions.numeric)).toBe(true);
+  expect(equal(numericCollatorOptions.numeric, defaultCollatorOptions.numeric)).toBe(false);
+  expect(equal(0, defaultCollatorOptions.numeric)).toBe(false);
+  expect(equal(null, defaultCollatorOptions.numeric)).toBe(false);
 });

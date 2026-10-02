@@ -2392,11 +2392,11 @@ end;
 // function cannot settle from the register kinds, one pointer compare and
 // IsPrimitive alone:
 //   - a hole, or an object register that holds nil (read as undefined);
-//   - an object register that holds a primitive, compared with anything but
-//     itself: a register is not guaranteed to hold its value in canonical
-//     form, so the object may be a boxed number, boolean, null or undefined
-//     that equals a scalar, or a string or BigInt that equals another by
-//     content;
+//   - an object register that holds a primitive, compared with a scalar or
+//     with another primitive object: a register is not guaranteed to hold its
+//     value in canonical form, so the object may be an allocated number,
+//     boolean, null or undefined that equals a scalar, or a string or BigInt
+//     that equals another by content;
 //   - a number object compared with itself, which is unequal when it is NaN.
 type
   TGocciaVMStrictEquality = (vseUndecided, vseEqual, vseNotEqual);

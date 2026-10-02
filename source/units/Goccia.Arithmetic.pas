@@ -564,15 +564,12 @@ end;
 // that has one installs an implicit exception frame on every call. The string
 // comparison lives here so that ValuesEqual, which most callers leave before
 // reaching a string, has none (docs/core-patterns.md, "Managed Locals on Hot
-// Paths"). FPC would inline a function this small at -O3 and above and bring
-// the frame back with it.
-{$IFDEF FPC}{$PUSH}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+// Paths").
 function StringValuesEqual(
   const ALeft, ARight: TGocciaStringLiteralValue): Boolean;
 begin
   Result := UTF16StringsEqual(ALeft.Value, ARight.Value);
 end;
-{$IFDEF FPC}{$POP}{$ENDIF}
 
 function ValuesEqual(const ALeft, ARight: TGocciaValue;
   const ANumberKind: TGocciaNumberEqualityKind): Boolean; {$IFDEF FPC}inline;{$ENDIF}
