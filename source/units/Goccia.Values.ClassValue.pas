@@ -3329,4 +3329,8 @@ begin
         ValPair.Value.MarkReferences;
 end;
 
+
+initialization
+  RegisterOrdinaryObjectClass(TGocciaInstanceValue);
+
 end.

@@ -24,6 +24,9 @@ uses
 { Records AStore, the shim's slot WeakMap, for the current realm. }
 procedure RegisterDateValueStore(const AStore: TGocciaValue);
 
+{ Records AConstructor, the realm's %Date%, for CreateDateObject. }
+procedure RegisterDateConstructor(const AConstructor: TGocciaValue);
+
 { True when AObject has a [[DateValue]] slot in the current realm. }
 function HasDateValue(const AObject: TGocciaObjectValue): Boolean;
 
@@ -32,16 +35,24 @@ function HasDateValue(const AObject: TGocciaObjectValue): Boolean;
 function TryGetDateValue(const AObject: TGocciaObjectValue;
   out ATimeValue: Double): Boolean;
 
+{ A new Date of the current realm holding ATimeValue, built by %Date% (so its
+  prototype is %Date.prototype%). Only valid once the realm's Date shim has
+  been evaluated, which any existing Date guarantees; nil before that. }
+function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
+
 implementation
 
 uses
   Math,
 
+  Goccia.Arguments.Collection,
   Goccia.Realm,
+  Goccia.Values.FunctionBase,
   Goccia.Values.WeakMapValue;
 
 var
   GDateValueStoreSlot: TGocciaRealmSlotId;
+  GDateConstructorSlot: TGocciaRealmSlotId;
 
 function CurrentDateValueStore: TGocciaWeakMapValue; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -59,6 +70,12 @@ procedure RegisterDateValueStore(const AStore: TGocciaValue);
 begin
   if (CurrentRealm <> nil) and (AStore is TGocciaWeakMapValue) then
     CurrentRealm.SetSlot(GDateValueStoreSlot, AStore);
+end;
+
+procedure RegisterDateConstructor(const AConstructor: TGocciaValue);
+begin
+  if (CurrentRealm <> nil) and Assigned(AConstructor) then
+    CurrentRealm.SetSlot(GDateConstructorSlot, AConstructor);
 end;
 
 function HasDateValue(const AObject: TGocciaObjectValue): Boolean;
@@ -83,7 +100,34 @@ begin
     ATimeValue := TGocciaNumberLiteralValue(Slot).Value;
 end;
 
+function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
+var
+  Arguments: TGocciaArgumentsCollection;
+  Constructed: TGocciaValue;
+  DateConstructor: TObject;
+begin
+  Result := nil;
+  if CurrentRealm = nil then
+    Exit;
+  DateConstructor := CurrentRealm.GetSlot(GDateConstructorSlot);
+  if not (DateConstructor is TGocciaValue) then
+    Exit;
+  // new Date(t) stores TimeClip(t), which is t itself for any time value a
+  // Date already holds, NaN included.
+  Arguments := TGocciaArgumentsCollection.Create(
+    [TGocciaNumberLiteralValue.Create(ATimeValue)]);
+  try
+    Constructed := ConstructValue(TGocciaValue(DateConstructor), Arguments,
+      TGocciaValue(DateConstructor));
+  finally
+    Arguments.Free;
+  end;
+  if Constructed is TGocciaObjectValue then
+    Result := TGocciaObjectValue(Constructed);
+end;
+
 initialization
   GDateValueStoreSlot := RegisterRealmSlot('%DateValueStore%');
+  GDateConstructorSlot := RegisterRealmSlot('%DateConstructor%');
 
 end.

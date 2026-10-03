@@ -60,6 +60,12 @@ type
 
     property BufferValue: TGocciaValue read FBufferValue;
     property ByteOffset: Integer read FByteOffset;
+    // [[ByteLength]] of a fixed-length view; meaningless when IsLengthTracking.
+    property FixedByteLength: Integer read FByteLength;
+    // True when [[ByteLength]] is AUTO: the view tracks a resizable buffer.
+    property IsLengthTracking: Boolean read IsAutoLength;
+    // ES2026 §25.3.1.4 IsViewOutOfBounds, which a detached buffer also is.
+    property IsOutOfBounds: Boolean read IsViewOutOfBounds;
   published
     function DataViewBufferGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DataViewByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

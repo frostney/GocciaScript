@@ -70,3 +70,24 @@ test("second argument with arbitrary value does not throw", () => {
   expect(structuredClone("hello", null)).toBe("hello");
   expect(structuredClone(true, {})).toBe(true);
 });
+
+// DOMException is a serializable platform object: its name and message
+// survive, and the clone is a DOMException of the current realm.
+test("clones a DOMException as a DOMException", () => {
+  const original = new DOMException("msg", "AbortError");
+  original.extra = 1;
+  const clone = structuredClone(original);
+  expect(clone instanceof DOMException).toBe(true);
+  expect(clone).not.toBe(original);
+  expect(clone.name).toBe("AbortError");
+  expect(clone.message).toBe("msg");
+  expect(clone.code).toBe(20);
+  expect(clone.extra).toBeUndefined();
+});
+
+test("clones a DOMException with the default name", () => {
+  const clone = structuredClone(new DOMException("x"));
+  expect(clone.name).toBe("Error");
+  expect(clone.message).toBe("x");
+  expect(clone.code).toBe(0);
+});

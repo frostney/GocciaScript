@@ -640,6 +640,8 @@ resourcestring
   SErrorStructuredCloneArgRequired = 'Failed to execute ''structuredClone'': 1 argument required, but only 0 present.';
   SErrorStructuredCloneNotCloneable = '%s could not be cloned.';
   SErrorStructuredCloneValueNotCloneable = 'value could not be cloned.';
+  SErrorStructuredCloneDetachedBuffer = 'An ArrayBuffer is detached and could not be cloned.';
+  SErrorStructuredCloneOutOfBoundsView = '%s is out of bounds of its ArrayBuffer and could not be cloned.';
 
   // Property descriptor errors
   SErrorPropertyDescriptorMustBeObject = 'property descriptor must be an object';

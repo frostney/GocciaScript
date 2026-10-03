@@ -66,6 +66,10 @@ type
 
 procedure ClearDisposableStackSlotMap;
 
+{ True when AValue is a DisposableStack or AsyncDisposableStack, that is, has
+  a [[DisposableState]] internal slot. }
+function IsDisposableStackObject(const AValue: TGocciaValue): Boolean;
+
 implementation
 
 uses
@@ -129,6 +133,12 @@ threadvar
 var
   GDisposableStackPrototypeSlot: TGocciaRealmSlotId;
   GAsyncDisposableStackPrototypeSlot: TGocciaRealmSlotId;
+
+function IsDisposableStackObject(const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(GSlotMap) and (AValue is TGocciaObjectValue) and
+    GSlotMap.ContainsKey(TGocciaObjectValue(AValue));
+end;
 
 function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 begin

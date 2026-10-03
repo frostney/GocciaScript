@@ -257,6 +257,13 @@ function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
   const ASymbol: TGocciaSymbolValue;
   const AValue, AReceiver: TGocciaValue): Boolean;
 
+{ The classes whose instances are ordinary objects with no internal slot beyond
+  [[Prototype]], [[Extensible]] and [[PrivateElements]]: object literals and
+  class instances. Each unit that defines such a class registers it from its
+  initialization section. A subclass is not covered by its parent's entry. }
+procedure RegisterOrdinaryObjectClass(const AClass: TClass);
+function IsOrdinaryObjectClass(const AClass: TClass): Boolean;
+
 
 implementation
 
@@ -2581,7 +2588,29 @@ begin
   Result := True;
 end;
 
+var
+  GOrdinaryObjectClasses: array of TClass;
+
+procedure RegisterOrdinaryObjectClass(const AClass: TClass);
+begin
+  if IsOrdinaryObjectClass(AClass) then
+    Exit;
+  SetLength(GOrdinaryObjectClasses, System.Length(GOrdinaryObjectClasses) + 1);
+  GOrdinaryObjectClasses[High(GOrdinaryObjectClasses)] := AClass;
+end;
+
+function IsOrdinaryObjectClass(const AClass: TClass): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(GOrdinaryObjectClasses) do
+    if GOrdinaryObjectClasses[I] = AClass then
+      Exit(True);
+  Result := False;
+end;
+
 initialization
+  RegisterOrdinaryObjectClass(TGocciaObjectValue);
   GObjectPrototypeSlot := RegisterRealmSlot('Object.prototype');
   GObjectMethodHostSlot := RegisterRealmSlot('Object.prototype.methodHost');
 

@@ -1056,6 +1056,7 @@ begin
         // The slot WeakMap is the [[DateValue]] internal slot native code
         // tests for (Goccia.Values.DateData).
         RegisterDateValueStore(ModuleScope.GetValue(DATE_VALUE_STORE_NAME));
+        RegisterDateConstructor(Result);
       end;
     finally
       ProgramNode.Free;
