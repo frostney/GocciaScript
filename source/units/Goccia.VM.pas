@@ -9025,29 +9025,11 @@ begin
     end;
   end
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
-          (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
-  begin
-    // ES2026 §6.2.5.6 PutValue: an assignment to a class runs [[Set]], so an
-    // inherited static setter is called and a non-writable property rejects
-    // the write, exactly as the constant-name store does.
-    Key := ClassifyPropertyKey(AKeyReg, False);
-    if Key.Kind = pkkSymbol then
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .AssignSymbolProperty(Key.Symbol, Value)
-    else
-    begin
-      KeyName := PropertyKeyName(Key);
-      if (caoHandlePrivateKeys in AOptions) and
-         IsBytecodePrivateKey(KeyName) then
-        SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName, Value)
-      else
-        TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-          .SetProperty(KeyName, Value);
-    end;
-  end
-  else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
+    // ES2026 §6.2.5.6 PutValue: an assignment runs [[Set]] on every object,
+    // a class included, so an inherited static setter is called and a
+    // non-writable property rejects the write.
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
