@@ -84,6 +84,20 @@ describe("typed array subclasses", () => {
     expect(Uint8Array.prototype.slice.call(made).length).toBe(2);
   });
 
+  test("Reflect.construct and a bound constructor pass their arguments to the constructor body only", () => {
+    let iterated = 0;
+    const iterable = { *[Symbol.iterator]() { iterated++; yield 1; } };
+    class Fixed extends Uint8Array { constructor() { super(4); } }
+    class Inherited extends Fixed {}
+    const Bound = Fixed.bind(null);
+
+    expect(Reflect.construct(Fixed, [-1]).length).toBe(4);
+    expect(Reflect.construct(Fixed, [iterable]).length).toBe(4);
+    expect(Reflect.construct(Inherited, [-1]).length).toBe(4);
+    expect(new Bound(-1).length).toBe(4);
+    expect(iterated).toBe(0);
+  });
+
   test("a second super() throws and keeps the first receiver", () => {
     class Twice extends Uint8Array {
       constructor() {
@@ -111,6 +125,7 @@ describe("buffer subclasses", () => {
     expect(new Eight().byteLength).toBe(8);
     expect([resizable.byteLength, resizable.maxByteLength, resizable.resizable]).toEqual([4, 16, true]);
     expect(new Eight(-1).byteLength).toBe(8);
+    expect(Reflect.construct(Eight, [-1]).byteLength).toBe(8);
   });
 
   test("a SharedArrayBuffer subclass is built from the super() arguments", () => {

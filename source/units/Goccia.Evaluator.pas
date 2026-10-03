@@ -11298,6 +11298,8 @@ var
   WalkClass: TGocciaClassValue;
   ImplicitSuperClass: TGocciaClassValue;
   NativeInstance: TGocciaObjectValue;
+  ConstructorBodyBeforeBuiltIn: Boolean;
+  BuiltInConstructedBySuper: Boolean;
   ConstructedValue: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
@@ -11409,7 +11411,50 @@ begin
     EffectiveNewTarget := ANewTarget
   else
     EffectiveNewTarget := AClassValue;
-  if Assigned(ANewTarget) then
+
+  { §15.7.14 step 15a: this class runs an implicit constructor, and so does
+    every class between it and the first ancestor that has a constructor body
+    of its own. The chain has to be resolved before the receiver is allocated,
+    because which constructor it selects decides whether allocating one here is
+    right at all. }
+  ResolveImplicitConstructorChain(AClassValue, Chain);
+  ImplicitSuperClass := Chain.HostClass;
+
+  { A class-value built-in (Array, Map, a typed array, ArrayBuffer and the
+    rest of NativeInstanceDefaultPrototype) is allocated here only when no
+    constructor body stands between this class and it, so that the implicit
+    constructors forward the `new` arguments to it unchanged. A constructor
+    body calls super() with arguments of its own, and the super() that reaches
+    the built-in allocates the receiver from those (ES2026 §13.3.7.1 SuperCall
+    step 6, Construct(func, argList, newTarget)), reading the prototype from
+    new.target itself; allocating it here from the `new` arguments ran the
+    built-in's validation and coercion on the wrong values. The receiver this
+    function allocates then is only a stand-in that super() replaces, so it
+    takes the class's own prototype rather than a second read of
+    new.target.prototype. Every hop is §13.3.7.3 GetSuperConstructor so that a
+    retargeted constructor allocates from what it now points at. }
+  ConstructorBodyBeforeBuiltIn := Assigned(AClassValue.ConstructorMethod) or
+    (Assigned(ImplicitSuperClass) and
+     Assigned(ImplicitSuperClass.ConstructorMethod));
+  BuiltInConstructedBySuper := False;
+  if ConstructorBodyBeforeBuiltIn then
+  begin
+    WalkClass := AClassValue;
+    while Assigned(WalkClass) do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+      if WalkClass.NativeInstanceDefaultPrototype <> nil then
+      begin
+        BuiltInConstructedBySuper := True;
+        Break;
+      end;
+      WalkClass := ImplicitSuperConstructorClass(WalkClass);
+    end;
+  end;
+
+  if Assigned(ANewTarget) and not BuiltInConstructedBySuper then
     InstancePrototype := GetProtoFromConstructor(ANewTarget)
   else
     InstancePrototype := AClassValue.Prototype;
@@ -11428,28 +11473,8 @@ begin
       Exit(AArguments.GetElement(0).Box);
   end;
 
-  { §15.7.14 step 15a: this class runs an implicit constructor, and so does
-    every class between it and the first ancestor that has a constructor body
-    of its own. The chain has to be resolved before the receiver is allocated,
-    because which constructor it selects decides whether allocating one here is
-    right at all. }
-  ResolveImplicitConstructorChain(AClassValue, Chain);
-  ImplicitSuperClass := Chain.HostClass;
-
   NativeInstance := nil;
-  { A class-value built-in (Array, Map, a typed array, ArrayBuffer and the
-    rest of NativeInstanceDefaultPrototype) is pre-created here only when no
-    constructor body stands between this class and it, so that the implicit
-    constructors forward the `new` arguments to it unchanged. A constructor
-    body calls super() with arguments of its own, and the super() that reaches
-    the built-in allocates the receiver from those (ES2026 §13.3.7.1 SuperCall
-    step 6, Construct(func, argList, newTarget)); pre-creating it from the
-    `new` arguments ran the built-in's validation and coercion on the wrong
-    values. Every hop is §13.3.7.3 GetSuperConstructor so that a retargeted
-    constructor allocates from what it now points at. }
-  if (not Assigned(AClassValue.ConstructorMethod)) and
-     not (Assigned(ImplicitSuperClass) and
-          Assigned(ImplicitSuperClass.ConstructorMethod)) then
+  if not ConstructorBodyBeforeBuiltIn then
   begin
     WalkClass := AClassValue;
     while Assigned(WalkClass) do
