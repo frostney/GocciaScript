@@ -300,7 +300,6 @@ end;
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 type
   TGocciaTemplateObjectArrayValue = class(TGocciaArrayValue)
@@ -5647,7 +5646,8 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
+  CycleMark: TGocciaObjectValue;
+  CycleSteps, CycleLimit: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -5665,15 +5665,19 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links and has no length limit.
+      // Those links should not form a cycle (every [[SetPrototypeOf]] refuses
+      // one, and the walk does not follow a Proxy's [[GetPrototypeOf]], so a
+      // cycle closed through a Proxy ends it), but an internal write that
+      // skipped the check would make the walk loop forever. Brent's method
+      // notices a revisited link without remembering the objects: CycleMark
+      // jumps to the current link after 1, 2, 4, ... steps.
       Current := Obj;
-      ChainDepth := 0;
+      CycleMark := Obj;
+      CycleSteps := 0;
+      CycleLimit := 1;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
@@ -5704,6 +5708,15 @@ begin
           end;
         end;
         Current := Current.Prototype;
+        if Current = CycleMark then
+          ThrowRangeError(SErrorMaxCallStackExceeded);
+        Inc(CycleSteps);
+        if CycleSteps = CycleLimit then
+        begin
+          CycleMark := Current;
+          CycleSteps := 0;
+          CycleLimit := CycleLimit * 2;
+        end;
       end;
     finally
       Visited.Free;
