@@ -65,6 +65,26 @@ function AdvanceProtocolLastIndexAfterEmptyMatch(
   const AUnicode: Boolean): Integer;
 function RegExpObjectToString(const AValue: TGocciaValue): string;
 
+{ True when Get(AValue, "exec") returns the built-in exec without running
+  user code: AValue is a RegExp of this realm whose prototype is
+  RegExp.prototype, with no own "exec", and RegExp.prototype's own "exec" is a
+  data property holding the built-in. RegExpExec then runs RegExpBuiltinExec,
+  and as long as no user code runs, the global loops can match through a
+  TGocciaRegExpScanner instead of the protocol. }
+function IsBuiltinExecRegExp(const AValue: TGocciaValue): Boolean;
+{ A scanner over AInput with AValue's compiled program and internal flags.
+  AValue must be a RegExp instance; the caller frees the scanner. }
+function CreateRegExpScanner(const AValue: TGocciaValue;
+  const AInput: string): TGocciaRegExpScanner;
+{ Whether AValue's internal flags contain AFlag. }
+function HasInternalRegExpFlag(const AValue: TGocciaValue;
+  const AFlag: Char): Boolean;
+{ RegExpBuiltinExec's match array. AInputValue becomes its "input" property;
+  pass a value the caller keeps reachable, so one string value can serve
+  every match of a loop. }
+function BuildRegExpMatchArray(const AInputValue: TGocciaValue;
+  const AMatchResult: TGocciaRegExpMatchResult): TGocciaValue;
+
 implementation
 
 uses
@@ -390,7 +410,19 @@ begin
   end;
 end;
 
-function BuildMatchArray(const AInput: string;
+// CreateDataPropertyOrThrow for a property the object cannot have yet: the
+// object was just created by the caller, is extensible, and AName is not an
+// array index, so the validation and descriptor copy of DefineProperty are
+// not needed.
+procedure AddNewDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue);
+begin
+  AObject.Properties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+function BuildMatchArrayWithInput(const AInput: string;
+  const AInputValue: TGocciaValue;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
 var
   IndicesArray: TGocciaArrayValue;
@@ -427,12 +459,15 @@ begin
     else
       MatchArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-  MatchArray.CreateDataPropertyOrThrow(PROP_INDEX,
+  AddNewDataProperty(MatchArray, PROP_INDEX,
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
-  MatchArray.CreateDataPropertyOrThrow(PROP_INPUT,
-    TGocciaStringLiteralValue.Create(AInput));
+  if Assigned(AInputValue) then
+    AddNewDataProperty(MatchArray, PROP_INPUT, AInputValue)
+  else
+    AddNewDataProperty(MatchArray, PROP_INPUT,
+      TGocciaStringLiteralValue.Create(AInput));
   GroupsValue := BuildNamedGroupsValue(AMatchResult);
-  MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS, GroupsValue);
+  AddNewDataProperty(MatchArray, PROP_GROUPS, GroupsValue);
 
   if AMatchResult.HasIndices then
   begin
@@ -471,7 +506,7 @@ begin
       IndicesArray.CreateDataPropertyOrThrow(PROP_GROUPS,
         TGocciaUndefinedLiteralValue.UndefinedValue);
 
-    MatchArray.CreateDataPropertyOrThrow(PROP_INDICES, IndicesArray);
+    AddNewDataProperty(MatchArray, PROP_INDICES, IndicesArray);
   end;
 
   Result := MatchArray;
@@ -480,6 +515,18 @@ begin
     RemoveTempRootIfNeeded(IndicesRoot);
     RemoveTempRootIfNeeded(MatchArrayRoot);
   end;
+end;
+
+function BuildMatchArray(const AInput: string;
+  const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
+begin
+  Result := BuildMatchArrayWithInput(AInput, nil, AMatchResult);
+end;
+
+function BuildRegExpMatchArray(const AInputValue: TGocciaValue;
+  const AMatchResult: TGocciaRegExpMatchResult): TGocciaValue;
+begin
+  Result := BuildMatchArrayWithInput('', AInputValue, AMatchResult);
 end;
 
 class function TGocciaRegExpExecutionResult.FromNative(
@@ -955,6 +1002,43 @@ begin
   Result := Goccia.RegExp.Engine.RegExpToString(
     GetRegExpInternalSource(AValue),
     GetRegExpInternalFlags(AValue));
+end;
+
+function IsBuiltinExecRegExp(const AValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Obj, Prototype: TGocciaObjectValue;
+begin
+  Result := False;
+  if not IsRegExpInstance(AValue) then
+    Exit;
+  Obj := TGocciaObjectValue(AValue);
+  if not (Obj.RegExpData is TGocciaRegExpProgramData) then
+    Exit;
+  Prototype := Obj.Prototype;
+  if not Assigned(Prototype) or (Prototype <> GetRegExpPrototype) then
+    Exit;
+  if Assigned(Obj.GetOwnPropertyDescriptor(PROP_EXEC)) then
+    Exit;
+  Descriptor := Prototype.GetOwnPropertyDescriptor(PROP_EXEC);
+  Result := (Descriptor is TGocciaPropertyDescriptorData) and
+    IsDefaultRegExpExecMethod(TGocciaPropertyDescriptorData(Descriptor).Value);
+end;
+
+function CreateRegExpScanner(const AValue: TGocciaValue;
+  const AInput: string): TGocciaRegExpScanner;
+var
+  ProgramData: TGocciaRegExpProgramData;
+begin
+  ProgramData := GetRegExpProgramData(AValue);
+  Result := TGocciaRegExpScanner.Create(ProgramData.FCompiledProgram,
+    ProgramData.FOriginalSource, ProgramData.FOriginalFlags, AInput);
+end;
+
+function HasInternalRegExpFlag(const AValue: TGocciaValue;
+  const AFlag: Char): Boolean;
+begin
+  Result := HasRegExpFlag(GetRegExpProgramData(AValue).FOriginalFlags, AFlag);
 end;
 
 initialization
