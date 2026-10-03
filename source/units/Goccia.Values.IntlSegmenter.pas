@@ -628,6 +628,11 @@ begin
         IntlSegmentIteratorSymbolIterator,
         0,
         [pfConfigurable, pfWritable]);
+      // ECMA-402 %IntlSegmentIteratorPrototype% [ %Symbol.toStringTag% ]
+      Members.AddSymbolDataProperty(
+        TGocciaSymbolValue.WellKnownToStringTag,
+        TGocciaStringLiteralValue.Create('Segmenter String Iterator'),
+        [pfConfigurable]);
       FSegmentIteratorPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;

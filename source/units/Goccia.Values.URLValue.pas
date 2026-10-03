@@ -244,6 +244,11 @@ begin
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod(PROP_TO_JSON, URLToJSON, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_URL),
+      [pfConfigurable]);
     FPrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

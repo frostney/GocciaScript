@@ -54,7 +54,6 @@ type
 
     function ToArray: TGocciaArrayValue;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -341,11 +340,6 @@ end;
 function TGocciaMapValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_MAP;
-end;
-
-function TGocciaMapValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 { Instance methods }

@@ -72,6 +72,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.FFI.UTF8String,
   Goccia.GarbageCollector,
+  Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -79,6 +80,9 @@ uses
   Goccia.Values.FFIType,
   Goccia.Values.NativeFunction,
   Goccia.VM.Exception;
+
+var
+  GFFICallbackPrototypeSlot: TGocciaRealmSlotId;
 
 const
   FFI_CALLBACK_TAG = 'FFICallback';
@@ -405,7 +409,8 @@ begin
      not Assigned(ACallable) or not ACallable.IsCallable then
     ThrowTypeError(SErrorFFICallbackRequiresCallable,
       SSuggestFFIUsage);
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  inherited Create(FFITaggedPrototype(GFFICallbackPrototypeSlot,
+    FFI_CALLBACK_TAG));
   FSlot := -1;
   FLifetimeGuard := TGocciaFFICallbackLifetimeGuard.Create(Self);
   FDescriptor := ADescriptor;
@@ -745,6 +750,7 @@ end;
 
 initialization
   SetFFICallbackDispatchHook(@DispatchCallbackHook);
+  GFFICallbackPrototypeSlot := RegisterRealmSlot('%FFICallback.prototype%');
 
 finalization
   SetFFICallbackDispatchHook(nil);

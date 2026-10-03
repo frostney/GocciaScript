@@ -116,7 +116,8 @@ uses
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.EventValue,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 const
   NANOSECONDS_PER_MILLISECOND = 1000000;
@@ -267,6 +268,11 @@ begin
       [pfConfigurable]);
     Members.AddNamedMethod(PROP_THROW_IF_ABORTED, ThrowIfAborted, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_ABORT_SIGNAL),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;
@@ -530,6 +536,11 @@ begin
     Members.AddAccessor(PROP_SIGNAL, SignalGetter, nil, [pfConfigurable]);
     Members.AddNamedMethod(PROP_ABORT, Abort, 1, gmkPrototypeMethod,
       [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_ABORT_CONTROLLER),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

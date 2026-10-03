@@ -10,6 +10,7 @@ uses
 
   OrderedStringMap,
 
+  Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -201,6 +202,8 @@ type
   public
     class function SharedPrototype: TGocciaObjectValue; static;
     class function SharedModuleSourcePrototype: TGocciaObjectValue; static;
+    class function ToStringTagGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     constructor Create(const APath: string; const ASourceText: string);
     function ToStringTag: string; override;
     property Path: string read FPath;
@@ -289,6 +292,7 @@ uses
   Goccia.Scope,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.VM.Exception;
 
 const
@@ -1270,7 +1274,26 @@ begin
     Result := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype);
     CurrentRealm.SetSlot(GModuleSourcePrototypeSlot, Result);
+    // %AbstractModuleSource%.prototype [ %Symbol.toStringTag% ]: an accessor
+    // that reports [[ModuleSourceClassName]], and undefined for anything
+    // without that slot.
+    Result.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(ToStringTagGetter,
+          'get [Symbol.toStringTag]', 0),
+        nil, [pfConfigurable]));
   end;
+end;
+
+class function TGocciaModuleSourceValue.ToStringTagGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue is TGocciaModuleSourceValue then
+    Result := TGocciaStringLiteralValue.Create(
+      TGocciaModuleSourceValue(AThisValue).ToStringTag)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 class function TGocciaModuleSourceValue.SharedModuleSourcePrototype:
