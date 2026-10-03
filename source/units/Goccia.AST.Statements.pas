@@ -337,6 +337,10 @@ type
     FieldInitializer: TGocciaExpression;
     StaticBlockBody: TGocciaBlockStatement;
     TypeAnnotation: string;
+    { cekAccessor only: the private name that holds the value. A private
+      auto-accessor stores it under its own name; a public one under a name
+      no source text can spell (see TGocciaParser.AutoAccessorStorageName). }
+    AccessorStorageName: string;
   end;
 
   TGocciaFieldOrderEntry = record
@@ -346,6 +350,9 @@ type
     ElementIndex: Integer;
     ComputedKeyExpression: TGocciaExpression;
     FieldInitializer: TGocciaExpression;
+    { The entry stores an auto-accessor's value; ElementIndex names the
+      accessor, whose own name is the one its initializer is named after. }
+    IsAutoAccessorStorage: Boolean;
   end;
 
   TGocciaClassElementArray = array of TGocciaClassElement;

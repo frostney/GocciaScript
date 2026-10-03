@@ -182,7 +182,12 @@ const
   //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
   //               declaration's module request in C, so a missing-export
   //               SyntaxError names the specifier, not the host path.
-  GOCCIA_FORMAT_VERSION = 82;
+  //   v82 -> v83: a public auto-accessor compiles to a private storage field
+  //               and a getter/setter pair defined with OP_DEFINE_ACCESSOR_*
+  //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
+  //               declares private auto-accessor names, and
+  //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
+  GOCCIA_FORMAT_VERSION = 83;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -190,6 +195,9 @@ const
   GOCCIA_NULLISH_MATCH_ANY = 255;
   ACCESSOR_FLAG_SETTER = 1;
   ACCESSOR_FLAG_STATIC = 2;
+  { A half of a public auto-accessor's getter/setter pair. A is the class, not
+    its prototype, for both the instance and the static case. }
+  ACCESSOR_FLAG_AUTO = 4;
   FUNCTION_NAME_PREFIX_NONE = 0;
   FUNCTION_NAME_PREFIX_GET  = 1;
   FUNCTION_NAME_PREFIX_SET  = 2;
@@ -375,7 +383,6 @@ type
     OP_DIV           = 132,
     OP_MOD           = 133,
     OP_POW           = 134,
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 135,
     OP_BAND          = 136,
     OP_BOR           = 137,
     OP_BXOR          = 138,
@@ -503,7 +510,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 144..166]);
+    not (AOp in [99, 135, 144..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
