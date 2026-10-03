@@ -2213,6 +2213,87 @@ await section("Test262 Runner: eval rejects arguments in generator method defaul
   }
 });
 
+await section("Test262 Runner: a decorator's replacement method does not let eval use super...", async () => {
+  // The decorators proposal (tc39/ecma262 PR #2417) stores a decorator's
+  // returned function as the element's value, getter or setter without
+  // calling MakeMethod on it, so it keeps the home object it was created
+  // with (here none) and §19.2.1.1 PerformEval rejects super inside it.
+  // A decorated method that is kept or wrapped is still a method.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const replacement = function () { return eval('super.describe()'); };",
+    "const replace = (value, context) => replacement;",
+    "const replaceFresh = (value, context) => function () { return eval('super.describe()'); };",
+    "class Derived extends Base {",
+    "  @replace m() { return 'original'; }",
+    "  @replaceFresh static s() { return 'original'; }",
+    "}",
+    "probe('instance method', () => new Derived().m());",
+    "probe('static method', () => Derived.s());",
+    "probe('replacement afterwards', () => replacement.call({}));",
+    "const replaceArrow = (value, context) => () => eval('super.describe()');",
+    "class ArrowDerived extends Base { @replaceArrow m() { return 'original'; } }",
+    "probe('arrow', () => new ArrowDerived().m());",
+    "const replaceGetter = (value, context) => function () { return eval('super.describe()'); };",
+    "class GetterDerived extends Base {",
+    "  @replaceGetter get g() { return 'original'; }",
+    "  @replaceGetter static get sg() { return 'original'; }",
+    "}",
+    "probe('getter', () => new GetterDerived().g);",
+    "probe('static getter', () => GetterDerived.sg);",
+    "let setterResult;",
+    "const replaceSetter = (value, context) => function (v) { setterResult = eval('super.describe()'); };",
+    "class SetterDerived extends Base { @replaceSetter set s(v) {} @replaceSetter static set ss(v) {} }",
+    "probe('setter', () => { setterResult = undefined; new SetterDerived().s = 1; return setterResult; });",
+    "probe('static setter', () => { setterResult = undefined; SetterDerived.ss = 1; return setterResult; });",
+    "const replaceAccessor = (value, context) => ({ get: function () { return eval('super.describe()'); } });",
+    "class AccessorDerived extends Base { @replaceAccessor accessor a = 1; }",
+    "probe('accessor getter', () => new AccessorDerived().a);",
+    "const keep = (value, context) => value;",
+    "class KeptDerived extends Base {",
+    "  @keep m() { return eval('super.describe()'); }",
+    "  @keep static s() { return eval('super.describe()'); }",
+    "  @keep get g() { return eval('super.describe()'); }",
+    "}",
+    "probe('kept method', () => new KeptDerived().m());",
+    "probe('kept static method', () => KeptDerived.s());",
+    "probe('kept getter', () => new KeptDerived().g);",
+    "const wrap = (value, context) => function (...args) { return 'wrapped ' + value.call(this, ...args); };",
+    "class WrappedDerived extends Base { @wrap m() { return eval('super.describe()'); } }",
+    "probe('wrapped method', () => new WrappedDerived().m());",
+    "",
+  ].join("\n");
+  const expected = [
+    "instance method: SyntaxError",
+    "static method: SyntaxError",
+    "replacement afterwards: SyntaxError",
+    "arrow: SyntaxError",
+    "getter: SyntaxError",
+    "static getter: SyntaxError",
+    "setter: SyntaxError",
+    "static setter: SyntaxError",
+    "accessor getter: SyntaxError",
+    "kept method: base-proto",
+    "kept static method: base-static",
+    "kept getter: base-proto",
+    "wrapped method: wrapped base-proto",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode} decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode} decorator replacement eval super got: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval super permissions stop at ordinary function boundary...", async () => {
   const source = [
     "class Base { method() { return 11; } }",
@@ -2360,87 +2441,6 @@ await section("Test262 Runner: assigning a function to a property does not let e
       if (normalizeLineEndings(proc.stdout.toString()).trim() !== probe.expected)
         throw new Error(`Bare ${mode} ${probe.label} stored-function eval super got: ${proc.stdout.toString()}`);
     }
-  }
-});
-
-await section("Test262 Runner: a decorator's replacement method does not let eval use super...", async () => {
-  // The decorators proposal (tc39/ecma262 PR #2417) stores a decorator's
-  // returned function as the element's value, getter or setter without
-  // calling MakeMethod on it, so it keeps the home object it was created
-  // with (here none) and §19.2.1.1 PerformEval rejects super inside it.
-  // A decorated method that is kept or wrapped is still a method.
-  const source = [
-    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
-    "const probe = (label, fn) => {",
-    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
-    "};",
-    "const replacement = function () { return eval('super.describe()'); };",
-    "const replace = (value, context) => replacement;",
-    "const replaceFresh = (value, context) => function () { return eval('super.describe()'); };",
-    "class Derived extends Base {",
-    "  @replace m() { return 'original'; }",
-    "  @replaceFresh static s() { return 'original'; }",
-    "}",
-    "probe('instance method', () => new Derived().m());",
-    "probe('static method', () => Derived.s());",
-    "probe('replacement afterwards', () => replacement.call({}));",
-    "const replaceArrow = (value, context) => () => eval('super.describe()');",
-    "class ArrowDerived extends Base { @replaceArrow m() { return 'original'; } }",
-    "probe('arrow', () => new ArrowDerived().m());",
-    "const replaceGetter = (value, context) => function () { return eval('super.describe()'); };",
-    "class GetterDerived extends Base {",
-    "  @replaceGetter get g() { return 'original'; }",
-    "  @replaceGetter static get sg() { return 'original'; }",
-    "}",
-    "probe('getter', () => new GetterDerived().g);",
-    "probe('static getter', () => GetterDerived.sg);",
-    "let setterResult;",
-    "const replaceSetter = (value, context) => function (v) { setterResult = eval('super.describe()'); };",
-    "class SetterDerived extends Base { @replaceSetter set s(v) {} @replaceSetter static set ss(v) {} }",
-    "probe('setter', () => { setterResult = undefined; new SetterDerived().s = 1; return setterResult; });",
-    "probe('static setter', () => { setterResult = undefined; SetterDerived.ss = 1; return setterResult; });",
-    "const replaceAccessor = (value, context) => ({ get: function () { return eval('super.describe()'); } });",
-    "class AccessorDerived extends Base { @replaceAccessor accessor a = 1; }",
-    "probe('accessor getter', () => new AccessorDerived().a);",
-    "const keep = (value, context) => value;",
-    "class KeptDerived extends Base {",
-    "  @keep m() { return eval('super.describe()'); }",
-    "  @keep static s() { return eval('super.describe()'); }",
-    "  @keep get g() { return eval('super.describe()'); }",
-    "}",
-    "probe('kept method', () => new KeptDerived().m());",
-    "probe('kept static method', () => KeptDerived.s());",
-    "probe('kept getter', () => new KeptDerived().g);",
-    "const wrap = (value, context) => function (...args) { return 'wrapped ' + value.call(this, ...args); };",
-    "class WrappedDerived extends Base { @wrap m() { return eval('super.describe()'); } }",
-    "probe('wrapped method', () => new WrappedDerived().m());",
-    "",
-  ].join("\n");
-  const expected = [
-    "instance method: SyntaxError",
-    "static method: SyntaxError",
-    "replacement afterwards: SyntaxError",
-    "arrow: SyntaxError",
-    "getter: SyntaxError",
-    "static getter: SyntaxError",
-    "setter: SyntaxError",
-    "static setter: SyntaxError",
-    "accessor getter: SyntaxError",
-    "kept method: base-proto",
-    "kept static method: base-static",
-    "kept getter: base-proto",
-    "wrapped method: wrapped base-proto",
-  ].join("\n");
-  for (const mode of ["interpreted", "bytecode"]) {
-    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
-      stdin: new TextEncoder().encode(source),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    if (proc.exitCode !== 0)
-      throw new Error(`Bare ${mode} decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
-    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
-      throw new Error(`Bare ${mode} decorator replacement eval super got: ${proc.stdout.toString()}`);
   }
 });
 
