@@ -358,8 +358,6 @@ type
 
   TGocciaResponseClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
-    // Fetch spec: Response constructor reports length 1 in WPT/V8.
-    function GetClassLength: Integer; override;
   end;
 
   TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
@@ -2858,11 +2856,6 @@ end;
 function TGocciaResponseClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaResponseValue.Create;
-end;
-
-function TGocciaResponseClassValue.GetClassLength: Integer;
-begin
-  Result := 1;
 end;
 
 { TGocciaStringClassValue }
