@@ -1195,8 +1195,9 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
+      // ES2026 §10.5.8 step 10: the receiver is the proxy.
       Result := DelegateGetSymbolProperty(TGocciaObjectValue(FTarget), ASymbol,
-        FTarget)
+        Self)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;

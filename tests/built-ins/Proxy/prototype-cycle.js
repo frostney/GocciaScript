@@ -44,6 +44,11 @@ describe("lookups around a prototype cycle through a Proxy", () => {
     expect(() => operation(proxy)).toThrow(RangeError);
   });
 
+  test("a symbol-keyed in check from the Proxy throws RangeError", () => {
+    const { proxy } = makeCycle();
+    expect(() => Symbol.iterator in proxy).toThrow(RangeError);
+  });
+
   test("instanceof throws RangeError", () => {
     const { object } = makeCycle();
     class Unrelated {}
@@ -78,5 +83,24 @@ describe("lookups around a prototype cycle through a Proxy", () => {
     }
     const parent = { inherited: 1 };
     expect(Object.create(parent).inherited).toBe(1);
+  });
+});
+
+describe("Proxies nested as targets", () => {
+  const nest = (depth) => {
+    let proxy = { x: "found" };
+    for (const i of Array.from({ length: depth })) {
+      proxy = new Proxy(proxy, {});
+    }
+    return proxy;
+  };
+
+  // Each Proxy forwarding to its target is one native call.
+  test("a read through 1,000 nested Proxies reaches the innermost target", () => {
+    expect(nest(1000).x).toBe("found");
+  });
+
+  test("a read through 100,000 nested Proxies throws RangeError", () => {
+    expect(() => nest(100000).x).toThrow(RangeError);
   });
 });

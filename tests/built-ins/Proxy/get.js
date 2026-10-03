@@ -37,6 +37,13 @@ describe("Proxy get trap", () => {
     expect(proxy.doesNotExist).toBe("intercepted");
   });
 
+  test("a symbol-keyed getter on the target runs with the proxy as this", () => {
+    const key = Symbol("key");
+    const target = { get [key]() { return this; } };
+    const proxy = new Proxy(target, {});
+    expect(proxy[key] === proxy).toBe(true);
+  });
+
   test("falls back to target when no get trap", () => {
     const target = { a: 1, b: "hello" };
     const proxy = new Proxy(target, {});

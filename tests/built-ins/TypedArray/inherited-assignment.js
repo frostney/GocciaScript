@@ -1,5 +1,5 @@
 /*---
-description: An assignment to an object whose prototype is a typed array goes through the typed array's [[Set]]
+description: An object whose prototype is a typed array reads its elements and assigns through the typed array's [[Set]]
 features: [TypedArray, prototype-chain]
 ---*/
 
@@ -37,5 +37,13 @@ describe("assignment through a typed array prototype", () => {
     const child = Object.create(new Uint8Array(4));
     child.name = "child";
     expect(Object.hasOwn(child, "name")).toBe(true);
+  });
+});
+
+describe("reads through a typed array prototype", () => {
+  test("an element of the typed array prototype is read", () => {
+    const child = Object.create(new Uint8Array([7, 8]));
+    expect(child[1]).toBe(8);
+    expect(1 in child).toBe(true);
   });
 });

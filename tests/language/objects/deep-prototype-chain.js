@@ -65,3 +65,23 @@ describe("a deep prototype chain", () => {
     expect(Object.hasOwn(deep, "x")).toBe(false);
   });
 });
+
+describe("a deep chain of objects whose class answers [[Get]] itself", () => {
+  test("a static method is found through 1,500 classes", () => {
+    class Base { static found() { return "base"; } }
+    let Derived = Base;
+    for (const i of Array.from({ length: 1500 })) {
+      Derived = class extends Derived {};
+    }
+    expect(Derived.found()).toBe("base");
+  });
+
+  test("an array method is found through 1,500 arrays", () => {
+    let array = [];
+    for (const i of Array.from({ length: 1500 })) {
+      array = Object.setPrototypeOf([], array);
+    }
+    expect(typeof array.push).toBe("function");
+    expect(array.missing).toBeUndefined();
+  });
+});
