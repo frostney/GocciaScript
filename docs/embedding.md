@@ -878,6 +878,8 @@ In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispat
 
 Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--max-stack`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine.
 
+Property lookups walk a chain of ordinary objects in a loop, with no length limit. An object that answers `[[Get]]`, `[[Set]]` or `[[HasProperty]]` itself (a Proxy, or a class that overrides the lookup) is entered by a native call, and so is a Proxy's target. At most `MAX_PROPERTY_DELEGATION_DEPTH` (1 000) such calls are live at once; past that the lookup throws the same `RangeError`. A prototype cycle closed through a Proxy, which ES2026 §10.1.2.1 OrdinarySetPrototypeOf accepts, ends this way. `instanceof` and `Object.prototype.isPrototypeOf` follow `[[GetPrototypeOf]]` in a loop instead and throw after `MAX_PROXY_PROTOTYPE_STEPS` (100 000) steps through a Proxy.
+
 ```pascal
 uses
   Goccia.StackLimit;

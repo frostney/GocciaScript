@@ -3270,6 +3270,10 @@ begin
     Inc(ChainDepth);
     if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
       Exit(False);
+    // A Proxy or exotic parent answers [[Set]] itself; leave it to the
+    // generic AssignProperty walk.
+    if not UsesOrdinarySet(Current) then
+      Exit(False);
     Descriptor := Current.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
       Exit(False);

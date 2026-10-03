@@ -177,6 +177,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Realm,
+  Goccia.StackLimit,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -487,9 +488,6 @@ function ProxyTargetHasSymbolProperty(
 var
   Current: TGocciaObjectValue;
 begin
-  if ATarget is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(ATarget).HasSymbolTrap(ASymbol));
-
   if not (ATarget is TGocciaObjectValue) then
     Exit(False);
 
@@ -497,7 +495,16 @@ begin
   while Assigned(Current) do
   begin
     if Current is TGocciaProxyValue then
-      Exit(TGocciaProxyValue(Current).HasSymbolTrap(ASymbol));
+    begin
+      // A Proxy reached from the target is a native call into its
+      // [[HasProperty]]; see MAX_PROPERTY_DELEGATION_DEPTH.
+      EnterPropertyDelegation;
+      try
+        Exit(TGocciaProxyValue(Current).HasSymbolTrap(ASymbol));
+      finally
+        LeavePropertyDelegation;
+      end;
+    end;
     if Current.HasSymbolProperty(ASymbol) then
       Exit(True);
     Current := Current.Prototype;
@@ -931,7 +938,8 @@ begin
   end
   else if FTarget is TGocciaObjectValue then
     // ES2026 §10.5.8 step 10: Return ? target.[[Get]](P, Receiver)
-    Result := TGocciaObjectValue(FTarget).GetPropertyWithContext(AName, AThisContext)
+    Result := DelegateGetProperty(TGocciaObjectValue(FTarget), AName,
+      AThisContext)
   else
     Result := FTarget.GetProperty(AName);
 end;
@@ -983,7 +991,7 @@ begin
   else
   begin
     if (FTarget is TGocciaObjectValue) and
-       TGocciaObjectValue(FTarget).AssignPropertyWithReceiver(AName, AValue, Self) then
+       DelegateSetProperty(TGocciaObjectValue(FTarget), AName, AValue, Self) then
       Exit;
     ThrowTypeError(Format(SErrorProxySetReturnedFalse, [AName]), SSuggestProxyTrapInvariant);
   end;
@@ -1039,7 +1047,8 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).AssignPropertyWithReceiver(AName, AValue, AReceiver)
+      Result := DelegateSetProperty(TGocciaObjectValue(FTarget), AName, AValue,
+        AReceiver)
     else
       Result := False;
   end;
@@ -1087,7 +1096,7 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).HasProperty(AName)
+      Result := DelegateHasProperty(TGocciaObjectValue(FTarget), AName)
     else
       Result := False;
   end;
@@ -1185,7 +1194,8 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).GetSymbolProperty(ASymbol)
+      Result := DelegateGetSymbolProperty(TGocciaObjectValue(FTarget), ASymbol,
+        FTarget)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
@@ -1234,7 +1244,8 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).GetSymbolPropertyWithReceiver(ASymbol, AReceiver)
+      Result := DelegateGetSymbolProperty(TGocciaObjectValue(FTarget), ASymbol,
+        AReceiver)
     else
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
@@ -1290,7 +1301,8 @@ begin
   else
   begin
     if FTarget is TGocciaObjectValue then
-      Result := TGocciaObjectValue(FTarget).AssignSymbolPropertyWithReceiver(ASymbol, AValue, AReceiver)
+      Result := DelegateSetSymbolProperty(TGocciaObjectValue(FTarget), ASymbol,
+        AValue, AReceiver)
     else
       Result := False;
   end;
