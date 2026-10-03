@@ -21,6 +21,11 @@ const
 procedure SetMaxStackDepth(const AMaxDepth: Integer);
 procedure CheckStackDepth(const ACurrentDepth: Integer);
 procedure CheckNativeReentryDepth(const ADepth: Integer);
+// The throw both checks share. It is exported only because FPC does not inline
+// a procedure into another unit when it calls one that is local to the
+// implementation section, and the two checks are small enough to be inlined
+// into their callers.
+procedure ThrowMaxCallStackExceeded;
 
 implementation
 
@@ -36,16 +41,37 @@ begin
   GMaxStackDepth := AMaxDepth;
 end;
 
+// Loading the resource string needs a managed temporary, and a procedure that
+// has one installs an implicit exception frame on every call. The throw lives
+// here so that the two checks, which run on each call, stay without one
+// (docs/core-patterns.md, "Managed Locals on Hot Paths").
+//
+// Production builds switch on FPC's automatic inlining (Shared.inc), which
+// folds a procedure this small back into its callers and brings the frame
+// with it, so it is switched off for this one procedure. {$PUSH} and {$POP}
+// do not save optimizer switches in FPC 3.2.2; the switch is turned back on
+// explicitly, under the condition Shared.inc turns it on.
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure ThrowMaxCallStackExceeded;
+begin
+  ThrowRangeError(SErrorMaxCallStackExceeded);
+end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
+
 procedure CheckStackDepth(const ACurrentDepth: Integer);
 begin
   if (GMaxStackDepth > 0) and (ACurrentDepth > GMaxStackDepth) then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
 end;
 
 procedure CheckNativeReentryDepth(const ADepth: Integer);
 begin
   if ADepth > MAX_NATIVE_REENTRY_DEPTH then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
 end;
 
 end.
