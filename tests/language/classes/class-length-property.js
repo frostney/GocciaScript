@@ -142,4 +142,21 @@ describe("class length property", () => {
     expect(Redefined.length).toBe(4);
     expect(Object.hasOwn(Redefined, "length")).toBe(true);
   });
+
+  test("assigning to a deleted length does not add it back", () => {
+    class Shortened {}
+    delete Shortened.length;
+
+    expect(() => {
+      Shortened.length = 3;
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Shortened, "length")).toBe(false);
+
+    Object.freeze(Shortened);
+    expect(() => {
+      Shortened.length = 3;
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Shortened, "length")).toBe(false);
+    expect(Object.isFrozen(Shortened)).toBe(true);
+  });
 });

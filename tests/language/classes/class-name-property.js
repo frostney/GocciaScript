@@ -129,4 +129,45 @@ describe("static name override", () => {
     expect(Renamed.name).toBe("Again");
     expect(Object.hasOwn(Renamed, "name")).toBe(true);
   });
+
+  test("assigning to the name of a class with a null prototype throws and keeps it non-writable", () => {
+    class Orphan {}
+    Object.setPrototypeOf(Orphan, null);
+
+    expect(() => {
+      Orphan.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Orphan, "name").writable).toBe(false);
+    expect(Orphan.name).toBe("Orphan");
+  });
+
+  test("assigning to the name of a subclass whose base has a writable name throws", () => {
+    class Base {}
+    Object.defineProperty(Base, "name", { writable: true });
+    class Derived extends Base {}
+
+    expect(() => {
+      Derived.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Derived.name).toBe("Derived");
+  });
+
+  test("assigning to a deleted name runs an inherited static setter and does not add the name back", () => {
+    let received;
+    class Base {
+      static get name() {
+        return "Base";
+      }
+      static set name(value) {
+        received = value;
+      }
+    }
+    class Derived extends Base {}
+    delete Derived.name;
+
+    Derived.name = "Changed";
+
+    expect(received).toBe("Changed");
+    expect(Object.hasOwn(Derived, "name")).toBe(false);
+  });
 });
