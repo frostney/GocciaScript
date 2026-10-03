@@ -11436,8 +11436,9 @@ begin
   ConstructorBodyBeforeBuiltIn := Assigned(AClassValue.ConstructorMethod) or
     (Assigned(ImplicitSuperClass) and
      Assigned(ImplicitSuperClass.ConstructorMethod));
+  // Only an explicit new.target has a prototype to read; `new` passes none.
   BuiltInConstructedBySuper := False;
-  if ConstructorBodyBeforeBuiltIn then
+  if ConstructorBodyBeforeBuiltIn and Assigned(ANewTarget) then
   begin
     WalkClass := AClassValue;
     while Assigned(WalkClass) do
