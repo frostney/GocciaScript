@@ -30,6 +30,8 @@ type
     ExecutionContextPushed: Boolean;
   end;
 
+  PGocciaVMCallFrame = ^TGocciaVMCallFrame;
+
 implementation
 
 end.

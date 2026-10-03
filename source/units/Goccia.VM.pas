@@ -13,6 +13,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
+  Goccia.CallStack,
   Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
@@ -119,10 +120,7 @@ type
     caoLiteralFastPath,
     // Set: class receivers install the value with DefineProperty
     // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
-    caoClassDefineSemantics,
-    // Set: home object is wired on array/object/fallback receivers too,
-    // not only on class receivers (OP_SET_INDEX).
-    caoHomeObjectAllReceivers
+    caoClassDefineSemantics
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
@@ -147,6 +145,11 @@ type
     FLocalCellBase: Integer;
     FLocalCells: PGocciaBytecodeCell;
     FLocalCellCount: Integer;
+    // Every slot of FLocalCellStack at or above this index is nil. Most frames
+    // capture no local and so create no cell, which lets a new frame take its
+    // window without clearing it. Whatever stores a cell raises the mark
+    // (NoteLocalCells); taking a window clears only the part below it.
+    FLocalCellStaleTop: Integer;
     // Call arguments live in a growable arena window (FArgumentStack) with a
     // base+count window, mirroring the register and local-cell stacks. The
     // window holds the current frame's arguments; PushFrame/PopFrame and native
@@ -213,6 +216,17 @@ type
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
     FTempSavedStateRootCount: Integer;
+    // The running thread's call stack and execution-context stack. Both live
+    // behind thread variables, and each reference to one is a thread-local
+    // lookup, so BindToCurrentThread resolves them when native code enters an
+    // idle VM and every bytecode call inside that entry reuses them.
+    FCallStack: TGocciaCallStack;
+    FExecutionContextThread: Pointer;
+    // The source path most recently interned for an execution context, and its
+    // interned reference. Holding the string keeps its address from being
+    // reused, so a path at the same address is the same path.
+    FExecutionSourcePath: string;
+    FExecutionSourcePathRef: Pointer;
     FASCIIStringValues: array[0..127] of TGocciaStringLiteralValue;
     function CachedASCIIStringValue(
       const ACodeUnit: TASCIIStringCodeUnit): TGocciaStringLiteralValue;
@@ -224,9 +238,12 @@ type
       const AConstantIndex: Integer): TGocciaValue;
     function AcquireArguments(const ACapacity: Integer = 0): TGocciaArgumentsCollection;
     procedure ReleaseArguments(const AArguments: TGocciaArgumentsCollection);
-    procedure AcquireRegisters(const ACount: Integer);
-    procedure AcquireLocalCells(const ACount: Integer);
-    procedure AcquireArgumentWindow(const ACount: Integer);
+    procedure AcquireRegisters(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure AcquireLocalCells(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure ClearStaleLocalCells(const AStart, AEnd: Integer);
+    procedure NoteLocalCells(const AWindowCount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    function LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
+    procedure AcquireArgumentWindow(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
@@ -468,10 +485,11 @@ type
     procedure PushSavedStateRoot(const AClosure: TGocciaBytecodeClosure;
       const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
+    procedure BindToCurrentThread;
+    procedure InternExecutionSourcePath(const ASourcePath: string);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-      const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
+      const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+      const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
@@ -483,9 +501,8 @@ type
       const ASuggestionIsHostOnly: Boolean = False);
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
-      const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-      const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-      const AUseFixedArgs: Boolean;
+      const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+      const AArgCount: Integer;
       const APushExecutionContext: Boolean;
       const AStopAtIP: Integer = -1;
       const AStopGenerator: TObject = nil): TGocciaRegister;
@@ -509,6 +526,10 @@ type
       const AThisValue: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
       const APushExecutionContext: Boolean = True): TGocciaValue;
+    function ExecuteClosureWithHeapArguments(
+      const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
+      const AArguments: TGocciaArgumentsCollection;
+      const APushExecutionContext: Boolean): TGocciaValue;
   public
     constructor Create;
     destructor Destroy; override;
@@ -551,7 +572,6 @@ uses
   Goccia.Arithmetic,
   Goccia.AST.Node,
   Goccia.AST.Statements,
-  Goccia.CallStack,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
@@ -625,6 +645,9 @@ const
   // A pooled argument collection keeps its backing store only when the call
   // it served carried at most this many arguments.
   MAX_POOLED_ARGUMENT_COUNT = 32;
+  // Arguments of a native call into bytecode that are converted on the stack
+  // rather than in a heap array; see TGocciaVM.ExecuteClosure.
+  MAX_STACK_STAGED_ARGUMENT_COUNT = 8;
 
 type
   TGocciaVMSuperConstructorValue = class(TGocciaFunctionBase)
@@ -2717,7 +2740,10 @@ type
     procedure MarkReferences;
   end;
 
-  TGocciaBytecodeFunctionValue = class(TGocciaFunctionBase)
+  // Sealed: OP_CALL and OP_CALL_METHOD recognise a bytecode callee by an exact
+  // class comparison, which stands in for `is` only while nothing derives
+  // from this class.
+  TGocciaBytecodeFunctionValue = class sealed(TGocciaFunctionBase)
   private
     FClosure: TGocciaBytecodeClosure;
     FConstructClassValue: TGocciaValue;
@@ -4468,6 +4494,7 @@ begin
   FVM.EnsureLocalCapacity(Length(FContinuationLocalCells));
   for I := 0 to High(FContinuationLocalCells) do
     FVM.FLocalCells[I] := FContinuationLocalCells[I];
+  FVM.NoteLocalCells(Length(FContinuationLocalCells));
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
@@ -6653,6 +6680,7 @@ begin
   FRegisters := nil;
   FRegisterCount := 0;
   SetLength(FLocalCellStack, INITIAL_STACK_SIZE);
+  FLocalCellStaleTop := 0;
   FLocalCellBase := 0;
   FLocalCells := nil;
   FLocalCellCount := 0;
@@ -8207,17 +8235,57 @@ begin
   FLocalCellBase := NewBase;
   FLocalCellCount := ACount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
-  FillChar(FLocalCells^, ACount * SizeOf(TGocciaBytecodeCell), 0);
+  // The GC marks every live window and a frame reads a slot before it stores
+  // one, so the new window must hold no cell. Only slots below the stale mark
+  // can hold one; an earlier frame that created none left them all nil.
+  if NewBase < FLocalCellStaleTop then
+    ClearStaleLocalCells(NewBase, Required);
+  Assert(LocalCellsAreClear(NewBase, Required),
+    'A new local-cell window holds a stale cell');
+end;
+
+// Clears the slots of [AStart, AEnd) that may hold a cell: those below the
+// stale mark. When the range reaches the mark, every slot from AStart up is
+// then nil, so the mark drops to AStart.
+procedure TGocciaVM.ClearStaleLocalCells(const AStart, AEnd: Integer);
+var
+  ClearEnd: Integer;
+begin
+  ClearEnd := AEnd;
+  if ClearEnd > FLocalCellStaleTop then
+    ClearEnd := FLocalCellStaleTop;
+  if ClearEnd > AStart then
+    FillChar(FLocalCellStack[AStart],
+      (ClearEnd - AStart) * SizeOf(TGocciaBytecodeCell), 0);
+  if (AEnd >= FLocalCellStaleTop) and (AStart < FLocalCellStaleTop) then
+    FLocalCellStaleTop := AStart;
+end;
+
+// Call after storing cells into the first AWindowCount slots of the current
+// window.
+procedure TGocciaVM.NoteLocalCells(const AWindowCount: Integer);
+begin
+  if FLocalCellBase + AWindowCount > FLocalCellStaleTop then
+    FLocalCellStaleTop := FLocalCellBase + AWindowCount;
+end;
+
+function TGocciaVM.LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
+var
+  I: Integer;
+begin
+  for I := AStart to AEnd - 1 do
+    if Assigned(FLocalCellStack[I]) then
+      Exit(False);
+  Result := True;
 end;
 
 // Acquire a fresh argument window on the arena, stack-disciplined exactly like
-// AcquireRegisters/AcquireLocalCells. The window is zero-filled so the GC, which
-// marks the whole live arena ([0, top)), never dereferences stale slot contents:
-// this keeps argument acquisition GC-safe regardless of caller ordering, at the
-// cost of touching ACount register slots. (Scope (c) of #798 evaluated removing
-// this and the register/cell fills; they are GC-safety/correctness critical on
-// this hot path, so the substantive wins come from the allocation removal and
-// cheap stack-trace push above, not from trimming these fills.)
+// AcquireRegisters/AcquireLocalCells. The window is NOT cleared: the GC marks
+// the whole live arena ([0, top)), so the caller must store every one of the
+// ACount slots before anything that can allocate a collected object runs.
+// SetupNewFrame, the only caller, copies the call's arguments into the window
+// immediately. (The register and local-cell fills stay: a callee reads those
+// slots before it writes them.)
 procedure TGocciaVM.AcquireArgumentWindow(const ACount: Integer);
 var
   NewBase, Required: Integer;
@@ -8231,8 +8299,6 @@ begin
   FArgumentBase := NewBase;
   FArgCount := ACount;
   FArguments := @FArgumentStack[FArgumentBase];
-  if ACount > 0 then
-    FillChar(FArguments^, ACount * SizeOf(TGocciaRegister), 0);
 end;
 
 // Copy the current frame's live argument window out of the arena into a
@@ -8267,16 +8333,18 @@ end;
 
 procedure TGocciaVM.EnsureLocalCapacity(const ACount: Integer);
 var
-  Growth, Required: Integer;
+  GrowthStart, Required: Integer;
 begin
   if ACount > FLocalCellCount then
   begin
-    Growth := ACount - FLocalCellCount;
+    GrowthStart := FLocalCellBase + FLocalCellCount;
     Required := FLocalCellBase + ACount;
     if Required > Length(FLocalCellStack) then
       SetLength(FLocalCellStack, Required * 2);
-    FillChar(FLocalCellStack[FLocalCellBase + FLocalCellCount],
-      Growth * SizeOf(TGocciaBytecodeCell), 0);
+    if GrowthStart < FLocalCellStaleTop then
+      ClearStaleLocalCells(GrowthStart, Required);
+    Assert(LocalCellsAreClear(GrowthStart, Required),
+      'A grown local-cell window holds a stale cell');
     FLocalCellCount := ACount;
     FLocalCells := @FLocalCellStack[FLocalCellBase];
   end;
@@ -8286,8 +8354,11 @@ function TGocciaVM.GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
 begin
   EnsureLocalCapacity(AIndex + 1);
   if not Assigned(FLocalCells[AIndex]) then
+  begin
     FLocalCells[AIndex] := TGocciaBytecodeCell.Create(
       GetLocalRegister(AIndex));
+    NoteLocalCells(AIndex + 1);
+  end;
   Result := FLocalCells[AIndex];
 end;
 
@@ -8383,6 +8454,10 @@ begin
     TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
 end;
 
+// ES2026 §10.2.7 MakeMethod: [[HomeObject]] is set when a method is defined
+// (class elements, static blocks, field initializers, object literal methods
+// and accessors), never by assigning a function to a property. Only the
+// definition opcodes call this; the OP_SET_* store family must not.
 procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
   const AHomeObject: TGocciaValue; const AStaticHome: Boolean = False);
 var
@@ -8634,8 +8709,7 @@ const
     [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoClassDefineSemantics, caoHomeObjectAllReceivers,
-     caoHandlePrivateKeys];                                         // OP_SET_INDEX
+    [caoClassDefineSemantics, caoHandlePrivateKeys];                 // OP_SET_INDEX
 
 function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
   const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
@@ -8869,7 +8943,6 @@ begin
         Exit;
     end
     else if (AKeyReg.Kind = grkInt) and
-            not (caoHomeObjectAllReceivers in AOptions) and
             (Target is TGocciaArrayValue) and
             (AKeyReg.IntValue >= 0) and
             (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
@@ -8928,8 +9001,6 @@ begin
   if (FRegisters[ATargetIndex].Kind = grkObject) and
      (FRegisters[ATargetIndex].ObjectValue is TGocciaArrayValue) then
   begin
-    if caoHomeObjectAllReceivers in AOptions then
-      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, True);
     case Key.Kind of
       pkkSymbol:
@@ -8946,7 +9017,6 @@ begin
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
   begin
-    SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, False);
     if caoClassDefineSemantics in AOptions then
     begin
@@ -8979,8 +9049,6 @@ begin
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
-    if caoHomeObjectAllReceivers in AOptions then
-      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
@@ -9016,13 +9084,7 @@ begin
           SSuggestCheckNullBeforeAccess);
     end
     else
-    begin
-      if (caoHomeObjectAllReceivers in AOptions) and
-         ((TargetValue is TGocciaClassValue) or
-          (TargetValue is TGocciaObjectValue)) then
-        SetBytecodeHomeObject(Value, TargetValue);
       SetPropertyValue(TargetValue, PropertyKeyName(Key), Value);
-    end;
   end;
   finally
     Roots.Clear;
@@ -13979,103 +14041,111 @@ function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosur
 begin
   CheckExecutionTimeout;
   CheckInstructionLimit;
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, AArguments,
-    Length(AArguments), RegisterUndefined, RegisterUndefined, RegisterUndefined,
-    False, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
+    PGocciaRegister(AArguments), Length(AArguments), APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters0(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
 begin
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 0, RegisterUndefined, RegisterUndefined,
-    RegisterUndefined, True, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, nil, 0,
+    APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters1(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
 begin
-  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 1, AArg0, RegisterUndefined, RegisterUndefined,
-    True, APushExecutionContext);
+  Result := ExecuteClosureRegistersInternal(AClosure, AThisValue, @AArg0, 1,
+    APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters2(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Arguments: array[0..1] of TGocciaRegister;
 begin
+  Arguments[0] := AArg0;
+  Arguments[1] := AArg1;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 2, AArg0, AArg1, RegisterUndefined, True,
-    APushExecutionContext);
+    @Arguments[0], 2, APushExecutionContext);
 end;
 
 function TGocciaVM.ExecuteClosureRegisters3(const AClosure: TGocciaBytecodeClosure;
   const AThisValue, AArg0, AArg1, AArg2: TGocciaRegister;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Arguments: array[0..2] of TGocciaRegister;
 begin
+  Arguments[0] := AArg0;
+  Arguments[1] := AArg1;
+  Arguments[2] := AArg2;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
-    TGocciaRegisterArray(nil), 3, AArg0, AArg1, AArg2, True,
-    APushExecutionContext);
+    @Arguments[0], 3, APushExecutionContext);
 end;
 
 procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
   const ATemplate: TGocciaFunctionTemplate;
   const APrevCovLine: UInt32; const AProfileTimestamp: Int64);
+var
+  Saved: PGocciaVMCallFrame;
 begin
   CheckStackDepth(FFrameDepth + 1);
   if FFrameStackCount >= Length(FFrameStack) then
     SetLength(FFrameStack, FFrameStackCount * 2 + 8);
-  FFrameStack[FFrameStackCount].Template := ATemplate;
-  FFrameStack[FFrameStackCount].IP := AFrameIP;
-  FFrameStack[FFrameStackCount].ReturnRegister := AResultRegister;
-  FFrameStack[FFrameStackCount].RegisterBase := FRegisterBase;
-  FFrameStack[FFrameStackCount].RegisterCount := FRegisterCount;
-  FFrameStack[FFrameStackCount].LocalCellBase := FLocalCellBase;
-  FFrameStack[FFrameStackCount].LocalCellCount := FLocalCellCount;
-  FFrameStack[FFrameStackCount].ArgumentBase := FArgumentBase;
-  FFrameStack[FFrameStackCount].ArgCount := FArgCount;
-  FFrameStack[FFrameStackCount].Closure := FCurrentClosure;
-  FFrameStack[FFrameStackCount].HandlerCount := FHandlerStack.Count;
-  FFrameStack[FFrameStackCount].PrevCovLine := APrevCovLine;
-  FFrameStack[FFrameStackCount].ProfileEntryTimestamp := AProfileTimestamp;
-  FFrameStack[FFrameStackCount].NewTarget := Pointer(FCurrentNewTarget);
-  FFrameStack[FFrameStackCount].GlobalScope := Pointer(FGlobalScope);
-  FFrameStack[FFrameStackCount].DynamicVarScope :=
-    Pointer(FCurrentDynamicVarScope);
-  FFrameStack[FFrameStackCount].ExecutionContextPushed :=
-    FCurrentExecutionContextPushed;
+  // Through a pointer: indexing the array for each field recomputes the
+  // element address every time.
+  Saved := @FFrameStack[FFrameStackCount];
+  Saved^.Template := ATemplate;
+  Saved^.IP := AFrameIP;
+  Saved^.ReturnRegister := AResultRegister;
+  Saved^.RegisterBase := FRegisterBase;
+  Saved^.RegisterCount := FRegisterCount;
+  Saved^.LocalCellBase := FLocalCellBase;
+  Saved^.LocalCellCount := FLocalCellCount;
+  Saved^.ArgumentBase := FArgumentBase;
+  Saved^.ArgCount := FArgCount;
+  Saved^.Closure := FCurrentClosure;
+  Saved^.HandlerCount := FHandlerStack.Count;
+  Saved^.PrevCovLine := APrevCovLine;
+  Saved^.ProfileEntryTimestamp := AProfileTimestamp;
+  Saved^.NewTarget := Pointer(FCurrentNewTarget);
+  Saved^.GlobalScope := Pointer(FGlobalScope);
+  Saved^.DynamicVarScope := Pointer(FCurrentDynamicVarScope);
+  Saved^.ExecutionContextPushed := FCurrentExecutionContextPushed;
   Inc(FFrameStackCount);
 end;
 
 function TGocciaVM.PopFrame(var AFrame: TGocciaVMCallFrame;
   out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64): Integer;
+var
+  Saved: PGocciaVMCallFrame;
 begin
   Dec(FFrameStackCount);
-  ATemplate := FFrameStack[FFrameStackCount].Template;
-  AFrame.IP := FFrameStack[FFrameStackCount].IP;
+  Saved := @FFrameStack[FFrameStackCount];
+  ATemplate := Saved^.Template;
+  AFrame.IP := Saved^.IP;
   AFrame.Template := ATemplate;
-  FRegisterBase := FFrameStack[FFrameStackCount].RegisterBase;
-  FRegisterCount := FFrameStack[FFrameStackCount].RegisterCount;
+  FRegisterBase := Saved^.RegisterBase;
+  FRegisterCount := Saved^.RegisterCount;
   FRegisters := @FRegisterStack[FRegisterBase];
-  FLocalCellBase := FFrameStack[FFrameStackCount].LocalCellBase;
-  FLocalCellCount := FFrameStack[FFrameStackCount].LocalCellCount;
+  FLocalCellBase := Saved^.LocalCellBase;
+  FLocalCellCount := Saved^.LocalCellCount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
-  FArgumentBase := FFrameStack[FFrameStackCount].ArgumentBase;
-  FArgCount := FFrameStack[FFrameStackCount].ArgCount;
+  FArgumentBase := Saved^.ArgumentBase;
+  FArgCount := Saved^.ArgCount;
   FArguments := @FArgumentStack[FArgumentBase];
-  FCurrentClosure := FFrameStack[FFrameStackCount].Closure;
-  APrevCovLine := FFrameStack[FFrameStackCount].PrevCovLine;
-  AProfileTimestamp := FFrameStack[FFrameStackCount].ProfileEntryTimestamp;
-  FCurrentNewTarget := TGocciaValue(FFrameStack[FFrameStackCount].NewTarget);
-  FGlobalScope := TGocciaScope(FFrameStack[FFrameStackCount].GlobalScope);
-  FCurrentDynamicVarScope :=
-    TGocciaScope(FFrameStack[FFrameStackCount].DynamicVarScope);
-  FCurrentExecutionContextPushed :=
-    FFrameStack[FFrameStackCount].ExecutionContextPushed;
-  Result := FFrameStack[FFrameStackCount].ReturnRegister;
+  FCurrentClosure := Saved^.Closure;
+  APrevCovLine := Saved^.PrevCovLine;
+  AProfileTimestamp := Saved^.ProfileEntryTimestamp;
+  FCurrentNewTarget := TGocciaValue(Saved^.NewTarget);
+  FGlobalScope := TGocciaScope(Saved^.GlobalScope);
+  FCurrentDynamicVarScope := TGocciaScope(Saved^.DynamicVarScope);
+  FCurrentExecutionContextPushed := Saved^.ExecutionContextPushed;
+  Result := Saved^.ReturnRegister;
 end;
 
 procedure TGocciaVM.TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplate;
@@ -14084,11 +14154,11 @@ begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
-  if (TGocciaCallStack.Instance <> nil) then
-    TGocciaCallStack.Instance.Pop;
+  if Assigned(FCallStack) then
+    FCallStack.Pop;
   if FCurrentExecutionContextPushed then
   begin
-    TGocciaExecutionContextStack.Pop;
+    TGocciaExecutionContextStack.PopFunctionContext(FExecutionContextThread);
     FCurrentExecutionContextPushed := False;
   end;
   while FHandlerStack.Count > ATargetHandlerCount do
@@ -14156,13 +14226,12 @@ begin
   AFrame.IP := 0;
 
   Inc(FFrameDepth);
-  if (TGocciaCallStack.Instance <> nil) then
+  if Assigned(FCallStack) then
     if Assigned(ATemplate.DebugInfo) and
        (ATemplate.DebugInfo.SourceFile <> '') then
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+      FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate),
-        FCurrentModuleSourcePath);
+      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -14211,8 +14280,8 @@ begin
      (ATemplate.ProfileIndex >= 0) then
     TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex,
       GetNanoseconds);
-  if (TGocciaCallStack.Instance <> nil) then
-    TGocciaCallStack.Instance.Pop;
+  if Assigned(FCallStack) then
+    FCallStack.Pop;
   Dec(FFrameDepth);
 
   Dec(FClosedNumericFrameStackCount);
@@ -14294,43 +14363,74 @@ begin
   FTempSavedStateRoots[FTempSavedStateRootCount].ArgCount := 0;
 end;
 
+{ Native code is entering a VM that is running nothing, so whatever thread the
+  VM last ran on has left it. Every nested entry happens inside this one, on
+  this thread, and so does every frame pushed or popped until it returns; the
+  call stack is created before a thread runs any engine and destroyed only
+  when the thread's runtime shuts down. }
+procedure TGocciaVM.BindToCurrentThread;
+begin
+  FCallStack := TGocciaCallStack.Instance;
+  FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
+  // Interned references belong to the thread that interned them.
+  if Pointer(FExecutionSourcePath) <> nil then
+    FExecutionSourcePath := '';
+  FExecutionSourcePathRef := nil;
+end;
+
+{ SetupNewFrame's slow path: the callee's source path is not the one the last
+  call interned. Kept out of line so that SetupNewFrame itself holds no
+  managed local or temporary and needs no implicit exception frame. Automatic
+  inlining is switched off for this procedure and back on after it by name:
+  FPC 3.2.2 does not save optimizer switches on $PUSH, so a $POP would leave
+  it off for the rest of the unit. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure TGocciaVM.InternExecutionSourcePath(const ASourcePath: string);
+begin
+  FExecutionSourcePathRef := InternSourcePath(ASourcePath);
+  FExecutionSourcePath := ASourcePath;
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
+
+{ AArguments points at AArgCount registers (nil when there are none). It may
+  point into the caller's register window: the arguments are copied into the
+  callee's argument window before any register is acquired, because acquiring
+  registers can move the register arena (growth) or clear the very slots the
+  arguments sit in (a tail call reuses the caller's window). }
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
-  const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
-  const AArgCount: Integer; const AArg0, AArg1, AArg2: TGocciaRegister;
-  const AUseFixedArgs: Boolean; const APushExecutionContext: Boolean;
+  const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
+  const AArgCount: Integer; const APushExecutionContext: Boolean;
   var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
-  I: Integer;
-  ExecutionSourcePath: string;
+  I, RegisterWindow: Integer;
   ExecutionRealm: TGocciaRealm;
+  FunctionValue: TGocciaValue;
+  HasOwnSourceFile: Boolean;
 begin
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
-  if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
-    ExecutionSourcePath := ATemplate.DebugInfo.SourceFile
-  else
-    ExecutionSourcePath := FCurrentModuleSourcePath;
+  // The frame's source path is the template's own source file, or the running
+  // module's path when it has none. This procedure runs on every call and must
+  // not hold that string: a managed local costs an implicit exception frame.
+  HasOwnSourceFile := Assigned(ATemplate.DebugInfo) and
+    (ATemplate.DebugInfo.SourceFile <> '');
 
-  AcquireRegisters(Max(ATemplate.MaxRegisters, 1));
-  AcquireLocalCells(Max(ATemplate.MaxRegisters, 1));
   // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
-  // FArguments) before reading the previous frame's FArgCount, then fill it.
+  // FArguments) and store every slot of it straight away: the window is not
+  // cleared, and nothing between here and the last store can collect.
   AcquireArgumentWindow(AArgCount);
   for I := 0 to AArgCount - 1 do
-    if AUseFixedArgs then
-      case I of
-        0:
-          FArguments[I] := AArg0;
-        1:
-          FArguments[I] := AArg1;
-        2:
-          FArguments[I] := AArg2;
-      else
-        FArguments[I] := RegisterUndefined;
-      end
-    else
-      FArguments[I] := AArguments[I];
+    FArguments[I] := AArguments[I];
+  // The register window holds `this` and one register per argument even when
+  // the callee declares fewer registers than it is passed arguments.
+  RegisterWindow := ATemplate.MaxRegisters;
+  if RegisterWindow < 1 then
+    RegisterWindow := 1;
+  AcquireLocalCells(RegisterWindow);
+  if RegisterWindow <= AArgCount then
+    RegisterWindow := AArgCount + 1;
+  AcquireRegisters(RegisterWindow);
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
@@ -14344,15 +14444,18 @@ begin
   // Push a deferred frame: store the template pointer and (only when the
   // template has no own source file) the module-path fallback, so an ordinary
   // call performs no per-call stack-trace string work. The resolver registered
-  // in the constructor reproduces ATemplate.Name and ExecutionSourcePath at
-  // capture time, keeping Error.stack output byte-identical.
-  if (TGocciaCallStack.Instance <> nil) then
-    if Assigned(ATemplate.DebugInfo) and (ATemplate.DebugInfo.SourceFile <> '') then
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), '')
+  // in the constructor reproduces ATemplate.Name and the frame's source path
+  // at capture time, keeping Error.stack output byte-identical.
+  if Assigned(FCallStack) then
+    if HasOwnSourceFile then
+      FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
-      TGocciaCallStack.Instance.PushTemplate(Pointer(ATemplate), ExecutionSourcePath);
+      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
 
-  AFrame := Default(TGocciaVMCallFrame);
+  // The dispatch loop's frame record carries only the instruction pointer and
+  // the template; its other fields exist for the entries PushFrame saves and
+  // are never read from this record, so they are not cleared here.
+  AFrame.IP := 0;
   AFrame.Template := ATemplate;
 
   if not ATemplate.IsArrow then
@@ -14391,22 +14494,44 @@ begin
       ATemplate.ProfileIndex, AProfileTimestamp);
   end;
 
-  SetLocalRaw(0, AThisValue);
-  for I := 0 to FArgCount - 1 do
-    SetLocalRaw(I + 1, FArguments[I]);
+  // Both windows were acquired above and are still as acquired: the registers
+  // exist and no local slot has a cell yet, so these are plain stores.
+  FRegisters[0] := AThisValue;
+  for I := 0 to AArgCount - 1 do
+    FRegisters[I + 1] := FArguments[I];
   // ES2026 §10.2.11 FunctionDeclarationInstantiation steps 19-20: sloppy
   // parameter expressions need a separate var environment for direct eval.
   if (ATemplate.DirectEvalEnvironmentCount > 0) and
      not TemplateUsesGlobalEvalEnvironment(ATemplate) then
     EnsureCurrentDynamicVarScope;
 
-  ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
+  // BytecodeClosureExecutionRealm, with the class of a bytecode function
+  // compared first: it is what almost every closure belongs to, and an exact
+  // class comparison is one load where `is` is a call.
+  ExecutionRealm := FRealm;
+  FunctionValue := AClosure.FunctionValue;
+  if Assigned(FunctionValue) and
+     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
+      (FunctionValue is TGocciaFunctionBase)) and
+     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
+    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
 
   if APushExecutionContext and Assigned(ExecutionRealm) then
   begin
-    TGocciaExecutionContextStack.Push(
-      CreateExecutionContext(ExecutionRealm, FGlobalScope, ExecutionSourcePath,
-        nil, AClosure.FunctionValue));
+    // Consecutive calls almost always run code from one source file, so the
+    // interned reference of the last path is reused while the path is the
+    // same string.
+    if HasOwnSourceFile then
+    begin
+      if Pointer(ATemplate.DebugInfo.SourceFile) <>
+         Pointer(FExecutionSourcePath) then
+        InternExecutionSourcePath(ATemplate.DebugInfo.SourceFile);
+    end
+    else if Pointer(FCurrentModuleSourcePath) <>
+            Pointer(FExecutionSourcePath) then
+      InternExecutionSourcePath(FCurrentModuleSourcePath);
+    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
+      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
     FCurrentExecutionContextPushed := True;
   end;
 
@@ -14486,12 +14611,8 @@ begin
   ExecuteClosureRegistersInternal(
     Generator.FClosure,
     Generator.FThisValue,
-    Generator.FArguments,
+    PGocciaRegister(Generator.FArguments),
     Length(Generator.FArguments),
-    RegisterUndefined,
-    RegisterUndefined,
-    RegisterUndefined,
-    False,
     True,
     Generator.FClosure.Template.ParameterPreambleSize,
     Generator);
@@ -14499,8 +14620,7 @@ end;
 
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
-  const AArguments: TGocciaRegisterArray; const AArgCount: Integer;
-  const AArg0, AArg1, AArg2: TGocciaRegister; const AUseFixedArgs: Boolean;
+  const AArguments: PGocciaRegister; const AArgCount: Integer;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject): TGocciaRegister;
 label
@@ -14578,9 +14698,9 @@ var
   RegisterArgs: TGocciaRegisterArray;
   CallThisRegister: TGocciaRegister;
   CallGlobalThisValue: TGocciaValue;
-  FixedArg0, FixedArg1, FixedArg2: TGocciaRegister;
-  ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2: TGocciaRegister;
+  ApplyArgRegisters: array[0..2] of TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
+  CalleeIsBytecodeFunction: Boolean;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
@@ -14590,6 +14710,7 @@ var
   DynImportTask: TGocciaMicrotask;
   AwaitPromise: TGocciaPromiseValue;
   AwaitContinuation: TGocciaBytecodeGeneratorObjectValue;
+  EntryGenerator: TGocciaBytecodeGeneratorObjectValue;
   SpreadArray: TGocciaArrayValue;
   RestoredContinuation: Boolean;
   ReturnAwaitAbrupt: Boolean;
@@ -14820,6 +14941,8 @@ begin
   // below). Without this, generator resume / eval / native-callback recursion
   // overflows the native stack (SIGSEGV) instead of throwing RangeError.
   CheckNativeReentryDepth(FNativeExecutionDepth + 1);
+  if FNativeExecutionDepth = 0 then
+    BindToCurrentThread;
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
@@ -14868,7 +14991,7 @@ begin
       FActiveTemplateProbe := PPointer(@Template);
       FActiveInstructionIPProbe := @InstructionStartIP;
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
-        AArg0, AArg1, AArg2, AUseFixedArgs, APushExecutionContext,
+        APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
     ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
@@ -14876,9 +14999,16 @@ begin
     if Assigned(FPendingNewTarget) then
       FCurrentNewTarget := FPendingNewTarget;
     FPendingNewTarget := nil;
-    RestoredContinuation := Assigned(GActiveBytecodeGenerator) and
-      (GActiveBytecodeGenerator.FClosure = AClosure) and
-      GActiveBytecodeGenerator.RestoreContinuation(
+    // The active generator when it is the one this entry runs, else nil. It
+    // is read once here: the thread variable is assigned only around a
+    // generator resume, which restores it before returning, so it holds this
+    // value at every instruction this entry dispatches, and OP_RETURN can test
+    // the local instead of reading the thread variable on every return.
+    EntryGenerator := GActiveBytecodeGenerator;
+    if Assigned(EntryGenerator) and (EntryGenerator.FClosure <> AClosure) then
+      EntryGenerator := nil;
+    RestoredContinuation := Assigned(EntryGenerator) and
+      EntryGenerator.RestoreContinuation(
         Frame, SavedHandlerCount, PrevCovLine);
     if RestoredContinuation then
     begin
@@ -15160,8 +15290,37 @@ LInnerLoopsDone:
   end;
 end;
 
+{ Every call native code makes into a bytecode function comes through here: a
+  callback from Array.prototype.map, a getter, a comparator. The arguments are
+  converted on the stack, which keeps this procedure free of a managed local
+  (and so of an implicit exception frame, an allocation and a release per
+  call); SetupNewFrame copies them into the callee's argument window before
+  anything can collect. A call with more arguments than the buffer holds
+  stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
+  const APushExecutionContext: Boolean): TGocciaValue;
+var
+  StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
+    TGocciaRegister;
+  I, ArgumentCount: Integer;
+begin
+  ArgumentCount := AArguments.Length;
+  if ArgumentCount > MAX_STACK_STAGED_ARGUMENT_COUNT then
+    Exit(ExecuteClosureWithHeapArguments(AClosure, AThisValue, AArguments,
+      APushExecutionContext));
+  for I := 0 to ArgumentCount - 1 do
+    StackArguments[I] := VMValueToRegisterFast(AArguments.GetElement(I));
+  CheckExecutionTimeout;
+  CheckInstructionLimit;
+  Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
+    VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
+    APushExecutionContext));
+end;
+
+function TGocciaVM.ExecuteClosureWithHeapArguments(
+  const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
+  const AArguments: TGocciaArgumentsCollection;
   const APushExecutionContext: Boolean): TGocciaValue;
 var
   RegisterArgs: TGocciaRegisterArray;

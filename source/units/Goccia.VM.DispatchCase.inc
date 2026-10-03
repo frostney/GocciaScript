@@ -813,11 +813,14 @@
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
             FRegisters[A].ObjectValue);
+          // Copied out of the register window first: where a register is
+          // passed by reference (Win64), SetupNewFrame would otherwise read
+          // `this` through the window after acquiring registers moved it.
+          CallThisRegister := FRegisters[A];
           PushFrame(B, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
-            FRegisters[A], TGocciaRegisterArray(nil), 0,
-            RegisterUndefined, RegisterUndefined, RegisterUndefined, True, True,
+            CallThisRegister, nil, 0, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
           goto LDispatchNext;
         end
@@ -957,12 +960,6 @@
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
           RightValue := RegisterToValue(FRegisters[C]);
-          // A receiver of one of the three cached classes is not a class
-          // value; the exact comparisons spare it the class-chain walk.
-          if (not VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue)) and
-             (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
-            SetBytecodeHomeObject(RightValue,
-              RegisterToValue(FRegisters[A]));
           // Own writable-data write IC: (shape, entry index), same receiver
           // gate as the read cache. Hits skip the name hash. Accessors,
           // proxies, private fields, deletion, and non-writable descriptors
@@ -1052,9 +1049,6 @@
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        if (TargetValue is TGocciaClassValue) or
-           (TargetValue is TGocciaObjectValue) then
-          SetBytecodeHomeObject(RightValue, TargetValue);
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
@@ -1372,9 +1366,6 @@
         OperandRoots.Add(RightValue);
         OperandRoots.Add(TargetValue);
         try
-          if (TargetValue is TGocciaClassValue) or
-             (TargetValue is TGocciaObjectValue) then
-            SetBytecodeHomeObject(RightValue, TargetValue);
           if not ((TargetValue is TGocciaArrayValue) and
                   (FRegisters[B].Kind = grkInt) and
                   (FRegisters[B].IntValue >= 0) and
@@ -2306,7 +2297,16 @@
             UInt32(InstructionStartIP), Template.StrictCode));
           goto LDispatchNext;
         end;
-        if ((C and CALL_FLAG_SPREAD) = 0) and
+        // A bytecode function is the usual callee and is neither a native nor
+        // a bound function. Its class is sealed, so one exact class comparison
+        // decides it: a bytecode callee skips the two `is` tests below, and
+        // any other callee skips the one for a bytecode function, each of
+        // which would walk a whole class chain to fail.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2333,7 +2333,8 @@
               end;
           end;
         end;
-        if (FRegisters[A].Kind = grkObject) and
+        if (not CalleeIsBytecodeFunction) and
+           (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
           BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
@@ -2367,9 +2368,8 @@
                   PushFrame(A, Frame.IP, Template, PrevCovLine,
                     ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs,
-                  Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False, True,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 goto LDispatchNext;
               end
@@ -2399,9 +2399,8 @@
                   PushFrame(A, Frame.IP, Template, PrevCovLine,
                     ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs,
-                  Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False, True,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 goto LDispatchNext;
               end;
@@ -2409,8 +2408,7 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2431,46 +2429,18 @@
               CallThisRegister := RegisterUndefined;
             if (C and 1) = 0 then
             begin
-              if B <= 3 then
-              begin
-                // Fixed-arg fast path: capture up to three arguments by value
-                // before any frame push or tail-call window reuse, so they
-                // survive AcquireRegisters' fill, and skip the RegisterArgs
-                // staging array entirely. SetupNewFrame consumes only the first
-                // B of these (bounded by AArgCount).
-                if B >= 1 then FixedArg0 := FRegisters[A + 1]
-                else FixedArg0 := RegisterUndefined;
-                if B >= 2 then FixedArg1 := FRegisters[A + 2]
-                else FixedArg1 := RegisterUndefined;
-                if B >= 3 then FixedArg2 := FRegisters[A + 3]
-                else FixedArg2 := RegisterUndefined;
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, TGocciaRegisterArray(nil), B,
-                  FixedArg0, FixedArg1, FixedArg2, True, True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              end
+              // The arguments are read straight out of the caller's registers:
+              // SetupNewFrame copies them into the callee's argument window
+              // before it acquires (and so may move or clear) any register.
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
               else
-              begin
-                SetLength(RegisterArgs, B);
-                for I := 0 to B - 1 do
-                  RegisterArgs[I] := FRegisters[A + 1 + I];
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs, B,
-                  RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              end;
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, @FRegisters[A + 1], B, True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end
             else if (FRegisters[B].Kind = grkObject) and
@@ -2488,8 +2458,8 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end;
@@ -2551,7 +2521,12 @@
       OP_CALL_METHOD:
       begin
         CheckExecutionTimeout;
-        if ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+        // See OP_CALL: an exact class comparison decides a bytecode callee.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2567,7 +2542,7 @@
               Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
           goto LDispatchNext;
         end;
-        if (C and 1) = 0 then
+        if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and
              (FRegisters[A].Kind = grkObject) and
@@ -2628,43 +2603,16 @@
                       BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
                         FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  case B of
-                    0:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    1:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    2:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 1,
-                        FRegisters[A + 2], RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    3:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 2,
-                        FRegisters[A + 2], FRegisters[A + 3], RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    4:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 3,
-                        FRegisters[A + 2], FRegisters[A + 3], FRegisters[A + 4],
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  // The first operand is the callee's `this`; the rest are its
+                  // arguments, read straight out of the caller's registers.
+                  if B <= 1 then
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, nil, 0, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp)
                   else
-                    begin
-                      SetLength(RegisterArgs, B - 1);
-                      for I := 1 to B - 1 do
-                        RegisterArgs[I - 1] := FRegisters[A + 1 + I];
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    end;
-                  end;
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @FRegisters[A + 2], B - 1, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   goto LDispatchNext;
                 end
                 // The dense hole-free gate is what makes the direct element
@@ -2693,56 +2641,28 @@
                       BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
                         FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  case ArgsArray.Elements.Count of
-                    0:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    1:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 1,
-                          ApplyArgRegister0, RegisterUndefined, RegisterUndefined,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
-                    2:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        ApplyArgRegister1 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[1]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 2,
-                          ApplyArgRegister0, ApplyArgRegister1, RegisterUndefined,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
-                    3:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        ApplyArgRegister1 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[1]);
-                        ApplyArgRegister2 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[2]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 3,
-                          ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
+                  // Up to three arguments are staged in a stack array, which
+                  // spares the common short apply a heap staging array.
+                  if ArgsArray.Elements.Count <= Length(ApplyArgRegisters) then
+                  begin
+                    for I := 0 to ArgsArray.Elements.Count - 1 do
+                      ApplyArgRegisters[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @ApplyArgRegisters[0],
+                      ArgsArray.Elements.Count, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  end
                   else
-                    begin
-                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
-                      for I := 0 to High(RegisterArgs) do
-                        RegisterArgs[I] :=
-                          VMValueToRegisterFast(ArgsArray.Elements[I]);
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    end;
+                  begin
+                    SetLength(RegisterArgs, ArgsArray.Elements.Count);
+                    for I := 0 to High(RegisterArgs) do
+                      RegisterArgs[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, PGocciaRegister(RegisterArgs),
+                      Length(RegisterArgs), True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   end;
                   goto LDispatchNext;
                 end;
@@ -2751,8 +2671,7 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2770,9 +2689,8 @@
                   FRealm));
             if (C and 1) = 0 then
             begin
-              SetLength(RegisterArgs, B);
-              for I := 0 to B - 1 do
-                RegisterArgs[I] := FRegisters[A + 1 + I];
+              // See OP_CALL: the arguments are read straight out of the
+              // caller's registers.
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2780,8 +2698,7 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end
@@ -2800,8 +2717,8 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end;
@@ -4108,9 +4025,8 @@
       OP_RETURN:
       begin
         ReturnValue := FRegisters[A];
-        if Assigned(GActiveBytecodeGenerator) and
-           (GActiveBytecodeGenerator.FClosure = AClosure) then
-          GActiveBytecodeGenerator.FReturnRequiresAwait := B <> 0;
+        if Assigned(EntryGenerator) then
+          EntryGenerator.FReturnRequiresAwait := B <> 0;
         if FClosedNumericFrameStackCount >
            InitialClosedNumericFrameCount then
         begin
