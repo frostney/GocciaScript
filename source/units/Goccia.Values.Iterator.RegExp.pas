@@ -22,12 +22,17 @@ type
     // code, so its lastIndex can live in FLastIndex between scanner matches.
     FMatcherIsPrivate: Boolean;
     FScanner: TGocciaRegExpScanner;
+    // Native bytes of FScanner (its decoded copy of the subject) charged to
+    // the collector, so live iterators count against --max-memory and
+    // garbage ones make the collector run.
+    FScannerChargedBytes: Int64;
     FInputValue: TGocciaStringLiteralValue;
     FLastIndex: Integer;
     FLastIndexPending: Boolean;
     FFlagsChecked: Boolean;
-    FFlagsAgree: Boolean;
     FSticky: Boolean;
+    function TryCreateScanner: Boolean;
+    procedure FreeScanner;
     function CanScan: Boolean;
     function ScanNext(out AMatchValue: TGocciaValue): Boolean;
     function MatchNext(out AMatchValue: TGocciaValue): Boolean;
@@ -49,6 +54,7 @@ uses
   TextSemantics,
 
   Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.RegExp.Runtime,
   Goccia.RegExp.VM,
@@ -84,14 +90,47 @@ end;
 
 destructor TGocciaRegExpMatchAllIteratorValue.Destroy;
 begin
-  FScanner.Free;
+  FreeScanner;
   inherited;
 end;
 
-// The flags the iterator took from Get(R, "flags") must agree with the
-// matcher's internal flags, which RegExpBuiltinExec uses. A private
-// matcher's internal flags cannot change, so they are checked once; whether
-// exec is still the built-in is checked on every step.
+function TGocciaRegExpMatchAllIteratorValue.TryCreateScanner: Boolean;
+var
+  Bytes: Int64;
+  GC: TGarbageCollector;
+begin
+  Bytes := Int64(Length(FInput)) * SizeOf(Cardinal);
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+  begin
+    // Without room for the decoded subject, match through the protocol as
+    // before, which reuses the per-thread decode instead.
+    if not GC.TryReserveExternalBytes(Bytes, Self) then
+      Exit(False);
+    FScannerChargedBytes := Bytes;
+  end;
+  FScanner := CreateRegExpScanner(FRegExp, FInput);
+  Result := True;
+end;
+
+procedure TGocciaRegExpMatchAllIteratorValue.FreeScanner;
+var
+  GC: TGarbageCollector;
+begin
+  FreeAndNil(FScanner);
+  if FScannerChargedBytes > 0 then
+  begin
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) then
+      GC.ReleaseExternalBytes(FScannerChargedBytes);
+    FScannerChargedBytes := 0;
+  end;
+end;
+
+// A private matcher was built by %RegExp% from the flags the iterator read,
+// so its internal flags match FGlobal and FUnicode and cannot change; only
+// its sticky flag is read, once. Whether exec is still the built-in is
+// checked on every step.
 function TGocciaRegExpMatchAllIteratorValue.CanScan: Boolean;
 begin
   if not FMatcherIsPrivate or not FGlobal or
@@ -99,13 +138,10 @@ begin
     Exit(False);
   if not FFlagsChecked then
   begin
-    FFlagsAgree := HasInternalRegExpFlag(FRegExp, 'g') and
-      (FUnicode = (HasInternalRegExpFlag(FRegExp, 'u') or
-        HasInternalRegExpFlag(FRegExp, 'v')));
     FSticky := HasInternalRegExpFlag(FRegExp, 'y');
     FFlagsChecked := True;
   end;
-  Result := FFlagsAgree;
+  Result := True;
 end;
 
 // RegExpExec plus the empty-match lastIndex advance of
@@ -118,8 +154,6 @@ var
   MatchResult: TGocciaRegExpMatchResult;
   StartIndex: Integer;
 begin
-  if not Assigned(FScanner) then
-    FScanner := CreateRegExpScanner(FRegExp, FInput);
   if FLastIndexPending then
     StartIndex := FLastIndex
   else
@@ -142,6 +176,9 @@ begin
     AMatchValue := nil;
     FLastIndex := 0;
     FLastIndexPending := True;
+    // The iterator is done: release the decoded subject and match buffers
+    // now rather than when the GC frees the iterator.
+    FreeScanner;
     Exit;
   end;
 
@@ -161,7 +198,7 @@ function TGocciaRegExpMatchAllIteratorValue.MatchNext(
 var
   MatchString: string;
 begin
-  if CanScan then
+  if CanScan and (Assigned(FScanner) or TryCreateScanner) then
     Exit(ScanNext(AMatchValue));
   // A user exec (or exec getter) receives the matcher as this, so from here
   // on user code may hold it and observe its lastIndex: keep it in sync.

@@ -446,17 +446,17 @@ begin
     end;
 end;
 
-// RegExp.prototype[Symbol.replace] and [Symbol.match] take global and
-// fullUnicode from Get(rx, "flags"); RegExpBuiltinExec uses the internal
-// flags. The scanner loop applies both, so it runs only when they agree and
-// exec is the built-in.
-function CanScanGlobalRegExp(const ARegExp: TGocciaObjectValue;
-  const AFullUnicode: Boolean): Boolean;
+// RegExp.prototype[Symbol.replace] and [Symbol.match] read global and
+// fullUnicode from Get(rx, "flags"); RegExpBuiltinExec matches with the
+// internal flags. The scanner loop advances empty matches by the fullUnicode
+// it is given and matches with the internal flags, as the protocol does. It
+// requires the internal global flag: without it RegExpBuiltinExec matches
+// from 0 every time, and the protocol's loop does not end on a subject that
+// matches.
+function CanScanGlobalRegExp(const ARegExp: TGocciaObjectValue): Boolean;
 begin
   Result := IsBuiltinExecRegExp(ARegExp) and
-    HasInternalRegExpFlag(ARegExp, 'g') and
-    (AFullUnicode = (HasInternalRegExpFlag(ARegExp, 'u') or
-      HasInternalRegExpFlag(ARegExp, 'v')));
+    HasInternalRegExpFlag(ARegExp, 'g');
 end;
 
 // One RegExpExec step of a global loop over a built-in-exec RegExp: matches
@@ -476,14 +476,31 @@ begin
 end;
 
 // A scanner loop keeps lastIndex in a local and writes the property only
-// when user code could next observe it; a match that raises leaves the
-// value the protocol's writes would have left.
-procedure ThrowRegExpScanError(const ARegExp: TGocciaObjectValue;
+// when user code could next observe it. When a match raises, the property
+// gets the value the protocol's writes would have left, and the error
+// propagates: a VM limit as a JavaScript Error, anything else unchanged.
+procedure HandleRegExpScanError(const ARegExp: TGocciaObjectValue;
   const ALastIndex: Integer; const AError: Exception);
+var
+  GC: TGarbageCollector;
+  WasFiring: Boolean;
 begin
-  ARegExp.SetProperty(PROP_LAST_INDEX,
-    TGocciaNumberLiteralValue.Create(ALastIndex));
-  ThrowError(AError.Message);
+  // The error may be the memory limit itself. The protocol allocated this
+  // lastIndex value before the allocation that failed, so the write is let
+  // past the limit, as the RangeError for the limit is.
+  GC := TGarbageCollector.Instance;
+  WasFiring := Assigned(GC) and GC.MemoryLimitFiring;
+  if Assigned(GC) then
+    GC.MemoryLimitFiring := True;
+  try
+    ARegExp.SetProperty(PROP_LAST_INDEX,
+      TGocciaNumberLiteralValue.Create(ALastIndex));
+  finally
+    if Assigned(GC) then
+      GC.MemoryLimitFiring := WasFiring;
+  end;
+  if AError is ERegExpRuntimeError then
+    ThrowError(AError.Message);
 end;
 
 // The global loop of RegExp.prototype[Symbol.replace] with a scanner. For a
@@ -537,8 +554,11 @@ begin
         Inc(AMatchCount);
       end;
     except
-      on E: ERegExpRuntimeError do
-        ThrowRegExpScanError(ARegExp, LastIndex, E);
+      on E: Exception do
+      begin
+        HandleRegExpScanError(ARegExp, LastIndex, E);
+        raise;
+      end;
     end;
   finally
     Scanner.Free;
@@ -548,15 +568,12 @@ end;
 // Symbol.split's splitter is sticky, so its loop tries one position at a
 // time; when exec is the built-in, the first position where that succeeds is
 // where an unanchored scan from the same index finds its match. The caller
-// checks that %RegExp% itself constructed the splitter, so no user code can
-// reach it and its lastIndex writes are skipped.
-function CanScanSplitter(const ASplitter: TGocciaObjectValue;
-  const AUnicodeMatching: Boolean): Boolean;
+// checks that %RegExp% itself constructed the splitter, from the flags it
+// read plus "y", so no user code can reach it, its internal flags agree with
+// those flags, and its lastIndex writes are skipped.
+function CanScanSplitter(const ASplitter: TGocciaObjectValue): Boolean;
 begin
-  Result := IsBuiltinExecRegExp(ASplitter) and
-    HasInternalRegExpFlag(ASplitter, 'y') and
-    (AUnicodeMatching = (HasInternalRegExpFlag(ASplitter, 'u') or
-      HasInternalRegExpFlag(ASplitter, 'v')));
+  Result := IsBuiltinExecRegExp(ASplitter);
 end;
 
 // ES2026 §22.2.6.14 RegExp.prototype [ @@split ] steps 19-25, matching with
@@ -1500,7 +1517,7 @@ begin
   ResultArray := TGocciaArrayValue.Create;
   TGarbageCollector.Instance.AddTempRoot(ResultArray);
   try
-    if CanScanGlobalRegExp(RegexValue, IsUnicode) then
+    if CanScanGlobalRegExp(RegexValue) then
     begin
       Sticky := HasInternalRegExpFlag(RegexValue, 'y');
       LastIndex := 0;
@@ -1513,8 +1530,11 @@ begin
               UTF16Substring(Input, Scanner.MatchIndex,
                 Scanner.MatchEnd - Scanner.MatchIndex)));
         except
-          on E: ERegExpRuntimeError do
-            ThrowRegExpScanError(RegexValue, LastIndex, E);
+          on E: Exception do
+          begin
+            HandleRegExpScanError(RegexValue, LastIndex, E);
+            raise;
+          end;
         end;
       finally
         Scanner.Free;
@@ -1658,7 +1678,7 @@ begin
   CaptureCount := 0;
   UseMatchSlots := False;
   try
-    if Global and CanScanGlobalRegExp(RegexValue, IsUnicode) then
+    if Global and CanScanGlobalRegExp(RegexValue) then
       UseMatchSlots := ScanGlobalRegExpMatches(RegexValue, Input, IsUnicode,
         Results, ResultCount, MatchSlots, MatchCount, CaptureCount)
     else
@@ -1728,11 +1748,8 @@ begin
                   Captures[CaptureNumber - 1].Text);
           end
           else
-          begin
-            Captures[CaptureNumber - 1].Text := '';
             Captures[CaptureNumber - 1].Value :=
               TGocciaUndefinedLiteralValue.UndefinedValue;
-          end;
         end;
         ReplacementString := GetRegExpReplacement(ReplaceValue, CallArgs,
           ReplacementText, Matched, Input, InputValue, Position, Captures,
@@ -1887,7 +1904,7 @@ begin
     // A splitter from a user species constructor may be held by user code,
     // which can observe or refuse the lastIndex writes the scan skips.
     if (SpeciesConstructor = FRegExpConstructor) and
-       CanScanSplitter(SplitterValue, UnicodeMatching) then
+       CanScanSplitter(SplitterValue) then
     begin
       Result := ScanSplit(SplitterValue, Input, Size, UnicodeMatching, Limit,
         ResultArray);

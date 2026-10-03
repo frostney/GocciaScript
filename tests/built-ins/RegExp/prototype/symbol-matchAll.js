@@ -240,3 +240,43 @@ test("Symbol.matchAll keeps lastIndex of a matcher that an earlier exec call exp
   expect(iterator.next().value.index).toBe(0);
   expect(matcher.lastIndex).toBe(1);
 });
+
+test("Symbol.matchAll with global and sticky flags stops at the first position that does not match", () => {
+  expect([..."aaba".matchAll(/a/gy)].map((match) => match.index)).toEqual([0, 1]);
+});
+
+test("Symbol.matchAll starts from the regex's lastIndex, even past the end", () => {
+  for (const lastIndex of [2 ** 32 + 1, 2 ** 31, 4]) {
+    const regex = /a|(?:)/g;
+    regex.lastIndex = lastIndex;
+    expect([..."aaa".matchAll(regex)]).toEqual([]);
+  }
+});
+
+const hasGocciaGc = typeof Goccia !== "undefined" && typeof Goccia.gc === "function";
+
+test.runIf(hasGocciaGc)("Symbol.matchAll results keep the subject as input across garbage collections", () => {
+  const subject = ["sub", "ject-", String(Date.now() % 10), "x".repeat(50), "aXbXcX"].join("");
+  const iterator = subject.matchAll(/X/g);
+  iterator.next();
+  for (const round of [1, 2, 3]) {
+    Array.from({ length: 2000 }, (_, k) => "j" + k + round);
+    Goccia.gc();
+  }
+  const second = iterator.next().value;
+  for (const round of [1, 2, 3]) {
+    Array.from({ length: 2000 }, (_, k) => "q" + k + round);
+    Goccia.gc();
+  }
+  expect(second.input).toBe(subject);
+  expect(iterator.next().value.input).toBe(subject);
+});
+
+test("Symbol.matchAll iterators over long subjects can be left unfinished", () => {
+  const subject = "a".repeat(20000) + "b";
+  let total = 0;
+  for (const i of Array.from({ length: 40 }, (_, k) => k)) {
+    total += (subject + i).matchAll(/(a|c)*b/g).next().value.index;
+  }
+  expect(total).toBe(0);
+});

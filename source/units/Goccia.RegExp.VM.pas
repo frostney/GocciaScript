@@ -56,6 +56,8 @@ type
     { A start and an end offset per group, -1 for a group that did not
       participate; overwritten by the next Exec. }
     property Slots: TRegExpSlots read FSlots;
+    { Backtrack entries kept for the next Exec. }
+    function RetainedBacktrackCapacity: Integer;
   end;
 
   TRegExpVMResult = record
@@ -93,6 +95,7 @@ const
   MIN_STEP_LIMIT = 10000000;
   STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 10000000;
+  MAX_RETAINED_BACKTRACK_ENTRIES = 1024;
   MEMO_INITIAL_CAPACITY = 64;
   MEMO_MAX_CAPACITY = 65536;
   MEMO_MAX_PROBES = 16;
@@ -1334,10 +1337,12 @@ begin
   end;
 end;
 
-// Per-thread memo of the most recently decoded subject. Global match/replace/
-// split/matchAll re-enter ExecuteRegExpVM once per match against the same
-// immutable subject string, so caching the decode avoids re-decoding and
-// re-allocating the whole input on every match (O(matches * length) -> O(length)).
+// Per-thread memo of the most recently decoded subject. Repeated exec/test
+// calls (and the global loops of replace/match/split/matchAll when they run
+// through the RegExpExec protocol) re-enter ExecuteRegExpVM once per match
+// against the same immutable subject string, so caching the decode avoids
+// re-decoding the whole input on every match. TRegExpMatcher, which those
+// loops use with the built-in exec, decodes through the same memo once.
 // Identity-keyed (the driver passes the same string instance each iteration),
 // so the hit check is O(1). Pure optimization — clearing it is always safe.
 // Single-entry: a different subject replaces the retained pair via managed
@@ -1488,6 +1493,15 @@ begin
   end;
   Result := ScanRegExpInput(FProgram, FInput, AStartIndex, ARequireStart,
     FSlots, FSlotCount, FStack);
+  // Reusing the stack saves allocations only while it is small; a large one
+  // (each entry holds two dynamic arrays) is not kept alive between matches.
+  if Length(FStack) > MAX_RETAINED_BACKTRACK_ENTRIES then
+    SetLength(FStack, 0);
+end;
+
+function TRegExpMatcher.RetainedBacktrackCapacity: Integer;
+begin
+  Result := Length(FStack);
 end;
 
 function TRegExpMatcher.Slot(const AIndex: Integer): Integer;

@@ -275,3 +275,24 @@ test("Symbol.replace advances empty matches by the unicode property", () => {
   expect("\u{1F600}".replace(regex, "-")).toBe("-\u{1F600}-");
   expect("\u{1F600}".replace(/(?:)/g, "-")).toBe("-\ud83d-\ude00-");
 });
+
+test("Symbol.replace and Symbol.match call exec from a prototype between the regex and RegExp.prototype", () => {
+  const calls = [];
+  const makeRegex = () => {
+    const regex = /a/g;
+    Object.setPrototypeOf(regex, Object.create(RegExp.prototype, {
+      exec: {
+        value(input) {
+          calls.push(this.lastIndex);
+          return RegExp.prototype.exec.call(this, input);
+        },
+      },
+    }));
+    return regex;
+  };
+  expect("aXa".replace(makeRegex(), "b")).toBe("bXb");
+  expect(calls).toEqual([0, 1, 3]);
+  calls.length = 0;
+  expect("aXa".match(makeRegex())).toEqual(["a", "a"]);
+  expect(calls).toEqual([0, 1, 3]);
+});

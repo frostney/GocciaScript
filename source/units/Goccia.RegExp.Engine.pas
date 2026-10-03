@@ -56,7 +56,6 @@ type
     procedure GetMatchResult(out AResult: TGocciaRegExpMatchResult);
     property CaptureCount: Integer read FProgram.CaptureCount;
     function HasNamedGroups: Boolean;
-    property IsUnicode: Boolean read FIsUnicode;
     property InputLength: Integer read FInputLength;
     property MatchIndex: Integer read FMatchIndex;
     property MatchEnd: Integer read FMatchEnd;
