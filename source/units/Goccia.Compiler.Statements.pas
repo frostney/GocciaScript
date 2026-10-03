@@ -94,6 +94,7 @@ function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
+function StatementIsIteration(const AStmt: TGocciaStatement): Boolean;
 function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean; overload;
 function StatementAlwaysAbrupt(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaStatement): Boolean; overload;
@@ -1105,10 +1106,10 @@ begin
       if CanTrackConstant then
         ACtx.Scope.SetLocalConstantValue(LocalIdx, ConstantValue);
 
-      // The initializer has completed, so later reads in this function see the
-      // value in the register: they need no TDZ check and no copy.
-      if AStmt.IsConst and (not AStmt.IsVar) and
-         (not IsTopLevelGlobalBacked) and Assigned(Info.Initializer) then
+      // The declaration has completed, with its initializer or with
+      // undefined for `let x;`, so a read compiled from here on cannot observe
+      // the TDZ hole.
+      if (not AStmt.IsVar) and (not IsTopLevelGlobalBacked) then
         ACtx.Scope.MarkLocalInitialized(LocalIdx);
     end;
 
@@ -2758,7 +2759,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
 
@@ -2924,7 +2925,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
@@ -3216,7 +3217,7 @@ begin
     begin
       Slot := ACtx.Scope.DeclareLocal(AStmt.BindingName, AStmt.IsConst);
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, ValueReg, 0));
-      if AStmt.IsConst then
+      if not AStmt.IsVar then
         ACtx.Scope.MarkLocalInitialized(
           ACtx.Scope.ResolveLocal(AStmt.BindingName));
     end;
@@ -3587,6 +3588,7 @@ begin
     SetLabeledContinueCleanupBase(AStmt);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
+    ACtx.Scope.MarkLocalInitialized(ACtx.Scope.ResolveLocal(LoopName));
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -5248,6 +5250,8 @@ begin
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+  MarkParametersInitialized(ChildScope, AMethod.Parameters,
+    ArgumentsSlot >= 0);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -5706,6 +5710,8 @@ begin
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+  MarkParametersInitialized(ChildScope, AMethod.Parameters,
+    ArgumentsSlot >= 0);
 
   ACtx.CompileFunctionBody(AMethod.Body);
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;

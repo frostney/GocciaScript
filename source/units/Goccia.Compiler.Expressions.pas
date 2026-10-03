@@ -115,6 +115,8 @@ function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boole
 
 procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
+procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray; const AHasArgumentsObject: Boolean);
 function ParameterListHasDefaultValues(
   const AParams: TGocciaParameterArray): Boolean;
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
@@ -155,6 +157,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.Statements,
   Goccia.Compiler.TypeRules,
   Goccia.Constants,
@@ -1942,6 +1945,7 @@ begin
 
     ACtx.Template.AddDirectEvalEnvironment(APC,
       ACtx.Template.RejectArgumentsInDirectEval, Bindings);
+    ACtx.Scope.MarkDirectEvalSeen;
   finally
     Names.Free;
   end;
@@ -1992,46 +1996,110 @@ begin
 end;
 
 
-// A const local whose declaration has already been compiled keeps its value in
-// its own register for the rest of its scope: nothing can assign it, and a read
-// compiled after the declaration cannot run before it. Such a read needs
-// neither the TDZ check nor a copy, so an instruction may take the register as
-// its operand.
-function TryResolveSettledLocalRegister(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+// Decides whether an identifier operand can be read straight from the register
+// of the local it names instead of being copied into a temporary first.
+// OP_GET_LOCAL, which makes that copy, does three things, and the direct read
+// is taken only where each of them is shown to be unnecessary.
+//
+// 1. It checks the temporal dead zone. IsInitialized is set after the code that
+//    initializes the binding has been compiled (a declaration, a loop binding,
+//    the parameter preamble), so the read is compiled after it. It is cleared
+//    at each switch clause, the one place where control enters a scope past a
+//    declaration. Blocks, loop bodies and try, catch and finally blocks are
+//    entered at their top, and a loop that jumps back runs the declaration
+//    again before it reaches the read.
+//
+// 2. It reads the binding's cell when there is one. A closure shares a captured
+//    local through a cell and writes only the cell, and so does a mapped
+//    arguments object; from then on the register is stale. A const cannot be
+//    written. A let binding or a parameter keeps a current register for as long
+//    as it has no cell:
+//    - No closure compiled before the read captured it (IsCaptured).
+//    - No closure compiled after the read exists when the read runs. Such a
+//      closure is created at a higher code address, and control only moves to
+//      a lower one at the back edge of a loop statement, so the read would have
+//      to be inside a loop that also creates a closure. Those loops are found
+//      before they are compiled (StatementCreatesNoClosure) and keep the copy.
+//    - A parameter is not marked initialized when its function has an
+//      arguments object (see MarkParametersInitialized).
+//    Code created by direct eval is the one thing that writes a function's
+//    registers from inside a call, and a closure it creates goes on doing so
+//    after the eval call has returned, in whichever function calls it. So
+//    where the host offers direct eval at all (DirectEvalAvailable) every let
+//    binding and parameter keeps the copy. Independently of that, a function
+//    keeps the copy from its first direct eval onwards, and a loop that
+//    contains one keeps it throughout.
+//
+// 3. It takes the value before the following operands are evaluated:
+//    `a + (a = 2)` adds the old value. AEvaluatedLater1 and AEvaluatedLater2
+//    are the operands evaluated between this one and the instruction that
+//    consumes it. Neither may be able to write a register of this function
+//    (ExpressionKeepsLocalRegisters). A call among them is harmless: the callee
+//    runs in a register window of its own, and by (2) no closure over this
+//    binding exists. AWrittenRegister is the register the consuming instruction
+//    stores its result in, which must be a different one.
+function TryResolveSettledLocalName(const ACtx: TGocciaCompilationContext;
+  const AName: string; out ARegister: UInt16;
+  const AEvaluatedLater1: TGocciaExpression = nil;
+  const AEvaluatedLater2: TGocciaExpression = nil;
+  const AWrittenRegister: Integer = -1): Boolean;
 var
   LocalIdx: Integer;
   Local: TGocciaCompilerLocal;
-  Name: string;
 begin
   Result := False;
   // Coverage counts a line as hit when one of its instructions runs. A line
   // holding only such an operand would emit none, so coverage keeps the copy.
   if ACtx.OptimizationOptions.PreserveCoverageShape then
     Exit;
-  if not (AExpr is TGocciaIdentifierExpression) then
+  if ShouldTryWithBinding(ACtx.Scope, AName) then
     Exit;
-  Name := TGocciaIdentifierExpression(AExpr).Name;
-  if ShouldTryWithBinding(ACtx.Scope, Name) then
-    Exit;
-  LocalIdx := ACtx.Scope.ResolveLocal(Name);
+  LocalIdx := ACtx.Scope.ResolveLocal(AName);
   if LocalIdx < 0 then
     Exit;
   Local := ACtx.Scope.GetLocal(LocalIdx);
-  if (not Local.IsConst) or (not Local.IsInitialized) or Local.IsVar or
-     Local.IsImportBinding or Local.IsGlobalBacked then
+  if (not Local.IsInitialized) or Local.IsVar or Local.IsImportBinding or
+     Local.IsGlobalBacked then
     Exit;
+  if AWrittenRegister = Local.Slot then
+    Exit;
+  if not Local.IsConst then
+  begin
+    if ACtx.OptimizationOptions.DirectEvalAvailable then
+      Exit;
+    if Local.IsCaptured or ACtx.Scope.MutableLocalsMayLeaveRegisters then
+      Exit;
+    if not ExpressionKeepsLocalRegisters(AEvaluatedLater1) or
+       not ExpressionKeepsLocalRegisters(AEvaluatedLater2) then
+      Exit;
+  end;
   ARegister := Local.Slot;
   Result := True;
 end;
 
+function TryResolveSettledLocalRegister(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaExpression; out ARegister: UInt16;
+  const AEvaluatedLater1: TGocciaExpression = nil;
+  const AEvaluatedLater2: TGocciaExpression = nil;
+  const AWrittenRegister: Integer = -1): Boolean;
+begin
+  Result := (AExpr is TGocciaIdentifierExpression) and
+    TryResolveSettledLocalName(ACtx, TGocciaIdentifierExpression(AExpr).Name,
+      ARegister, AEvaluatedLater1, AEvaluatedLater2, AWrittenRegister);
+end;
+
 // Compiles AExpr as a read-only instruction operand. Returns True when
 // ARegister is a temporary that the caller releases with FreeRegister. The
-// instruction that consumes the operand must not write to ARegister.
+// remaining arguments describe what happens between this operand and the
+// instruction that consumes it; see TryResolveSettledLocalName.
 function CompileOperand(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaExpression; out ARegister: UInt16): Boolean;
+  const AExpr: TGocciaExpression; out ARegister: UInt16;
+  const AEvaluatedLater1: TGocciaExpression = nil;
+  const AEvaluatedLater2: TGocciaExpression = nil;
+  const AWrittenRegister: Integer = -1): Boolean;
 begin
-  if TryResolveSettledLocalRegister(ACtx, AExpr, ARegister) then
+  if TryResolveSettledLocalRegister(ACtx, AExpr, ARegister, AEvaluatedLater1,
+       AEvaluatedLater2, AWrittenRegister) then
     Exit(False);
   ARegister := ACtx.Scope.AllocateRegister;
   ACtx.CompileExpression(AExpr, ARegister);
@@ -2137,7 +2205,7 @@ begin
      HasExactNumberProof(ACtx.Scope, AExpr.Left) and
      TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
   begin
-    OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
+    OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, nil, nil, ADest);
     EmitInstruction(ACtx, EncodeABC(OP_SUB_NUM_IMM, ADest, RegB,
       UInt16(Immediate)));
     if OwnsRegB then
@@ -2150,7 +2218,7 @@ begin
     if HasExactNumberProof(ACtx.Scope, AExpr.Left) and
        TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
     begin
-      OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
+      OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, nil, nil, ADest);
       EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
         UInt16(Immediate)));
       if OwnsRegB then
@@ -2160,7 +2228,7 @@ begin
     if HasExactNumberProof(ACtx.Scope, AExpr.Right) and
        TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
     begin
-      OwnsRegB := CompileOperand(ACtx, AExpr.Right, RegB);
+      OwnsRegB := CompileOperand(ACtx, AExpr.Right, RegB, nil, nil, ADest);
       EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
         UInt16(Immediate)));
       if OwnsRegB then
@@ -2169,8 +2237,8 @@ begin
     end;
   end;
 
-  OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB);
-  OwnsRegC := CompileOperand(ACtx, AExpr.Right, RegC);
+  OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, AExpr.Right, nil, ADest);
+  OwnsRegC := CompileOperand(ACtx, AExpr.Right, RegC, nil, nil, ADest);
 
   LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
   RightType := ExpressionType(ACtx.Scope, AExpr.Right);
@@ -2653,10 +2721,15 @@ begin
   if LocalIdx >= 0 then
   begin
     Local := ACtx.Scope.GetLocal(LocalIdx);
-    if not Local.IsGlobalBacked then
+    if (not Local.IsGlobalBacked) and
+       not (Local.IsInitialized and
+         not ACtx.OptimizationOptions.PreserveCoverageShape) then
     begin
       // PutValue on an uninitialized lexical binding throws after the RHS has
-      // been evaluated. Probe the destination without disturbing ADest.
+      // been evaluated. Probe the destination without disturbing ADest. A
+      // binding whose initialization was compiled before this assignment
+      // cannot still be in its temporal dead zone (see
+      // TryResolveSettledLocalName, point 1), so it needs no probe.
       ErrorReg := ACtx.Scope.AllocateRegister;
       EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ErrorReg, Local.Slot));
       ACtx.Scope.FreeRegister;
@@ -2758,7 +2831,7 @@ begin
     Exit;
   end;
 
-  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg);
+  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg, AExpr.Value);
   OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitStorePropertyByName(ACtx, ObjReg, AExpr.PropertyName, ValReg);
@@ -2889,6 +2962,31 @@ begin
     if IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
     PatchJumpTarget(ACtx, JumpIdx);
+  end;
+end;
+
+// Called once the parameter preamble has been compiled: from here on every
+// named parameter holds its argument or its default, so a read in the function
+// body cannot observe the TDZ hole that default initializers see.
+//
+// A function with an arguments object is left alone. A mapped arguments object
+// shares each parameter through a cell, and `arguments[0] = v` writes that cell
+// without touching the register, which a direct read would then get stale.
+// Destructured parameters are not marked either; their bindings keep the copy.
+procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray; const AHasArgumentsObject: Boolean);
+var
+  I, LocalIdx: Integer;
+begin
+  if AHasArgumentsObject then
+    Exit;
+  for I := 0 to High(AParams) do
+  begin
+    if AParams[I].IsPattern or (AParams[I].Name = '') then
+      Continue;
+    LocalIdx := AScope.ResolveLocal(AParams[I].Name);
+    if LocalIdx >= 0 then
+      AScope.MarkLocalInitialized(LocalIdx);
   end;
 end;
 
@@ -3932,6 +4030,7 @@ begin
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    MarkParametersInitialized(ChildScope, AExpr.Parameters, False);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -4924,7 +5023,8 @@ begin
     end;
   end;
   if ObjectRegisterAllocated and
-     TryResolveSettledLocalRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
+     TryResolveSettledLocalRegister(ACtx, AExpr.ObjectExpr, ObjReg,
+       AExpr.PropertyExpression, nil, ADest) then
     ObjectRegisterAllocated := False;
   if ObjectRegisterAllocated then
   begin
@@ -4938,7 +5038,8 @@ begin
 
   if AExpr.Computed then
   begin
-    OwnsIdxReg := CompileOperand(ACtx, AExpr.PropertyExpression, IdxReg);
+    OwnsIdxReg := CompileOperand(ACtx, AExpr.PropertyExpression, IdxReg, nil,
+      nil, ADest);
     EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
     if OwnsIdxReg then
       ACtx.Scope.FreeRegister;
@@ -4972,7 +5073,7 @@ begin
   Binary := TGocciaBinaryExpression(ACondition);
   if Binary.Operator <> gttLess then
     Exit;
-  OwnsLeftReg := CompileOperand(ACtx, Binary.Left, LeftReg);
+  OwnsLeftReg := CompileOperand(ACtx, Binary.Left, LeftReg, Binary.Right);
   OwnsRightReg := CompileOperand(ACtx, Binary.Right, RightReg);
   AJumpIndex := EmitJumpIfNotLessThan(ACtx, LeftReg, RightReg);
   if OwnsRightReg then
@@ -4989,6 +5090,7 @@ var
   ConditionReg: UInt16;
   ConditionBinary: TGocciaBinaryExpression;
   Immediate: Int16;
+  OwnsConditionReg: Boolean;
 begin
   if AExpr.Condition is TGocciaBinaryExpression then
   begin
@@ -4997,12 +5099,13 @@ begin
        HasExactNumberProof(ACtx.Scope, ConditionBinary.Left) and
        TrySignedInt16NumberLiteral(ConditionBinary.Right, Immediate) then
     begin
-      ConditionReg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(ConditionBinary.Left, ConditionReg);
+      OwnsConditionReg := CompileOperand(ACtx, ConditionBinary.Left,
+        ConditionReg);
       ElseJump := EmitInstruction(ACtx,
         EncodeABC(OP_JUMP_IF_NUM_NOT_LTE_IMM, ConditionReg,
           UInt16(Immediate), 0), True);
-      ACtx.Scope.FreeRegister;
+      if OwnsConditionReg then
+        ACtx.Scope.FreeRegister;
       ACtx.CompileExpression(AExpr.Consequent, ADest);
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
@@ -5989,8 +6092,10 @@ begin
     Exit;
   end;
 
-  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg);
-  OwnsKeyReg := CompileOperand(ACtx, AExpr.PropertyExpression, KeyReg);
+  OwnsObjReg := CompileOperand(ACtx, AExpr.ObjectExpr, ObjReg,
+    AExpr.PropertyExpression, AExpr.Value);
+  OwnsKeyReg := CompileOperand(ACtx, AExpr.PropertyExpression, KeyReg,
+    AExpr.Value);
   OwnsValReg := CompileOperand(ACtx, AExpr.Value, ValReg);
 
   EmitInstruction(ACtx, EncodeABC(StoreByKeyOpcode(ACtx), ObjReg, KeyReg,
@@ -6119,6 +6224,8 @@ begin
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
+    MarkParametersInitialized(ChildScope, AExpr.Parameters,
+      ArgumentsSlot >= 0);
 
     ACtx.CompileFunctionBody(AExpr.Body);
 
@@ -6161,6 +6268,7 @@ var
   I, EndCount, JumpIdx, MissJump, OkJump: Integer;
   EndJumps: array of Integer;
   PreparedTarget: TPreparedDestructuringTarget;
+  OwnsRegOld: Boolean;
 begin
   // ES2026 §13.15.2 AssignmentExpression : LeftHandSideExpression ??=/&&=/||= AssignmentExpression
   if IsShortCircuitAssignment(AExpr.Operator) then
@@ -6387,9 +6495,16 @@ begin
     // instead sample it after the right-hand side ran, and a right-hand side
     // that rebinds the target (`x += ((x = 10), 100)`) would then be folded
     // against the new value. OP_GET_LOCAL also performs the GetValue TDZ check
-    // that reading the raw slot skips.
-    RegOld := ACtx.Scope.AllocateRegister;
-    EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
+    // that reading the raw slot skips. The slot is named only where
+    // TryResolveSettledLocalName proves both away: the binding is initialized
+    // and the right-hand side cannot write a local.
+    OwnsRegOld := ACtx.Scope.GetLocal(LocalIdx).IsConst or
+      not TryResolveSettledLocalName(ACtx, AExpr.Name, RegOld, AExpr.Value);
+    if OwnsRegOld then
+    begin
+      RegOld := ACtx.Scope.AllocateRegister;
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, RegOld, Slot));
+    end;
     RegVal := ACtx.Scope.AllocateRegister;
     ACtx.CompileExpression(AExpr.Value, RegVal);
 
@@ -6432,7 +6547,8 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
     ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
-    ACtx.Scope.FreeRegister;
+    if OwnsRegOld then
+      ACtx.Scope.FreeRegister;
     Exit;
   end;
 

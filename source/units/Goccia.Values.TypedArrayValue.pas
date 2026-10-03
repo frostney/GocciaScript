@@ -196,6 +196,8 @@ implementation
 uses
   Math,
 
+  NumericText,
+
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.PropertyNames,
@@ -1274,7 +1276,7 @@ begin
 
   for I := 0 to Len - 1 do
   begin
-    Result[Count] := IntToStr(I);
+    Result[Count] := IntegerToString(I);
     Inc(Count);
   end;
 
@@ -1993,7 +1995,7 @@ begin
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcLen - 1 do
       TA.SetIntegerIndexedElement(TargetOffset + I, False,
-        SrcObj.GetProperty(IntToStr(I)));
+        SrcObj.GetProperty(IntegerToString(I)));
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3332,7 +3334,7 @@ begin
       ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
     for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntToStr(I)));
+      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
     Exit(NewTA);
   end;
 
@@ -3561,7 +3563,7 @@ begin
     try
       for I := 0 to Len - 1 do
       begin
-        Val := SrcObj.GetProperty(IntToStr(I));
+        Val := SrcObj.GetProperty(IntegerToString(I));
         if HasMapFn then
         begin
           MapArgs := TGocciaArgumentsCollection.Create;

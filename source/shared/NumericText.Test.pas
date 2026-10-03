@@ -22,6 +22,7 @@ type
     procedure TestDecimalLiterals;
     procedure TestDecimalRoundingBoundaries;
     procedure TestShortestNumberFormatting;
+    procedure TestIntegerFormatting;
     procedure TestSignedZero;
     procedure TestInvalidInput;
   public
@@ -56,6 +57,8 @@ begin
     TestDecimalRoundingBoundaries);
   Test('number formatting emits ECMAScript shortest decimals',
     TestShortestNumberFormatting);
+  Test('integer formatting matches the RTL across the Int64 range',
+    TestIntegerFormatting);
   Test('negative-zero strings preserve -0',
     TestSignedZero);
   Test('inputs that are not StringNumericLiterals convert to NaN',
@@ -169,6 +172,39 @@ begin
     UInt64($7FEFFFFFFFFFFFFF)))).ToBe('1.7976931348623157e+308');
   Expect<string>(NumberToString(BitsToDouble(
     UInt64($8000000000000000)))).ToBe('0');
+end;
+
+procedure TNumericTextTests.TestIntegerFormatting;
+const
+  BOUNDARIES: array[0..17] of Int64 = (
+    0, 1, -1, 9, 10, -10, 99, 100, 2147483647, -2147483648, 2147483648,
+    4294967295, 4294967296, 9007199254740991, -9007199254740991,
+    999999999999999999, High(Int64), Low(Int64));
+var
+  I: Integer;
+  Power: Int64;
+begin
+  Expect<string>(IntegerToString(0)).ToBe('0');
+  Expect<string>(IntegerToString(-1)).ToBe('-1');
+  Expect<string>(IntegerToString(1234567890)).ToBe('1234567890');
+  Expect<string>(IntegerToString(High(Int64))).ToBe('9223372036854775807');
+  Expect<string>(IntegerToString(Low(Int64))).ToBe('-9223372036854775808');
+
+  for I := Low(BOUNDARIES) to High(BOUNDARIES) do
+    Expect<string>(IntegerToString(BOUNDARIES[I])).ToBe(
+      string(IntToStr(BOUNDARIES[I])));
+
+  // Every digit count, on both sides of each power of ten.
+  Power := 1;
+  for I := 1 to 18 do
+  begin
+    Power := Power * 10;
+    Expect<string>(IntegerToString(Power - 1)).ToBe(string(IntToStr(Power - 1)));
+    Expect<string>(IntegerToString(Power)).ToBe(string(IntToStr(Power)));
+    Expect<string>(IntegerToString(-Power)).ToBe(string(IntToStr(-Power)));
+    Expect<string>(IntegerToString(-Power - 1)).ToBe(
+      string(IntToStr(-Power - 1)));
+  end;
 end;
 
 procedure TNumericTextTests.TestSignedZero;
