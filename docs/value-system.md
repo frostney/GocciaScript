@@ -621,7 +621,7 @@ Represent class constructors. Store:
 
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
 
-- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes check for setters before falling back to direct property creation.
+- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes call the setter of an own or inherited accessor, and fail when that accessor has none, before falling back to direct property creation.
 - **Private property storage** using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
 - **Class reference** for `instanceof` checks
 
@@ -644,7 +644,7 @@ flowchart TD
     Rest --> Return
 ```
 
-Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields.
+Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields. A public field is defined on the instance rather than assigned (ES2026 §7.3.32 DefineField), so it never calls a setter of the same name and replaces a configurable accessor the instance already has.
 
 ## Enums
 
