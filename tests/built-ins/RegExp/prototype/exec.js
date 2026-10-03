@@ -467,3 +467,35 @@ test("lookbehind unicode set strings match backward", () => {
   expect(/(?<=[\q{ab}])c/v.test("abc")).toBe(true);
   expect(/(?<=[\q{ab}])c/v.test("ac")).toBe(false);
 });
+
+test("exec defines index, input and groups on the match array without calling setters on Array.prototype", () => {
+  const names = ["index", "input", "groups"];
+  const setterCalls = [];
+  for (const name of names) {
+    Object.defineProperty(Array.prototype, name, {
+      configurable: true,
+      get() {
+        return "inherited";
+      },
+      set(value) {
+        setterCalls.push(name);
+      },
+    });
+  }
+  let match;
+  let all;
+  try {
+    match = /b/.exec("abc");
+    all = [..."abab".matchAll(/b/g)];
+  } finally {
+    for (const name of names) {
+      delete Array.prototype[name];
+    }
+  }
+  expect(setterCalls).toEqual([]);
+  expect(match.index).toBe(1);
+  expect(match.input).toBe("abc");
+  expect(match.groups).toBeUndefined();
+  expect(Object.keys(match)).toEqual(["0", "index", "input", "groups"]);
+  expect(all.map((m) => m.index)).toEqual([1, 3]);
+});
