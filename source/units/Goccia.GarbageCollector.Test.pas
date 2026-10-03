@@ -73,6 +73,7 @@ type
     procedure TestActiveRootStackGrowsPastInitialCapacity;
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
+    procedure TestRegisterObjectAdvancesEveryByteCounter;
   end;
 
 var
@@ -151,6 +152,8 @@ begin
     TestPushesOutsideTheGuardingTryLeakOnRaise);
   Test('Cross-thread releases keep the byte ledger exact under churn',
     TestCrossThreadReleaseKeepsAccountingExact);
+  Test('Registering an object advances the live, total and peak byte counters',
+    TestRegisterObjectAdvancesEveryByteCounter);
 end;
 
 procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
@@ -377,6 +380,36 @@ begin
 
   GC.Collect;
   Expect<Integer>(GCountedValueDestructorCount).ToBe(2);
+end;
+
+procedure TTestGarbageCollector.TestRegisterObjectAdvancesEveryByteCounter;
+var
+  GC: TGarbageCollector;
+  LiveBefore, TotalBefore: Int64;
+  Managed: TChildManaged;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GC.ResetPeakBytesAllocated;
+  LiveBefore := GC.BytesAllocated;
+  TotalBefore := GC.TotalBytesAllocated;
+  Expect<Int64>(GC.PeakBytesAllocated).ToBe(LiveBefore);
+
+  Managed := TChildManaged.Create;
+  GC.RegisterObject(Managed);
+  Expect<Int64>(GC.BytesAllocated - LiveBefore).ToBe(Managed.InstanceSize);
+  Expect<Int64>(GC.TotalBytesAllocated - TotalBefore).ToBe(
+    Managed.InstanceSize);
+  Expect<Int64>(GC.PeakBytesAllocated).ToBe(GC.BytesAllocated);
+
+  // Collecting it lowers the live count only: the total is cumulative and the
+  // peak keeps the high-water mark.
+  GC.Collect;
+  Expect<Int64>(GC.BytesAllocated).ToBe(LiveBefore);
+  Expect<Int64>(GC.TotalBytesAllocated - TotalBefore).ToBe(
+    TChildManaged.InstanceSize);
+  Expect<Int64>(GC.PeakBytesAllocated - LiveBefore).ToBe(
+    TChildManaged.InstanceSize);
 end;
 
 procedure TTestGarbageCollector.TestReservationCollectsAndRetries;
