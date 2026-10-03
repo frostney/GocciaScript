@@ -994,11 +994,11 @@ console.log("--max-memory (override)...");
 }
 
 console.log("--max-memory (OOM triggers RangeError)...");
-{
-  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${RUNNER} --max-memory=200000 --compat-asi 2>&1`.nothrow();
+for (const mode of ["interpreted", "bytecode"]) {
+  const res = await $`echo 'Array.from({length:5000},(_,i)=>({x:i}));' | ${RUNNER} --max-memory=200000 --compat-asi --mode=${mode} 2>&1`.nothrow();
   const out = res.text();
-  if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
-  if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError`);
+  if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode} (${mode})`);
+  if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");

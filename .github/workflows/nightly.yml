@@ -60,10 +60,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
-            --jq '.workflow_runs[0] | select(. != null) | "\(.id) \(.head_sha)"')"
+          # The newest push to main whose run succeeded, chosen here from
+          # the newest runs rather than with the API's status=success
+          # filter: on 2026-10-03 that filter answered with a run from six
+          # days earlier while two newer commits had passed, and the
+          # nightly skipped them. Ordered by when the run was created, so
+          # a re-run of an older commit does not count as newer.
+          RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100" \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | last | select(. != null) | "\(.id) \(.head_sha)"')"
           if [ -z "$RUN" ]; then
-            echo "No successful CI run for a push to main was found: nothing to publish."
+            echo "No successful CI run among the newest 100 pushes to main: nothing to publish."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
