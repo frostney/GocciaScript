@@ -39,8 +39,19 @@ procedure PollInstructionLimit(
 
 implementation
 
+uses
+  Goccia.ThreadPolls;
+
 threadvar
   GInstructionLimitState: TGocciaInstructionLimitState;
+
+// Every assignment to GInstructionLimitState.Active goes through here, so the
+// mirror that Goccia.ThreadPolls readers see cannot drift from it.
+procedure SetInstructionLimitActive(const AActive: Boolean);
+begin
+  GInstructionLimitState.Active := AActive;
+  GThreadPolls.InstructionLimitActive := AActive;
+end;
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 begin
@@ -49,7 +60,7 @@ begin
   SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := AMaxInstructions;
   GInstructionLimitState.InstructionCount := 0;
-  GInstructionLimitState.Active := AMaxInstructions > 0;
+  SetInstructionLimitActive(AMaxInstructions > 0);
 end;
 
 procedure ClearInstructionLimit;
@@ -59,7 +70,7 @@ begin
   SetLength(GInstructionLimitState.ScopeLimits, 0);
   GInstructionLimitState.MaxInstructions := 0;
   GInstructionLimitState.InstructionCount := 0;
-  GInstructionLimitState.Active := False;
+  SetInstructionLimitActive(False);
 end;
 
 procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
@@ -76,7 +87,7 @@ begin
     GInstructionLimitState.InstructionCount;
   GInstructionLimitState.ScopeLimits[Index] := AMaxInstructions;
   Inc(GInstructionLimitState.ScopeDepth);
-  GInstructionLimitState.Active := True;
+  SetInstructionLimitActive(True);
 end;
 
 procedure PopInstructionLimitScope;
@@ -88,9 +99,8 @@ begin
     GInstructionLimitState.ScopeDepth);
   SetLength(GInstructionLimitState.ScopeLimits,
     GInstructionLimitState.ScopeDepth);
-  GInstructionLimitState.Active :=
-    (GInstructionLimitState.MaxInstructions > 0) or
-    (GInstructionLimitState.ScopeDepth > 0);
+  SetInstructionLimitActive((GInstructionLimitState.MaxInstructions > 0) or
+    (GInstructionLimitState.ScopeDepth > 0));
 end;
 
 procedure RaiseInstructionLimit(const AMaxInstructions: Int64);

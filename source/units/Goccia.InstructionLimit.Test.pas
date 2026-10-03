@@ -7,7 +7,9 @@ uses
 
   Goccia.InstructionLimit,
   Goccia.NativeLimits,
-  Goccia.TestSetup;
+  Goccia.TestSetup,
+  Goccia.Timeout,
+  Goccia.Values.ObjectValue;
 
 type
   TInstructionLimitTests = class(TTestSuite)
@@ -15,6 +17,7 @@ type
     procedure TestCapturedStateTracksLiveBudget;
     procedure TestNativeDepthRollsBackWhenBudgetCheckRaises;
     procedure TestNestedScopePreservesBaseBudget;
+    procedure TestAllocationChecksAnExhaustedBudget;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -42,6 +45,58 @@ begin
     TestNestedScopePreservesBaseBudget);
   Test('Native depth rolls back when a budget check raises',
     TestNativeDepthRollsBackWhenBudgetCheckRaises);
+  Test('A value allocation checks an exhausted budget',
+    TestAllocationChecksAnExhaustedBudget);
+end;
+
+procedure TInstructionLimitTests.TestAllocationChecksAnExhaustedBudget;
+var
+  Value: TGocciaObjectValue;
+  RaisedExpected: Boolean;
+begin
+  // With no budget, and nothing else armed on this thread, an allocation
+  // checks nothing and succeeds.
+  ClearExecutionTimeout;
+  Value := TGocciaObjectValue.Create;
+  Value.Free;
+
+  // A budget of one step that is already spent: what the bytecode loop leaves
+  // behind while it runs the last instruction it is allowed to run. A native
+  // call made by that instruction must stop at its first allocation, and the
+  // instruction limit is the only thing armed, so the allocation hook has to
+  // look at it on its own account.
+  StartInstructionLimit(1);
+  IncrementInstructionCounter;
+  RaisedExpected := False;
+  try
+    TGocciaObjectValue.Create;
+  except
+    on TGocciaInstructionLimitError do
+      RaisedExpected := True;
+  end;
+  Expect<Boolean>(RaisedExpected).ToBe(True);
+
+  // The same under a scope without a base budget.
+  ClearInstructionLimit;
+  PushInstructionLimitScope(1);
+  try
+    IncrementInstructionCounter;
+    RaisedExpected := False;
+    try
+      TGocciaObjectValue.Create;
+    except
+      on TGocciaInstructionLimitError do
+        RaisedExpected := True;
+    end;
+    Expect<Boolean>(RaisedExpected).ToBe(True);
+  finally
+    PopInstructionLimitScope;
+  end;
+
+  // Cleared again, allocation is unchecked again.
+  ClearInstructionLimit;
+  Value := TGocciaObjectValue.Create;
+  Value.Free;
 end;
 
 procedure TInstructionLimitTests.TestCapturedStateTracksLiveBudget;
