@@ -110,20 +110,25 @@ describe("a prototype cycle through a Proxy that also holds other objects", () =
 });
 
 describe("Proxies nested as targets", () => {
+  const handler = {};
   const nest = (depth) => {
     let proxy = { x: "found" };
     for (const i of Array.from({ length: depth })) {
-      proxy = new Proxy(proxy, {});
+      proxy = new Proxy(proxy, handler);
     }
     return proxy;
   };
+  // 100,000 nested Proxies take a few hundred megabytes in interpreted mode,
+  // which a 32-bit process running parallel test workers cannot spare.
+  const is64Bit = typeof Goccia !== "undefined" &&
+    ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 
   // Each Proxy forwarding to its target is one native call.
   test("a read through 1,000 nested Proxies reaches the innermost target", () => {
     expect(nest(1000).x).toBe("found");
   });
 
-  test("a read through 100,000 nested Proxies throws RangeError", () => {
+  test.runIf(is64Bit)("a read through 100,000 nested Proxies throws RangeError", () => {
     expect(() => nest(100000).x).toThrow(RangeError);
   });
 
@@ -137,7 +142,7 @@ describe("Proxies nested as targets", () => {
     expect(Found.prototype.isPrototypeOf(proxy)).toBe(true);
   });
 
-  test("instanceof, isPrototypeOf and Object.getPrototypeOf through 100,000 nested Proxies throw RangeError", () => {
+  test.runIf(is64Bit)("instanceof, isPrototypeOf and Object.getPrototypeOf through 100,000 nested Proxies throw RangeError", () => {
     class Unrelated {}
     const proxy = nest(100000);
     expect(() => proxy instanceof Unrelated).toThrow(RangeError);

@@ -13,56 +13,60 @@ const chainOf = (length, base = {}) => {
 };
 
 describe("a deep prototype chain", () => {
+  // One 20,000-link chain serves every test that needs one: building it is
+  // the expensive part, and a 32-bit process running parallel test workers
+  // has little address space to spare.
+  const farKey = Symbol("far");
+  const deep = chainOf(20000, { far: "end", [farKey]: "end" });
+
   test("a missing property reads as undefined through 20,000 links", () => {
-    expect(chainOf(20000).missing).toBeUndefined();
+    expect(deep.missing).toBeUndefined();
   });
 
   test("a property at the far end is found through 20,000 links", () => {
-    const deep = chainOf(20000, { far: "end" });
     expect(deep.far).toBe("end");
     expect("far" in deep).toBe(true);
     expect("missing" in deep).toBe(false);
   });
 
   test("a symbol-keyed property at the far end is found through 20,000 links", () => {
-    const key = Symbol("key");
-    expect(chainOf(20000, { [key]: "end" })[key]).toBe("end");
+    expect(deep[farKey]).toBe("end");
   });
 
   test("an object with a 20,000-link chain converts to a string", () => {
-    expect(String(chainOf(20000))).toBe("[object Object]");
+    expect(String(deep)).toBe("[object Object]");
   });
 
   test("an assignment through 300 links creates an own property", () => {
-    const deep = chainOf(300);
-    deep.x = 1;
-    expect(deep.x).toBe(1);
-    expect(Object.hasOwn(deep, "x")).toBe(true);
+    const shallow = chainOf(300);
+    shallow.x = 1;
+    expect(shallow.x).toBe(1);
+    expect(Object.hasOwn(shallow, "x")).toBe(true);
   });
 
   test("an assignment through 20,000 links creates an own property", () => {
-    const deep = chainOf(20000);
-    deep.x = 1;
-    expect(Object.hasOwn(deep, "x")).toBe(true);
+    const leaf = Object.create(deep);
+    leaf.x = 1;
+    expect(Object.hasOwn(leaf, "x")).toBe(true);
     const key = Symbol("key");
-    deep[key] = 2;
-    expect(deep[key]).toBe(2);
-    expect(Reflect.set(deep, "y", 3)).toBe(true);
-    expect(deep.y).toBe(3);
+    leaf[key] = 2;
+    expect(leaf[key]).toBe(2);
+    expect(Reflect.set(leaf, "y", 3)).toBe(true);
+    expect(leaf.y).toBe(3);
   });
 
   test("an assignment through 300 links calls an inherited setter at the far end", () => {
     let seen;
-    const deep = chainOf(300, { set x(value) { seen = value; } });
-    deep.x = 5;
+    const shallow = chainOf(300, { set x(value) { seen = value; } });
+    shallow.x = 5;
     expect(seen).toBe(5);
-    expect(Object.hasOwn(deep, "x")).toBe(false);
+    expect(Object.hasOwn(shallow, "x")).toBe(false);
   });
 
   test("an assignment through 300 links to an inherited read-only property throws", () => {
-    const deep = chainOf(300, Object.defineProperty({}, "x", { value: 1, writable: false }));
-    expect(() => { deep.x = 2; }).toThrow(TypeError);
-    expect(Object.hasOwn(deep, "x")).toBe(false);
+    const shallow = chainOf(300, Object.defineProperty({}, "x", { value: 1, writable: false }));
+    expect(() => { shallow.x = 2; }).toThrow(TypeError);
+    expect(Object.hasOwn(shallow, "x")).toBe(false);
   });
 });
 
