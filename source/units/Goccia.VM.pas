@@ -2934,7 +2934,6 @@ type
       const AContinuationIP: Integer);
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
@@ -3003,7 +3002,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaVMAsyncGeneratorYieldAwaitHandler = class(TGocciaObjectValue)
@@ -5295,11 +5293,6 @@ begin
   Result := 'Generator';
 end;
 
-function TGocciaBytecodeGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
-end;
-
 constructor TGocciaBytecodeAsyncGeneratorObjectValue.Create(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection);
@@ -5761,11 +5754,6 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.ToStringTag: string;
 begin
   Result := 'AsyncGenerator';
-end;
-
-function TGocciaBytecodeAsyncGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionName: string;

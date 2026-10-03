@@ -255,7 +255,6 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -1689,11 +1688,6 @@ end;
 function TGocciaTypedArrayIteratorValue.ToStringTag: string;
 begin
   Result := 'Array Iterator';
-end;
-
-function TGocciaTypedArrayIteratorValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaTypedArrayIteratorValue.MarkReferences;

@@ -246,6 +246,8 @@ begin
 end;
 ```
 
+`ToStringTag` names the value for the engine's own display (error details, snapshots). It does not decide what `Object.prototype.toString` returns: that tag comes only from the internal slots ECMA-262 lists, and otherwise from `Symbol.toStringTag` read through the prototype chain. Give the prototype a `Symbol.toStringTag` data property (`Members.AddSymbolDataProperty(TGocciaSymbolValue.WellKnownToStringTag, ..., [pfConfigurable])`), or the type prints as `[object Object]`.
+
 **InitializeNativeFromArguments** -- Called when `new YourType(args)` is used via the class constructor path:
 
 ```pascal
