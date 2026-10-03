@@ -421,6 +421,8 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 2. If not found, check `FPrototype`.
 3. Repeat until `nil` prototype.
 
+ES2026 §10.1.8.1 OrdinaryGet, §10.1.7.1 OrdinaryHasProperty and §10.1.9.2 OrdinarySetWithOwnDescriptor continue at the parent by calling the parent's own internal method. While the parent's class keeps `TGocciaObjectValue`'s `GetPropertyWithContext`, `HasProperty` or `AssignPropertyWithReceiver`, that call is the same procedure, so the walk steps to the parent in a loop and a chain of any length takes no native stack. A parent whose class overrides the lookup, such as a Proxy, is asked through its own method instead. The walk recognizes such a class by the method it resolves to, so a new override needs no registration. Calls into a Proxy are counted against `MAX_PROPERTY_DELEGATION_DEPTH`, calls into other such objects against `MAX_OBJECT_DELEGATION_DEPTH`; see [Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
+
 `GetProperty(Name)` delegates to `GetPropertyWithContext(Name, Self)`. The `WithContext` variant carries a `this` reference through the prototype chain so that inherited getter functions execute with the correct receiver (the original object, not the prototype where the getter was found).
 
 ### Object Freezing

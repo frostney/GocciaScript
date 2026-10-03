@@ -3096,14 +3096,7 @@ begin
   end;
 
   // Check the prototype chain with the receiver as context.
-  if Assigned(FPrototype) then
-  begin
-    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
-    if not (Result is TGocciaUndefinedLiteralValue) then
-      Exit;
-  end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := GetPropertyFromPrototype(AName, AThisContext);
 end;
 
 procedure TGocciaInstanceValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
@@ -3131,6 +3124,11 @@ begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
+    if not UsesOrdinarySet(Proto) then
+    begin
+      AssignThroughExoticParent(Proto, AName, AValue);
+      Exit;
+    end;
     Descriptor := Proto.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin

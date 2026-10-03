@@ -230,6 +230,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.ObjectModel,
+  Goccia.StackLimit,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ErrorHelper,
@@ -505,10 +506,17 @@ begin
   Result := AValue.IsCallable;
 end;
 
-function GetPrototypeOfObject(const AObject: TGocciaObjectValue): TGocciaValue;
+// One [[GetPrototypeOf]] step of a prototype walk. AProxySteps counts the
+// steps taken through a Proxy, the only ones that can repeat without end.
+function GetPrototypeOfObject(const AObject: TGocciaObjectValue;
+  var AProxySteps: Integer): TGocciaValue;
 begin
   if IsRegisteredProxyValue(AObject) then
-    Result := GProxyGetPrototypeHook(AObject)
+  begin
+    Inc(AProxySteps);
+    CheckProxyPrototypeSteps(AProxySteps);
+    Result := GProxyGetPrototypeHook(AObject);
+  end
   else if Assigned(AObject.Prototype) then
     Result := AObject.Prototype
   else
@@ -521,6 +529,7 @@ var
   ConstructorPrototype: TGocciaValue;
   CurrentObject: TGocciaObjectValue;
   CurrentPrototype: TGocciaValue;
+  ProxySteps: Integer;
   Roots: TGocciaActiveRootFrame;
   HopRoots: TGocciaActiveRootFrame;
 begin
@@ -553,13 +562,14 @@ begin
   Roots.Initialize;
   Roots.Add(ConstructorPrototype);
   try
+    ProxySteps := 0;
     CurrentObject := TGocciaObjectValue(AInstance);
     while True do
     begin
       HopRoots.Initialize;
       HopRoots.Add(CurrentObject);
       try
-        CurrentPrototype := GetPrototypeOfObject(CurrentObject);
+        CurrentPrototype := GetPrototypeOfObject(CurrentObject, ProxySteps);
       finally
         HopRoots.Clear;
       end;
