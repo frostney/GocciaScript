@@ -2253,11 +2253,14 @@ await section("Test262 Runner: assigning a function to a property does not let e
   const strictSource = [
     "'use strict';",
     "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const methodKey = 'computedMethod';",
     "class Derived extends Base {",
     "  static #slot;",
     "  static storePrivate(fn) { Derived.#slot = fn; }",
     "  static method() { return eval('super.describe()'); }",
     "  method() { return eval('super.describe()'); }",
+    "  [methodKey]() { return eval('super.describe()'); }",
+    "  static [methodKey]() { return eval('super.describe()'); }",
     "}",
     "const probe = (label, fn) => {",
     "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
@@ -2274,6 +2277,8 @@ await section("Test262 Runner: assigning a function to a property does not let e
     "f = make(); Derived.storePrivate(f); probe('Derived.#slot = f', f);",
     "probe('static method', () => Derived.method());",
     "probe('method', () => new Derived().method());",
+    "probe('computed method', () => new Derived()[methodKey]());",
+    "probe('static computed method', () => Derived[methodKey]());",
     "",
   ].join("\n");
   const strictExpected = [
@@ -2286,6 +2291,8 @@ await section("Test262 Runner: assigning a function to a property does not let e
     "Derived.#slot = f: SyntaxError",
     "static method: base-static",
     "method: base-proto",
+    "computed method: base-proto",
+    "static computed method: base-static",
   ].join("\n");
   const sloppySource = [
     "class Base { describe() { return 'base-proto'; } }",
