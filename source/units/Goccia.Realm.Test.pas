@@ -72,6 +72,7 @@ type
     procedure TestRealmIdentitiesAreNeverReused;
     procedure TestRealmTemplateMapRoundtrip;
     procedure TestExecutionContextStackSetsCurrentRealm;
+    procedure TestFunctionContextPushMatchesPush;
     procedure TestShapeEnsureFromNonOwnerRealmUsesDictionary;
     procedure TestShapeEnsureCoversEveryAppendedKey;
     procedure TestThreadLocalityOfCurrentRealm;
@@ -108,6 +109,8 @@ begin
     TestRealmTemplateMapRoundtrip);
   Test('Execution context stack drives CurrentRealm',
     TestExecutionContextStackSetsCurrentRealm);
+  Test('Call-path context push and pop match Push and Pop',
+    TestFunctionContextPushMatchesPush);
   Test('Shape ensure from a non-owner realm uses dictionary mode',
     TestShapeEnsureFromNonOwnerRealmUsesDictionary);
   Test('Shape ensure covers every appended key and stops at the depth limit',
@@ -454,6 +457,69 @@ begin
   finally
     if Assigned(Guard) then
       Guard.Free;
+    SetCurrentRealm(PreviousRealm);
+    InnerRealm.Free;
+    OuterRealm.Free;
+  end;
+end;
+
+procedure TTestRealm.TestFunctionContextPushMatchesPush;
+var
+  OuterRealm, InnerRealm, PreviousRealm: TGocciaRealm;
+  Thread, PathRef: Pointer;
+  Running, Popped: TGocciaExecutionContext;
+  HadRunning: Boolean;
+begin
+  PreviousRealm := CurrentRealm;
+  HadRunning := HasRunningExecutionContext;
+  OuterRealm := TGocciaRealm.Create('outer');
+  InnerRealm := TGocciaRealm.Create('inner');
+  try
+    SetCurrentRealm(OuterRealm);
+    Thread := TGocciaExecutionContextStack.ThreadState;
+    Expect<Boolean>(Thread = TGocciaExecutionContextStack.ThreadState).ToBe(True);
+    PathRef := InternSourcePath('<call-path-test>');
+    Expect<Boolean>(PathRef = InternSourcePath('<call-path-test>')).ToBe(True);
+    Expect<Boolean>(PathRef <> InternSourcePath('<another-path>')).ToBe(True);
+    Expect<Boolean>(InternSourcePath('') = nil).ToBe(True);
+
+    TGocciaExecutionContextStack.PushFunctionContext(Thread, InnerRealm, nil,
+      nil, PathRef);
+    Running := RunningExecutionContext;
+    Expect<Boolean>(CurrentRealm = InnerRealm).ToBe(True);
+    Expect<Boolean>(TGocciaExecutionContextStack.CurrentRealm = InnerRealm)
+      .ToBe(True);
+    Expect<Boolean>(Running.Realm = InnerRealm).ToBe(True);
+    Expect<Boolean>(Running.ScriptOrModule = nil).ToBe(True);
+    Expect<string>(Running.SourcePath).ToBe('<call-path-test>');
+
+    // The two entry points share one stack and nest in either order.
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(OuterRealm, nil, ''));
+    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+    TGocciaExecutionContextStack.PushFunctionContext(Thread, InnerRealm, nil,
+      nil, nil);
+    Expect<string>(RunningExecutionContext.SourcePath).ToBe('');
+    Expect<Boolean>(CurrentRealm = InnerRealm).ToBe(True);
+    TGocciaExecutionContextStack.PopFunctionContext(Thread);
+    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+    TGocciaExecutionContextStack.Pop;
+    Expect<Boolean>(CurrentRealm = InnerRealm).ToBe(True);
+
+    // A context pushed on the call path pops through Pop unchanged.
+    Popped := TGocciaExecutionContextStack.Pop;
+    Expect<Boolean>(Popped.Realm = InnerRealm).ToBe(True);
+    Expect<string>(Popped.SourcePath).ToBe('<call-path-test>');
+    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+    Expect<Boolean>(HasRunningExecutionContext = HadRunning).ToBe(True);
+
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(InnerRealm, nil, '<call-path-test>'));
+    Expect<Boolean>(CurrentRealm = InnerRealm).ToBe(True);
+    TGocciaExecutionContextStack.PopFunctionContext(Thread);
+    Expect<Boolean>(CurrentRealm = OuterRealm).ToBe(True);
+    Expect<Boolean>(HasRunningExecutionContext = HadRunning).ToBe(True);
+  finally
     SetCurrentRealm(PreviousRealm);
     InnerRealm.Free;
     OuterRealm.Free;
