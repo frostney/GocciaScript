@@ -120,10 +120,7 @@ type
     caoLiteralFastPath,
     // Set: class receivers install the value with DefineProperty
     // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
-    caoClassDefineSemantics,
-    // Set: home object is wired on array/object/fallback receivers too,
-    // not only on class receivers (OP_SET_INDEX).
-    caoHomeObjectAllReceivers
+    caoClassDefineSemantics
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
@@ -8457,6 +8454,10 @@ begin
     TGocciaPropertyDescriptorData.Create(PrototypeObj, PrototypeFlags));
 end;
 
+// ES2026 §10.2.7 MakeMethod: [[HomeObject]] is set when a method is defined
+// (class elements, static blocks, field initializers, object literal methods
+// and accessors), never by assigning a function to a property. Only the
+// definition opcodes call this; the OP_SET_* store family must not.
 procedure SetBytecodeHomeObject(const AFunctionValue: TGocciaValue;
   const AHomeObject: TGocciaValue; const AStaticHome: Boolean = False);
 var
@@ -8708,8 +8709,7 @@ const
     [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoClassDefineSemantics, caoHomeObjectAllReceivers,
-     caoHandlePrivateKeys];                                         // OP_SET_INDEX
+    [caoClassDefineSemantics, caoHandlePrivateKeys];                 // OP_SET_INDEX
 
 function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
   const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
@@ -8943,7 +8943,6 @@ begin
         Exit;
     end
     else if (AKeyReg.Kind = grkInt) and
-            not (caoHomeObjectAllReceivers in AOptions) and
             (Target is TGocciaArrayValue) and
             (AKeyReg.IntValue >= 0) and
             (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
@@ -9002,8 +9001,6 @@ begin
   if (FRegisters[ATargetIndex].Kind = grkObject) and
      (FRegisters[ATargetIndex].ObjectValue is TGocciaArrayValue) then
   begin
-    if caoHomeObjectAllReceivers in AOptions then
-      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, True);
     case Key.Kind of
       pkkSymbol:
@@ -9020,7 +9017,6 @@ begin
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
   begin
-    SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, False);
     if caoClassDefineSemantics in AOptions then
     begin
@@ -9053,8 +9049,6 @@ begin
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
-    if caoHomeObjectAllReceivers in AOptions then
-      SetBytecodeHomeObject(Value, FRegisters[ATargetIndex].ObjectValue);
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
@@ -9090,13 +9084,7 @@ begin
           SSuggestCheckNullBeforeAccess);
     end
     else
-    begin
-      if (caoHomeObjectAllReceivers in AOptions) and
-         ((TargetValue is TGocciaClassValue) or
-          (TargetValue is TGocciaObjectValue)) then
-        SetBytecodeHomeObject(Value, TargetValue);
       SetPropertyValue(TargetValue, PropertyKeyName(Key), Value);
-    end;
   end;
   finally
     Roots.Clear;

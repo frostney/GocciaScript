@@ -107,3 +107,37 @@ test("private static methods and accessors are branded per class evaluation", ()
   expect(() => First.methodAccess.call(Second)).toThrow(TypeError);
   expect(() => Second.getterAccess.call(First)).toThrow(TypeError);
 });
+
+test("static field arrows are branded per class evaluation", () => {
+  const createClass = () =>
+    class {
+      #value = "ok";
+      static read = (receiver) => receiver.#value;
+      static has = (receiver) => #value in receiver;
+    };
+
+  const First = createClass();
+  const Second = createClass();
+
+  expect(First.read(new First())).toBe("ok");
+  expect(First.has(new First())).toBe(true);
+  expect(First.has(new Second())).toBe(false);
+  expect(() => First.read(new Second())).toThrow(TypeError);
+});
+
+test("static computed methods are branded per class evaluation", () => {
+  const key = "readStatic";
+  const createClass = () =>
+    class {
+      #value = "ok";
+      static [key](receiver) {
+        return receiver.#value;
+      }
+    };
+
+  const First = createClass();
+  const Second = createClass();
+
+  expect(First.readStatic(new First())).toBe("ok");
+  expect(() => First.readStatic(new Second())).toThrow(TypeError);
+});
