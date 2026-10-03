@@ -134,4 +134,28 @@ describe("Reflect.apply", () => {
     const fn = () => {};
     expect(() => Reflect.apply(fn, undefined)).toThrow(TypeError);
   });
+
+  test("passes every argument for any argument count", () => {
+    const collect = (...args) => args.length + ":" + args.join("");
+    const first = (a, b) => [a, b].join("|");
+    const many = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+
+    expect(Reflect.apply(collect, undefined, many.slice(0, 1))).toBe("1:1");
+    expect(Reflect.apply(collect, undefined, many.slice(0, 7))).toBe("7:1234567");
+    expect(Reflect.apply(collect, undefined, many.slice(0, 8))).toBe("8:12345678");
+    expect(Reflect.apply(collect, undefined, many.slice(0, 9))).toBe("9:123456789");
+    expect(Reflect.apply(collect, undefined, many)).toBe("17:1234567891011121314151617");
+    expect(Reflect.apply(first, undefined, many)).toBe("1|2");
+  });
+
+  test("passes this and many arguments to a method", () => {
+    const holder = {
+      tag: "T",
+      join(...parts) {
+        return this.tag + parts.join("");
+      },
+    };
+
+    expect(Reflect.apply(holder.join, { tag: "U" }, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])).toBe("U12345678910");
+  });
 });

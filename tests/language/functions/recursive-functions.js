@@ -84,3 +84,46 @@ test("closed numeric self-recursion preserves one to three scalar arguments", ()
   expect(threeArgumentResult()).toBe(17);
   expect(fractionalResult()).toBe(2.5);
 });
+
+test("tail recursion carries every argument across many frames", () => {
+  const rotate = (n, a, b, c, d, e) => {
+    if (n === 0) return [a, b, c, d, e].join("");
+    return rotate(n - 1, b, c, d, e, a);
+  };
+  const fewer = (n, a, b) => {
+    if (n === 0) return [a, b];
+    return fewer(n - 1);
+  };
+  const more = (n, a) => {
+    if (n === 0) return a;
+    return more(n - 1, a, n, n, n, n, n, n, n, n);
+  };
+  const holder = {
+    step: 2,
+    walk(n, total) {
+      if (n === 0) return total;
+      return this.walk(n - 1, total + this.step);
+    },
+  };
+
+  expect(rotate(1000, 1, 2, 3, 4, 5)).toBe("12345");
+  expect(rotate(1003, 1, 2, 3, 4, 5)).toBe("45123");
+  expect(fewer(1000, "a", "b")).toEqual([undefined, undefined]);
+  expect(fewer(0, "a", "b")).toEqual(["a", "b"]);
+  expect(more(1000, "kept")).toBe("kept");
+  expect(holder.walk(1000, 0)).toBe(2000);
+});
+
+test("mutual tail recursion passes arguments between different functions", () => {
+  const even = (n, trail) => {
+    if (n === 0) return trail + "e";
+    return odd(n - 1, trail, n);
+  };
+  const odd = (n, trail, from) => {
+    if (n === 0) return trail + "o" + from;
+    return even(n - 1, trail);
+  };
+
+  expect(even(1000, ">")).toBe(">e");
+  expect(even(1001, ">")).toBe(">o1");
+});
