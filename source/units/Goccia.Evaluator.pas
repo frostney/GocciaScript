@@ -4010,6 +4010,39 @@ var
     RunClassInstanceInitializers(CurrentCtorClass,
       TGocciaObjectValue(AFinalThis), AContext);
   end;
+  { Binds the receiver a built-in's construction returned as `this` in every
+    scope from the super() call up to the constructor's own call scope, so an
+    arrow function or a block that calls super() rebinds the constructor's
+    `this`, which is what the class's construction reads when the body
+    finishes. A second super() leaves `this` alone: §9.1.1.3.1 BindThisValue
+    throws on it, which MarkSuperConstructorCalled reports afterwards. }
+  procedure BindConstructedThis(const AThis: TGocciaObjectValue);
+  var
+    CurrentScope: TGocciaScope;
+    PreviousThis: TGocciaValue;
+  begin
+    CurrentScope := AContext.Scope;
+    while Assigned(CurrentScope) and
+          not (CurrentScope is TGocciaMethodCallScope) do
+      CurrentScope := CurrentScope.Parent;
+    if Assigned(CurrentScope) and
+       TGocciaMethodCallScope(CurrentScope).SuperConstructorCalled then
+      Exit;
+    PreviousThis := AContext.Scope.ThisValue;
+    if (PreviousThis is TGocciaInstanceValue) and
+       (AThis is TGocciaInstanceValue) and
+       not Assigned(TGocciaInstanceValue(AThis).ClassValue) then
+      TGocciaInstanceValue(AThis).ClassValue :=
+        TGocciaInstanceValue(PreviousThis).ClassValue;
+    CurrentScope := AContext.Scope;
+    while Assigned(CurrentScope) do
+    begin
+      CurrentScope.ThisValue := AThis;
+      if CurrentScope is TGocciaMethodCallScope then
+        Exit;
+      CurrentScope := CurrentScope.Parent;
+    end;
+  end;
   procedure MarkSuperConstructorCalled;
   var
     CurrentScope: TGocciaScope;
@@ -4168,6 +4201,18 @@ begin
             if Assigned(ThisScope) then
               ThisScope.ThisValue := AContext.Scope.ThisValue;
           end;
+        end
+        else if SuperClass.NativeInstanceDefaultPrototype <> nil then
+        begin
+          // ES2026 §13.3.7.1 SuperCall steps 6-10: the built-in is
+          // constructed from this super()'s own arguments, and the object it
+          // returns is bound as `this`, replacing the receiver the class
+          // allocated before its constructor body ran.
+          SuperResult := InvokeConstructableWithReceiver(SuperClass,
+            Arguments, AContext.Scope.ThisValue, AContext,
+            AContext.Scope.FindNewTarget);
+          if SuperResult is TGocciaObjectValue then
+            BindConstructedThis(TGocciaObjectValue(SuperResult));
         end
         else
         begin
@@ -11392,20 +11437,31 @@ begin
   ImplicitSuperClass := Chain.HostClass;
 
   NativeInstance := nil;
-  { Only a class-value built-in — Array, Map, Set — is initialized in place by
-    a later super(); the walk pre-creates one because the receiver has to exist
-    before any constructor body runs. Every hop is §13.3.7.3 GetSuperConstructor
-    so that a retargeted constructor allocates from what it now points at. }
-  WalkClass := AClassValue;
-  while Assigned(WalkClass) do
+  { A class-value built-in (Array, Map, a typed array, ArrayBuffer and the
+    rest of NativeInstanceDefaultPrototype) is pre-created here only when no
+    constructor body stands between this class and it, so that the implicit
+    constructors forward the `new` arguments to it unchanged. A constructor
+    body calls super() with arguments of its own, and the super() that reaches
+    the built-in allocates the receiver from those (ES2026 §13.3.7.1 SuperCall
+    step 6, Construct(func, argList, newTarget)); pre-creating it from the
+    `new` arguments ran the built-in's validation and coercion on the wrong
+    values. Every hop is §13.3.7.3 GetSuperConstructor so that a retargeted
+    constructor allocates from what it now points at. }
+  if (not Assigned(AClassValue.ConstructorMethod)) and
+     not (Assigned(ImplicitSuperClass) and
+          Assigned(ImplicitSuperClass.ConstructorMethod)) then
   begin
-    CheckExecutionTimeout;
-    IncrementInstructionCounter;
-    CheckInstructionLimit;
-    NativeInstance := WalkClass.CreateNativeInstance(AArguments);
-    if Assigned(NativeInstance) then
-      Break;
-    WalkClass := ImplicitSuperConstructorClass(WalkClass);
+    WalkClass := AClassValue;
+    while Assigned(WalkClass) do
+    begin
+      CheckExecutionTimeout;
+      IncrementInstructionCounter;
+      CheckInstructionLimit;
+      NativeInstance := WalkClass.CreateNativeInstance(AArguments);
+      if Assigned(NativeInstance) then
+        Break;
+      WalkClass := ImplicitSuperConstructorClass(WalkClass);
+    end;
   end;
 
   { A native super *constructor* — a built-in exposed as a function value,
