@@ -72,10 +72,12 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Realm,
   Goccia.Scope,
-  Goccia.SourcePipeline;
+  Goccia.SourcePipeline,
+  Goccia.Values.DateData;
 
 const
   DATE_SHIM_NAME = 'Date';
+  DATE_VALUE_STORE_NAME = '__GocciaDateSlots';
   DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
@@ -1049,7 +1051,12 @@ begin
         EvaluateStatement(ProgramNode.Body[I], Context);
       Result := ModuleScope.GetValue(AShim.Name);
       if AShim.Name = DATE_SHIM_NAME then
+      begin
         CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
+        // The slot WeakMap is the [[DateValue]] internal slot native code
+        // tests for (Goccia.Values.DateData).
+        RegisterDateValueStore(ModuleScope.GetValue(DATE_VALUE_STORE_NAME));
+      end;
     finally
       ProgramNode.Free;
     end;
