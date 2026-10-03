@@ -8062,6 +8062,17 @@ begin
   end;
 end;
 
+// ES2026 §7.3.32 DefineField step 6.b: a public field is created on the instance
+// with CreateDataPropertyOrThrow. It is not assigned, so it replaces a
+// configurable accessor the instance already has and never calls a setter,
+// own or inherited.
+procedure DefineInstanceField(const AInstance: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue);
+begin
+  AInstance.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
@@ -8106,9 +8117,8 @@ begin
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]))
         else if Assigned(FOEntry.ComputedKey) then
-          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
-            TGocciaPropertyDescriptorData.Create(PropertyValue,
-              [pfEnumerable, pfConfigurable, pfWritable]));
+          DefineInstanceField(AInstance,
+            FOEntry.ComputedKey.ToStringLiteral.Value, PropertyValue);
       end
       else if FOEntry.IsPrivate then
       begin
@@ -8128,13 +8138,15 @@ begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
           PropertyValue := EvaluateExpression(Expr, LocalContext);
-          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+          DefineInstanceField(AInstance, FOEntry.Name, PropertyValue);
         end;
       end;
     end;
   end
   else
   begin
+    { Without a field order the only public entries are the backing values of
+      auto-accessors, which bytecode mode stores by assignment as well. }
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
@@ -8186,9 +8198,8 @@ begin
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]))
         else if Assigned(FOEntry.ComputedKey) then
-          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
-            TGocciaPropertyDescriptorData.Create(PropertyValue,
-              [pfEnumerable, pfConfigurable, pfWritable]));
+          DefineInstanceField(AInstance,
+            FOEntry.ComputedKey.ToStringLiteral.Value, PropertyValue);
       end
       else if FOEntry.IsPrivate then
       begin
@@ -8208,13 +8219,15 @@ begin
         if AClassValue.InstancePropertyDefs.TryGetValue(FOEntry.Name, Expr) and Assigned(Expr) then
         begin
           PropertyValue := EvaluateExpression(Expr, LocalContext);
-          AInstance.AssignProperty(FOEntry.Name, PropertyValue);
+          DefineInstanceField(AInstance, FOEntry.Name, PropertyValue);
         end;
       end;
     end;
   end
   else
   begin
+    { Without a field order the only public entries are the backing values of
+      auto-accessors, which bytecode mode stores by assignment as well. }
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);

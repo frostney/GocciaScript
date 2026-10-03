@@ -94,3 +94,60 @@ test("Object.assign has correct name and length", () => {
   expect(desc.configurable).toBe(true);
   expect(desc.enumerable).toBe(false);
 });
+
+// ES2026 §20.1.2.1 step 3.a.iii.2.b: each property is copied with
+// Set(to, nextKey, propValue, true), so a target's own accessor receives the
+// value through its setter, and a missing setter is a TypeError.
+describe("Object.assign onto a target with an own accessor", () => {
+  class Plain {}
+
+  const targets = [
+    ["a plain object", () => ({})],
+    ["a class instance", () => new Plain()],
+    ["an array", () => [1, 2, 3]],
+    ["a Uint8Array", () => new Uint8Array(2)],
+    ["a Map", () => new Map()],
+    ["a String object", () => new String("ab")],
+  ];
+
+  describe.each(targets)("%s", (label, make) => {
+    test("calls the setter and keeps the accessor", () => {
+      const target = make();
+      const calls = [];
+      Object.defineProperty(target, "x", {
+        set(value) {
+          calls.push([this === target, value]);
+        },
+        configurable: true,
+      });
+
+      const result = Object.assign(target, { x: 1 });
+
+      expect(result).toBe(target);
+      expect(calls).toEqual([[true, 1]]);
+      expect("set" in Object.getOwnPropertyDescriptor(target, "x")).toBe(true);
+    });
+
+    test("throws TypeError when the accessor has no setter", () => {
+      const target = make();
+      Object.defineProperty(target, "x", {
+        get: () => "from getter",
+        configurable: true,
+      });
+
+      expect(() => Object.assign(target, { x: 1 })).toThrow(TypeError);
+      expect(target.x).toBe("from getter");
+      expect("get" in Object.getOwnPropertyDescriptor(target, "x")).toBe(true);
+    });
+  });
+
+  test("copies the properties before a getter-only accessor and stops there", () => {
+    const target = new Plain();
+    Object.defineProperty(target, "b", { get: () => "kept", configurable: true });
+
+    expect(() => Object.assign(target, { a: 1, b: 2, c: 3 })).toThrow(TypeError);
+    expect(target.a).toBe(1);
+    expect(target.b).toBe("kept");
+    expect(Object.hasOwn(target, "c")).toBe(false);
+  });
+});

@@ -2247,6 +2247,122 @@ await section("Test262 Runner: eval super permissions stop at ordinary function 
   }
 });
 
+await section("Test262 Runner: assigning a function to a property does not let eval use super...", async () => {
+  // ES2026 §10.2.7 MakeMethod sets [[HomeObject]] only for defined methods;
+  // §19.2.1.1 PerformEval rejects super when the function has none.
+  const strictSource = [
+    "'use strict';",
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const methodKey = 'computedMethod';",
+    "class Derived extends Base {",
+    "  static #slot;",
+    "  static storePrivate(fn) { Derived.#slot = fn; }",
+    "  static method() { return eval('super.describe()'); }",
+    "  method() { return eval('super.describe()'); }",
+    "  [methodKey]() { return eval('super.describe()'); }",
+    "  static [methodKey]() { return eval('super.describe()'); }",
+    "}",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const make = () => () => eval('super.describe()');",
+    "const key = 'computed';",
+    "const symbol = Symbol('stored');",
+    "let f = make(); probe('unstored', f);",
+    "f = make(); Derived.stored = f; probe('Derived.stored = f', f);",
+    "f = make(); Derived[key] = f; probe('Derived[key] = f', f);",
+    "f = make(); Derived[symbol] = f; probe('Derived[symbol] = f', f);",
+    "f = make(); Derived.assigned ??= f; probe('Derived.assigned ??= f', f);",
+    "f = make(); [Derived.destructured] = [f]; probe('[Derived.destructured] = [f]', f);",
+    "f = make(); Derived.storePrivate(f); probe('Derived.#slot = f', f);",
+    "probe('static method', () => Derived.method());",
+    "probe('method', () => new Derived().method());",
+    "probe('computed method', () => new Derived()[methodKey]());",
+    "probe('static computed method', () => Derived[methodKey]());",
+    "",
+  ].join("\n");
+  const strictExpected = [
+    "unstored: SyntaxError",
+    "Derived.stored = f: SyntaxError",
+    "Derived[key] = f: SyntaxError",
+    "Derived[symbol] = f: SyntaxError",
+    "Derived.assigned ??= f: SyntaxError",
+    "[Derived.destructured] = [f]: SyntaxError",
+    "Derived.#slot = f: SyntaxError",
+    "static method: base-static",
+    "method: base-proto",
+    "computed method: base-proto",
+    "static computed method: base-static",
+  ].join("\n");
+  const sloppySource = [
+    "class Base { describe() { return 'base-proto'; } }",
+    "class Derived extends Base { method() { return eval('super.describe()'); } }",
+    "const plain = { __proto__: { describe() { return 'plain-proto'; } } };",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const make = () => () => eval('super.describe()');",
+    "const key = 'computed';",
+    "let f = make(); Derived.stored = f; probe('Derived.stored = f', f);",
+    "f = make(); Derived[key] = f; probe('Derived[key] = f', f);",
+    "f = make(); plain.stored = f; probe('plain.stored = f', f);",
+    "f = make(); plain[key] = f; probe('plain[key] = f', f);",
+    "probe('method', () => new Derived().method());",
+    "",
+  ].join("\n");
+  const sloppyExpected = [
+    "Derived.stored = f: SyntaxError",
+    "Derived[key] = f: SyntaxError",
+    "plain.stored = f: SyntaxError",
+    "plain[key] = f: SyntaxError",
+    "method: base-proto",
+  ].join("\n");
+  // With more than 256 constants a named store compiles to the computed store
+  // opcode instead of the constant-name one.
+  const constantPadding = `const padding = { ${Array.from({ length: 300 }, (_, i) => `pad${i}: ${i}`).join(", ")} };`;
+  const largePoolSource = (directive: string) => [
+    directive,
+    constantPadding,
+    "class Base { describe() { return 'base-proto'; } }",
+    "class Derived extends Base {}",
+    "const plain = { __proto__: { describe() { return 'plain-proto'; } } };",
+    "const list = [];",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const make = () => () => eval('super.describe()');",
+    "let f = make(); Derived.storedWithLargePool = f; probe('Derived.storedWithLargePool = f', f);",
+    "f = make(); plain.storedWithLargePool = f; probe('plain.storedWithLargePool = f', f);",
+    "f = make(); list.storedWithLargePool = f; probe('list.storedWithLargePool = f', f);",
+    "f = make(); list[0] = f; probe('list[0] = f', f);",
+    "",
+  ].join("\n");
+  const largePoolExpected = [
+    "Derived.storedWithLargePool = f: SyntaxError",
+    "plain.storedWithLargePool = f: SyntaxError",
+    "list.storedWithLargePool = f: SyntaxError",
+    "list[0] = f: SyntaxError",
+  ].join("\n");
+  for (const probe of [
+    { label: "strict", source: strictSource, expected: strictExpected, flags: [] },
+    { label: "sloppy", source: sloppySource, expected: sloppyExpected, flags: ["--compat-non-strict-mode"] },
+    { label: "strict large-pool", source: largePoolSource("'use strict';"), expected: largePoolExpected, flags: [] },
+    { label: "sloppy large-pool", source: largePoolSource(""), expected: largePoolExpected, flags: ["--compat-non-strict-mode"] },
+  ]) {
+    for (const mode of ["interpreted", "bytecode"]) {
+      const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, ...probe.flags], {
+        stdin: new TextEncoder().encode(probe.source),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(`Bare ${mode} ${probe.label} stored-function eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (normalizeLineEndings(proc.stdout.toString()).trim() !== probe.expected)
+        throw new Error(`Bare ${mode} ${probe.label} stored-function eval super got: ${proc.stdout.toString()}`);
+    }
+  }
+});
+
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
