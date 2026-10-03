@@ -2363,6 +2363,65 @@ await section("Test262 Runner: assigning a function to a property does not let e
   }
 });
 
+await section("Test262 Runner: bytecode static field initializers are methods for eval super...", async () => {
+  // ES2026 §15.7.10: a static field initializer is a method whose home object
+  // is the class; arrows inside it inherit that, and §19.2.1.1 PerformEval
+  // allows super there. Defining the field never makes its value a method, so
+  // a function expression or an arrow from outside the class gets none. The
+  // interpreter's half of this table is #1389, so only bytecode runs here.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const key = 'computed';",
+    "const outer = () => eval('super.describe()');",
+    "probe('direct', () => { class D extends Base { static direct = eval('super.describe()'); } return D.direct; });",
+    "class Derived extends Base {",
+    "  static arrow = () => eval('super.describe()');",
+    "  static inArray = [() => eval('super.describe()')];",
+    "  static [key] = () => eval('super.describe()');",
+    "  static #hidden = () => eval('super.describe()');",
+    "  static hidden() { return Derived.#hidden(); }",
+    "  static fnExpr = function () { return eval('super.describe()'); };",
+    "  static outerArrow = outer;",
+    "}",
+    "probe('arrow', () => Derived.arrow());",
+    "probe('arrow in array', () => Derived.inArray[0]());",
+    "probe('computed arrow', () => Derived[key]());",
+    "probe('private arrow', () => Derived.hidden());",
+    "probe('function expression', () => Derived.fnExpr());",
+    "probe('outer arrow', () => Derived.outerArrow());",
+    "probe('outer arrow afterwards', () => outer());",
+    "probe('base class', () => { class C { static f = eval('typeof super.call'); } return C.f; });",
+    "probe('new.target', () => { class C { static f = eval('new.target'); } return String(C.f); });",
+    "probe('eval var does not leak', () => { class C { static f = eval('var leaked = 1; leaked'); } return typeof leaked + ' ' + C.f; });",
+    "",
+  ].join("\n");
+  const expected = [
+    "direct: base-static",
+    "arrow: base-static",
+    "arrow in array: base-static",
+    "computed arrow: base-static",
+    "private arrow: base-static",
+    "function expression: SyntaxError",
+    "outer arrow: SyntaxError",
+    "outer arrow afterwards: SyntaxError",
+    "base class: function",
+    "new.target: undefined",
+    "eval var does not leak: undefined 1",
+  ].join("\n");
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode static-field eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode static-field eval super got: ${proc.stdout.toString()}`);
+});
+
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {
   const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
     stdin: new TextEncoder().encode([
