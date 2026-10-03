@@ -1961,6 +1961,7 @@ var
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
+  BuiltInConstructedBySuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
   CollapsedIndex: Integer;
   function IsUndefinedConstructResult(const AValue: TGocciaValue): Boolean;
@@ -2050,6 +2051,21 @@ begin
     WalkClass := ImplicitSuperConstructorClass(WalkClass);
   end;
 
+  { A constructor body between this class and a class-value built-in calls
+    super() with arguments of its own, and the super() that reaches the
+    built-in constructs it from those and reads the prototype from new.target
+    (ES2026 §13.3.7.1 SuperCall step 6). The receiver allocated here is then
+    only a stand-in that super() replaces: it is not built from AArguments and
+    takes the class's own prototype, as InstantiateClass in the evaluator does
+    for `new`. }
+  ConstructorToCall := FConstructorMethod;
+  if not Assigned(ConstructorToCall) and Assigned(Chain.HostClass) then
+    ConstructorToCall := Chain.HostClass.ConstructorMethod;
+  BuiltInConstructedBySuper := Assigned(NativeClass) and (NativeClass <> Self) and
+    Assigned(ConstructorToCall);
+  if BuiltInConstructedBySuper then
+    NativeClass := nil;
+
   // These constructors perform observable validation/coercion before
   // OrdinaryCreateFromConstructor reaches GetPrototypeFromConstructor. TypedArray
   // does so only for object sources that are neither ArrayBuffer-backed nor
@@ -2058,7 +2074,8 @@ begin
     AArguments) or ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructor);
 
   // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
-  if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
+  if Assigned(ANewTarget) and not DelayNativePrototypeLookup and
+     not BuiltInConstructedBySuper then
   begin
     if Assigned(NativeClass) then
       InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,

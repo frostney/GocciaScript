@@ -344,6 +344,8 @@ end;
 
 **In the implementation uses clause**, add `Goccia.Values.YourValue`.
 
+**When the instance is created.** For `new YourType(args)` and for a subclass with no constructor of its own, the instance is created before construction with the `new` arguments. For a subclass whose constructor body calls `super(...)`, the `super(...)` that reaches the built-in creates it with its own arguments: `CreateNativeInstance`, then `InitializeNativeFromArguments`, the prototype from `new.target`, then `FinalizeNativeFromArguments`, and the result becomes `this` (ES2026 §13.3.7.1).
+
 ## Step 4: Engine Or Runtime Integration
 
 Core language built-ins belong in `Goccia.Engine.pas`. Runtime globals that are not part of the language core belong in a dedicated runtime extension unit under `source/units/Goccia.RuntimeExtensions.*.pas`.
