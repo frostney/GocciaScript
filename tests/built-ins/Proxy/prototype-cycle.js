@@ -126,4 +126,22 @@ describe("Proxies nested as targets", () => {
   test("a read through 100,000 nested Proxies throws RangeError", () => {
     expect(() => nest(100000).x).toThrow(RangeError);
   });
+
+  test("instanceof and isPrototypeOf through 1,000 nested Proxies reach the target's prototype", () => {
+    class Found {}
+    let proxy = new Found();
+    for (const i of Array.from({ length: 1000 })) {
+      proxy = new Proxy(proxy, {});
+    }
+    expect(proxy instanceof Found).toBe(true);
+    expect(Found.prototype.isPrototypeOf(proxy)).toBe(true);
+  });
+
+  test("instanceof, isPrototypeOf and Object.getPrototypeOf through 100,000 nested Proxies throw RangeError", () => {
+    class Unrelated {}
+    const proxy = nest(100000);
+    expect(() => proxy instanceof Unrelated).toThrow(RangeError);
+    expect(() => Unrelated.prototype.isPrototypeOf(proxy)).toThrow(RangeError);
+    expect(() => Object.getPrototypeOf(proxy)).toThrow(RangeError);
+  });
 });

@@ -418,7 +418,17 @@ end;
 function ProxyTargetGetPrototype(const ATarget: TGocciaValue): TGocciaValue;
 begin
   if ATarget is TGocciaProxyValue then
-    Exit(TGocciaProxyValue(ATarget).GetPrototypeTrap);
+  begin
+    // A Proxy target is a native call into its [[GetPrototypeOf]]; Proxies
+    // nested deeply as targets would otherwise recurse until the native
+    // stack ends. See MAX_PROPERTY_DELEGATION_DEPTH.
+    EnterPropertyDelegation;
+    try
+      Exit(TGocciaProxyValue(ATarget).GetPrototypeTrap);
+    finally
+      LeavePropertyDelegation;
+    end;
+  end;
 
   if ATarget is TGocciaObjectValue then
   begin
