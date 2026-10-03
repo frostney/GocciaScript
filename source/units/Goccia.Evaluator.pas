@@ -10183,8 +10183,12 @@ begin
 
       ContextObject := TGocciaObjectValue.Create;
       ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('class'));
+      // The decorator context's name is the class's name, including one an
+      // anonymous class took from its context, as bytecode mode reports.
       if AClassDef.Name <> '' then
         ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AClassDef.Name))
+      else if AInferredName <> '' then
+        ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AInferredName))
       else
         ContextObject.AssignProperty(PROP_NAME, TGocciaUndefinedLiteralValue.UndefinedValue);
       ContextObject.AssignProperty(PROP_METADATA, MetadataObject);

@@ -6196,6 +6196,9 @@ begin
   if (AExpression is TGocciaClassExpression) and
      (TGocciaClassExpression(AExpression).ClassDefinition.Name = '') then
   begin
+    // CompileExpression maps the line before it dispatches; this path
+    // bypasses it, so coverage still sees the class's line.
+    EmitLineMapping(ACtx, AExpression.Line, AExpression.Column);
     CompileClassExpression(ACtx,
       TGocciaClassExpression(AExpression).ClassDefinition, ADest, '',
       AKeyReg);

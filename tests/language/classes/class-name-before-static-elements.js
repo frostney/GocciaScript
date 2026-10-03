@@ -148,23 +148,77 @@ describe("an anonymous class named by its context", () => {
     expect([target.p.n, target.p.name]).toEqual(["", ""]);
   });
 
-  test("a generator that resumes after the class evaluates it once", () => {
-    let evaluations = 0;
-    const generator = {
-      *build() {
-        return {
-          K: class {
-            static count = (evaluations += 1);
-            static n = this.name;
-          },
-          after: yield 1,
-        };
-      },
-    }.build();
-    generator.next();
-    const result = generator.next(5).value;
-    expect(evaluations).toBe(1);
-    expect(result.K.n).toBe("K");
-    expect(result.after).toBe(5);
+  test("a generator that resumes after the class builds it once", () => {
+    // Each generator below yields once; the second next() resumes it.
+    const drive = (generator) => {
+      const iterator = generator();
+      iterator.next();
+      return iterator.next(5).value;
+    };
+
+    const literal = drive(
+      {
+        *build() {
+          const result = {
+            K: class {
+              static self = this;
+              static n = this.name;
+            },
+            after: yield 1,
+          };
+          return result;
+        },
+      }.build,
+    );
+    expect(literal.K.self).toBe(literal.K);
+    expect(literal.K.n).toBe("K");
+    expect(literal.after).toBe(5);
+
+    const computed = drive(
+      {
+        *build() {
+          return {
+            [key]: class {
+              static self = this;
+            },
+            after: yield 1,
+          };
+        },
+      }.build,
+    );
+    expect(computed.K.self).toBe(computed.K);
+    expect(computed.K.name).toBe("K");
+
+    const destructured = drive(
+      {
+        *build() {
+          let a;
+          let b;
+          ({ a = class { static self = this; }, b = yield 1 } = {});
+          return { a, b };
+        },
+      }.build,
+    );
+    expect(destructured.a.self).toBe(destructured.a);
+    expect(destructured.a.name).toBe("a");
+    expect(destructured.b).toBe(5);
   });
+
+  // The message text is implementation-defined (V8 leaves the name out for a
+  // class named from a computed key), so this pins GocciaScript's.
+  test.runIf(typeof Goccia !== "undefined")("an error from calling the class without new names it", () => {
+    const messageOf = (callback) => {
+      try {
+        callback();
+      } catch (error) {
+        return error.message;
+      }
+      return "";
+    };
+    const C = { [key]: class {} }.K;
+    expect(messageOf(() => C())).toBe("Class constructor K cannot be invoked without 'new'");
+    const D = class {};
+    expect(messageOf(() => D())).toBe("Class constructor D cannot be invoked without 'new'");
+  });
+
 });
