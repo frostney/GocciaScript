@@ -67,8 +67,12 @@ jobs:
           # run six days old, and unfiltered its "newest 100" reached back
           # two months and missed the passing runs of the day, so the
           # nightly skipped newer builds or picked an expired one.
+          # Assigned on its own line so a failed request stops the step
+          # (set -e) instead of leaving the loop below with nothing to
+          # check and reporting that nothing has passed.
+          SHAS="$(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=main&per_page=30" --jq '.[].sha')"
           RUN=""
-          for SHA in $(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=main&per_page=30" --jq '.[].sha'); do
+          for SHA in $SHAS; do
             RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&event=push&per_page=20" \
               --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | last | select(. != null) | "\(.id) \(.head_sha)"')"
             if [ -n "$RUN" ]; then
