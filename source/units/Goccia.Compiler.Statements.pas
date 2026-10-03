@@ -6178,10 +6178,15 @@ begin
     ACtx, AExpression, ADest, AInferredName);
 end;
 
-procedure CompileStaticFieldInitializerExpression(
+{ An initializer containing `yield` or `await` is an early error in
+  ECMAScript, but the parser accepts it inside a generator or async function.
+  Such an initializer is compiled inline into the enclosing function, as all
+  static initializers once were, so the suspension still belongs to a
+  generator or async frame; a `<static field>` function is neither. }
+procedure CompileInlineStaticFieldInitializer(
   const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
   const AExpression: TGocciaExpression; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string);
 var
   ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
@@ -6220,6 +6225,93 @@ begin
     ACtx.Template.RejectArgumentsInDirectEval :=
       OldRejectArgumentsInDirectEval;
   end;
+end;
+
+{ ES2026 §15.7.10 ClassFieldDefinitionEvaluation: a field initializer is a
+  method of its own whose [[HomeObject]] is the class (static fields) and whose
+  `this` is the class. The value is compiled into a `<static field>` child
+  template that returns it; OP_CLASS_EXEC_STATIC_BLOCK gives the closure the
+  class as its home object and calls it with `this` = class, leaving the
+  return value in ADest. The caller then defines the field, so the definition
+  opcode never has to make the value a method. Arrows inside the initializer
+  inherit its home object, which a direct eval reads for `super`
+  (§19.2.1.1 PerformEval: inMethod). The child template is strict, as a
+  ClassBody is (§15.7.1), and RejectArgumentsInDirectEval mirrors
+  inClassFieldInitializer. }
+procedure CompileStaticFieldInitializerExpression(
+  const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
+  const AExpression: TGocciaExpression; const ADest: UInt16;
+  const AInferredName: string = '');
+var
+  OldTemplate: TGocciaFunctionTemplate;
+  OldScope: TGocciaCompilerScope;
+  ChildTemplate: TGocciaFunctionTemplate;
+  ChildScope: TGocciaCompilerScope;
+  ChildCtx: TGocciaCompilationContext;
+  FuncIdx: UInt16;
+  ValReg: UInt16;
+  I: Integer;
+begin
+  if not Assigned(AExpression) then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ADest, 0));
+    Exit;
+  end;
+  if Goccia.Compiler.Expressions.ExpressionContainsSuspension(AExpression) then
+  begin
+    CompileInlineStaticFieldInitializer(ACtx, AClassReg, AExpression, ADest,
+      AInferredName);
+    Exit;
+  end;
+
+  OldTemplate := ACtx.Template;
+  OldScope := ACtx.Scope;
+
+  ChildTemplate := TGocciaFunctionTemplate.Create(STATIC_FIELD_TEMPLATE_NAME);
+  ChildTemplate.DebugInfo := TGocciaDebugInfo.Create(ACtx.SourcePath);
+  ChildTemplate.ParameterCount := 0;
+  ChildTemplate.RejectArgumentsInDirectEval := True;
+  ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
+  ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+
+  ChildScope.DeclareLocal(KEYWORD_THIS, False);
+
+  ACtx.SwapState(ChildTemplate, ChildScope);
+
+  ChildCtx := ACtx;
+  ChildCtx.Template := ChildTemplate;
+  ChildCtx.Scope := ChildScope;
+  ChildCtx.NonStrictMode := False;
+  ChildCtx.CompatibilityNonStrictMode := False;
+  ChildCtx.DerivedConstructorThisGuard := False;
+  { Nested functions read the compiler-wide flag, not the context copy. }
+  if Assigned(ACtx.SetNonStrictMode) then
+    ACtx.SetNonStrictMode(False);
+  try
+    ValReg := ChildScope.AllocateRegister;
+    CompileFieldValueWithInferredName(ChildCtx, AExpression, ValReg,
+      AInferredName);
+    EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, ValReg, 0, 0));
+  finally
+    if Assigned(ACtx.SetNonStrictMode) then
+      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+  end;
+
+  ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
+
+  for I := 0 to ChildScope.UpvalueCount - 1 do
+    ChildTemplate.AddUpvalueDescriptor(
+      ChildScope.GetUpvalue(I).IsLocal,
+      ChildScope.GetUpvalue(I).Index,
+      ChildScope.GetUpvalue(I).Name);
+
+  ACtx.SwapState(OldTemplate, OldScope);
+  ChildScope.Free;
+
+  FuncIdx := OldTemplate.AddFunction(ChildTemplate);
+  EmitInstruction(ACtx, EncodeABx(OP_CLOSURE, ADest, FuncIdx));
+  EmitInstruction(ACtx, EncodeABC(OP_CLASS_EXEC_STATIC_BLOCK,
+    AClassReg, ADest, 0));
 end;
 
 procedure RegisterPrivateName(const AScope: TGocciaCompilerScope;

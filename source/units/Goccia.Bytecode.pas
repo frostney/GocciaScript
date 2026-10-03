@@ -182,7 +182,12 @@ const
   //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
   //               declaration's module request in C, so a missing-export
   //               SyntaxError names the specifier, not the host path.
-  GOCCIA_FORMAT_VERSION = 82;
+  //   v82 -> v83: a static field initializer compiles to its own function,
+  //               run by OP_CLASS_EXEC_STATIC_BLOCK with the class as its
+  //               home object; OP_DEFINE_STATIC_PROP_CONST and
+  //               OP_DEFINE_STATIC_PROP_DYNAMIC no longer give the stored
+  //               value one, so inline initializers from v82 lose it.
+  GOCCIA_FORMAT_VERSION = 83;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

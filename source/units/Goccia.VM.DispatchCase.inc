@@ -805,14 +805,17 @@
         end;
       end;
 
-      // ES2022 §15.7.14: execute static block closure with this = class
+      // Runs a static block (ES2026 §15.7.11) or a static field initializer
+      // (§15.7.10) with this = class and leaves its return value in B. Both
+      // are methods whose [[HomeObject]] is the class itself, not its
+      // prototype, so `super.x` there reads the class's [[Prototype]].
       OP_CLASS_EXEC_STATIC_BLOCK:
       begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
-            FRegisters[A].ObjectValue);
+            FRegisters[A].ObjectValue, True);
           // Copied out of the register window first: where a register is
           // passed by reference (Win64), SetupNewFrame would otherwise read
           // `this` through the window after acquiring registers moved it.
@@ -830,8 +833,8 @@
         begin
           CallArgs := AcquireArguments(0);
           try
-            InvokeFunctionValue(RegisterToValue(FRegisters[B]),
-              CallArgs, RegisterToValue(FRegisters[A]));
+            SetRegister(B, InvokeFunctionValue(RegisterToValue(FRegisters[B]),
+              CallArgs, RegisterToValue(FRegisters[A])));
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -1052,6 +1055,10 @@
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
+      // Defines a field: static fields on the class, `<fields>` instance
+      // fields on the receiver. ES2026 §7.3.33 DefineField never calls
+      // MakeMethod on the value, so neither definition opcode sets a home
+      // object; the initializer itself is the method (§15.7.10).
       OP_DEFINE_STATIC_PROP_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
@@ -1059,9 +1066,6 @@
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
-              True);
           if IsBytecodePrivateKey(GlobalName) then
           begin
             if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
@@ -1103,9 +1107,6 @@
         if TargetValue is TGocciaObjectValue then
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
-          if TargetValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, TargetValue, True);
-
           if PropKey.Kind = pkkSymbol then
             TGocciaObjectValue(TargetValue).DefineSymbolProperty(
               PropKey.Symbol,
@@ -2215,7 +2216,8 @@
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
            Assigned(ChildTemplate.DebugInfo) and
-           (ChildTemplate.DebugInfo.LineMapCount > 0) then
+           (ChildTemplate.DebugInfo.LineMapCount > 0) and
+           (ChildTemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
           TGocciaCoverageTracker.Instance.RegisterFunction(
             ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
             ChildTemplate.DebugInfo.CoverageLine,
