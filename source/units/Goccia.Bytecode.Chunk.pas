@@ -13,6 +13,12 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Error.CallDiagnostics;
 
+const
+  { The function a static field initializer compiles to. Coverage does not
+    count it as a function: the source has none there, and it would share a
+    position with the function value it returns. }
+  STATIC_FIELD_TEMPLATE_NAME = '<static field>';
+
 type
   TGocciaBytecodeConstantKind = (
     bckNil,

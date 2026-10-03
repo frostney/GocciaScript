@@ -2216,7 +2216,8 @@
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
            Assigned(ChildTemplate.DebugInfo) and
-           (ChildTemplate.DebugInfo.LineMapCount > 0) then
+           (ChildTemplate.DebugInfo.LineMapCount > 0) and
+           (ChildTemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
           TGocciaCoverageTracker.Instance.RegisterFunction(
             ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
             ChildTemplate.DebugInfo.CoverageLine,

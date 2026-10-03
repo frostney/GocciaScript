@@ -2420,6 +2420,68 @@ await section("Test262 Runner: bytecode static field initializers are methods fo
     throw new Error(`Bare bytecode static-field eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
   if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
     throw new Error(`Bare bytecode static-field eval super got: ${proc.stdout.toString()}`);
+  // Instance fields go through the same definition opcodes, with the wide
+  // form once a <fields> function has more than 256 constants. A base
+  // constructor that returns a class makes that class the receiver, and the
+  // function expression stored there must still get no home object.
+  const padding = Array.from({ length: 300 }, (_, i) => `  pad${i} = ${i};`);
+  const classReceiverSource = [
+    "class Target {}",
+    "Object.setPrototypeOf(Target, class Parent { static describe() { return 'parent-static'; } });",
+    "class Returner { constructor() { return Target; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "class D extends Returner {",
+    "  early = function () { return eval('super.describe()'); };",
+    ...padding,
+    "  late = function () { return eval('super.describe()'); };",
+    "}",
+    "new D();",
+    "probe('field before the padding', () => Target.early());",
+    "probe('field after the padding', () => Target.late());",
+    "",
+  ].join("\n");
+  const classReceiverExpected = [
+    "field before the padding: SyntaxError",
+    "field after the padding: SyntaxError",
+  ].join("\n");
+  const classReceiver = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+    stdin: new TextEncoder().encode(classReceiverSource),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (classReceiver.exitCode !== 0)
+    throw new Error(`Bare bytecode class-receiver field eval super probe exited ${classReceiver.exitCode}: ${classReceiver.stderr.toString()}`);
+  if (normalizeLineEndings(classReceiver.stdout.toString()).trim() !== classReceiverExpected)
+    throw new Error(`Bare bytecode class-receiver field eval super got: ${classReceiver.stdout.toString()}`);
+  // `yield` and `await` in a field initializer are early errors in ECMAScript,
+  // but the parser accepts them inside a generator or async function. Such an
+  // initializer stays inline so the suspension still belongs to that function
+  // instead of to a <static field> function that cannot suspend.
+  const suspendingSource = [
+    "const o = { *g() { class C { static x = yield 1; static y = 'b'; } return C.x + C.y; } };",
+    "const it = o.g();",
+    "print(JSON.stringify(it.next()));",
+    "print(JSON.stringify(it.next(5)));",
+    "const run = async () => { class C { static x = await Promise.resolve(2); } return C.x; };",
+    "run().then((v) => print('await ' + v));",
+    "",
+  ].join("\n");
+  const suspendingExpected = [
+    '{"value":1,"done":false}',
+    '{"value":"5b","done":true}',
+    "await 2",
+  ].join("\n");
+  const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(suspendingSource),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (suspending.exitCode !== 0)
+    throw new Error(`Bare bytecode suspending static initializer probe exited ${suspending.exitCode}: ${suspending.stderr.toString()}`);
+  if (normalizeLineEndings(suspending.stdout.toString()).trim() !== suspendingExpected)
+    throw new Error(`Bare bytecode suspending static initializer got: ${suspending.stdout.toString()}`);
 });
 
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {
@@ -3843,6 +3905,32 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
           throw new Error(`${modeName} LCOV should retain the name of ${name}`);
         }
       }
+    }
+
+    console.log("Loader: LCOV counts a static field's function value, not its initializer...");
+    // A static field initializer runs as a function of its own in bytecode
+    // mode, at the same position as an arrow or function it returns. Only
+    // the functions written in the source are counted.
+    const staticFieldSourcePath = join(tmp, "static-field-functions.js");
+    writeFileSync(
+      staticFieldSourcePath,
+      [
+        "class C {",
+        "  static never = () => 4;",
+        "  static neverFn = function named() { return 5; };",
+        "  static called = () => 6;",
+        "  static value = 7;",
+        "}",
+        "C.called();",
+        "",
+      ].join("\n"),
+    );
+    const staticFieldLcovPath = join(tmp, "static-field-functions.lcov");
+    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${staticFieldLcovPath} ${staticFieldSourcePath}`.quiet();
+    const staticFieldLcov = readFileSync(staticFieldLcovPath, "utf-8");
+    for (const record of ["FNDA:0,never", "FNDA:0,named", "FNDA:1,called", "FNF:3", "FNH:1"]) {
+      if (!staticFieldLcov.split(/\r?\n/).includes(record))
+        throw new Error(`Static field LCOV should contain ${record}: ${staticFieldLcov}`);
     }
 
     console.log("Loader: LCOV function names cannot inject tracefile records...");
