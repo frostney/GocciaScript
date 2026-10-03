@@ -410,6 +410,17 @@ begin
   end;
 end;
 
+// CreateDataPropertyOrThrow for a property the object cannot have yet: the
+// object was just created by the caller, is extensible, and AName is not an
+// array index, so the validation and descriptor copy of DefineProperty are
+// not needed.
+procedure AddNewDataProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue: TGocciaValue);
+begin
+  AObject.Properties.Add(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
 function BuildMatchArrayWithInput(const AInput: string;
   const AInputValue: TGocciaValue;
   const AMatchResult: TGocciaRegExpMatchResult): TGocciaObjectValue;
@@ -448,15 +459,15 @@ begin
     else
       MatchArray.Elements.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
-  MatchArray.CreateDataPropertyOrThrow(PROP_INDEX,
+  AddNewDataProperty(MatchArray, PROP_INDEX,
     TGocciaNumberLiteralValue.Create(AMatchResult.MatchIndex));
   if Assigned(AInputValue) then
-    MatchArray.CreateDataPropertyOrThrow(PROP_INPUT, AInputValue)
+    AddNewDataProperty(MatchArray, PROP_INPUT, AInputValue)
   else
-    MatchArray.CreateDataPropertyOrThrow(PROP_INPUT,
+    AddNewDataProperty(MatchArray, PROP_INPUT,
       TGocciaStringLiteralValue.Create(AInput));
   GroupsValue := BuildNamedGroupsValue(AMatchResult);
-  MatchArray.CreateDataPropertyOrThrow(PROP_GROUPS, GroupsValue);
+  AddNewDataProperty(MatchArray, PROP_GROUPS, GroupsValue);
 
   if AMatchResult.HasIndices then
   begin
@@ -495,7 +506,7 @@ begin
       IndicesArray.CreateDataPropertyOrThrow(PROP_GROUPS,
         TGocciaUndefinedLiteralValue.UndefinedValue);
 
-    MatchArray.CreateDataPropertyOrThrow(PROP_INDICES, IndicesArray);
+    AddNewDataProperty(MatchArray, PROP_INDICES, IndicesArray);
   end;
 
   Result := MatchArray;
