@@ -371,6 +371,8 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `ToPrimitive` | `ToPrimitiveGeneric` |
 | `TGocciaValue.AfterConstruction` | `ThrowMemoryLimitExceeded` |
 | `CheckStackDepth`, `CheckNativeReentryDepth` | `ThrowMaxCallStackExceeded` |
+| `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
+| `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
 
 The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
 

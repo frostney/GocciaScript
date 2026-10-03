@@ -132,3 +132,91 @@ test("call time evaluation with functions", () => {
   expect(callSomething()).toBe(1);
   expect(callSomething()).toBe(2);
 });
+
+test("every argument count reaches the parameters and the rest parameter", () => {
+  const collect = (a, b, c, ...rest) => [a, b, c, rest.length, rest.join("")].join("|");
+  const values = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
+
+  expect(collect()).toBe("|||0|");
+  expect(collect("a")).toBe("a|||0|");
+  expect(collect("a", "b", "c")).toBe("a|b|c|0|");
+  expect(collect("a", "b", "c", "d")).toBe("a|b|c|1|d");
+  expect(collect("a", "b", "c", "d", "e", "f", "g", "h")).toBe("a|b|c|5|defgh");
+  expect(collect("a", "b", "c", "d", "e", "f", "g", "h", "i")).toBe("a|b|c|6|defghi");
+  expect(collect(...values)).toBe("a|b|c|9|defghijkl");
+});
+
+test("arguments beyond the parameters do not leak into the callee's locals", () => {
+  const none = () => {
+    let first;
+    let second;
+    return [first, second];
+  };
+  const one = (a) => {
+    let first;
+    let second;
+    let third;
+    return [a, first, second, third];
+  };
+
+  expect(none(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)).toEqual([undefined, undefined]);
+  expect(one(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)).toEqual([1, undefined, undefined, undefined]);
+});
+
+test("a method keeps its receiver and arguments apart for any argument count", () => {
+  const holder = {
+    tag: "T",
+    join(...parts) {
+      return this.tag + parts.join("");
+    },
+    pair(a, b) {
+      return [this.tag, a, b];
+    },
+  };
+
+  expect(holder.join()).toBe("T");
+  expect(holder.join(1)).toBe("T1");
+  expect(holder.join(1, 2, 3, 4)).toBe("T1234");
+  expect(holder.join(1, 2, 3, 4, 5, 6, 7, 8, 9)).toBe("T123456789");
+  expect(holder.pair()).toEqual(["T", undefined, undefined]);
+  expect(holder.pair(1, 2, 3, 4, 5, 6)).toEqual(["T", 1, 2]);
+});
+
+test("arguments captured by a closure survive the call", () => {
+  const capture = (a, b, c, d, e) => [() => a, () => e, () => (c = c + 1)];
+  const [first, last, bump] = capture(1, 2, 3, 4, 5, 6, 7);
+  const other = capture(10, 20, 30, 40, 50);
+
+  expect(first()).toBe(1);
+  expect(last()).toBe(5);
+  expect(bump()).toBe(4);
+  expect(bump()).toBe(5);
+  expect(other[0]()).toBe(10);
+  expect(other[2]()).toBe(31);
+  expect(first()).toBe(1);
+});
+
+test("far more arguments than the callee has registers", () => {
+  const none = () => "none";
+  const one = (a) => a.i;
+  const rest = (...r) => r.length;
+  const big = Array.from({ length: 30000 }, (_, i) => ({ i }));
+  const nested = (n) => (n === 0 ? [none(...big), one(...big), rest(...big)] : nested(n - 1));
+  const after = (a, b, c) => {
+    const o = { a, b, c };
+    return o.a + o.b + o.c;
+  };
+
+  expect([none(...big), one(...big), rest(...big)]).toEqual(["none", 0, 30000]);
+  expect([none.apply(null, big), one.apply(null, big), rest.apply(null, big)]).toEqual(["none", 0, 30000]);
+  expect([Reflect.apply(none, null, big), Reflect.apply(one, null, big), Reflect.apply(rest, null, big)]).toEqual([
+    "none",
+    0,
+    30000,
+  ]);
+  expect(nested(50)).toEqual(["none", 0, 30000]);
+  expect([1, 2].map(() => none(...big))).toEqual(["none", "none"]);
+  expect(after(1, 2, 3)).toBe(6);
+  expect(big.length).toBe(30000);
+  expect(big[29999].i).toBe(29999);
+});
