@@ -643,7 +643,9 @@ const
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+  // How far TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast looks
+  // up the chain before it leaves the store to the general assignment path.
+  LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
@@ -3430,7 +3432,7 @@ begin
   while Assigned(Current) do
   begin
     Inc(ChainDepth);
-    if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+    if ChainDepth > LITERAL_FAST_SET_MAX_CHAIN_DEPTH then
       Exit(False);
     // A Proxy or exotic parent answers [[Set]] itself; leave it to the
     // generic AssignProperty walk.
@@ -9766,7 +9768,6 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -9784,15 +9785,12 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links, which cannot form a
+      // cycle (every [[SetPrototypeOf]] refuses one, and the link of a Proxy
+      // is never set), so a chain of any length is enumerated in full.
       Current := Obj;
-      ChainDepth := 0;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin

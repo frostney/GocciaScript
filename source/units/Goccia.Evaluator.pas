@@ -300,7 +300,6 @@ end;
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 type
   TGocciaTemplateObjectArrayValue = class(TGocciaArrayValue)
@@ -5647,7 +5646,6 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -5665,15 +5663,12 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links, which cannot form a
+      // cycle (every [[SetPrototypeOf]] refuses one, and the link of a Proxy
+      // is never set), so a chain of any length is enumerated in full.
       Current := Obj;
-      ChainDepth := 0;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
