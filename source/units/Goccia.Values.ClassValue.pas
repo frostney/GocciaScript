@@ -3112,12 +3112,19 @@ var
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
 begin
-  if FProperties.TryGetValue(AName, Descriptor) and
-     (Descriptor is TGocciaPropertyDescriptorData) then
+  if FProperties.TryGetValue(AName, Descriptor) then
   begin
-    if not TGocciaPropertyDescriptorData(Descriptor).Writable then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
-    TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      if not TGocciaPropertyDescriptorData(Descriptor).Writable then
+        ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
+      TGocciaPropertyDescriptorData(Descriptor).Value := AValue;
+      Exit;
+    end;
+    // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor steps 3-7: an own accessor
+    // is assigned through its setter and refused when it has none. The
+    // inherited method does both before it reaches the prototype chain.
+    inherited AssignProperty(AName, AValue, ACanCreate);
     Exit;
   end;
 
