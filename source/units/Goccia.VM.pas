@@ -118,10 +118,7 @@ type
     caoHandlePrivateKeys,
     // Get: try the VM literal-object own-data fast path before the generic
     // GetProperty walk (OP_GET_INDEX).
-    caoLiteralFastPath,
-    // Set: class receivers install the value with DefineProperty
-    // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
-    caoClassDefineSemantics
+    caoLiteralFastPath
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
@@ -8722,7 +8719,7 @@ const
     [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoClassDefineSemantics, caoHandlePrivateKeys];                 // OP_SET_INDEX
+    [caoHandlePrivateKeys];                                         // OP_SET_INDEX
 
 function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
   const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
@@ -9028,40 +9025,11 @@ begin
     end;
   end
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
-          (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
-  begin
-    Key := ClassifyPropertyKey(AKeyReg, False);
-    if caoClassDefineSemantics in AOptions then
-    begin
-      if Key.Kind = pkkSymbol then
-        TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-          .DefineSymbolProperty(Key.Symbol,
-            TGocciaPropertyDescriptorData.Create(
-              Value, [pfConfigurable, pfWritable]))
-      else
-      begin
-        KeyName := PropertyKeyName(Key);
-        if (caoHandlePrivateKeys in AOptions) and
-           IsBytecodePrivateKey(KeyName) then
-          SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName,
-            Value)
-        else
-          TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-            .DefineProperty(KeyName,
-              TGocciaPropertyDescriptorData.Create(
-                Value, [pfConfigurable, pfWritable]));
-      end;
-    end
-    else if Key.Kind = pkkSymbol then
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .AssignSymbolProperty(Key.Symbol, Value)
-    else
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .SetProperty(PropertyKeyName(Key), Value);
-  end
-  else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
+    // ES2026 §6.2.5.6 PutValue: an assignment runs [[Set]] on every object,
+    // a class included, so an inherited static setter is called and a
+    // non-writable property rejects the write.
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
