@@ -180,6 +180,9 @@ type
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindOwningClassAfter(const AAfter: TGocciaValue): TGocciaValue;
+    // Like FindOwningClassAfter, but also yields the classes that private
+    // environment scopes contribute; only private-name resolution uses it.
+    function FindPrivateClassAfter(const AAfter: TGocciaValue): TGocciaValue;
     function FindSuperClass: TGocciaValue;
     function FindSuperConstructor: TGocciaValue;
     function FindNewTarget: TGocciaValue;
@@ -299,6 +302,20 @@ type
     constructor Create(const AParent: TGocciaScope; const AOwningClass: TGocciaValue);
     procedure MarkReferences; override;
     property OwningClass: TGocciaValue read FOwningClass;
+  end;
+
+  // A class whose private names code in this scope can use, without being
+  // the owner of that code: super, new.target and field initialization do not
+  // see it. Direct eval in bytecode uses it to give the evaluated code the
+  // calling function's private environment (ES2026 §19.2.1.1 step 13).
+  TGocciaPrivateEnvironmentScope = class(TGocciaScope)
+  private
+    FPrivateClass: TGocciaValue;
+  public
+    constructor Create(const AParent: TGocciaScope;
+      const APrivateClass: TGocciaValue);
+    procedure MarkReferences; override;
+    property PrivateClass: TGocciaValue read FPrivateClass;
   end;
 
   // Specialized scope for try-catch blocks with proper assignment propagation
@@ -570,6 +587,33 @@ begin
   while Assigned(Current) do
   begin
     Candidate := Current.GetOwningClass;
+    if Assigned(Candidate) then
+    begin
+      if FoundAfter and (Candidate <> AAfter) then
+        Exit(Candidate);
+      if Candidate = AAfter then
+        FoundAfter := True;
+    end;
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindPrivateClassAfter(
+  const AAfter: TGocciaValue): TGocciaValue;
+var
+  Current: TGocciaScope;
+  Candidate: TGocciaValue;
+  FoundAfter: Boolean;
+begin
+  Current := Self;
+  FoundAfter := not Assigned(AAfter);
+  while Assigned(Current) do
+  begin
+    Candidate := Current.GetOwningClass;
+    if (not Assigned(Candidate)) and
+       (Current is TGocciaPrivateEnvironmentScope) then
+      Candidate := TGocciaPrivateEnvironmentScope(Current).PrivateClass;
     if Assigned(Candidate) then
     begin
       if FoundAfter and (Candidate <> AAfter) then
@@ -1840,6 +1884,23 @@ begin
   inherited;
   if Assigned(FOwningClass) then
     FOwningClass.MarkReferences;
+end;
+
+{ TGocciaPrivateEnvironmentScope }
+
+constructor TGocciaPrivateEnvironmentScope.Create(const AParent: TGocciaScope;
+  const APrivateClass: TGocciaValue);
+begin
+  inherited Create(AParent, skBlock, 'PrivateEnvironment');
+  FPrivateClass := APrivateClass;
+end;
+
+procedure TGocciaPrivateEnvironmentScope.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPrivateClass) then
+    FPrivateClass.MarkReferences;
 end;
 
 { TGocciaCatchScope }

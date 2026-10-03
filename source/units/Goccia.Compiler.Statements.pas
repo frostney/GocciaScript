@@ -6752,6 +6752,7 @@ var
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
   OldPrivatePrefix: string;
+  OldPrivateClassReg: Integer;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -6824,6 +6825,10 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ClassReg, SuperReg, 0));
   end;
 
+  // The class heritage is evaluated in the outer private environment; the
+  // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
+  ACtx.Scope.PrivateClassReg := ClassReg;
   ACtx.Scope.BeginScope;
   ComputedCtx := ACtx;
   ComputedCtx.NonStrictMode := False;
@@ -6952,6 +6957,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
+  ACtx.Scope.PrivateClassReg := OldPrivateClassReg;
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
   ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;
@@ -6977,6 +6983,7 @@ var
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
   OldPrivatePrefix: string;
+  OldPrivateClassReg: Integer;
 begin
   ClassDef := AClassDef;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -7039,6 +7046,10 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ADest, SuperReg, 0));
   end;
 
+  // The class heritage is evaluated in the outer private environment; the
+  // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
+  ACtx.Scope.PrivateClassReg := ADest;
   ACtx.Scope.BeginScope;
   ComputedCtx := ACtx;
   ComputedCtx.NonStrictMode := False;
@@ -7167,6 +7178,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
+  ACtx.Scope.PrivateClassReg := OldPrivateClassReg;
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
   ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;

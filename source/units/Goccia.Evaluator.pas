@@ -10231,7 +10231,7 @@ begin
   Result := nil;
   LastOwningClass := nil;
   repeat
-    OwningClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
+    OwningClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
     if not Assigned(OwningClassValue) then
       Exit;
 
@@ -10285,7 +10285,7 @@ begin
 
   LastOwningClass := nil;
   repeat
-    CandidateClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
+    CandidateClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
     if not Assigned(CandidateClassValue) then
       Exit;
     if CandidateClassValue is TGocciaClassValue then

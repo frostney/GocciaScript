@@ -1667,7 +1667,9 @@ begin
 
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
-  Expect<Boolean>(IsValidGocciaOpCode(145)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(146)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_SET_PRIVATE_CLASS))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_SET_PRIVATE_CLASS)).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CLASS_ADD_METHOD_DYNAMIC))).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);

@@ -883,6 +883,8 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string; forward;
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue; forward;
 
 function UTF16CodeUnitImmediateToString(const ACodeUnit: UInt16): string;
 begin
@@ -1167,6 +1169,7 @@ function CollectBytecodeDirectEvalPrivateNames(
 var
   Closure: TGocciaBytecodeClosure;
   RawNames: TStringList;
+  PrivateClass: TGocciaObjectValue;
   SourceName: string;
   I: Integer;
 begin
@@ -1176,7 +1179,7 @@ begin
   Result.Duplicates := dupIgnore;
 
   Closure := DirectEvalLexicalClosure(AVM);
-  if not (Assigned(Closure) and (Closure.HomeClass is TGocciaClassValue)) then
+  if not Assigned(Closure) then
     Exit;
 
   RawNames := TStringList.Create;
@@ -1184,7 +1187,16 @@ begin
     RawNames.CaseSensitive := True;
     RawNames.Sorted := False;
     RawNames.Duplicates := dupIgnore;
-    TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    if Closure.HomeClass is TGocciaClassValue then
+      TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    // Every class body around the calling code contributes its names
+    // (ES2026 §19.2.1.1 PerformEval step 6.b, through the PrivateEnvironment).
+    PrivateClass := Closure.PrivateClass;
+    while PrivateClass is TGocciaClassValue do
+    begin
+      TGocciaClassValue(PrivateClass).AppendOwnPrivateNames(RawNames);
+      PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+    end;
 
     for I := 0 to RawNames.Count - 1 do
     begin
@@ -1195,6 +1207,31 @@ begin
   finally
     RawNames.Free;
   end;
+end;
+
+// Direct eval code runs in the tree-walk evaluator, which finds private names
+// through the scope chain. Give it one scope per class body around the
+// calling code, innermost nearest, so it resolves a private name to the same
+// class evaluation the caller's own code would.
+function WrapInBytecodePrivateEnvironment(const AParent: TGocciaScope;
+  const AClosure: TGocciaBytecodeClosure): TGocciaScope;
+var
+  Classes: array of TGocciaObjectValue;
+  PrivateClass: TGocciaObjectValue;
+  I: Integer;
+begin
+  Result := AParent;
+  if not Assigned(AClosure) then
+    Exit;
+  PrivateClass := AClosure.PrivateClass;
+  while PrivateClass is TGocciaClassValue do
+  begin
+    SetLength(Classes, Length(Classes) + 1);
+    Classes[High(Classes)] := PrivateClass;
+    PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+  end;
+  for I := High(Classes) downto 0 do
+    Result := TGocciaPrivateEnvironmentScope.Create(Result, Classes[I]);
 end;
 
 function DirectEvalCapturedThisValue(const AVM: TGocciaVM;
@@ -8034,6 +8071,15 @@ begin
     TGocciaBytecodeFunctionValue(AValue).FConstructClassValue := Self;
 end;
 
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  if AClass is TGocciaVMClassValue then
+    Result := TGocciaVMClassValue(AClass).OuterPrivateClass
+  else
+    Result := nil;
+end;
+
 procedure TGocciaVMClassValue.AddRuntimeKeyedPrivateKey(
   const ACompiledKey: string);
 var
@@ -8561,15 +8607,6 @@ begin
   if Assigned(EffectiveHomeClass) and not Assigned(Closure.HomeClass) and
      (Closure.HomeObject = EffectiveHomeObject) then
     Closure.HomeClass := EffectiveHomeClass;
-  // A class element is created by the code that evaluates the class
-  // definition, so it starts out in the class's enclosing private
-  // environment; defining it moves it into the class body's own. A function
-  // created anywhere else keeps the environment it was created in.
-  if Assigned(EffectiveHomeClass) and
-     (EffectiveHomeClass is TGocciaVMClassValue) and
-     (Closure.PrivateClass =
-       TGocciaVMClassValue(EffectiveHomeClass).OuterPrivateClass) then
-    Closure.PrivateClass := EffectiveHomeClass;
 end;
 
 procedure DeclareBytecodePrivateNameForClass(const AClassValue: TGocciaValue;
@@ -14046,6 +14083,8 @@ begin
         CallerParentScope := FGlobalScope
       else
         CallerParentScope := EnsureCurrentDynamicVarScope;
+      CallerParentScope := WrapInBytecodePrivateEnvironment(
+        CallerParentScope, CallerClosure);
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
         ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,

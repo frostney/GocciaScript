@@ -254,3 +254,51 @@ describe("private names resolve through the class body the code is in", () => {
     expect(() => new Inner().readShared(Second)).toThrow(TypeError);
   });
 });
+
+describe("code in a class body outside its methods uses the class's private names", () => {
+  // Static field initializers, static blocks and their nested functions all
+  // run with the class's PrivateEnvironment (ES2026 §15.7.14 step 12), even
+  // though they are evaluated while the class is being defined.
+  const createClass = () =>
+    class Owner {
+      #value = "own";
+      static literal = {
+        read(receiver) {
+          return receiver.#value;
+        },
+      };
+      static arrows = [(receiver) => receiver.#value, (receiver) => #value in receiver];
+      static Inner = class {
+        read(receiver) {
+          return receiver.#value;
+        }
+      };
+      static fromBlock;
+      static {
+        Owner.fromBlock = (receiver) => receiver.#value;
+      }
+    };
+
+  test("functions from static field initializers accept their own class's instances", () => {
+    const First = createClass();
+    const first = new First();
+
+    expect(First.literal.read(first)).toBe("own");
+    expect(First.arrows[0](first)).toBe("own");
+    expect(First.arrows[1](first)).toBe(true);
+    expect(new First.Inner().read(first)).toBe("own");
+    expect(First.fromBlock(first)).toBe("own");
+  });
+
+  test("functions from static field initializers reject another evaluation's instances", () => {
+    const First = createClass();
+    const Second = createClass();
+    const second = new Second();
+
+    expect(() => First.literal.read(second)).toThrow(TypeError);
+    expect(() => First.arrows[0](second)).toThrow(TypeError);
+    expect(First.arrows[1](second)).toBe(false);
+    expect(() => new First.Inner().read(second)).toThrow(TypeError);
+    expect(() => First.fromBlock(second)).toThrow(TypeError);
+  });
+});

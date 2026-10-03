@@ -186,7 +186,10 @@ const
   //               defines a computed instance method on the class's
   //               prototype, and computed instance accessors now pass the
   //               class to OP_DEFINE_ACCESSOR_DYNAMIC, so both resolve
-  //               private names through their class.
+  //               private names through their class. Added
+  //               OP_SET_PRIVATE_CLASS (opcode 145), which follows each
+  //               OP_CLOSURE and OP_NEW_CLASS in a class body and hands the
+  //               new function or class the class's private environment.
   GOCCIA_FORMAT_VERSION = 83;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
@@ -390,6 +393,7 @@ type
     OP_DEFINE_CLASS_METHOD_DYNAMIC = 142,
     OP_SET_CLASS_SOURCE_CONST = 143,
     OP_CLASS_ADD_METHOD_DYNAMIC = 144,
+    OP_SET_PRIVATE_CLASS = 145,
     OP_IMPORT        = 167,
     OP_EXPORT        = 168,
     OP_AWAIT         = 169,
@@ -509,7 +513,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 145..166]);
+    not (AOp in [99, 146..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
@@ -535,7 +539,7 @@ begin
     OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP, OP_ADD, OP_SUB, OP_MUL,
     OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
     OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC,
-    OP_CLASS_ADD_METHOD_DYNAMIC, OP_AWAIT,
+    OP_CLASS_ADD_METHOD_DYNAMIC, OP_SET_PRIVATE_CLASS, OP_AWAIT,
     OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
     OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
     OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,

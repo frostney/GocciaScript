@@ -1268,6 +1268,21 @@
         end;
       end;
 
+      // A function or class created in a class body joins the class's
+      // private environment; a class's own then links to it.
+      OP_SET_PRIVATE_CLASS:
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue then
+            TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue).FClosure
+              .PrivateClass := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          else if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+              TGocciaVMClassValue(FRegisters[B].ObjectValue);
+        end;
+
       OP_SET_OBJECT_PROTO:
         SetObjectLiteralPrototype(RegisterToValue(FRegisters[A]),
           RegisterToValue(FRegisters[B]));
