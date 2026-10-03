@@ -2042,10 +2042,6 @@ end;
 const
   // A string holds at most MaxInt code units.
   QUANTIFIER_UNREACHABLE_MIN = Int64(MaxInt) + 1;
-  // After its minimum count, a repetition stops at an iteration that matches
-  // empty, so it runs at most min + (subject length) iterations: a maximum
-  // at or above this equals no maximum.
-  QUANTIFIER_UNBOUNDED_MAX = Int64(MaxInt) + REGEXP_MAX_QUANTIFIER_BOUND + 1;
   QUANTIFIER_BOUND_SATURATED = Int64(1) shl 40;
 
 // A quantifier bound's value, saturated at QUANTIFIER_BOUND_SATURATED;
@@ -2829,28 +2825,79 @@ var
   BodyLen: Integer;
   BodyCode: array of UInt32;
   MinDigits, MaxDigits: string;
+  PrevSplit: Integer;
   SavePos: Integer;
   ClearOperand: Integer;
   HasCaptureClear: Boolean;
   NeedsRepeatGuard: Boolean;
 
-  // Whether every match of the body consumes at least one code unit,
-  // judged conservatively from its first instructions.
+  // Whether every match of the body consumes at least one code unit: no
+  // path from the body's start to its end passes only instructions that
+  // match empty. Conservative: an instruction it does not model counts as
+  // reaching the end. A string set consumes, because AddStringSet keeps
+  // only strings of two or more code points beside its single-character
+  // class.
   function BodyAlwaysConsumes: Boolean;
   var
-    J: Integer;
-  begin
-    for J := AAtomStart to CurrentPC - 1 do
-      case TRegExpOpCode(FCode[J] and $FF) of
-        RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY:
-          Exit(True);
-        RX_SAVE, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD,
-        RX_CLEAR_CAPTURES:
-          ;
-      else
-        Exit(False);
+    Visited: array of Boolean;
+    Pending: array of Integer;
+    PendingCount: Integer;
+    J, Target: Integer;
+    Instr: UInt32;
+    ReachesEnd: Boolean;
+
+    procedure Visit(APC: Integer);
+    begin
+      APC := APC - AAtomStart;
+      if (APC < 0) or (APC >= BodyLen) then
+        ReachesEnd := True
+      else if not Visited[APC] then
+      begin
+        Visited[APC] := True;
+        Pending[PendingCount] := APC;
+        Inc(PendingCount);
       end;
-    Result := False;
+    end;
+
+  begin
+    SetLength(Visited, BodyLen);
+    SetLength(Pending, BodyLen);
+    PendingCount := 0;
+    ReachesEnd := False;
+    Visit(AAtomStart);
+    while (PendingCount > 0) and not ReachesEnd do
+    begin
+      Dec(PendingCount);
+      J := AAtomStart + Pending[PendingCount];
+      Instr := FCode[J];
+      Target := Integer(Instr shr 8);
+      case TRegExpOpCode(Instr and $FF) of
+        RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY, RX_STRING_SET,
+        RX_FAIL:
+          ;
+        RX_SAVE, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD,
+        RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK, RX_BACKREF:
+          Visit(J + 1);
+        RX_SPLIT, RX_SPLIT_LAZY:
+          begin
+            Visit(J + 1);
+            Visit(Target);
+          end;
+        RX_JUMP:
+          Visit(Target);
+        RX_LOOKAHEAD, RX_LOOKBEHIND:
+          // A lookaround consumes nothing; matching continues at its end.
+          Visit(Target and LOOK_TARGET_MASK);
+        RX_CAPTURE_UNDEFINED_JUMP:
+          begin
+            Visit(J + 1);
+            Visit(J + 2);
+          end;
+      else
+        ReachesEnd := True;
+      end;
+    end;
+    Result := not ReachesEnd;
   end;
 
   function BodyRequiresProgress: Boolean;
@@ -2966,7 +3013,11 @@ begin
   BodyLen := CurrentPC - AAtomStart;
   if BodyLen = 0 then
     Exit;
-  if MaxCount >= QUANTIFIER_UNBOUNDED_MAX then
+  // After its minimum, a repetition stops at an iteration that matches
+  // empty, so it runs at most MinCount + MaxInt iterations, and at most
+  // MaxInt when every iteration consumes: a larger maximum is no maximum.
+  if (MaxCount >= MinCount + MaxInt) or
+     ((MaxCount >= MaxInt) and BodyAlwaysConsumes) then
     MaxCount := -1;
   if (MinCount >= QUANTIFIER_UNREACHABLE_MIN) and BodyAlwaysConsumes then
   begin
@@ -3003,14 +3054,25 @@ begin
   end
   else
   begin
+    // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
+    // skipped, matching continues after the last copy instead of trying
+    // each remaining copy in turn. Until the end is known, each split's
+    // operand links to the previous split (index + 1, 0 for none).
+    PrevSplit := -1;
     for I := Integer(MinCount) + 1 to Integer(MaxCount) do
     begin
       SplitPC := CurrentPC;
       if Lazy then
-        Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
+        Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
       else
-        Emit(EncodeOpBx(RX_SPLIT, 0));
+        Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
+      PrevSplit := SplitPC;
       EmitOptionalBody;
+    end;
+    while PrevSplit >= 0 do
+    begin
+      SplitPC := PrevSplit;
+      PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
       PatchHole(SplitPC, CurrentPC);
     end;
   end;
