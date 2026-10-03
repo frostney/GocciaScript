@@ -1217,8 +1217,9 @@ var
   Index: Integer;
   NumericIndex: Double;
 begin
-  // Step 1: a canonical numeric string reads this typed array's element, or
-  // undefined for an invalid index, and never the receiver or the prototype.
+  // ES2026 §10.4.5.5 step 1: a canonical numeric string reads this typed
+  // array's element, or undefined for an invalid index, and never the
+  // receiver or the prototype.
   if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
   begin
     if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
