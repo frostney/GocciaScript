@@ -23,6 +23,10 @@ type
   TBacktrackEntry = record
     PC: Integer;
     InputPos: Integer;
+    // -1 for an ordinary entry. Otherwise the entry stands for every
+    // position from RunStart up to InputPos that a greedy single-character
+    // loop passed: it is popped once per position, highest first.
+    RunStart: Integer;
     RepeatDepth: Integer;
     RepeatStack: array of Integer;
     Slots: array of Integer;
@@ -627,6 +631,7 @@ var
       SetLength(AStack, StackTop * 2 + 16);
     AStack[StackTop].PC := APC;
     AStack[StackTop].InputPos := AInputPos;
+    AStack[StackTop].RunStart := -1;
     AStack[StackTop].RepeatDepth := RepeatDepth;
     if RepeatDepth = 0 then
       SetLength(AStack[StackTop].RepeatStack, 0)
@@ -724,6 +729,18 @@ var
     Result := True;
   end;
 
+  // The width of the code point that ends at APos, never reaching below
+  // ALow: 2 for a surrogate pair in full Unicode mode, else 1.
+  function CodePointWidthBefore(APos, ALow: Integer): Integer;
+  begin
+    if AProgram.FullUnicode and (APos - 2 >= ALow) and
+       IsLowSurrogate(AInput.Units[APos - 1]) and
+       IsHighSurrogate(AInput.Units[APos - 2]) then
+      Result := 2
+    else
+      Result := 1;
+  end;
+
   function PopBacktrack: Boolean;
   begin
     while StackTop >= 0 do
@@ -740,7 +757,14 @@ var
       end;
       if SlotCount > 0 then
         Move(AStack[StackTop].Slots[0], ASlots[0], SlotCount * SizeOf(Integer));
-      Dec(StackTop);
+      if (AStack[StackTop].RunStart >= 0) and
+         (InputPos > AStack[StackTop].RunStart) then
+        // A greedy run: keep the entry for the next lower position, one
+        // code point back.
+        AStack[StackTop].InputPos := InputPos - CodePointWidthBefore(InputPos,
+          AStack[StackTop].RunStart)
+      else
+        Dec(StackTop);
       if not MemoContains(Memo, PC, InputPos) then
         Exit(True);
     end;
@@ -789,6 +813,12 @@ var
     Result := False;
   end;
 
+  // A loop whose body is one character-matching instruction (x*, [a-z]*,
+  // .*) consumes as many characters as it can in one step. When the rest of
+  // the pattern can only accept, no alternative is kept; otherwise one
+  // backtrack entry stands for every shorter count, instead of one entry
+  // per iteration, so the loop's backtracking state does not grow with the
+  // subject.
   function TrySimpleGreedyLoop(ASplitPC, AExitPC: Integer): Boolean;
   var
     BodyBx: Integer;
@@ -797,6 +827,8 @@ var
     JumpInstr: UInt32;
     Matched: Boolean;
     PollCount: Integer;
+    RunStart: Integer;
+    SimpleTail: Boolean;
   begin
     Result := False;
     if ABackward or (ASplitPC + 2 >= Length(AProgram.Code)) then
@@ -806,7 +838,7 @@ var
     BodyOp := TRegExpOpCode(BodyInstr and $FF);
     BodyBx := Integer(BodyInstr shr 8);
     case BodyOp of
-      RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG:
+      RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY:
         ;
     else
       Exit;
@@ -817,9 +849,8 @@ var
        (Integer(JumpInstr shr 8) <> ASplitPC) then
       Exit;
 
-    if not TailIsSimpleAccept(AExitPC) then
-      Exit;
-
+    SimpleTail := TailIsSimpleAccept(AExitPC);
+    RunStart := InputPos;
     PollCount := 0;
     while ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
       CodePoint, ByteLen) do
@@ -831,6 +862,8 @@ var
           Matched := CharClassContains(AProgram.CharClasses[BodyBx], CodePoint);
         RX_CHAR_CLASS_NEG:
           Matched := not CharClassContains(AProgram.CharClasses[BodyBx], CodePoint);
+        RX_ANY:
+          Matched := (BodyBx <> 0) or not IsLineTerminator(CodePoint);
       else
         Matched := False;
       end;
@@ -843,6 +876,14 @@ var
         CheckExecutionTimeout;
     end;
 
+    // The protocol's order: continue after the loop at the longest count,
+    // then at each shorter count down to zero iterations.
+    if not SimpleTail and (InputPos > RunStart) then
+    begin
+      PushBacktrack(AExitPC, InputPos - CodePointWidthBefore(InputPos,
+        RunStart));
+      AStack[StackTop].RunStart := RunStart;
+    end;
     PC := AExitPC;
     Result := True;
   end;
@@ -862,7 +903,7 @@ begin
   begin
     Inc(StepCount);
     if StepCount > StepLimit then
-      raise ERegExpRuntimeError.Create('Maximum regular expression backtrack stack size exceeded');
+      raise ERegExpRuntimeError.Create('Maximum regular expression step count exceeded');
     // Catastrophic backtracking can spin here for seconds inside a single
     // exec/test call; poll the cooperative engine deadline periodically.
     // The 255 mask composes with CheckExecutionTimeout's internal 1/1024
@@ -1015,7 +1056,7 @@ begin
           if (Bx >= 0) and (Bx < Length(AProgram.Code)) and
              (TRegExpOpCode(AProgram.Code[Bx] and $FF) = RX_SPLIT) then
           begin
-          if (StackTop >= 0) and
+          if (StackTop >= 0) and (AStack[StackTop].RunStart < 0) and
              (AStack[StackTop].PC = Integer(AProgram.Code[Bx] shr 8)) and
              (AStack[StackTop].InputPos = InputPos) then
           begin

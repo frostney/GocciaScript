@@ -20,6 +20,7 @@ type
     procedure TestMatcherReleasesLargeBacktrackStack;
     procedure TestMatcherMatchesRepeatedly;
     procedure TestMatcherReleasesStackWhenLimitRaises;
+    procedure TestGreedyLoopKeepsOneBacktrackEntry;
   public
     procedure SetupTests; override;
   end;
@@ -39,6 +40,8 @@ begin
     TestMatcherMatchesRepeatedly);
   Test('a matcher releases its buffers after a VM limit',
     TestMatcherReleasesStackWhenLimitRaises);
+  Test('a greedy single-character loop does not keep an entry per iteration',
+    TestGreedyLoopKeepsOneBacktrackEntry);
 end;
 
 procedure TRegExpVMTests.TestShortSubjectGetsFloor;
@@ -127,6 +130,23 @@ begin
     Expect<Integer>(Matcher.RetainedBacktrackCapacity).ToBe(0);
     // The matcher still works after its buffers were released.
     Expect<Boolean>(Matcher.Exec(2030, False)).ToBe(False);
+  finally
+    Matcher.Free;
+  end;
+end;
+
+procedure TRegExpVMTests.TestGreedyLoopKeepsOneBacktrackEntry;
+var
+  Matcher: TRegExpMatcher;
+begin
+  // a* passes 500 positions before "b"; an entry per iteration would grow
+  // the stack past 500 entries.
+  Matcher := TRegExpMatcher.Create(CompileRegExp('a*b', ''),
+    StringOfChar('a', 500) + 'b');
+  try
+    Expect<Boolean>(Matcher.Exec(0, False)).ToBe(True);
+    Expect<Integer>(Matcher.Slot(1)).ToBe(501);
+    Expect<Boolean>(Matcher.RetainedBacktrackCapacity < 500).ToBe(True);
   finally
     Matcher.Free;
   end;
