@@ -80,8 +80,6 @@ describe("class length property", () => {
     expect(FinalizationRegistry.length).toBe(1);
     // WHATWG: URL(url, base?) — required url means length 1.
     expect(URL.length).toBe(1);
-    // Fetch: Response constructor reports 1 in WPT/V8.
-    expect(Response.length).toBe(1);
     // ECMAScript 20.2.2: Function constructor length is 1.
     expect(Function.length).toBe(1);
   });
@@ -91,6 +89,15 @@ describe("class length property", () => {
     expect(TextDecoder.length).toBe(0);
     expect(URLSearchParams.length).toBe(0);
     expect(Headers.length).toBe(0);
+    // Fetch: constructor(optional BodyInit? body = null, optional ResponseInit init = {}).
+    // WebIDL takes length from the shortest argument list, which is empty.
+    expect(Response.length).toBe(0);
+    expect(Object.getOwnPropertyDescriptor(Response, "length")).toEqual({
+      value: 0,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
   });
 
   test("explicit length redefinition is honored in own descriptor", () => {
