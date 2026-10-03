@@ -51,8 +51,7 @@ procedure CheckNativeReentryDepth(const ADepth: Integer);
 // into their callers.
 procedure ThrowMaxCallStackExceeded;
 
-// Bracket one native call into a Proxy's [[Get]], [[Set]] or
-// [[HasProperty]]. EnterPropertyDelegation throws before it counts, so a
+// Bracket one native call into a Proxy's internal method or trap. EnterPropertyDelegation throws before it counts, so a
 // caller pairs it with LeavePropertyDelegation in a try/finally that starts
 // after it.
 procedure EnterPropertyDelegation;
