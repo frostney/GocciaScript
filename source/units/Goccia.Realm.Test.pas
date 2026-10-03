@@ -74,6 +74,7 @@ type
     procedure TestExecutionContextStackSetsCurrentRealm;
     procedure TestFunctionContextPushMatchesPush;
     procedure TestShapeEnsureFromNonOwnerRealmUsesDictionary;
+    procedure TestShapeEnsureCoversEveryAppendedKey;
     procedure TestThreadLocalityOfCurrentRealm;
   end;
 
@@ -112,6 +113,8 @@ begin
     TestFunctionContextPushMatchesPush);
   Test('Shape ensure from a non-owner realm uses dictionary mode',
     TestShapeEnsureFromNonOwnerRealmUsesDictionary);
+  Test('Shape ensure covers every appended key and stops at the depth limit',
+    TestShapeEnsureCoversEveryAppendedKey);
   Test('CurrentRealm is thread-local',
     TestThreadLocalityOfCurrentRealm);
 end;
@@ -557,6 +560,84 @@ begin
     SecondDescriptor.Free;
     OtherRealm.Free;
     OwnerRealm.Free;
+  end;
+end;
+
+procedure TTestRealm.TestShapeEnsureCoversEveryAppendedKey;
+const
+  KEYS_BEYOND_LIMIT = SHAPE_TRANSITION_DEPTH_LIMIT + 6;
+var
+  Realm, PreviousRealm: TGocciaRealm;
+  First, Second, Reordered, Deep: TGocciaShapedPropertyMap;
+  Descriptors: array of TGocciaPropertyDescriptor;
+  Shape: TGocciaShape;
+  I: Integer;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('shape-coverage');
+  First := nil;
+  Second := nil;
+  Reordered := nil;
+  Deep := nil;
+  SetLength(Descriptors, KEYS_BEYOND_LIMIT);
+  for I := 0 to High(Descriptors) do
+    Descriptors[I] := TGocciaPropertyDescriptor.Create([], []);
+  try
+    SetCurrentRealm(Realm);
+    First := TGocciaShapedPropertyMap.Create;
+    Second := TGocciaShapedPropertyMap.Create;
+    Reordered := TGocciaShapedPropertyMap.Create;
+    Deep := TGocciaShapedPropertyMap.Create;
+
+    // An empty layout has no shape yet.
+    Expect<Boolean>(First.EnsureShape = nil).ToBe(True);
+
+    First.Add('alpha', Descriptors[0]);
+    Shape := First.EnsureShape;
+    Expect<Boolean>(Assigned(Shape)).ToBe(True);
+    Expect<Boolean>(Shape <> DictionaryShapeSentinel).ToBe(True);
+    Expect<Integer>(Shape.Depth).ToBe(1);
+    Expect<string>(Shape.Key).ToBe('alpha');
+    // Unchanged layout: the same shape again.
+    Expect<Boolean>(First.EnsureShape = Shape).ToBe(True);
+
+    // A key appended after the shape was computed extends it.
+    First.Add('beta', Descriptors[1]);
+    Expect<Boolean>(First.Shape = Shape).ToBe(True);
+    Expect<Integer>(First.EnsureShape.Depth).ToBe(2);
+    Expect<string>(First.EnsureShape.Key).ToBe('beta');
+    Expect<Boolean>(First.EnsureShape.Parent = Shape).ToBe(True);
+
+    // The same keys in the same order are the same shape; another order is not.
+    Second.Add('alpha', Descriptors[2]);
+    Second.Add('beta', Descriptors[3]);
+    Expect<Boolean>(Second.EnsureShape = First.EnsureShape).ToBe(True);
+    Reordered.Add('beta', Descriptors[4]);
+    Reordered.Add('alpha', Descriptors[5]);
+    Expect<Integer>(Reordered.EnsureShape.Depth).ToBe(2);
+    Expect<Boolean>(Reordered.EnsureShape <> First.EnsureShape).ToBe(True);
+
+    // Past the transition limit the shape describes the first keys only.
+    for I := 0 to KEYS_BEYOND_LIMIT - 1 do
+      Deep.Add('key' + IntToStr(I), Descriptors[I]);
+    Shape := Deep.EnsureShape;
+    Expect<Boolean>(Assigned(Shape)).ToBe(True);
+    Expect<Boolean>(Shape <> DictionaryShapeSentinel).ToBe(True);
+    Expect<Integer>(Shape.Depth).ToBe(SHAPE_TRANSITION_DEPTH_LIMIT);
+    Expect<Boolean>(Deep.EnsureShape = Shape).ToBe(True);
+
+    // Removing a key leaves shaped mode for good.
+    Expect<Boolean>(First.Remove('alpha')).ToBe(True);
+    Expect<Boolean>(First.EnsureShape = DictionaryShapeSentinel).ToBe(True);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    First.Free;
+    Second.Free;
+    Reordered.Free;
+    Deep.Free;
+    for I := 0 to High(Descriptors) do
+      Descriptors[I].Free;
+    Realm.Free;
   end;
 end;
 
