@@ -64,19 +64,26 @@ begin
   Expect<Boolean>(RaisesConvertError(RX_JUMP, -1)).ToBe(True);
 end;
 
-procedure TRegExpCompilerTests.TestBackReferencePastIndexBitsRaises;
-var
-  Raised: Boolean;
+function CompileRaisesConvertError(const APattern, AFlags: string): Boolean;
 begin
-  Expect<Boolean>(Length(CompileRegExp('(a)\1', '').Code) > 0).ToBe(True);
-  Raised := False;
+  Result := False;
   try
-    CompileRegExp('(a)\99999999999', '');
+    CompileRegExp(APattern, AFlags);
   except
     on EConvertError do
-      Raised := True;
+      Result := True;
   end;
-  Expect<Boolean>(Raised).ToBe(True);
+end;
+
+procedure TRegExpCompilerTests.TestBackReferencePastIndexBitsRaises;
+begin
+  Expect<Boolean>(Length(CompileRegExp('(a)\1', '').Code) > 0).ToBe(True);
+  // 2097151 is the largest index; 2097152 would set a flag bit.
+  Expect<Boolean>(CompileRaisesConvertError('(a)\2097151', '')).ToBe(False);
+  Expect<Boolean>(CompileRaisesConvertError('(a)\2097152', '')).ToBe(True);
+  // 2^32 + 1 would wrap to a back reference to group 1.
+  Expect<Boolean>(CompileRaisesConvertError('(a)\4294967297', '')).ToBe(True);
+  Expect<Boolean>(CompileRaisesConvertError('(a)\99999999999', '')).ToBe(True);
 end;
 
 begin

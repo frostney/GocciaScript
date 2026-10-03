@@ -2252,17 +2252,21 @@ begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
         begin
-          // The index shares its operand with three flag bits; stop before
-          // it could reach them or overflow.
-          if BackrefIdx > BACKREF_INDEX_MASK div 10 then
-            raise EConvertError.Create(SErrorRegExpTooLarge);
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
+          // Saturate one past the largest index, so many digits neither
+          // overflow nor wrap to a small group number.
+          if BackrefIdx > BACKREF_INDEX_MASK then
+            BackrefIdx := BACKREF_INDEX_MASK + 1;
         end;
-        if BackrefIdx > BACKREF_INDEX_MASK then
-          raise EConvertError.Create(SErrorRegExpTooLarge);
         if FUnicode and (BackrefIdx > FPreScanCaptureCount) then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
+        // The index shares its operand with three flag bits. (Without the u
+        // flag, Annex B reads a number above the group count as an escape;
+        // this engine treats it as a back reference, so a number past the
+        // index bits is reported as too large.)
+        if BackrefIdx > BACKREF_INDEX_MASK then
+          raise EConvertError.Create(SErrorRegExpTooLarge);
         Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
@@ -3123,12 +3127,7 @@ begin
           Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
           Bx := Bx and LOOK_TARGET_MASK;
           if Bx >= APos then
-          begin
-            Inc(Bx);
-            if Negated then
-              Bx := Bx or LOOK_NEGATED_FLAG;
-            FCode[I] := EncodeOpBx(Op, Bx);
-          end;
+            FCode[I] := EncodeLookaroundInstruction(Op, Bx + 1, Negated);
         end;
     end;
   end;
