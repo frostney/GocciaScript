@@ -9768,6 +9768,8 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
+  CycleMark: TGocciaObjectValue;
+  CycleSteps, CycleLimit: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -9785,10 +9787,17 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
-      // The walk follows the stored prototype links, which cannot form a
-      // cycle (every [[SetPrototypeOf]] refuses one, and the link of a Proxy
-      // is never set), so a chain of any length is enumerated in full.
+      // The walk follows the stored prototype links and has no length limit.
+      // Those links should not form a cycle (every [[SetPrototypeOf]] refuses
+      // one, and the walk does not follow a Proxy's [[GetPrototypeOf]], so a
+      // cycle closed through a Proxy ends it), but an internal write that
+      // skipped the check would make the walk loop forever. Brent's method
+      // notices a revisited link without remembering the objects: CycleMark
+      // jumps to the current link after 1, 2, 4, ... steps.
       Current := Obj;
+      CycleMark := Obj;
+      CycleSteps := 0;
+      CycleLimit := 1;
       while Assigned(Current) do
       begin
         Keys := Current.GetOwnPropertyKeys;
@@ -9821,6 +9830,15 @@ begin
           end;
         end;
         Current := Current.Prototype;
+        if Current = CycleMark then
+          ThrowRangeError(SErrorMaxCallStackExceeded);
+        Inc(CycleSteps);
+        if CycleSteps = CycleLimit then
+        begin
+          CycleMark := Current;
+          CycleSteps := 0;
+          CycleLimit := CycleLimit * 2;
+        end;
       end;
     finally
       Visited.Free;

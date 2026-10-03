@@ -34,4 +34,41 @@ describe("for...in over a deep prototype chain", () => {
   test("the key at the far end of a 5,000-link chain is enumerated", () => {
     expect(enumerate(chain(5000, false))).toEqual(["root"]);
   });
+
+  // A super() call into a native constructor in bytecode mode sets the new
+  // object's prototype after running the constructor's own code, without a
+  // cycle check, so a user hook can close the stored chain into a loop
+  // (interpreted mode and Node.js read the prototype first). Whatever the
+  // chain looks like, for...in must end: with the keys, or with RangeError.
+  test("for...in ends on an object whose stored chain loops back", () => {
+    let captured = null;
+    const originalSet = Map.prototype.set;
+    Map.prototype.set = ({ set(key, value) {
+      captured = captured || this;
+      return originalSet.call(this, key, value);
+    } }).set;
+    class Derived extends Map {
+      constructor(entries) {
+        super(entries);
+      }
+    }
+    const newTarget = new Proxy((class {}).bind(null), {
+      get: (target, key, receiver) => key === "prototype"
+        ? (captured ? Object.create(captured) : Derived.prototype)
+        : Reflect.get(target, key, receiver),
+    });
+    let object;
+    try {
+      object = Reflect.construct(Derived, [[[1, 2]]], newTarget);
+    } finally {
+      Map.prototype.set = originalSet;
+    }
+    let outcome;
+    try {
+      outcome = enumerate(object).join(",");
+    } catch (error) {
+      outcome = error.constructor.name;
+    }
+    expect(outcome === "" || outcome === "RangeError").toBe(true);
+  });
 });
