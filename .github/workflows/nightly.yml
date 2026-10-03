@@ -176,6 +176,11 @@ jobs:
             archive_name="gocciascript-nightly-${display}"
             pkg_dir="${archive_name}"
             bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
+            # Artifacts do not keep file modes, so the binaries come out of
+            # download-artifact without the executable bit (ci.yml restores it
+            # with chmod after every download). Restore it before archiving;
+            # tar and zip both record it, and Windows ignores it.
+            find "$pkg_dir" -maxdepth 1 -type f -exec chmod +x {} +
 
             cp -r tests/ "$pkg_dir/tests/"
             cp -r benchmarks/ "$pkg_dir/benchmarks/"
