@@ -2206,7 +2206,7 @@ begin
 
     Result := TGocciaRegExpMatchAllIteratorValue.Create(RegexValue, StringValue,
       True, HasUnicodeRegExpFlag(RegexValue.GetProperty(PROP_FLAGS)
-      .ToStringLiteral.Value));
+      .ToStringLiteral.Value), False);
   finally
     TGarbageCollector.Instance.RemoveTempRoot(RegexValue);
   end;
