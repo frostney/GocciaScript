@@ -76,6 +76,28 @@ describe("public field definition", () => {
     expect(instance.x).toBe(1);
   });
 
+  test("without an initializer, defines undefined instead of calling an inherited setter", () => {
+    const received = [];
+    class Base {
+      set x(value) {
+        received.push(value);
+      }
+    }
+    class Derived extends Base {
+      x;
+    }
+
+    const instance = new Derived();
+
+    expect(received).toEqual([]);
+    expect(Object.getOwnPropertyDescriptor(instance, "x")).toEqual({
+      value: undefined,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
   test("shadows an inherited getter-only accessor", () => {
     class Base {
       get x() {

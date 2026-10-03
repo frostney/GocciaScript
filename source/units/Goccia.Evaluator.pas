@@ -8117,9 +8117,8 @@ begin
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]))
         else if Assigned(FOEntry.ComputedKey) then
-          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
-            TGocciaPropertyDescriptorData.Create(PropertyValue,
-              [pfEnumerable, pfConfigurable, pfWritable]));
+          DefineInstanceField(AInstance,
+            FOEntry.ComputedKey.ToStringLiteral.Value, PropertyValue);
       end
       else if FOEntry.IsPrivate then
       begin
@@ -8146,10 +8145,12 @@ begin
   end
   else
   begin
+    { Without a field order the only public entries are the backing values of
+      auto-accessors, which bytecode mode stores by assignment as well. }
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      DefineInstanceField(AInstance, Entry.Key, PropertyValue);
+      AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
   end;
 end;
@@ -8197,9 +8198,8 @@ begin
             TGocciaPropertyDescriptorData.Create(PropertyValue,
               [pfEnumerable, pfConfigurable, pfWritable]))
         else if Assigned(FOEntry.ComputedKey) then
-          AInstance.DefineProperty(FOEntry.ComputedKey.ToStringLiteral.Value,
-            TGocciaPropertyDescriptorData.Create(PropertyValue,
-              [pfEnumerable, pfConfigurable, pfWritable]));
+          DefineInstanceField(AInstance,
+            FOEntry.ComputedKey.ToStringLiteral.Value, PropertyValue);
       end
       else if FOEntry.IsPrivate then
       begin
@@ -8226,10 +8226,12 @@ begin
   end
   else
   begin
+    { Without a field order the only public entries are the backing values of
+      auto-accessors, which bytecode mode stores by assignment as well. }
     for Entry in AClassValue.InstancePropertyDefs do
     begin
       PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      DefineInstanceField(AInstance, Entry.Key, PropertyValue);
+      AInstance.AssignProperty(Entry.Key, PropertyValue);
     end;
     InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
   end;
