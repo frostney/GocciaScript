@@ -52,4 +52,18 @@ describe("in with a symbol key", () => {
     Object.setPrototypeOf(object, new Proxy(Object.create(object), {}));
     expect(() => key in object).toThrow(RangeError);
   });
+
+  // 100,000 nested Proxies take a few hundred megabytes in interpreted mode,
+  // which a 32-bit process running parallel test workers cannot spare.
+  const is64Bit = typeof Goccia !== "undefined" &&
+    ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
+
+  test.runIf(is64Bit)("Proxies nested 100,000 deep as targets throw RangeError", () => {
+    const handler = {};
+    let proxy = { [key]: 1 };
+    for (const i of Array.from({ length: 100000 })) {
+      proxy = new Proxy(proxy, handler);
+    }
+    expect(() => key in proxy).toThrow(RangeError);
+  });
 });
