@@ -125,6 +125,42 @@ describe("Reflect.ownKeys on a function or class whose length or name is defined
     expect(max.length).toBe(0);
   });
 
+  test("Reflect.defineProperty re-creates a length or name at the end", () => {
+    const arrow = (a) => {};
+    delete arrow.length;
+    arrow.extra = 1;
+    expect(Reflect.defineProperty(arrow, "length", { value: 0, configurable: true })).toBe(true);
+    expect(Reflect.ownKeys(arrow)).toEqual(["name", "extra", "length"]);
+
+    class Defined {}
+    delete Defined.name;
+    Defined.extra = 1;
+    expect(Reflect.defineProperty(Defined, "name", { value: "D", configurable: true })).toBe(true);
+    expect(Reflect.ownKeys(Defined)).toEqual(["length", "prototype", "extra", "name"]);
+  });
+
+  test("a re-created class length or name is an own property with its defined attributes", () => {
+    class C {}
+    delete C.length;
+    delete C.name;
+    redefine(C, "length", 3);
+    redefine(C, "name", "Again");
+    expect(Object.hasOwn(C, "length")).toBe(true);
+    expect(Object.hasOwn(C, "name")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(C, "length")).toEqual({
+      value: 3,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Object.getOwnPropertyDescriptor(C, "name")).toEqual({
+      value: "Again",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
   test("a function's re-created name can be deleted again", () => {
     const arrow = () => {};
     delete arrow.name;
