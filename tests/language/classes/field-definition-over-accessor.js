@@ -164,4 +164,44 @@ describe("public field definition", () => {
     expect(Object.hasOwn(instance, "x")).toBe(true);
     expect(instance.x).toBe(1);
   });
+
+  test("does not call an inherited setter on an instance of a class extending Error", () => {
+    let setterCalls = 0;
+    class Base extends Error {
+      get x() {
+        return "from prototype";
+      }
+
+      set x(value) {
+        setterCalls += 1;
+      }
+    }
+    class Derived extends Base {
+      x = 1;
+    }
+
+    const instance = new Derived("message");
+
+    expect(setterCalls).toBe(0);
+    expect(Object.hasOwn(instance, "x")).toBe(true);
+    expect(instance.x).toBe(1);
+  });
+
+  test("does not call an inherited setter on an instance of a class extending Promise", () => {
+    let setterCalls = 0;
+    class Base extends Promise {
+      set x(value) {
+        setterCalls += 1;
+      }
+    }
+    class Derived extends Base {
+      x = 1;
+    }
+
+    const instance = new Derived(() => {});
+
+    expect(setterCalls).toBe(0);
+    expect(Object.hasOwn(instance, "x")).toBe(true);
+    expect(instance.x).toBe(1);
+  });
 });
