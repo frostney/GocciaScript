@@ -6113,25 +6113,37 @@ begin
             Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST,
             AHasSuper and (Elem.Name = PROP_CONSTRUCTOR));
       cekAccessor:
-        ; // Auto-accessor installation consumes the captured property key later.
+        { proposal-decorators ClassFieldDefinitionEvaluation: a public
+          auto-accessor's getter and setter are defined here, in element
+          order. Both halves name the class; the VM puts the instance pair on
+          its prototype (ACCESSOR_FLAG_AUTO). A private one is a private field
+          whose name CompilePrivateAutoAccessorDeclarations declares. }
+        if not Elem.IsPrivate then
+        begin
+          AccessorFlags := ACCESSOR_FLAG_AUTO;
+          if Elem.IsStatic then
+            AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
+          if Elem.IsComputed then
+          begin
+            CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, AccessorFlags);
+            CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+              AccessorFlags or ACCESSOR_FLAG_SETTER);
+          end
+          else
+          begin
+            CompileGetterBody(ACtx, ATargetReg, Elem.Name, Elem.GetterNode,
+              OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+            CompileSetterBody(ACtx, ATargetReg, Elem.Name, Elem.SetterNode,
+              OP_DEFINE_ACCESSOR_CONST, AccessorFlags or ACCESSOR_FLAG_SETTER);
+          end;
+        end;
     end;
 
     if Elem.IsComputed and not KeyIsLocal then
       ACtx.Scope.FreeRegister;
   end;
-end;
-
-function HasAccessorInitializers(
-  const AClassDef: TGocciaClassDefinition): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(AClassDef.FElements) do
-    if (AClassDef.FElements[I].Kind = cekAccessor) and
-       (AClassDef.FElements[I].IsPrivate or
-        Assigned(AClassDef.FElements[I].FieldInitializer)) then
-      Exit(True);
-  Result := False;
 end;
 
 function HasComputedInstanceFields(
@@ -6243,8 +6255,13 @@ var
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
 begin
   for I := 0 to High(AClassDef.FElements) do
+  begin
     if AClassDef.FElements[I].IsPrivate then
       RegisterPrivateName(AScope, AClassDef.FElements[I].Name, APrefix);
+    if AClassDef.FElements[I].Kind = cekAccessor then
+      RegisterPrivateName(AScope, AClassDef.FElements[I].AccessorStorageName,
+        APrefix);
+  end;
   for I := 0 to High(AClassDef.FFieldOrder) do
     if AClassDef.FFieldOrder[I].IsPrivate then
       RegisterPrivateName(AScope, AClassDef.FFieldOrder[I].Name, APrefix);
@@ -6281,12 +6298,10 @@ var
   FuncIdx: UInt16;
   FnReg: UInt16;
   ValReg, ThisReg, KeyReg: UInt16;
-  KeyIdx: UInt16;
   I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   ComputedKeyName: string;
-  AccessorBackingName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -6336,6 +6351,33 @@ begin
         ChildScope.FreeRegister;
         Continue;
       end
+      else if AClassDef.FFieldOrder[I].IsAutoAccessorStorage then
+      begin
+        { An auto-accessor's initializer is named after the accessor
+          ([[ClassFieldInitializerName]]), not after its storage. }
+        Elem := AClassDef.FElements[AClassDef.FFieldOrder[I].ElementIndex];
+        CompileFieldValueWithInferredName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+          ClassFieldInferredName(Elem));
+        if Elem.IsComputed and IsAnonymousFunctionNameInitializer(
+           AClassDef.FFieldOrder[I].FieldInitializer) then
+        begin
+          KeyReg := ChildScope.AllocateRegister;
+          ComputedKeyName := FindComputedFieldKeyLocalName(
+            AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
+          UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
+          if UpvalueIdx < 0 then
+            raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+          EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+            UInt16(UpvalueIdx)));
+          EmitInstruction(ChildCtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+            KeyReg, 0));
+          ChildScope.FreeRegister;
+        end;
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+          '#slot:' + ChildScope.ResolvePrivatePrefix +
+          AClassDef.FFieldOrder[I].Name);
+      end
       else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
         CompileFieldValueWithInferredName(ChildCtx,
@@ -6374,47 +6416,6 @@ begin
         '#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       ChildScope.FreeRegister;
     end;
-  end;
-
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    if Elem.IsStatic or
-       (Elem.Kind <> cekAccessor) or
-       ((not Elem.IsPrivate) and not Assigned(Elem.FieldInitializer)) then
-      Continue;
-    ValReg := ChildScope.AllocateRegister;
-    if Assigned(Elem.FieldInitializer) then
-      ACtx.CompileExpression(Elem.FieldInitializer, ValReg)
-    else
-      EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-    if Elem.IsPrivate then
-      AccessorBackingName := '#slot:' + ChildScope.ResolvePrivatePrefix +
-        Elem.Name
-    else if Elem.IsComputed then
-      AccessorBackingName := '__accessor_computed_' + IntToStr(I)
-    else
-      AccessorBackingName := '__accessor_' + Elem.Name;
-    if Elem.IsPrivate then
-    begin
-      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-        AccessorBackingName);
-      ChildScope.FreeRegister;
-      Continue;
-    end;
-    KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
-    if KeyIdx <= High(UInt8) then
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
-        UInt16(KeyIdx), ValReg))
-    else
-    begin
-      KeyReg := ChildScope.AllocateRegister;
-      EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_INDEX, ThisReg, KeyReg,
-        ValReg));
-      ChildScope.FreeRegister;
-    end;
-    ChildScope.FreeRegister;
   end;
 
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6532,55 +6533,6 @@ begin
       Exit(True);
   end;
   Result := False;
-end;
-
-procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
-  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
-var
-  I: Integer;
-  Elem: TGocciaClassElement;
-  NameIdx: UInt16;
-  KeyReg: UInt16;
-  LocalIdx: Integer;
-  ComputedKeyName: string;
-  BackingName: string;
-  Flags: Integer;
-begin
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    if Elem.Kind <> cekAccessor then
-      Continue;
-    if Elem.IsPrivate then
-      Continue;
-
-    if Elem.IsComputed then
-      BackingName := '__accessor_computed_' + IntToStr(I)
-    else
-      BackingName := Elem.Name;
-
-    NameIdx := ACtx.Template.AddConstantString(BackingName);
-
-    Flags := 0;
-    if Elem.IsStatic then
-      Flags := Flags or 1;
-
-    if Elem.IsComputed then
-    begin
-      ComputedKeyName := FindComputedFieldKeyLocalName(
-        AComputedFieldKeyLocals, I);
-      LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
-      if LocalIdx < 0 then
-        raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
-      KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_DYNAMIC,
-        KeyReg, Flags, UInt16(NameIdx)));
-    end
-    else
-      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
-        0, Flags, UInt16(NameIdx)));
-  end;
 end;
 
 procedure CompilePrivateAutoAccessorDeclarations(
@@ -6734,8 +6686,6 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileAutoAccessors(ACtx, AClassReg, AClassDef,
-    AComputedFieldKeyLocals);
   CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
     AComputedFieldKeyLocals);
 
@@ -6855,8 +6805,7 @@ begin
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
-     HasComputedInstanceFields(ClassDef) or
-     HasAccessorInitializers(ClassDef) then
+     HasComputedInstanceFields(ClassDef) then
     CompileFieldInitializer(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
@@ -6893,9 +6842,7 @@ begin
   begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
       CompileStaticBlock(ACtx, ClassReg, ClassDef.FElements[I].StaticBlockBody)
-    else if ((ClassDef.FElements[I].Kind = cekField) or
-             ((ClassDef.FElements[I].Kind = cekAccessor) and
-              ClassDef.FElements[I].IsPrivate)) and
+    else if (ClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
             ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
@@ -6921,7 +6868,18 @@ begin
            ClassDef.FElements[I].FieldInitializer) then
         EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
           KeyReg, 0));
-      if ClassDef.FElements[I].IsPrivate then
+      { An auto-accessor's value goes to its private storage, which for a
+        private auto-accessor is its own name. }
+      if ClassDef.FElements[I].Kind = cekAccessor then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
+          ClassDef.FElements[I].AccessorStorageName);
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ClassReg, UInt16(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
+          UInt16(KeyIdx), ValReg));
+      end
+      else if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
@@ -7070,8 +7028,7 @@ begin
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
-     HasComputedInstanceFields(ClassDef) or
-     HasAccessorInitializers(ClassDef) then
+     HasComputedInstanceFields(ClassDef) then
     CompileFieldInitializer(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
@@ -7108,9 +7065,7 @@ begin
   begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
       CompileStaticBlock(ACtx, ADest, ClassDef.FElements[I].StaticBlockBody)
-    else if ((ClassDef.FElements[I].Kind = cekField) or
-             ((ClassDef.FElements[I].Kind = cekAccessor) and
-              ClassDef.FElements[I].IsPrivate)) and
+    else if (ClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
             ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
@@ -7136,7 +7091,18 @@ begin
            ClassDef.FElements[I].FieldInitializer) then
         EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
           KeyReg, 0));
-      if ClassDef.FElements[I].IsPrivate then
+      { An auto-accessor's value goes to its private storage, which for a
+        private auto-accessor is its own name. }
+      if ClassDef.FElements[I].Kind = cekAccessor then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
+          ClassDef.FElements[I].AccessorStorageName);
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ADest, UInt16(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
+          UInt16(KeyIdx), ValReg));
+      end
+      else if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
