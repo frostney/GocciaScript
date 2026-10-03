@@ -89,10 +89,30 @@ implementation
 uses
   TextSemantics;
 
+// ES2026 §15.7.14 ClassDefinitionEvaluation runs the class body with the
+// class's PrivateEnvironment, so a function or class created by code in the
+// body belongs to it (§10.2.3 OrdinaryFunctionCreate). Code in a class body
+// runs inline in the enclosing function, so each such creation is followed
+// by an instruction that hands it the class.
+procedure EmitSetPrivateClass(const ACtx: TGocciaCompilationContext;
+  const AInstruction: UInt64);
+var
+  Target: UInt16;
+begin
+  Target := UInt16((AInstruction shr 8) and $FF) or
+    UInt16(((AInstruction shr 32) and $FF) shl 8);
+  ACtx.Template.EmitInstruction(EncodeABC(OP_SET_PRIVATE_CLASS, Target,
+    UInt16(ACtx.Scope.PrivateClassReg), 0));
+end;
+
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
   const AInstruction: UInt64; const AForceWide: Boolean): Integer;
 begin
   Result := ACtx.Template.EmitInstruction(AInstruction, AForceWide);
+  if Assigned(ACtx.Scope) and (ACtx.Scope.PrivateClassReg >= 0) and
+     (((AInstruction and $FF) = Ord(OP_CLOSURE)) or
+      ((AInstruction and $FF) = Ord(OP_NEW_CLASS))) then
+    EmitSetPrivateClass(ACtx, AInstruction);
 end;
 
 function TrySingleUTF16CodeUnitString(const AValue: string;

@@ -430,6 +430,7 @@ type
       AKey, AValue: TGocciaValue);
     procedure SetSuperPropertyBaseValueByKey(const ABaseValue, AThisValue,
       AKey, AValue: TGocciaValue);
+    function LexicalBytecodePrivateClass(const AKey: string): TGocciaClassValue;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
@@ -882,6 +883,8 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string; forward;
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue; forward;
 
 function UTF16CodeUnitImmediateToString(const ACodeUnit: UInt16): string;
 begin
@@ -1166,6 +1169,7 @@ function CollectBytecodeDirectEvalPrivateNames(
 var
   Closure: TGocciaBytecodeClosure;
   RawNames: TStringList;
+  PrivateClass: TGocciaObjectValue;
   SourceName: string;
   I: Integer;
 begin
@@ -1175,7 +1179,7 @@ begin
   Result.Duplicates := dupIgnore;
 
   Closure := DirectEvalLexicalClosure(AVM);
-  if not (Assigned(Closure) and (Closure.HomeClass is TGocciaClassValue)) then
+  if not Assigned(Closure) then
     Exit;
 
   RawNames := TStringList.Create;
@@ -1183,7 +1187,16 @@ begin
     RawNames.CaseSensitive := True;
     RawNames.Sorted := False;
     RawNames.Duplicates := dupIgnore;
-    TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    if Closure.HomeClass is TGocciaClassValue then
+      TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    // Every class body around the calling code contributes its names
+    // (ES2026 §19.2.1.1 PerformEval step 6.b, through the PrivateEnvironment).
+    PrivateClass := Closure.PrivateClass;
+    while PrivateClass is TGocciaClassValue do
+    begin
+      TGocciaClassValue(PrivateClass).AppendOwnPrivateNames(RawNames);
+      PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+    end;
 
     for I := 0 to RawNames.Count - 1 do
     begin
@@ -1194,6 +1207,31 @@ begin
   finally
     RawNames.Free;
   end;
+end;
+
+// Direct eval code runs in the tree-walk evaluator, which finds private names
+// through the scope chain. Give it one scope per class body around the
+// calling code, innermost nearest, so it resolves a private name to the same
+// class evaluation the caller's own code would.
+function WrapInBytecodePrivateEnvironment(const AParent: TGocciaScope;
+  const AClosure: TGocciaBytecodeClosure): TGocciaScope;
+var
+  Classes: array of TGocciaObjectValue;
+  PrivateClass: TGocciaObjectValue;
+  I: Integer;
+begin
+  Result := AParent;
+  if not Assigned(AClosure) then
+    Exit;
+  PrivateClass := AClosure.PrivateClass;
+  while PrivateClass is TGocciaClassValue do
+  begin
+    SetLength(Classes, Length(Classes) + 1);
+    Classes[High(Classes)] := PrivateClass;
+    PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+  end;
+  for I := High(Classes) downto 0 do
+    Result := TGocciaPrivateEnvironmentScope.Create(Result, Classes[I]);
 end;
 
 function DirectEvalCapturedThisValue(const AVM: TGocciaVM;
@@ -3026,6 +3064,13 @@ type
     FVM: TGocciaVM;
     FConstructorValue: TGocciaValue;
     FNativeInstanceNewTarget: TGocciaValue;
+    // The class whose body encloses this class's definition, or nil at the
+    // outermost level: the outer link of the class's PrivateEnvironment
+    // (ES2026 §15.7.14 ClassDefinitionEvaluation step 6).
+    FOuterPrivateClass: TGocciaClassValue;
+    // Compiled keys of private static elements, which the class declares
+    // under a per-evaluation runtime key instead of the compiled one.
+    FRuntimeKeyedPrivateKeys: array of string;
     function CreateNativeInstanceWithNewTarget(
       const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue): TGocciaObjectValue;
@@ -3048,6 +3093,11 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
+    procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
+    function DeclaresCompiledPrivateKey(const ACompiledKey,
+      ASourceName: string): Boolean;
+    property OuterPrivateClass: TGocciaClassValue read FOuterPrivateClass
+      write FOuterPrivateClass;
   end;
 
 constructor TGocciaResolvedEnvironmentReferenceValue.Create(
@@ -3122,6 +3172,8 @@ begin
     AClosure.HomeObject.MarkReferences;
   if Assigned(AClosure.HomeClass) then
     AClosure.HomeClass.MarkReferences;
+  if Assigned(AClosure.PrivateClass) then
+    AClosure.PrivateClass.MarkReferences;
   if Assigned(AClosure.NewTarget) then
     AClosure.NewTarget.MarkReferences;
   if Assigned(AClosure.GlobalScope) then
@@ -3492,6 +3544,7 @@ begin
   FVM := AVM;
   FConstructorValue := nil;
   FNativeInstanceNewTarget := nil;
+  FOuterPrivateClass := nil;
 end;
 
 function TGocciaVMClassValue.GetClassLength: Integer;
@@ -5254,6 +5307,8 @@ begin
       FClosure.HomeObject.MarkReferences;
     if Assigned(FClosure.HomeClass) then
       FClosure.HomeClass.MarkReferences;
+    if Assigned(FClosure.PrivateClass) then
+      FClosure.PrivateClass.MarkReferences;
     if Assigned(FClosure.NewTarget) then
       FClosure.NewTarget.MarkReferences;
     if Assigned(FClosure.GlobalScope) then
@@ -8016,6 +8071,44 @@ begin
     TGocciaBytecodeFunctionValue(AValue).FConstructClassValue := Self;
 end;
 
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  if AClass is TGocciaVMClassValue then
+    Result := TGocciaVMClassValue(AClass).OuterPrivateClass
+  else
+    Result := nil;
+end;
+
+procedure TGocciaVMClassValue.AddRuntimeKeyedPrivateKey(
+  const ACompiledKey: string);
+var
+  Count: Integer;
+begin
+  Count := Length(FRuntimeKeyedPrivateKeys);
+  SetLength(FRuntimeKeyedPrivateKeys, Count + 1);
+  FRuntimeKeyedPrivateKeys[Count] := ACompiledKey;
+end;
+
+// Whether this class body declares the private name that ACompiledKey
+// names. The compiled key carries the class body's compile-time prefix, so a
+// same-named private name of another class body does not match.
+function TGocciaVMClassValue.DeclaresCompiledPrivateKey(const ACompiledKey,
+  ASourceName: string): Boolean;
+var
+  DeclaredKey: string;
+  I: Integer;
+begin
+  if not ResolveDeclaredPrivateKey(ASourceName, DeclaredKey) then
+    Exit(False);
+  if DeclaredKey = ACompiledKey then
+    Exit(True);
+  for I := 0 to High(FRuntimeKeyedPrivateKeys) do
+    if FRuntimeKeyedPrivateKeys[I] = ACompiledKey then
+      Exit(True);
+  Result := False;
+end;
+
 procedure TGocciaVMClassValue.MarkReferences;
 begin
   if GCMarked then Exit;
@@ -8024,6 +8117,8 @@ begin
     FConstructorValue.MarkReferences;
   if Assigned(FNativeInstanceNewTarget) then
     FNativeInstanceNewTarget.MarkReferences;
+  if Assigned(FOuterPrivateClass) then
+    FOuterPrivateClass.MarkReferences;
 end;
 
 procedure TGocciaVMSuperConstructorValue.MarkReferences;
@@ -8053,6 +8148,8 @@ begin
     FClosure.HomeObject.MarkReferences;
   if Assigned(FClosure.HomeClass) then
     FClosure.HomeClass.MarkReferences;
+  if Assigned(FClosure.PrivateClass) then
+    FClosure.PrivateClass.MarkReferences;
   if Assigned(FClosure.NewTarget) then
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
@@ -8524,8 +8621,12 @@ begin
   if SourceName <> '' then
   begin
     if AUseRuntimeKey then
+    begin
       InternalName := BytecodePrivateRuntimeKey(AName,
-        TGocciaClassValue(AClassValue).PrivateBrandToken)
+        TGocciaClassValue(AClassValue).PrivateBrandToken);
+      if (AClassValue is TGocciaVMClassValue) and IsBytecodePrivateKey(AName) then
+        TGocciaVMClassValue(AClassValue).AddRuntimeKeyedPrivateKey(AName);
+    end
     else
       InternalName := AName;
     TGocciaClassValue(AClassValue).DeclarePrivateName(SourceName,
@@ -10863,9 +10964,38 @@ begin
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
+// ES2026 §9.2.1.2 ResolvePrivateIdentifier: walk the running function's
+// private environments outward to the class body that declares AKey. The
+// compiled key names the class body, so only the matching evaluation of it
+// can answer.
+function TGocciaVM.LexicalBytecodePrivateClass(
+  const AKey: string): TGocciaClassValue;
+var
+  SourceName: string;
+  Candidate: TGocciaObjectValue;
+begin
+  Result := nil;
+  if not Assigned(FCurrentClosure) then
+    Exit;
+  Candidate := FCurrentClosure.PrivateClass;
+  if not Assigned(Candidate) then
+    Exit;
+  SourceName := BytecodePrivateSourceName(AKey);
+  if SourceName = '' then
+    Exit;
+  while Candidate is TGocciaVMClassValue do
+  begin
+    if TGocciaVMClassValue(Candidate).DeclaresCompiledPrivateKey(AKey,
+         SourceName) then
+      Exit(TGocciaVMClassValue(Candidate));
+    Candidate := TGocciaVMClassValue(Candidate).OuterPrivateClass;
+  end;
+end;
+
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
   const AObject: TGocciaValue): string;
 var
+  LexicalClass: TGocciaClassValue;
   HomeClass: TGocciaClassValue;
   CandidateClass: TGocciaClassValue;
   ExactReceiverClass: TGocciaClassValue;
@@ -10888,6 +11018,10 @@ var
     end;
   end;
 begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if Assigned(LexicalClass) then
+    Exit(LexicalClass.PrivateBrandToken);
+
   Result := BytecodePrivateTokenForKey(AKey,
     BytecodePrivateReceiverBrandToken(AObject));
 
@@ -10935,7 +11069,9 @@ var
   DeclaredKey: string;
   SourceName: string;
 begin
-  Result := nil;
+  Result := LexicalBytecodePrivateClass(AKey);
+  if Assigned(Result) then
+    Exit;
   if (not Assigned(FCurrentClosure)) or
      not (FCurrentClosure.HomeClass is TGocciaClassValue) then
     Exit;
@@ -13947,6 +14083,8 @@ begin
         CallerParentScope := FGlobalScope
       else
         CallerParentScope := EnsureCurrentDynamicVarScope;
+      CallerParentScope := WrapInBytecodePrivateEnvironment(
+        CallerParentScope, CallerClosure);
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
         ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,
