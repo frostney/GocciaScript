@@ -695,16 +695,19 @@ var
   LeftValue, RightValue: TGocciaValue;
 begin
   { Shapes the expectation cannot describe a subset of are compared in full:
-    an asymmetric matcher runs its own match, and an expected error, Set,
-    Map or typed array must equal the actual one outright rather than merely
-    be contained by it (Vitest compares iterables element by element over
-    their whole length). An expected plain object keeps subset semantics even
-    when the actual value is one of these. }
+    an asymmetric matcher runs its own match, and an expected error, Set or
+    Map must equal the actual one outright rather than merely be contained
+    by it. So must an expected typed array when the actual value is a typed
+    array too: Vitest then compares the two iterables element by element over
+    their whole length. Against any other actual value an expected typed
+    array describes a subset of index keys, as in Vitest. An expected plain
+    object keeps subset semantics even when the actual value is one of these. }
   if (AActual is TGocciaAsymmetricMatcherValue) or
      (AExpected is TGocciaAsymmetricMatcherValue) or
      IsErrorObject(AExpected) or (AExpected is TGocciaSetValue) or
      (AExpected is TGocciaMapValue) or
-     (AExpected is TGocciaTypedArrayValue) then
+     ((AExpected is TGocciaTypedArrayValue) and
+      (AActual is TGocciaTypedArrayValue)) then
   begin
     CopyComparedPairs(AComparedPairs, DeepComparedPairs);
     Result := IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs,

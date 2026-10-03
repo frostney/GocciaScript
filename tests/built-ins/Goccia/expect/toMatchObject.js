@@ -189,4 +189,10 @@ describe("toMatchObject with typed arrays", () => {
     expect(new Uint8Array([1, 2])).toMatchObject({ 0: 1 });
     expect(new Uint8Array([1, 2])).not.toMatchObject({ 0: 2 });
   });
+
+  test("lets a typed array describe index keys of another kind of value", () => {
+    expect({ 0: 1, 1: 2, 2: 3 }).toMatchObject(new Uint8Array([1, 2]));
+    expect([1, 2]).toMatchObject(new Uint8Array([1, 2]));
+    expect({ 0: 9, 1: 2 }).not.toMatchObject(new Uint8Array([1, 2]));
+  });
 });
