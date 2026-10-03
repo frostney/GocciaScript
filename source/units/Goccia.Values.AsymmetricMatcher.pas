@@ -226,21 +226,6 @@ begin
   Result := False;
 end;
 
-function HasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean;
-var
-  Current: TGocciaObjectValue;
-begin
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
-  end;
-  Result := False;
-end;
-
 constructor TGocciaAsymmetricMatcherValue.Create(const ASample: TGocciaValue;
   const AInverse: Boolean);
 begin
@@ -482,8 +467,7 @@ begin
     end;
 
     for I := 0 to High(ExpectedSymbols) do
-      if not HasSymbolPropertyInChain(ActualObject,
-        ExpectedSymbols[I].Key) or
+      if not ActualObject.HasSymbolPropertyInChain(ExpectedSymbols[I].Key) or
          not AEquality(ActualObject.GetSymbolProperty(ExpectedSymbols[I].Key),
            ExpectedSymbols[I].Value) then
         Exit(ApplyInverse(False));

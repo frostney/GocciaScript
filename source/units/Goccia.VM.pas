@@ -1694,21 +1694,6 @@ begin
   end;
 end;
 
-function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-var
-  Current: TGocciaObjectValue;
-begin
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
-  end;
-  Result := False;
-end;
-
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
   const AName: string; out AValue: TGocciaValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 var
@@ -13505,13 +13490,8 @@ begin
       ResolvedKey := AKey;
     if ResolvedKey is TGocciaSymbolValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if TGocciaObjectValue(AObject).HasSymbolProperty(TGocciaSymbolValue(ResolvedKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(
+        TGocciaSymbolValue(ResolvedKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
@@ -13636,21 +13616,13 @@ begin
   begin
     if AObject is TGocciaObjectValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if VMHasSymbolPropertyInChain(TGocciaObjectValue(AObject),
-        TGocciaSymbolValue(AKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
 
     Boxed := AObject.Box;
-    if Assigned(Boxed) and VMHasSymbolPropertyInChain(Boxed,
-      TGocciaSymbolValue(AKey)) then
+    if Assigned(Boxed) and Boxed.HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
