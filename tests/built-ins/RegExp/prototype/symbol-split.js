@@ -96,3 +96,61 @@ test("Symbol.split advances zero-width unicode matches by code point", () => {
     "\uD83D\uDC3A",
   ]);
 });
+
+test("Symbol.split calls an exec installed on RegExp.prototype at every position", () => {
+  const originalExec = RegExp.prototype.exec;
+  const lastIndexes = [];
+  RegExp.prototype.exec = {
+    exec(input) {
+      lastIndexes.push(this.lastIndex);
+      return originalExec.call(this, input);
+    },
+  }.exec;
+  let result;
+  try {
+    result = "a,b".split(/,/);
+  } finally {
+    RegExp.prototype.exec = originalExec;
+  }
+  expect(result).toEqual(["a", "b"]);
+  expect(lastIndexes).toEqual([0, 1, 2]);
+});
+
+test("Symbol.split includes captures and stops at the limit", () => {
+  expect("a1b2c".split(/(\d)/)).toEqual(["a", "1", "b", "2", "c"]);
+  expect("a1b2c".split(/(\d)|x/)).toEqual(["a", "1", "b", "2", "c"]);
+  expect("axb".split(/(\d)|x/)).toEqual(["a", undefined, "b"]);
+  expect("a1b2c".split(/(\d)/, 2)).toEqual(["a", "1"]);
+  expect("a1b2c".split(/(\d)/, 3)).toEqual(["a", "1", "b"]);
+  expect("abc".split(/(?:)/)).toEqual(["a", "b", "c"]);
+  expect(",a,".split(/,/)).toEqual(["", "a", ""]);
+});
+
+test("Symbol.split sets lastIndex on a splitter that a species constructor kept", () => {
+  let splitter;
+  class Species {
+    constructor(source, flags) {
+      splitter = new RegExp(source, flags);
+      return splitter;
+    }
+  }
+  const regex = /,/;
+  regex.constructor = { [Symbol.species]: Species };
+  expect("a,b,".split(regex)).toEqual(["a", "b", ""]);
+  expect(splitter.lastIndex).toBe(4);
+  expect("a,b,c".split(regex, 1)).toEqual(["a"]);
+  expect(splitter.lastIndex).toBe(2);
+});
+
+test("Symbol.split throws when the splitter's lastIndex is not writable", () => {
+  class Species {
+    constructor(source, flags) {
+      const splitter = new RegExp(source, flags);
+      Object.defineProperty(splitter, "lastIndex", { writable: false, value: 0 });
+      return splitter;
+    }
+  }
+  const regex = /,/;
+  regex.constructor = { [Symbol.species]: Species };
+  expect(() => "a,b".split(regex)).toThrow(TypeError);
+});

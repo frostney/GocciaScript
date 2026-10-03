@@ -128,3 +128,36 @@ test("Symbol.match retains custom results while reading matched text", () => {
 test("Symbol.match returns only matched strings for native global results", () => {
   expect(/a(b)/dg[Symbol.match]("abxab")).toEqual(["ab", "ab"]);
 });
+
+test("Symbol.match calls an exec installed on RegExp.prototype for every global match", () => {
+  const originalExec = RegExp.prototype.exec;
+  let calls = 0;
+  RegExp.prototype.exec = {
+    exec(input) {
+      calls++;
+      return originalExec.call(this, input);
+    },
+  }.exec;
+  let result;
+  try {
+    result = "a1b22c".match(/\d+/g);
+  } finally {
+    RegExp.prototype.exec = originalExec;
+  }
+  expect(result).toEqual(["1", "22"]);
+  expect(calls).toBe(3);
+});
+
+test("Symbol.match collects empty global matches and resets lastIndex", () => {
+  const regex = /x*/g;
+  regex.lastIndex = 3;
+  expect("axxb".match(regex)).toEqual(["", "xx", "", ""]);
+  expect(regex.lastIndex).toBe(0);
+});
+
+test("Symbol.match advances empty matches by the unicode property", () => {
+  const regex = /(?:)/g;
+  Object.defineProperty(regex, "unicode", { value: true });
+  expect("\u{1F600}".match(regex).length).toBe(2);
+  expect("\u{1F600}".match(/(?:)/g).length).toBe(3);
+});
