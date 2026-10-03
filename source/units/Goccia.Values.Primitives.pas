@@ -195,6 +195,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.Profiler,
   Goccia.Threading.Flags,
+  Goccia.ThreadPolls,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
 
@@ -230,9 +231,25 @@ begin
   end;
 end;
 
+{ What a value allocation checks when Goccia.ThreadPolls says something is
+  armed. APolls is the word the caller has just read, so that this does not
+  look the thread variable up a second time, and each check runs only when
+  its own flag is set: a check whose flag is clear would return at once, after
+  a lookup of its own. }
+procedure RunAllocationPolls(const APolls: TGocciaThreadPolls);
+begin
+  if APolls.ProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
+    TGocciaProfiler.Instance.RecordAllocation;
+  if APolls.TimeoutArmed then
+    CheckExecutionTimeout;
+  if APolls.InstructionLimitActive then
+    CheckInstructionLimit;
+end;
+
 procedure TGocciaValue.AfterConstruction;
 var
   GC: TGarbageCollector;
+  Polls: TGocciaThreadPolls;
 begin
   inherited;
   GC := TGarbageCollector.Instance;
@@ -248,10 +265,12 @@ begin
       ThrowMemoryLimitExceeded(GC);
     end;
   end;
-  if GProfilingAllocations and (TGocciaProfiler.Instance <> nil) then
-    TGocciaProfiler.Instance.RecordAllocation;
-  CheckExecutionTimeout;
-  CheckInstructionLimit;
+  // One thread-local read decides whether the allocation profiler, a timeout
+  // or an instruction limit is armed on this thread; none is in an ordinary
+  // run. See Goccia.ThreadPolls.
+  Polls := GThreadPolls;
+  if Polls.Any <> 0 then
+    RunAllocationPolls(Polls);
 end;
 
 function TGocciaValue.RuntimeCopy: TGocciaValue;

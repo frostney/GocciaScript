@@ -69,7 +69,9 @@ function RemainingExecutionTimeoutMilliseconds: Integer;
 implementation
 
 uses
-  TimingUtils;
+  TimingUtils,
+
+  Goccia.ThreadPolls;
 
 const
   TIMEOUT_CHECK_INTERVAL = 1024;
@@ -122,6 +124,10 @@ begin
       GMinDeadlineMs := GTimeoutStack[I].DurationMs;
     end;
   end;
+  // GMinDeadlineNs changes here and in the two procedures that reset it, and
+  // nowhere else; each mirrors it for the callers that poll through
+  // Goccia.ThreadPolls.
+  GThreadPolls.TimeoutArmed := GMinDeadlineNs <> 0;
 end;
 
 procedure PushTimeoutScope(const AScope: TGocciaTimeoutScope;
@@ -159,6 +165,7 @@ procedure StartExecutionTimeout(const ATimeoutMilliseconds: Integer);
 begin
   GTimeoutDepth := 0;
   GMinDeadlineNs := 0;
+  GThreadPolls.TimeoutArmed := False;
   GMinDeadlineMs := 0;
   GCheckCounter := 0;
   if ATimeoutMilliseconds > 0 then
@@ -169,6 +176,7 @@ procedure ClearExecutionTimeout;
 begin
   GTimeoutDepth := 0;
   GMinDeadlineNs := 0;
+  GThreadPolls.TimeoutArmed := False;
   GMinDeadlineMs := 0;
   GCheckCounter := 0;
 end;
