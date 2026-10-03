@@ -41,7 +41,6 @@ type
     FText: string;
     FInput: TRegExpInput;
     FDecoded: Boolean;
-    FNoStartCandidate: Boolean;
     FSlotCount: Integer;
     FSlots: TRegExpSlots;
     FStack: TBacktrackStack;
@@ -58,6 +57,9 @@ type
     property Slots: TRegExpSlots read FSlots;
     { Backtrack entries kept for the next Exec. }
     function RetainedBacktrackCapacity: Integer;
+    { Drops the decoded subject and the backtrack stack; the next Exec gets
+      the subject again through the per-thread decode memo. }
+    procedure ReleaseBuffers;
   end;
 
   TRegExpVMResult = record
@@ -1477,26 +1479,31 @@ end;
 function TRegExpMatcher.Exec(const AStartIndex: Integer;
   const ARequireStart: Boolean): Boolean;
 begin
+  // Decoded once for all matches: unlike ExecuteRegExpVM, no raw scan for a
+  // possible first character first, which a subject that has one would pay
+  // on top of the decode. (The global loops decoded the subject up front
+  // before this class existed, to measure it.)
   if not FDecoded then
   begin
-    // As in ExecuteRegExpVM: a subject without any possible first character
-    // fails every unanchored scan, so it is never decoded.
-    if (not ARequireStart) and (FNoStartCandidate or
-       (StartCheckIsASCIIOnly(FProgram.StartCheck) and
-        not RawInputHasASCIIStartCandidate(FProgram.StartCheck, FText))) then
-    begin
-      FNoStartCandidate := True;
-      Exit(False);
-    end;
     GetRegExpInput(FText, FInput);
     FDecoded := True;
   end;
   Result := ScanRegExpInput(FProgram, FInput, AStartIndex, ARequireStart,
     FSlots, FSlotCount, FStack);
   // Reusing the stack saves allocations only while it is small; a large one
-  // (each entry holds two dynamic arrays) is not kept alive between matches.
+  // (each entry holds two dynamic arrays) is not kept for the next match.
+  // When a VM limit or a timeout ends the scan, the caller frees the matcher
+  // or calls ReleaseBuffers.
   if Length(FStack) > MAX_RETAINED_BACKTRACK_ENTRIES then
     SetLength(FStack, 0);
+end;
+
+procedure TRegExpMatcher.ReleaseBuffers;
+begin
+  FInput.Units := nil;
+  FInput.Length := 0;
+  FDecoded := False;
+  SetLength(FStack, 0);
 end;
 
 function TRegExpMatcher.RetainedBacktrackCapacity: Integer;

@@ -296,3 +296,15 @@ test("Symbol.replace and Symbol.match call exec from a prototype between the reg
   expect("aXa".match(makeRegex())).toEqual(["a", "a"]);
   expect(calls).toEqual([0, 1, 3]);
 });
+
+// GocciaScript stops a match that exceeds its regular expression VM limits;
+// other engines have no such limit, so this pins engine behaviour.
+test("Symbol.replace and Symbol.match leave lastIndex at the last match end when a match hits the VM limit", () => {
+  const subject = "ab" + "a".repeat(28) + "c";
+  const replaceRegex = /(a+)+b/g;
+  expect(() => subject.replace(replaceRegex, "x")).toThrow(Error);
+  expect(replaceRegex.lastIndex).toBe(2);
+  const matchRegex = /(a+)+b/g;
+  expect(() => subject.match(matchRegex)).toThrow(Error);
+  expect(matchRegex.lastIndex).toBe(2);
+});

@@ -3,6 +3,8 @@ program Goccia.RegExp.VM.Test;
 {$I Goccia.inc}
 
 uses
+  SysUtils,
+
   TestingPascalLibrary,
 
   Goccia.RegExp.Compiler,
@@ -17,6 +19,7 @@ type
     procedure TestLongestSubject;
     procedure TestMatcherReleasesLargeBacktrackStack;
     procedure TestMatcherMatchesRepeatedly;
+    procedure TestMatcherReleasesStackWhenLimitRaises;
   public
     procedure SetupTests; override;
   end;
@@ -34,6 +37,8 @@ begin
     TestMatcherReleasesLargeBacktrackStack);
   Test('a matcher finds successive matches from the given start index',
     TestMatcherMatchesRepeatedly);
+  Test('a matcher releases its buffers after a VM limit',
+    TestMatcherReleasesStackWhenLimitRaises);
 end;
 
 procedure TRegExpVMTests.TestShortSubjectGetsFloor;
@@ -95,6 +100,33 @@ begin
     Expect<Boolean>(Matcher.Exec(5, False)).ToBe(False);
     Expect<Boolean>(Matcher.Exec(1, True)).ToBe(True);
     Expect<Boolean>(Matcher.Exec(2, True)).ToBe(False);
+  finally
+    Matcher.Free;
+  end;
+end;
+
+procedure TRegExpVMTests.TestMatcherReleasesStackWhenLimitRaises;
+var
+  Matcher: TRegExpMatcher;
+  Raised: Boolean;
+begin
+  // (a|c)* leaves 2,000 backtrack entries below (b+)+$, whose exponential
+  // backtracking on 30 "b"s and a "!" exceeds the step limit.
+  Matcher := TRegExpMatcher.Create(CompileRegExp('(a|c)*(b+)+$', 'y'),
+    StringOfChar('a', 2000) + StringOfChar('b', 30) + '!');
+  try
+    Raised := False;
+    try
+      Matcher.Exec(0, True);
+    except
+      on ERegExpRuntimeError do
+        Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Matcher.ReleaseBuffers;
+    Expect<Integer>(Matcher.RetainedBacktrackCapacity).ToBe(0);
+    // The matcher still works after its buffers were released.
+    Expect<Boolean>(Matcher.Exec(2030, False)).ToBe(False);
   finally
     Matcher.Free;
   end;

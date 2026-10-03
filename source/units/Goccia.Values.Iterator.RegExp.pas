@@ -22,23 +22,22 @@ type
     // code, so its lastIndex can live in FLastIndex between scanner matches.
     FMatcherIsPrivate: Boolean;
     FScanner: TGocciaRegExpScanner;
-    // Native bytes of FScanner (its decoded copy of the subject) charged to
-    // the collector, so live iterators count against --max-memory and
-    // garbage ones make the collector run.
-    FScannerChargedBytes: Int64;
+    // Not traced: cleared at every collection (see MarkReferences).
     FInputValue: TGocciaStringLiteralValue;
     FLastIndex: Integer;
     FLastIndexPending: Boolean;
     FFlagsChecked: Boolean;
     FSticky: Boolean;
-    function TryCreateScanner: Boolean;
-    procedure FreeScanner;
     function CanScan: Boolean;
     function ScanNext(out AMatchValue: TGocciaValue): Boolean;
     function MatchNext(out AMatchValue: TGocciaValue): Boolean;
   public
+    { AInputValue, when assigned, is a string value holding AInput that the
+      results use as their "input" until the next collection, so they share
+      the caller's value. }
     constructor Create(const ARegExp: TGocciaObjectValue; const AInput: string;
-      const AGlobal, AUnicode, AMatcherIsPrivate: Boolean);
+      const AGlobal, AUnicode, AMatcherIsPrivate: Boolean;
+      const AInputValue: TGocciaStringLiteralValue = nil);
     destructor Destroy; override;
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
@@ -71,7 +70,8 @@ var
 
 constructor TGocciaRegExpMatchAllIteratorValue.Create(
   const ARegExp: TGocciaObjectValue; const AInput: string;
-  const AGlobal, AUnicode, AMatcherIsPrivate: Boolean);
+  const AGlobal, AUnicode, AMatcherIsPrivate: Boolean;
+  const AInputValue: TGocciaStringLiteralValue);
 var
   SharedPrototype: TGocciaObjectValue;
 begin
@@ -86,45 +86,13 @@ begin
   FUnicode := AUnicode;
   FSingleMatchReturned := False;
   FMatcherIsPrivate := AMatcherIsPrivate;
+  FInputValue := AInputValue;
 end;
 
 destructor TGocciaRegExpMatchAllIteratorValue.Destroy;
 begin
-  FreeScanner;
+  FScanner.Free;
   inherited;
-end;
-
-function TGocciaRegExpMatchAllIteratorValue.TryCreateScanner: Boolean;
-var
-  Bytes: Int64;
-  GC: TGarbageCollector;
-begin
-  Bytes := Int64(Length(FInput)) * SizeOf(Cardinal);
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-  begin
-    // Without room for the decoded subject, match through the protocol as
-    // before, which reuses the per-thread decode instead.
-    if not GC.TryReserveExternalBytes(Bytes, Self) then
-      Exit(False);
-    FScannerChargedBytes := Bytes;
-  end;
-  FScanner := CreateRegExpScanner(FRegExp, FInput);
-  Result := True;
-end;
-
-procedure TGocciaRegExpMatchAllIteratorValue.FreeScanner;
-var
-  GC: TGarbageCollector;
-begin
-  FreeAndNil(FScanner);
-  if FScannerChargedBytes > 0 then
-  begin
-    GC := TGarbageCollector.Instance;
-    if Assigned(GC) then
-      GC.ReleaseExternalBytes(FScannerChargedBytes);
-    FScannerChargedBytes := 0;
-  end;
 end;
 
 // A private matcher was built by %RegExp% from the flags the iterator read,
@@ -150,10 +118,14 @@ end;
 function TGocciaRegExpMatchAllIteratorValue.ScanNext(
   out AMatchValue: TGocciaValue): Boolean;
 var
+  InputRoot: TGocciaTempRoot;
+  InputValue: TGocciaStringLiteralValue;
   LastIndex: Double;
   MatchResult: TGocciaRegExpMatchResult;
   StartIndex: Integer;
 begin
+  if not Assigned(FScanner) then
+    FScanner := CreateRegExpScanner(FRegExp, FInput);
   if FLastIndexPending then
     StartIndex := FLastIndex
   else
@@ -166,19 +138,24 @@ begin
   end;
 
   try
-    Result := FScanner.Exec(StartIndex, FSticky);
-  except
-    on E: ERegExpRuntimeError do
-      ThrowError(E.Message);
+    try
+      Result := FScanner.Exec(StartIndex, FSticky);
+    except
+      on E: ERegExpRuntimeError do
+        ThrowError(E.Message);
+    end;
+  finally
+    // next() calls may be far apart, and an unfinished iterator may live
+    // long: keep only the scanner object between them. The next call finds
+    // the decoded subject in the per-thread memo unless another subject was
+    // matched in between.
+    FScanner.ReleaseBuffers;
   end;
   if not Result then
   begin
     AMatchValue := nil;
     FLastIndex := 0;
     FLastIndexPending := True;
-    // The iterator is done: release the decoded subject and match buffers
-    // now rather than when the GC frees the iterator.
-    FreeScanner;
     Exit;
   end;
 
@@ -187,10 +164,19 @@ begin
   else
     FLastIndex := FScanner.MatchEnd;
   FLastIndexPending := True;
+  // FInputValue is not marked (see MarkReferences), so a collection while
+  // the match array is built could free it: root it until the array holds it.
   if not Assigned(FInputValue) then
     FInputValue := TGocciaStringLiteralValue.Create(FInput);
-  FScanner.GetMatchResult(MatchResult);
-  AMatchValue := BuildRegExpMatchArray(FInputValue, MatchResult);
+  InputValue := FInputValue;
+  InitializeTempRoot(InputRoot);
+  AddTempRootIfNeeded(InputRoot, InputValue);
+  try
+    FScanner.GetMatchResult(MatchResult);
+    AMatchValue := BuildRegExpMatchArray(InputValue, MatchResult);
+  finally
+    RemoveTempRootIfNeeded(InputRoot);
+  end;
 end;
 
 function TGocciaRegExpMatchAllIteratorValue.MatchNext(
@@ -198,7 +184,7 @@ function TGocciaRegExpMatchAllIteratorValue.MatchNext(
 var
   MatchString: string;
 begin
-  if CanScan and (Assigned(FScanner) or TryCreateScanner) then
+  if CanScan then
     Exit(ScanNext(AMatchValue));
   // A user exec (or exec getter) receives the matcher as this, so from here
   // on user code may hold it and observe its lastIndex: keep it in sync.
@@ -296,8 +282,13 @@ begin
   inherited;
   if Assigned(FRegExp) then
     FRegExp.MarkReferences;
-  if Assigned(FInputValue) then
-    FInputValue.MarkReferences;
+  // FInputValue only spares creating, and charging the collector for, a
+  // new string value of the whole subject for every result. The results
+  // keep it alive while user code holds them; the iterator itself lets go
+  // at every collection, so an unfinished iterator does not keep a copy of
+  // the subject charged against the memory limit. The next result creates
+  // a new one.
+  FInputValue := nil;
 end;
 
 initialization

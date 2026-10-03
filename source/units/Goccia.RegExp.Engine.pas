@@ -54,6 +54,9 @@ type
     function TryGetGroup(const AGroup: Integer; out AStart,
       AEnd: Integer): Boolean;
     procedure GetMatchResult(out AResult: TGocciaRegExpMatchResult);
+    { Drops the decoded subject and VM buffers between matches that may be
+      far apart in time, such as matchAll's next() calls. }
+    procedure ReleaseBuffers;
     property CaptureCount: Integer read FProgram.CaptureCount;
     function HasNamedGroups: Boolean;
     property InputLength: Integer read FInputLength;
@@ -346,6 +349,12 @@ begin
   FMatchIndex := FMatcher.Slot(0);
   FMatchEnd := FMatcher.Slot(1);
   Result := True;
+end;
+
+procedure TGocciaRegExpScanner.ReleaseBuffers;
+begin
+  if Assigned(FMatcher) then
+    FMatcher.ReleaseBuffers;
 end;
 
 function TGocciaRegExpScanner.HasNamedGroups: Boolean;

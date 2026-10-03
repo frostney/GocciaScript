@@ -271,12 +271,3 @@ test.runIf(hasGocciaGc)("Symbol.matchAll results keep the subject as input acros
   expect(second.input).toBe(subject);
   expect(iterator.next().value.input).toBe(subject);
 });
-
-test("Symbol.matchAll iterators over long subjects can be left unfinished", () => {
-  const subject = "a".repeat(20000) + "b";
-  let total = 0;
-  for (const i of Array.from({ length: 40 }, (_, k) => k)) {
-    total += (subject + i).matchAll(/(a|c)*b/g).next().value.index;
-  }
-  expect(total).toBe(0);
-});

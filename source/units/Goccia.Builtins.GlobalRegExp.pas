@@ -134,6 +134,20 @@ const
 var
   GRegExpPrototypeSlot: TGocciaRealmSlotId;
 
+// The first argument when it is a string value: then it holds the input the
+// method converted it to, and the method can hand it out as "input" without
+// creating, and charging the collector for, another string value. The
+// caller's arguments keep it reachable.
+function ArgumentStringValue(
+  const AArgs: TGocciaArgumentsCollection): TGocciaStringLiteralValue;
+begin
+  if (AArgs.Length > 0) and
+     (AArgs.GetElement(0) is TGocciaStringLiteralValue) then
+    Result := TGocciaStringLiteralValue(AArgs.GetElement(0))
+  else
+    Result := nil;
+end;
+
 function RequireRegExpObjectReceiver(const AValue: TGocciaValue;
   const AMethodName: string): TGocciaObjectValue;
 begin
@@ -1605,7 +1619,8 @@ begin
     IsGlobal := HasRegExpFlag(Flags, 'g');
     IsUnicode := HasUnicodeRegExpFlag(Flags);
     Result := TGocciaRegExpMatchAllIteratorValue.Create(Matcher, Input,
-      IsGlobal, IsUnicode, SpeciesConstructor = FRegExpConstructor);
+      IsGlobal, IsUnicode, SpeciesConstructor = FRegExpConstructor,
+      ArgumentStringValue(AArgs));
   finally
     TGarbageCollector.Instance.RemoveTempRoot(Matcher);
   end;
@@ -1619,6 +1634,7 @@ var
   Accumulated: TStringBuffer;
   AccumulatedLength: Int64;
   InputValue: TGocciaStringLiteralValue;
+  InputValueRooted: Boolean;
   CallArgs: TGocciaArgumentsCollection;
   Captures: TRegexReplacementCaptures;
   CaptureNumber, CaptureCount, I, MatchLength, NextSourcePosition,
@@ -1660,6 +1676,7 @@ begin
     ReplaceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
 
   InputValue := nil;
+  InputValueRooted := False;
   CallArgs := nil;
   FunctionalReplace := ReplaceValue.IsCallable;
   if not FunctionalReplace then
@@ -1709,11 +1726,16 @@ begin
     InputLength := UTF16CodeUnitLength(Input);
     NextSourcePosition := 0;
     // The replacer gets the subject as its "input" argument on every call:
-    // one string value serves them all.
+    // one string value serves them all, the caller's when it passed one.
     if FunctionalReplace and ((ResultCount > 0) or (MatchCount > 0)) then
     begin
-      InputValue := TGocciaStringLiteralValue.Create(Input);
-      TGarbageCollector.Instance.AddTempRoot(InputValue);
+      InputValue := ArgumentStringValue(AArgs);
+      if not Assigned(InputValue) then
+      begin
+        InputValue := TGocciaStringLiteralValue.Create(Input);
+        TGarbageCollector.Instance.AddTempRoot(InputValue);
+        InputValueRooted := True;
+      end;
       CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(
         CaptureCount + 4);
     end;
@@ -1798,7 +1820,7 @@ begin
     Result := TGocciaStringLiteralValue.Create(Accumulated.ToString);
   finally
     CallArgs.Free;
-    if Assigned(InputValue) then
+    if InputValueRooted then
       TGarbageCollector.Instance.RemoveTempRoot(InputValue);
     for I := 0 to ResultCount - 1 do
     begin
