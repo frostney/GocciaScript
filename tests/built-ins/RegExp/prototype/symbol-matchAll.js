@@ -163,3 +163,55 @@ test("Symbol.matchAll preserves lastIndex from cloned regex", () => {
   // Original regex lastIndex is not mutated
   expect(regex.lastIndex).toBe(1);
 });
+
+test("Symbol.matchAll gives every match the subject as input", () => {
+  const input = "a1-b2";
+  const matches = [...input.matchAll(/([a-z])(\d)/g)];
+  expect(matches.map((match) => match.index)).toEqual([0, 3]);
+  expect(matches.map((match) => match.input)).toEqual([input, input]);
+  expect(matches.map((match) => match[2])).toEqual(["1", "2"]);
+  expect(matches[0].groups).toBeUndefined();
+});
+
+test("Symbol.matchAll advances past empty matches", () => {
+  expect([..."ab".matchAll(/(?:)/g)].map((match) => match.index)).toEqual([0, 1, 2]);
+});
+
+test("Symbol.matchAll calls an exec installed during iteration with the matcher's lastIndex", () => {
+  const iterator = "a1a2a3".matchAll(/a\d/g);
+  const first = iterator.next().value[0];
+  const originalExec = RegExp.prototype.exec;
+  const lastIndexes = [];
+  RegExp.prototype.exec = {
+    exec(input) {
+      lastIndexes.push(this.lastIndex);
+      return originalExec.call(this, input);
+    },
+  }.exec;
+  let rest;
+  try {
+    rest = [...iterator].map((match) => match[0]);
+  } finally {
+    RegExp.prototype.exec = originalExec;
+  }
+  expect(first).toBe("a1");
+  expect(rest).toEqual(["a2", "a3"]);
+  expect(lastIndexes).toEqual([2, 4, 6]);
+});
+
+test("Symbol.matchAll reads the lastIndex of a matcher from a custom species", () => {
+  let matcher;
+  class Species {
+    constructor(source, flags) {
+      matcher = new RegExp(source, flags);
+      return matcher;
+    }
+  }
+  const regex = /a/g;
+  regex.constructor = { [Symbol.species]: Species };
+  const iterator = regex[Symbol.matchAll]("aaaa");
+  expect(iterator.next().value.index).toBe(0);
+  matcher.lastIndex = 3;
+  expect(iterator.next().value.index).toBe(3);
+  expect(iterator.next().done).toBe(true);
+});

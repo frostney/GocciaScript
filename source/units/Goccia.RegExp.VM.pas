@@ -13,6 +13,51 @@ uses
 type
   ERegExpRuntimeError = class(Exception);
 
+  TRegExpInputUnits = array of Cardinal;
+
+  TRegExpInput = record
+    Units: TRegExpInputUnits;
+    Length: Integer;
+  end;
+
+  TBacktrackEntry = record
+    PC: Integer;
+    InputPos: Integer;
+    RepeatDepth: Integer;
+    RepeatStack: array of Integer;
+    Slots: array of Integer;
+  end;
+
+  TBacktrackStack = array of TBacktrackEntry;
+
+  TRegExpSlots = array of Integer;
+
+  { Matches one program against one subject repeatedly, as a global
+    replace, match, split or matchAll does: the subject is decoded once and
+    the capture slots and backtrack stack are reused by every Exec. }
+  TRegExpMatcher = class
+  private
+    FProgram: TRegExpProgram;
+    FText: string;
+    FInput: TRegExpInput;
+    FDecoded: Boolean;
+    FNoStartCandidate: Boolean;
+    FSlotCount: Integer;
+    FSlots: TRegExpSlots;
+    FStack: TBacktrackStack;
+  public
+    constructor Create(const AProgram: TRegExpProgram; const AText: string);
+    { Same matching as ExecuteRegExpVM; on success the capture slots are
+      read with Slot. }
+    function Exec(const AStartIndex: Integer;
+      const ARequireStart: Boolean): Boolean;
+    function Slot(const AIndex: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+    property SlotCount: Integer read FSlotCount;
+    { A start and an end offset per group, -1 for a group that did not
+      participate; overwritten by the next Exec. }
+    property Slots: TRegExpSlots read FSlots;
+  end;
+
   TRegExpVMResult = record
     Matched: Boolean;
     CaptureSlots: array of Integer;
@@ -53,23 +98,6 @@ const
   LOW_SURROGATE_END = $DFFF;
 
 type
-  TRegExpInputUnits = array of Cardinal;
-
-  TRegExpInput = record
-    Units: TRegExpInputUnits;
-    Length: Integer;
-  end;
-
-  TBacktrackEntry = record
-    PC: Integer;
-    InputPos: Integer;
-    RepeatDepth: Integer;
-    RepeatStack: array of Integer;
-    Slots: array of Integer;
-  end;
-
-  TBacktrackStack = array of TBacktrackEntry;
-
   TMemoEntry = record
     Occupied: Boolean;
     PC: Integer;
@@ -1344,12 +1372,53 @@ begin
   Result := Input.Length;
 end;
 
+// Runs the program from AStartIndex (only there when ARequireStart, else at
+// the first matching position from there on), leaving the capture slots of a
+// match in ASlots.
+function ScanRegExpInput(const AProgram: TRegExpProgram;
+  const AInput: TRegExpInput; const AStartIndex: Integer;
+  const ARequireStart: Boolean; var ASlots: array of Integer;
+  const ASlotCount: Integer; var AStack: TBacktrackStack): Boolean;
+var
+  StartPos: Integer;
+begin
+  StartPos := NormalizeInputIndex(AInput, AStartIndex, AProgram.FullUnicode);
+  if ARequireStart then
+  begin
+    FillChar(ASlots[0], ASlotCount * SizeOf(Integer), $FF);
+    Exit(RunVM(AProgram, AInput, StartPos, ASlots, ASlotCount, AStack));
+  end;
+  if AProgram.StartCheck.Enabled then
+    StartPos := FindNextStartCandidate(AProgram.StartCheck, AInput, StartPos,
+      AProgram.FullUnicode);
+  while StartPos <= AInput.Length do
+  begin
+    // Unanchored scans re-run the VM at every input position; on a long
+    // non-matching subject this loop runs millions of times inside one
+    // exec/test call, so poll the cooperative engine deadline here too.
+    // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
+    // throttles deadlines > 16ms, and the always-check mode for <= 16ms
+    // deadlines is self-limiting (the expensive window lasts at most 16ms).
+    CheckExecutionTimeout;
+    FillChar(ASlots[0], ASlotCount * SizeOf(Integer), $FF);
+    if RunVM(AProgram, AInput, StartPos, ASlots, ASlotCount, AStack) then
+      Exit(True);
+    if StartPos >= AInput.Length then
+      Break;
+    StartPos := AdvanceInputIndex(AInput, StartPos, AProgram.FullUnicode);
+    if AProgram.StartCheck.Enabled then
+      StartPos := FindNextStartCandidate(AProgram.StartCheck, AInput, StartPos,
+        AProgram.FullUnicode);
+  end;
+  Result := False;
+end;
+
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 var
   Input: TRegExpInput;
-  SlotCount, StartPos: Integer;
+  SlotCount: Integer;
   Slots: array of Integer;
   Stack: TBacktrackStack;
 begin
@@ -1364,47 +1433,52 @@ begin
   end;
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
-  StartPos := NormalizeInputIndex(Input, AStartIndex, AProgram.FullUnicode);
-  if ARequireStart then
+  if ScanRegExpInput(AProgram, Input, AStartIndex, ARequireStart, Slots,
+     SlotCount, Stack) then
   begin
-    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
-    begin
-      AResult.Matched := True;
-      SetLength(AResult.CaptureSlots, SlotCount);
-      Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
-      Result := True;
-    end;
-    Exit;
+    AResult.Matched := True;
+    SetLength(AResult.CaptureSlots, SlotCount);
+    Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
+    Result := True;
   end;
-  if AProgram.StartCheck.Enabled then
-    StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
-      AProgram.FullUnicode);
-  while StartPos <= Input.Length do
+end;
+
+{ TRegExpMatcher }
+
+constructor TRegExpMatcher.Create(const AProgram: TRegExpProgram;
+  const AText: string);
+begin
+  inherited Create;
+  FProgram := AProgram;
+  FText := AText;
+  FSlotCount := (AProgram.CaptureCount + 1) * 2;
+  SetLength(FSlots, FSlotCount);
+end;
+
+function TRegExpMatcher.Exec(const AStartIndex: Integer;
+  const ARequireStart: Boolean): Boolean;
+begin
+  if not FDecoded then
   begin
-    // Unanchored scans re-run the VM at every input position; on a long
-    // non-matching subject this loop runs millions of times inside one
-    // exec/test call, so poll the cooperative engine deadline here too.
-    // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
-    // throttles deadlines > 16ms, and the always-check mode for <= 16ms
-    // deadlines is self-limiting (the expensive window lasts at most 16ms).
-    CheckExecutionTimeout;
-    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
+    // As in ExecuteRegExpVM: a subject without any possible first character
+    // fails every unanchored scan, so it is never decoded.
+    if (not ARequireStart) and (FNoStartCandidate or
+       (StartCheckIsASCIIOnly(FProgram.StartCheck) and
+        not RawInputHasASCIIStartCandidate(FProgram.StartCheck, FText))) then
     begin
-      AResult.Matched := True;
-      SetLength(AResult.CaptureSlots, SlotCount);
-      Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
-      Result := True;
-      Exit;
+      FNoStartCandidate := True;
+      Exit(False);
     end;
-    if StartPos >= Input.Length then
-      Break;
-    StartPos := AdvanceInputIndex(Input, StartPos, AProgram.FullUnicode);
-    if AProgram.StartCheck.Enabled then
-      StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
-        AProgram.FullUnicode);
+    GetRegExpInput(FText, FInput);
+    FDecoded := True;
   end;
+  Result := ScanRegExpInput(FProgram, FInput, AStartIndex, ARequireStart,
+    FSlots, FSlotCount, FStack);
+end;
+
+function TRegExpMatcher.Slot(const AIndex: Integer): Integer;
+begin
+  Result := FSlots[AIndex];
 end;
 
 // FPC does not auto-finalize managed threadvars at thread exit; registered in
