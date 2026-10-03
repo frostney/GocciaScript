@@ -345,8 +345,7 @@ begin
   if Sample is TGocciaBooleanClassValue then
     Exit((AOther is TGocciaBooleanLiteralValue) or
       (AOther is TGocciaBooleanObjectValue));
-  if (Sample is TGocciaClassValue) and
-     (TGocciaClassValue(Sample).Name = 'Object') and
+  if (Sample is TGocciaObjectClassValue) and
      (TGocciaClassValue(Sample).Prototype =
        TGocciaObjectValue.SharedObjectPrototype) then
     Exit(AOther.TypeOf = 'object');

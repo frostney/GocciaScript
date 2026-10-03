@@ -11371,7 +11371,7 @@ begin
 
   // ES2026 §20.1.1.1 Object(value): direct Object construction with a
   // non-nullish argument returns that object or ToObject(value).
-  if (AClassValue.Name = CONSTRUCTOR_OBJECT) and
+  if (AClassValue is TGocciaObjectClassValue) and
      (EffectiveNewTarget = AClassValue) and
      (AArguments.Length > 0) and
      not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
