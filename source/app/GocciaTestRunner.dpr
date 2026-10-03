@@ -1721,9 +1721,15 @@ begin
      (WorkerResults^[AIndex].SuiteErrors > 0)) then
     AErrorMessage := EXIT_ON_FIRST_FAILURE_SIGNAL;
 
-  // No per-file GC.Collect here. Explicit script-level Goccia.gc() is
-  // serialized by the collector lock, but the runner still lets worker
-  // shutdown reclaim each thread-local heap in bulk.
+  { Reclaim this file's heap before the worker takes the next one, as the
+    sequential path does after each file. Workers run with automatic
+    collection off, so without this every object a worker allocated stayed
+    live until the worker exited: all workers together held the garbage of
+    every file in the run. Collect is serialized by the collector lock, which
+    is what makes it safe on a worker thread (the same path Goccia.gc()
+    takes). }
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.Collect;
 end;
 
 function TTestRunnerApp.RunScriptsFromFilesParallel(
