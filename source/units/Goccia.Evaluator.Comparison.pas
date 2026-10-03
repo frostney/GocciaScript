@@ -26,7 +26,8 @@ uses
   Goccia.Values.HoleValue,
   Goccia.Values.MapValue,
   Goccia.Values.ObjectValue,
-  Goccia.Values.SetValue;
+  Goccia.Values.SetValue,
+  Goccia.Values.TypedArrayValue;
 
 type
   TComparedValuePair = record
@@ -129,14 +130,22 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-{ Exactly one side being an array, Set or Map makes the two values different
-  kinds of container, which never compare equal even loosely. }
+{ Exactly one side being an array, Set, Map or typed array makes the two
+  values different kinds of container, which never compare equal even loosely.
+  Two typed arrays of different kinds differ too: Vitest's equality compares
+  the Object.prototype.toString tags first, so a Uint8Array never equals an
+  Int8Array holding the same numbers. }
 function IsMismatchedContainer(const AActual, AExpected: TGocciaValue): Boolean;
 begin
   Result :=
     ((AActual is TGocciaArrayValue) <> (AExpected is TGocciaArrayValue)) or
     ((AActual is TGocciaSetValue) <> (AExpected is TGocciaSetValue)) or
-    ((AActual is TGocciaMapValue) <> (AExpected is TGocciaMapValue));
+    ((AActual is TGocciaMapValue) <> (AExpected is TGocciaMapValue)) or
+    ((AActual is TGocciaTypedArrayValue) <>
+      (AExpected is TGocciaTypedArrayValue)) or
+    ((AActual is TGocciaTypedArrayValue) and
+      (TGocciaTypedArrayValue(AActual).Kind <>
+        TGocciaTypedArrayValue(AExpected).Kind));
 end;
 
 function IsDeepEqualInternal(const AActual, AExpected: TGocciaValue;
@@ -686,14 +695,16 @@ var
   LeftValue, RightValue: TGocciaValue;
 begin
   { Shapes the expectation cannot describe a subset of are compared in full:
-    an asymmetric matcher runs its own match, and an expected error, Set or
-    Map must equal the actual one outright rather than merely be contained
-    by it. An expected plain object keeps subset semantics even when the
-    actual value is one of these. }
+    an asymmetric matcher runs its own match, and an expected error, Set,
+    Map or typed array must equal the actual one outright rather than merely
+    be contained by it (Vitest compares iterables element by element over
+    their whole length). An expected plain object keeps subset semantics even
+    when the actual value is one of these. }
   if (AActual is TGocciaAsymmetricMatcherValue) or
      (AExpected is TGocciaAsymmetricMatcherValue) or
      IsErrorObject(AExpected) or (AExpected is TGocciaSetValue) or
-     (AExpected is TGocciaMapValue) then
+     (AExpected is TGocciaMapValue) or
+     (AExpected is TGocciaTypedArrayValue) then
   begin
     CopyComparedPairs(AComparedPairs, DeepComparedPairs);
     Result := IsDeepEqualInternal(AActual, AExpected, DeepComparedPairs,

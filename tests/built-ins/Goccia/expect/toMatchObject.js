@@ -173,3 +173,20 @@ describe.runIf(typeof Goccia !== "undefined")("toMatchObject under explicit GC",
     expect([{ k: { x: 1, arr: [1, 2, 3] } }]).toContainEqual(freshExpected());
   });
 });
+
+describe("toMatchObject with typed arrays", () => {
+  test("requires an expected typed array to match in full", () => {
+    expect({ buf: new Uint8Array([1, 2]) }).toMatchObject({
+      buf: new Uint8Array([1, 2]),
+    });
+    expect({ buf: new Uint8Array([1, 2]) }).not.toMatchObject({
+      buf: new Uint8Array([1]),
+    });
+    expect(new Uint8Array([1, 2])).not.toMatchObject(new Uint8Array([2, 1]));
+  });
+
+  test("lets a plain object describe some of the elements", () => {
+    expect(new Uint8Array([1, 2])).toMatchObject({ 0: 1 });
+    expect(new Uint8Array([1, 2])).not.toMatchObject({ 0: 2 });
+  });
+});

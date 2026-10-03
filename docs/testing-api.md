@@ -141,7 +141,7 @@ When `.toMatch()` receives a `RegExp`, the matcher uses regex semantics but does
 
 #### Deep equality
 
-`.toEqual()` and `.toStrictEqual()` share one recursive comparison and differ only in what they forgive. Both use `Object.is` at the leaves, so `NaN` equals `NaN` while `0` and `-0` stay distinct, and both compare `Set` and `Map` contents without regard to insertion order, matching members and entries by deep equality rather than by reference. Neither ever equates different kinds of container: a `Map` is not a plain object, and a `Set` is not an array.
+`.toEqual()` and `.toStrictEqual()` share one recursive comparison and differ only in what they forgive. Both use `Object.is` at the leaves, so `NaN` equals `NaN` while `0` and `-0` stay distinct, and both compare `Set` and `Map` contents without regard to insertion order, matching members and entries by deep equality rather than by reference. Neither ever equates different kinds of container: a `Map` is not a plain object, a `Set` is not an array, and a typed array equals only a typed array of the same kind (a `Uint8Array` never equals an `Int8Array`, an array or `{ 0: 1 }`). Typed arrays compare element by element, together with any named own properties, so typed arrays of different lengths are never equal. `.toMatchObject()` compares an expected typed array in full rather than as a subset.
 
 `.toEqual()` ignores three things that `.toStrictEqual()` enforces:
 
