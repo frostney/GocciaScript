@@ -1339,7 +1339,7 @@ begin
   end;
 end;
 
-// Per-thread memo of the most recently decoded subject. Repeated exec/test
+// Per-thread memo of the most recently decoded subjects. Repeated exec/test
 // calls (and the global loops of replace/match/split/matchAll when they run
 // through the RegExpExec protocol) re-enter ExecuteRegExpVM once per match
 // against the same immutable subject string, so caching the decode avoids
@@ -1347,11 +1347,14 @@ end;
 // loops use with the built-in exec, decodes through the same memo once.
 // Identity-keyed (the driver passes the same string instance each iteration),
 // so the hit check is O(1). Pure optimization — clearing it is always safe.
-// Single-entry: a different subject replaces the retained pair via managed
-// assignment (the prior string/array is released, so the cache never grows).
+// Two entries, most recent first: a decode evicts the older one (the managed
+// assignments release its string/array, so the cache never grows), and a hit
+// on the older one swaps them. Two entries let a loop over one long subject
+// (matchAll's next() calls, an exec loop) match other strings in its body
+// without re-decoding the long one on every step.
 // FPC does not auto-finalize managed threadvars at thread exit. ClearRegExpInputMemo
 // is registered with Goccia.ThreadCleanupRegistry from this unit's initialization,
-// so the registry drain releases each thread's pair on worker exit
+// so the registry drain releases each thread's entries on worker exit
 // (ShutdownThreadRuntime) and the main thread's on process shutdown (the
 // registry's finalization) — no thread retains a residual.
 threadvar
@@ -1359,12 +1362,43 @@ threadvar
   GRegExpInputMemoUnits: TRegExpInputUnits;
   GRegExpInputMemoLength: Integer;
   GRegExpInputMemoValid: Boolean;
+  GRegExpInputMemoOlderStr: string;
+  GRegExpInputMemoOlderUnits: TRegExpInputUnits;
+  GRegExpInputMemoOlderLength: Integer;
+  GRegExpInputMemoOlderValid: Boolean;
+
+// Swaps the two entries. Kept out of TryGetRegExpInputMemo, whose hit path
+// must stay free of managed temporaries.
+procedure PromoteOlderRegExpInputMemo;
+var
+  Str: string;
+  Units: TRegExpInputUnits;
+  Len: Integer;
+begin
+  Str := GRegExpInputMemoStr;
+  Units := GRegExpInputMemoUnits;
+  Len := GRegExpInputMemoLength;
+  GRegExpInputMemoOlderValid := GRegExpInputMemoValid;
+  GRegExpInputMemoStr := GRegExpInputMemoOlderStr;
+  GRegExpInputMemoUnits := GRegExpInputMemoOlderUnits;
+  GRegExpInputMemoLength := GRegExpInputMemoOlderLength;
+  GRegExpInputMemoValid := True;
+  GRegExpInputMemoOlderStr := Str;
+  GRegExpInputMemoOlderUnits := Units;
+  GRegExpInputMemoOlderLength := Len;
+end;
 
 function TryGetRegExpInputMemo(const AInput: string;
   out ADecodedInput: TRegExpInput): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GRegExpInputMemoValid and
     (Pointer(AInput) = Pointer(GRegExpInputMemoStr));
+  if not Result and GRegExpInputMemoOlderValid and
+     (Pointer(AInput) = Pointer(GRegExpInputMemoOlderStr)) then
+  begin
+    PromoteOlderRegExpInputMemo;
+    Result := True;
+  end;
   if Result then
   begin
     ADecodedInput.Units := GRegExpInputMemoUnits;
@@ -1379,6 +1413,10 @@ begin
     Exit;
 
   BuildRegExpInput(AInput, ADecodedInput);
+  GRegExpInputMemoOlderStr := GRegExpInputMemoStr;
+  GRegExpInputMemoOlderUnits := GRegExpInputMemoUnits;
+  GRegExpInputMemoOlderLength := GRegExpInputMemoLength;
+  GRegExpInputMemoOlderValid := GRegExpInputMemoValid;
   GRegExpInputMemoStr := AInput;
   GRegExpInputMemoUnits := ADecodedInput.Units;
   GRegExpInputMemoLength := ADecodedInput.Length;
@@ -1526,6 +1564,10 @@ begin
   SetLength(GRegExpInputMemoUnits, 0);
   GRegExpInputMemoLength := 0;
   GRegExpInputMemoValid := False;
+  GRegExpInputMemoOlderStr := '';
+  SetLength(GRegExpInputMemoOlderUnits, 0);
+  GRegExpInputMemoOlderLength := 0;
+  GRegExpInputMemoOlderValid := False;
 end;
 
 initialization

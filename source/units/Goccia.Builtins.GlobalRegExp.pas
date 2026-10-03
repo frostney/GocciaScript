@@ -1813,11 +1813,17 @@ begin
         AppendReplacement(Position, MatchLength, ReplacementString);
       end;
 
-    if NextSourcePosition < InputLength then
-      AppendReplacementBuffer(Accumulated, AccumulatedLength,
-        UTF16Substring(Input, NextSourcePosition,
-          InputLength - NextSourcePosition));
-    Result := TGocciaStringLiteralValue.Create(Accumulated.ToString);
+    if (ResultCount = 0) and (MatchCount = 0) then
+      // No match: the result is the input, without copying it.
+      Result := TGocciaStringLiteralValue.Create(Input)
+    else
+    begin
+      if NextSourcePosition < InputLength then
+        AppendReplacementBuffer(Accumulated, AccumulatedLength,
+          UTF16Substring(Input, NextSourcePosition,
+            InputLength - NextSourcePosition));
+      Result := TGocciaStringLiteralValue.Create(Accumulated.ToString);
+    end;
   finally
     CallArgs.Free;
     if InputValueRooted then

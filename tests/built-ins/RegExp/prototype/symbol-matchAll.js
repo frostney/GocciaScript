@@ -271,3 +271,46 @@ test.runIf(hasGocciaGc)("Symbol.matchAll results keep the subject as input acros
   expect(second.input).toBe(subject);
   expect(iterator.next().value.input).toBe(subject);
 });
+
+test.runIf(hasGocciaGc)("Symbol.matchAll results keep their input when collections run between steps", () => {
+  const churn = (tag, length) =>
+    Array.from({ length: 100 }, (_, k) => (tag + k + "#").padEnd(length, "z")).length;
+  const makeSubject = (i) => ["S", String(i), "-", "aXbXcXdX".repeat(20), "e"].join("");
+  for (const i of [0, 1, 2, 3]) {
+    const expected = makeSubject(i);
+    const results = [];
+    const all = makeSubject(i).matchAll(/X/g);
+    churn("p", expected.length);
+    Goccia.gc();
+    churn("q", expected.length);
+    for (const match of all) {
+      results.push(match);
+      if (results.length % 5 === 0) {
+        Goccia.gc();
+        churn("r", expected.length);
+      }
+    }
+    expect(results.length).toBe(80);
+    expect(results.every((match) => match.input === expected)).toBe(true);
+
+    const iterator = makeSubject(i).matchAll("X");
+    const first = iterator.next().value;
+    Goccia.gc();
+    churn("s", expected.length);
+    const second = iterator.next().value;
+    churn("t", expected.length);
+    expect(first.input).toBe(expected);
+    expect(second.input).toBe(expected);
+  }
+});
+
+test("Symbol.matchAll steps re-find the subject after other regular expressions run in between", () => {
+  const subject = "x".repeat(50000) + "aXbXcX";
+  const indices = [];
+  for (const match of subject.matchAll(/X/g)) {
+    expect(/^X$/.test(match[0])).toBe(true);
+    expect("other".replace(/o/g, "0")).toBe("0ther");
+    indices.push(match.index);
+  }
+  expect(indices).toEqual([50001, 50003, 50005]);
+});
