@@ -10,6 +10,10 @@ unit Goccia.Shims;
   LoadShimValue evaluates the module in a child scope and returns the exported
   value, which the engine binds into the global scope.
 
+  A default shim is parsed once per thread runtime and its program is reused by
+  every engine that thread builds; see "Shimmed Legacy Globals" in
+  docs/core-patterns.md.
+
   To add a new shim, append a TGocciaShimDefinition entry to DEFAULT_SHIMS. }
 
 interface
@@ -62,6 +66,11 @@ function LoadShimValue(const AInterpreter: TGocciaInterpreter;
   global property.  Materializes the Date shim on first use. }
 function GetDateIntrinsic(const AInterpreter: TGocciaInterpreter): TGocciaValue;
 
+{ Drop the calling thread's cached shim programs. Registered with
+  Goccia.ThreadCleanupRegistry, so a thread's runtime shutdown releases them;
+  exposed for the registration regression test. }
+procedure ReleaseShimProgramCache;
+
 implementation
 
 uses
@@ -72,7 +81,8 @@ uses
   Goccia.Evaluator.Context,
   Goccia.Realm,
   Goccia.Scope,
-  Goccia.SourcePipeline;
+  Goccia.SourcePipeline,
+  Goccia.ThreadCleanupRegistry;
 
 const
   DATE_SHIM_NAME = 'Date';
@@ -986,6 +996,15 @@ const
 var
   GDateIntrinsicSlot: TGocciaRealmSlotId;
 
+threadvar
+  { One parsed program per DEFAULT_SHIMS entry, filled on first use. A parsed
+    program is never released while the thread's engines run: the functions a
+    shim defines keep pointing into its AST, and TGocciaProgram.Free releases
+    only the program node, not the statements under it. Parsing per engine
+    therefore leaked a full shim AST for every engine — the Date shim alone is
+    about 0.7 MB on 64-bit, and the test runner builds one engine per file. }
+  GShimPrograms: array of TGocciaProgram;
+
 function DefaultShimCount: Integer;
 begin
   Result := Length(DEFAULT_SHIMS);
@@ -1004,16 +1023,59 @@ begin
     AShims.Add(DEFAULT_SHIMS[I].Name);
 end;
 
+procedure ReleaseShimProgramCache;
+var
+  I: Integer;
+begin
+  { Same release the per-engine path made right after evaluating a shim: the
+    program node goes, the statements under it stay (see GShimPrograms). By
+    the time a thread's runtime shuts down no engine on it is running. }
+  for I := 0 to High(GShimPrograms) do
+    GShimPrograms[I].Free;
+  SetLength(GShimPrograms, 0);
+end;
+
+function ParseShimProgram(const AShim: TGocciaShimDefinition): TGocciaProgram;
+var
+  ModuleParseResult: TGocciaSourcePipelineModuleResult;
+  PipelineOptions: TGocciaSourcePipelineOptions;
+begin
+  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
+  PipelineOptions.Preprocessors := [];
+  PipelineOptions.Compatibility := [cfFunction];
+  PipelineOptions.SourceType := stModule;
+  ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
+    string(AShim.Source), AShim.FileName, PipelineOptions);
+  try
+    Result := ModuleParseResult.TakeProgramNode;
+  finally
+    ModuleParseResult.Free;
+  end;
+end;
+
+{ Index of AShim in DEFAULT_SHIMS, or -1 for a definition that is not one of
+  them (only those are cached). The source is compared too, so a caller-built
+  definition that reuses a default name never picks up the default program. }
+function DefaultShimIndex(const AShim: TGocciaShimDefinition): Integer;
+var
+  I: Integer;
+begin
+  for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
+    if (DEFAULT_SHIMS[I].Name = AShim.Name) and
+       (DEFAULT_SHIMS[I].Source = AShim.Source) then
+      Exit(I);
+  Result := -1;
+end;
+
 function LoadShimValue(const AInterpreter: TGocciaInterpreter;
   const AShim: TGocciaShimDefinition): TGocciaValue;
 var
   CachedValue: TObject;
-  ModuleParseResult: TGocciaSourcePipelineModuleResult;
-  PipelineOptions: TGocciaSourcePipelineOptions;
   ProgramNode: TGocciaProgram;
+  OwnsProgram: Boolean;
   ModuleScope: TGocciaScope;
   Context: TGocciaEvaluationContext;
-  I: Integer;
+  I, ShimIndex: Integer;
 begin
   if AShim.Name = DATE_SHIM_NAME then
   begin
@@ -1022,39 +1084,54 @@ begin
       Exit(TGocciaValue(CachedValue));
   end;
 
-  PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-  PipelineOptions.Preprocessors := [];
-  PipelineOptions.Compatibility := [cfFunction];
-  PipelineOptions.SourceType := stModule;
-  ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(
-    string(AShim.Source), AShim.FileName, PipelineOptions);
-  try
-    ProgramNode := ModuleParseResult.TakeProgramNode;
-    try
-      ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
-        'Shim:' + AShim.Name);
-      // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
-      // Environment Record's [[ThisValue]] is undefined.
-      ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      // Built-in shims may need argument-count presence checks without
-      // enabling the legacy arguments object for user code.
-      ModuleScope.ArgumentsObjectEnabled := True;
-      Context := AInterpreter.CreateEvaluationContext;
-      Context.Scope := ModuleScope;
-      // Shims are engine implementation details, not user source. Keep their
-      // generated locations out of the caller's line/branch/function report.
-      Context.CoverageEnabled := False;
-      Context.HideFunctionSourceText := True;
-      for I := 0 to ProgramNode.Body.Count - 1 do
-        EvaluateStatement(ProgramNode.Body[I], Context);
-      Result := ModuleScope.GetValue(AShim.Name);
-      if AShim.Name = DATE_SHIM_NAME then
-        CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
-    finally
-      ProgramNode.Free;
+  { Reusing a program across engines is sound because evaluation does not
+    write to the AST: every realm-specific object the shim creates lives in
+    the scope and realm below. The one AST node that caches a runtime value,
+    a tagged template's template object, is per realm by specification, so no
+    default shim may contain a template literal; Goccia.Shims.Test enforces
+    that. }
+  ShimIndex := DefaultShimIndex(AShim);
+  if ShimIndex >= 0 then
+  begin
+    if Length(GShimPrograms) = 0 then
+      SetLength(GShimPrograms, Length(DEFAULT_SHIMS));
+    ProgramNode := GShimPrograms[ShimIndex];
+    if not Assigned(ProgramNode) then
+    begin
+      ProgramNode := ParseShimProgram(AShim);
+      GShimPrograms[ShimIndex] := ProgramNode;
     end;
+    OwnsProgram := False;
+  end
+  else
+  begin
+    ProgramNode := ParseShimProgram(AShim);
+    OwnsProgram := True;
+  end;
+
+  try
+    ModuleScope := AInterpreter.GlobalScope.CreateChild(skModule,
+      'Shim:' + AShim.Name);
+    // ES2026 §16.2.1.6.4 InitializeEnvironment: a Module
+    // Environment Record's [[ThisValue]] is undefined.
+    ModuleScope.ThisValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    // Built-in shims may need argument-count presence checks without
+    // enabling the legacy arguments object for user code.
+    ModuleScope.ArgumentsObjectEnabled := True;
+    Context := AInterpreter.CreateEvaluationContext;
+    Context.Scope := ModuleScope;
+    // Shims are engine implementation details, not user source. Keep their
+    // generated locations out of the caller's line/branch/function report.
+    Context.CoverageEnabled := False;
+    Context.HideFunctionSourceText := True;
+    for I := 0 to ProgramNode.Body.Count - 1 do
+      EvaluateStatement(ProgramNode.Body[I], Context);
+    Result := ModuleScope.GetValue(AShim.Name);
+    if AShim.Name = DATE_SHIM_NAME then
+      CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
   finally
-    ModuleParseResult.Free;
+    if OwnsProgram then
+      ProgramNode.Free;
   end;
 end;
 
@@ -1092,5 +1169,6 @@ end;
 
 initialization
   GDateIntrinsicSlot := RegisterRealmSlot('%Date%');
+  RegisterThreadvarCleanup(@ReleaseShimProgramCache);
 
 end.

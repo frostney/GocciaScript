@@ -603,7 +603,7 @@ The `GocciaTestRunner` program:
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
-6. In a sequential multi-file run (`--jobs=1`), `GC.Collect` runs after each file; parallel workers skip it and reclaim their thread-local heaps in bulk at shutdown.
+6. `GC.Collect` runs after each file, on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one, so memory does not grow with the number of files a worker runs.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 
