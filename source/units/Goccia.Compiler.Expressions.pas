@@ -371,8 +371,10 @@ begin
   if ALocalIdx < 0 then
     Exit;
 
+  // Under strict types only an enforced binding carries a hint; see
+  // CompileVariableDeclaration.
   Local := ACtx.Scope.GetLocal(ALocalIdx);
-  if Local.IsStrictlyTyped then
+  if Local.IsStrictlyTyped or ACtx.StrictTypes then
     Exit;
 
   ACtx.Scope.SetLocalTypeHint(ALocalIdx, ATypeHint);
