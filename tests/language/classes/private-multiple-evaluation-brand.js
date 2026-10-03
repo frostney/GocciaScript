@@ -141,3 +141,116 @@ test("static computed methods are branded per class evaluation", () => {
   expect(First.readStatic(new First())).toBe("ok");
   expect(() => First.readStatic(new Second())).toThrow(TypeError);
 });
+
+describe("private names resolve through the class body the code is in", () => {
+  // ES2026 §15.7.14 ClassDefinitionEvaluation gives each evaluation of a
+  // class body fresh Private Names, and every function created inside the
+  // body captures that PrivateEnvironment (§10.2.3 OrdinaryFunctionCreate).
+  const key = "read";
+  const symbol = Symbol("read");
+  const createClass = () =>
+    class {
+      #value;
+      static #shared = "shared";
+      constructor(value) {
+        this.#value = value;
+      }
+      [key](receiver) {
+        return receiver.#value;
+      }
+      [symbol](receiver) {
+        return receiver.#value;
+      }
+      get [key + "Getter"]() {
+        return this.#value;
+      }
+      set [key + "Setter"](receiver) {
+        receiver.#value = "written";
+      }
+      static literal() {
+        return {
+          read(receiver) {
+            return receiver.#value;
+          },
+          write(receiver) {
+            receiver.#value = "written";
+            return receiver.#value;
+          },
+          has(receiver) {
+            return #value in receiver;
+          },
+          get getter() {
+            return this.receiver.#value;
+          },
+        };
+      }
+      static innerClass() {
+        return class {
+          read(receiver) {
+            return receiver.#value;
+          }
+          has(receiver) {
+            return #value in receiver;
+          }
+          readShared(receiver) {
+            return receiver.#shared;
+          }
+        };
+      }
+    };
+
+  test("computed instance methods are branded per class evaluation", () => {
+    const First = createClass();
+    const Second = createClass();
+    const first = new First("first");
+    const second = new Second("second");
+
+    expect(first[key](new First("other"))).toBe("other");
+    expect(first[symbol](new First("other"))).toBe("other");
+    expect(() => first[key](second)).toThrow(TypeError);
+    expect(() => first[symbol](second)).toThrow(TypeError);
+  });
+
+  test("computed instance accessors are branded per class evaluation", () => {
+    const First = createClass();
+    const Second = createClass();
+    const second = new Second("second");
+    const getter = Object.getOwnPropertyDescriptor(First.prototype, "readGetter").get;
+
+    expect(getter.call(new First("first"))).toBe("first");
+    expect(() => getter.call(second)).toThrow(TypeError);
+    expect(() => {
+      new First("first").readSetter = second;
+    }).toThrow(TypeError);
+    expect(second[key](second)).toBe("second");
+  });
+
+  test("object literal methods in a class body are branded per class evaluation", () => {
+    const First = createClass();
+    const Second = createClass();
+    const second = new Second("second");
+    const literal = First.literal();
+
+    expect(literal.read(new First("first"))).toBe("first");
+    expect(literal.has(new First("first"))).toBe(true);
+    expect(() => literal.read(second)).toThrow(TypeError);
+    expect(() => literal.write(second)).toThrow(TypeError);
+    expect(literal.has(second)).toBe(false);
+    literal.receiver = second;
+    expect(() => literal.getter).toThrow(TypeError);
+    expect(second[key](second)).toBe("second");
+  });
+
+  test("classes nested in a method are branded per outer class evaluation", () => {
+    const First = createClass();
+    const Second = createClass();
+    const Inner = First.innerClass();
+
+    expect(new Inner().read(new First("first"))).toBe("first");
+    expect(new Inner().has(new First("first"))).toBe(true);
+    expect(() => new Inner().read(new Second("second"))).toThrow(TypeError);
+    expect(new Inner().has(new Second("second"))).toBe(false);
+    expect(new Inner().readShared(First)).toBe("shared");
+    expect(() => new Inner().readShared(Second)).toThrow(TypeError);
+  });
+});

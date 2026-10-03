@@ -674,6 +674,10 @@
       begin
         FRegisters[A] := RegisterObject(TGocciaVMClassValue.Create(Self,
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
+        if Assigned(FCurrentClosure) and
+           (FCurrentClosure.PrivateClass is TGocciaClassValue) then
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+            TGocciaClassValue(FCurrentClosure.PrivateClass);
         TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
           PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(
             FRegisters[A].ObjectValue, [pfConfigurable, pfWritable]));
@@ -1237,6 +1241,31 @@
         else
           SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]), RightValue);
+      end;
+
+      // A computed instance method: installed on the prototype, which is its
+      // home object, while the class in A supplies its private names.
+      OP_CLASS_ADD_METHOD_DYNAMIC:
+      begin
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+        begin
+          TargetValue := TGocciaVMClassValue(FRegisters[A].ObjectValue)
+            .Prototype;
+          PropKey := ClassifyPropertyKey(FRegisters[B], False);
+          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
+          if PropKey.Kind = pkkSymbol then
+            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
+              PropKey.Symbol,
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]))
+          else
+            TGocciaObjectValue(TargetValue).DefineProperty(
+              PropertyKeyName(PropKey),
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]));
+        end;
       end;
 
       OP_SET_OBJECT_PROTO:
@@ -2224,6 +2253,11 @@
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
         ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
+        // ES2026 §10.2.3 OrdinaryFunctionCreate: every function captures the
+        // running PrivateEnvironment, whatever kind of function it is. Class
+        // element definitions then move a method into its own class body.
+        if Assigned(FCurrentClosure) then
+          ChildClosure.PrivateClass := FCurrentClosure.PrivateClass;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;
