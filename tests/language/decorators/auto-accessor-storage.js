@@ -241,3 +241,36 @@ describe("public auto-accessor property", () => {
     expect(accessorLast.x).toBe("set");
   });
 });
+
+describe("auto-accessor initializer", () => {
+  // CreateFieldInitializerFunction sets [[ClassFieldInitializerName]] to the
+  // accessor's name, so an anonymous function is named exactly as it would be
+  // in a field of the same name, never after the storage.
+  test("names an anonymous function like a field of the same name", () => {
+    const key = "computed";
+    class WithAccessors {
+      accessor plain = () => {};
+      accessor [key] = () => {};
+      accessor #hidden = () => {};
+      hiddenName() {
+        return this.#hidden.name;
+      }
+    }
+    class WithFields {
+      plain = () => {};
+      [key] = () => {};
+      #hidden = () => {};
+      hiddenName() {
+        return this.#hidden.name;
+      }
+    }
+
+    const accessors = new WithAccessors();
+    const fields = new WithFields();
+
+    expect(accessors.plain.name).toBe(fields.plain.name);
+    expect(accessors.computed.name).toBe(fields.computed.name);
+    expect(accessors.hiddenName()).toBe(fields.hiddenName());
+    expect(accessors.plain.name).not.toContain("storage");
+  });
+});

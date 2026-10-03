@@ -62,6 +62,44 @@ describe("static public auto-accessor", () => {
     expect(S.s).toBe(5);
   });
 
+  test("belongs to one evaluation of the class", () => {
+    const declare = (value) => {
+      class S {
+        static accessor s = value;
+      }
+      return S;
+    };
+    const express = (value) => class {
+      static accessor s = value;
+    };
+
+    for (const make of [declare, express]) {
+      const first = make(1);
+      const second = make(2);
+      const { get, set } = Object.getOwnPropertyDescriptor(first, "s");
+
+      expect(() => get.call(second)).toThrow(TypeError);
+      expect(() => set.call(second, 3)).toThrow(TypeError);
+      expect([first.s, second.s]).toEqual([1, 2]);
+    }
+  });
+
+  test("a subclass accessor of the same name has separate storage", () => {
+    class Base {
+      static accessor s = "base";
+    }
+    class Derived extends Base {
+      static accessor s = "derived";
+      static readBase() {
+        return super.s;
+      }
+    }
+
+    expect(Derived.s).toBe("derived");
+    expect(() => Derived.readBase()).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Base, "s").get.call(Base)).toBe("base");
+  });
+
   test("is initialized in source order with static fields and blocks", () => {
     const order = [];
     class S {
