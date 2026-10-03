@@ -30,6 +30,7 @@ type
     FChargedBytes: Int64;
 
     function GetByteLength: Integer;
+    function GetObservableMaxByteLength: Integer;
     procedure SetData(const AData: TBytes);
     procedure SetDataLength(const ALength: Integer);
 
@@ -92,6 +93,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -213,12 +215,27 @@ begin
   Result := Trunc(IntegerIndex);
 end;
 
+// ES2026 §25.1.6.1 get ArrayBuffer.prototype.byteLength, steps 4-6: +0 for a
+// detached buffer, [[ArrayBufferByteLength]] otherwise.
 function TGocciaArrayBufferValue.GetByteLength: Integer;
 begin
   if FDetached then
     Result := 0
   else
     Result := Length(FData);
+end;
+
+// ES2026 §25.1.6.4 get ArrayBuffer.prototype.maxByteLength, steps 4-6: +0 for a
+// detached buffer, the byte length for a fixed-length one,
+// [[ArrayBufferMaxByteLength]] otherwise.
+function TGocciaArrayBufferValue.GetObservableMaxByteLength: Integer;
+begin
+  if FDetached then
+    Result := 0
+  else if FMaxByteLength < 0 then
+    Result := Length(FData)
+  else
+    Result := FMaxByteLength;
 end;
 
 procedure TGocciaArrayBufferValue.SetData(const AData: TBytes);
@@ -377,6 +394,15 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_LENGTH,
+    nikArrayBufferByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_MAX_BYTE_LENGTH,
+    nikArrayBufferMaxByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_RESIZABLE,
+    nikArrayBufferResizable);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_DETACHED, nikArrayBufferDetached);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_IMMUTABLE,
+    nikArrayBufferImmutable);
 end;
 
 class procedure TGocciaArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -498,56 +524,36 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
+// ES2026 §10.1.8.1 OrdinaryGet. byteLength, maxByteLength, resizable, detached
+// and immutable are accessors on ArrayBuffer.prototype (§25.1.6) and nothing
+// more, so a null prototype, a replaced one, an own property and a getter a
+// subclass or a program defines are all found by the ordinary lookup. When
+// this buffer is the receiver and the lookup reaches one of the built-in
+// getters through plain objects, its result is computed here from the slots
+// instead of through a call: the getter reads only its receiver's slots.
 function TGocciaArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  Kind: TGocciaNativeIntrinsicKind;
 begin
-  if ((AName = PROP_BYTE_LENGTH) or
-      (AName = PROP_MAX_BYTE_LENGTH) or
-      (AName = PROP_RESIZABLE) or
-      (AName = PROP_DETACHED) or
-      (AName = PROP_IMMUTABLE)) and
-     ((AThisContext <> Self) or HasOwnProperty(AName) or
-      (Assigned(Prototype) and Prototype.HasProperty(AName))) then
-    Exit(inherited GetPropertyWithContext(AName, AThisContext));
-
-  if AName = PROP_BYTE_LENGTH then
-  begin
-    if FDetached then
-      Result := TGocciaNumberLiteralValue.ZeroValue
-    else
-      Result := TGocciaNumberLiteralValue.Create(Length(FData));
-  end
-  else if AName = PROP_MAX_BYTE_LENGTH then
-  begin
-    if FDetached then
-      Result := TGocciaNumberLiteralValue.ZeroValue
-    else if FMaxByteLength >= 0 then
-      Result := TGocciaNumberLiteralValue.Create(FMaxByteLength)
-    else
-      Result := TGocciaNumberLiteralValue.Create(Length(FData));
-  end
-  else if AName = PROP_RESIZABLE then
-  begin
-    if FMaxByteLength >= 0 then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else if AName = PROP_DETACHED then
-  begin
-    if FDetached then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else if AName = PROP_IMMUTABLE then
-  begin
-    if FImmutable then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else
-    Result := inherited GetPropertyWithContext(AName, AThisContext);
+  if (AThisContext = Self) and
+     ResolvePropertyWithoutCall(Self, AName, Result, Kind) then
+    case Kind of
+      nikNone:
+        Exit;
+      nikArrayBufferByteLength:
+        Exit(TGocciaNumberLiteralValue.Create(GetByteLength));
+      nikArrayBufferMaxByteLength:
+        Exit(TGocciaNumberLiteralValue.Create(GetObservableMaxByteLength));
+      nikArrayBufferResizable:
+        Exit(TGocciaBooleanLiteralValue.FromBoolean(FMaxByteLength >= 0));
+      nikArrayBufferDetached:
+        Exit(TGocciaBooleanLiteralValue.FromBoolean(FDetached));
+      nikArrayBufferImmutable:
+        Exit(TGocciaBooleanLiteralValue.FromBoolean(FImmutable));
+    end;
+  // Any other built-in getter (a SharedArrayBuffer or typed array one moved
+  // onto this chain) is called, and rejects this receiver itself.
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaArrayBufferValue.ToStringTag: string;
@@ -566,11 +572,7 @@ var
   Buf: TGocciaArrayBufferValue;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.byteLength');
-  // ES2026 §25.1.6.1 step 4: If IsDetachedBuffer(O) is true, return +0
-  if Buf.FDetached then
-    Result := TGocciaNumberLiteralValue.ZeroValue
-  else
-    Result := TGocciaNumberLiteralValue.Create(Length(Buf.FData));
+  Result := TGocciaNumberLiteralValue.Create(Buf.GetByteLength);
 end;
 
 // ES2026 §25.1.6.2 get ArrayBuffer.prototype.detached
@@ -604,15 +606,7 @@ var
   Buf: TGocciaArrayBufferValue;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.maxByteLength');
-  // ES2026 §25.1.6.3 step 4: If IsDetachedBuffer(O) is true, return +0
-  if Buf.FDetached then
-    Result := TGocciaNumberLiteralValue.ZeroValue
-  // ES2026 §25.1.6.3 step 5: If IsFixedLengthArrayBuffer(O), return byteLength
-  else if Buf.FMaxByteLength < 0 then
-    Result := TGocciaNumberLiteralValue.Create(Length(Buf.FData))
-  // ES2026 §25.1.6.3 step 6: Return maxByteLength
-  else
-    Result := TGocciaNumberLiteralValue.Create(Buf.FMaxByteLength);
+  Result := TGocciaNumberLiteralValue.Create(Buf.GetObservableMaxByteLength);
 end;
 
 // ES2026 §25.1.6.4 get ArrayBuffer.prototype.resizable

@@ -964,31 +964,6 @@ end;
 
 { Prototype initialization }
 
-// Stamp the identity TryGetNamedPropertyWithoutCall matches on, so it
-// recognises the built-in getter itself rather than whatever function a
-// program later defines under the same name.
-procedure MarkSlotGetter(const APrototype: TGocciaObjectValue;
-  const AName: string; const AKind: TGocciaNativeIntrinsicKind);
-var
-  Descriptor: TGocciaPropertyDescriptor;
-  Getter: TGocciaValue;
-begin
-  Descriptor := APrototype.GetOwnPropertyDescriptor(AName);
-  if Descriptor is TGocciaPropertyDescriptorAccessor then
-    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter
-  else
-    Getter := nil;
-  // A miss here would silently send every read of AName through the getter
-  // call: still correct, so no behaviour test could notice.
-  Assert(Getter is TGocciaNativeFunctionValue,
-    '%TypedArray%.prototype.' + AName + ' must have a native getter to ' +
-    'carry its intrinsic kind');
-  // Production builds compile assertions out (source/shared/Shared.inc), so
-  // the type test has to stand on its own before the cast.
-  if Getter is TGocciaNativeFunctionValue then
-    TGocciaNativeFunctionValue(Getter).IntrinsicKind := AKind;
-end;
-
 procedure TGocciaTypedArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -1052,10 +1027,10 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
-  MarkSlotGetter(Shared.Prototype, PROP_BUFFER, nikTypedArrayBuffer);
-  MarkSlotGetter(Shared.Prototype, PROP_BYTE_LENGTH, nikTypedArrayByteLength);
-  MarkSlotGetter(Shared.Prototype, PROP_BYTE_OFFSET, nikTypedArrayByteOffset);
-  MarkSlotGetter(Shared.Prototype, PROP_LENGTH, nikTypedArrayLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BUFFER, nikTypedArrayBuffer);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_LENGTH, nikTypedArrayByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_OFFSET, nikTypedArrayByteOffset);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_LENGTH, nikTypedArrayLength);
   ValuesMethod := Shared.Prototype.GetProperty('values');
   Shared.Prototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -1136,7 +1111,8 @@ end;
 // program defines are all found by the same walk, which then declines and
 // leaves the read to the full lookup. No managed locals: this runs on every
 // named read of a typed array (docs/core-patterns.md, "Managed Locals on Hot
-// Paths").
+// Paths"). The walk is ResolvePropertyWithoutCall's, written out here because
+// the extra call costs about 0.9% of the instructions of a loop of named reads.
 function TGocciaTypedArrayValue.TryGetNamedPropertyWithoutCall(
   const AName: string; out AValue: TGocciaValue): Boolean;
 var

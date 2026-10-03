@@ -30,6 +30,7 @@ type
     procedure SetDataLength(const ALength: Integer);
 
     function GetByteLength: Integer;
+    function GetObservableMaxByteLength: Integer;
 
     procedure InitializePrototype;
   public
@@ -75,6 +76,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
+  Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.SymbolValue;
 
@@ -186,6 +188,17 @@ end;
 function TGocciaSharedArrayBufferValue.GetByteLength: Integer;
 begin
   Result := Length(FData);
+end;
+
+// ES2026 §25.2.5.5 get SharedArrayBuffer.prototype.maxByteLength, steps 4-5:
+// the byte length for a fixed-length buffer, [[ArrayBufferMaxByteLength]]
+// otherwise.
+function TGocciaSharedArrayBufferValue.GetObservableMaxByteLength: Integer;
+begin
+  if FMaxByteLength >= 0 then
+    Result := FMaxByteLength
+  else
+    Result := Length(FData);
 end;
 
 procedure TGocciaSharedArrayBufferValue.SetData(const AData: TBytes);
@@ -317,6 +330,12 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_LENGTH,
+    nikSharedArrayBufferByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_MAX_BYTE_LENGTH,
+    nikSharedArrayBufferMaxByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_GROWABLE,
+    nikSharedArrayBufferGrowable);
 end;
 
 class procedure TGocciaSharedArrayBufferValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -429,36 +448,32 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
+// ES2026 §10.1.8.1 OrdinaryGet. byteLength, maxByteLength and growable are
+// accessors on SharedArrayBuffer.prototype (§25.2.5) and nothing more, so a
+// null prototype, a replaced one, an own property and a getter a subclass or a
+// program defines are all found by the ordinary lookup. When this buffer is
+// the receiver and the lookup reaches one of the built-in getters through
+// plain objects, its result is computed here from the slots instead of through
+// a call: the getter reads only its receiver's slots.
 function TGocciaSharedArrayBufferValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
+var
+  Kind: TGocciaNativeIntrinsicKind;
 begin
-  if ((AName = PROP_BYTE_LENGTH) or
-      (AName = PROP_MAX_BYTE_LENGTH) or
-      (AName = PROP_GROWABLE)) and
-     ((AThisContext <> Self) or HasOwnProperty(AName) or
-      (Assigned(Prototype) and Prototype.HasProperty(AName))) then
-    Exit(inherited GetPropertyWithContext(AName, AThisContext));
-
-  if (AName = PROP_MAX_BYTE_LENGTH) and HasOwnProperty(AName) then
-    Exit(inherited GetPropertyWithContext(AName, AThisContext));
-
-  if AName = PROP_BYTE_LENGTH then
-    Result := TGocciaNumberLiteralValue.Create(Length(FData))
-  else if AName = PROP_MAX_BYTE_LENGTH then
-  begin
-    if FMaxByteLength >= 0 then
-      Result := TGocciaNumberLiteralValue.Create(FMaxByteLength)
-    else
-      Result := TGocciaNumberLiteralValue.Create(Length(FData));
-  end
-  else if AName = PROP_GROWABLE then
-  begin
-    if FMaxByteLength >= 0 then
-      Result := TGocciaBooleanLiteralValue.TrueValue
-    else
-      Result := TGocciaBooleanLiteralValue.FalseValue;
-  end
-  else
-    Result := inherited GetPropertyWithContext(AName, AThisContext);
+  if (AThisContext = Self) and
+     ResolvePropertyWithoutCall(Self, AName, Result, Kind) then
+    case Kind of
+      nikNone:
+        Exit;
+      nikSharedArrayBufferByteLength:
+        Exit(TGocciaNumberLiteralValue.Create(GetByteLength));
+      nikSharedArrayBufferMaxByteLength:
+        Exit(TGocciaNumberLiteralValue.Create(GetObservableMaxByteLength));
+      nikSharedArrayBufferGrowable:
+        Exit(TGocciaBooleanLiteralValue.FromBoolean(FMaxByteLength >= 0));
+    end;
+  // Any other built-in getter (an ArrayBuffer or typed array one moved onto
+  // this chain) is called, and rejects this receiver itself.
+  Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 function TGocciaSharedArrayBufferValue.ToStringTag: string;
@@ -478,7 +493,8 @@ begin
     ThrowTypeError(Format(SErrorRequiresSharedArrayBuffer,
       ['SharedArrayBuffer.prototype.byteLength']),
       SSuggestSharedArrayBufferThisType);
-  Result := TGocciaNumberLiteralValue.Create(Length(TGocciaSharedArrayBufferValue(AThisValue).FData));
+  Result := TGocciaNumberLiteralValue.Create(
+    TGocciaSharedArrayBufferValue(AThisValue).GetByteLength);
 end;
 
 function TGocciaSharedArrayBufferValue.SharedArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -490,10 +506,7 @@ begin
       ['SharedArrayBuffer.prototype.maxByteLength']),
       SSuggestSharedArrayBufferThisType);
   Buf := TGocciaSharedArrayBufferValue(AThisValue);
-  if Buf.FMaxByteLength >= 0 then
-    Result := TGocciaNumberLiteralValue.Create(Buf.FMaxByteLength)
-  else
-    Result := TGocciaNumberLiteralValue.Create(Length(Buf.FData));
+  Result := TGocciaNumberLiteralValue.Create(Buf.GetObservableMaxByteLength);
 end;
 
 function TGocciaSharedArrayBufferValue.SharedArrayBufferGrowableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
