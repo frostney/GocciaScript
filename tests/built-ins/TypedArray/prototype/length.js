@@ -269,6 +269,17 @@ describe("TypedArray.prototype.length", () => {
     expect(() => Object.create(new Uint8Array(4)).length).toThrow(TypeError);
   });
 
+  test("an array, a String object or a function in the chain answers with its own length", () => {
+    const behind = { length: "behind" };
+    const array = Object.setPrototypeOf([1, 2, 3], behind);
+    const string = Object.setPrototypeOf(new String("abcdefg"), behind);
+    const fn = Object.setPrototypeOf((a, b) => a + b, behind);
+
+    expect(Object.setPrototypeOf(new Uint8Array(4), array).length).toBe(3);
+    expect(Object.setPrototypeOf(new Uint8Array(4), string).length).toBe(7);
+    expect(Object.setPrototypeOf(new Uint8Array(4), fn).length).toBe(2);
+  });
+
   test("Reflect.get reads it for the receiver it is given", () => {
     const ta = new Uint8Array(4);
 

@@ -33,6 +33,7 @@ type
     procedure TestSlotGettersCarryTheirIntrinsicKind;
     procedure TestSlotNamesAreReadThroughThePrototype;
     procedure TestUnmarkedNativeGetterIsCalled;
+    procedure TestStampedGetterIsAnsweredWithoutACall;
   end;
 
 procedure TTestTypedArrayValue.SetupTests;
@@ -43,6 +44,8 @@ begin
     TestSlotNamesAreReadThroughThePrototype);
   Test('a native getter without a slot-getter kind is called',
     TestUnmarkedNativeGetterIsCalled);
+  Test('a getter stamped as the length getter is answered from the slots',
+    TestStampedGetterIsAnsweredWithoutACall);
 end;
 
 function TTestTypedArrayValue.GetterKind(const APrototype: TGocciaObjectValue;
@@ -161,6 +164,42 @@ begin
       .ToNumberLiteral.Value).ToBe(77);
     Expect<Integer>(FGetterCalls).ToBe(1);
     Expect<Boolean>(FGetterReceiver = TypedArray).ToBe(True);
+  finally
+    SetCurrentRealm(PreviousRealm);
+    Realm.Free;
+  end;
+end;
+
+{ The shortcut itself: a getter that carries nikTypedArrayLength is not called,
+  wherever on the chain it is found, and the read yields the element count. A
+  regression that stopped taking the shortcut would only cost time, so a script
+  could not tell. }
+procedure TTestTypedArrayValue.TestStampedGetterIsAnsweredWithoutACall;
+var
+  Getter: TGocciaNativeFunctionValue;
+  Holder, Middle: TGocciaObjectValue;
+  PreviousRealm: TGocciaRealm;
+  Realm: TGocciaRealm;
+  TypedArray: TGocciaTypedArrayValue;
+begin
+  PreviousRealm := CurrentRealm;
+  Realm := TGocciaRealm.Create('typed-array-stamped-getter');
+  SetCurrentRealm(Realm);
+  try
+    FGetterCalls := 0;
+    TypedArray := TGocciaTypedArrayValue.Create(takUint16, 5);
+    Getter := TGocciaNativeFunctionValue.CreateWithoutPrototype(RecordingGetter,
+      'get length', 0);
+    Getter.IntrinsicKind := nikTypedArrayLength;
+    Holder := TGocciaObjectValue.Create;
+    Holder.DefineProperty(PROP_LENGTH, TGocciaPropertyDescriptorAccessor.Create(
+      Getter, nil, [pfConfigurable]));
+    Middle := TGocciaObjectValue.Create(Holder);
+    TypedArray.Prototype := Middle;
+
+    Expect<Double>(TypedArray.GetProperty(PROP_LENGTH)
+      .ToNumberLiteral.Value).ToBe(5);
+    Expect<Integer>(FGetterCalls).ToBe(0);
   finally
     SetCurrentRealm(PreviousRealm);
     Realm.Free;
