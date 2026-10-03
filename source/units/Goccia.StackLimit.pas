@@ -37,7 +37,7 @@ const
 procedure SetMaxStackDepth(const AMaxDepth: Integer);
 procedure CheckStackDepth(const ACurrentDepth: Integer);
 procedure CheckNativeReentryDepth(const ADepth: Integer);
-// The throw both checks share. It is exported only because FPC does not inline
+// The throw the checks share. It is exported only because FPC does not inline
 // a procedure into another unit when it calls one that is local to the
 // implementation section, and the two checks are small enough to be inlined
 // into their callers.
@@ -104,7 +104,7 @@ end;
 procedure EnterPropertyDelegation;
 begin
   if GPropertyDelegationDepth >= MAX_PROPERTY_DELEGATION_DEPTH then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
   Inc(GPropertyDelegationDepth);
 end;
 
@@ -116,7 +116,7 @@ end;
 procedure CheckProxyPrototypeSteps(const AProxySteps: Integer);
 begin
   if AProxySteps > MAX_PROXY_PROTOTYPE_STEPS then
-    ThrowRangeError(SErrorMaxCallStackExceeded);
+    ThrowMaxCallStackExceeded;
 end;
 
 end.
