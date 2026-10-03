@@ -61,6 +61,59 @@ describe("Proxies nested 500 deep forward every internal method", () => {
   });
 });
 
+describe("Proxies nested 1,200 deep", () => {
+  // An assignment and a `new` go down the nest twice: the innermost [[Set]]
+  // defines the property on the outermost Proxy, and [[Construct]] reads
+  // `prototype` from it.
+  test("an assignment and a construction reach the target", () => {
+    const target = {};
+    const proxy = nest(1200, target);
+    proxy.y = 2;
+    expect(target.y).toBe(2);
+    expect(Reflect.set(proxy, "z", 3)).toBe(true);
+    class Made {}
+    expect(new (nest(1200, Made))() instanceof Made).toBe(true);
+  });
+});
+
+// The engine bounds the native calls through a nest (MAX_PROPERTY_DELEGATION_DEPTH,
+// 2,500), so a 3,000-deep nest throws RangeError however much native stack is
+// left. Node.js has no such bound and completes these.
+describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past the engine's bound", () => {
+  const proxy = nest(3000, { x: 1 });
+  const callable = nest(3000, () => 1);
+  const constructable = nest(3000, class {});
+  const handlerChain = (() => {
+    let handler = {};
+    for (const i of Array.from({ length: 3000 })) {
+      handler = new Proxy({}, handler);
+    }
+    return new Proxy({ x: 1 }, handler);
+  })();
+  const operations = [
+    ["getOwnPropertyDescriptor", () => Object.getOwnPropertyDescriptor(proxy, "x")],
+    ["a symbol-keyed getOwnPropertyDescriptor", () => Object.getOwnPropertyDescriptor(proxy, Symbol.iterator)],
+    ["Object.keys", () => Object.keys(proxy)],
+    ["Reflect.ownKeys", () => Reflect.ownKeys(proxy)],
+    ["defineProperty", () => Object.defineProperty(proxy, "z", { value: 3 })],
+    ["delete", () => delete proxy.x],
+    ["isExtensible", () => Object.isExtensible(proxy)],
+    ["preventExtensions", () => Object.preventExtensions(nest(3000, {}))],
+    ["setPrototypeOf", () => Object.setPrototypeOf(proxy, {})],
+    ["a call", () => callable()],
+    ["new", () => new constructable()],
+    ["a read through a chain of handlers", () => handlerChain.x],
+  ];
+
+  test.each(operations)("%s throws RangeError", (_, operation) => {
+    expect(operation).toThrow(RangeError);
+  });
+
+  test("typeof steps through the nest without a bound", () => {
+    expect(typeof callable).toBe("function");
+  });
+});
+
 // 20,000 nested Proxies are deep enough to exhaust the native stack without
 // the bound, and take tens of megabytes in interpreted mode, too much for a
 // 32-bit process running parallel test workers.

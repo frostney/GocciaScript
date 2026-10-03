@@ -225,7 +225,20 @@ function TGocciaProxyValue.GetTrap(const ATrapName: string): TGocciaValue;
 var
   TrapValue: TGocciaValue;
 begin
-  TrapValue := FHandler.GetProperty(ATrapName);
+  // A handler that is itself a Proxy answers through its get trap or target,
+  // a native call that a chain of such handlers would repeat; count it like a
+  // forward to a Proxy target.
+  if FHandler.ClassType = TGocciaProxyValue then
+  begin
+    EnterPropertyDelegation;
+    try
+      TrapValue := FHandler.GetProperty(ATrapName);
+    finally
+      LeavePropertyDelegation;
+    end;
+  end
+  else
+    TrapValue := FHandler.GetProperty(ATrapName);
   if (TrapValue is TGocciaUndefinedLiteralValue) or
      (TrapValue is TGocciaNullLiteralValue) then
     Result := nil

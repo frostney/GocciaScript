@@ -24,8 +24,13 @@ const
   // through a Proxy, which ES2026 §10.1.2.1 OrdinarySetPrototypeOf cannot
   // refuse, repeats those calls without end, and Proxies nested deeply enough
   // do the same to the native stack. This cap on the calls into a Proxy that
-  // are live at once turns both into a RangeError.
-  MAX_PROPERTY_DELEGATION_DEPTH = 1000;
+  // are live at once turns both into a RangeError. An assignment or a `new`
+  // through a nest of N Proxies goes down the nest twice (the innermost
+  // [[Set]] defines the property on the outermost Proxy, and [[Construct]]
+  // reads `prototype` from it), so N up to half the cap still completes.
+  // Together with MAX_OBJECT_DELEGATION_DEPTH this fits the native stack even
+  // under the deepest recursion the default --max-stack allows.
+  MAX_PROPERTY_DELEGATION_DEPTH = 2500;
 
   // The same walk enters an array, function, class or class instance by a
   // native call too, because their classes override the lookup. Those calls
@@ -51,9 +56,9 @@ procedure CheckNativeReentryDepth(const ADepth: Integer);
 // into their callers.
 procedure ThrowMaxCallStackExceeded;
 
-// Bracket one native call into a Proxy's internal method or trap. EnterPropertyDelegation throws before it counts, so a
-// caller pairs it with LeavePropertyDelegation in a try/finally that starts
-// after it.
+// Bracket one native call into a Proxy's internal method or trap.
+// EnterPropertyDelegation throws before it counts, so a caller pairs it with
+// LeavePropertyDelegation in a try/finally that starts after it.
 procedure EnterPropertyDelegation;
 procedure LeavePropertyDelegation;
 // The same for a call into any other object whose class overrides the lookup,
