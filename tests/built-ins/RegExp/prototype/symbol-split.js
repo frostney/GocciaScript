@@ -125,3 +125,32 @@ test("Symbol.split includes captures and stops at the limit", () => {
   expect("abc".split(/(?:)/)).toEqual(["a", "b", "c"]);
   expect(",a,".split(/,/)).toEqual(["", "a", ""]);
 });
+
+test("Symbol.split sets lastIndex on a splitter that a species constructor kept", () => {
+  let splitter;
+  class Species {
+    constructor(source, flags) {
+      splitter = new RegExp(source, flags);
+      return splitter;
+    }
+  }
+  const regex = /,/;
+  regex.constructor = { [Symbol.species]: Species };
+  expect("a,b,".split(regex)).toEqual(["a", "b", ""]);
+  expect(splitter.lastIndex).toBe(4);
+  expect("a,b,c".split(regex, 1)).toEqual(["a"]);
+  expect(splitter.lastIndex).toBe(2);
+});
+
+test("Symbol.split throws when the splitter's lastIndex is not writable", () => {
+  class Species {
+    constructor(source, flags) {
+      const splitter = new RegExp(source, flags);
+      Object.defineProperty(splitter, "lastIndex", { writable: false, value: 0 });
+      return splitter;
+    }
+  }
+  const regex = /,/;
+  regex.constructor = { [Symbol.species]: Species };
+  expect(() => "a,b".split(regex)).toThrow(TypeError);
+});

@@ -18,8 +18,8 @@ type
     FGlobal: Boolean;
     FUnicode: Boolean;
     FSingleMatchReturned: Boolean;
-    // FRegExp came from %RegExp% itself, so no user code holds it and its
-    // lastIndex can live in FLastIndex between scanner matches.
+    // FRegExp came from %RegExp% itself and has not been passed to user
+    // code, so its lastIndex can live in FLastIndex between scanner matches.
     FMatcherIsPrivate: Boolean;
     FScanner: TGocciaRegExpScanner;
     FInputValue: TGocciaStringLiteralValue;
@@ -163,6 +163,9 @@ var
 begin
   if CanScan then
     Exit(ScanNext(AMatchValue));
+  // A user exec (or exec getter) receives the matcher as this, so from here
+  // on user code may hold it and observe its lastIndex: keep it in sync.
+  FMatcherIsPrivate := False;
 
   if FLastIndexPending then
   begin

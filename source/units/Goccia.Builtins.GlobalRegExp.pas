@@ -547,8 +547,9 @@ end;
 
 // Symbol.split's splitter is sticky, so its loop tries one position at a
 // time; when exec is the built-in, the first position where that succeeds is
-// where an unanchored scan from the same index finds its match. The splitter
-// is otherwise unreachable by user code, so its lastIndex writes are skipped.
+// where an unanchored scan from the same index finds its match. The caller
+// checks that %RegExp% itself constructed the splitter, so no user code can
+// reach it and its lastIndex writes are skipped.
 function CanScanSplitter(const ASplitter: TGocciaObjectValue;
   const AUnicodeMatching: Boolean): Boolean;
 begin
@@ -1883,7 +1884,10 @@ begin
     Size := UTF16CodeUnitLength(Input);
     LastMatchEnd := 0;
     SearchIndex := LastMatchEnd;
-    if CanScanSplitter(SplitterValue, UnicodeMatching) then
+    // A splitter from a user species constructor may be held by user code,
+    // which can observe or refuse the lastIndex writes the scan skips.
+    if (SpeciesConstructor = FRegExpConstructor) and
+       CanScanSplitter(SplitterValue, UnicodeMatching) then
     begin
       Result := ScanSplit(SplitterValue, Input, Size, UnicodeMatching, Limit,
         ResultArray);

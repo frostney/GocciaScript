@@ -215,3 +215,28 @@ test("Symbol.matchAll reads the lastIndex of a matcher from a custom species", (
   expect(iterator.next().value.index).toBe(3);
   expect(iterator.next().done).toBe(true);
 });
+
+test("Symbol.matchAll keeps lastIndex of a matcher that an earlier exec call exposed", () => {
+  const originalExec = RegExp.prototype.exec;
+  let matcher;
+  RegExp.prototype.exec = {
+    exec(input) {
+      matcher = this;
+      return originalExec.call(this, input);
+    },
+  }.exec;
+  const iterator = "aaaa".matchAll(/a/g);
+  let first;
+  try {
+    first = iterator.next().value.index;
+  } finally {
+    RegExp.prototype.exec = originalExec;
+  }
+  expect(first).toBe(0);
+  expect(matcher.lastIndex).toBe(1);
+  expect(iterator.next().value.index).toBe(1);
+  expect(matcher.lastIndex).toBe(2);
+  matcher.lastIndex = 0;
+  expect(iterator.next().value.index).toBe(0);
+  expect(matcher.lastIndex).toBe(1);
+});
