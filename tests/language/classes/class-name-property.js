@@ -85,4 +85,48 @@ describe("static name override", () => {
     class Foo { static set name(v) {} }
     expect(Foo.name).toBe(undefined);
   });
+
+  test("assigning to a deleted name does not add it back", () => {
+    class Plain {}
+    delete Plain.name;
+    expect(() => {
+      Plain.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Plain, "name")).toBe(false);
+    expect(Plain.name).toBe("");
+
+    class Frozen {}
+    delete Frozen.name;
+    Object.freeze(Frozen);
+    expect(() => {
+      Frozen.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Frozen, "name")).toBe(false);
+    expect(Object.isFrozen(Frozen)).toBe(true);
+    expect(Object.getOwnPropertyNames(Frozen)).toEqual(["length", "prototype"]);
+  });
+
+  test("assigning to the name of a non-extensible class throws and keeps the name", () => {
+    class Fixed {}
+    Object.preventExtensions(Fixed);
+
+    expect(() => {
+      Fixed.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Fixed, "name")).toEqual({
+      value: "Fixed",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a deleted name can be defined again", () => {
+    class Renamed {}
+    delete Renamed.name;
+    Object.defineProperty(Renamed, "name", { value: "Again", configurable: true });
+
+    expect(Renamed.name).toBe("Again");
+    expect(Object.hasOwn(Renamed, "name")).toBe(true);
+  });
 });

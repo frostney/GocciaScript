@@ -2393,35 +2393,22 @@ procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocc
 var
   Descriptor: TGocciaPropertyDescriptor;
 begin
-  // .name override via static field or assignment: use DefineProperty to
-  // override the synthesized non-writable descriptor (which is configurable)
-  if AName = PROP_NAME then
+  // An assignment to "name" or "length" is checked against the class's own
+  // non-writable property, so store the synthesized one first. Once deleted,
+  // the class has no own property and the assignment follows the prototype
+  // chain like any other missing key; DefineProperty clears the deleted
+  // marker only if that adds the property.
+  if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
   begin
-    FNameDeleted := False;
-    Descriptor := inherited GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
+    MaterializeIntrinsicProperty(AName);
+    inherited SetProperty(AName, AValue);
+    if AName = PROP_NAME then
     begin
-      inherited SetProperty(AName, AValue);
       Descriptor := inherited GetOwnPropertyDescriptor(AName);
       if (Descriptor is TGocciaPropertyDescriptorData) and
          (TGocciaPropertyDescriptorData(Descriptor).Value is TGocciaStringLiteralValue) then
         FName := TGocciaStringLiteralValue(TGocciaPropertyDescriptorData(Descriptor).Value).Value;
-      Exit;
     end;
-
-    Descriptor := GetOwnPropertyDescriptor(AName);
-    if (Descriptor is TGocciaPropertyDescriptorData) and
-       (not TGocciaPropertyDescriptorData(Descriptor).Writable) then
-    begin
-      inherited DefineProperty(AName, Descriptor);
-      inherited SetProperty(AName, AValue);
-      Exit;
-    end;
-
-    if AValue is TGocciaStringLiteralValue then
-      FName := TGocciaStringLiteralValue(AValue).Value;
-    inherited DefineProperty(AName,
-      TGocciaPropertyDescriptorData.Create(AValue, [pfConfigurable, pfWritable, pfEnumerable]));
     Exit;
   end;
 

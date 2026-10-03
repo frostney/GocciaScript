@@ -213,13 +213,25 @@ describe("Reflect.defineProperty", () => {
     });
   });
 
-  test("does not add back a deleted class length on a non-extensible class", () => {
+  test("does not add back a deleted class length or name on a non-extensible class", () => {
     class K {}
     delete K.length;
+    delete K.name;
     Object.preventExtensions(K);
 
     expect(Reflect.defineProperty(K, "length", { value: 1 })).toBe(false);
+    expect(Reflect.defineProperty(K, "name", { value: "Back" })).toBe(false);
     expect(Object.hasOwn(K, "length")).toBe(false);
-    expect(Object.getOwnPropertyNames(K)).toEqual(["name", "prototype"]);
+    expect(Object.hasOwn(K, "name")).toBe(false);
+    expect(Object.getOwnPropertyNames(K)).toEqual(["prototype"]);
+  });
+
+  test("defines a deleted class name again on an extensible class", () => {
+    class K {}
+    delete K.name;
+
+    expect(Reflect.defineProperty(K, "name", { value: "Again" })).toBe(true);
+    expect(Object.hasOwn(K, "name")).toBe(true);
+    expect(K.name).toBe("Again");
   });
 });

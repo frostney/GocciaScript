@@ -977,3 +977,19 @@ test("Object.defineProperty does not add back a deleted class length or name whe
   expect(K.name).toBe("");
   expect(K.length).toBe(0);
 });
+
+test("Object.defineProperty defines a deleted class length or name again on an extensible class", () => {
+  class K {
+    constructor(a) {}
+  }
+  delete K.length;
+  delete K.name;
+
+  Object.defineProperty(K, "length", { value: 3 });
+  Object.defineProperty(K, "name", { value: "Again" });
+
+  expect(Object.hasOwn(K, "length")).toBe(true);
+  expect(Object.hasOwn(K, "name")).toBe(true);
+  expect(K.length).toBe(3);
+  expect(K.name).toBe("Again");
+});
