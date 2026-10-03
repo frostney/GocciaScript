@@ -3,7 +3,7 @@ description: >
   byteLength, maxByteLength, resizable, detached and immutable are accessors on
   ArrayBuffer.prototype, so an ArrayBuffer answers them only through its
   prototype chain
-features: [ArrayBuffer, resizable-arraybuffer, arraybuffer-transfer, immutable-arraybuffer, Reflect]
+features: [ArrayBuffer, resizable-arraybuffer, arraybuffer-transfer, immutable-arraybuffer, Reflect, Atomics]
 ---*/
 
 const NAMES = ["byteLength", "maxByteLength", "resizable", "detached", "immutable"];
@@ -46,6 +46,20 @@ describe("ArrayBuffer accessors through the prototype chain", () => {
     expect(detached.maxByteLength).toBe(0);
     expect(detached.detached).toBe(true);
     expect(new ArrayBuffer(2).transferToImmutable().immutable).toBe(true);
+  });
+
+  test("a name found nowhere on the chain is undefined", () => {
+    expect(new ArrayBuffer(4).missing).toBeUndefined();
+    expect(Object.setPrototypeOf(new ArrayBuffer(4), null).slice).toBeUndefined();
+    expect(new ArrayBuffer(0, { maxByteLength: 0 }).resizable).toBe(true);
+  });
+
+  test("a lazily created global is read through a prototype chain that reaches it", () => {
+    const buffer = Object.setPrototypeOf(new ArrayBuffer(4), globalThis);
+
+    // Nothing else in this file reads Atomics, so it is still lazy here.
+    expect(typeof buffer.Atomics).toBe("object");
+    expect(buffer.Atomics).toBe(Atomics);
   });
 
   test("a data property, an own property or a getter found first is what is read", () => {

@@ -524,9 +524,9 @@ begin
   Result := GetPropertyWithContext(AName, Self);
 end;
 
-// ES2026 §10.1.8.1 OrdinaryGet. byteLength, maxByteLength, resizable, detached
-// and immutable are accessors on ArrayBuffer.prototype (§25.1.6) and nothing
-// more, so a null prototype, a replaced one, an own property and a getter a
+// ES2026 §10.1.8.1 OrdinaryGet. byteLength, maxByteLength, resizable and
+// detached are accessors on ArrayBuffer.prototype (§25.1.6), and so is
+// immutable (Immutable ArrayBuffers proposal), and nothing more, so a null prototype, a replaced one, an own property and a getter a
 // subclass or a program defines are all found by the ordinary lookup. When
 // this buffer is the receiver and the lookup reaches one of the built-in
 // getters through plain objects, its result is computed here from the slots
@@ -575,13 +575,13 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Buf.GetByteLength);
 end;
 
-// ES2026 §25.1.6.2 get ArrayBuffer.prototype.detached
+// ES2026 §25.1.6.3 get ArrayBuffer.prototype.detached
 function TGocciaArrayBufferValue.ArrayBufferDetachedGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.detached');
-  // ES2026 §25.1.6.2 step 4: Return IsDetachedBuffer(O)
+  // ES2026 §25.1.6.3 step 4: Return IsDetachedBuffer(O)
   if Buf.FDetached then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
@@ -600,7 +600,7 @@ begin
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// ES2026 §25.1.6.3 get ArrayBuffer.prototype.maxByteLength
+// ES2026 §25.1.6.4 get ArrayBuffer.prototype.maxByteLength
 function TGocciaArrayBufferValue.ArrayBufferMaxByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
@@ -609,20 +609,20 @@ begin
   Result := TGocciaNumberLiteralValue.Create(Buf.GetObservableMaxByteLength);
 end;
 
-// ES2026 §25.1.6.4 get ArrayBuffer.prototype.resizable
+// ES2026 §25.1.6.5 get ArrayBuffer.prototype.resizable
 function TGocciaArrayBufferValue.ArrayBufferResizableGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.resizable');
-  // ES2026 §25.1.6.4 step 4-5: Return !IsFixedLengthArrayBuffer(O)
+  // ES2026 §25.1.6.5 step 4-5: Return !IsFixedLengthArrayBuffer(O)
   if Buf.FMaxByteLength >= 0 then
     Result := TGocciaBooleanLiteralValue.TrueValue
   else
     Result := TGocciaBooleanLiteralValue.FalseValue;
 end;
 
-// ES2026 §25.1.6.5 ArrayBuffer.prototype.resize(newLength)
+// ES2026 §25.1.6.6 ArrayBuffer.prototype.resize(newLength)
 function TGocciaArrayBufferValue.ArrayBufferResize(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
@@ -634,11 +634,11 @@ begin
     ThrowTypeError('Cannot resize an immutable ArrayBuffer',
       SSuggestArrayBufferResizable);
 
-  // ES2026 §25.1.6.5 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
+  // ES2026 §25.1.6.6 step 5: If IsFixedLengthArrayBuffer(O), throw TypeError
   if Buf.FMaxByteLength < 0 then
     ThrowTypeError(SErrorCannotResizeFixedLengthArrayBuffer, SSuggestArrayBufferResizable);
 
-  // ES2026 §25.1.6.5: ToIndex(newLength) can detach the receiver.
+  // ES2026 §25.1.6.6: ToIndex(newLength) can detach the receiver.
   if AArgs.Length > 0 then
     NewByteLength := ToIndex(AArgs.GetElement(0))
   else
@@ -647,11 +647,11 @@ begin
   // Revalidate before checking fixed/resizable state or touching storage.
   EnsureArrayBufferAttached(Buf, SErrorCannotResizeDetachedArrayBuffer);
 
-  // ES2026 §25.1.6.5 step 7: If newByteLength > maxByteLength, throw RangeError
+  // ES2026 §25.1.6.6 step 7: If newByteLength > maxByteLength, throw RangeError
   if NewByteLength > Buf.FMaxByteLength then
     ThrowRangeError(SErrorArrayBufferResizeExceedsMax, SSuggestArrayBufferResizable);
 
-  // ES2026 §25.1.6.5 steps 10-16: Create new data block and copy
+  // ES2026 §25.1.6.6 steps 10-16: Create new data block and copy
   Buf.SetDataLength(NewByteLength);
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -696,7 +696,7 @@ begin
   ABuf.Detach;
 end;
 
-// ES2026 §25.1.6.6 ArrayBuffer.prototype.transfer([newLength])
+// ES2026 §25.1.6.8 ArrayBuffer.prototype.transfer([newLength])
 function TGocciaArrayBufferValue.ArrayBufferTransfer(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
@@ -704,17 +704,17 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.transfer');
 
-  // ES2026 §25.1.6.6: ArrayBufferCopyAndDetach converts newLength before the detached check.
+  // ES2026 §25.1.6.8: ArrayBufferCopyAndDetach converts newLength before the detached check.
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     NewByteLength := Length(Buf.FData)
   else
     NewByteLength := ToIndex(AArgs.GetElement(0));
 
-  // ES2026 §25.1.6.6 step 3: ArrayBufferCopyAndDetach(O, newLength, PRESERVE-RESIZABILITY)
+  // ES2026 §25.1.6.8 step 3: ArrayBufferCopyAndDetach(O, newLength, PRESERVE-RESIZABILITY)
   Result := ArrayBufferCopyAndDetach(Buf, NewByteLength, True);
 end;
 
-// ES2026 §25.1.6.7 ArrayBuffer.prototype.transferToFixedLength([newLength])
+// ES2026 §25.1.6.9 ArrayBuffer.prototype.transferToFixedLength([newLength])
 function TGocciaArrayBufferValue.ArrayBufferTransferToFixedLength(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
@@ -722,13 +722,13 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.transferToFixedLength');
 
-  // ES2026 §25.1.6.7: ArrayBufferCopyAndDetach converts newLength before the detached check.
+  // ES2026 §25.1.6.9: ArrayBufferCopyAndDetach converts newLength before the detached check.
   if (AArgs.Length = 0) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
     NewByteLength := Length(Buf.FData)
   else
     NewByteLength := ToIndex(AArgs.GetElement(0));
 
-  // ES2026 §25.1.6.7 step 3: ArrayBufferCopyAndDetach(O, newLength, FIXED-LENGTH)
+  // ES2026 §25.1.6.9 step 3: ArrayBufferCopyAndDetach(O, newLength, FIXED-LENGTH)
   Result := ArrayBufferCopyAndDetach(Buf, NewByteLength, False);
 end;
 
@@ -783,7 +783,7 @@ begin
   Result := TGocciaArrayBufferValue.CreateImmutableFromBytes(Bytes);
 end;
 
-// ES2026 §25.1.6.8 ArrayBuffer.prototype.slice(start, end)
+// ES2026 §25.1.6.7 ArrayBuffer.prototype.slice(start, end)
 function TGocciaArrayBufferValue.ArrayBufferSlice(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   Buf: TGocciaArrayBufferValue;
@@ -795,7 +795,7 @@ var
 begin
   Buf := RequireArrayBuffer(AThisValue, 'ArrayBuffer.prototype.slice');
 
-  // ES2026 §25.1.6.8 step 4: If IsDetachedBuffer(O), throw TypeError
+  // ES2026 §25.1.6.7 step 4: If IsDetachedBuffer(O), throw TypeError
   if Buf.FDetached then
     ThrowTypeError(SErrorCannotSliceDetachedArrayBuffer, SSuggestArrayBufferDetached);
 
@@ -807,7 +807,7 @@ begin
   else
     First := ToArrayBufferSliceIndex(AArgs.GetElement(0), Len);
 
-  // ES2026 §25.1.6.8 step 11: If end is undefined, let relativeEnd be len
+  // ES2026 §25.1.6.7 step 11: If end is undefined, let relativeEnd be len
   if (AArgs.Length > 1) and not (AArgs.GetElement(1) is TGocciaUndefinedLiteralValue) then
     Final := ToArrayBufferSliceIndex(AArgs.GetElement(1), Len)
   else

@@ -29,6 +29,11 @@ describe("SharedArrayBuffer accessors through the prototype chain", () => {
     const fixed = new SharedArrayBuffer(3);
     expect(fixed.maxByteLength).toBe(3);
     expect(fixed.growable).toBe(false);
+
+    const empty = new SharedArrayBuffer(0, { maxByteLength: 0 });
+    expect(empty.growable).toBe(true);
+    expect(empty.maxByteLength).toBe(0);
+    expect(empty.missing).toBeUndefined();
   });
 
   test("a data property, an own property or a getter found first is what is read", () => {

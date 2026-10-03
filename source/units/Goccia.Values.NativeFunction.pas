@@ -96,15 +96,16 @@ procedure MarkIntrinsicGetter(const APrototype: TGocciaObjectValue;
 
 { The ordinary lookup of AName from AObject (ES2026 §10.1.8.1 OrdinaryGet), for
   the chains it can answer without calling anything: AObject's own property
-  map, then each prototype while that prototype is a plain object. Returns True
-  with AValue set and AKind = nikNone for a plain data property, and True with
-  AValue nil and AKind set for an accessor whose getter is a native function
-  marked by MarkIntrinsicGetter; the caller computes that getter's result for
-  AObject itself as the receiver, or declines if the kind is not one of its own.
-  Returns False for anything else (a missing property, a getter a program
-  defined, a lazy property, a prototype that is not a plain object), which
-  leaves the read to the full lookup. No managed locals: buffers read their
-  accessors through it on every named read. }
+  map, then each prototype while that prototype is a plain object. AObject must
+  keep all its own properties in that map. Returns True with AKind = nikNone
+  and AValue set for a plain data property, or to undefined when the chain ends
+  without the property. Returns True with AValue nil and AKind set for an
+  accessor whose getter is a native function marked by MarkIntrinsicGetter; the
+  caller computes that getter's result for AObject itself as the receiver, or
+  declines if the kind is not one of its own. Returns False for anything else
+  (a getter a program defined, a lazy property, a prototype that is not a plain
+  object), which leaves the read to the full lookup. No managed locals: buffers
+  read every named property through it. }
 function ResolvePropertyWithoutCall(const AObject: TGocciaObjectValue;
   const AName: string; out AValue: TGocciaValue;
   out AKind: TGocciaNativeIntrinsicKind): Boolean;
@@ -172,6 +173,11 @@ begin
     end;
     Holder := Holder.Prototype;
   until (not Assigned(Holder)) or (Holder.ClassType <> TGocciaObjectValue);
+  if not Assigned(Holder) then
+  begin
+    AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := True;
+  end;
 end;
 
 constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
