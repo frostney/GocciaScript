@@ -325,6 +325,11 @@ describe("Object.prototype.toString", () => {
       expect(tagWithPrototype(new Date(NaN), null)).toBe("[object Date]");
     });
 
+    test("Date.prototype has no @@toStringTag of its own", () => {
+      expect(Object.getOwnPropertySymbols(Date.prototype)).not.toContain(Symbol.toStringTag);
+      expect(Date.prototype[Symbol.toStringTag]).toBeUndefined();
+    });
+
     test("a Date subclass instance is a Date", () => {
       class LaterDate extends Date {}
       expect(tagWithPrototype(new LaterDate(0), null)).toBe("[object Date]");

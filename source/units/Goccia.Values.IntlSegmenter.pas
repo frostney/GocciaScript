@@ -628,17 +628,19 @@ begin
         IntlSegmentIteratorSymbolIterator,
         0,
         [pfConfigurable, pfWritable]);
-      // ECMA-402 %IntlSegmentIteratorPrototype% [ %Symbol.toStringTag% ]
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Segmenter String Iterator'),
-        [pfConfigurable]);
       FSegmentIteratorPrototypeMembers := Members.ToDefinitions;
     finally
       Members.Free;
     end;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FSegmentIteratorPrototypeMembers);
+  // ECMA-402 %IntlSegmentIteratorPrototype% [ %Symbol.toStringTag% ]. Defined
+  // here, not in the thread-cached member list, so each realm gets its own
+  // string.
+  Shared.Prototype.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create('Segmenter String Iterator'),
+      [pfConfigurable]));
 end;
 
 function TGocciaIntlSegmentIteratorValue.IntlSegmentIteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
