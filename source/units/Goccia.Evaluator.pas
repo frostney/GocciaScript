@@ -11370,18 +11370,14 @@ begin
     InstancePrototype := AClassValue.Prototype;
 
   // ES2026 §20.1.1.1 Object(value): direct Object construction with a
-  // non-nullish argument returns that object or ToObject(value).
+  // non-nullish argument returns that object or ToObject(value), which
+  // TGocciaObjectClassValue.Instantiate does in Object's own realm.
   if (AClassValue is TGocciaObjectClassValue) and
      (EffectiveNewTarget = AClassValue) and
      (AArguments.Length > 0) and
      not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
      not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
-  begin
-    if AArguments.GetElement(0) is TGocciaObjectValue then
-      Exit(AArguments.GetElement(0));
-    if AArguments.GetElement(0).IsPrimitive then
-      Exit(AArguments.GetElement(0).Box);
-  end;
+    Exit(AClassValue.Instantiate(AArguments, ANewTarget));
 
   { §15.7.14 step 15a: this class runs an implicit constructor, and so does
     every class between it and the first ancestor that has a constructor body
