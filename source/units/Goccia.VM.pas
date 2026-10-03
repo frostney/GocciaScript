@@ -11943,6 +11943,11 @@ var
         AName, TGocciaMethodValue(AValue));
   end;
 
+  { These three install a decorator's replacement. The decorators proposal
+    (tc39/ecma262 PR #2417, ApplyDecoratorsToElementDefinition) stores the
+    returned function as the element's [[Value]], [[Get]] or [[Set]] without
+    calling MakeMethod on it, so the replacement keeps whatever
+    [[HomeObject]] it was created with; none is set here. }
   procedure DefineDecoratedMethodProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, AValue: TGocciaValue);
   var
@@ -11957,10 +11962,6 @@ var
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    if AIsStatic then
-      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AValue, TargetObject);
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
         TGocciaSymbolValue(KeyValue),
@@ -12009,10 +12010,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AGetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
@@ -12060,10 +12057,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(ASetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
