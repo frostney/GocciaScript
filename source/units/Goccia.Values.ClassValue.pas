@@ -69,6 +69,11 @@ type
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
+    // Set once the synthesized "name" or "length" has been deleted, and never
+    // cleared. A property of that key defined later is an ordinary entry in
+    // FProperties, listed where it was created (ES2026 §10.1.11.1
+    // OrdinaryOwnPropertyKeys) rather than in the synthesized slot that
+    // GetAllPropertyNames gives the class's original name and length.
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
@@ -2358,10 +2363,6 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   inherited DefineProperty(AName, ADescriptor);
-  if AName = PROP_NAME then
-    FNameDeleted := False
-  else if AName = PROP_LENGTH then
-    FLengthDeleted := False;
 end;
 
 function TGocciaClassValue.TryDefineProperty(const AName: string;
@@ -2380,13 +2381,6 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   Result := inherited TryDefineProperty(AName, ADescriptor);
-  if Result then
-  begin
-    if AName = PROP_NAME then
-      FNameDeleted := False
-    else if AName = PROP_LENGTH then
-      FLengthDeleted := False;
-  end;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
@@ -2396,8 +2390,7 @@ begin
   // An assignment to "name" or "length" is checked against the class's own
   // non-writable property, so store the synthesized one first. Once deleted,
   // the class has no own property and the assignment follows the prototype
-  // chain like any other missing key; DefineProperty clears the deleted
-  // marker only if that adds the property.
+  // chain like any other missing key.
   if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
   begin
     MaterializeIntrinsicProperty(AName);
@@ -2422,12 +2415,9 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
   else if AName = PROP_NAME then
   begin
-    if FNameDeleted then
-      Exit(nil);
-
     // Check if .name was explicitly set (e.g. static name = 'Custom')
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FNameDeleted then
     begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
@@ -2440,14 +2430,11 @@ begin
   end
   else if AName = PROP_LENGTH then
   begin
-    if FLengthDeleted then
-      Exit(nil);
-
     // Honour explicit own-property redefinitions (length is configurable, so
     // userland may override via Object.defineProperty); fall back to a
     // synthesized descriptor only when no own descriptor exists.
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
         TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
   end
@@ -2528,10 +2515,10 @@ function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
   if AName = PROP_PROTOTYPE then
     Result := True
-  else if AName = PROP_NAME then
-    Result := not FNameDeleted
-  else if AName = PROP_LENGTH then
-    Result := not FLengthDeleted
+  else if (AName = PROP_NAME) and not FNameDeleted then
+    Result := True
+  else if (AName = PROP_LENGTH) and not FLengthDeleted then
+    Result := True
   else
     Result := inherited HasOwnProperty(AName);
 end;
