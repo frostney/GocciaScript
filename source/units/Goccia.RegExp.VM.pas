@@ -26,7 +26,7 @@ function RegExpInputCodeUnitLength(const AInput: string): Integer;
 { The number of VM steps one match attempt may take on a subject of
   AInputLength code units: proportional to the subject, never below the fixed
   floor. Computed in 64 bits so a subject of any length gets its full budget. }
-function RegExpStepLimit(const AInputLength: Integer): Int64; {$IFDEF FPC}inline;{$ENDIF}
+function RegExpStepLimit(const AInputLength: Integer): Int64;
 
 { Release the per-thread input-decode memo. Registered with
   Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
@@ -539,7 +539,10 @@ end;
 
 function RegExpStepLimit(const AInputLength: Integer): Int64;
 begin
-  // A 32-bit product overflows from 21,474,837 code units on.
+  // From 21,474,837 code units on the product exceeds High(Integer). The cast
+  // keeps 32-bit targets, which multiply two Integers in 32 bits, from
+  // overflowing; the Int64 result keeps 64-bit targets from narrowing it.
+  // Not inlined: inlining it into RunVM made the step loop spill registers.
   Result := Int64(AInputLength) * STEPS_PER_INPUT_BYTE;
   if Result < MIN_STEP_LIMIT then
     Result := MIN_STEP_LIMIT;
