@@ -13,7 +13,8 @@ uses
   Goccia.Values.SymbolValue;
 
 type
-  TGocciaProxyValue = class(TGocciaObjectValue)
+  // Sealed so a prototype walk can recognize a Proxy by exact class.
+  TGocciaProxyValue = class sealed(TGocciaObjectValue)
   private
     FTarget: TGocciaValue;
     FHandler: TGocciaObjectValue;

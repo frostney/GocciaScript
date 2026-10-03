@@ -49,12 +49,11 @@ type
     function GetPropertyFromPrototype(const AName: string;
       const AThisContext: TGocciaValue): TGocciaValue;
     // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1.c.i for a strict
-    // assignment to this object that has walked up to AParent. True when
-    // AParent answers [[Set]] itself and has taken the assignment over, with a
-    // TypeError if it refused; False when the caller's walk continues with
-    // AParent's own properties.
-    function AssignThroughExoticParent(const AParent: TGocciaObjectValue;
-      const AName: string; const AValue: TGocciaValue): Boolean;
+    // assignment to this object that has walked up to AParent, a parent that
+    // answers [[Set]] itself (not UsesOrdinarySet): hands the assignment to
+    // it, and throws TypeError if it refuses.
+    procedure AssignThroughExoticParent(const AParent: TGocciaObjectValue;
+      const AName: string; const AValue: TGocciaValue);
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -471,7 +470,7 @@ var
 begin
   // ES2026 §10.5.8: a Proxy's [[Get]] is its get trap or its target's [[Get]].
   // Its [[GetOwnProperty]] is a different trap, so it is not asked.
-  if not (AParent is TGocciaProxyValue) then
+  if AParent.ClassType <> TGocciaProxyValue then
   begin
     // Any other exotic object describes its own properties through
     // [[GetOwnProperty]] (a typed array's elements, a String object's
@@ -1327,8 +1326,11 @@ begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
-    if AssignThroughExoticParent(Proto, AName, AValue) then
+    if not UsesOrdinarySet(Proto) then
+    begin
+      AssignThroughExoticParent(Proto, AName, AValue);
       Exit;
+    end;
     Descriptor := Proto.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
@@ -1872,24 +1874,36 @@ end;
 
 function TGocciaObjectValue.GetPropertyFromPrototype(const AName: string;
   const AThisContext: TGocciaValue): TGocciaValue;
+var
+  Parent, GrandParent: TGocciaObjectValue;
 begin
-  if not Assigned(FPrototype) then
+  Parent := FPrototype;
+  if not Assigned(Parent) then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  if (InheritsGet(FPrototype) and InheritsGetOwnProperty(FPrototype)) or
-     not GetThroughExoticParent(FPrototype, AName, AThisContext, Result) then
-    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
+  if Parent.ClassType = TGocciaProxyValue then
+    Exit(DelegateGetProperty(Parent, AName, AThisContext));
+  // Any other parent answers with its own [[Get]] directly, which is the
+  // common case of an array or class instance asking its prototype
+  // (Array.prototype is itself an array). That call is left uncounted only
+  // when the parent's own parent is ordinary, so the walk it starts steps in
+  // a loop from there: an uncounted call is never followed by another, and a
+  // chain of such objects is still bounded by MAX_PROPERTY_DELEGATION_DEPTH.
+  GrandParent := Parent.FPrototype;
+  if (InheritsGet(Parent) and InheritsGetOwnProperty(Parent)) or
+     not Assigned(GrandParent) or
+     (InheritsGet(GrandParent) and InheritsGetOwnProperty(GrandParent)) then
+    Result := Parent.GetPropertyWithContext(AName, AThisContext)
+  else
+    Result := DelegateGetProperty(Parent, AName, AThisContext);
 end;
 
-function TGocciaObjectValue.AssignThroughExoticParent(
+procedure TGocciaObjectValue.AssignThroughExoticParent(
   const AParent: TGocciaObjectValue; const AName: string;
-  const AValue: TGocciaValue): Boolean;
+  const AValue: TGocciaValue);
 begin
-  Result := not UsesOrdinarySet(AParent);
-  if not Result then
-    Exit;
   if DelegateSetProperty(AParent, AName, AValue, Self) then
     Exit;
-  if AParent is TGocciaProxyValue then
+  if AParent.ClassType = TGocciaProxyValue then
     ThrowTypeError(Format(SErrorProxySetReturnedFalse, [AName]),
       SSuggestProxyTrapInvariant);
   ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),

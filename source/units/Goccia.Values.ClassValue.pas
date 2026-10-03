@@ -3105,8 +3105,11 @@ begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
-    if AssignThroughExoticParent(Proto, AName, AValue) then
+    if not UsesOrdinarySet(Proto) then
+    begin
+      AssignThroughExoticParent(Proto, AName, AValue);
       Exit;
+    end;
     Descriptor := Proto.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
