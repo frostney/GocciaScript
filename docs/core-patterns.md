@@ -397,6 +397,22 @@ FPC also does not inline a procedure into another unit when it calls one that is
 
 An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 
+### Thread Variables on Hot Paths
+
+Every reference to a `threadvar` is a lookup: on POSIX targets FPC calls `pthread_getspecific` through the thread manager, about 33 machine instructions, and a function that only returns one (`TGarbageCollector.Instance`, `CurrentRealm`) adds its call to that. Two references to fields of the same thread-variable record are two lookups. A hot path must not make several of them to find out that there is nothing to do.
+
+Three patterns keep them off those paths:
+
+| Pattern | Where | What it replaces |
+|---------|-------|------------------|
+| One mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` reads `GThreadPolls.Any` once and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Four lookups per allocated value (`CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
+| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread` | A lookup per bytecode call, backward jump and native call site |
+| A handle captured at the loop boundary | `CaptureInstructionLimitState` / `PollInstructionLimit` | A lookup per opcode in the instrumented loop |
+
+Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out.
+
+A thread variable that other units read on a hot path is declared in the interface section, so that they reference it directly: an accessor function adds a call to the lookup, and FPC does not inline one that reads an implementation-section variable into another unit (`TGarbageCollector.Instance`, `CurrentRealm`). A bound pointer is valid from the outermost entry until that entry returns, on that thread, and must be rebound on the next one, because a VM can be entered from another thread between two entries ([ADR 0126](adr/0126-bytecode-call-path-arena-fills-and-thread-binding.md)).
+
 ### Singleton Special Values
 
 Special values like `undefined`, `null`, `true`, `false`, `NaN`, `Infinity`, and `-Infinity` are singletons:

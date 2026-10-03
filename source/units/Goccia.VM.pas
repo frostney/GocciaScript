@@ -23,6 +23,7 @@ uses
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
+  Goccia.ThreadPolls,
   Goccia.Values.ArrayValue,
   Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -222,6 +223,10 @@ type
     // idle VM and every bytecode call inside that entry reuses them.
     FCallStack: TGocciaCallStack;
     FExecutionContextThread: Pointer;
+    // The running thread's Goccia.ThreadPolls word, bound with the two above.
+    // The dispatch loop polls the timeout through it without a thread-local
+    // lookup. Never nil: the constructor points it at the creating thread's.
+    FThreadPolls: PGocciaThreadPolls;
     // The source path most recently interned for an execution context, and its
     // interned reference. Holding the string keeps its address from being
     // reused, so a path at the same address is the same path.
@@ -6659,6 +6664,7 @@ const
   INITIAL_STACK_SIZE = 4096;
 begin
   inherited Create;
+  FThreadPolls := @GThreadPolls;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
   // that SetupNewFrame pushes on the hot path. This is class-level, so it is
@@ -7580,8 +7586,11 @@ var
     end;
   end;
 begin
-  CheckExecutionTimeout;
-  CheckInstructionLimit;
+  if GThreadPolls.Any <> 0 then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+  end;
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -9483,8 +9492,11 @@ begin
       end;
       try
         repeat
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
+          if GThreadPolls.Any <> 0 then
+          begin
+            CheckExecutionTimeout;
+            CheckInstructionLimit;
+          end;
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             Result.Elements.Add(NextResult);
@@ -9532,8 +9544,11 @@ begin
           SSuggestIteratorProtocol);
       try
         repeat
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
+          if GThreadPolls.Any <> 0 then
+          begin
+            CheckExecutionTimeout;
+            CheckInstructionLimit;
+          end;
           CallArgs := AcquireArguments;
           try
             NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -9664,8 +9679,11 @@ begin
     begin
       try
         repeat
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
+          if GThreadPolls.Any <> 0 then
+          begin
+            CheckExecutionTimeout;
+            CheckInstructionLimit;
+          end;
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             AArray.Elements.Add(NextResult);
@@ -9685,8 +9703,11 @@ begin
     // of re-running GetProperty(PROP_NEXT) per iteration.
     try
       repeat
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
+        if GThreadPolls.Any <> 0 then
+        begin
+          CheckExecutionTimeout;
+          CheckInstructionLimit;
+        end;
         CallArgs := AcquireArguments;
         try
           NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -14039,8 +14060,11 @@ function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosur
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const APushExecutionContext: Boolean): TGocciaRegister;
 begin
-  CheckExecutionTimeout;
-  CheckInstructionLimit;
+  if GThreadPolls.Any <> 0 then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+  end;
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
     PGocciaRegister(AArguments), Length(AArguments), APushExecutionContext);
 end;
@@ -14372,6 +14396,7 @@ procedure TGocciaVM.BindToCurrentThread;
 begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
+  FThreadPolls := @GThreadPolls;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
     FExecutionSourcePath := '';
@@ -14756,14 +14781,14 @@ var
   var
     SourcePath: string;
   begin
-    if TGocciaCallStack.Instance = nil then
+    if FCallStack = nil then
       Exit;
     CurrentInstructionDebugLocation(DebugLine, DebugColumn);
     if Assigned(Template) and Assigned(Template.DebugInfo) then
       SourcePath := Template.DebugInfo.SourceFile
     else
       SourcePath := '';
-    TGocciaCallStack.Instance.SetTopFrameLocation(SourcePath, DebugLine,
+    FCallStack.SetTopFrameLocation(SourcePath, DebugLine,
       DebugColumn);
   end;
 
@@ -14814,7 +14839,7 @@ var
   var
     CallStack: TGocciaCallStack;
   begin
-    CallStack := TGocciaCallStack.Instance;
+    CallStack := FCallStack;
     if not Assigned(CallStack) then
       Exit;
     CurrentCallExpressionLocation(DebugLine, DebugColumn);
@@ -14835,7 +14860,7 @@ var
     CallStack: TGocciaCallStack;
   begin
     CurrentCallExpressionLocation(DebugLine, DebugColumn);
-    CallStack := TGocciaCallStack.Instance;
+    CallStack := FCallStack;
     if Assigned(Template) and Assigned(Template.DebugInfo) then
     begin
       EnterGocciaCallSite(Template.DebugInfo.SourceFile, DebugLine,
@@ -14865,13 +14890,13 @@ var
       StampCurrentInstructionLocation;
       Exit;
     end;
-    if TGocciaCallStack.Instance = nil then
+    if FCallStack = nil then
       Exit;
     if Assigned(Template) and Assigned(Template.DebugInfo) then
       SourcePath := Template.DebugInfo.SourceFile
     else
       SourcePath := '';
-    TGocciaCallStack.Instance.SetTopFrameLocation(SourcePath, ACallSite.Line,
+    FCallStack.SetTopFrameLocation(SourcePath, ACallSite.Line,
       ACallSite.Column);
   end;
 
@@ -14969,8 +14994,8 @@ begin
     PreviousMemoryPressureCountdown := nil;
   // Host callbacks can enter after module execution has finished. Scope the
   // allocation switch to native VM entries; trampoline calls keep this state.
-  PreviousProfilingAllocations := GProfilingAllocations;
-  GProfilingAllocations := FProfilingFunctions;
+  PreviousProfilingAllocations := FThreadPolls^.ProfilingAllocations;
+  FThreadPolls^.ProfilingAllocations := FProfilingFunctions;
   try
     FLastClosureThisValue := AThisValue;
     PushSavedStateRoot(SavedClosure, SavedNewTarget, SavedArgumentBase,
@@ -15102,7 +15127,7 @@ begin
     begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
-          (AStopAtIP < 0) and not InstructionLimitIsActive;
+          (AStopAtIP < 0) and not FThreadPolls^.InstructionLimitActive;
         if UseProdDispatch then
           goto LProdLoopHead
         else
@@ -15283,7 +15308,7 @@ LInnerLoopsDone:
       end;
     end;
   finally
-    GProfilingAllocations := PreviousProfilingAllocations;
+    FThreadPolls^.ProfilingAllocations := PreviousProfilingAllocations;
     if Assigned(GC) then
       GC.ExchangeMemoryPressureCountdown(
         PreviousMemoryPressureCountdown);
@@ -15311,8 +15336,11 @@ begin
       APushExecutionContext));
   for I := 0 to ArgumentCount - 1 do
     StackArguments[I] := VMValueToRegisterFast(AArguments.GetElement(I));
-  CheckExecutionTimeout;
-  CheckInstructionLimit;
+  if GThreadPolls.Any <> 0 then
+  begin
+    CheckExecutionTimeout;
+    CheckInstructionLimit;
+  end;
   Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
     VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
     APushExecutionContext));

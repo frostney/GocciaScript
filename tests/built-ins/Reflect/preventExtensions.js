@@ -59,4 +59,23 @@ describe("Reflect.preventExtensions", () => {
     expect(() => Reflect.preventExtensions("str")).toThrow(TypeError);
     expect(() => Reflect.preventExtensions(null)).toThrow(TypeError);
   });
+
+  test("returns true for a class, which can then be sealed or frozen", () => {
+    class Sealed {
+      static level = 1;
+    }
+    expect(Reflect.preventExtensions(Sealed)).toBe(true);
+    expect(Reflect.isExtensible(Sealed)).toBe(false);
+    expect(Reflect.preventExtensions(Sealed)).toBe(true);
+    Object.seal(Sealed);
+    expect(Object.isSealed(Sealed)).toBe(true);
+
+    class Frozen {
+      static level = 1;
+    }
+    expect(Reflect.preventExtensions(Frozen)).toBe(true);
+    Object.freeze(Frozen);
+    expect(Object.isFrozen(Frozen)).toBe(true);
+    expect(Reflect.ownKeys(Frozen)).toEqual(["length", "name", "prototype", "level"]);
+  });
 });
