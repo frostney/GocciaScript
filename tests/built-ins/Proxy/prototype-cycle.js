@@ -86,6 +86,29 @@ describe("lookups around a prototype cycle through a Proxy", () => {
   });
 });
 
+describe("a prototype cycle through a Proxy that also holds other objects", () => {
+  test("a read around a cycle through 30 arrays throws RangeError", () => {
+    const first = [];
+    let last = first;
+    for (const i of Array.from({ length: 29 })) {
+      const next = [];
+      Object.setPrototypeOf(last, next);
+      last = next;
+    }
+    Object.setPrototypeOf(last, new Proxy(Object.create(first), {}));
+    expect(() => first.missing).toThrow(RangeError);
+    expect(() => "missing" in first).toThrow(RangeError);
+    expect(() => { first.missing = 1; }).toThrow(RangeError);
+  });
+
+  test("a read around a cycle through a class instance throws RangeError", () => {
+    class Plain {}
+    const instance = new Plain();
+    Object.setPrototypeOf(instance, new Proxy(Object.create(instance), {}));
+    expect(() => instance.missing).toThrow(RangeError);
+  });
+});
+
 describe("Proxies nested as targets", () => {
   const nest = (depth) => {
     let proxy = { x: "found" };

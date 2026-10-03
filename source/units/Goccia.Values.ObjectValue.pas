@@ -242,9 +242,10 @@ function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FP
   lookup, and a Proxy when it forwards to its target. A call into a Proxy is
   counted against MAX_PROPERTY_DELEGATION_DEPTH (Goccia.StackLimit): every
   prototype cycle passes through one, because the cycle checks of
-  [[SetPrototypeOf]] stop only there. A call into any other object is left
-  uncounted, so a long chain of arrays or classes reads as far as it did
-  before the walk became a loop. }
+  [[SetPrototypeOf]] stop only there. A call into any other object counts
+  against the much larger MAX_OBJECT_DELEGATION_DEPTH, so a long chain of
+  arrays or classes still reads, and a cycle holding many of them still ends
+  in a RangeError. }
 function DelegateGetProperty(const AObject: TGocciaObjectValue;
   const AName: string; const AReceiver: TGocciaValue): TGocciaValue;
 function DelegateGetSymbolProperty(const AObject: TGocciaObjectValue;
@@ -309,8 +310,7 @@ const
   same procedure again, so the walks below step to it in a loop: a chain of
   ordinary objects takes no native stack and has no length limit. A parent
   whose class overrides the lookup (a Proxy, an exotic object) is entered by a
-  real call through the Delegate* functions, which count the calls into a
-  Proxy.
+  real call through the Delegate* functions, which count it.
 
   The Inherits* functions tell the two apart by the method the parent's class
   resolves to, so a new subclass that overrides a lookup is handed over to
@@ -383,7 +383,15 @@ function DelegateGetProperty(const AObject: TGocciaObjectValue;
   const AName: string; const AReceiver: TGocciaValue): TGocciaValue;
 begin
   if AObject.ClassType <> TGocciaProxyValue then
-    Exit(AObject.GetPropertyWithContext(AName, AReceiver));
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.GetPropertyWithContext(AName, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
   EnterPropertyDelegation;
   try
     Result := AObject.GetPropertyWithContext(AName, AReceiver);
@@ -397,7 +405,15 @@ function DelegateGetSymbolProperty(const AObject: TGocciaObjectValue;
   const AReceiver: TGocciaValue): TGocciaValue;
 begin
   if AObject.ClassType <> TGocciaProxyValue then
-    Exit(AObject.GetSymbolPropertyWithReceiver(ASymbol, AReceiver));
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
   EnterPropertyDelegation;
   try
     Result := AObject.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
@@ -410,7 +426,15 @@ function DelegateHasProperty(const AObject: TGocciaObjectValue;
   const AName: string): Boolean;
 begin
   if AObject.ClassType <> TGocciaProxyValue then
-    Exit(AObject.HasProperty(AName));
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.HasProperty(AName);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
   EnterPropertyDelegation;
   try
     Result := AObject.HasProperty(AName);
@@ -423,7 +447,15 @@ function DelegateSetProperty(const AObject: TGocciaObjectValue;
   const AName: string; const AValue, AReceiver: TGocciaValue): Boolean;
 begin
   if AObject.ClassType <> TGocciaProxyValue then
-    Exit(AObject.AssignPropertyWithReceiver(AName, AValue, AReceiver));
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.AssignPropertyWithReceiver(AName, AValue, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
   EnterPropertyDelegation;
   try
     Result := AObject.AssignPropertyWithReceiver(AName, AValue, AReceiver);
@@ -437,8 +469,16 @@ function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
   const AValue, AReceiver: TGocciaValue): Boolean;
 begin
   if AObject.ClassType <> TGocciaProxyValue then
-    Exit(AObject.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
-      AReceiver));
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
+        AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
   EnterPropertyDelegation;
   try
     Result := AObject.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
@@ -1891,7 +1931,7 @@ end;
 function TGocciaObjectValue.GetPropertyFromPrototype(const AName: string;
   const AThisContext: TGocciaValue): TGocciaValue;
 var
-  Parent: TGocciaObjectValue;
+  Parent, GrandParent: TGocciaObjectValue;
 begin
   Parent := FPrototype;
   if not Assigned(Parent) then
@@ -1900,13 +1940,22 @@ begin
     Exit(DelegateGetProperty(Parent, AName, AThisContext));
   // A parent that keeps the ordinary [[Get]] but describes some own
   // properties only through [[GetOwnProperty]] (a typed array's elements) is
-  // asked that first. Any other parent answers with its own [[Get]]: the
-  // common case of an array or class instance reading its prototype
-  // (Array.prototype is itself an array), so it stays a direct call.
+  // asked that first.
   if InheritsGet(Parent) and not InheritsGetOwnProperty(Parent) and
      GetThroughExoticParent(Parent, AName, AThisContext, Result) then
     Exit;
-  Result := Parent.GetPropertyWithContext(AName, AThisContext);
+  // Any other parent answers with its own [[Get]]. The common case is an
+  // array or class instance reading its prototype (Array.prototype is itself
+  // an array, whose own prototype is ordinary): that call stays direct and
+  // uncounted, since the walk it starts continues in a loop. A parent whose
+  // own prototype also overrides the lookup is a counted call, so a chain or
+  // cycle of such objects is bounded.
+  GrandParent := Parent.FPrototype;
+  if not Assigned(GrandParent) or
+     (InheritsGet(GrandParent) and InheritsGetOwnProperty(GrandParent)) then
+    Result := Parent.GetPropertyWithContext(AName, AThisContext)
+  else
+    Result := DelegateGetProperty(Parent, AName, AThisContext);
 end;
 
 procedure TGocciaObjectValue.AssignThroughExoticParent(

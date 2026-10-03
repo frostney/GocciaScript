@@ -27,6 +27,14 @@ const
   // are live at once turns both into a RangeError.
   MAX_PROPERTY_DELEGATION_DEPTH = 1000;
 
+  // The same walk enters an array, function, class or class instance by a
+  // native call too, because their classes override the lookup. Those calls
+  // are counted separately against this much larger cap: a long chain of such
+  // objects reads as it always did, and a prototype cycle through a Proxy that
+  // holds many of them still ends in a RangeError before the native stack
+  // does.
+  MAX_OBJECT_DELEGATION_DEPTH = 3000;
+
   // OrdinaryHasInstance and Object.prototype.isPrototypeOf follow
   // [[GetPrototypeOf]] in a loop. Through a Proxy that loop can run forever,
   // either around a prototype cycle or because a getPrototypeOf trap keeps
@@ -49,6 +57,10 @@ procedure ThrowMaxCallStackExceeded;
 // after it.
 procedure EnterPropertyDelegation;
 procedure LeavePropertyDelegation;
+// The same for a call into any other object whose class overrides the lookup,
+// counted against MAX_OBJECT_DELEGATION_DEPTH.
+procedure EnterObjectDelegation;
+procedure LeaveObjectDelegation;
 procedure CheckProxyPrototypeSteps(const AProxySteps: Integer);
 
 implementation
@@ -62,6 +74,7 @@ var
 
 threadvar
   GPropertyDelegationDepth: Integer;
+  GObjectDelegationDepth: Integer;
 
 procedure SetMaxStackDepth(const AMaxDepth: Integer);
 begin
@@ -111,6 +124,18 @@ end;
 procedure LeavePropertyDelegation;
 begin
   Dec(GPropertyDelegationDepth);
+end;
+
+procedure EnterObjectDelegation;
+begin
+  if GObjectDelegationDepth >= MAX_OBJECT_DELEGATION_DEPTH then
+    ThrowMaxCallStackExceeded;
+  Inc(GObjectDelegationDepth);
+end;
+
+procedure LeaveObjectDelegation;
+begin
+  Dec(GObjectDelegationDepth);
 end;
 
 procedure CheckProxyPrototypeSteps(const AProxySteps: Integer);
