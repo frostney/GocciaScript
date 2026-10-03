@@ -66,10 +66,6 @@ type
 
 procedure ClearDisposableStackSlotMap;
 
-{ True when AValue is a DisposableStack or AsyncDisposableStack, that is, has
-  a [[DisposableState]] internal slot. }
-function IsDisposableStackObject(const AValue: TGocciaValue): Boolean;
-
 implementation
 
 uses
@@ -106,6 +102,13 @@ type
   end;
   PDisposableStackSlot = ^TDisposableStackSlot;
 
+  { A DisposableStack or AsyncDisposableStack instance. Its state lives in
+    the side table; the class only tells it apart from an ordinary object,
+    which a pointer-keyed table cannot do once a dead stack's address is
+    reused. }
+  TGocciaDisposableStackObjectValue = class(TGocciaObjectValue)
+  end;
+
   TAsyncDisposableStackDisposeJob = class(TGocciaObjectValue)
   private
     FSlot: PDisposableStackSlot;
@@ -133,12 +136,6 @@ threadvar
 var
   GDisposableStackPrototypeSlot: TGocciaRealmSlotId;
   GAsyncDisposableStackPrototypeSlot: TGocciaRealmSlotId;
-
-function IsDisposableStackObject(const AValue: TGocciaValue): Boolean;
-begin
-  Result := Assigned(GSlotMap) and (AValue is TGocciaObjectValue) and
-    GSlotMap.ContainsKey(TGocciaObjectValue(AValue));
-end;
 
 function EnsureSlotMap: THashMap<TGocciaObjectValue, PDisposableStackSlot>;
 begin
@@ -763,7 +760,7 @@ var
   Instance: TGocciaObjectValue;
   Slot: PDisposableStackSlot;
 begin
-  Instance := TGocciaObjectValue.Create(APrototype);
+  Instance := TGocciaDisposableStackObjectValue.Create(APrototype);
 
   // Allocate internal slot (side-channel, invisible to JS)
   New(Slot);

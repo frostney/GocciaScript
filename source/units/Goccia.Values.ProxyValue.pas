@@ -2186,6 +2186,9 @@ begin
 end;
 
 initialization
+  // An ordinary object holding proxy and revoke; the revoker field only feeds
+  // the GC.
+  RegisterOrdinaryObjectClass(TGocciaRevocableProxyResult);
   RegisterProxyDispatchHooks(IsProxyDispatchValue, DispatchProxyApply,
     DispatchProxyConstruct, DispatchProxyGetPrototype,
     DispatchProxyGetFunctionRealm);

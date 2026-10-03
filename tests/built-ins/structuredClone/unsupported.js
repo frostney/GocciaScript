@@ -44,8 +44,8 @@ describe("values with no serialization", () => {
     expectDataCloneError(new DisposableStack());
   });
 
-  test("an Intl object", () => {
-    expectDataCloneError(new Intl.Collator());
+  test("a Temporal object", () => {
+    expectDataCloneError(Temporal.Duration.from({ days: 1 }));
   });
 
   test("platform objects that are not serializable", () => {
@@ -70,6 +70,29 @@ describe("values that still clone through the property walk", () => {
     const bare = Object.create(null);
     bare.y = 2;
     expect(structuredClone(bare).y).toBe(2);
+  });
+
+  // A DisposableStack is recognized by its class, not by looking its address
+  // up in the stacks' side table, which still lists stacks that have been
+  // collected.
+  test("a plain object allocated after DisposableStacks were collected", () => {
+    const makeStacks = () => Array.from({ length: 50 }, () => new DisposableStack()).length;
+    makeStacks();
+    Goccia.gc();
+    const objects = Array.from({ length: 100 }, (_, i) => {
+      const bare = Object.create(null);
+      bare.i = i;
+      return bare;
+    });
+    expect(structuredClone(objects).map((o) => o.i)).toEqual(objects.map((o) => o.i));
+  });
+
+  test("the object Proxy.revocable returns, once its functions are gone", () => {
+    const revocable = Proxy.revocable({}, {});
+    delete revocable.proxy;
+    delete revocable.revoke;
+    revocable.x = 1;
+    expect(structuredClone(revocable)).toEqual({ x: 1 });
   });
 
   test("namespace objects without internal slots", () => {

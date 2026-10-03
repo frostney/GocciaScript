@@ -91,3 +91,9 @@ test("clones a DOMException with the default name", () => {
   expect(clone.message).toBe("x");
   expect(clone.code).toBe(0);
 });
+
+test("one DOMException cloned twice is one clone", () => {
+  const exception = new DOMException("x");
+  const [first, second] = structuredClone([exception, exception]);
+  expect(first).toBe(second);
+});

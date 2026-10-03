@@ -97,7 +97,6 @@ uses
 
   HashMap,
 
-  Goccia.Builtins.DisposableStack,
   Goccia.CallStack,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -1541,8 +1540,7 @@ begin
   // iterator, an Intl or Temporal object, an arguments object) or is a
   // platform object that is not serializable, and either way is not
   // serializable.
-  else if IsOrdinaryObjectClass(AValue.ClassType) and
-          not IsDisposableStackObject(AValue) then
+  else if IsOrdinaryObjectClass(AValue.ClassType) then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
   else if AValue is TGocciaObjectValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable,

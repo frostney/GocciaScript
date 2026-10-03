@@ -149,6 +149,21 @@ describe("DataView cloning", () => {
     expect(clone.byteLength).toBe(6);
   });
 
+  test("a fixed-length DataView over a resizable buffer keeps its length", () => {
+    const buffer = new ArrayBuffer(4, { maxByteLength: 16 });
+    const clone = structuredClone(new DataView(buffer, 1, 2));
+    clone.buffer.resize(8);
+    expect(clone.byteOffset).toBe(1);
+    expect(clone.byteLength).toBe(2);
+  });
+
+  test("throws DataCloneError for an out-of-bounds DataView", () => {
+    const buffer = new ArrayBuffer(8, { maxByteLength: 8 });
+    const view = new DataView(buffer, 4, 4);
+    buffer.resize(2);
+    expect(() => structuredClone(view)).toThrow(DOMException);
+  });
+
   test("throws DataCloneError for a DataView over a detached buffer", () => {
     const buffer = new ArrayBuffer(4);
     const view = new DataView(buffer);

@@ -2262,6 +2262,8 @@ begin
 end;
 
 initialization
+  // A stats object is ordinary; its fields only back the prototype methods.
+  RegisterOrdinaryObjectClass(TGocciaSandboxStatValue);
   GSandboxStatsPrototypeSlot :=
     RegisterRealmSlot('Sandbox.fs.Stats.prototype');
 

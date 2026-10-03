@@ -28,6 +28,31 @@ describe("Date cloning", () => {
     expect(clone.getTime()).toBe(1);
   });
 
+  test("one Date cloned twice is one clone", () => {
+    const date = new Date(1);
+    const [first, second] = structuredClone([date, date]);
+    expect(first).toBe(second);
+  });
+
+  // StructuredDeserialize creates the Date directly; no script-visible
+  // function takes part.
+  test("runs no script-visible function", () => {
+    const original = new Date(5);
+    const trunc = Math.trunc;
+    const set = WeakMap.prototype.set;
+    Math.trunc = () => 999;
+    WeakMap.prototype.set = () => {
+      throw new Error("called");
+    };
+    try {
+      const clone = structuredClone(original);
+      expect(clone.getTime()).toBe(5);
+    } finally {
+      Math.trunc = trunc;
+      WeakMap.prototype.set = set;
+    }
+  });
+
   test("an object that only inherits from Date.prototype is not a Date", () => {
     const clone = structuredClone(Object.create(Date.prototype));
     expect(Object.prototype.toString.call(clone)).toBe("[object Object]");
@@ -51,6 +76,12 @@ describe("RegExp cloning", () => {
     const clone = structuredClone(original);
     expect(clone.lastIndex).toBe(0);
     expect(clone.extra).toBeUndefined();
+  });
+
+  test("one RegExp cloned twice is one clone", () => {
+    const regexp = /a/;
+    const [first, second] = structuredClone([regexp, regexp]);
+    expect(first).toBe(second);
   });
 
   test("keeps the sticky, unicode and dotAll flags", () => {

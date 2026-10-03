@@ -35,9 +35,11 @@ function HasDateValue(const AObject: TGocciaObjectValue): Boolean;
 function TryGetDateValue(const AObject: TGocciaObjectValue;
   out ATimeValue: Double): Boolean;
 
-{ A new Date of the current realm holding ATimeValue, built by %Date% (so its
-  prototype is %Date.prototype%). Only valid once the realm's Date shim has
-  been evaluated, which any existing Date guarantees; nil before that. }
+{ A new Date of the current realm holding ATimeValue: an instance of %Date%
+  with %Date.prototype% and ATimeValue in its [[DateValue]] slot. It is built
+  natively, so no script-visible function (the shim's constructor body,
+  Math.trunc, WeakMap.prototype.set) runs. Only valid once the realm's Date
+  shim has been evaluated, which any existing Date guarantees; nil before. }
 function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
 
 implementation
@@ -45,9 +47,10 @@ implementation
 uses
   Math,
 
-  Goccia.Arguments.Collection,
+  Goccia.Constants.PropertyNames,
+  Goccia.GarbageCollector,
   Goccia.Realm,
-  Goccia.Values.FunctionBase,
+  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.WeakMapValue;
 
 var
@@ -102,28 +105,37 @@ end;
 
 function CreateDateObject(const ATimeValue: Double): TGocciaObjectValue;
 var
-  Arguments: TGocciaArgumentsCollection;
-  Constructed: TGocciaValue;
   DateConstructor: TObject;
+  Descriptor: TGocciaPropertyDescriptor;
+  Store: TGocciaWeakMapValue;
+  Root: TGocciaTempRoot;
 begin
   Result := nil;
-  if CurrentRealm = nil then
+  Store := CurrentDateValueStore;
+  if not Assigned(Store) then
     Exit;
   DateConstructor := CurrentRealm.GetSlot(GDateConstructorSlot);
-  if not (DateConstructor is TGocciaValue) then
+  if not (DateConstructor is TGocciaObjectValue) then
     Exit;
-  // new Date(t) stores TimeClip(t), which is t itself for any time value a
-  // Date already holds, NaN included.
-  Arguments := TGocciaArgumentsCollection.Create(
-    [TGocciaNumberLiteralValue.Create(ATimeValue)]);
+  // %Date%.prototype is a non-writable, non-configurable data property, so
+  // reading its descriptor runs nothing and always finds %Date.prototype%.
+  Descriptor := TGocciaObjectValue(DateConstructor).GetOwnPropertyDescriptor(
+    PROP_PROTOTYPE);
+  if not (Descriptor is TGocciaPropertyDescriptorData) or
+     not (TGocciaPropertyDescriptorData(Descriptor).Value is
+       TGocciaObjectValue) then
+    Exit;
+  // What `new Date(t)` builds before its body runs: an ordinary object with
+  // %Date.prototype%. The body's only lasting effect is the slot store.
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue(
+    TGocciaPropertyDescriptorData(Descriptor).Value));
+  InitializeTempRoot(Root);
+  AddTempRootIfNeeded(Root, Result);
   try
-    Constructed := ConstructValue(TGocciaValue(DateConstructor), Arguments,
-      TGocciaValue(DateConstructor));
+    Store.SetEntry(Result, TGocciaNumberLiteralValue.Create(ATimeValue));
   finally
-    Arguments.Free;
+    RemoveTempRootIfNeeded(Root);
   end;
-  if Constructed is TGocciaObjectValue then
-    Result := TGocciaObjectValue(Constructed);
 end;
 
 initialization
