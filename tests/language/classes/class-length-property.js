@@ -114,4 +114,49 @@ describe("class length property", () => {
     expect(typeof Foo.length).toBe("function");
     expect(Foo.length()).toBe("static length");
   });
+
+  test("assigning to length throws even when no prototype supplies one", () => {
+    class Orphan {
+      constructor(a, b) {}
+    }
+    Object.setPrototypeOf(Orphan, null);
+
+    expect(() => {
+      Orphan.length = 5;
+    }).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Orphan, "length")).toEqual({
+      value: 2,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a deleted length can be defined again", () => {
+    class Redefined {
+      constructor(a) {}
+    }
+    delete Redefined.length;
+    expect(Reflect.defineProperty(Redefined, "length", { value: 4, configurable: true })).toBe(true);
+
+    expect(Redefined.length).toBe(4);
+    expect(Object.hasOwn(Redefined, "length")).toBe(true);
+  });
+
+  test("assigning to a deleted length does not add it back", () => {
+    class Shortened {}
+    delete Shortened.length;
+
+    expect(() => {
+      Shortened.length = 3;
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Shortened, "length")).toBe(false);
+
+    Object.freeze(Shortened);
+    expect(() => {
+      Shortened.length = 3;
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Shortened, "length")).toBe(false);
+    expect(Object.isFrozen(Shortened)).toBe(true);
+  });
 });

@@ -849,6 +849,52 @@ console.log("--timeout (bytecode)...");
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
+// -- --timeout with exactly one place left to notice it ---------------------------
+//
+// The deadline is polled from several places: backward jumps and calls in the
+// bytecode loop, the entry of a native-to-bytecode call, and every value
+// allocation. In bytecode mode each fixture below leaves one of them as the
+// only poll that runs, so that removing it stops the script from timing out.
+// The interpreted runs check that the same scripts end there too, where the
+// interpreter has a poll for them: it has none for a native consumer driving
+// a callback that allocates nothing, so those two fixtures run in bytecode
+// mode only.
+
+{
+  // Function-local int32 arithmetic stays in registers, so the loops allocate
+  // nothing and call nothing. (At the top level the counter would be a global
+  // binding, and each new value an allocation.) The recursive calls return
+  // numbers that fit a register and allocate nothing either.
+  const BOTH = ["interpreted", "bytecode"];
+  const BYTECODE = ["bytecode"];
+  const onePoll: Array<[string, string, string[], string[]]> = [
+    ["backward jump", "const spin = () => { let i = 0; while (true) { i = (i + 1) | 0; } }; spin();\n", ["--compat-while-loops"], BOTH],
+    ["backward conditional jump", "const spin = () => { let i = 0; do { i = (i + 1) | 0; } while (true); }; spin();\n", ["--compat-while-loops"], BOTH],
+    ["call", "const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2); fib(45);\n", [], BOTH],
+    ["method call", "const o = { fib(n) { return n < 2 ? n : o.fib(n - 1) + o.fib(n - 2); } }; o.fib(45);\n", [], BOTH],
+    // A native consumer drives a bytecode `next` that returns the same result
+    // object every time: nothing is allocated, no jump goes backward and no
+    // bytecode call is made, so only the poll at the native-to-bytecode entry
+    // is left. Set keeps one element, so memory does not grow.
+    ["native-to-bytecode entry", "const res = { done: false, value: 0 }; const it = { [Symbol.iterator]() { return this; }, next: () => res }; new Set(it);\n", [], BYTECODE],
+    // The same through a bound function with nine bound arguments, which
+    // enters through the heap-argument path.
+    ["native-to-bytecode entry with heap arguments", "const res = { done: false, value: 0 }; const f = (a, b, c, d, e, g, h, i, j) => res; const it = { [Symbol.iterator]() { return this; }, next: f.bind(null, 1, 2, 3, 4, 5, 6, 7, 8, 9) }; new Set(it);\n", [], BYTECODE],
+    // split() builds four million strings inside one native call that has no
+    // poll of its own; the poll in the value allocation is what ends it.
+    // Without that poll the call completes, in well over a second.
+    ["value allocation", 'const parts = "ab,".repeat(4000000).split(","); parts.length;\n', [], BOTH],
+  ];
+  for (const [what, source, flags, modes] of onePoll) {
+    console.log(`--timeout (only the ${what} poll is left, ${modes.join(" and ")})...`);
+    for (const mode of modes) {
+      const { exitCode, json } = runLoaderJson(source, ["--timeout=50", ...flags, `--mode=${mode}`], { timeout: 10_000 });
+      if (exitCode !== 1) throw new Error(`Timeout through the ${what} poll: exit code should be 1 (${mode}), got ${exitCode}`);
+      if (json.error?.type !== "TimeoutError") throw new Error(`Timeout through the ${what} poll: expected TimeoutError (${mode}), got ${json.error?.type}`);
+    }
+  }
+}
+
 // -- --timeout inside long-running NATIVE operations ----------------------------
 //
 // A single JS statement can stall inside one native call (dense hole-fill for

@@ -286,7 +286,7 @@
       begin
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
-        if JumpOffset < 0 then
+        if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
       end;
 
@@ -300,7 +300,7 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
-          if JumpOffset < 0 then
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
             CheckExecutionTimeout;
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
@@ -319,7 +319,7 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
-          if JumpOffset < 0 then
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
             CheckExecutionTimeout;
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
@@ -348,7 +348,7 @@
                 Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
-            if JumpOffset < 0 then
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
               CheckExecutionTimeout;
           end
           else if FCoverageEnabled and
@@ -401,7 +401,7 @@
                 Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
-            if JumpOffset < 0 then
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
               CheckExecutionTimeout;
           end
           else if FCoverageEnabled and
@@ -2268,7 +2268,8 @@
 
       OP_CALL_SELF_NUM:
       begin
-        CheckExecutionTimeout;
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
           ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
         goto LDispatchNext;
@@ -2276,7 +2277,8 @@
 
       OP_CALL:
       begin
-        CheckExecutionTimeout;
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
         if ((C and CALL_FLAG_DIRECT_EVAL) <> 0) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
@@ -2489,9 +2491,9 @@
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
-            if TGocciaCallStack.Instance <> nil then
+            if FCallStack <> nil then
               SavedConstructFrameOk :=
-                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
             // Also stamps the executing frame with this call's position so an
@@ -2507,8 +2509,8 @@
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
-            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -2520,7 +2522,8 @@
 
       OP_CALL_METHOD:
       begin
-        CheckExecutionTimeout;
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
         // See OP_CALL: an exact class comparison decides a bytecode callee.
         CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
           Assigned(FRegisters[A].ObjectValue) and
@@ -2748,9 +2751,9 @@
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
-            if TGocciaCallStack.Instance <> nil then
+            if FCallStack <> nil then
               SavedConstructFrameOk :=
-                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
             // See OP_CALL: also stamps the recorded call-site position for a
@@ -2762,8 +2765,8 @@
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
-            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -2794,9 +2797,9 @@
             construction locates the `new`, then restore it on success so the
             stamp does not leak onto a later throw in the same function
             (`new Map(); JSON.parse('{')`). On a throw the frame unwinds. }
-          if TGocciaCallStack.Instance <> nil then
+          if FCallStack <> nil then
             SavedConstructFrameOk :=
-              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+              FCallStack.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
           StampCurrentCallSiteLocation;
@@ -2813,8 +2816,8 @@
           finally
             ReleaseArguments(CallArgs);
           end;
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -2837,9 +2840,9 @@
             ThrowNotConstructorHere(GetRegister(B));
           // Snapshot/stamp/restore as in OP_CONSTRUCT, so a successful spread
           // construct does not leave the caller frame stamped for a later throw.
-          if TGocciaCallStack.Instance <> nil then
+          if FCallStack <> nil then
             SavedConstructFrameOk :=
-              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+              FCallStack.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
           StampCurrentCallSiteLocation;
@@ -2856,8 +2859,8 @@
           finally
             ReleaseArguments(CallArgs);
           end;
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -3668,9 +3671,9 @@
         // pending) records this location instead of the deferred frame's 0:0,
         // matching the tree-walk interpreter. Snapshot/restore so it does not
         // perturb the location seen by later instructions.
-        if TGocciaCallStack.Instance <> nil then
+        if FCallStack <> nil then
           SavedConstructFrameOk :=
-            TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+            FCallStack.TryGetTopFrame(SavedConstructFrame)
         else
           SavedConstructFrameOk := False;
         StampCurrentInstructionLocation;
@@ -3739,8 +3742,8 @@
           end;
         end;
         finally
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 

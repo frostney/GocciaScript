@@ -832,7 +832,7 @@ end;
 
 ## Execution Limits
 
-Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter.
+Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter. Whether either is armed on a thread is mirrored in `GThreadPolls` (`Goccia.ThreadPolls`), which is all that a value allocation and a bytecode call read when neither is.
 
 ### Timeout
 
