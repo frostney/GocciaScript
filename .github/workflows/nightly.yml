@@ -60,10 +60,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
-            --jq '.workflow_runs[0] | select(. != null) | "\(.id) \(.head_sha)"')"
+          # The newest commit on main with a successful CI run for its
+          # push, found by walking main's commits newest first and asking
+          # for each one's runs by SHA. The runs list cannot be trusted
+          # for this: filtered by status=success it once answered with a
+          # run six days old, and unfiltered its "newest 100" reached back
+          # two months and missed the passing runs of the day, so the
+          # nightly skipped newer builds or picked an expired one.
+          # Assigned on its own line so a failed request stops the step
+          # (set -e) instead of leaving the loop below with nothing to
+          # check and reporting that nothing has passed.
+          SHAS="$(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=main&per_page=30" --jq '.[].sha')"
+          RUN=""
+          for SHA in $SHAS; do
+            RUN="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&event=push&per_page=20" \
+              --jq '[.workflow_runs[] | select(.conclusion == "success")] | sort_by(.created_at) | last | select(. != null) | "\(.id) \(.head_sha)"')"
+            if [ -n "$RUN" ]; then
+              break
+            fi
+          done
           if [ -z "$RUN" ]; then
-            echo "No successful CI run for a push to main was found: nothing to publish."
+            echo "None of the newest 30 commits on main has a successful CI run: nothing to publish."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi

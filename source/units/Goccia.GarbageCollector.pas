@@ -683,6 +683,8 @@ end;
 
 procedure TGarbageCollector.RegisterObject(
   const AObject: TGCManagedObject);
+var
+  Size: Int64;
 begin
   // The list and the allocation counter are owner-thread-confined; the byte
   // totals race a cross-thread ReleaseExternalBytes and take the accounting
@@ -690,15 +692,19 @@ begin
   AObject.GCIndex := FManagedObjects.Count;
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
+  // The size is read before the lock so that the locked region is integer
+  // arithmetic on this collector's own fields. In a production build nothing
+  // in it can raise; a development build keeps the Int64 overflow check on the
+  // two additions, which would need a ledger past 2^63 bytes to fire. So it
+  // needs no try..finally — and with it no exception frame on every value
+  // allocated (the same reasoning as the 32-bit GetBytesAllocated).
+  Size := AObject.InstanceSize;
   CriticalSectionEnter(FAccountingLock);
-  try
-    Inc(FBytesAllocated, AObject.InstanceSize);
-    Inc(FTotalBytesAllocated, AObject.InstanceSize);
-    if FBytesAllocated > FPeakBytesAllocated then
-      FPeakBytesAllocated := FBytesAllocated;
-  finally
-    CriticalSectionLeave(FAccountingLock);
-  end;
+  Inc(FBytesAllocated, Size);
+  Inc(FTotalBytesAllocated, Size);
+  if FBytesAllocated > FPeakBytesAllocated then
+    FPeakBytesAllocated := FBytesAllocated;
+  CriticalSectionLeave(FAccountingLock);
 end;
 
 procedure TGarbageCollector.UnregisterObject(
