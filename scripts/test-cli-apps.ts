@@ -2247,6 +2247,100 @@ await section("Test262 Runner: eval super permissions stop at ordinary function 
   }
 });
 
+await section("Test262 Runner: eval may use super in every method, with or without a superclass...", async () => {
+  // ES2026 §19.2.1.1 PerformEval allows super when the eval's this-environment
+  // has a home object (§9.1.1.3.4 HasSuperBinding). MakeMethod gives one to
+  // class methods with or without `extends`, object-literal methods, static
+  // blocks and field initializers (§10.2.7, §15.7.10, §15.7.11); arrows share
+  // the enclosing function's. A function expression, an arrow outside any
+  // method and a function stored by assignment have none.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const proto = { describe() { return 'proto'; } };",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "probe('derived class method', () => { class D extends Base { m() { return eval('super.describe()'); } } return new D().m(); });",
+    "probe('base class method', () => { class C { m() { return eval('typeof super.hasOwnProperty'); } } return new C().m(); });",
+    "probe('base class static method', () => { class C { static m() { return eval('typeof super.call'); } } return C.m(); });",
+    "probe('base class getter', () => { class C { get g() { return eval('typeof super.hasOwnProperty'); } } return new C().g; });",
+    "probe('object literal method', () => ({ __proto__: proto, m() { return eval('super.describe()'); } }).m());",
+    "probe('arrow in object literal method', () => ({ __proto__: proto, m() { return (() => eval('super.describe()'))(); } }).m());",
+    "probe('object literal generator method', () => ({ __proto__: proto, *m() { yield eval('super.describe()'); } }).m().next().value);",
+    "probe('nested eval in object literal method', () => ({ __proto__: proto, m() { return eval(\"eval('super.describe()')\"); } }).m());",
+    "probe('static block', () => { let r; class D extends Base { static { r = eval('super.describe()'); } } return r; });",
+    "probe('arrow in static block', () => { let r; class D extends Base { static { r = (() => eval('super.describe()'))(); } } return r; });",
+    "probe('static field arrow', () => { class D extends Base { static f = () => eval('super.describe()'); } return D.f(); });",
+    "probe('instance field initializer', () => { class D extends Base { f = eval('super.describe()'); } return new D().f; });",
+    "probe('instance field arrow', () => { class D extends Base { f = () => eval('super.describe()'); } return new D().f(); });",
+    "probe('instance field new.target', () => { class C { f = eval('new.target'); } return String(new C().f); });",
+    "probe('instance field super()', () => { class D extends Base { f = eval('super()'); } return new D().f; });",
+    "probe('function in method', () => { class D extends Base { m() { const f = function () { return eval('super.describe()'); }; return f(); } } return new D().m(); });",
+    "probe('function in instance field', () => { class D extends Base { f = function () { return eval('super.describe()'); }; } return new D().f(); });",
+    "probe('arrow outside any method', () => (() => eval('super.describe()'))());",
+    "probe('function stored on a class', () => { class D extends Base {} D.f = function () { return eval('super.describe()'); }; return D.f(); });",
+    "",
+  ].join("\n");
+  const expected = [
+    "derived class method: base-proto",
+    "base class method: function",
+    "base class static method: function",
+    "base class getter: function",
+    "object literal method: proto",
+    "arrow in object literal method: proto",
+    "object literal generator method: proto",
+    "nested eval in object literal method: proto",
+    "static block: base-static",
+    "arrow in static block: base-static",
+    "static field arrow: base-static",
+    "instance field initializer: base-proto",
+    "instance field arrow: base-proto",
+    "instance field new.target: undefined",
+    "instance field super(): SyntaxError",
+    "function in method: SyntaxError",
+    "function in instance field: SyntaxError",
+    "arrow outside any method: SyntaxError",
+    "function stored on a class: SyntaxError",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode} eval super-in-methods probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode} eval super-in-methods got: ${proc.stdout.toString()}`);
+  }
+  // A static field initializer is a method too. Bytecode compiles it inline
+  // until #1390, so this part runs in the interpreter only.
+  const staticSource = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "probe('static field initializer', () => { class D extends Base { static f = eval('super.describe()'); } return D.f; });",
+    "probe('arrow in static field array', () => { class D extends Base { static f = [() => eval('super.describe()')]; } return D.f[0](); });",
+    "probe('static field new.target', () => { class C { static f = eval('new.target'); } return String(C.f); });",
+    "",
+  ].join("\n");
+  const staticExpected = [
+    "static field initializer: base-static",
+    "arrow in static field array: base-static",
+    "static field new.target: undefined",
+  ].join("\n");
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=interpreted"], {
+    stdin: new TextEncoder().encode(staticSource),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare interpreted eval super-in-static-field probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== staticExpected)
+    throw new Error(`Bare interpreted eval super-in-static-field got: ${proc.stdout.toString()}`);
+});
+
 await section("Test262 Runner: assigning a function to a property does not let eval use super...", async () => {
   // ES2026 §10.2.7 MakeMethod sets [[HomeObject]] only for defined methods;
   // §19.2.1.1 PerformEval rejects super when the function has none.

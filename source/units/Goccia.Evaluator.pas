@@ -3743,6 +3743,11 @@ begin
     Result := AReceiver;
 end;
 
+{ The scope of the function whose this-environment a direct eval sees: the
+  nearest non-arrow call, or a class-init scope. Field initializers (ES2026
+  §15.7.10 ClassFieldDefinitionEvaluation) and static blocks (§15.7.11
+  ClassStaticBlockDefinitionEvaluation) are methods of their own, and the
+  evaluator runs them in a TGocciaClassInitScope rather than a call scope. }
 function FindDirectEvalCallerFunctionScope(
   const AScope: TGocciaScope): TGocciaScope;
 var
@@ -3754,6 +3759,8 @@ begin
     if (Current is TGocciaCallScope) and
        not (Current is TGocciaArrowCallScope) then
       Exit(Current);
+    if Current is TGocciaClassInitScope then
+      Exit(Current);
     if (Current.ScopeKind = skFunction) and
        (Current.CustomLabel = 'BytecodeDirectEval') then
       Exit(Current);
@@ -3762,6 +3769,24 @@ begin
     Current := Current.Parent;
   end;
   Result := nil;
+end;
+
+{ ES2026 §19.2.1.1 PerformEval: inMethod is HasSuperBinding() of the eval's
+  this-environment (§9.1.1.3.4), true whenever the function has a
+  [[HomeObject]]. MakeMethod (§10.2.7) gives one to every class element and
+  object-literal method, whether or not a superclass exists; the evaluator
+  calls those through a TGocciaMethodCallScope. Field initializers and static
+  blocks have one too. A bytecode caller's scope carries its closure's home
+  object, which FindSuperClass reports. }
+function DirectEvalHasSuperBinding(
+  const ACallerFunctionScope: TGocciaScope): Boolean;
+begin
+  if (ACallerFunctionScope is TGocciaMethodCallScope) or
+     (ACallerFunctionScope is TGocciaClassInitScope) then
+    Exit(True);
+  Result := Assigned(ACallerFunctionScope) and
+    (ACallerFunctionScope.CustomLabel = 'BytecodeDirectEval') and
+    (ACallerFunctionScope.FindSuperClass <> nil);
 end;
 
 function DirectEvalAllowsSuperCall(const AScope: TGocciaScope): Boolean;
@@ -3912,8 +3937,7 @@ begin
         end;
         CallerFunctionScope := FindDirectEvalCallerFunctionScope(AContext.Scope);
         AllowNewTarget := Assigned(CallerFunctionScope);
-        AllowSuperProperty := Assigned(CallerFunctionScope) and
-          (CallerFunctionScope.FindSuperClass <> nil);
+        AllowSuperProperty := DirectEvalHasSuperBinding(CallerFunctionScope);
         AllowSuperCall := DirectEvalAllowsSuperCall(AContext.Scope);
         AResult := EvaluateEvalProgram(PipelineResult.ProgramNode,
           EvalContext, VarScope, EvalScope, StrictEval,
