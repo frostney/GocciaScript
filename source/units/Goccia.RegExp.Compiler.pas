@@ -43,6 +43,10 @@ const
   WORD_ASSERT_ICASE_FLAG = $2;
   CLEAR_CAPTURE_COUNT_BITS = 12;
   CLEAR_CAPTURE_COUNT_MASK = (1 shl CLEAR_CAPTURE_COUNT_BITS) - 1;
+  // The compiler copies a quantified body once per counted iteration and
+  // instructions address each other with 24-bit operands, so a count above
+  // 2^24 - 1 cannot be compiled.
+  REGEXP_MAX_QUANTIFIER_BOUND = $FFFFFF;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 
@@ -133,7 +137,7 @@ type
     function ParseGroupName: string;
     function ParseUnicodeEscape: Cardinal;
     function ParseHexEscape(ADigits: Integer): Cardinal;
-    function ParseDecimalEscape: Integer;
+    function ParseQuantifierBound(out ADigits: string): Int64;
     procedure EmitCharMatch(ACodePoint: Cardinal);
     procedure EmitCharClassRanges(const ARanges: array of TRegExpCharRange;
       ARangeCount: Integer; ANegated: Boolean);
@@ -2035,25 +2039,47 @@ begin
   end;
 end;
 
-function TRegExpCompiler.ParseDecimalEscape: Integer;
 const
-  MAX_QUANTIFIER = 1000000;
+  // A string holds at most MaxInt code units.
+  QUANTIFIER_UNREACHABLE_MIN = Int64(MaxInt) + 1;
+  // After its minimum count, a repetition stops at an iteration that matches
+  // empty, so it runs at most min + (subject length) iterations: a maximum
+  // at or above this equals no maximum.
+  QUANTIFIER_UNBOUNDED_MAX = Int64(MaxInt) + REGEXP_MAX_QUANTIFIER_BOUND + 1;
+  QUANTIFIER_BOUND_SATURATED = Int64(1) shl 40;
+
+// A quantifier bound's value, saturated at QUANTIFIER_BOUND_SATURATED;
+// ADigits receives its digits without leading zeros, for exact comparison.
+function TRegExpCompiler.ParseQuantifierBound(out ADigits: string): Int64;
 var
   C: Char;
 begin
   Result := 0;
+  ADigits := '';
   while not AtEnd do
   begin
     C := Peek;
     if (C < '0') or (C > '9') then
       Break;
-    if Result <= MAX_QUANTIFIER then
-      Result := Result * 10 + (Ord(Advance) - Ord('0'))
-    else
-      Advance;
+    Advance;
+    if (ADigits <> '') or (C <> '0') then
+      ADigits := ADigits + C;
+    if Result < QUANTIFIER_BOUND_SATURATED then
+    begin
+      Result := Result * 10 + (Ord(C) - Ord('0'));
+      if Result > QUANTIFIER_BOUND_SATURATED then
+        Result := QUANTIFIER_BOUND_SATURATED;
+    end;
   end;
-  if Result > MAX_QUANTIFIER then
-    Result := MAX_QUANTIFIER;
+end;
+
+// Compares two decimal numbers given as digits without leading zeros.
+function CompareDecimalDigits(const A, B: string): Integer;
+begin
+  if Length(A) <> Length(B) then
+    Result := Length(A) - Length(B)
+  else
+    Result := CompareStr(A, B);
 end;
 
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
@@ -2796,15 +2822,36 @@ end;
 procedure TRegExpCompiler.CompileQuantifier(AAtomStart: Integer);
 var
   SplitPC: Integer;
-  MinCount, MaxCount, I: Integer;
+  MinCount, MaxCount: Int64;
+  I: Integer;
   Lazy: Boolean;
   C: Char;
   BodyLen: Integer;
   BodyCode: array of UInt32;
+  MinDigits, MaxDigits: string;
   SavePos: Integer;
   ClearOperand: Integer;
   HasCaptureClear: Boolean;
   NeedsRepeatGuard: Boolean;
+
+  // Whether every match of the body consumes at least one code unit,
+  // judged conservatively from its first instructions.
+  function BodyAlwaysConsumes: Boolean;
+  var
+    J: Integer;
+  begin
+    for J := AAtomStart to CurrentPC - 1 do
+      case TRegExpOpCode(FCode[J] and $FF) of
+        RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY:
+          Exit(True);
+        RX_SAVE, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD,
+        RX_CLEAR_CAPTURES:
+          ;
+      else
+        Exit(False);
+      end;
+    Result := False;
+  end;
 
   function BodyRequiresProgress: Boolean;
   var
@@ -2888,22 +2935,27 @@ begin
           Dec(FPos);
           Exit;
         end;
-        MinCount := ParseDecimalEscape;
+        MinCount := ParseQuantifierBound(MinDigits);
         if Match(',') then
         begin
           if Peek = '}' then
             MaxCount := -1
           else
-            MaxCount := ParseDecimalEscape;
+            MaxCount := ParseQuantifierBound(MaxDigits);
         end
         else
+        begin
           MaxCount := MinCount;
+          MaxDigits := MinDigits;
+        end;
         if not Match('}') then
         begin
           FPos := SavePos;
           Exit;
         end;
-        if (MaxCount >= 0) and (MinCount > MaxCount) then
+        // ES2026 §22.2.1.1: compare the bounds' mathematical values.
+        if (MaxCount >= 0) and
+           (CompareDecimalDigits(MinDigits, MaxDigits) > 0) then
           raise EConvertError.Create(
             'Invalid regular expression: numbers out of order in quantifier');
       end;
@@ -2914,12 +2966,26 @@ begin
   BodyLen := CurrentPC - AAtomStart;
   if BodyLen = 0 then
     Exit;
+  if MaxCount >= QUANTIFIER_UNBOUNDED_MAX then
+    MaxCount := -1;
+  if (MinCount >= QUANTIFIER_UNREACHABLE_MIN) and BodyAlwaysConsumes then
+  begin
+    // Each iteration consumes at least one code unit and no string has
+    // MinCount of them: the repetition never matches.
+    FCodeLen := AAtomStart;
+    Emit(EncodeOp(RX_FAIL));
+    Exit;
+  end;
+  if (MinCount > REGEXP_MAX_QUANTIFIER_BOUND) or
+     (MaxCount > REGEXP_MAX_QUANTIFIER_BOUND) then
+    raise EConvertError.Create(
+      'Invalid regular expression: quantifier bound too large');
   SetLength(BodyCode, BodyLen);
   Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
   HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
   NeedsRepeatGuard := not BodyRequiresProgress;
   FCodeLen := AAtomStart;
-  for I := 1 to MinCount do
+  for I := 1 to Integer(MinCount) do
   begin
     EmitCaptureClearIfNeeded;
     EmitBodyAt(BodyCode, BodyLen, AAtomStart);
@@ -2937,7 +3003,7 @@ begin
   end
   else
   begin
-    for I := MinCount + 1 to MaxCount do
+    for I := Integer(MinCount) + 1 to Integer(MaxCount) do
     begin
       SplitPC := CurrentPC;
       if Lazy then
