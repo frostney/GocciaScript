@@ -57,6 +57,7 @@ type
     FGlobalEnv: TGCManagedObject;
     FHostDefined: TObject;
     FHostFinalize: TGocciaRealmHostFinalize;
+    FHostsDirectEval: Boolean;
     FIdentity: TGocciaRealmIdentity;
     FIntrinsics: TGocciaRealmIntrinsics;
     FLoadedModules: TObject;
@@ -97,8 +98,16 @@ type
     property LoadedModules: TObject read FLoadedModules write FLoadedModules;
     property HostDefined: TObject read FHostDefined write FHostDefined;
     property HostFinalize: TGocciaRealmHostFinalize read FHostFinalize write FHostFinalize;
+    // Set by a host when it installs a function that performs direct eval in
+    // this realm, and never cleared: code created by direct eval stays able to
+    // write the registers of running functions whatever a script later does
+    // with the global `eval` property. The bytecode compiler reads it to keep
+    // let bindings and parameters out of direct register reads.
+    property HostsDirectEval: Boolean read FHostsDirectEval write FHostsDirectEval;
     property Identity: TGocciaRealmIdentity read FIdentity;
   end;
+
+  PGocciaRealm = ^TGocciaRealm;
 
 // Allocates a new slot id.  Call from the initialization section of a unit
 // that owns per-realm state and store the result in a unit-local constant.
@@ -123,6 +132,12 @@ procedure SetCurrentRealm(const ARealm: TGocciaRealm);
 // Installs ARealm as the current realm and returns the one it replaces, with
 // one thread-local lookup instead of the two a read followed by a write costs.
 function ExchangeCurrentRealm(const ARealm: TGocciaRealm): TGocciaRealm;
+
+// The address of the calling thread's current-realm variable. It stays valid
+// for as long as the thread lives, so a caller that switches realms on a hot
+// path can resolve it once and read and write through it without a
+// thread-local lookup per switch. Never hand it to another thread.
+function CurrentRealmSlot: PGocciaRealm;
 
 procedure PushCurrentFunctionExecutionContext(const AScope: TObject;
   const AFunctionValue: TObject);
@@ -226,6 +241,11 @@ begin
   Current := @GCurrentRealm;
   Result := Current^;
   Current^ := ARealm;
+end;
+
+function CurrentRealmSlot: PGocciaRealm;
+begin
+  Result := @GCurrentRealm;
 end;
 
 procedure PushCurrentFunctionExecutionContext(const AScope: TObject;

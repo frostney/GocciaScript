@@ -13,6 +13,55 @@ uses
 type
   ERegExpRuntimeError = class(Exception);
 
+  TRegExpInputUnits = array of Cardinal;
+
+  TRegExpInput = record
+    Units: TRegExpInputUnits;
+    Length: Integer;
+  end;
+
+  TBacktrackEntry = record
+    PC: Integer;
+    InputPos: Integer;
+    RepeatDepth: Integer;
+    RepeatStack: array of Integer;
+    Slots: array of Integer;
+  end;
+
+  TBacktrackStack = array of TBacktrackEntry;
+
+  TRegExpSlots = array of Integer;
+
+  { Matches one program against one subject repeatedly, as a global
+    replace, match, split or matchAll does: the subject is decoded once and
+    the capture slots and backtrack stack are reused by every Exec. }
+  TRegExpMatcher = class
+  private
+    FProgram: TRegExpProgram;
+    FText: string;
+    FInput: TRegExpInput;
+    FDecoded: Boolean;
+    FSlotCount: Integer;
+    FSlots: TRegExpSlots;
+    FStack: TBacktrackStack;
+  public
+    constructor Create(const AProgram: TRegExpProgram; const AText: string);
+    { Same matching as ExecuteRegExpVM; on success the capture slots are
+      read with Slot. }
+    function Exec(const AStartIndex: Integer;
+      const ARequireStart: Boolean): Boolean;
+    function Slot(const AIndex: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+    property SlotCount: Integer read FSlotCount;
+    { A start and an end offset per group, -1 for a group that did not
+      participate; overwritten by the next Exec. }
+    property Slots: TRegExpSlots read FSlots;
+    { Backtrack entries kept for the next Exec. }
+    function RetainedBacktrackCapacity: Integer;
+    { Drops the decoded subject and the backtrack stack; the next Exec gets
+      the subject again through the per-thread decode memo. }
+    procedure ReleaseBuffers;
+  end;
+
   TRegExpVMResult = record
     Matched: Boolean;
     CaptureSlots: array of Integer;
@@ -22,6 +71,11 @@ function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 function RegExpInputCodeUnitLength(const AInput: string): Integer;
+
+{ The number of VM steps one match attempt may take on a subject of
+  AInputLength code units: proportional to the subject, never below the fixed
+  floor. Computed in 64 bits so a subject of any length gets its full budget. }
+function RegExpStepLimit(const AInputLength: Integer): Int64;
 
 { Release the per-thread input-decode memo. Registered with
   Goccia.ThreadCleanupRegistry from this unit's initialization, so the drain
@@ -43,6 +97,7 @@ const
   MIN_STEP_LIMIT = 10000000;
   STEPS_PER_INPUT_BYTE = 100;
   DEFAULT_BACKTRACK_CAP = 10000000;
+  MAX_RETAINED_BACKTRACK_ENTRIES = 1024;
   MEMO_INITIAL_CAPACITY = 64;
   MEMO_MAX_CAPACITY = 65536;
   MEMO_MAX_PROBES = 16;
@@ -53,23 +108,6 @@ const
   LOW_SURROGATE_END = $DFFF;
 
 type
-  TRegExpInputUnits = array of Cardinal;
-
-  TRegExpInput = record
-    Units: TRegExpInputUnits;
-    Length: Integer;
-  end;
-
-  TBacktrackEntry = record
-    PC: Integer;
-    InputPos: Integer;
-    RepeatDepth: Integer;
-    RepeatStack: array of Integer;
-    Slots: array of Integer;
-  end;
-
-  TBacktrackStack = array of TBacktrackEntry;
-
   TMemoEntry = record
     Occupied: Boolean;
     PC: Integer;
@@ -532,6 +570,17 @@ begin
   Result := AInput.Length + 1;
 end;
 
+function RegExpStepLimit(const AInputLength: Integer): Int64;
+begin
+  // From 21,474,837 code units on the product exceeds High(Integer). The cast
+  // keeps 32-bit targets, which multiply two Integers in 32 bits, from
+  // overflowing; the Int64 result keeps 64-bit targets from narrowing it.
+  // Not inlined: inlining it into RunVM made the step loop spill registers.
+  Result := Int64(AInputLength) * STEPS_PER_INPUT_BYTE;
+  if Result < MIN_STEP_LIMIT then
+    Result := MIN_STEP_LIMIT;
+end;
+
 function RunVM(const AProgram: TRegExpProgram; const AInput: TRegExpInput;
   AStartPos: Integer; var ASlots: array of Integer;
   ASlotCount: Integer; var AStack: TBacktrackStack; AStartPC: Integer = 0;
@@ -544,8 +593,8 @@ var
   CodePoint: Cardinal;
   ByteLen: Integer;
   StackTop: Integer;
-  StepCount: Integer;
-  StepLimit: Integer;
+  StepCount: Int64;
+  StepLimit: Int64;
   Memo: TMemoTable;
   SlotCount: Integer;
   MatchCP: Cardinal;
@@ -804,9 +853,7 @@ begin
   PC := AStartPC;
   InputPos := AStartPos;
   StepCount := 0;
-  StepLimit := AInput.Length * STEPS_PER_INPUT_BYTE;
-  if StepLimit < MIN_STEP_LIMIT then
-    StepLimit := MIN_STEP_LIMIT;
+  StepLimit := RegExpStepLimit(AInput.Length);
   StackTop := -1;
   RepeatDepth := 0;
   MemoInit(Memo);
@@ -1292,17 +1339,22 @@ begin
   end;
 end;
 
-// Per-thread memo of the most recently decoded subject. Global match/replace/
-// split/matchAll re-enter ExecuteRegExpVM once per match against the same
-// immutable subject string, so caching the decode avoids re-decoding and
-// re-allocating the whole input on every match (O(matches * length) -> O(length)).
+// Per-thread memo of the most recently decoded subjects. Repeated exec/test
+// calls (and the global loops of replace/match/split/matchAll when they run
+// through the RegExpExec protocol) re-enter ExecuteRegExpVM once per match
+// against the same immutable subject string, so caching the decode avoids
+// re-decoding the whole input on every match. TRegExpMatcher, which those
+// loops use with the built-in exec, decodes through the same memo once.
 // Identity-keyed (the driver passes the same string instance each iteration),
 // so the hit check is O(1). Pure optimization — clearing it is always safe.
-// Single-entry: a different subject replaces the retained pair via managed
-// assignment (the prior string/array is released, so the cache never grows).
+// Two entries, most recent first: a decode evicts the older one (the managed
+// assignments release its string/array, so the cache never grows), and a hit
+// on the older one swaps them. Two entries let a loop over one long subject
+// (matchAll's next() calls, an exec loop) match other strings in its body
+// without re-decoding the long one on every step.
 // FPC does not auto-finalize managed threadvars at thread exit. ClearRegExpInputMemo
 // is registered with Goccia.ThreadCleanupRegistry from this unit's initialization,
-// so the registry drain releases each thread's pair on worker exit
+// so the registry drain releases each thread's entries on worker exit
 // (ShutdownThreadRuntime) and the main thread's on process shutdown (the
 // registry's finalization) — no thread retains a residual.
 threadvar
@@ -1310,12 +1362,43 @@ threadvar
   GRegExpInputMemoUnits: TRegExpInputUnits;
   GRegExpInputMemoLength: Integer;
   GRegExpInputMemoValid: Boolean;
+  GRegExpInputMemoOlderStr: string;
+  GRegExpInputMemoOlderUnits: TRegExpInputUnits;
+  GRegExpInputMemoOlderLength: Integer;
+  GRegExpInputMemoOlderValid: Boolean;
+
+// Swaps the two entries. Kept out of TryGetRegExpInputMemo, whose hit path
+// must stay free of managed temporaries.
+procedure PromoteOlderRegExpInputMemo;
+var
+  Str: string;
+  Units: TRegExpInputUnits;
+  Len: Integer;
+begin
+  Str := GRegExpInputMemoStr;
+  Units := GRegExpInputMemoUnits;
+  Len := GRegExpInputMemoLength;
+  GRegExpInputMemoOlderValid := GRegExpInputMemoValid;
+  GRegExpInputMemoStr := GRegExpInputMemoOlderStr;
+  GRegExpInputMemoUnits := GRegExpInputMemoOlderUnits;
+  GRegExpInputMemoLength := GRegExpInputMemoOlderLength;
+  GRegExpInputMemoValid := True;
+  GRegExpInputMemoOlderStr := Str;
+  GRegExpInputMemoOlderUnits := Units;
+  GRegExpInputMemoOlderLength := Len;
+end;
 
 function TryGetRegExpInputMemo(const AInput: string;
   out ADecodedInput: TRegExpInput): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := GRegExpInputMemoValid and
     (Pointer(AInput) = Pointer(GRegExpInputMemoStr));
+  if not Result and GRegExpInputMemoOlderValid and
+     (Pointer(AInput) = Pointer(GRegExpInputMemoOlderStr)) then
+  begin
+    PromoteOlderRegExpInputMemo;
+    Result := True;
+  end;
   if Result then
   begin
     ADecodedInput.Units := GRegExpInputMemoUnits;
@@ -1330,6 +1413,10 @@ begin
     Exit;
 
   BuildRegExpInput(AInput, ADecodedInput);
+  GRegExpInputMemoOlderStr := GRegExpInputMemoStr;
+  GRegExpInputMemoOlderUnits := GRegExpInputMemoUnits;
+  GRegExpInputMemoOlderLength := GRegExpInputMemoLength;
+  GRegExpInputMemoOlderValid := GRegExpInputMemoValid;
   GRegExpInputMemoStr := AInput;
   GRegExpInputMemoUnits := ADecodedInput.Units;
   GRegExpInputMemoLength := ADecodedInput.Length;
@@ -1344,12 +1431,53 @@ begin
   Result := Input.Length;
 end;
 
+// Runs the program from AStartIndex (only there when ARequireStart, else at
+// the first matching position from there on), leaving the capture slots of a
+// match in ASlots.
+function ScanRegExpInput(const AProgram: TRegExpProgram;
+  const AInput: TRegExpInput; const AStartIndex: Integer;
+  const ARequireStart: Boolean; var ASlots: array of Integer;
+  const ASlotCount: Integer; var AStack: TBacktrackStack): Boolean;
+var
+  StartPos: Integer;
+begin
+  StartPos := NormalizeInputIndex(AInput, AStartIndex, AProgram.FullUnicode);
+  if ARequireStart then
+  begin
+    FillChar(ASlots[0], ASlotCount * SizeOf(Integer), $FF);
+    Exit(RunVM(AProgram, AInput, StartPos, ASlots, ASlotCount, AStack));
+  end;
+  if AProgram.StartCheck.Enabled then
+    StartPos := FindNextStartCandidate(AProgram.StartCheck, AInput, StartPos,
+      AProgram.FullUnicode);
+  while StartPos <= AInput.Length do
+  begin
+    // Unanchored scans re-run the VM at every input position; on a long
+    // non-matching subject this loop runs millions of times inside one
+    // exec/test call, so poll the cooperative engine deadline here too.
+    // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
+    // throttles deadlines > 16ms, and the always-check mode for <= 16ms
+    // deadlines is self-limiting (the expensive window lasts at most 16ms).
+    CheckExecutionTimeout;
+    FillChar(ASlots[0], ASlotCount * SizeOf(Integer), $FF);
+    if RunVM(AProgram, AInput, StartPos, ASlots, ASlotCount, AStack) then
+      Exit(True);
+    if StartPos >= AInput.Length then
+      Break;
+    StartPos := AdvanceInputIndex(AInput, StartPos, AProgram.FullUnicode);
+    if AProgram.StartCheck.Enabled then
+      StartPos := FindNextStartCandidate(AProgram.StartCheck, AInput, StartPos,
+        AProgram.FullUnicode);
+  end;
+  Result := False;
+end;
+
 function ExecuteRegExpVM(const AProgram: TRegExpProgram;
   const AInput: string; const AStartIndex: Integer;
   const ARequireStart: Boolean; out AResult: TRegExpVMResult): Boolean;
 var
   Input: TRegExpInput;
-  SlotCount, StartPos: Integer;
+  SlotCount: Integer;
   Slots: array of Integer;
   Stack: TBacktrackStack;
 begin
@@ -1364,47 +1492,66 @@ begin
   end;
   SlotCount := (AProgram.CaptureCount + 1) * 2;
   SetLength(Slots, SlotCount);
-  StartPos := NormalizeInputIndex(Input, AStartIndex, AProgram.FullUnicode);
-  if ARequireStart then
+  if ScanRegExpInput(AProgram, Input, AStartIndex, ARequireStart, Slots,
+     SlotCount, Stack) then
   begin
-    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
-    begin
-      AResult.Matched := True;
-      SetLength(AResult.CaptureSlots, SlotCount);
-      Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
-      Result := True;
-    end;
-    Exit;
+    AResult.Matched := True;
+    SetLength(AResult.CaptureSlots, SlotCount);
+    Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
+    Result := True;
   end;
-  if AProgram.StartCheck.Enabled then
-    StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
-      AProgram.FullUnicode);
-  while StartPos <= Input.Length do
+end;
+
+{ TRegExpMatcher }
+
+constructor TRegExpMatcher.Create(const AProgram: TRegExpProgram;
+  const AText: string);
+begin
+  inherited Create;
+  FProgram := AProgram;
+  FText := AText;
+  FSlotCount := (AProgram.CaptureCount + 1) * 2;
+  SetLength(FSlots, FSlotCount);
+end;
+
+function TRegExpMatcher.Exec(const AStartIndex: Integer;
+  const ARequireStart: Boolean): Boolean;
+begin
+  // Decoded once for all matches: unlike ExecuteRegExpVM, no raw scan for a
+  // possible first character first, which a subject that has one would pay
+  // on top of the decode. (The global loops decoded the subject up front
+  // before this class existed, to measure it.)
+  if not FDecoded then
   begin
-    // Unanchored scans re-run the VM at every input position; on a long
-    // non-matching subject this loop runs millions of times inside one
-    // exec/test call, so poll the cooperative engine deadline here too.
-    // Deliberately unmasked: CheckExecutionTimeout's internal 1/1024 counter
-    // throttles deadlines > 16ms, and the always-check mode for <= 16ms
-    // deadlines is self-limiting (the expensive window lasts at most 16ms).
-    CheckExecutionTimeout;
-    FillChar(Slots[0], SlotCount * SizeOf(Integer), $FF);
-    if RunVM(AProgram, Input, StartPos, Slots, SlotCount, Stack) then
-    begin
-      AResult.Matched := True;
-      SetLength(AResult.CaptureSlots, SlotCount);
-      Move(Slots[0], AResult.CaptureSlots[0], SlotCount * SizeOf(Integer));
-      Result := True;
-      Exit;
-    end;
-    if StartPos >= Input.Length then
-      Break;
-    StartPos := AdvanceInputIndex(Input, StartPos, AProgram.FullUnicode);
-    if AProgram.StartCheck.Enabled then
-      StartPos := FindNextStartCandidate(AProgram.StartCheck, Input, StartPos,
-        AProgram.FullUnicode);
+    GetRegExpInput(FText, FInput);
+    FDecoded := True;
   end;
+  Result := ScanRegExpInput(FProgram, FInput, AStartIndex, ARequireStart,
+    FSlots, FSlotCount, FStack);
+  // Reusing the stack saves allocations only while it is small; a large one
+  // (each entry holds two dynamic arrays) is not kept for the next match.
+  // When a VM limit or a timeout ends the scan, the caller frees the matcher
+  // or calls ReleaseBuffers.
+  if Length(FStack) > MAX_RETAINED_BACKTRACK_ENTRIES then
+    SetLength(FStack, 0);
+end;
+
+procedure TRegExpMatcher.ReleaseBuffers;
+begin
+  FInput.Units := nil;
+  FInput.Length := 0;
+  FDecoded := False;
+  SetLength(FStack, 0);
+end;
+
+function TRegExpMatcher.RetainedBacktrackCapacity: Integer;
+begin
+  Result := Length(FStack);
+end;
+
+function TRegExpMatcher.Slot(const AIndex: Integer): Integer;
+begin
+  Result := FSlots[AIndex];
 end;
 
 // FPC does not auto-finalize managed threadvars at thread exit; registered in
@@ -1417,6 +1564,10 @@ begin
   SetLength(GRegExpInputMemoUnits, 0);
   GRegExpInputMemoLength := 0;
   GRegExpInputMemoValid := False;
+  GRegExpInputMemoOlderStr := '';
+  SetLength(GRegExpInputMemoOlderUnits, 0);
+  GRegExpInputMemoOlderLength := 0;
+  GRegExpInputMemoOlderValid := False;
 end;
 
 initialization

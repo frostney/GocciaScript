@@ -114,4 +114,41 @@ describe("Object.isFrozen", () => {
     });
     expect(Object.isFrozen(obj)).toBe(false);
   });
+
+  test("a class is frozen once it is non-extensible and every own property is fixed", () => {
+    class K {
+      static level = 1;
+    }
+    expect(Object.isFrozen(K)).toBe(false);
+
+    Object.preventExtensions(K);
+    expect(Object.isFrozen(K)).toBe(false);
+
+    Object.seal(K);
+    expect(Object.isFrozen(K)).toBe(false);
+
+    Object.defineProperty(K, "level", { writable: false });
+    expect(Object.isFrozen(K)).toBe(true);
+  });
+
+  test("a non-extensible class left with only its prototype property is frozen", () => {
+    class K {}
+    Object.preventExtensions(K);
+    delete K.name;
+    delete K.length;
+
+    expect(Object.getOwnPropertyNames(K)).toEqual(["prototype"]);
+    expect(Object.isFrozen(K)).toBe(true);
+  });
+
+  test("a class frozen by Object.freeze stays frozen when a redefinition is rejected", () => {
+    class K {}
+    Object.freeze(K);
+
+    expect(Reflect.defineProperty(K, "name", { value: "Other" })).toBe(false);
+    expect(Reflect.defineProperty(K, "length", { get: () => 1 })).toBe(false);
+    expect(Object.isFrozen(K)).toBe(true);
+    expect(K.name).toBe("K");
+    expect(K.length).toBe(0);
+  });
 });

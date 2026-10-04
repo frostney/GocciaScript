@@ -3,6 +3,8 @@ program Goccia.VM.Test;
 {$I Goccia.inc}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes,
   Math,
   SysUtils,
 
@@ -13,11 +15,14 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Constants.PropertyNames,
   Goccia.ExecutionContext,
+  Goccia.InstructionLimit,
   Goccia.Modules,
   Goccia.Profiler,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.TestSetup,
+  Goccia.ThreadPolls,
+  Goccia.Timeout,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
@@ -27,6 +32,19 @@ uses
   Goccia.VM.Exception;
 
 type
+  TLimitedRunScenario = (lrsTimeout, lrsInstructionLimit);
+
+  // Runs one template on its own thread under a limit armed on that thread.
+  TLimitedRunThread = class(TThread)
+  public
+    VM: TGocciaVM;
+    Template: TGocciaFunctionTemplate;
+    Scenario: TLimitedRunScenario;
+    Outcome: string;
+    Finished: Boolean;
+    procedure Execute; override;
+  end;
+
   TTestGocciaVM = class(TTestSuite)
   private
     FRealm: TGocciaRealm;
@@ -53,6 +71,8 @@ type
     procedure TestDetachedModuleNamespaceImportRaisesSyntaxError;
     procedure TestMissingImportBindingNamesSpecifier;
     procedure TestGlobalReadCacheFollowsBindingTurnedImport;
+    procedure TestPropertyCacheSlotsStayWithTheirConstant;
+    procedure TestLimitsOfTheRunningThreadApplyAfterAnotherThreadEnteredFirst;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -107,6 +127,10 @@ begin
     TestMissingImportBindingNamesSpecifier);
   Test('Global read cache follows a binding that becomes an import',
     TestGlobalReadCacheFollowsBindingTurnedImport);
+  Test('Property cache slots stay with their constant and exist only inside the pool',
+    TestPropertyCacheSlotsStayWithTheirConstant);
+  Test('A VM entered on one thread reads the limits of the thread that runs it next',
+    TestLimitsOfTheRunningThreadApplyAfterAnotherThreadEnteredFirst);
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -646,13 +670,13 @@ begin
     FirstAllocations := TGocciaProfiler.Instance.GetFunctionProfile(
       ChildTemplate.ProfileIndex).Allocations;
     Expect<Boolean>(FirstAllocations > 0).ToBe(True);
-    Expect<Boolean>(GProfilingAllocations).ToBe(False);
+    Expect<Boolean>(GThreadPolls.ProfilingAllocations).ToBe(False);
     Callback.Call(Arguments, TGocciaUndefinedLiteralValue.UndefinedValue);
     Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
       ChildTemplate.ProfileIndex).Allocations).ToBe(FirstAllocations * 2);
     Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
       Template.ProfileIndex).Allocations).ToBe(0);
-    Expect<Boolean>(GProfilingAllocations).ToBe(False);
+    Expect<Boolean>(GThreadPolls.ProfilingAllocations).ToBe(False);
   finally
     Arguments.Free;
     VM.Free;
@@ -683,7 +707,7 @@ begin
         begin
           TGocciaProfiler.Instance.ResetCounts;
           TGocciaProfiler.Instance.PushFunction(CallerIndex, 0);
-          GProfilingAllocations := PreviousEnabled;
+          GThreadPolls.ProfilingAllocations := PreviousEnabled;
           VM.ProfilingFunctions := Profiled;
           if Throws then
             Template.PatchInstruction(1, EncodeABC(OP_THROW, 0, 0, 0))
@@ -697,12 +721,12 @@ begin
               RaisedExpected := True;
           end;
           Expect<Boolean>(RaisedExpected).ToBe(Throws);
-          Expect<Boolean>(GProfilingAllocations).ToBe(PreviousEnabled);
+          Expect<Boolean>(GThreadPolls.ProfilingAllocations).ToBe(PreviousEnabled);
           // An unprofiled entry must not charge its objects to the caller.
           Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
             CallerIndex).Allocations).ToBe(0);
           // The caller remains on the profiling stack after either exit path.
-          GProfilingAllocations := True;
+          GThreadPolls.ProfilingAllocations := True;
           CallerObject := TGocciaObjectValue.Create;
           try
             Expect<Int64>(TGocciaProfiler.Instance.GetFunctionProfile(
@@ -712,7 +736,7 @@ begin
           end;
         end;
   finally
-    GProfilingAllocations := False;
+    GThreadPolls.ProfilingAllocations := False;
     VM.Free;
     Template.Free;
     TGocciaProfiler.Shutdown;
@@ -843,6 +867,173 @@ begin
     Template.Free;
     Scope.Free;
     Module.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestPropertyCacheSlotsStayWithTheirConstant;
+const
+  CONSTANT_COUNT = 12;
+  FIRST_USED = 3;
+var
+  Template: TGocciaFunctionTemplate;
+  FirstRead: PGocciaPropertyReadCacheEntry;
+  FirstProto: PGocciaProtoReadCacheEntry;
+  FirstWrite: PGocciaPropertyWriteCacheEntry;
+  I, BelowPool, AbovePool: Integer;
+begin
+  Template := TGocciaFunctionTemplate.Create('cache-slots');
+  // Variables, not literals: the accessors are inlined, and FPC rejects a
+  // literal index it can see is out of range.
+  BelowPool := -1;
+  AbovePool := CONSTANT_COUNT;
+  try
+    for I := 0 to CONSTANT_COUNT - 1 do
+      Template.AddConstantString('name' + IntToStr(I));
+
+    // An index outside the constant pool has no slot: the VM writes through
+    // the pointer, so anything but nil there is a wild write.
+    Expect<Boolean>(Template.PropertyReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyReadCacheSlot(AbovePool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(AbovePool) = nil).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(AbovePool) = nil).ToBe(True);
+
+    // The first use of a constant assigns its slot; the same constant then
+    // resolves to that slot without the assignment path. The read and the
+    // prototype tier share one slot map, so the read's first use assigns the
+    // prototype slot too.
+    FirstRead := Template.PropertyReadCacheSlot(FIRST_USED);
+    FirstProto := Template.ProtoReadCacheSlot(FIRST_USED);
+    FirstWrite := Template.PropertyWriteCacheSlot(FIRST_USED);
+    Expect<Boolean>(Template.PropertyReadCacheSlot(FIRST_USED) =
+      FirstRead).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(FIRST_USED) =
+      FirstProto).ToBe(True);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(FIRST_USED) =
+      FirstWrite).ToBe(True);
+    FirstRead^.EntryIndex := 1000 + FIRST_USED;
+    FirstProto^.EntryIndex := 2000 + FIRST_USED;
+    FirstWrite^.EntryIndex := 3000 + FIRST_USED;
+
+    // Every other constant gets a slot of its own, in an order that is not
+    // the constant order, and enough of them to grow the entry arrays.
+    for I := CONSTANT_COUNT - 1 downto 0 do
+      if I <> FIRST_USED then
+      begin
+        Template.PropertyReadCacheSlot(I)^.EntryIndex := 1000 + I;
+        Template.ProtoReadCacheSlot(I)^.EntryIndex := 2000 + I;
+        Template.PropertyWriteCacheSlot(I)^.EntryIndex := 3000 + I;
+      end;
+    for I := 0 to CONSTANT_COUNT - 1 do
+    begin
+      Expect<Integer>(Template.PropertyReadCacheSlot(I)^.EntryIndex).ToBe(1000 + I);
+      Expect<Integer>(Template.ProtoReadCacheSlot(I)^.EntryIndex).ToBe(2000 + I);
+      Expect<Integer>(Template.PropertyWriteCacheSlot(I)^.EntryIndex).ToBe(3000 + I);
+    end;
+
+    Expect<Boolean>(Template.PropertyReadCacheSlot(BelowPool) = nil).ToBe(True);
+    Expect<Boolean>(Template.ProtoReadCacheSlot(AbovePool) = nil).ToBe(True);
+    AbovePool := High(Integer);
+    Expect<Boolean>(Template.PropertyWriteCacheSlot(AbovePool) = nil).ToBe(True);
+  finally
+    Template.Free;
+  end;
+end;
+
+procedure TLimitedRunThread.Execute;
+const
+  // Long enough never to fire in a passing run. It ends the loop when the
+  // limit under test was not seen and the test thread releases this one.
+  SAFETY_TIMEOUT_MS = 1500;
+begin
+  try
+    case Scenario of
+      lrsTimeout:
+        StartExecutionTimeout(50);
+      lrsInstructionLimit:
+      begin
+        StartExecutionTimeout(SAFETY_TIMEOUT_MS);
+        StartInstructionLimit(1000);
+      end;
+    end;
+    try
+      VM.ExecuteFunction(Template);
+      Outcome := 'returned';
+    except
+      on E: Exception do
+        Outcome := E.ClassName;
+    end;
+  finally
+    ClearExecutionTimeout;
+    ClearInstructionLimit;
+    Finished := True;
+  end;
+end;
+
+procedure TTestGocciaVM.TestLimitsOfTheRunningThreadApplyAfterAnotherThreadEnteredFirst;
+const
+  WAIT_STEP_MS = 10;
+  WAIT_LIMIT_MS = 1000;
+var
+  VM: TGocciaVM;
+  Warmup, Spin: TGocciaFunctionTemplate;
+  Worker: TLimitedRunThread;
+  Scenario: TLimitedRunScenario;
+  Waited: Integer;
+  SawLimitInTime: Boolean;
+begin
+  for Scenario := Low(TLimitedRunScenario) to High(TLimitedRunScenario) do
+  begin
+    VM := TGocciaVM.Create;
+    Warmup := TGocciaFunctionTemplate.Create('warmup');
+    Spin := TGocciaFunctionTemplate.Create('spin');
+    Worker := TLimitedRunThread.Create(True);
+    try
+      // This thread creates the VM and enters it first, so whatever the VM
+      // binds per thread is bound here, where nothing is armed.
+      Warmup.MaxRegisters := 1;
+      Warmup.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, 1));
+      Warmup.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+      VM.ExecuteFunction(Warmup);
+      Expect<Boolean>(GThreadPolls.Any = 0).ToBe(True);
+
+      // A jump to itself: no allocation and no call, so the loop ends only
+      // if the dispatch loop sees the limit armed on the thread running it.
+      Spin.MaxRegisters := 1;
+      Spin.EmitInstruction(EncodeAx(OP_JUMP, -1));
+      Spin.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+
+      Worker.VM := VM;
+      Worker.Template := Spin;
+      Worker.Scenario := Scenario;
+      Worker.Start;
+      Waited := 0;
+      while (not Worker.Finished) and (Waited < WAIT_LIMIT_MS) do
+      begin
+        Sleep(WAIT_STEP_MS);
+        Inc(Waited, WAIT_STEP_MS);
+      end;
+      SawLimitInTime := Worker.Finished;
+      if not SawLimitInTime then
+        // The loop is reading this thread's word. Arming it here makes the
+        // loop poll, and the worker's own deadline then ends it.
+        StartExecutionTimeout(60000);
+      Worker.WaitFor;
+      ClearExecutionTimeout;
+
+      Expect<Boolean>(SawLimitInTime).ToBe(True);
+      if Scenario = lrsTimeout then
+        Expect<string>(Worker.Outcome).ToBe('TGocciaTimeoutError')
+      else
+        Expect<string>(Worker.Outcome).ToBe('TGocciaInstructionLimitError');
+      Expect<Boolean>(GThreadPolls.Any = 0).ToBe(True);
+    finally
+      Worker.Free;
+      VM.Free;
+      Spin.Free;
+      Warmup.Free;
+    end;
   end;
 end;
 

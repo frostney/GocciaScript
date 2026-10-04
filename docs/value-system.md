@@ -275,7 +275,7 @@ TGocciaStringLiteralValue = class(TGocciaValue)
 end;
 ```
 
-String primitives get `.length`, `.charAt()`, `.includes()` and the other methods by boxing: property access on a primitive goes through a `TGocciaStringObjectValue` (also produced by `new String()`) whose prototype is the realm's single `String.prototype`. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
+String primitives get `.length`, `.charAt()`, `.includes()` and the other methods from the realm's single `String.prototype`, as a `TGocciaStringObjectValue` boxed from them would (the class `new String()` also produces). A named read in bytecode mode does not create that box: `TryGetStringPrimitiveProperty` answers from the string's own characters and length, then from `String.prototype` with the primitive as the receiver. Computed reads and the interpreter still box. Every built-in prototype is per engine and lives in a [realm slot](core-patterns.md#realm-ownership--slot-registration), but the wiring varies by type:
 
 - **Owned slot with `TGocciaSharedPrototype`** — `Set`, `Map`, `Promise`, `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `TypedArray` and the weak collections. The helper creates the prototype and pins it and its method host in its constructor; the realm frees the helper on tear-down, which unpins both.
 - **Raw slots** — `Array`, `Number`, `Symbol` and `Iterator` keep the prototype in one slot and the method host in another (`GArrayMethodHostSlot`, `GNumberMethodHostSlot`, `GSymbolMethodHostSlot`, …); for `Array` and `Number` both slots hold the same instance. `String.prototype` (`GStringPrototypeSlot`) and `Function.prototype` (`GFunctionPrototypeSlot`, a `TGocciaFunctionSharedPrototype`) are their own method hosts in a single slot. `SetSlot` pins; realm tear-down unpins.
@@ -420,6 +420,8 @@ Objects can have a prototype via `FPrototype: TGocciaObjectValue`. Property look
 1. Check own property descriptors (invoking getters if present).
 2. If not found, check `FPrototype`.
 3. Repeat until `nil` prototype.
+
+ES2026 §10.1.8.1 OrdinaryGet, §10.1.7.1 OrdinaryHasProperty and §10.1.9.2 OrdinarySetWithOwnDescriptor continue at the parent by calling the parent's own internal method. While the parent's class keeps `TGocciaObjectValue`'s `GetPropertyWithContext`, `HasProperty` or `AssignPropertyWithReceiver`, that call is the same procedure, so the walk steps to the parent in a loop and a chain of any length takes no native stack. A parent whose class overrides the lookup, such as a Proxy, is asked through its own method instead. The walk recognizes such a class by the method it resolves to, so a new override needs no registration. Calls into a Proxy are counted against `MAX_PROPERTY_DELEGATION_DEPTH`, calls into other such objects against `MAX_OBJECT_DELEGATION_DEPTH`; see [Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
 
 `GetProperty(Name)` delegates to `GetPropertyWithContext(Name, Self)`. The `WithContext` variant carries a `this` reference through the prototype chain so that inherited getter functions execute with the correct receiver (the original object, not the prototype where the getter was found).
 
@@ -619,7 +621,7 @@ Represent class constructors. Store:
 
 Created by `new ClassName()`. Extend `TGocciaObjectValue` with:
 
-- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes check for setters before falling back to direct property creation.
+- **Virtual property dispatch** — `GetProperty` and `AssignProperty` override the base class methods to intercept property access and assignment. This enables getter/setter invocation: reads check the prototype for accessor descriptors and invoke getters with the instance as `this`; writes call the setter of an own or inherited accessor, and fail when that accessor has none, before falling back to direct property creation.
 - **Private property storage** using **composite keys** (`ClassName:FieldName`) — this enables proper inheritance shadowing where `Base.#x` and `Derived.#x` are distinct fields even when they share the same name.
 - **Class reference** for `instanceof` checks
 
@@ -642,7 +644,7 @@ flowchart TD
     Rest --> Return
 ```
 
-Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields.
+Public and private fields share one declaration order (`FFieldOrder`), so `a = …; #p = …; c = …` initializes `a`, `#p`, then `c`. Field initializers have access to `this` (the instance being constructed) and can reference previously-initialized fields. A public field is defined on the instance rather than assigned (ES2026 §7.3.32 DefineField), so it never calls a setter of the same name and replaces a configurable accessor the instance already has.
 
 ## Enums
 
@@ -698,6 +700,7 @@ Self-references in initializers are supported via a child scope that binds each 
 
 - **Internal storage** — `FBufferValue: TGocciaValue` (the underlying buffer — either `TGocciaArrayBufferValue` or `TGocciaSharedArrayBufferValue`, returned by `.buffer`), `FBufferData: TBytes` (shared reference to the buffer's byte array for element access), `FByteOffset: Integer`, `FLength: Integer`, `FKind: TGocciaTypedArrayKind`.
 - **Shared prototype singleton** — All TypedArray instances (regardless of kind) within an engine share a single per-engine prototype (`TGocciaSharedPrototype`), stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Prototype methods are registered once during `InitializePrototype`; the `TGocciaSharedPrototype` pins the prototype and method host until the realm frees it.
+- **Named property reads** — Only a canonical numeric string is answered from the elements; every other name is an ordinary lookup, so `length`, `byteLength`, `byteOffset` and `buffer` come from the accessors on `%TypedArray%.prototype` and `BYTES_PER_ELEMENT` from the constructor's prototype. A replaced or `null` prototype, an own property, or a getter defined by a subclass or a program is observed. `TryGetNamedPropertyWithoutCall` walks the chain while every level is a plain object; when the property it reaches is a data property it returns the value, and when it is an accessor whose getter carries the `TGocciaNativeIntrinsicKind` that `InitializePrototype` stamps on the four built-in getters, it computes the getter's result from the internal slots instead of calling it. Anything else takes the full lookup. A name that cannot be a canonical numeric string is recognised by its first character, so it never reaches the String-to-Number round trip of `CanonicalNumericIndexString`.
 - **Element access** — `ReadElement(index): Double` and `WriteElement(index, value)` delegate raw byte encoding to `Goccia.BinaryData`, using the same endian-aware helpers as DataView. Integer types wrap, `Uint8ClampedArray` clamps, and float types preserve IEEE 754 encodings.
 - **`WriteNumberLiteral(index, num)`** — Handles `TGocciaNumberLiteralValue` special values (`NaN`, `Infinity`, `-Infinity`) correctly: NaN → 0 for integer types, NaN for float types; Infinity → 255 for `Uint8ClampedArray`, 0 for other integer types; raw IEEE 754 bytes for float types through `Goccia.BinaryData`. All write sites (property assignment, `fill`, `set`, `map`, `with`, constructors, `from`, `of`) use this helper.
 - **Buffer sharing** — Multiple TypedArrays can share the same ArrayBuffer or SharedArrayBuffer with different byte offsets and element types. Changes through one view are visible in others. `FBufferData` is a FPC dynamic array reference that shares the underlying byte array with the buffer object, so element writes are visible across all views without copying.

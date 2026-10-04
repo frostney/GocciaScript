@@ -362,11 +362,56 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 
 | Fast path, no managed locals | Core holding the managed locals |
 |------------------------------|----------------------------------|
+| `ValuesEqual` (`IsStrictEqual`, `IsSameValue`, `IsSameValueZero`) | `StringValuesEqual` |
 | `ExecGetComputedProperty` | `ExecGetComputedPropertyGeneric` |
+| `TGocciaVM.GetPropertyValue` | `GetPropertyValueGeneric` |
 | `ExecSetComputedProperty` | `ExecSetComputedPropertyGeneric` |
 | `GetArrayIteratorElement` | `GetArrayIteratorElementByName` |
+| `TGocciaShapedPropertyMap.EnsureShape` | `ExtendShape` |
+| `ToPrimitive` | `ToPrimitiveGeneric` |
+| `TGocciaValue.AfterConstruction` | `ThrowMemoryLimitExceeded` |
+| `CheckStackDepth`, `CheckNativeReentryDepth` | `ThrowMaxCallStackExceeded` |
+| `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
+| `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
 
-The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, and to a function that returns a managed record by value.
+The same cost applies to a managed temporary the compiler creates for an expression such as `IntToStr(AIndex)`, to a function that returns a managed record by value, and to a resource string passed as an argument: `ThrowRangeError(SErrorMaxCallStackExceeded)` on a path that is never taken still gives the procedure around it a frame.
+
+Production builds switch on FPC's automatic inlining (`{$optimization autoInline}` in `Shared.inc`), which inlines a procedure of up to ten syntax-tree nodes into its callers. A core of two or three lines is therefore folded back into its fast path, frame included. Switch it off for the core, and check the disassembly of the fast path for `fpc_pushexceptaddr`:
+
+```pascal
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure ThrowMaxCallStackExceeded;
+begin
+  ThrowRangeError(SErrorMaxCallStackExceeded);
+end;
+{$IFDEF PRODUCTION}
+  {$IFDEF FPC}
+    {$OPTIMIZATION AUTOINLINE}
+  {$ENDIF}
+{$ENDIF}
+```
+
+Turn the switch back on explicitly, as above. `{$PUSH}` and `{$POP}` do not save optimizer switches in FPC 3.2.2, so a `{$POP}` leaves automatic inlining off for the rest of the unit. Do not use `{$OPTIMIZATION DEFAULT}` either: it resets to the command line and drops the `NOFASTMATH` guard. A core that contains a `try` block, or that is well above ten nodes, is not inlined and needs no bracket.
+
+FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckNativeReentryDepth` as a compare and a branch.
+
+An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
+
+### Thread Variables on Hot Paths
+
+Every reference to a `threadvar` is a lookup: on POSIX targets FPC calls `pthread_getspecific` through the thread manager, about 33 machine instructions, and a function that only returns one (`TGarbageCollector.Instance`, `CurrentRealm`) adds its call to that. Two references to fields of the same thread-variable record are two lookups. A hot path must not make several of them to find out that there is nothing to do.
+
+Three patterns keep them off those paths:
+
+| Pattern | Where | What it replaces |
+|---------|-------|------------------|
+| One mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` reads `GThreadPolls.Any` once and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Four lookups per allocated value (`CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
+| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread` | A lookup per bytecode call, backward jump and native call site |
+| A handle captured at the loop boundary | `CaptureInstructionLimitState` / `PollInstructionLimit` | A lookup per opcode in the instrumented loop |
+
+Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out.
+
+A thread variable that other units read on a hot path is declared in the interface section, so that they reference it directly: an accessor function adds a call to the lookup, and FPC does not inline one that reads an implementation-section variable into another unit (`TGarbageCollector.Instance`, `CurrentRealm`). A bound pointer is valid from the outermost entry until that entry returns, on that thread, and must be rebound on the next one, because a VM can be entered from another thread between two entries ([ADR 0126](adr/0126-bytecode-call-path-arena-fills-and-thread-binding.md)).
 
 ### Singleton Special Values
 

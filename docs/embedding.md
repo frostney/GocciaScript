@@ -139,7 +139,7 @@ end;
 
 `FormatDuration` (from `TimingUtils`) automatically selects the appropriate unit: `ns` for values below 0.5μs, `μs` for values below 0.5ms, `ms` with two decimal places for values up to 10s, and `s` above that.
 
-`TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime(CLOCK_MONOTONIC)` on Unix/macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
+`TimingUtils` provides three clock functions: `GetNanoseconds` and `GetMilliseconds` for monotonic duration timing (`clock_gettime` with `CLOCK_MONOTONIC` on Linux and `CLOCK_MONOTONIC_RAW` on macOS, `QueryPerformanceCounter` on Windows), and `GetEpochNanoseconds` for wall-clock epoch time (`clock_gettime(CLOCK_REALTIME)` on Unix/macOS, `GetSystemTimeAsFileTime` on Windows).
 
 ### Host-Controlled Time And Randomness
 
@@ -832,7 +832,7 @@ end;
 
 ## Execution Limits
 
-Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter.
+Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter. Whether either is armed on a thread is mirrored in `GThreadPolls` (`Goccia.ThreadPolls`), which is all that a value allocation and a bytecode call read when neither is.
 
 ### Timeout
 
@@ -876,7 +876,7 @@ Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero
 
 In bytecode mode the VM uses a trampoline: bytecode-to-bytecode calls are dispatched iteratively via an explicit frame stack, so the Pascal call stack stays flat regardless of JS call depth. The interpreter mode uses Pascal recursion and relies on the depth check to prevent overflow.
 
-Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--max-stack`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine.
+Native re-entries into the bytecode VM — generator resume, host `eval`, and native callbacks such as Array iteration methods or sort comparators — run the bytecode loop on a fresh Pascal stack frame instead of the trampoline. These are bounded separately by a fixed native re-entry cap (`MAX_NATIVE_REENTRY_DEPTH` in `Goccia.StackLimit`), which throws the same `RangeError` well before the native stack can overflow. This is independent of `SetMaxStackDepth`/`--max-stack`, which bounds the much cheaper trampolined frames; it ensures that, for example, infinite recursion mediated by a generator throws rather than crashing the engine. Property lookups walk a chain of ordinary objects in a loop, with no length limit. A Proxy in the chain, and a Proxy's target, are entered by native calls; at most `MAX_PROPERTY_DELEGATION_DEPTH` (1 000) of them are live at once, and past that the lookup throws the same `RangeError`. Arrays, functions, classes and class instances in the chain are entered by native calls too, counted against `MAX_OBJECT_DELEGATION_DEPTH` (3 000). A prototype cycle closed through a Proxy, which ES2026 §10.1.2.1 OrdinarySetPrototypeOf accepts, ends this way. `instanceof` and `Object.prototype.isPrototypeOf` follow `[[GetPrototypeOf]]` in a loop instead and throw after `MAX_PROXY_PROTOTYPE_STEPS` (100 000) steps through a Proxy.
 
 ```pascal
 uses

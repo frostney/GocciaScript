@@ -864,11 +864,18 @@ begin
   Result := Integer(FPropertyReadSlotMap[AConstIndex]) - 1;
 end;
 
+// The three slot accessors below are inlined into the dispatch loop. Once a
+// name constant has its slot, the map lookup is all they do there; the
+// out-of-line PropertyReadSlot / PropertyWriteSlot run only for the first
+// use of a constant and for an out-of-range index.
 function TGocciaFunctionTemplate.PropertyReadCacheSlot(
   const AConstIndex: Integer): PGocciaPropertyReadCacheEntry;
 var
   Slot: Integer;
 begin
+  if (AConstIndex >= 0) and (AConstIndex < Length(FPropertyReadSlotMap)) and
+     (FPropertyReadSlotMap[AConstIndex] <> 0) then
+    Exit(@FPropertyReadCaches[FPropertyReadSlotMap[AConstIndex] - 1]);
   Slot := PropertyReadSlot(AConstIndex);
   if Slot < 0 then
     Exit(nil);
@@ -880,6 +887,9 @@ function TGocciaFunctionTemplate.ProtoReadCacheSlot(
 var
   Slot: Integer;
 begin
+  if (AConstIndex >= 0) and (AConstIndex < Length(FPropertyReadSlotMap)) and
+     (FPropertyReadSlotMap[AConstIndex] <> 0) then
+    Exit(@FProtoReadCaches[FPropertyReadSlotMap[AConstIndex] - 1]);
   Slot := PropertyReadSlot(AConstIndex);
   if Slot < 0 then
     Exit(nil);
@@ -915,6 +925,9 @@ function TGocciaFunctionTemplate.PropertyWriteCacheSlot(
 var
   Slot: Integer;
 begin
+  if (AConstIndex >= 0) and (AConstIndex < Length(FPropertyWriteSlotMap)) and
+     (FPropertyWriteSlotMap[AConstIndex] <> 0) then
+    Exit(@FPropertyWriteCaches[FPropertyWriteSlotMap[AConstIndex] - 1]);
   Slot := PropertyWriteSlot(AConstIndex);
   if Slot < 0 then
     Exit(nil);

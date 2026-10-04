@@ -162,4 +162,76 @@ describe("Reflect.defineProperty", () => {
     expect(result).toBe(true);
     expect(obj.getOnly).toBe(99);
   });
+
+  test("redefines the name of a non-extensible class and reports a new property as not defined", () => {
+    class K {}
+    Object.preventExtensions(K);
+
+    expect(Reflect.defineProperty(K, "name", { value: "Renamed" })).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(K, "name")).toEqual({
+      value: "Renamed",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Reflect.defineProperty(K, "added", { value: 1 })).toBe(false);
+    expect(Object.hasOwn(K, "added")).toBe(false);
+  });
+
+  test("on a frozen class accepts only a definition that changes nothing", () => {
+    class K {
+      constructor(a) {}
+    }
+    Object.freeze(K);
+
+    expect(Reflect.defineProperty(K, "name", { value: "Other" })).toBe(false);
+    expect(Reflect.defineProperty(K, "length", { writable: true })).toBe(false);
+    expect(Reflect.defineProperty(K, "name", { value: "K", configurable: false })).toBe(true);
+    expect(Reflect.defineProperty(K, "length", { value: 1 })).toBe(true);
+    expect(K.name).toBe("K");
+    expect(K.length).toBe(1);
+  });
+
+  test("changes only the given attributes of a class's length and name", () => {
+    class K {
+      constructor(a, b) {}
+    }
+
+    expect(Reflect.defineProperty(K, "length", { enumerable: true })).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(K, "length")).toEqual({
+      value: 2,
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    });
+    expect(Reflect.defineProperty(K, "name", {})).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(K, "name")).toEqual({
+      value: "K",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("does not add back a deleted class length or name on a non-extensible class", () => {
+    class K {}
+    delete K.length;
+    delete K.name;
+    Object.preventExtensions(K);
+
+    expect(Reflect.defineProperty(K, "length", { value: 1 })).toBe(false);
+    expect(Reflect.defineProperty(K, "name", { value: "Back" })).toBe(false);
+    expect(Object.hasOwn(K, "length")).toBe(false);
+    expect(Object.hasOwn(K, "name")).toBe(false);
+    expect(Object.getOwnPropertyNames(K)).toEqual(["prototype"]);
+  });
+
+  test("defines a deleted class name again on an extensible class", () => {
+    class K {}
+    delete K.name;
+
+    expect(Reflect.defineProperty(K, "name", { value: "Again" })).toBe(true);
+    expect(Object.hasOwn(K, "name")).toBe(true);
+    expect(K.name).toBe("Again");
+  });
 });

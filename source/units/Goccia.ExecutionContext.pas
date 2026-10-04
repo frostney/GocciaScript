@@ -26,13 +26,55 @@ type
     property SourcePath: string read GetSourcePath;
   end;
 
+  { The two records below are the context stack's own storage. They are
+    declared here only so that the call-path push and pop can be inlined into
+    the bytecode VM; nothing outside this unit should read or write them. }
+  TGocciaExecutionContextStackEntry = record
+    Context: TGocciaExecutionContext;
+    PreviousRealm: TGocciaRealm;
+  end;
+  PGocciaExecutionContextStackEntry = ^TGocciaExecutionContextStackEntry;
+
+  // The stack and its depth live in one thread variable. Every reference to a
+  // thread variable is a thread-local lookup, and Push and Pop run on each VM
+  // call, so they resolve this record once and work through the pointer.
+  TGocciaExecutionContextThreadState = record
+    Entries: array of TGocciaExecutionContextStackEntry;
+    Count: Integer;
+    // Goccia.Realm's current-realm variable for this thread, resolved by
+    // ThreadState so the call-path push and pop switch realms through it.
+    RealmSlot: PGocciaRealm;
+  end;
+  PGocciaExecutionContextThreadState = ^TGocciaExecutionContextThreadState;
+
   TGocciaExecutionContextStack = class
+  private
+    class procedure RaiseRealmRequired; static;
+    class procedure RaiseUnderflow; static;
   public
     class procedure Push(const AContext: TGocciaExecutionContext); static;
     class function Pop: TGocciaExecutionContext; static;
     class function Running: TGocciaExecutionContext; static;
     class function HasRunning: Boolean; static;
     class function CurrentRealm: TGocciaRealm; static;
+
+    { Call-path entry points for the bytecode VM, which pushes and pops one
+      context per function call.
+
+      ThreadState returns a handle to the calling thread's context stack. It
+      stays valid for as long as the thread lives and must never be handed to
+      another thread. PushFunctionContext and PopFunctionContext do exactly
+      what Push and Pop do for a context built by CreateExecutionContext with
+      no ScriptOrModule, but through that handle: neither performs a
+      thread-local lookup, copies a context record, or looks a source path up.
+      ASourcePathRef comes from InternSourcePath on the same thread. }
+    class function ThreadState: Pointer; static;
+    class procedure PushFunctionContext(const AThreadState: Pointer;
+      const ARealm: TGocciaRealm; const AScope: TGocciaScope;
+      const AFunctionValue: TGocciaValue; const ASourcePathRef: Pointer);
+      static; {$IFDEF FPC}inline;{$ENDIF}
+    class procedure PopFunctionContext(const AThreadState: Pointer);
+      static; {$IFDEF FPC}inline;{$ENDIF}
   end;
 
   TGocciaExecutionContextScope = class
@@ -57,6 +99,12 @@ function CreateExecutionContext(const ARealm: TGocciaRealm;
   const AScriptOrModule: TObject = nil;
   const AFunctionValue: TGocciaValue = nil): TGocciaExecutionContext;
 
+// The stable, thread-owned reference an execution context stores in place of
+// its source path (nil for the empty path). Equal paths give the same
+// reference, which stays valid for the life of the process, so a caller that
+// pushes many contexts for one path can look it up once.
+function InternSourcePath(const ASourcePath: string): Pointer;
+
 function RunningExecutionContext: TGocciaExecutionContext; {$IFDEF FPC}inline;{$ENDIF}
 function HasRunningExecutionContext: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
@@ -71,21 +119,6 @@ type
     Next: PGocciaInternedSourcePath;
     Value: UnicodeString;
   end;
-
-  TGocciaExecutionContextStackEntry = record
-    Context: TGocciaExecutionContext;
-    PreviousRealm: TGocciaRealm;
-  end;
-  PGocciaExecutionContextStackEntry = ^TGocciaExecutionContextStackEntry;
-
-  // The stack and its depth live in one thread variable. Every reference to a
-  // thread variable is a thread-local lookup, and Push and Pop run on each VM
-  // call, so they resolve this record once and work through the pointer.
-  TGocciaExecutionContextThreadState = record
-    Entries: array of TGocciaExecutionContextStackEntry;
-    Count: Integer;
-  end;
-  PGocciaExecutionContextThreadState = ^TGocciaExecutionContextThreadState;
 
 threadvar
   // Non-owning context stack.  Scope and FunctionValue are GC-managed objects
@@ -222,6 +255,85 @@ begin
   PreviousRealm := Entry^.PreviousRealm;
   Entry^ := Default(TGocciaExecutionContextStackEntry);
   SetCurrentRealm(PreviousRealm);
+end;
+
+{ The failure branches of the inlined call-path push and pop. They are kept
+  out of line so that inlining those two into the VM's frame setup and
+  teardown brings no exception construction with it. Automatic inlining is
+  switched off for them and back on after them by name: FPC 3.2.2 does not
+  save optimizer switches on $PUSH, so a $POP would leave it off for the rest
+  of the unit. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+class procedure TGocciaExecutionContextStack.RaiseRealmRequired;
+begin
+  raise Exception.Create('Execution context requires a realm.');
+end;
+
+class procedure TGocciaExecutionContextStack.RaiseUnderflow;
+begin
+  raise Exception.Create('Execution context stack underflow.');
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
+
+class function TGocciaExecutionContextStack.ThreadState: Pointer;
+var
+  State: PGocciaExecutionContextThreadState;
+begin
+  State := @GExecutionContextState;
+  if State^.RealmSlot = nil then
+    State^.RealmSlot := CurrentRealmSlot;
+  Result := State;
+end;
+
+class procedure TGocciaExecutionContextStack.PushFunctionContext(
+  const AThreadState: Pointer; const ARealm: TGocciaRealm;
+  const AScope: TGocciaScope; const AFunctionValue: TGocciaValue;
+  const ASourcePathRef: Pointer);
+var
+  State: PGocciaExecutionContextThreadState;
+  Entry: PGocciaExecutionContextStackEntry;
+begin
+  if not Assigned(ARealm) then
+    RaiseRealmRequired;
+
+  State := PGocciaExecutionContextThreadState(AThreadState);
+  if State^.Count >= Length(State^.Entries) then
+    SetLength(State^.Entries, State^.Count * 2 + 8);
+
+  Entry := @State^.Entries[State^.Count];
+  Entry^.Context.Realm := ARealm;
+  Entry^.Context.Scope := AScope;
+  Entry^.Context.FunctionValue := AFunctionValue;
+  Entry^.Context.ScriptOrModule := nil;
+  Entry^.Context.FSourcePathRef := ASourcePathRef;
+  Entry^.PreviousRealm := State^.RealmSlot^;
+  State^.RealmSlot^ := ARealm;
+  Inc(State^.Count);
+end;
+
+class procedure TGocciaExecutionContextStack.PopFunctionContext(
+  const AThreadState: Pointer);
+var
+  State: PGocciaExecutionContextThreadState;
+  Entry: PGocciaExecutionContextStackEntry;
+  PreviousRealm: TGocciaRealm;
+begin
+  State := PGocciaExecutionContextThreadState(AThreadState);
+  if State^.Count <= 0 then
+    RaiseUnderflow;
+
+  Dec(State^.Count);
+  Entry := @State^.Entries[State^.Count];
+  PreviousRealm := Entry^.PreviousRealm;
+  // Leave the vacated entry cleared, as Pop does, field by field: assigning
+  // Default() to it is a FillChar call.
+  Entry^.Context.Realm := nil;
+  Entry^.Context.Scope := nil;
+  Entry^.Context.FunctionValue := nil;
+  Entry^.Context.ScriptOrModule := nil;
+  Entry^.Context.FSourcePathRef := nil;
+  Entry^.PreviousRealm := nil;
+  State^.RealmSlot^ := PreviousRealm;
 end;
 
 class function TGocciaExecutionContextStack.Running: TGocciaExecutionContext;
