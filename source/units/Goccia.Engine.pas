@@ -329,6 +329,13 @@ type
       const AScope: TGocciaScope): TGocciaValue;
     function RunModuleForSourceType(const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
+    { Calls AFunction as a run of this engine, as ExecuteProgram runs a
+      program: it waits for the work the call leaves pending and raises a
+      rejection the call leaves unhandled. For script a host calls after the
+      engine's own run, such as the test runner's runTests. }
+    function CallAsRun(const AFunction: TGocciaFunctionBase;
+      const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
 
@@ -2845,6 +2852,44 @@ begin
     else
       Result := RunModule(AModule);
   finally
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
+  end;
+end;
+
+function TGocciaEngine.CallAsRun(const AFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
+  PrevScope: TGocciaDiagnosticSourceScope;
+  PreviousRunningEngine: TGocciaEngine;
+  Completed: Boolean;
+begin
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
+  Completed := False;
+  try
+    Result := AFunction.Call(AArguments, AThisValue);
+    GC := TGarbageCollector.Instance;
+    if Assigned(Result) and Assigned(GC) then
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+      RaiseUnhandledRejection;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
+    Completed := True;
+  finally
+    if not Completed then
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
+    GRunningEngine := PreviousRunningEngine;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
 end;

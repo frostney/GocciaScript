@@ -26,6 +26,7 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FNumericParameterProofs: TNumericParameterProofMap;
+    FNumberBindingProofs: TNumberBindingProofMap;
     FGlobalBackedTopLevel: Boolean;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -84,6 +85,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.NumericBindings,
   Goccia.Compiler.NumericProof,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
@@ -99,6 +101,7 @@ begin
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FNumericParameterProofs := TNumericParameterProofMap.Create;
+  FNumberBindingProofs := TNumberBindingProofMap.Create;
   FTemplateDerivedConstructorThisGuards :=
     TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
@@ -111,6 +114,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
   FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
@@ -124,6 +128,7 @@ begin
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.NumericParameterProofs := FNumericParameterProofs;
+  Result.NumberBindingProofs := FNumberBindingProofs;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
@@ -760,6 +765,8 @@ begin
       Block := TGocciaBlockStatement(ABody);
 
       DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
+      DiscoverNumberBindings(Block, FCurrentScope,
+        NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
 
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
@@ -1390,6 +1397,7 @@ var
   PredeclaredLocal: TGocciaCompilerLocal;
 begin
   FNumericParameterProofs.Clear;
+  FNumberBindingProofs.Clear;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
@@ -1402,6 +1410,9 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try
+    DiscoverProgramNumberBindings(AProgram, FCurrentScope,
+      NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
+
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled,
