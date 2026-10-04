@@ -26,6 +26,7 @@ type
     function MaterializeOwnLazyProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
     procedure MaterializeAllLazyStringProperties;
+    procedure EnsureSymbolStorage; {$IFDEF FPC}inline;{$ENDIF}
     function StoreLazyPropertyDescriptor(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor;
       out ABlockedByExtensibility: Boolean): Boolean;
@@ -941,6 +942,16 @@ begin
     CurrentRealm.SetSlot(GObjectPrototypeSlot, AValue);
 end;
 
+procedure TGocciaObjectValue.EnsureSymbolStorage;
+begin
+  // Each field is tested on its own, so a failure between the two creations
+  // leaves a state the next call completes rather than one it overwrites.
+  if not Assigned(FSymbolInsertionOrder) then
+    FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
+  if not Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors := TSymbolDescriptorMap.Create;
+end;
+
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
   const APropertyCapacity: Integer = 0);
 begin
@@ -953,8 +964,10 @@ begin
   // passes through. The map needs a way back to the value that holds it so the
   // properties already stored stay reachable across a collection taken there.
   TGocciaShapedPropertyMap(FProperties).Owner := Self;
-  FSymbolDescriptors := TSymbolDescriptorMap.Create;
-  FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
+  // Symbol-keyed storage is created by EnsureSymbolStorage on the first
+  // symbol key. Created here it cost every object about 512 heap bytes (a
+  // 16-slot hash table and an insertion-order list) that most objects never
+  // use and that BytesAllocated does not see (ADR 0129).
   FPrototype := APrototype;
   FFrozen := False;
   FSealed := False;
@@ -1241,9 +1254,12 @@ begin
     Pair.Value.Free;
   FProperties.Free;
 
-  for SymPair in FSymbolDescriptors do
-    SymPair.Value.Free;
-  FSymbolDescriptors.Free;
+  if Assigned(FSymbolDescriptors) then
+  begin
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
+    FSymbolDescriptors.Free;
+  end;
 
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
@@ -1278,11 +1294,12 @@ begin
   for Pair in FProperties do
     Pair.Value.MarkValues;
 
-  for SymPair in FSymbolDescriptors do
-  begin
-    SymPair.Key.MarkReferences;
-    SymPair.Value.MarkValues;
-  end;
+  if Assigned(FSymbolDescriptors) then
+    for SymPair in FSymbolDescriptors do
+    begin
+      SymPair.Key.MarkReferences;
+      SymPair.Value.MarkValues;
+    end;
 end;
 
 function TGocciaObjectValue.TypeName: string;
@@ -2134,7 +2151,8 @@ var
   Applied: TGocciaPropertyDescriptor;
 begin
   Current := nil;
-  FSymbolDescriptors.TryGetValue(ASymbol, Current);
+  if Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors.TryGetValue(ASymbol, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -2143,6 +2161,7 @@ begin
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
   end;
 
+  EnsureSymbolStorage;
   if Assigned(Current) then
     Current.Free
   else
@@ -2160,7 +2179,8 @@ var
   Applied: TGocciaPropertyDescriptor;
 begin
   Current := nil;
-  FSymbolDescriptors.TryGetValue(ASymbol, Current);
+  if Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors.TryGetValue(ASymbol, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -2168,6 +2188,7 @@ begin
     Exit(False);
   end;
 
+  EnsureSymbolStorage;
   if Assigned(Current) then
     Current.Free
   else
@@ -2194,7 +2215,8 @@ begin
     Exit;
   end;
 
-  if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  if Assigned(FSymbolDescriptors) and
+     FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -2235,7 +2257,8 @@ begin
           SSuggestCannotDeleteNonConfigurable);
       Exit;
     end;
-    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    if Assigned(Current.FSymbolDescriptors) and
+       Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
@@ -2379,7 +2402,8 @@ var
 begin
   Current := Self;
   repeat
-    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    if Assigned(Current.FSymbolDescriptors) and
+       Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
       Exit(PropertyValueFromDescriptor(Descriptor, AReceiver));
 
     Parent := Current.FPrototype;
@@ -2393,13 +2417,15 @@ end;
 
 function TGocciaObjectValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 begin
-  if not FSymbolDescriptors.TryGetValue(ASymbol, Result) then
+  if not Assigned(FSymbolDescriptors) or
+     not FSymbolDescriptors.TryGetValue(ASymbol, Result) then
     Result := nil;
 end;
 
 function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 begin
-  Result := FSymbolDescriptors.ContainsKey(ASymbol);
+  Result := Assigned(FSymbolDescriptors) and
+    FSymbolDescriptors.ContainsKey(ASymbol);
 end;
 
 // ES2026 §10.1.10 [[Delete]](P)
@@ -2408,7 +2434,8 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
-  if not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  if not Assigned(FSymbolDescriptors) or
+     not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     Result := True;
     Exit;
@@ -2438,6 +2465,8 @@ var
   Symbol: TGocciaSymbolValue;
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  if not Assigned(FSymbolInsertionOrder) then
+    Exit(nil);
   SetLength(Entries, FSymbolInsertionOrder.Count);
   Count := 0;
 
@@ -2466,6 +2495,8 @@ var
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
+  if not Assigned(FSymbolInsertionOrder) then
+    Exit(nil);
   SetLength(Symbols, FSymbolInsertionOrder.Count);
   for I := 0 to FSymbolInsertionOrder.Count - 1 do
     Symbols[I] := FSymbolInsertionOrder[I];

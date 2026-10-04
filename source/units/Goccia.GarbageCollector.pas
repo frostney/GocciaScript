@@ -198,6 +198,24 @@ type
     FMemoryLimitFiring: Boolean;
     FExternalPressurePending: Boolean;
     FMemoryPressureCountdown: PInteger;
+    // Heap-triggered collection (ADR 0129). BytesAllocated sees well under
+    // half of what the heap manager hands out — property maps, descriptors,
+    // scope bindings and allocator rounding are not charged — so a ceiling
+    // compared only against it lets garbage grow to several times the
+    // ceiling before a pressure collection runs. Every
+    // HEAP_SAMPLE_INTERVAL registrations SampleHeap reads the heap manager's
+    // in-use total; at or above HeapTriggerBytes it latches the same pending
+    // flag an external reservation uses, so the existing checkpoints (the
+    // interpreter's per-expression check, the VM dispatch countdown) collect.
+    // No collection site is added, and refusal still compares BytesAllocated.
+    FHeapPressurePending: Boolean;
+    FHeapSampleCountdown: Integer;
+    // Heap-manager in-use bytes right after the most recent collection: what
+    // survived plus everything the collector does not own. HeapTriggerBytes
+    // backs off from it so a heap that cannot get under the ceiling collects
+    // once per growth step instead of at every checkpoint.
+    FHeapAfterLastCollect: Int64;
+    FHeapTriggeredCollections: Integer;
     // Bytes still live after the most recent forced collection that failed to
     // make room, or -1 when no such observation is on record. Absent an
     // intervening collection or counter drop, no collection gets below the
@@ -219,6 +237,13 @@ type
 
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    function PressureReserve: Int64; {$IFDEF FPC}inline;{$ENDIF}
+    function HeapTriggerBytes: Int64;
+    procedure SampleHeap;
+    procedure NoteCollectionFinished;
+    // Asks the next pressure checkpoint to collect: sets the pending flag the
+    // checkpoints test and zeroes the VM's countdown so it checks at once.
+    procedure RequestPressureCollection; {$IFDEF FPC}inline;{$ENDIF}
     // Untorn read of the live-byte total for callers that hold no lock — see
     // the reader rule at FAccountingLock. Never call it while holding the
     // accounting lock; read FBytesAllocated directly there.
@@ -369,6 +394,7 @@ type
     property MemoryLimitFiring: Boolean read FMemoryLimitFiring write FMemoryLimitFiring;
     property ExternalPressurePending: Boolean
       read FExternalPressurePending;
+    property HeapTriggeredCollections: Integer read FHeapTriggeredCollections;
 
     // Current position in the managed objects list. Capture before a
     // measurement phase and pass to CollectYoung for efficient
@@ -385,6 +411,16 @@ const
   MEMORY_PRESSURE_COLLECTION_MIN_RESERVE = 16 * 1024;
   MEMORY_PRESSURE_COLLECTION_MAX_RESERVE = 16 * 1024 * 1024;
   EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL = 256 * 1024 * 1024;
+  // Registrations between two reads of the heap manager's in-use total. At
+  // a few hundred heap bytes per registered object this bounds the drift
+  // between samples to well under a megabyte while keeping the read off the
+  // per-allocation path.
+  HEAP_SAMPLE_INTERVAL = 1024;
+
+// The calling thread's heap-manager in-use bytes. The FPC heap manager keeps
+// its status per thread, matching the thread-local collector. Other compilers
+// report 0, which leaves heap-triggered collection inert there.
+function CurrentHeapBytes: Int64;
 
 function DetectDefaultMaxBytes: Int64;
 procedure InitializeTempRoot(var ARoot: TGocciaTempRoot); {$IFDEF FPC}inline;{$ENDIF}
@@ -406,6 +442,15 @@ const
   // Slots pre-allocated for the active-root stack, and the unit it doubles
   // from. Deep enough that ordinary evaluator nesting never reallocates.
   ACTIVE_ROOT_STACK_INITIAL_CAPACITY = 256;
+
+function CurrentHeapBytes: Int64;
+begin
+  {$IFDEF FPC}
+  Result := Int64(GetFPCHeapStatus.CurrHeapUsed);
+  {$ELSE}
+  Result := 0;
+  {$ENDIF}
+end;
 
 function DetectDefaultMaxBytes: Int64;
 var
@@ -642,6 +687,10 @@ begin
   FMemoryLimitFiring := False;
   FExternalPressurePending := False;
   FMemoryPressureCountdown := nil;
+  FHeapPressurePending := False;
+  FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FHeapAfterLastCollect := 0;
+  FHeapTriggeredCollections := 0;
   FForcedCollectFloor := -1;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
@@ -692,6 +741,9 @@ begin
   AObject.GCIndex := FManagedObjects.Count;
   FManagedObjects.Add(AObject);
   Inc(FAllocationsSinceLastGC);
+  Dec(FHeapSampleCountdown);
+  if FHeapSampleCountdown <= 0 then
+    SampleHeap;
   // The size is read before the lock so that the locked region is integer
   // arithmetic on this collector's own fields. In a production build nothing
   // in it can raise; a development build keeps the Int64 overflow check on the
@@ -1102,6 +1154,7 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
+      NoteCollectionFinished;
       // This collection supersedes whatever the last forced one observed, so
       // the next failing reservation is entitled to force again. The floor is
       // part of the accounting family a cross-thread release reads and
@@ -1190,6 +1243,24 @@ begin
   {$ENDIF}
 end;
 
+procedure TGarbageCollector.RequestPressureCollection;
+begin
+  FExternalPressurePending := True;
+  if Assigned(FMemoryPressureCountdown) then
+    FMemoryPressureCountdown^ := 0;
+end;
+
+function TGarbageCollector.PressureReserve: Int64;
+begin
+  Result := FMaxBytes div 8;
+  if Result < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
+    Result := MEMORY_PRESSURE_COLLECTION_MIN_RESERVE;
+  if Result > MEMORY_PRESSURE_COLLECTION_MAX_RESERVE then
+    Result := MEMORY_PRESSURE_COLLECTION_MAX_RESERVE;
+  if Result >= FMaxBytes then
+    Result := FMaxBytes div 2;
+end;
+
 function TGarbageCollector.NeedsMemoryPressureCollection: Boolean;
 begin
   // Guards before the counter read: on 32-bit GetBytesAllocated takes the
@@ -1211,15 +1282,54 @@ begin
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit;
 
-  Reserve := FMaxBytes div 8;
-  if Reserve < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
-    Reserve := MEMORY_PRESSURE_COLLECTION_MIN_RESERVE;
-  if Reserve > MEMORY_PRESSURE_COLLECTION_MAX_RESERVE then
-    Reserve := MEMORY_PRESSURE_COLLECTION_MAX_RESERVE;
-  if Reserve >= FMaxBytes then
-    Reserve := FMaxBytes div 2;
-
+  Reserve := PressureReserve;
   Result := ABytesAllocated >= (FMaxBytes - Reserve);
+end;
+
+function TGarbageCollector.HeapTriggerBytes: Int64;
+var
+  Reserve: Int64;
+begin
+  Reserve := PressureReserve;
+  Result := FMaxBytes - Reserve;
+  // The trigger sits one pressure reserve below the ceiling, like the
+  // tracked-bytes trigger. When what the last collection left behind already
+  // sits within a reserve of that trigger — the rest is live or is not the
+  // collector's — collecting again would free at most that reserve each time,
+  // so the trigger backs off to the larger of a reserve and half the
+  // survivors above them. Collection work then stays proportional to growth,
+  // and the heap peaks at about max(ceiling, 1.5 x survivors).
+  if FHeapAfterLastCollect + Reserve > Result then
+  begin
+    if Reserve < FHeapAfterLastCollect div 2 then
+      Reserve := FHeapAfterLastCollect div 2;
+    Result := FHeapAfterLastCollect + Reserve;
+  end;
+end;
+
+procedure TGarbageCollector.SampleHeap;
+begin
+  FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring or
+     FHeapPressurePending then
+    Exit;
+  if CurrentHeapBytes >= HeapTriggerBytes then
+  begin
+    // Rides the external-pressure latch so the interpreter's per-expression
+    // checkpoint keeps testing a single flag; FHeapPressurePending only
+    // attributes the collection that follows.
+    FHeapPressurePending := True;
+    RequestPressureCollection;
+  end;
+end;
+
+procedure TGarbageCollector.NoteCollectionFinished;
+begin
+  if FHeapPressurePending then
+    Inc(FHeapTriggeredCollections);
+  FHeapPressurePending := False;
+  FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  FHeapAfterLastCollect := CurrentHeapBytes;
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
@@ -1317,6 +1427,7 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
+      NoteCollectionFinished;
       // Same locked reset as Collect: either order with a concurrent
       // conditional invalidation lands on -1.
       CriticalSectionEnter(FAccountingLock);
@@ -1463,11 +1574,7 @@ begin
   if (FExternalBytesAllocatedSinceGC >=
       EXTERNAL_MEMORY_PRESSURE_ALLOCATION_INTERVAL) or
      NeedsMemoryPressureCollection(FBytesAllocated) then
-  begin
-    FExternalPressurePending := True;
-    if Assigned(FMemoryPressureCountdown) then
-      FMemoryPressureCountdown^ := 0;
-  end;
+    RequestPressureCollection;
 end;
 
 function TGarbageCollector.TryReserveExternalBytes(

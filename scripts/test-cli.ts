@@ -1047,6 +1047,71 @@ for (const mode of ["interpreted", "bytecode"]) {
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
 }
 
+console.log("--max-memory (peak resident memory stays near the ceiling)...");
+if (process.platform === "linux") {
+  // BytesAllocated charges each value its InstanceSize, well under half of
+  // what the heap manager actually hands out, so a ceiling compared only
+  // against it let collectable garbage grow to about six times the ceiling
+  // before a collection ran (#1442). The collector now also triggers on the
+  // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
+  // churn garbage far past the ceiling: a flat loop of short-lived objects and
+  // arrays, and Promise jobs drained in batches. Linux only.
+  const ceiling = 64 * 1024 * 1024;
+  // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
+  // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
+  // two readings cannot be confused for these runs: the runner alone is
+  // resident for more than 8 MB, and neither script comes near 8 GB (8 million
+  // KiB) even with no collection at all.
+  const peakBytes = (maxRSS: number) => (maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS);
+  const scripts = {
+    flat: [
+      "let n = 0;",
+      "for (const _ of Array.from({ length: 250000 })) { n += Reflect.ownKeys({ x: 1 }).length; }",
+      "console.log('n', n);",
+      "",
+    ].join("\n"),
+    promise: [
+      "const N = 10000;",
+      "const noop = () => {};",
+      "const idx = Array.from({ length: N }, (_, i) => i);",
+      "const time = async (fn) => { for (const _ of [0, 1, 2, 3, 4]) { idx.forEach(fn); await null; } };",
+      "await time((i) => { Promise.resolve(i).then(noop); });",
+      "await time((i) => { Promise.reject(i).catch(noop); });",
+      "const thrower = async () => { throw 1; }; await time(() => { thrower().catch(noop); });",
+      "const ok = async () => 1; await time(() => { ok().then(noop); });",
+      "console.log('n', idx.length * 25);",
+      "",
+    ].join("\n"),
+  };
+  const expected = { flat: "n 250000", promise: "n 250000" };
+  const dir = mkdtemp("goccia-rss-");
+  try {
+    for (const [name, src] of Object.entries(scripts)) {
+      const path = join(dir, `${name}.js`);
+      writeFileSync(path, src);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync([RUNNER, path, `--mode=${mode}`, `--max-memory=${ceiling}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0 || !out.includes(expected[name as keyof typeof expected]))
+          throw new Error(`${name} (${mode}) at --max-memory=${ceiling} should complete, got exit ${proc.exitCode}: ${out}`);
+        const maxRSS = proc.resourceUsage?.maxRSS;
+        if (typeof maxRSS !== "number" || maxRSS <= 0)
+          throw new Error(`${name} (${mode}): Bun reported no peak RSS for the child`);
+        if (peakBytes(maxRSS) >= 2 * ceiling)
+          throw new Error(`${name} (${mode}) peaked at ${peakBytes(maxRSS)} bytes resident, at or above twice the ${ceiling}-byte ceiling`);
+      }
+    }
+  } finally {
+    clean(dir);
+  }
+} else {
+  console.log("  skipped: peak RSS is asserted on Linux only");
+}
+
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
 {
   // Enumerating a large property map allocates one string per key, and every
