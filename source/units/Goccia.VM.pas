@@ -6670,7 +6670,7 @@ const
   // AcquireArgumentWindow, EnsureRegisterCapacity, EnsureLocalCapacity,
   // PushFrame). SetLength zero-fills the whole allocation, so a large initial
   // size is paid on every engine boot even by a program that needs a handful
-  // of slots: 4096 slots each cost about 30,000 instructions per VM.
+  // of slots: three 4096-slot arenas cost about 30,000 instructions per VM.
   INITIAL_STACK_SIZE = 64;
   INITIAL_FRAME_STACK_SIZE = 8;
 begin
