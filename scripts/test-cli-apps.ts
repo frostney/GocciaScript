@@ -5742,6 +5742,39 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
   }
 });
 
+await section("TestRunner (bytecode): work the tests leave pending runs, and a rejection it leaves fails the file...", async () => {
+  // runTests runs after the file. Work left pending once it returns, here by
+  // afterAll, still runs before the file ends, and a rejection that work
+  // leaves fails the file. The interpreted path does not wait for it.
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "late.test.js");
+    writeFileSync(
+      file,
+      [
+        'test("leaves a timer", () => { setTimeout(() => console.log("TIMER " + "AFTER TEST"), 5); });',
+        "afterAll(() => {",
+        '  setTimeout(() => console.log("TIMER " + "AFTER ALL"), 5);',
+        '  setTimeout(() => { Promise.reject(new Error("late rejection")); }, 10);',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", file, "--no-progress", "--mode=bytecode"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    for (const line of ["TIMER AFTER TEST", "TIMER AFTER ALL"])
+      if (!containsLine(out, line))
+        throw new Error(`TestRunner (bytecode) should run ${JSON.stringify(line)}, got:\n${out}`);
+    if (proc.exitCode !== 1 || !out.includes("late.test.js: Error: late rejection"))
+      throw new Error(`TestRunner (bytecode) should fail the file for a late rejection, got exit ${proc.exitCode}:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: a file that fails with work still queued does not reach the next file...", async () => {
   const tmp = makeTmp();
   try {

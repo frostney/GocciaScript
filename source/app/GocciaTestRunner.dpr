@@ -9,7 +9,6 @@ uses
   SysUtils,
 
   TimingUtils,
-  TextSemantics,
   CriticalSections,
 
   Goccia.Arguments.Collection,
@@ -224,7 +223,8 @@ type
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
-    function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
+    function RunRegisteredTests(const AEngine: TGocciaEngine;
+      const AAsRun: Boolean = False): TGocciaObjectValue;
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
@@ -955,8 +955,11 @@ begin
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
-function TTestRunnerApp.RunRegisteredTests(
-  const AEngine: TGocciaEngine): TGocciaObjectValue;
+{ AAsRun calls runTests as a run of the engine (TGocciaEngine.CallAsRun), so
+  work the tests leave pending still runs and a rejection they leave
+  unhandled fails the file. }
+function TTestRunnerApp.RunRegisteredTests(const AEngine: TGocciaEngine;
+  const AAsRun: Boolean): TGocciaObjectValue;
 var
   GC: TGarbageCollector;
   RunTestsValue: TGocciaValue;
@@ -980,8 +983,12 @@ begin
     if Assigned(GC) then
       GC.AddTempRoot(Options);
     try
-      ResultValue := TGocciaFunctionBase(RunTestsValue).Call(
-        Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      if AAsRun then
+        ResultValue := AEngine.CallAsRun(TGocciaFunctionBase(RunTestsValue),
+          Args, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        ResultValue := TGocciaFunctionBase(RunTestsValue).Call(
+          Args, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       if Assigned(GC) then
         GC.RemoveTempRoot(Options);
@@ -1170,13 +1177,7 @@ var
   ExpectedPrincipal: Int64;
   LexStart, CompileStart, CompileEnd, ExecEnd: Int64;
   LexTimeNanoseconds, ParseTimeNanoseconds: Int64;
-  SourceText: string;
   PlainThrowDetail: string;
-  { The file as written. Source itself gains an appended runTests(...) call
-    below, and quoting that in a code frame showed the runner's own epilogue as
-    if the author had written it — a line the interpreted path, which calls
-    runTests directly instead of appending it, never showed. }
-  DiagnosticSource: TStringList;
 begin
   ScriptResult := CreateDefaultScriptResult;
   ResultValue := nil;
@@ -1188,7 +1189,6 @@ begin
     GC.AddTempRoot(ScriptResult);
 
   Source := nil;
-  DiagnosticSource := nil;
   try
     if Assigned(APreloadedSource) then
       Source := APreloadedSource
@@ -1207,17 +1207,6 @@ begin
         end;
       end;
     end;
-
-    DiagnosticSource := TStringList.Create;
-    DiagnosticSource.Assign(Source);
-    SourceText := StringListToSourceText(Source);
-    if Source.Count > 0 then
-      SourceText := SourceText + #10;
-    SourceText := SourceText + Format(
-      'runTests({ exitOnFirstFailure: %s, showTestResults: false });',
-      [StrUtils.IfThen(FExitOnFirst.Present, 'true', 'false')]);
-    Source.Free;
-    Source := CreateECMAScriptSourceLines(SourceText);
 
     try
       Executor := TGocciaBytecodeExecutor.Create;
@@ -1265,7 +1254,13 @@ begin
               StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(DEFAULT_TIMEOUT_MS));
               StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
               try
-                ResultValue := RunBytecodeTestModule(Engine, Module, AFileName);
+                { runTests is called once the file has run, as on the
+                  interpreted path. Called from the file's own top level, it
+                  held one frame of the call stack limit for every test. It
+                  still ends like the file's run did: what the tests leave
+                  pending runs, and a rejection they leave fails the file. }
+                RunBytecodeTestModule(Engine, Module, AFileName);
+                ResultValue := RunRegisteredTests(Engine, True);
                 if Assigned(GC) and Assigned(ResultValue) then
                 begin
                   GC.AddTempRoot(ResultValue);
@@ -1319,10 +1314,10 @@ begin
         begin
           if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(TGocciaThrowValue(E).Value, AFileName,
-              DiagnosticSource, IsColorTerminal, ExpectedPrincipal,
+              Source, IsColorTerminal, ExpectedPrincipal,
               TGocciaThrowValue(E).Suggestion));
           PlainThrowDetail := FormatThrowDetail(TGocciaThrowValue(E).Value,
-            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            AFileName, Source, False, ExpectedPrincipal,
             TGocciaThrowValue(E).Suggestion);
           MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
           Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
@@ -1335,11 +1330,11 @@ begin
             the location, code frame and suggestion. }
           if (not GIsWorkerThread) and (not IsJsonOutput) then
             WriteLn(FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-              AFileName, DiagnosticSource, IsColorTerminal,
+              AFileName, Source, IsColorTerminal,
               ExpectedPrincipal,
               EGocciaBytecodeThrow(E).Suggestion));
           PlainThrowDetail := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
-            AFileName, DiagnosticSource, False, ExpectedPrincipal,
+            AFileName, Source, False, ExpectedPrincipal,
             EGocciaBytecodeThrow(E).Suggestion);
           MarkLoadError(ScriptResult, AFileName, PlainThrowDetail);
           Result := MakeEmptyTestResult(ScriptResult, PlainThrowDetail);
@@ -1359,7 +1354,6 @@ begin
       GC.RemoveTempRoot(ResultValue);
     if Assigned(GC) then
       GC.RemoveTempRoot(ScriptResult);
-    DiagnosticSource.Free;
     Source.Free;
   end;
 end;

@@ -603,7 +603,7 @@ Automock throws because it would have to execute the real module's top-level cod
 
 Further divergences from Vitest worth knowing:
 
-- In interpreter mode a missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. Bytecode mode currently raises it as a `SyntaxError` inside the test that first reads the binding, and not at all when nothing reads it ([#1274](https://github.com/frostney/GocciaScript/issues/1274)).
+- A missing export is reported **eagerly, at link time**, as `Module "./m.js" has no export named "x"`; Vitest reports it lazily, at property access. Bytecode mode raises it as a `SyntaxError` before any module of the test file's graph evaluates. Interpreter mode may first evaluate the test file's earlier imports, and reports a script-source-type test file's missing import as a `RuntimeError`.
 - An **aliased or namespaced callee silently does nothing**: `import { vi as v } from "vitest"; v.mock(...)` is not hoisted and never applies. This is Vitest parity — Vitest's hoist is a syntactic transform that matches only the literal `vi.mock` / `vitest.mock` spellings — but it is silent in both, so prefer the literal spelling.
 - A **non-string specifier is skipped**, since the address cannot be resolved before evaluation.
 - A test-file `var` (under `--compat-var`) referenced from a factory is a `ReferenceError` under module source type, where Vitest yields `undefined`. Under script source type a static import sees `undefined`, as in Vitest, and a dynamic `import()` resolves the variable, as for `const` in the table above.
@@ -750,7 +750,7 @@ expect(set).toEqual(new Set([2, 1]));
 | `mock()` / `spyOn()` | Standalone globals | `vi.fn()` / `vi.spyOn()` (Vitest) or `jest.fn()` / `jest.spyOn()` (Jest) |
 | `new` on a mock | `TypeError`; `mock.instances` is always empty | Constructs, and `mock.instances` records the instance |
 | `vi.mock` factories | Must directly return an object literal; no automock, no spread-based partial mock | Any factory shape; automock and `importOriginal` partial mocks supported |
-| Missing export on a mock | Interpreter: reported eagerly at link time. Bytecode: a `SyntaxError` when first read, none if never read ([#1274](https://github.com/frostney/GocciaScript/issues/1274)) | Reported lazily, at property access |
+| Missing export on a mock | Reported eagerly at link time; bytecode raises a `SyntaxError` before any module evaluates | Reported lazily, at property access |
 | `process` | Not provided; inject one with `--global` / `--globals` when a suite needs it | The real process environment and the rest of the Node `process` API |
 | `import.meta.env` | Not available; `vi.stubEnv` writes to `process.env` | Vite populates it, and `vi.stubEnv` writes there |
 | Timer ids | Numbers, as on the web | Node `Timeout` objects with `ref`/`unref`/`refresh` |
