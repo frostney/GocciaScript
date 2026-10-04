@@ -363,8 +363,12 @@ begin
   Result := '';
 end;
 
-procedure SetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
-  const ALocalIdx: Integer; const ATypeHint: TGocciaLocalType);
+// Called after code that assigns the local. A hint that is not enforced has to
+// hold for every read of the binding, including reads compiled before this
+// assignment that run after it, so the assignment cannot set one. It leaves
+// the hint of a binding that holds only Numbers in place and clears any other.
+procedure ForgetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer);
 var
   Local: TGocciaCompilerLocal;
 begin
@@ -372,18 +376,11 @@ begin
     Exit;
 
   Local := ACtx.Scope.GetLocal(ALocalIdx);
-  if Local.IsStrictlyTyped then
+  if Local.IsStrictlyTyped or Local.HoldsOnlyNumbers then
     Exit;
 
-  ACtx.Scope.SetLocalTypeHint(ALocalIdx, ATypeHint);
-  ACtx.Template.SetLocalType(Local.Slot, ATypeHint);
-end;
-
-procedure RefreshNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
-  const ALocalIdx: Integer; const AExpr: TGocciaExpression);
-begin
-  SetNonStrictLocalTypeHint(ACtx, ALocalIdx,
-    InferredExpressionType(ACtx.Scope, AExpr));
+  ACtx.Scope.SetLocalTypeHint(ALocalIdx, sltUntyped);
+  ACtx.Template.SetLocalType(Local.Slot, sltUntyped);
 end;
 
 procedure EmitStrictLocalTypeCheck(const ACtx: TGocciaCompilationContext;
@@ -2605,7 +2602,6 @@ var
   ObjReg, KeyReg, CondReg: UInt16;
   TargetReg: Integer;
   NameIdx: UInt16;
-  ValueType: TGocciaLocalType;
   GlobalExistsJump, MissJump, EndJump: Integer;
   I, EndCount: Integer;
   EndJumps: array of Integer;
@@ -2703,11 +2699,7 @@ begin
         InferLocalType(AExpr.Value));
       EmitExportBindingUpdates(ACtx, Local.ExportNames,
         Local.ExportNameCount, ADest);
-      if not Local.IsStrictlyTyped then
-      begin
-        ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
-      end;
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       Exit;
     end;
   end;
@@ -2748,7 +2740,7 @@ begin
       EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
       EmitExportBindingUpdates(ACtx, Local.ExportNames,
         Local.ExportNameCount, ADest);
-      RefreshNonStrictLocalTypeHint(ACtx, LocalIdx, AExpr.Value);
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       Exit;
     end;
     Slot := Local.Slot;
@@ -2760,11 +2752,7 @@ begin
     end;
     EmitExportBindingUpdates(ACtx, Local.ExportNames,
       Local.ExportNameCount, ADest);
-    if not Local.IsStrictlyTyped then
-    begin
-      ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
-      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
-    end;
+    ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
     Exit;
   end;
 
@@ -6320,7 +6308,7 @@ begin
           EmitExportBindingUpdates(ACtx,
             ACtx.Scope.GetLocal(LocalIdx).ExportNames,
             ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-          SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+          ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
         end;
         PatchJumpTarget(ACtx, JumpIdx);
         Exit;
@@ -6361,7 +6349,7 @@ begin
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
           ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+        ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       end;
       PatchJumpTarget(ACtx, JumpIdx);
       Exit;
@@ -6475,7 +6463,7 @@ begin
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
           ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+        ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -6539,10 +6527,7 @@ begin
     EmitExportBindingUpdates(ACtx,
       ACtx.Scope.GetLocal(LocalIdx).ExportNames,
       ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegTemp);
-    if not ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
-    begin
-      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ResultType);
-    end;
+    ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
     ACtx.Scope.FreeRegister;

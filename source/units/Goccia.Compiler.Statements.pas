@@ -761,6 +761,16 @@ begin
   EmitInstruction(ACtx, EncodeABx(OpCode, ASlot, NameIdx));
 end;
 
+function DeclarationHoldsOnlyNumbers(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaVariableDeclaration; const AIndex: Integer): Boolean;
+var
+  Mask: UInt64;
+begin
+  Result := Assigned(ACtx.NumberBindingProofs) and (AIndex < 64) and
+    ACtx.NumberBindingProofs.TryGetValue(AStmt, Mask) and
+    ((Mask and (UInt64(1) shl AIndex)) <> 0);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -774,7 +784,7 @@ var
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
   IsVarRedeclaration, UseWithVarInitializer: Boolean;
-  CanTrackConstant: Boolean;
+  CanTrackConstant, HoldsOnlyNumbers: Boolean;
   InitSlot: UInt16;
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
@@ -869,12 +879,28 @@ begin
       When disabled, type annotations are parsed but not enforced. }
     IsStrict := ACtx.StrictTypes and (TypeHint <> sltUntyped);
 
+    // ES2026 §14.3.1: a let or var binding takes whatever value is assigned
+    // to it later, and that assignment can run before a read compiled ahead
+    // of it (a loop's back edge, the other branch of a join). Without
+    // enforcement such a binding keeps a type only when every value it can
+    // hold is a Number; a const keeps the type of its initializer.
+    HoldsOnlyNumbers := False;
+    if not IsStrict and not AStmt.IsConst then
+    begin
+      HoldsOnlyNumbers := IsKnownNumeric(TypeHint) and
+        not IsTopLevelGlobalBacked and
+        DeclarationHoldsOnlyNumbers(ACtx, AStmt, I);
+      if not HoldsOnlyNumbers then
+        TypeHint := sltUntyped;
+    end;
+
     if TypeHint <> sltUntyped then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
+        ACtx.Scope.SetLocalHoldsOnlyNumbers(LocalIdx, HoldsOnlyNumbers);
         ACtx.Template.SetLocalType(Slot, TypeHint);
         if IsStrict then
         begin
@@ -1454,6 +1480,7 @@ begin
   Target := ACtx.Scope.GetLocal(ATargetIdx);
 
   ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
+  ACtx.Scope.SetLocalHoldsOnlyNumbers(ATargetIdx, Source.HoldsOnlyNumbers);
   ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
   ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
   ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);

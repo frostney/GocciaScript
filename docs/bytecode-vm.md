@@ -43,7 +43,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
 | Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
-| Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.Expressions.pas` |
+| Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.NumericBindings.pas`, `Goccia.Compiler.Expressions.pas` |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 
@@ -54,7 +54,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
-- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit (CLI default 2 200 frames, `--max-stack=N`). Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
+- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
 - A call the VM enters natively (`ExecuteClosureRegistersInternal`: constructors, async functions, generator resume, accessors, Proxy traps, callbacks from built-ins) is checked against the same limit, and against the native stack it costs: the VM throws the same `RangeError` once less than `NATIVE_STACK_RESERVE` of the thread's stack is left. See [Embedding — Call Stack Depth Limit](embedding.md#call-stack-depth-limit).
 - Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)). See [Type Annotations](type-annotations.md).
 
@@ -413,6 +413,8 @@ The optimizer is intentionally compiler-side only:
 A top-level `const` of a script or an imported module lives in the global or module environment rather than in a register, so that other code can reach it by name. Its value is propagated only to reads compiled after the declaration. Top-level statements run in source order and hoisted function declarations are compiled before all of them, so no such read can run while the binding is in its temporal dead zone; a read compiled earlier keeps `OP_GET_GLOBAL` and throws `ReferenceError` there. The binding is still declared, defined and exported, so direct `eval`, later scripts and importing modules observe it unchanged. Three cases keep the named read: non-strict compatibility mode, where a sloppy direct `eval` can shadow the name with a function-level `var` at run time; BigInt values, whose constant load rebuilds the value and costs more than the cached global read; and a coverage run, where a ternary or logical expression decided by the constant would otherwise be folded and lose its branch records.
 
 What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no non-strict function lies between the read and the declaration. A sloppy direct `eval` in such a function can declare a `var` of the same name, which shadows the enclosing binding at run time. Strict code, the default, is unaffected.
+
+Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
 
 When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
 
