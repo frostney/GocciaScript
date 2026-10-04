@@ -298,3 +298,316 @@ test("a built-in call or construction in an imported function leaves its frame a
   expectFrameUnchanged(importedAfterMethodCall);
   expectFrameUnchanged(importedAfterConstruction);
 });
+
+// Each scenario below catches a throw in its own frame, so the frame carries on
+// past the throw before it reaches the later error.
+const parse = JSON.parse;
+const parseArguments = ["{"];
+const negativeLength = [-1];
+
+test("a built-in function call that throws leaves its caller's frame as it found it", () => {
+  const afterThrowingCall = (perform) => {
+    try {
+      if (perform) JSON.parse("{");
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingHeldCall = (perform) => {
+    try {
+      if (perform) parse("{");
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingSpreadCall = (perform) => {
+    try {
+      if (perform) JSON.parse(...parseArguments);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingBoundCall = (perform) => {
+    const parseOpenBrace = JSON.parse.bind(null, "{");
+    try {
+      if (perform) parseOpenBrace();
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingCall);
+  expectFrameUnchanged(afterThrowingHeldCall);
+  expectFrameUnchanged(afterThrowingSpreadCall);
+  expectFrameUnchanged(afterThrowingBoundCall);
+});
+
+test("a built-in method call that throws leaves its caller's frame as it found it", () => {
+  const afterThrowingMethodCall = (perform) => {
+    try {
+      if (perform) "abc".repeat(-1);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingReflectApply = (perform) => {
+    try {
+      if (perform) Reflect.apply(JSON.parse, null, parseArguments);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingMethodCall);
+  expectFrameUnchanged(afterThrowingReflectApply);
+});
+
+test("constructing a built-in that throws leaves the constructing frame as it found it", () => {
+  const throwingIterable = {
+    [Symbol.iterator]() {
+      throw new Error("no entries");
+    },
+  };
+  const afterThrowingConstruction = (perform) => {
+    try {
+      if (perform) new ArrayBuffer(-1);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingSpreadConstruction = (perform) => {
+    try {
+      if (perform) new ArrayBuffer(...negativeLength);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterConstructionCallbackThrows = (perform) => {
+    try {
+      if (perform) new Map(throwingIterable);
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingConstruction);
+  expectFrameUnchanged(afterThrowingSpreadConstruction);
+  expectFrameUnchanged(afterConstructionCallbackThrows);
+});
+
+test("a Proxy trap that throws leaves the calling frame as it found it", () => {
+  const callable = new Proxy(() => {}, {
+    apply() {
+      throw new Error("apply");
+    },
+  });
+  const constructable = new Proxy(class {}, {
+    construct() {
+      throw new Error("construct");
+    },
+  });
+  const afterThrowingApplyTrap = (perform) => {
+    try {
+      if (perform) callable();
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowingConstructTrap = (perform) => {
+    try {
+      if (perform) new constructable();
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingApplyTrap);
+  expectFrameUnchanged(afterThrowingConstructTrap);
+});
+
+test("a callback that throws out of a built-in leaves the calling frame as it found it", () => {
+  const afterThrowingCallback = (perform) => {
+    try {
+      if (perform)
+        [1].map(() => {
+          throw new Error("callback");
+        });
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterNestedThrowingCallback = (perform) => {
+    try {
+      if (perform) [1].forEach(() => [2].map(() => JSON.parse("{")));
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const callbackAfterThrowingCall = (perform) => {
+    let error;
+    [1].forEach(() => {
+      try {
+        if (perform) JSON.parse("{");
+      } catch (e) {}
+      error = failInNestedCall();
+    });
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingCallback);
+  expectFrameUnchanged(afterNestedThrowingCallback);
+  expectFrameUnchanged(callbackAfterThrowingCall);
+});
+
+test("a fault caught in the same function leaves its frame as it found it", () => {
+  const afterCaughtFault = (perform) => {
+    try {
+      if (perform) absent.value.x;
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterCaughtNotCallable = (perform) => {
+    try {
+      if (perform) absent.value();
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(afterCaughtFault);
+  expectFrameUnchanged(afterCaughtNotCallable);
+});
+
+test("a throw that runs a finally block or a nested catch leaves the frame as it found it", () => {
+  const insideFinallyAfterThrow = (perform) => {
+    let error;
+    try {
+      try {
+        if (perform) JSON.parse("{");
+      } finally {
+        error = failInNestedCall();
+      }
+    } catch (e) {}
+    return error;
+  };
+  const afterFinallyRethrow = (perform) => {
+    let finished = false;
+    try {
+      try {
+        if (perform) JSON.parse("{");
+      } finally {
+        finished = true;
+      }
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterNestedRethrow = (perform) => {
+    try {
+      try {
+        if (perform) JSON.parse("{");
+      } catch (e) {
+        throw e;
+      }
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterThrowInsideCatch = (perform) => {
+    try {
+      if (perform) JSON.parse("{");
+    } catch (e) {
+      try {
+        if (perform) JSON.parse("{");
+      } catch (inner) {}
+    }
+    const error = failInNestedCall();
+    return error;
+  };
+
+  expectFrameUnchanged(insideFinallyAfterThrow);
+  expectFrameUnchanged(afterFinallyRethrow);
+  expectFrameUnchanged(afterNestedRethrow);
+  expectFrameUnchanged(afterThrowInsideCatch);
+});
+
+test("a throw caught in or around a generator leaves the frames as it found them", () => {
+  const generators = {
+    *throwing() {
+      throw new Error("generator");
+    },
+    *catching(perform) {
+      try {
+        if (perform) JSON.parse("{");
+      } catch (e) {}
+      const error = failInNestedCall();
+      yield error;
+    },
+    *catchingAfterResume(perform) {
+      yield 1;
+      try {
+        if (perform) JSON.parse("{");
+      } catch (e) {}
+      const error = failInNestedCall();
+      yield error;
+    },
+  };
+  const afterThrowingGenerator = (perform) => {
+    try {
+      if (perform) generators.throwing().next();
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const insideGenerator = (perform) => {
+    const error = generators.catching(perform).next().value;
+    return error;
+  };
+  const insideResumedGenerator = (perform) => {
+    const iterator = generators.catchingAfterResume(perform);
+    iterator.next();
+    const error = iterator.next().value;
+    return error;
+  };
+
+  expectFrameUnchanged(afterThrowingGenerator);
+  expectFrameUnchanged(insideGenerator);
+  expectFrameUnchanged(insideResumedGenerator);
+});
+
+test("a throw caught in an async function leaves its frame as it found it", async () => {
+  const beforeAwait = async (perform) => {
+    try {
+      if (perform) JSON.parse("{");
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+  const afterAwait = async (perform) => {
+    await null;
+    try {
+      if (perform) JSON.parse("{");
+    } catch (e) {}
+    const error = failInNestedCall();
+    return error;
+  };
+
+  // Both runs start from one call site before either is awaited, so their
+  // stacks can differ only by what the throw left on the scenario's frame.
+  const stacksAroundAsyncOperation = async (scenario) =>
+    (await Promise.all([false, true].map((perform) => scenario(perform)))).map(
+      (error) => error.stack,
+    );
+
+  const [skippedBefore, performedBefore] =
+    await stacksAroundAsyncOperation(beforeAwait);
+  expect(performedBefore).toBe(skippedBefore);
+  expect(performedBefore.includes("at beforeAwait (")).toBe(true);
+
+  // Which frames a stack lists after a resumption differs between the
+  // executors (#1273), so this compares the two runs only.
+  const [skippedAfter, performedAfter] =
+    await stacksAroundAsyncOperation(afterAwait);
+  expect(performedAfter).toBe(skippedAfter);
+});
