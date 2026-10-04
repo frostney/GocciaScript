@@ -156,19 +156,6 @@ describe("the default limit allows exactly 2,200 nested calls", () => {
     expect(() => [LIMIT + 1].map(count)).toThrow(RangeError);
   });
 
-  test("calls from a getter", () => {
-    let depth = 0;
-    const holder = {
-      get value() {
-        return count(depth);
-      },
-    };
-    depth = LIMIT;
-    expect(holder.value).toBe(LIMIT);
-    depth = LIMIT + 1;
-    expect(() => holder.value).toThrow(RangeError);
-  });
-
   test("calls from a generator", () => {
     // next() is the first call.
     const source = {

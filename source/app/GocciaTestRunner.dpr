@@ -223,7 +223,8 @@ type
     procedure InitializeRuntime(const AEngine: TGocciaEngine);
     procedure ApplyGlobalsToEngine(const AEngine: TGocciaEngine);
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
-    function RunRegisteredTests(const AEngine: TGocciaEngine): TGocciaObjectValue;
+    function RunRegisteredTests(const AEngine: TGocciaEngine;
+      const AAsRun: Boolean = False): TGocciaObjectValue;
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure Configure; override;
@@ -954,8 +955,11 @@ begin
   WarmUpSharedLazyGlobals(AEngine);
 end;
 
-function TTestRunnerApp.RunRegisteredTests(
-  const AEngine: TGocciaEngine): TGocciaObjectValue;
+{ AAsRun calls runTests as a run of the engine (TGocciaEngine.CallAsRun), so
+  work the tests leave pending still runs and a rejection they leave
+  unhandled fails the file. }
+function TTestRunnerApp.RunRegisteredTests(const AEngine: TGocciaEngine;
+  const AAsRun: Boolean): TGocciaObjectValue;
 var
   GC: TGarbageCollector;
   RunTestsValue: TGocciaValue;
@@ -979,8 +983,12 @@ begin
     if Assigned(GC) then
       GC.AddTempRoot(Options);
     try
-      ResultValue := TGocciaFunctionBase(RunTestsValue).Call(
-        Args, TGocciaUndefinedLiteralValue.UndefinedValue);
+      if AAsRun then
+        ResultValue := AEngine.CallAsRun(TGocciaFunctionBase(RunTestsValue),
+          Args, TGocciaUndefinedLiteralValue.UndefinedValue)
+      else
+        ResultValue := TGocciaFunctionBase(RunTestsValue).Call(
+          Args, TGocciaUndefinedLiteralValue.UndefinedValue);
     finally
       if Assigned(GC) then
         GC.RemoveTempRoot(Options);
@@ -1248,9 +1256,11 @@ begin
               try
                 { runTests is called once the file has run, as on the
                   interpreted path. Called from the file's own top level, it
-                  held one frame of the call stack limit for every test. }
+                  held one frame of the call stack limit for every test. It
+                  still ends like the file's run did: what the tests leave
+                  pending runs, and a rejection they leave fails the file. }
                 RunBytecodeTestModule(Engine, Module, AFileName);
-                ResultValue := RunRegisteredTests(Engine);
+                ResultValue := RunRegisteredTests(Engine, True);
                 if Assigned(GC) and Assigned(ResultValue) then
                 begin
                   GC.AddTempRoot(ResultValue);
