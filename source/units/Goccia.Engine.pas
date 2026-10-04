@@ -2882,6 +2882,7 @@ var
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
   EntryPromise: TGocciaPromiseValue;
+  EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
@@ -2985,6 +2986,13 @@ begin
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
           EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          { Stamp the entry with its file's modification time, as the
+            loader stamps every module it loads. Unstamped, a later
+            import of the entry's own path took it for a changed file
+            and evaluated its body a second time. }
+          if FModuleLoader.ContentProvider.TryGetLastModified(
+             EntryModule.Path, EntryLastModified) then
+            EntryModule.LastModified := EntryLastModified;
           EntryModule.SetEnvironment(ModuleScope);
           FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
           ModuleContext.CurrentModule := EntryModule;
