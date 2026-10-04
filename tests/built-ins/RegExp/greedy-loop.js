@@ -48,7 +48,10 @@ test("a loop at the end of the pattern is rescanned for every count of an earlie
 
 test("a greedy loop prunes the same failed states on a long run as on a short one", () => {
   // Under 32 code units the loop iterates one character at a time; from 32
-  // on it keeps one entry for the whole run. Both find the same match.
+  // on it keeps one entry for the whole run. Both find the same match. The
+  // failure memo ignores what \1 captured, so both currently give group 1 as
+  // "" where the spec and Node.js give "b"; this test checks only that the
+  // two paths agree.
   const short = /(.*)[ab]*\1{3}/.exec("bccc");
   const long = /(.*)[ab]*\1{3}/.exec("b" + "c".repeat(48));
   expect(long.index).toBe(short.index);

@@ -839,7 +839,7 @@ var
     BodyOp: TRegExpOpCode;
     JumpInstr: UInt32;
     Matched: Boolean;
-    PollCount: Integer;
+    Iterations: Integer;
     RunStart: Integer;
     SimpleTail: Boolean;
   begin
@@ -864,7 +864,7 @@ var
 
     SimpleTail := TailIsSimpleAccept(AExitPC);
     RunStart := InputPos;
-    PollCount := 0;
+    Iterations := 0;
     while ReadInputCodePoint(AInput, InputPos, AProgram.FullUnicode,
       CodePoint, ByteLen) do
     begin
@@ -884,21 +884,22 @@ var
         Break;
 
       Inc(InputPos, ByteLen);
-      Inc(PollCount);
-      if (PollCount and 4095) = 0 then
+      Inc(Iterations);
+      if (Iterations and 4095) = 0 then
         CheckExecutionTimeout;
     end;
 
     if not SimpleTail then
     begin
       // Before runs were kept, a loop whose tail can fail iterated one
-      // character at a time at three steps each. Its scan costs one step
-      // per code unit, so that rescans (^a*a*b rescans the second a* for
-      // every count of the first) stay within the step limit. A loop whose
-      // tail can only accept was scanned without a charge and still is:
-      // charging it would make /^[ab]*a*$/ throw on 5,000 characters, where
-      // it returns false.
-      Inc(StepCount, InputPos - RunStart);
+      // character at a time, at three steps (split, body, jump) each. The
+      // scan is charged the same, so a rescan (^a*a*b rescans the second a*
+      // for every count of the first) reaches the step limit where it did
+      // before; at a lower charge an unanchored search runs its larger
+      // budget at every start position. A loop whose tail can only accept
+      // was scanned without a charge and still is: charging it would make
+      // /^[ab]*a*$/ throw on 5,000 characters, where it returns false.
+      Inc(StepCount, 3 * Int64(Iterations));
       if StepCount > StepLimit then
         raise ERegExpRuntimeError.Create(SStepLimitExceeded);
       // The protocol's order: continue after the loop at the longest count,

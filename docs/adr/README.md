@@ -136,3 +136,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0124 — An unhandled promise rejection fails the run](0124-unhandled-rejections-fail-the-run.md)
 - [0125 — A host can observe unhandled rejections through an engine hook](0125-unhandled-rejection-hook.md)
 - [0126 — A bytecode call clears only what a new frame could read stale, binds thread state per outermost entry, and identifies its callee by exact class](0126-bytecode-call-path-arena-fills-and-thread-binding.md)
+- [0128 — The RegExp VM has two resource limits with their own messages, and a greedy single-character loop keeps one backtrack entry](0128-regexp-vm-resource-limits.md)

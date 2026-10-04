@@ -43,7 +43,7 @@ begin
     TestMatcherReleasesStackWhenLimitRaises);
   Test('a greedy single-character loop does not keep an entry per iteration',
     TestGreedyLoopKeepsOneBacktrackEntry);
-  Test('a greedy loop rescanned by backtracking counts toward the step limit',
+  Test('a greedy loop rescanned by backtracking costs the steps its iterations did',
     TestGreedyLoopScanCountsTowardStepLimit);
 end;
 
@@ -155,28 +155,36 @@ begin
   end;
 end;
 
-procedure TRegExpVMTests.TestGreedyLoopScanCountsTowardStepLimit;
+function GreedyRescanOutcome(const ALength: Integer): string;
 var
   Matcher: TRegExpMatcher;
-  Message: string;
 begin
-  // The second a* is rescanned for each of the 20,000 counts of the first:
-  // 200 million characters, against a step limit of 10 million.
   Matcher := TRegExpMatcher.Create(CompileRegExp('^a*a*b', ''),
-    StringOfChar('a', 20000));
+    StringOfChar('a', ALength));
   try
-    Message := '';
     try
-      Matcher.Exec(0, False);
+      if Matcher.Exec(0, False) then
+        Result := 'match'
+      else
+        Result := 'no match';
     except
       on E: ERegExpRuntimeError do
-        Message := E.Message;
+        Result := E.Message;
     end;
-    Expect<string>(Message).ToBe(
-      'Maximum regular expression step count exceeded');
   finally
     Matcher.Free;
   end;
+end;
+
+procedure TRegExpVMTests.TestGreedyLoopScanCountsTowardStepLimit;
+begin
+  // The second a* is rescanned for each count of the first, n * n / 2
+  // characters in all. At three steps per character, as when the loop
+  // iterated, 2,500 "a"s stay under the 10,000,000-step limit and 3,000
+  // exceed it, the same lengths at which iterating stopped.
+  Expect<string>(GreedyRescanOutcome(2500)).ToBe('no match');
+  Expect<string>(GreedyRescanOutcome(3000)).ToBe(
+    'Maximum regular expression step count exceeded');
 end;
 
 begin
