@@ -39,6 +39,7 @@ type
     FExtensible: Boolean;
     FHasEverHadIndexedOwnProperty: Boolean;
     FHasErrorData: Boolean;
+    FIsConstructorStandIn: Boolean;
     FErrorStack: string;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
@@ -149,6 +150,12 @@ type
     property HasEverHadIndexedOwnProperty: Boolean
       read FHasEverHadIndexedOwnProperty;
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
+    { The interpreter allocates a derived constructor's receiver before the
+      body runs; super() may replace it (§13.3.7.1 SuperCall step 10). While
+      this is set, an arrow function that captures it as `this` reads `this`
+      from the constructor's call scope instead, which super() rebinds. }
+    property IsConstructorStandIn: Boolean
+      read FIsConstructorStandIn write FIsConstructorStandIn;
     property ErrorStack: string read FErrorStack write FErrorStack;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
     property RegExpData: TObject read FRegExpData write SetRegExpData;

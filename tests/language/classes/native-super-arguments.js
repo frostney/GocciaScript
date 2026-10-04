@@ -84,6 +84,31 @@ describe("typed array subclasses", () => {
     expect(Uint8Array.prototype.slice.call(made).length).toBe(2);
   });
 
+  test("new.target.prototype is read once, when super() builds the typed array", () => {
+    const declaredLog = [];
+    class Declared extends Uint8Array { constructor() { declaredLog.push("body"); super(2); } }
+    const DeclaredTarget = new Proxy(Declared, {
+      get(target, key, receiver) {
+        if (key === "prototype") declaredLog.push("proto");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const retargetedLog = [];
+    class Retargeted extends class {} { constructor() { retargetedLog.push("body"); super(2); } }
+    Object.setPrototypeOf(Retargeted, Uint8Array);
+    const RetargetedTarget = new Proxy(Retargeted, {
+      get(target, key, receiver) {
+        if (key === "prototype") retargetedLog.push("proto");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    expect(Reflect.construct(Declared, [9], DeclaredTarget).length).toBe(2);
+    expect(declaredLog).toEqual(["body", "proto"]);
+    expect(ArrayBuffer.isView(Reflect.construct(Retargeted, [9], RetargetedTarget))).toBe(true);
+    expect(retargetedLog).toEqual(["body", "proto"]);
+  });
+
   test("Reflect.construct and a bound constructor pass their arguments to the constructor body only", () => {
     let iterated = 0;
     const iterable = { *[Symbol.iterator]() { iterated++; yield 1; } };
@@ -148,5 +173,78 @@ describe("other built-ins built at super()", () => {
     expect(new PairSet([9]).size).toBe(2);
     expect(Array.from(new Triple(7))).toEqual([1, 2, 3]);
     expect(new Window().byteLength).toBe(6);
+  });
+});
+
+describe("this around super()", () => {
+  test("an arrow function made before super() sees the receiver super() built", () => {
+    class SetArrow extends Set {
+      constructor() { const self = () => this; super([1]); this.seen = self().size; }
+    }
+    class ArrayArrow extends Array {
+      constructor() { const self = () => this; super(1, 2); this.seen = self().length; }
+    }
+    class TypedArrow extends Uint8Array {
+      constructor() { const self = () => () => this; super(2); this.seen = self()().length; }
+    }
+    class PrivateArrow extends Map {
+      #secret = 1;
+      constructor() { const read = () => this.#secret; super(); this.seen = read(); }
+    }
+    class Escaped extends Map {
+      constructor() { const self = () => this; super([[1, 2]]); this.self = self; }
+    }
+    const escaped = new Escaped();
+
+    expect(new SetArrow().seen).toBe(1);
+    expect(new ArrayArrow().seen).toBe(2);
+    expect(new TypedArrow().seen).toBe(2);
+    expect(new PrivateArrow().seen).toBe(1);
+    expect(escaped.self()).toBe(escaped);
+    expect(escaped.self().size).toBe(1);
+  });
+
+  test("an arrow function made before super() sees an object the base constructor returned", () => {
+    class Base { constructor() { return { tag: "returned" }; } }
+    class Derived extends Base {
+      constructor() { const self = () => this; super(); this.seen = self().tag; }
+    }
+
+    expect(new Derived().seen).toBe("returned");
+  });
+
+  test("super() from an arrow function through a class without a constructor rebinds this", () => {
+    class MapMiddle extends Map {}
+    class MapLeaf extends MapMiddle { constructor() { (() => super([[1, 2]]))(); } }
+    class TypedMiddle extends Uint8Array {}
+    class TypedLeaf extends TypedMiddle { constructor() { (() => super(3))(); } }
+    const typed = new TypedLeaf();
+
+    expect(new MapLeaf().size).toBe(1);
+    expect(ArrayBuffer.isView(typed)).toBe(true);
+    expect(typed.length).toBe(3);
+  });
+
+  test("the built-in reads new.target.prototype before it processes the super() arguments", () => {
+    const log = [];
+    const entries = { [Symbol.iterator]() { log.push("iterate"); return [][Symbol.iterator](); } };
+    class Entries extends Map { constructor() { super(entries); } }
+    const Target = new Proxy(Entries, {
+      get(target, key, receiver) {
+        if (key === "prototype") log.push("proto");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    class Negative extends Array { constructor() { super(-1); } }
+    const Throwing = new Proxy(Negative, {
+      get(target, key, receiver) {
+        if (key === "prototype") throw new SyntaxError("prototype");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    Reflect.construct(Entries, [], Target);
+    expect(log.slice(0, 2)).toEqual(["proto", "iterate"]);
+    expect(() => Reflect.construct(Negative, [], Throwing)).toThrow(SyntaxError);
   });
 });

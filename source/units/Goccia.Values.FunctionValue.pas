@@ -83,10 +83,18 @@ type
   end;
 
   TGocciaArrowFunctionValue = class(TGocciaFunctionValue)
+  private
+    FThisScope: TGocciaScope;
   protected
     function CreateCallScope: TGocciaScope; override;
     function CreatesArgumentsObject: Boolean; override;
     procedure BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue); override;
+  public
+    { The constructor call scope to read `this` from at call time, for an arrow
+      created while `this` was a derived constructor's stand-in receiver that
+      super() may still replace. It is an ancestor of the closure, so the
+      closure keeps it alive. }
+    property ThisScope: TGocciaScope read FThisScope write FThisScope;
   end;
 
   TGocciaMethodValue = class(TGocciaFunctionValue)
@@ -1124,7 +1132,12 @@ end;
 
 procedure TGocciaArrowFunctionValue.BindThis(const ACallScope: TGocciaScope; const AThisValue: TGocciaValue);
 begin
-  ACallScope.ThisValue := FClosure.ThisValue;
+  // ES2026 §9.4.4 ResolveThisBinding: an arrow has no `this` of its own and
+  // reads the enclosing function's binding when it runs, not when it was made.
+  if Assigned(FThisScope) then
+    ACallScope.ThisValue := FThisScope.ThisValue
+  else
+    ACallScope.ThisValue := FClosure.ThisValue;
 end;
 
 { TGocciaMethodValue }

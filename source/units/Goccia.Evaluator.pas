@@ -3605,6 +3605,7 @@ var
     NativeInstanceRooted: Boolean;
     ReceiverPrototype: TGocciaObjectValue;
     ImplicitSuper: TGocciaObjectValue;
+    DelayPrototypeLookup: Boolean;
   begin
     NativeInstance := nil;
     NativeInstanceRooted := False;
@@ -3613,17 +3614,34 @@ var
 
       if ClassConstructor.NativeInstanceDefaultPrototype <> nil then
       begin
+        { Most built-ins read the prototype from new.target first
+          (OrdinaryCreateFromConstructor, e.g. §24.1.1.1 Map step 2, §23.1.1.1
+          Array step 2), so the receiver already has it when its arguments are
+          processed and an overridden `set` or `add` is the one called. Those
+          that validate or coerce their arguments first (a typed array from a
+          length or an iterable, ArrayBuffer, SharedArrayBuffer, DataView,
+          Function) read it afterwards, as TGocciaClassValue.Instantiate does. }
+        DelayPrototypeLookup := ShouldDelayNativePrototypeLookup(
+          ClassConstructor, AArguments);
+        ReceiverPrototype := nil;
+        if not DelayPrototypeLookup then
+          ReceiverPrototype := GetNativePrototypeFromConstructor(
+            ClassConstructor, EffectiveNewTarget,
+            ClassConstructor.NativeInstanceDefaultPrototype);
         NativeInstance := ClassConstructor.CreateNativeInstance(AArguments);
         if not Assigned(NativeInstance) then
           ThrowTypeError('Superclass constructor did not return an object',
             SSuggestNotConstructorType);
         TGarbageCollector.Instance.AddTempRoot(NativeInstance);
         NativeInstanceRooted := True;
+        if not DelayPrototypeLookup then
+          NativeInstance.Prototype := ReceiverPrototype;
         if NativeInstance is TGocciaInstanceValue then
           TGocciaInstanceValue(NativeInstance).InitializeNativeFromArguments(AArguments);
-        ReceiverPrototype := GetNativePrototypeFromConstructor(ClassConstructor,
-          EffectiveNewTarget, ClassConstructor.NativeInstanceDefaultPrototype);
-        NativeInstance.Prototype := ReceiverPrototype;
+        if DelayPrototypeLookup then
+          NativeInstance.Prototype := GetNativePrototypeFromConstructor(
+            ClassConstructor, EffectiveNewTarget,
+            ClassConstructor.NativeInstanceDefaultPrototype);
         if NativeInstance is TGocciaInstanceValue then
           TGocciaInstanceValue(NativeInstance).FinalizeNativeFromArguments(AArguments);
         Result := NativeInstance;
@@ -3951,6 +3969,7 @@ var
   CalleeName: string;
   FirstAddedIndex, I: Integer;
   ThisScope: TGocciaScope;
+  SuperReceiver: TGocciaValue;
   ConstructorThisValue: TGocciaValue;
   CurrentCtorClassValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
@@ -4106,6 +4125,7 @@ begin
       Exit;
     end;
 
+    SuperReceiver := AContext.Scope.ThisValue;
     Arguments := TGocciaArgumentsCollection.Create;
 
     try
@@ -4195,12 +4215,7 @@ begin
             AContext.Scope.ThisValue, AContext, AContext.Scope.FindNewTarget);
           if (SuperResult is TGocciaObjectValue) and
              (SuperResult <> AContext.Scope.ThisValue) then
-          begin
-            AContext.Scope.ThisValue := TGocciaObjectValue(SuperResult);
-            ThisScope := AContext.Scope.FindFunctionOrModuleScope;
-            if Assigned(ThisScope) then
-              ThisScope.ThisValue := AContext.Scope.ThisValue;
-          end;
+            BindConstructedThis(TGocciaObjectValue(SuperResult));
         end
         else if SuperClass.NativeInstanceDefaultPrototype <> nil then
         begin
@@ -4248,6 +4263,11 @@ begin
       Arguments.Free;
       Roots.Clear;
     end;
+    { A receiver super() kept is the instance from here on, so arrows made
+      afterwards capture it directly again. One it replaced stays marked for
+      any arrow made before super() that still holds it. }
+    if (SuperReceiver = Result) and (SuperReceiver is TGocciaObjectValue) then
+      TGocciaObjectValue(SuperReceiver).IsConstructorStandIn := False;
     MarkSuperConstructorCalled;
     AddValueRoot(Roots, Result);
     { The field initializers below are guest code and can throw, and the
@@ -7075,6 +7095,26 @@ begin
   end;
 end;
 
+{ The call scope that owns `this` for code in AScope: the nearest enclosing
+  call scope that is not an arrow function's. Nil unless that is a class
+  method's (a constructor's) call scope, the only place a stand-in receiver
+  is the `this` binding. }
+function FindConstructorCallScope(const AScope: TGocciaScope): TGocciaScope;
+begin
+  Result := AScope;
+  while Assigned(Result) do
+  begin
+    if (Result is TGocciaCallScope) and
+       not (Result is TGocciaArrowCallScope) then
+    begin
+      if not (Result is TGocciaMethodCallScope) then
+        Result := nil;
+      Exit;
+    end;
+    Result := Result.Parent;
+  end;
+end;
+
 function EvaluateArrowFunction(const AArrowFunctionExpression: TGocciaArrowFunctionExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Statements: TObjectList<TGocciaASTNode>;
@@ -7092,6 +7132,13 @@ begin
     Result := TGocciaAsyncArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild)
   else
     Result := TGocciaArrowFunctionValue.Create(AArrowFunctionExpression.Parameters, Statements, AContext.Scope.CreateChild);
+  { An arrow made before super() would otherwise keep the stand-in receiver
+    that super() replaces; it reads `this` from the constructor's call scope
+    instead, which super() rebinds (§9.4.4 ResolveThisBinding). }
+  if (AContext.Scope.ThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(AContext.Scope.ThisValue).IsConstructorStandIn then
+    TGocciaArrowFunctionValue(Result).ThisScope :=
+      FindConstructorCallScope(AContext.Scope);
   ApplyFunctionObjectPrototype(Result,
     FunctionIntrinsicKind(AArrowFunctionExpression.IsAsync, False));
   TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
@@ -11515,6 +11562,9 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(AClassValue);
     Instance.Prototype := InstancePrototype;
+    // A derived constructor body's super() may replace this receiver.
+    Instance.IsConstructorStandIn := ConstructorBodyBeforeBuiltIn and
+      HasDerivedConstructorReturnRestriction;
   end;
 
   RootedInstance := Instance;
