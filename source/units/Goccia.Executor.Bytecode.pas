@@ -170,7 +170,7 @@ begin
   try
     if Assigned(AContext.Realm) then
       FVM.Realm := AContext.Realm;
-    Result := FVM.ExecuteModule(BytecodeModule);
+    Result := FVM.ExecuteImportedModule(BytecodeModule);
     if AProgram.HasTopLevelAwait and Assigned(AContext.CurrentModule) and
        (Result is TGocciaPromiseValue) then
       AContext.CurrentModule.EvaluationPromise := Result;

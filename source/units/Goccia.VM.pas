@@ -541,6 +541,8 @@ type
     procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    function ExecuteImportedModule(
+      const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
@@ -14597,7 +14599,10 @@ begin
 
   while True do
   begin
-    if (not FHandlerStack.IsEmpty) and
+    // A handler below ASavedHandlerCount belongs to a frame of an outer
+    // native entry, even at this frame's depth: an imported module's top
+    // level runs at the depth of the frame below it (ExecuteImportedModule).
+    if (FHandlerStack.Count > ASavedHandlerCount) and
        (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
     begin
       Handler := FHandlerStack.Peek;
@@ -15443,6 +15448,30 @@ begin
   finally
     TopClosure.Free;
     EmptyArgs.Free;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation runs a module's top level for
+  the module that imports it, so the importer's frame, or the call that read a
+  deferred namespace, is still live below it. The top level is not a function
+  call, and --max-stack caps nested calls (docs/embedding.md): its frame takes
+  the depth of the frame below instead of one more, as the interpreter, which
+  evaluates a module body without a call-stack entry, counts it. A module
+  imported from a top level keeps the whole limit; one evaluated k calls deep
+  keeps the limit less those k calls. With no frame below, the top level is the
+  outermost frame, which FFrameDepth already counts as no call. }
+function TGocciaVM.ExecuteImportedModule(
+  const AModule: TGocciaBytecodeModule): TGocciaValue;
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
   end;
 end;
 
