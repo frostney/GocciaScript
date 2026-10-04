@@ -46,7 +46,7 @@ console.log("Error display (SyntaxError with caret and suggestion)...");
 
 console.log("Error display (JSON error output)...");
 {
-  const { exitCode, json } = runLoaderJson("const x = ;\n");
+  const { exitCode, json } = runLoaderJson("const x = ;\n", ["--mode=interpreted"]);
   if (exitCode !== 1) throw new Error(`Syntax error exit code should be 1, got ${exitCode}`);
   if (json.ok !== false) throw new Error(`JSON error ok should be false`);
   if (json.error?.type !== "SyntaxError") throw new Error(`Expected SyntaxError, got ${json.error?.type}`);
@@ -597,8 +597,8 @@ console.log("Unsupported/default-disabled syntax errors by default...");
   ];
 
   for (const { desc, source, message, expectedWarningOutput } of cases) {
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length ? `${desc} (bytecode)` : desc;
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
       const defaultRes = runLoaderJson(source, modeArgs);
       if (defaultRes.exitCode === 0)
         throw new Error(`${label}: unsupported syntax should fail by default`);
@@ -659,8 +659,8 @@ console.log("Unsupported syntax in imported modules follows the entry policy..."
     writeFileSync(dep, 'var dep = 1;\nconsole.log("dep");\n');
     writeFileSync(entry, 'import "./dep.js";\nconsole.log("entry");\n');
 
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length ? "module dependency (bytecode)" : "module dependency";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? "module dependency (bytecode)" : "module dependency";
       const defaultProc = Bun.spawnSync([RUNNER, "--source-type=module", ...modeArgs, entry], {
         stdout: "pipe",
         stderr: "pipe",
@@ -757,8 +757,8 @@ console.log("Disabled-feature diagnostics with interpolated template literals...
   ];
 
   for (const { desc, compatFlag, source, expected } of recoveryCases) {
-    for (const args of [[] as string[], ["--mode=bytecode"]]) {
-      const label = args.length ? `${desc} (bytecode)` : desc;
+    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = args[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
       const defaultRes = runLoaderJson(source, args);
       if (defaultRes.exitCode === 0)
         throw new Error(`${label}: disabled syntax should fail by default`);
@@ -885,8 +885,8 @@ console.log("JSX preprocessor termination...");
   // before the attribute scan ever begins.
   {
     const nonAsciiSource = 'const element = <svg fill="a" \u00fcnter="b" />;\n';
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode"
         ? "non-ASCII attribute byte (bytecode)"
         : "non-ASCII attribute byte";
       const res = runLoaderJson(nonAsciiSource, modeArgs, {
@@ -923,8 +923,8 @@ console.log("JSX preprocessor termination...");
     const jsxFile = join(tmp, "stall.jsx");
     writeFileSync(jsxFile, angleBracketSource);
 
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode"
         ? "attribute list stall in .jsx (bytecode)"
         : "attribute list stall in .jsx";
       const res = runLoaderJson("", [...modeArgs, jsxFile], {
@@ -943,8 +943,8 @@ console.log("JSX preprocessor termination...");
     const tsFile = join(tmp, "annotations.ts");
     writeFileSync(tsFile, angleBracketSource);
 
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode"
         ? "angle-bracket type syntax in .ts (bytecode)"
         : "angle-bracket type syntax in .ts";
       const res = runLoaderJson("", [...modeArgs, tsFile], {
@@ -1022,7 +1022,7 @@ console.log("Malformed type annotations...");
       for (const { desc, source, messageIncludes } of malformed) {
         const path = join(tmp, "malformed.ts");
         writeFileSync(path, source);
-        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
           const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
           const out = res.text();
           if (res.exitCode === 0)
@@ -1072,7 +1072,7 @@ console.log("Malformed type annotations...");
       for (const source of accepted) {
         const path = join(tmp, "accepted.ts");
         writeFileSync(path, `${source}\n`);
-        for (const args of [[] as string[], ["--mode=bytecode"]]) {
+        for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
           const res = await $`${RUNNER} ${path} ${args} 2>&1`.quiet().nothrow();
           if (res.exitCode !== 0)
             throw new Error(
@@ -1149,8 +1149,8 @@ console.log("Definite assignment assertion rules...");
     "console.log(typeof x)",
     "",
   ].join("\n");
-  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-    const label = modeArgs.length ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "leading-! after ASI (bytecode)" : "leading-! after ASI";
     const res = runLoaderJson(asiSource, ["--compat-asi", ...modeArgs]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
@@ -1176,8 +1176,8 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-    const label = modeArgs.length ? "multi-line type alias (bytecode)" : "multi-line type alias";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "multi-line type alias (bytecode)" : "multi-line type alias";
     const res = runLoaderJson(source, ["--compat-asi", ...modeArgs]);
     if (res.exitCode !== 0)
       throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
@@ -1194,8 +1194,8 @@ console.log("Type alias skipping under ASI...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-    const label = modeArgs.length ? "relational in skipped var (bytecode)" : "relational in skipped var";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "relational in skipped var (bytecode)" : "relational in skipped var";
     const res = runLoaderJson(relationalSource, [
       "--warning-unsupported-features",
       "--compat-asi",
@@ -1245,8 +1245,8 @@ console.log("Parenthesized ternary consequent...");
   ] as const;
 
   for (const { desc, source, output } of cases)
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length ? `${desc} (bytecode)` : desc;
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? `${desc} (bytecode)` : desc;
       const res = runLoaderJson(source, [...COMPAT, ...modeArgs]);
       if (res.exitCode !== 0)
         throw new Error(`${label}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);

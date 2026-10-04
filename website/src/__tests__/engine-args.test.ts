@@ -98,4 +98,35 @@ describe("buildEngineArgs", () => {
     expect(args[0]).toBe("--compat-asi");
     expect(args.at(-1)).toBe("--mode=bytecode");
   });
+
+  test("names the interpreter explicitly, since newer engines default to bytecode", () => {
+    for (const kind of ["loader", "testRunner"] as const) {
+      const args = buildEngineArgs(
+        { ...OPTIONS, mode: "interpreted" },
+        CAPABILITY_FEATURES,
+        kind,
+      );
+      expect(args.at(-1)).toBe("--mode=interpreted");
+      expect(args.filter((arg) => arg.startsWith("--mode"))).toHaveLength(1);
+    }
+  });
+
+  test("sends no mode flag to a binary that does not advertise --mode", () => {
+    const noMode: VendorFeatureSet = {
+      loader: CAPABILITY_FEATURES.loader.filter((flag) => flag !== "--mode"),
+      testRunner: CAPABILITY_FEATURES.testRunner,
+    };
+    for (const mode of ["bytecode", "interpreted"] as const) {
+      const args = buildEngineArgs({ ...OPTIONS, mode }, noMode, "loader");
+      expect(args.some((arg) => arg.startsWith("--mode"))).toBe(false);
+    }
+    expect(
+      buildEngineArgs({ ...OPTIONS, mode: "bytecode" }, noMode, "testRunner"),
+    ).toContain("--mode=bytecode");
+  });
+
+  test("leaves the mode to the engine when the request names none", () => {
+    const args = buildEngineArgs(OPTIONS, CAPABILITY_FEATURES, "loader");
+    expect(args.some((arg) => arg.startsWith("--mode"))).toBe(false);
+  });
 });

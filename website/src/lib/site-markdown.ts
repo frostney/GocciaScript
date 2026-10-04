@@ -481,7 +481,7 @@ function playgroundMarkdown(searchParams: URLSearchParams): string {
     "",
     "# Playground",
     "",
-    "Run GocciaScript in the browser. Choose an example, select the tree-walk or bytecode VM backend, toggle ASI, and execute the script.",
+    "Run GocciaScript in the browser. Choose an example, select the bytecode VM backend (the default) or the tree-walk interpreter on versions that support `--mode`, toggle ASI, and execute the script.",
     "",
     "## Examples",
     "",

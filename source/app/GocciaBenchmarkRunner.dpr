@@ -830,10 +830,7 @@ begin
   AErrorMessage := '';
   WorkerResults := PBenchmarkFileResultPtrArray(AData);
 
-  if EngineOptions.Mode.Matches(emBytecode) then
-    Mode := emBytecode
-  else
-    Mode := emInterpreted;
+  Mode := EngineOptions.ExecutionMode;
 
   if (TGarbageCollector.Instance <> nil) then
     TGarbageCollector.Instance.Enabled := True;
@@ -1218,10 +1215,7 @@ var
 begin
   ShowProgress := not FNoProgress.Present;
 
-  if EngineOptions.Mode.Matches(emBytecode) then
-    Mode := emBytecode
-  else
-    Mode := emInterpreted;
+  Mode := EngineOptions.ExecutionMode;
 
   ReportCount := FFormats.Values.Count;
   if ReportCount = 0 then

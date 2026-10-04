@@ -86,7 +86,7 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
     writeFileSync(join(tmp, "test-runner.js"), testCase.testRunnerSource);
     writeFileSync(join(tmp, "bench.js"), testCase.benchSource);
 
-    const loaderOut = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
     if (!containsLine(loaderOut, testCase.loaderExpectedLine))
       throw new Error(`Loader interp ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderOut}`);
 
@@ -94,7 +94,7 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
     if (!containsLine(loaderBc, testCase.loaderExpectedLine))
       throw new Error(`Loader bytecode ${testCase.name} should produce ${testCase.loaderExpectedLine} on its own line, got: ${loaderBc}`);
 
-    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    const trInterp = await $`${TESTRUNNER} ${join(tmp, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
     if (!trInterp.includes("Passed: 1"))
       throw new Error(`TestRunner interp ${testCase.name} should pass, got: ${trInterp}`);
 
@@ -107,7 +107,7 @@ async function runCompatAcrossAppsCase(testCase: CompatAcrossAppsCase): Promise<
       throw new Error(`Bundler ${testCase.name} should compile`);
 
     const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--no-progress"],
+      [resolve(BENCHRUNNER), join(tmp, "bench.js"), "--mode=interpreted", "--no-progress"],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -479,7 +479,7 @@ console.log("TestRunner JSON load errors include per-file error...");
     for (const mode of ["interpreted", "bytecode"]) {
       const resultsPath = join(tmp, `load-error-${mode}.json`);
       const args = ["bad.js", "--no-progress", `--output=${resultsPath}`];
-      if (mode === "bytecode") args.push("--mode=bytecode");
+      args.push(`--mode=${mode}`);
       runCwd(TESTRUNNER, args, tmp, { expectFail: true });
 
       const resultsJson = JSON.parse(readFileSync(resultsPath, "utf-8"));
@@ -537,13 +537,13 @@ console.log("Per-file ASI config across all apps...");
     writeFileSync(join(strictDir, "bad.js"), "const z = 1\nz\n");
 
     // Loader (interpreted)
-    const loaderInterp = await $`${RUNNER} --print ${join(asiDir, "test.js")} 2>&1`.text();
+    const loaderInterp = await $`${RUNNER} --print ${join(asiDir, "test.js")} --mode=interpreted 2>&1`.text();
     if (!containsLine(loaderInterp, "42")) throw new Error(`Loader interp ASI should produce 42 on its own line, got: ${loaderInterp}`);
 
-    const strictOk = await $`${RUNNER} --print ${join(strictDir, "test.js")} 2>&1`.text();
+    const strictOk = await $`${RUNNER} --print ${join(strictDir, "test.js")} --mode=interpreted 2>&1`.text();
     if (!containsLine(strictOk, "99")) throw new Error(`Strict subdir should produce 99 on its own line, got: ${strictOk}`);
 
-    const strictBad = await $`${RUNNER} ${join(strictDir, "bad.js")} 2>&1`.nothrow();
+    const strictBad = await $`${RUNNER} ${join(strictDir, "bad.js")} --mode=interpreted 2>&1`.nothrow();
     if (!strictBad.text().includes("SyntaxError")) throw new Error("Strict subdir should reject missing semicolons");
 
     // Loader (bytecode)
@@ -554,7 +554,7 @@ console.log("Per-file ASI config across all apps...");
     if (!strictBcBad.text().includes("SyntaxError")) throw new Error("Strict bytecode should reject");
 
     // TestRunner (interpreted)
-    const trInterp = await $`${TESTRUNNER} ${join(asiDir, "test-runner.js")} --no-progress 2>&1`.text();
+    const trInterp = await $`${TESTRUNNER} ${join(asiDir, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
     if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner interp ASI should pass, got: ${trInterp}`);
 
     // TestRunner (bytecode)
@@ -576,7 +576,7 @@ console.log("Per-file ASI config across all apps...");
 
     // BenchmarkRunner (interpreted)
     const benchInterp = Bun.spawnSync(
-      [resolve(BENCHRUNNER), join(asiDir, "bench.js"), "--no-progress"],
+      [resolve(BENCHRUNNER), join(asiDir, "bench.js"), "--mode=interpreted", "--no-progress"],
       {
         stdout: "pipe",
         stderr: "pipe",
@@ -633,13 +633,13 @@ console.log("Per-file allow-ffi config across runtime apps...");
     const loaderNoConfig = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} 2>&1`.text();
     if (!containsLine(loaderNoConfig, "undefined")) throw new Error(`Loader without allow-ffi config should leave FFI undefined, got: ${loaderNoConfig}`);
 
-    const loaderOut = await $`${RUNNER} -P --print ${join(tmp, "test.js")} 2>&1`.text();
+    const loaderOut = await $`${RUNNER} -P --print ${join(tmp, "test.js")} --mode=interpreted 2>&1`.text();
     if (!containsLine(loaderOut, "object")) throw new Error(`Loader allow-ffi config should expose FFI, got: ${loaderOut}`);
 
     const loaderBc = await $`${RUNNER} -P --print ${join(tmp, "test.js")} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderBc, "object")) throw new Error(`Loader bytecode allow-ffi config should expose FFI, got: ${loaderBc}`);
 
-    const trInterp = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --no-progress 2>&1`.text();
+    const trInterp = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --mode=interpreted --no-progress 2>&1`.text();
     if (!trInterp.includes("Passed: 1")) throw new Error(`TestRunner allow-ffi config should pass, got: ${trInterp}`);
 
     const trBc = await $`${TESTRUNNER} -P ${join(tmp, "test-runner.js")} --mode=bytecode --no-progress 2>&1`.text();
@@ -680,7 +680,7 @@ console.log("Per-file allow-ffi config across runtime apps...");
         throw new Error(`TestRunner ${jobsArgs.join(" ")} should run both files, got: ${trShortJobs.combined}`);
     }
 
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
       const bench = Bun.spawnSync(
         [resolve(BENCHRUNNER), "-P", join(tmp, "bench.js"), "--no-progress", ...modeArgs],
         {
@@ -982,7 +982,7 @@ console.log("Multi-directory TestRunner...");
     );
 
     // TestRunner interpreted: both subdirs
-    const trInterp = await $`${TESTRUNNER} ${lenientDir} ${strictDir} --no-progress 2>&1`.text();
+    const trInterp = await $`${TESTRUNNER} ${lenientDir} ${strictDir} --mode=interpreted --no-progress 2>&1`.text();
     if (!trInterp.includes("Passed: 2")) throw new Error(`TestRunner interp multi-dir should pass 2, got: ${trInterp}`);
     if (!trInterp.includes("Failed: 0")) throw new Error(`TestRunner interp multi-dir should fail 0, got: ${trInterp}`);
 
@@ -1034,7 +1034,7 @@ console.log("Explicit multi-file TestRunner config isolation...");
 
     const first = join(argsDir, "test.js");
     const second = join(nonStrictDir, "test.js");
-    const trInterp = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--no-progress"], tmp);
+    const trInterp = runCwd(TESTRUNNER, [first, second, "--jobs=1", "--mode=interpreted", "--no-progress"], tmp);
     if (!trInterp.combined.includes("Passed: 2"))
       throw new Error(`TestRunner interp explicit multi-file config isolation should pass 2, got: ${trInterp.combined}`);
     if (!trInterp.combined.includes("Failed: 0"))
@@ -1073,7 +1073,7 @@ console.log("CLI options override file config...");
     if (!noConfigRes.text().includes("SyntaxError")) throw new Error("No config should reject");
 
     // CLI --compat-asi overrides no-config
-    const cliAsi = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi 2>&1`.text();
+    const cliAsi = await $`${RUNNER} --print ${join(noConfigDir, "test.js")} --compat-asi --mode=interpreted 2>&1`.text();
     if (!containsLine(cliAsi, "1")) throw new Error(`CLI --compat-asi should override, got: ${cliAsi}`);
 
     // CLI --compat-asi bytecode

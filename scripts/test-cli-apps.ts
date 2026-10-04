@@ -305,7 +305,7 @@ function assertPreservesBodyFailure(outputPath: string, label: string): void {
 // -- JSON output (interpreted + bytecode) ---------------------------------------
 
 await section("Loader: JSON output (interpreted)...", async () => {
-  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n");
+  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=interpreted"]);
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
   if (json.fileName !== undefined) throw new Error(`JSON fileName should only be present per-file, got ${json.fileName}`);
@@ -821,7 +821,7 @@ await section("Bare Loader: .mjs module inference...", async () => {
   }
 });
 
-// --mode option: bare loader defaults to interpreter mode; both values must execute.
+// --mode option: bare loader defaults to bytecode mode; both values must execute.
 await section("Bare Loader: --mode=interpreted...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
@@ -2442,7 +2442,7 @@ await section("Test262 Runner: bytecode module direct eval keeps module this bin
     throw new Error(`Bare bytecode module direct eval this got: ${proc.stdout.toString()}`);
 });
 
-await section("Bare Loader: --mode default is interpreted...", async () => {
+await section("Bare Loader: --mode default is bytecode...", async () => {
   const proc = Bun.spawnSync([BARE, "--help"], {
     stdout: "pipe",
     stderr: "pipe",
@@ -2451,8 +2451,8 @@ await section("Bare Loader: --mode default is interpreted...", async () => {
   const help = proc.stdout.toString();
   if (!help.includes("--mode=interpreted|bytecode"))
     throw new Error(`Bare --help should document --mode, got: ${help}`);
-  if (!help.includes("default: interpreted"))
-    throw new Error(`Bare --help should document interpreted as default, got: ${help}`);
+  if (!help.includes("default: bytecode"))
+    throw new Error(`Bare --help should document bytecode as default, got: ${help}`);
   if (help.includes("--test262-host"))
     throw new Error(`Bare --help should not expose Test262 machinery, got: ${help}`);
 });
@@ -4206,7 +4206,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     writeFileSync(parallelSecond, 'test("b", () => { expect(2).toBe(2); });\n');
     for (const mode of ["interpreted", "bytecode"]) {
       const parallelJsonPath = join(tmp, `parallel-${mode}.json`);
-      const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+      const modeArgs = [`--mode=${mode}`];
       const proc = Bun.spawnSync(
         [
           resolve(TESTRUNNER),
@@ -4407,7 +4407,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     ].join("\n");
     writeFileSync(external, externalSource);
 
-    let proc = run([external]);
+    let proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode !== 0)
       throw new Error(`Snapshot creation failed: ${proc.stdout}${proc.stderr}`);
     const expectedSnapshot = [
@@ -4486,7 +4486,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       throw new Error(`Bytecode snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
 
     writeFileSync(external, externalSource.replace('z: 1', 'z: 2'));
-    proc = run([external]);
+    proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode === 0)
       throw new Error("Snapshot mismatch should fail without update mode");
     if (!readFileSync(snapshot, "utf-8").includes('"z": 1'))
@@ -4500,7 +4500,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       .replace('z: 1', 'z: 2')
       .split('  test("custom serializer"')[0] + '});\n';
     writeFileSync(external, withoutSerializer);
-    proc = run([external]);
+    proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('custom serializer'))
       throw new Error("Local obsolete snapshots should be retained without failing");
     proc = run([external], ciEnv);
@@ -4613,7 +4613,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       throw new Error(`Bytecode inline comparison failed: ${proc.stdout}${proc.stderr}`);
 
     const unicodeInline = join(tmp, "inline-unicode.test.js");
-    for (const mode of [[], ["--mode=bytecode"]]) {
+    for (const mode of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       writeFileSync(unicodeInline,
         'test("first", () => expect(true).toBe(true));\u2028' +
         'test("unicode", () => expect("value").toMatchInlineSnapshot\u00a0());');
@@ -4825,13 +4825,13 @@ await section("TestRunner: an expired deadline inside a toThrow callable is not 
       ].join("\n"),
     );
 
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode"
         ? "toThrow deadline (bytecode)"
         : "toThrow deadline";
       // Report to a file: a failing test still prints its marker line to
       // stdout, so stdout is not parseable JSON here.
-      const reportPath = join(tmp, `throw-timeout${modeArgs.length ? "-bc" : ""}.json`);
+      const reportPath = join(tmp, `throw-timeout${modeArgs[0] === "--mode=bytecode" ? "-bc" : ""}.json`);
       const proc = Bun.spawnSync(
         [resolve(TESTRUNNER), file, ...modeArgs, "--test-timeout=300", "--no-progress", `--output=${reportPath}`],
         { stdout: "pipe", stderr: "pipe" },
@@ -4978,8 +4978,8 @@ await section("TestRunner: --output=json keeps stdout clean when test throws..."
 // A file-level throw emits no per-test reporter output, so the case above cannot
 // catch the reporter markers the testing library writes straight to stdout for
 // individual tests. These scenarios cover every marker-producing shape.
-for (const modeArgs of [[], ["--mode=bytecode"]]) {
-  const modeLabel = modeArgs.length === 0 ? "interpreted" : "bytecode";
+for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+  const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
 
   const scenarios: Array<{
     name: string;
@@ -6039,7 +6039,7 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     console.log("Loader: source map interpreted...");
     const interpJsxPath = join(tmp, "interp.jsx");
     writeFileSync(interpJsxPath, jsxSource);
-    await $`${RUNNER} --source-map ${interpJsxPath}`.quiet();
+    await $`${RUNNER} --source-map --mode=interpreted ${interpJsxPath}`.quiet();
     const interpMapPath = interpJsxPath.replace(/\.jsx$/, ".jsx.map");
     if (!existsSync(interpMapPath)) throw new Error("Interpreted source map should exist");
     assertValidSourceMap(interpMapPath);
@@ -6241,7 +6241,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
     const fileOut = join(tmp, "file-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--no-progress", "--format=json", `--output=${fileOut}`],
+        [resolve(BENCHRUNNER), "benchmarks/fibonacci.js", "--source-type=module", "--mode=interpreted", "--no-progress", "--format=json", `--output=${fileOut}`],
         { stdout: "pipe", stderr: "pipe", env: benchEnv, timeout: 120_000 },
       );
       if (proc.exitCode !== 0) throw new Error(`File benchmark exit ${proc.exitCode}: ${proc.stderr.toString()}`);
@@ -6672,7 +6672,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
     const stdinOutPath = join(tmp, "stdin-interp.json");
     {
       const proc = Bun.spawnSync(
-        [resolve(BENCHRUNNER), "--source-type=module", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
+        [resolve(BENCHRUNNER), "--source-type=module", "--mode=interpreted", "--no-progress", "--format=json", `--output=${stdinOutPath}`],
         {
           stdin: new TextEncoder().encode(stdinSource),
           stdout: "pipe",
@@ -6841,9 +6841,14 @@ await section("BenchmarkRunner: a rejection a bench body leaves is forgotten, no
   }
 });
 
-await section("REPL: banner (interpreted)...", async () => {
+await section("REPL: banner (default is bytecode)...", async () => {
   const out = await $`echo '' | ${REPL} 2>&1`.text();
   if (!out.includes("Goccia REPL")) throw new Error(`Banner should contain "Goccia REPL", got: ${out.slice(0, 200)}`);
+  if (!out.includes("(bytecode)")) throw new Error(`Default banner should contain "(bytecode)", got: ${out.slice(0, 200)}`);
+});
+
+await section("REPL: banner (interpreted)...", async () => {
+  const out = await $`echo '' | ${REPL} --mode=interpreted 2>&1`.text();
   if (!out.includes("(interpreted)")) throw new Error(`Banner should contain "(interpreted)", got: ${out.slice(0, 200)}`);
 });
 
@@ -6897,7 +6902,7 @@ await section("REPL: repeated tagged template execution (interpreted + bytecode)
   ].join("\n") + "\n";
 
   for (const [label, args] of [
-    ["interpreted", []],
+    ["interpreted", ["--mode=interpreted"]],
     ["bytecode", ["--mode=bytecode"]],
   ] as const) {
     const proc = Bun.spawnSync([REPL, ...args], {
@@ -11284,8 +11289,8 @@ await section("Memory budget: property storage growth is refused before it happe
         'print("kept " + keys.length);\n',
     );
 
-    for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length > 0 ? "bytecode" : "interpreter";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
 
       const refused = await runWithPeakRss([
         BARE,
@@ -11360,8 +11365,8 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
         'print("objects " + sink.length);\n',
     );
 
-    for (const modeArgs of [[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length > 0 ? "bytecode" : "interpreter";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
 
       const run = await runWithPeakRss([BARE, "--max-memory=16777216", ...modeArgs, distributed]);
       if (run.exitCode !== 0 || !run.output.includes("objects 4000"))

@@ -35,7 +35,7 @@ import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 console.log("Stdin smoke (interpreted)...");
 {
-  const out = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print`.text();
+  const out = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode=interpreted`.text();
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
@@ -519,7 +519,7 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         !bareWarningDefault.text().includes("'while' loops are not supported by default"))
       throw new Error(`Bare without warning flag should report while SyntaxError, got: ${bareWarningDefault.text()}`);
 
-    for (const args of [[] as string[], ["--mode=bytecode"]]) {
+    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       const bareWarningFile = await $`${BARE} --print ${bareWarningSrc} --warning-unsupported-features ${args} 2>&1`.text();
       if (!bareWarningFile.includes("Warning: 'while' loops are not supported by default") ||
           !bareWarningFile.includes("23"))
@@ -615,7 +615,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
       ].join("\n") + "\n",
     );
 
-    const loaderOut = await $`${RUNNER} --print ${src} --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
+    const loaderOut = await $`${RUNNER} --print ${src} --mode=interpreted --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
     if (!containsLine(loaderOut, "7")) throw new Error(`Loader --compat-non-strict-mode expected 7, got: ${loaderOut}`);
 
     const loaderBcOut = await $`${RUNNER} --print ${src} --mode=bytecode --compat-function --compat-non-strict-mode --compat-arguments-object 2>&1`.text();
@@ -669,7 +669,7 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
 
     const moduleWithSrc = join(tmp, "module-with.js");
     writeFileSync(moduleWithSrc, "with ({ x: 1 }) { x; }\n");
-    const moduleWithInterp = await $`${RUNNER} ${moduleWithSrc} --source-type=module --compat-non-strict-mode 2>&1`.nothrow();
+    const moduleWithInterp = await $`${RUNNER} ${moduleWithSrc} --source-type=module --mode=interpreted --compat-non-strict-mode 2>&1`.nothrow();
     const moduleWithInterpOutput = moduleWithInterp.text();
     if (moduleWithInterp.exitCode === 0 || !moduleWithInterpOutput.includes("'with' statements are not allowed in strict mode"))
       throw new Error(`Module with should fail as strict code in interpreter mode, got: ${moduleWithInterpOutput}`);
@@ -742,11 +742,15 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
   }
 }
 
-// -- --mode=bytecode (Loader: both execution modes produce 4) -------------------
+// -- --mode (Loader: the default and both execution modes produce 4) ----------
 
-console.log("--mode=bytecode...");
+console.log("--mode (default and both values)...");
 {
-  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print`.text();
+  const defaultOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print`.text();
+  if (!containsLine(defaultOut, "4")) throw new Error(`Default mode expected 4 on its own line, got: ${defaultOut}`);
+  if (!defaultOut.includes("(bytecode)")) throw new Error(`Expected the default mode to be bytecode, got: ${defaultOut}`);
+
+  const interpOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode=interpreted`.text();
   if (!containsLine(interpOut, "4")) throw new Error(`Interpreted expected 4 on its own line, got: ${interpOut}`);
   if (!interpOut.includes("(interpreted)")) throw new Error(`Expected (interpreted) in output`);
 
@@ -757,6 +761,22 @@ console.log("--mode=bytecode...");
   const bcSplitOut = await $`echo 'const x = 2 + 2; x;' | ${RUNNER} --print - --mode bytecode`.text();
   if (!containsLine(bcSplitOut, "4")) throw new Error(`Bytecode split option expected 4 on its own line, got: ${bcSplitOut}`);
   if (!bcSplitOut.includes("(bytecode)")) throw new Error(`Expected (bytecode) in split option output`);
+
+  // The test runner reports the mode it ran in; without --mode that is bytecode.
+  const tmp = mkdtemp("goccia-default-mode-");
+  try {
+    const testFile = join(tmp, "default-mode.js");
+    writeFileSync(testFile, 'test("runs", () => expect(1).toBe(1));\n');
+    const proc = Bun.spawnSync([TESTRUNNER, testFile, "--no-progress", "--output=json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const report = JSON.parse(proc.stdout.toString());
+    if (proc.exitCode !== 0 || report.mode !== "bytecode")
+      throw new Error(`TestRunner default mode should be bytecode, got ${report.mode} (exit ${proc.exitCode})`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- --source-type and .mjs module inference -----------------------------------
@@ -768,14 +788,14 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
     const moduleEntry = join(tmp, "entry.mjs");
     writeFileSync(moduleEntry, "this === undefined;\n");
 
-    const loaderMjs = await $`${RUNNER} --print ${moduleEntry} 2>&1`.text();
+    const loaderMjs = await $`${RUNNER} --print ${moduleEntry} --mode=interpreted 2>&1`.text();
     if (!containsLine(loaderMjs, "true")) throw new Error(`Loader .mjs should infer module source, got: ${loaderMjs}`);
 
     const loaderMjsBytecode = await $`${RUNNER} --print ${moduleEntry} --mode=bytecode 2>&1`.text();
     if (!containsLine(loaderMjsBytecode, "true"))
       throw new Error(`Loader .mjs bytecode should infer module source, got: ${loaderMjsBytecode}`);
 
-    const loaderScriptOverride = await $`${RUNNER} --print ${moduleEntry} --source-type=script 2>&1`.text();
+    const loaderScriptOverride = await $`${RUNNER} --print ${moduleEntry} --mode=interpreted --source-type=script 2>&1`.text();
     if (!containsLine(loaderScriptOverride, "false"))
       throw new Error(`Loader --source-type=script should override .mjs inference, got: ${loaderScriptOverride}`);
 
@@ -793,7 +813,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
         'test(".mjs import.meta", () => { expect(metaUrl.endsWith("entry-test.mjs")).toBe(true); });',
       ].join("\n") + "\n",
     );
-    const testRunnerMjs = await $`${TESTRUNNER} ${testModuleEntry} --no-progress 2>&1`.text();
+    const testRunnerMjs = await $`${TESTRUNNER} ${testModuleEntry} --mode=interpreted --no-progress 2>&1`.text();
     if (!testRunnerMjs.includes("Passed: 2")) throw new Error(`TestRunner .mjs expected Passed: 2, got: ${testRunnerMjs}`);
 
     const testRunnerMjsBytecode = await $`${TESTRUNNER} ${testModuleEntry} --mode=bytecode --no-progress 2>&1`.text();
@@ -808,7 +828,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
         'test(".mjs script override", () => { expect(topLevelThis === undefined).toBe(false); });',
       ].join("\n") + "\n",
     );
-    const testRunnerScript = await $`${TESTRUNNER} ${testScriptOverride} --source-type=script --no-progress 2>&1`.text();
+    const testRunnerScript = await $`${TESTRUNNER} ${testScriptOverride} --mode=interpreted --source-type=script --no-progress 2>&1`.text();
     if (!testRunnerScript.includes("Passed: 1"))
       throw new Error(`TestRunner --source-type=script expected Passed: 1, got: ${testRunnerScript}`);
 
@@ -836,7 +856,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
 console.log("--timeout (interpreted)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const { exitCode, json } = runLoaderJson(loop, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(loop, ["--timeout=50", "--mode=interpreted"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -915,7 +935,7 @@ console.log("--timeout (native sparse-array fill, interpreted)...");
   // The stall is still bounded — hole extension polls the deadline as it
   // grows, so only the fraction allocated within 50ms is ever committed.
   const fill = "const x = new Array(2 ** 30); x.length;\n";
-  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(fill, ["--timeout=50", "--max-memory=0", "--mode=interpreted"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Array-fill timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -933,7 +953,7 @@ console.log("--timeout (native sparse-array fill, bytecode)...");
 
 console.log("--timeout (native regex scan, interpreted)...");
 {
-  const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50", "--mode=interpreted"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Regex-scan timeout exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
@@ -951,8 +971,8 @@ console.log("--timeout (native regex scan, bytecode)...");
 // a module that stalls inside import() previously surfaced as a caught
 // rejection and the script "succeeded" with exit 0, defeating --timeout.
 
-for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-  const label = modeArgs.length ? "bytecode" : "interpreted";
+for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+  const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
   console.log(`--timeout (dynamic import stall, ${label})...`);
   const tmp = mkdtemp("goccia-timeout-import-");
   try {
@@ -979,7 +999,7 @@ for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
 console.log("--max-instructions (interpreted)...");
 {
   const loop = "const iterable = { [Symbol.iterator]: () => ({ next: () => ({ done: false, value: 1 }) }) }; for (const x of iterable) { }\n";
-  const { exitCode, json } = runLoaderJson(loop, ["--max-instructions=500"], { timeout: 10_000 });
+  const { exitCode, json } = runLoaderJson(loop, ["--max-instructions=500", "--mode=interpreted"], { timeout: 10_000 });
   if (exitCode !== 1) throw new Error(`Instruction limit exit code should be 1, got ${exitCode}`);
   if (json.error?.type !== "InstructionLimitError") throw new Error(`Expected InstructionLimitError, got ${json.error?.type}`);
 }
@@ -1011,7 +1031,7 @@ const retargetCycle =
 
 for (const mode of ["interpreted", "bytecode"] as const) {
   console.log(`super-constructor cycle terminates (${mode})...`);
-  const modeArgs = mode === "bytecode" ? ["--mode=bytecode"] : [];
+  const modeArgs = [`--mode=${mode}`];
   const { exitCode, json } = runLoaderJson(retargetCycle, modeArgs, { timeout: 20_000 });
   if (exitCode !== 1) throw new Error(`Retarget cycle exit code should be 1, got ${exitCode} (${mode})`);
   if (json.error?.type !== "TypeError") {
@@ -1473,6 +1493,9 @@ console.log("--max-memory (builtin result builders survive mid-build collections
         parse: "YAML.parse(doc)",
         check: "'ok', Object.keys(b).length, b.a0.x.length, b.b249.y[1].length, b.c249.z.length, b.c249.x.length",
         expect: "ok 750 201 200 203 203",
+        // Measured in bytecode mode: refuses at 600000, first completes at
+        // 650000 (the interpreter completed at the default 600000).
+        windowSlack: 900_000,
       },
       {
         name: "toml",
@@ -1613,9 +1636,9 @@ console.log("--max-memory (builtin result builders survive mid-build collections
       // as a fault — so this run has to complete, and a refusal fails it.
       //
       // The window is per probe because the documents differ by an order of
-      // magnitude in what they need to finish: the default pair completes for six
-      // of the nine, while json-nested, yaml-block-and-flow and toml only refuse
-      // there and carry a measured `windowSlack` instead. Each override sits above
+      // magnitude in what they need to finish: the default pair completes for five
+      // of the nine, while json-nested, yaml-block-and-flow, yaml-anchors and
+      // toml only refuse there and carry a measured `windowSlack` instead. Each override sits above
       // the smallest slack at which that probe was observed to complete, and the
       // slack the preamble converges to is deterministic for a given build, so
       // "completes while parked" is a property of the calibration, not luck.
@@ -1715,8 +1738,8 @@ console.log("--max-memory (builtin result builders survive mid-build collections
   ];
 
   for (const [shape, src] of shapes) {
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-      const label = `${shape} ${modeArgs.length > 0 ? "bytecode" : "interpreted"}`;
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+      const label = `${shape} ${modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted"}`;
       console.log(`--max-memory (refusal is not catchable: ${label})...`);
       const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", ...modeArgs], { timeout: 30_000 });
       if (exitCode !== 1) throw new Error(`Memory limit refusal (${label}) should exit 1, got ${exitCode}: ${JSON.stringify(json)}`);
@@ -1766,8 +1789,8 @@ console.log("--max-memory (builtin result builders survive mid-build collections
     ];
 
     for (const [label, imports, parse] of parkedParse) {
-      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
         console.log(`--max-memory (parse refusal keeps its RangeError: ${label} ${modeLabel})...`);
         const src = [
           ...imports,
@@ -2089,8 +2112,8 @@ const CONSTRUCTED_GATE_CEILING = 1_048_576;
       "",
     ].join("\n");
 
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
       console.log(`--max-memory (growth gate refuses a request larger than the whole ceiling: ${modeLabel})...`);
       const what = `Constructed gate probe (${modeLabel})`;
       const run = runGateCase(
@@ -2182,8 +2205,8 @@ const CAPACITY_GATE_CEILING = 4_194_304;
       "",
     ].join("\n");
   try {
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
       console.log(
         `--max-memory (a gated growth is refused at the same doubling with or without guest collection: ${modeLabel})...`,
       );
@@ -2385,7 +2408,7 @@ const runParkedGateProbe = (
   modeArgs: readonly string[],
   tmpDir: string,
 ): GateRun => {
-  const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+  const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
   const what = `${kind} ${probe.label} (${modeLabel})`;
   const srcPath = join(tmpDir, `${kind.replace(" ", "-")}-${probe.label.replace(".", "-")}-${modeLabel}.mjs`);
   const charge = measureCallCharge(probe, modeArgs, `${srcPath}.charge.mjs`);
@@ -2548,8 +2571,8 @@ const assertParkedGateOutcome = (
     ];
 
     for (const probe of gatedParses) {
-      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
         console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
         if (runParkedGateProbe("Parse gate", probe, modeArgs, gateTmp).outcome === "gate")
           reachedGate[modeLabel] += 1;
@@ -2620,8 +2643,8 @@ const assertParkedGateOutcome = (
     ];
 
     for (const probe of gatedStringifies) {
-      for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-        const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+      for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+        const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
         console.log(`--max-memory (growth gate inside ${probe.label} stays opaque to the guest: ${modeLabel})...`);
         if (runParkedGateProbe("Stringify gate", probe, modeArgs, stringifyGateTmp).outcome === "gate")
           reachedGate[modeLabel] += 1;
@@ -2746,8 +2769,8 @@ const ASSIGNMENT_FAULT_SLACK = 147_000;
 {
   const assignGateTmp = mkdtemp("goccia-assign-gate-");
   try {
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-      const modeLabel = modeArgs.length > 0 ? "bytecode" : "interpreted";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+      const modeLabel = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
       console.log(
         `--max-memory (computed property assignment never faults into the guest: ${modeLabel})...`,
       );
@@ -2849,9 +2872,9 @@ console.log("TestRunner (a failing file stays exit 1, not an integrity abort)...
       join(failTmp, "passing.test.js"),
       'console.log("RAN: passing.test.js");\ndescribe("d", () => {\n  test("passes", () => {\n    expect(1).toBe(1);\n  });\n});\n',
     );
-    for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
       for (const jobsArg of ["--jobs=1", "--jobs=2"]) {
-        const label = `${modeArgs.length > 0 ? "bytecode" : "interpreted"} ${jobsArg}`;
+        const label = `${modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted"} ${jobsArg}`;
         const proc = Bun.spawnSync(
           [TESTRUNNER, failTmp, "--no-progress", jobsArg, ...modeArgs],
           { stdout: "pipe", stderr: "pipe" },
@@ -3028,8 +3051,8 @@ console.log("--max-memory (ordinary script errors stay catchable under a budget)
 {
   // The counterweight: the same budget must not turn an in-language error
   // into a host-level failure.
-  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-    const label = modeArgs.length > 0 ? "bytecode" : "interpreted";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
     const src = "let caught = false; try { null.property; } catch (e) { caught = true; } caught\n";
     const { exitCode, json } = runLoaderJson(src, ["--max-memory=67108864", "--compat-asi", ...modeArgs], { timeout: 30_000 });
     if (exitCode !== 0) throw new Error(`Catchable script error (${label}) should exit 0, got ${exitCode}: ${JSON.stringify(json)}`);
@@ -3050,8 +3073,8 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [[], ["--mode=bytecode"]] as const) {
-    const label = modeArgs.length > 0 ? modeArgs.join(" ") : "interpreter";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
+    const label = modeArgs.join(" ");
     const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi", ...modeArgs], { timeout: 30_000 });
     if (exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
     if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call ${label} should return positive bytesAllocated`);
@@ -3067,7 +3090,7 @@ console.log("--max-memory (interpreter recursive expression pressure reclaims)..
     "",
   ].join("\n");
 
-  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi"], { timeout: 30_000 });
+  const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi", "--mode=interpreted"], { timeout: 30_000 });
   if (exitCode !== 0) throw new Error(`Recursive expression pressure exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (json.files?.[0]?.result !== 46368) throw new Error(`Recursive expression pressure should return 46368, got ${json.files?.[0]?.result}`);
   if ((json.memory?.gc?.collections ?? 0) <= 0) throw new Error(`Recursive expression pressure should report collections, got ${json.memory?.gc?.collections}`);
@@ -3085,6 +3108,7 @@ console.log("--max-memory (interpreter lexical for-loop roots stay bounded)...")
   const { exitCode, json, stderr } = runLoaderJson(src, [
     "--max-memory=300000",
     "--compat-traditional-for-loop",
+    "--mode=interpreted",
   ], { timeout: 30_000 });
   if (exitCode !== 0) throw new Error(`Interpreter lexical for-loop exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
   if (json.files?.[0]?.result !== "completed") throw new Error(`Interpreter lexical for-loop should complete, got ${json.files?.[0]?.result}`);
@@ -3223,8 +3247,8 @@ console.log("Console observable behavior...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-    const label = modeArgs.length ? "bytecode" : "interpreted";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
     const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
     if (exitCode !== 0)
       throw new Error(`Console behavior ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
@@ -3265,8 +3289,8 @@ console.log("Console timer lifecycle...");
     "",
   ].join("\n");
 
-  for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-    const label = modeArgs.length ? "bytecode" : "interpreted";
+  for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+    const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
     const { exitCode, json, stderr } = runLoaderJson(source, modeArgs);
     if (exitCode !== 0)
       throw new Error(`Console timers ${label} failed: ${JSON.stringify(json.error)}${stderr}`);
@@ -3337,8 +3361,8 @@ console.log("--log option...");
       "timeEnd",
     ];
 
-    for (const modeArgs of [[] as string[], ["--mode=bytecode"]]) {
-      const label = modeArgs.length ? "bytecode" : "interpreted";
+    for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+      const label = modeArgs[0] === "--mode=bytecode" ? "bytecode" : "interpreted";
       const logPath = join(tmp, `${label}.log`);
       const { exitCode, json, stderr } = runLoaderJson(source, [`--log=${logPath}`, ...modeArgs]);
       if (exitCode !== 0)
@@ -3844,7 +3868,7 @@ console.log("Runtime diagnostic parity...");
         "",
       ].join("\n"),
     );
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${preloadAttack} --globals ${preloadSrc} ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(preloadMarker))
@@ -3906,7 +3930,7 @@ console.log("Runtime diagnostic parity...");
     );
     const hostThrowerMain = join(tmp, "host-thrower-main.js");
     writeFileSync(hostThrowerMain, ["boom();", ""].join("\n"));
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${hostThrowerMain} --globals ${hostThrower} --compat-asi ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(hostBodyMarker))
@@ -3925,7 +3949,7 @@ console.log("Runtime diagnostic parity...");
     );
     const heldMain = join(tmp, "held-main.js");
     writeFileSync(heldMain, ["const e = makeHeld();", "throw e;", ""].join("\n"));
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${heldMain} --globals ${heldHost} --compat-asi ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(heldMarker))
@@ -3959,7 +3983,7 @@ console.log("Runtime diagnostic parity...");
     );
     const deferredMain = join(tmp, "deferred-main.js");
     writeFileSync(deferredMain, ["await loadDeferredHostModule();", ""].join("\n"));
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${deferredMain} --globals ${deferredGlobals} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (run.exitCode === 0 || !out.includes("deferred-host-secret.js:2:"))
@@ -3995,7 +4019,7 @@ console.log("Runtime diagnostic parity...");
         "",
       ].join("\n"),
     );
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${join(memDir, "main.js")} --max-memory=262144 --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes("Object reference is Nil") || out.includes("Range check"))
@@ -4024,7 +4048,7 @@ console.log("Runtime diagnostic parity...");
     const vmDef =
       `virtual:secret=// ${vmMarker}\n` +
       "export const boom = () => { const z = null; return z.x; };";
-    for (const mode of ["", "--mode=bytecode"]) {
+    for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
       const run = await $`${RUNNER} ${vmMain} --module ${vmDef} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
       const out = run.text();
       if (out.includes(vmMarker))
@@ -4103,7 +4127,7 @@ console.log("Runtime diagnostic parity...");
         aliasMain,
         [`import { boom } from "${relativeAlias}";`, "boom();", ""].join("\n"),
       );
-      for (const mode of ["", "--mode=bytecode"]) {
+      for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
         const run = await $`${RUNNER} ${aliasMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
         const out = run.text();
         if (out.includes(aliasMarker))
@@ -4121,7 +4145,7 @@ console.log("Runtime diagnostic parity...");
           "",
         ].join("\n"),
       );
-      for (const mode of ["", "--mode=bytecode"]) {
+      for (const mode of ["--mode=interpreted", "--mode=bytecode"]) {
         const run = await $`${RUNNER} ${transitiveMain} --globals ${realHost} --compat-asi --source-type=module ${mode} 2>&1`.nothrow();
         const out = run.text();
         if (run.exitCode === 0 || !out.includes("alias-child.js:2:"))

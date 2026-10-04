@@ -391,6 +391,7 @@ type
     function FindExtension(
       const AClass: TGocciaEngineExtensionClass): TGocciaEngineExtension;
 
+    { One-shot helpers that run the source in a bytecode executor of their own. }
     class function RunScript(const ASource: string; const AFileName: string = 'inline.goccia'): TGocciaScriptResult; overload;
     class function RunScriptFromStringList(const ASource: TStringList; const AFileName: string): TGocciaScriptResult; overload;
 
@@ -2881,6 +2882,7 @@ var
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
   EntryPromise: TGocciaPromiseValue;
+  EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
@@ -2984,6 +2986,13 @@ begin
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
           EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          { Stamp the entry with its file's modification time, as the
+            loader stamps every module it loads. Unstamped, a later
+            import of the entry's own path took it for a changed file
+            and evaluated its body a second time. }
+          if FModuleLoader.ContentProvider.TryGetLastModified(
+             EntryModule.Path, EntryLastModified) then
+            EntryModule.LastModified := EntryLastModified;
           EntryModule.SetEnvironment(ModuleScope);
           FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
           ModuleContext.CurrentModule := EntryModule;
@@ -3195,12 +3204,15 @@ class function TGocciaEngine.RunScriptFromStringList(
   const ASource: TStringList; const AFileName: string): TGocciaScriptResult;
 var
   Engine: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaBytecodeExecutor;
 begin
-  Executor := TGocciaInterpreterExecutor.Create;
+  Executor := TGocciaBytecodeExecutor.Create;
   try
     Engine := TGocciaEngine.Create(AFileName, ASource, Executor);
     try
+      { Script source keeps its top-level bindings on the global object;
+        a module file name (.mjs) gives module source, which does not. }
+      Executor.GlobalBackedTopLevel := Engine.SourceType = stScript;
       Result := Engine.Execute;
     finally
       Engine.Free;

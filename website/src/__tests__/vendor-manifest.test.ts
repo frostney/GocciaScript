@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   binaryNames,
   checkVendorManifestFloor,
+  DEFAULT_EXECUTION_MODE,
   findVersion,
   hostFilesystemBoundaryFlag,
   isFlagSupported,
@@ -16,6 +17,7 @@ import {
   pickVendorManifestSource,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
+  supportsModeFlag,
   type VendorFeatureSet,
   type VendorManifest,
 } from "@/lib/vendor-manifest";
@@ -380,6 +382,30 @@ describe("resolveAsiFlag", () => {
     };
     expect(resolveAsiFlag(mixed, "loader")).toBe("--compat-asi");
     expect(resolveAsiFlag(mixed, "testRunner")).toBe("--asi");
+  });
+});
+
+describe("supportsModeFlag", () => {
+  test("defaults the execution mode to bytecode", () => {
+    expect(DEFAULT_EXECUTION_MODE).toBe("bytecode");
+  });
+
+  test("is true for binaries that advertise --mode", () => {
+    expect(supportsModeFlag(MODERN_FEATURES, "loader")).toBe(true);
+    expect(supportsModeFlag(LEGACY_061_FEATURES, "testRunner")).toBe(true);
+  });
+
+  test("is false for a binary that does not advertise --mode", () => {
+    const noMode: VendorFeatureSet = {
+      loader: ["--compat-asi", "--deny-read"],
+      testRunner: ["--compat-asi", "--deny-read", "--mode"],
+    };
+    expect(supportsModeFlag(noMode, "loader")).toBe(false);
+    expect(supportsModeFlag(noMode, "testRunner")).toBe(true);
+  });
+
+  test("treats an unprobed (locally built) engine as supporting --mode", () => {
+    expect(supportsModeFlag(undefined, "loader")).toBe(true);
   });
 });
 

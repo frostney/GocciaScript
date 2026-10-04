@@ -342,6 +342,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Executor.Interpreter,
   Goccia.FileExtensions,
+  Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.HostEnvironment.JavaScript,
   Goccia.JSON,
@@ -369,6 +370,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue,
+  Goccia.VM,
   Goccia.YAML;
 
 const
@@ -1785,8 +1787,11 @@ begin
     Exit('a symbol');
   if AValue is TGocciaBigIntValue then
     Exit('a BigInt');
+  { An object literal is a TGocciaObjectValue in the interpreter and a
+    TGocciaVMLiteralObjectValue in bytecode mode; both are plain objects. }
   if not (AValue is TGocciaObjectValue) or
      ((AValue.ClassType <> TGocciaObjectValue) and
+      (AValue.ClassType <> TGocciaVMLiteralObjectValue) and
       (AValue.ClassType <> TGocciaArrayValue)) then
     Exit('an object that is not a plain object or array');
   if AVisiting.IndexOf(TGocciaObjectValue(AValue)) >= 0 then
@@ -1834,7 +1839,7 @@ function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
   out AModulePath: string): string;
 var
   Isolated: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaExecutor;
   Source: TStringList;
   Module: TGocciaModule;
   ExportValue, ExportedValue: TGocciaValue;
@@ -1842,88 +1847,102 @@ var
   ExportName, Reason, ReasonPath: string;
   Visiting: TList<TGocciaObjectValue>;
   Stringifier: TGocciaJSONStringifier;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
-  Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  { Loading the module evaluates it outside Execute, so it needs the
+    engine's floating-point environment itself: compiling and running
+    NaN or Infinity must not raise a host FPU exception. }
+  EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    Isolated := TGocciaEngine.Create(APath, Source, Executor,
-      AEngine.Capabilities);
+    Source := TStringList.Create;
+    { The module runs in the script's execution mode; bytecode unless the
+      script runs in an interpreter. }
+    if AEngine.Executor is TGocciaInterpreterExecutor then
+      Executor := TGocciaInterpreterExecutor.Create
+    else
+      Executor := TGocciaBytecodeExecutor.Create;
     try
-      Isolated.ProjectRoot := ExtractFileDir(AConfigPath);
-      Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
-      Isolated.Preprocessors := AEngine.Preprocessors;
-      Isolated.Compatibility := AEngine.Compatibility;
-      Isolated.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
-      Isolated.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
-      Isolated.StrictTypes := AEngine.StrictTypes;
-      { The filesystem content provider, with every read it makes checked. }
-      AttachRuntime(Isolated);
-      Module := Isolated.ModuleLoader.LoadModule(APath, APath);
-      AModulePath := Module.Path;
-      if AResult = imrDefaultExport then
-      begin
-        if not Module.TryGetExportValue(KEYWORD_DEFAULT, ExportValue) then
-          raise EArgumentException.Create(
-            'Virtual modules manifest module must have a default export.');
-      end
-      else
-      begin
-        NamedExports := TGocciaObjectValue.Create;
-        if TGarbageCollector.Instance <> nil then
-          TGarbageCollector.Instance.AddTempRoot(NamedExports);
-        Visiting := TList<TGocciaObjectValue>.Create;
-        try
+      Isolated := TGocciaEngine.Create(APath, Source, Executor,
+        AEngine.Capabilities);
+      try
+        Isolated.ProjectRoot := ExtractFileDir(AConfigPath);
+        Isolated.ConfigureCapabilityAuditAsChildOf(AEngine);
+        Isolated.Preprocessors := AEngine.Preprocessors;
+        Isolated.Compatibility := AEngine.Compatibility;
+        Isolated.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
+        Isolated.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
+        Isolated.StrictTypes := AEngine.StrictTypes;
+        { The filesystem content provider, with every read it makes checked. }
+        AttachRuntime(Isolated);
+        Module := Isolated.ModuleLoader.LoadModule(APath, APath);
+        AModulePath := Module.Path;
+        if AResult = imrDefaultExport then
+        begin
+          if not Module.TryGetExportValue(KEYWORD_DEFAULT, ExportValue) then
+            raise EArgumentException.Create(
+              'Virtual modules manifest module must have a default export.');
+        end
+        else
+        begin
+          NamedExports := TGocciaObjectValue.Create;
+          if TGarbageCollector.Instance <> nil then
+            TGarbageCollector.Instance.AddTempRoot(NamedExports);
+          Visiting := TList<TGocciaObjectValue>.Create;
           try
-            for ExportName in Module.GetExportNames do
-              if Module.TryGetExportValue(ExportName, ExportedValue) then
-              begin
-                { Only data crosses into the script's engine, and all of it:
-                  JSON would drop a nested function or rewrite NaN silently. }
-                Reason := NonDataReason(ExportedValue, ExportName, Visiting,
-                  ReasonPath);
-                if Reason <> '' then
-                  raise EArgumentException.CreateFmt(
-                    '%s: export "%s" is %s; a config''s globals module may ' +
-                    'export data only (pass it with --globals on the ' +
-                    'command line to inject code)',
-                    [APath, ReasonPath, Reason]);
-                NamedExports.SetProperty(ExportName, ExportedValue);
-              end;
-          except
-            { The stringify step's finally removes the root on success; a
-              refused export must not leave it pinning the copied values. }
-            if TGarbageCollector.Instance <> nil then
-              TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
-            raise;
+            try
+              for ExportName in Module.GetExportNames do
+                if Module.TryGetExportValue(ExportName, ExportedValue) then
+                begin
+                  { Only data crosses into the script's engine, and all of it:
+                    JSON would drop a nested function or rewrite NaN silently. }
+                  Reason := NonDataReason(ExportedValue, ExportName, Visiting,
+                    ReasonPath);
+                  if Reason <> '' then
+                    raise EArgumentException.CreateFmt(
+                      '%s: export "%s" is %s; a config''s globals module may ' +
+                      'export data only (pass it with --globals on the ' +
+                      'command line to inject code)',
+                      [APath, ReasonPath, Reason]);
+                  NamedExports.SetProperty(ExportName, ExportedValue);
+                end;
+            except
+              { The stringify step's finally removes the root on success; a
+                refused export must not leave it pinning the copied values. }
+              if TGarbageCollector.Instance <> nil then
+                TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+              raise;
+            end;
+          finally
+            Visiting.Free;
+          end;
+          ExportValue := NamedExports;
+        end;
+        if TGarbageCollector.Instance <> nil then
+          TGarbageCollector.Instance.AddTempRoot(ExportValue);
+        try
+          Stringifier := TGocciaJSONStringifier.Create;
+          try
+            Result := Stringifier.Stringify(ExportValue);
+          finally
+            Stringifier.Free;
           end;
         finally
-          Visiting.Free;
-        end;
-        ExportValue := NamedExports;
-      end;
-      if TGarbageCollector.Instance <> nil then
-        TGarbageCollector.Instance.AddTempRoot(ExportValue);
-      try
-        Stringifier := TGocciaJSONStringifier.Create;
-        try
-          Result := Stringifier.Stringify(ExportValue);
-        finally
-          Stringifier.Free;
+          if TGarbageCollector.Instance <> nil then
+          begin
+            TGarbageCollector.Instance.RemoveTempRoot(ExportValue);
+            if AResult = imrNamedExports then
+              TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
+          end;
         end;
       finally
-        if TGarbageCollector.Instance <> nil then
-        begin
-          TGarbageCollector.Instance.RemoveTempRoot(ExportValue);
-          if AResult = imrNamedExports then
-            TGarbageCollector.Instance.RemoveTempRoot(NamedExports);
-        end;
+        Isolated.Free;
       end;
     finally
-      Isolated.Free;
+      Executor.Free;
+      Source.Free;
     end;
   finally
-    Executor.Free;
-    Source.Free;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
 end;
 

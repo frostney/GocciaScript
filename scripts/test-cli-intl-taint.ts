@@ -65,8 +65,8 @@ const tmp = `${import.meta.dir}/../build/.intl-taint-cli.js`;
 await Bun.write(tmp, script);
 
 let failures = 0;
-for (const mode of [[], ["--mode=bytecode"]]) {
-  const label = mode.length ? "bytecode" : "interpreter";
+for (const mode of [["--mode=interpreted"], ["--mode=bytecode"]]) {
+  const label = mode[0] === "--mode=bytecode" ? "bytecode" : "interpreter";
   console.log(`Intl taint robustness (${label})...`);
   const res = await $`${BARE} ${tmp} ${mode} 2>&1`.nothrow();
   const out = res.text();

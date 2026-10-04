@@ -1367,7 +1367,7 @@ end;
 function TTestRunnerApp.RunGocciaScript(const AFileName: string;
   APreloadedSource: TStringList): TTestFileResult;
 begin
-  case EngineOptions.Mode.ValueOr(emInterpreted) of
+  case EngineOptions.ExecutionMode of
     emInterpreted: Result := RunGocciaScriptInterpreted(AFileName, APreloadedSource);
     emBytecode:    Result := RunGocciaScriptBytecode(AFileName, APreloadedSource);
   end;
@@ -2054,7 +2054,7 @@ var
   ErrorInfo: TCLIJSONErrorInfo;
   Timing: TCLIJSONTiming;
 begin
-  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
   FailedCount := Round(AResult.TestResult.GetProperty('failed').ToNumberLiteral.Value);
   { Suite-level errors never enter `failed` (Vitest keeps them out of the
     test counts), so `ok` and the exit code must consult them separately
@@ -2256,7 +2256,7 @@ begin
   DurationNanoseconds := Round(TestResult.GetProperty('duration').ToNumberLiteral.Value);
   RunCount := StrToFloat(TotalRunTests);
 
-  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
   IsParallel := AResult.JobCount > 1;
 
   if (not FNoResults.Present) and (not IsJsonOutput) then

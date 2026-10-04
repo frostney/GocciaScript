@@ -145,7 +145,7 @@ begin
     Exit;
   end;
 
-  IsBytecodeMode := EngineOptions.Mode.Matches(emBytecode);
+  IsBytecodeMode := EngineOptions.ExecutionMode = emBytecode;
 
   { The working directory's config governs the session: refuse before the
     prompt when its permission requests are not trusted. }

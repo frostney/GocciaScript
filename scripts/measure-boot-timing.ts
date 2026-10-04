@@ -45,7 +45,7 @@ interface ModeTiming {
 
 function measure(script: string, modeArgs: string[]): ModeTiming {
   const samples: number[] = [];
-  const label = modeArgs.join(" ") || "interpreter";
+  const label = modeArgs.join(" ");
   for (let i = 0; i < warmup + runs; i++) {
     const start = Bun.nanoseconds();
     const result = Bun.spawnSync([loader, script, ...modeArgs], {
@@ -78,7 +78,7 @@ try {
   const report = {
     runs,
     warmup,
-    interpreted: measure(script, []),
+    interpreted: measure(script, ["--mode=interpreted"]),
     bytecode: measure(script, ["--mode=bytecode"]),
   };
 

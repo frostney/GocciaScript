@@ -12,7 +12,7 @@ uses
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Executor,
-  Goccia.Executor.Interpreter,
+  Goccia.Executor.Bytecode,
   Goccia.ModuleResolver,
   Goccia.Modules,
   Goccia.Modules.Loader,
@@ -120,6 +120,8 @@ type
     constructor Create(const AEngine: TGocciaEngine); overload;
     constructor Create(const AEngine: TGocciaEngine;
       const AOwnsEngine: Boolean); overload;
+    { The overloads without an executor run in a bytecode executor the
+      runtime owns. }
     constructor Create(const AFileName: string;
       const ASourceLines: TStringList); overload;
     constructor Create(const AFileName: string; const ASourceLines: TStringList;
@@ -594,7 +596,7 @@ end;
 constructor TGocciaRuntime.Create(const AFileName: string;
   const ASourceLines: TStringList; const ACapabilities: TGocciaCapabilities);
 begin
-  FOwnedExecutor := TGocciaInterpreterExecutor.Create;
+  FOwnedExecutor := TGocciaBytecodeExecutor.Create;
   try
     CreateWithEngine(TGocciaEngine.Create(AFileName, ASourceLines,
       FOwnedExecutor, ACapabilities), True);
@@ -643,6 +645,12 @@ end;
 
 function TGocciaRuntime.Execute: TGocciaScriptResult;
 begin
+  { The runtime's own executor backs a script's top-level bindings with the
+    global object, as the CLI hosts configure theirs; module source keeps
+    them in its module scope. }
+  if FOwnedExecutor is TGocciaBytecodeExecutor then
+    TGocciaBytecodeExecutor(FOwnedExecutor).GlobalBackedTopLevel :=
+      FEngine.SourceType = stScript;
   Result := FEngine.Execute;
 end;
 
