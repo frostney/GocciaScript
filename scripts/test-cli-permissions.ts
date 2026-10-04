@@ -777,7 +777,7 @@ console.log("A config's permissions govern only files in its own directory tree.
     ].join("\n");
     writeFileSync(join(tmp, "a", "x.mjs"), probe);
     writeFileSync(join(tmp, "c", "l.mjs"), probe);
-    for (const args of [[], ["--mode=bytecode"]]) {
+    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "l.mjs"), ...args], { cwd: tmp });
       // Each file's output precedes its own "Running script" line.
       const [first, second] = result.stdout.split("Running script");
@@ -814,7 +814,7 @@ console.log("A file with its own config inherits no unsafe-* keys or grants from
     ].join("\n");
     for (const file of [join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs")])
       writeFileSync(join(tmp, file), probe);
-    for (const args of [[], ["--mode=bytecode"]]) {
+    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       const result = run(RUNNER, ["-P", join("a", "x.mjs"), join("c", "x.mjs"), join("a", "sub", "x.mjs"), ...args], { cwd: tmp });
       const probes = result.stdout.split("\n").filter((line) => line.startsWith("probe "));
       if (probes.length !== 3) throw new Error(`three probes expected: ${result.combined}`);
@@ -840,7 +840,7 @@ console.log("A file with its own config inherits no unsafe-* keys or grants from
       "",
     ].join("\n"));
     writeFileSync(join(tmp, "a", "bench.js"), 'import("goccia:microbench").then(({ bench, group }) => { group("a", () => { bench("a", () => 1); }); });\n');
-    for (const args of [[], ["--mode=bytecode"]]) {
+    for (const args of [["--mode=interpreted"], ["--mode=bytecode"]]) {
       const bench = Bun.spawnSync([resolve(BENCHRUNNER), "-P", join("a", "bench.js"), join("c", "bench.js"), "--no-progress", ...args], {
         cwd: tmp,
         stdout: "pipe",

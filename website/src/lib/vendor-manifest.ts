@@ -118,6 +118,24 @@ export function isFlagSupported(
   return features[kind].includes(name);
 }
 
+/** The execution backends a binary's `--mode` flag selects between. */
+export type ExecutionMode = "interpreted" | "bytecode";
+
+/** The backend the website runs when the request names none (#871). */
+export const DEFAULT_EXECUTION_MODE: ExecutionMode = "bytecode";
+
+/** Whether a binary advertises `--mode`, so its backend is selectable. The
+ *  playground shows its execution-mode toggle only for such binaries, and the
+ *  API sends `--mode` only to them; any other binary runs its built-in
+ *  default. A missing feature set is a locally built (current) engine that was
+ *  never probed, so it counts as supporting the flag. */
+export function supportsModeFlag(
+  features: VendorFeatureSet | undefined,
+  kind: "loader" | "testRunner",
+): boolean {
+  return isFlagSupported(features, "--mode", kind);
+}
+
 /** The flags that refuse every host read, including imports from the
  *  project: `--deny-read` from GocciaScript 0.14.0 (ADR 0122), and the
  *  `--no-host-filesystem` it replaced. Newest first. */

@@ -162,7 +162,7 @@ POST JSON to \`/api/execute\`:
 \`\`\`json
 {
   "code": "1 + 1;",
-  "mode": "interpreted",
+  "mode": "bytecode",
   "asi": true,
   "compatVar": false,
   "compatFunction": false
@@ -172,7 +172,7 @@ POST JSON to \`/api/execute\`:
 Options:
 
 - \`code\` — GocciaScript source code, capped at ${MAX_GOCCIA_CODE_BYTES} bytes (${MAX_GOCCIA_CODE_BYTES / 1024} KiB).
-- \`mode\` — \`interpreted\` or \`bytecode\`, matching \`--mode=bytecode\`.
+- \`mode\` — \`bytecode\` or \`interpreted\`, passed as \`--mode=<value>\` to binaries that advertise \`--mode\`. The website API defaults this to \`bytecode\`.
 - \`asi\` — enables automatic semicolon insertion. The website API keeps this short field name for version compatibility; selected binaries may map it to \`--asi\` or \`--compat-asi\` depending on their supported flags. The website API defaults this to \`true\`.
 - \`compatVar\` — enables legacy \`var\` declarations, matching \`--compat-var\`.
 - \`compatFunction\` — enables the \`function\` keyword, matching \`--compat-function\`.

@@ -16,6 +16,13 @@ type
   TGocciaExecutionMode = (emInterpreted, emBytecode);
   TGocciaSourceType = (stScript, stModule);
 
+const
+  { The mode an entry point runs in when neither --mode nor a config "mode"
+    key chooses one. }
+  DEFAULT_EXECUTION_MODE = emBytecode;
+
+type
+
   TGocciaCompatibilityFlagDescriptor = record
     OptionName: string;
     HelpText: string;
@@ -90,6 +97,9 @@ type
     { Hides the limits a binary does not apply from --help and makes config
       files ignore them without validation. }
     procedure HideUnsupportedSettings(const AHonored: TGocciaHonoredSettings);
+    { The selected execution mode: --mode or a config "mode" key when given,
+      otherwise DEFAULT_EXECUTION_MODE. }
+    function ExecutionMode: TGocciaExecutionMode;
 
     property Mode: TEnumOption<TGocciaExecutionMode> read FMode;
     property SourceType: TEnumOption<TGocciaSourceType> read FSourceType;
@@ -719,7 +729,7 @@ var
 begin
   inherited Create;
   FMode := TEnumOption<TGocciaExecutionMode>.Create('mode',
-    'Execution mode', 'Engine');
+    'Execution mode (default: bytecode)', 'Engine');
   FSourceType := TEnumOption<TGocciaSourceType>.Create('source-type',
     'Source loading kind (default: script; .mjs infers module)', 'Engine');
   for Flag := Low(TGocciaCompatibility) to High(TGocciaCompatibility) do
@@ -878,6 +888,11 @@ function TGocciaEngineOptions.CompatibilityFlagOption(
   const AFlag: TGocciaCompatibility): TFlagOption;
 begin
   Result := FCompatibilityFlags[AFlag];
+end;
+
+function TGocciaEngineOptions.ExecutionMode: TGocciaExecutionMode;
+begin
+  Result := FMode.ValueOr(DEFAULT_EXECUTION_MODE);
 end;
 
 function TGocciaEngineOptions.SettingOption(

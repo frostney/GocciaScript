@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  gocciaRunInputSchema,
   gocciaToolInputZodSchema,
   MAX_GOCCIA_CODE_BYTES,
   MAX_GOCCIA_TOOL_REQUEST_BYTES,
@@ -38,7 +39,7 @@ describe("goccia tool schema validation", () => {
       ok: true,
       value: {
         code: "1;",
-        mode: "interpreted",
+        mode: "bytecode",
         asi: true,
         compatVar: false,
         compatFunction: false,
@@ -155,6 +156,20 @@ describe("goccia tool schema validation", () => {
     );
   });
 
+  test("defaults the mode to bytecode and still accepts interpreted", () => {
+    const defaulted = validateGocciaToolInput({ code: "1;" });
+    expect(defaulted.ok && defaulted.value.mode).toBe("bytecode");
+    const interpreted = validateGocciaToolInput({
+      code: "1;",
+      mode: "interpreted",
+    });
+    expect(interpreted.ok && interpreted.value.mode).toBe("interpreted");
+    expect(gocciaRunInputSchema().properties.mode).toMatchObject({
+      enum: ["interpreted", "bytecode"],
+      default: "bytecode",
+    });
+  });
+
   test("exports the underlying Zod schema", () => {
     const result = gocciaToolInputZodSchema.safeParse({ code: "1;" });
 
@@ -162,7 +177,7 @@ describe("goccia tool schema validation", () => {
     if (result.success) {
       expect(result.data).toEqual({
         code: "1;",
-        mode: "interpreted",
+        mode: "bytecode",
         asi: true,
         compatVar: false,
         compatFunction: false,

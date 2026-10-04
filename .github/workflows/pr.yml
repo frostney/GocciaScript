@@ -157,7 +157,7 @@ jobs:
         run: ./fixtures/ffi/build.sh
 
       - name: Run all JavaScript tests
-        run: ./build/GocciaTestRunner -P tests ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
+        run: ./build/GocciaTestRunner -P tests --mode=${{ matrix.mode }} --silent --no-progress --output=test-results-${{ matrix.mode }}.json
 
       - name: Check GocciaTestRunner CLI behaviour
         run: |
@@ -168,42 +168,42 @@ jobs:
       - name: Check GocciaTestRunner coverage CLI
         run: |
           # --coverage prints a summary to stdout
-          cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
+          cov_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage 2>&1)"
           [[ "$cov_output" == *'Coverage Summary:'* ]]
           [[ "$cov_output" == *'array-creation.js'* ]]
 
           # --coverage-format=lcov --coverage-output writes an lcov file
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-format=lcov --coverage-output=cov.lcov
           grep -q '^SF:' cov.lcov
           grep -q '^DA:' cov.lcov
           grep -q '^end_of_record' cov.lcov
           rm cov.lcov
 
           # --coverage-format=json --coverage-output writes a JSON file
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=cov.json
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-format=json --coverage-output=cov.json
           grep -q '"path":' cov.json
           grep -q '"statementMap":' cov.json
           rm cov.json
 
           # order-independent: --coverage-output before --coverage-format
-          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-output=cov2.lcov --coverage-format=lcov
+          ./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage --coverage-output=cov2.lcov --coverage-format=lcov
           grep -q '^DA:' cov2.lcov
           rm cov2.lcov
 
           # single-file detail view shows line annotations
-          detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage 2>&1)"
+          detail_output="$(./build/GocciaTestRunner tests/built-ins/Array/array-creation.js --mode=${{ matrix.mode }} --coverage 2>&1)"
           detail_re='[0-9]+x \|'
           [[ "$detail_output" =~ $detail_re ]]
 
           # branch coverage: lcov contains BRDA/BRF entries for branching code
-          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --mode=${{ matrix.mode }} --coverage --coverage-format=lcov --coverage-output=branch-cov.lcov
           grep -q '^BRDA:' branch-cov.lcov
           grep -q '^BRF:' branch-cov.lcov
           grep -q '^BRH:' branch-cov.lcov
           rm branch-cov.lcov
 
           # branch coverage: JSON contains branchMap and b entries
-          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --coverage --coverage-format=json --coverage-output=branch-cov.json
+          ./build/GocciaTestRunner tests/language/statements/if/if-else-statements.js --mode=${{ matrix.mode }} --coverage --coverage-format=json --coverage-output=branch-cov.json
           grep -q '"branchMap":' branch-cov.json
           grep -q '"b":' branch-cov.json
           rm branch-cov.json
@@ -294,7 +294,7 @@ jobs:
         env:
           GOCCIA_BENCH_ROUNDS: 1
           GOCCIA_BENCH_CALIBRATION_MS: 10
-        run: timeout 120 ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress > /dev/null 2>&1 || true
+        run: timeout 120 ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress > /dev/null 2>&1 || true
 
       # `main` is built from the PR's base commit, so it cannot run benchmarks the
       # PR newly adds or changes to use new language features. The report is still
@@ -312,13 +312,13 @@ jobs:
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: timeout -k 30 480 ./build-main/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
+        run: timeout -k 30 480 ./build-main/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}-main.json
 
       - name: Run benchmarks
         env:
           GOCCIA_BENCH_CALIBRATION_MS: 100
           GOCCIA_BENCH_ROUNDS: 7
-        run: timeout -k 30 480 ./build/GocciaBenchmarkRunner benchmarks ${{ matrix.mode == 'bytecode' && '--mode=bytecode' || '' }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
+        run: timeout -k 30 480 ./build/GocciaBenchmarkRunner benchmarks --mode=${{ matrix.mode }} --no-progress --format=json --output=benchmark-${{ matrix.mode }}.json
 
       - name: Capture deterministic profiles (main base)
         if: matrix.mode == 'bytecode'

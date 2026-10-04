@@ -57,8 +57,8 @@ You should see the script's output followed by a short run summary (the timings 
 
 ```text
 Hello from GocciaScript!
-Running script (interpreted): hello.js
-  Lex: 31.17µs | Parse: 11.22µs | Execute: 11.17µs | Total: 69.66µs
+Running script (bytecode): hello.js
+  Lex: 24.21µs | Parse: 9.74µs | Compile: 46.62µs | Execute: 30.32µs | Total: 3.43ms
 ```
 
 That's it — GocciaScript files are plain `.js` files. No special extension, no transpilation step.

@@ -6,6 +6,7 @@ import {
   listPlaygroundVersions,
   resolveAsiFlag,
   resolvePublicDefaultVersion,
+  supportsModeFlag,
 } from "@/lib/vendor-manifest";
 import { getVendorManifest } from "@/lib/vendor-manifest-server";
 
@@ -51,6 +52,18 @@ export default async function PlaygroundPage() {
   const runnerNames = Object.fromEntries(
     manifest.versions.map((entry) => [entry.tag, binaryNames(entry)]),
   );
+  // The execution-mode toggle is version-aware: it appears only for a binary
+  // whose help text advertises `--mode`, the same probe the API checks before
+  // sending the flag.
+  const modeSupport = Object.fromEntries(
+    manifest.versions.map((entry) => [
+      entry.tag,
+      {
+        loader: supportsModeFlag(entry.features, "loader"),
+        testRunner: supportsModeFlag(entry.features, "testRunner"),
+      },
+    ]),
+  );
   return (
     <Suspense>
       <Playground
@@ -58,6 +71,7 @@ export default async function PlaygroundPage() {
         defaultVersion={resolvePublicDefaultVersion(manifest)}
         asiFlags={asiFlags}
         runnerNames={runnerNames}
+        modeSupport={modeSupport}
       />
     </Suspense>
   );
