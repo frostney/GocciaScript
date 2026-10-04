@@ -190,6 +190,17 @@ unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
 proper-tail-call path. The optimization does not turn the function into a
 generally typed function or change generic `+` semantics.
 
+A scalar frame takes its register window without clearing it, so the window
+can still hold references that an earlier frame left there, to objects that
+may since have been freed. The collector therefore does not mark scalar
+frames: when any is live, the bytecode stack root marks the register arena only
+up to the first scalar frame's window. That loses nothing, because a scalar
+frame writes each register before reading it and stores only scalars and the
+pinned NaN, infinity and -0 values. It relies on scalar frames being the
+innermost frames whenever one is live, which holds because they call only
+themselves; development builds assert that no frame is set up while a scalar
+frame is live (see [ADR 0127](adr/0127-collector-skips-closed-numeric-frames.md)).
+
 ## Profiling
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.

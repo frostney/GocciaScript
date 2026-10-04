@@ -476,7 +476,7 @@ type
     procedure PushClosedNumericFrame(const AResultRegister, AArgumentBase,
       AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-      var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+      var AProfileTimestamp: Int64);
     function PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
       var AProfileTimestamp: Int64): Integer;
@@ -3209,7 +3209,15 @@ begin
   // below are redundant with this but kept for parity with the register stack.
   MarkArgumentRange(0, FVM.FArgumentBase + FVM.FArgCount);
 
+  // Closed numeric frames (ADR 0101) are the innermost frames whenever any is
+  // live: they call only themselves, and no other frame is set up above them.
+  // Their windows are not cleared, so they can still hold references an
+  // earlier frame left behind, and what the frames store themselves is
+  // scalars and pinned numbers. Mark only the registers below the first one.
   Limit := FVM.FRegisterBase + FVM.FRegisterCount;
+  if FVM.FClosedNumericFrameStackCount > 0 then
+    Limit := FVM.FClosedNumericFrameStack[0].RegisterBase +
+      FVM.FRegisterCount;
   if Limit > Length(FVM.FRegisterStack) then
     Limit := Length(FVM.FRegisterStack);
   for I := 0 to Limit - 1 do
@@ -14197,11 +14205,11 @@ end;
 procedure TGocciaVM.PushClosedNumericFrame(const AResultRegister,
   AArgumentBase, AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
   const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-  var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+  var AProfileTimestamp: Int64);
 var
   Arguments: array[0..2] of TGocciaRegister;
   I: Integer;
-  NewBase, Required, ClearStart: Integer;
+  NewBase, Required: Integer;
 begin
   if (AArgumentCount < 1) or (AArgumentCount > 3) or
      (AArgumentCount <> ATemplate.ParameterCount) then
@@ -14234,20 +14242,14 @@ begin
   Required := NewBase + FRegisterCount;
   if Required > Length(FRegisterStack) then
     SetLength(FRegisterStack, Required * 2);
-  if Required > AInitializedRegisterTop then
-  begin
-    ClearStart := Max(NewBase, AInitializedRegisterTop);
-    if Required > ClearStart then
-      FillChar(FRegisterStack[ClearStart],
-        (Required - ClearStart) * SizeOf(TGocciaRegister), 0);
-    AInitializedRegisterTop := Required;
-  end;
   FRegisterBase := NewBase;
   FRegisters := @FRegisterStack[FRegisterBase];
-  // Each depth is cleared on first use in this outer invocation. The proof
-  // then admits only scalar-number expressions, numeric predicates, and direct
-  // self-calls, so sibling reuse can contain only non-reference scalars or
-  // undefined and no stale object pointer can reach the GC.
+  // The window is not cleared, so it can still hold references that an
+  // earlier frame left there; the collector does not mark closed numeric
+  // windows (TGocciaVMStackRoot.MarkReferences). The proof admits only
+  // scalar-number expressions, numeric predicates, and direct self-calls, so
+  // the frame writes each register before reading it and stores only scalars
+  // and the pinned NaN, infinity and -0 values.
   FRegisters[0] := RegisterUndefined;
   for I := 0 to AArgumentCount - 1 do
     FRegisters[I + 1] := Arguments[I];
@@ -14437,6 +14439,10 @@ var
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
 begin
+  // The collector does not mark the registers of closed numeric frames, which
+  // relies on no other frame running above them.
+  Assert(FClosedNumericFrameStackCount = 0,
+    'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
   // The frame's source path is the template's own source file, or the running
@@ -14748,7 +14754,6 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
   PreviousCallSite: TGocciaCallSite;
-  ClosedNumericInitializedRegisterTop: Integer;
   InstructionLimitState: PGocciaInstructionLimitState;
   UseProdDispatch: Boolean;
   GC: TGarbageCollector;
@@ -15022,7 +15027,6 @@ begin
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-    ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then

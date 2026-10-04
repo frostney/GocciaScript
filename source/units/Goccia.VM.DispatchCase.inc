@@ -2271,7 +2271,7 @@
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
-          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+          ProfileEntryTimestamp);
         goto LDispatchNext;
       end;
 
