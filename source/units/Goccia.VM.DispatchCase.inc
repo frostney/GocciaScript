@@ -286,7 +286,7 @@
       begin
         JumpOffset := DecodeAx(Instruction);
         Inc(Frame.IP, JumpOffset);
-        if JumpOffset < 0 then
+        if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
       end;
 
@@ -300,7 +300,7 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
-          if JumpOffset < 0 then
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
             CheckExecutionTimeout;
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
@@ -319,7 +319,7 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
           JumpOffset := DecodesBx(Instruction);
           Inc(Frame.IP, JumpOffset);
-          if JumpOffset < 0 then
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
             CheckExecutionTimeout;
         end
         else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
@@ -348,7 +348,7 @@
                 Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
-            if JumpOffset < 0 then
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
               CheckExecutionTimeout;
           end
           else if FCoverageEnabled and
@@ -401,7 +401,7 @@
                 Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
             JumpOffset := Int16(C);
             Inc(Frame.IP, JumpOffset);
-            if JumpOffset < 0 then
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
               CheckExecutionTimeout;
           end
           else if FCoverageEnabled and
@@ -813,11 +813,14 @@
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
             FRegisters[A].ObjectValue);
+          // Copied out of the register window first: where a register is
+          // passed by reference (Win64), SetupNewFrame would otherwise read
+          // `this` through the window after acquiring registers moved it.
+          CallThisRegister := FRegisters[A];
           PushFrame(B, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
           SetupNewFrame(
             TGocciaBytecodeFunctionValue(FRegisters[B].ObjectValue).FClosure,
-            FRegisters[A], TGocciaRegisterArray(nil), 0,
-            RegisterUndefined, RegisterUndefined, RegisterUndefined, True, True,
+            CallThisRegister, nil, 0, True,
             Frame, Template, PrevCovLine, ProfileEntryTimestamp);
           goto LDispatchNext;
         end
@@ -847,7 +850,7 @@
       OP_GET_PROP_CONST:
       LGetPropConstShared:
         if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
-           (FRegisters[B].ObjectValue is TGocciaObjectValue) then
+           VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
         begin
           // Hot shape: per-site inline cache keyed by the name-constant
           // index, validated against (own-map identity, map entry version).
@@ -857,11 +860,14 @@
           // are megamorphic: they skip the cache and use the uncached
           // own-data fast path. A nil slot (out-of-range constant index in
           // corrupt bytecode) runs fully uncached.
+          // The gate above is the three exact classes the caches serve, not
+          // `is TGocciaObjectValue`: no tier below does anything for another
+          // receiver class but call GetPropertyValue, which the next branch
+          // does without walking the class chain first.
           PropertyReadCache := Template.PropertyReadCacheSlot(C);
           if Assigned(PropertyReadCache) and
              (PropertyReadCache^.MissStreak <
               PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-             VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
              VMTryGetCachedOwnDataProperty(
                TGocciaObjectValue(FRegisters[B].ObjectValue),
                PropertyReadCache, GlobalBindingValue) then
@@ -879,8 +885,7 @@
             else
             begin
               GlobalName := Template.GetConstantUnchecked(C).StringValue;
-              if VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) and
-                 (not IsBytecodePrivateKey(GlobalName)) then
+              if not IsBytecodePrivateKey(GlobalName) then
               begin
                 // One own-map probe establishes own-data / own-non-data /
                 // absent; no fallback tier re-hashes the same name on this
@@ -955,9 +960,6 @@
         if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
         begin
           RightValue := RegisterToValue(FRegisters[C]);
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue,
-              RegisterToValue(FRegisters[A]));
           // Own writable-data write IC: (shape, entry index), same receiver
           // gate as the read cache. Hits skip the name hash. Accessors,
           // proxies, private fields, deletion, and non-writable descriptors
@@ -1047,9 +1049,6 @@
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
         RightValue := RegisterToValue(FRegisters[C]);
         TargetValue := GetRegister(A);
-        if (TargetValue is TGocciaClassValue) or
-           (TargetValue is TGocciaObjectValue) then
-          SetBytecodeHomeObject(RightValue, TargetValue);
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
@@ -1367,9 +1366,6 @@
         OperandRoots.Add(RightValue);
         OperandRoots.Add(TargetValue);
         try
-          if (TargetValue is TGocciaClassValue) or
-             (TargetValue is TGocciaObjectValue) then
-            SetBytecodeHomeObject(RightValue, TargetValue);
           if not ((TargetValue is TGocciaArrayValue) and
                   (FRegisters[B].Kind = grkInt) and
                   (FRegisters[B].IntValue >= 0) and
@@ -1510,8 +1506,14 @@
               SetRegisterRaw(A, RegisterInt(1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // ES2026 §13.4 Update Expressions: each form reads the old value with
+          // GetValue before ToNumeric. The four fused update opcodes can take
+          // a local's own register as B, where a hole is a lexical binding
+          // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1534,8 +1536,11 @@
               SetRegisterRaw(A, RegisterInt(-1));
           grkNull:
             SetRegisterRaw(A, RegisterInt(-1));
-          grkUndefined, grkHole:
+          grkUndefined:
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1595,11 +1600,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1666,11 +1674,14 @@
             if (B < FLocalCellCount) and Assigned(FLocalCells[B]) then
               FLocalCells[B].Value := FRegisters[B];
           end;
-          grkUndefined, grkHole:
+          grkUndefined:
           begin
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
             SetRegister(B, TGocciaNumberLiteralValue.NaNValue);
           end;
+          // Temporal dead zone: see OP_INC_NUMERIC.
+          grkHole:
+            ThrowReferenceError('Cannot access lexical binding before initialization');
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1785,6 +1796,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) and
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) and
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
             GetRegister(B), GetRegister(C)));
@@ -1795,6 +1811,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) or
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) or
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseOr,
             GetRegister(B), GetRegister(C)));
@@ -1805,6 +1826,11 @@
           FRegisters[A] := RegisterInt(
             LongInt(FRegisters[B].IntValue) xor
             LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) xor
+            VMRegisterToInt32(FRegisters[C]))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseXor,
             GetRegister(B), GetRegister(C)));
@@ -1815,6 +1841,11 @@
           FRegisters[A] := RegisterInt(LongInt(
             LongWord(FRegisters[B].IntValue) shl
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(LongInt(
+            LongWord(VMRegisterToInt32(FRegisters[B])) shl
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateLeftShift,
             GetRegister(B), GetRegister(C)));
@@ -1825,6 +1856,11 @@
           FRegisters[A] := RegisterInt(SignedRightShiftInt32(
             LongInt(FRegisters[B].IntValue),
             LongWord(FRegisters[C].IntValue)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(SignedRightShiftInt32(
+            VMRegisterToInt32(FRegisters[B]),
+            LongWord(VMRegisterToInt32(FRegisters[C]))))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1835,6 +1871,11 @@
           FRegisters[A] := VMIntResult(Int64(LongWord(
             FRegisters[B].IntValue) shr
             (LongWord(FRegisters[C].IntValue) and 31)))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMIntResult(Int64(LongWord(
+            VMRegisterToInt32(FRegisters[B])) shr
+            (LongWord(VMRegisterToInt32(FRegisters[C])) and 31)))
         else
           SetRegister(A, VMRootedBinaryValue(@EvaluateUnsignedRightShift,
             GetRegister(B), GetRegister(C)));
@@ -1842,6 +1883,9 @@
       OP_BNOT:
         if FRegisters[B].Kind = grkInt then
           FRegisters[A] := RegisterInt(not LongInt(FRegisters[B].IntValue))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := RegisterInt(
+            not NumberToInt32(FRegisters[B].FloatValue))
         else
           SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
 
@@ -1857,7 +1901,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(True);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(False);
+          else
+            SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          end;
 
       OP_NEQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -1871,7 +1922,14 @@
             TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
             TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
         else
-          SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(False);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(True);
+          else
+            SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          end;
 
       OP_LOOSE_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -2210,7 +2268,8 @@
 
       OP_CALL_SELF_NUM:
       begin
-        CheckExecutionTimeout;
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
           ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
         goto LDispatchNext;
@@ -2218,7 +2277,8 @@
 
       OP_CALL:
       begin
-        CheckExecutionTimeout;
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
         if ((C and CALL_FLAG_DIRECT_EVAL) <> 0) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
@@ -2239,7 +2299,16 @@
             UInt32(InstructionStartIP), Template.StrictCode));
           goto LDispatchNext;
         end;
-        if ((C and CALL_FLAG_SPREAD) = 0) and
+        // A bytecode function is the usual callee and is neither a native nor
+        // a bound function. Its class is sealed, so one exact class comparison
+        // decides it: a bytecode callee skips the two `is` tests below, and
+        // any other callee skips the one for a bytecode function, each of
+        // which would walk a whole class chain to fail.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2266,7 +2335,8 @@
               end;
           end;
         end;
-        if (FRegisters[A].Kind = grkObject) and
+        if (not CalleeIsBytecodeFunction) and
+           (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
         begin
           BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
@@ -2300,9 +2370,8 @@
                   PushFrame(A, Frame.IP, Template, PrevCovLine,
                     ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs,
-                  Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False, True,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 goto LDispatchNext;
               end
@@ -2316,7 +2385,7 @@
                   RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
 	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
 	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
-	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
                 CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
                 if not BytecodeFunction.FStrictThis then
                   CallThisRegister := CoerceNonStrictThisRegister(
@@ -2332,9 +2401,8 @@
                   PushFrame(A, Frame.IP, Template, PrevCovLine,
                     ProfileEntryTimestamp);
                 SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs,
-                  Length(RegisterArgs), RegisterUndefined, RegisterUndefined,
-                  RegisterUndefined, False, True,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
                   Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                 goto LDispatchNext;
               end;
@@ -2342,8 +2410,7 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2364,46 +2431,18 @@
               CallThisRegister := RegisterUndefined;
             if (C and 1) = 0 then
             begin
-              if B <= 3 then
-              begin
-                // Fixed-arg fast path: capture up to three arguments by value
-                // before any frame push or tail-call window reuse, so they
-                // survive AcquireRegisters' fill, and skip the RegisterArgs
-                // staging array entirely. SetupNewFrame consumes only the first
-                // B of these (bounded by AArgCount).
-                if B >= 1 then FixedArg0 := FRegisters[A + 1]
-                else FixedArg0 := RegisterUndefined;
-                if B >= 2 then FixedArg1 := FRegisters[A + 2]
-                else FixedArg1 := RegisterUndefined;
-                if B >= 3 then FixedArg2 := FRegisters[A + 3]
-                else FixedArg2 := RegisterUndefined;
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, TGocciaRegisterArray(nil), B,
-                  FixedArg0, FixedArg1, FixedArg2, True, True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              end
+              // The arguments are read straight out of the caller's registers:
+              // SetupNewFrame copies them into the callee's argument window
+              // before it acquires (and so may move or clear) any register.
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
               else
-              begin
-                SetLength(RegisterArgs, B);
-                for I := 0 to B - 1 do
-                  RegisterArgs[I] := FRegisters[A + 1 + I];
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, RegisterArgs, B,
-                  RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              end;
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, @FRegisters[A + 1], B, True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end
             else if (FRegisters[B].Kind = grkObject) and
@@ -2413,7 +2452,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := ValueToRegister(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2421,8 +2460,8 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end;
@@ -2438,7 +2477,7 @@
           begin
 	            if GetRegister(B) is TGocciaArrayValue then
 	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2452,9 +2491,9 @@
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
-            if TGocciaCallStack.Instance <> nil then
+            if FCallStack <> nil then
               SavedConstructFrameOk :=
-                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
             // Also stamps the executing frame with this call's position so an
@@ -2470,8 +2509,8 @@
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
-            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -2483,8 +2522,14 @@
 
       OP_CALL_METHOD:
       begin
-        CheckExecutionTimeout;
-        if ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
+        // See OP_CALL: an exact class comparison decides a bytecode callee.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
            (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
            (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
@@ -2500,7 +2545,7 @@
               Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
           goto LDispatchNext;
         end;
-        if (C and 1) = 0 then
+        if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
         begin
           if (FRegisters[A - 1].Kind = grkObject) and
              (FRegisters[A].Kind = grkObject) and
@@ -2561,43 +2606,16 @@
                       BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
                         FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  case B of
-                    0:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    1:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    2:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 1,
-                        FRegisters[A + 2], RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    3:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 2,
-                        FRegisters[A + 2], FRegisters[A + 3], RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    4:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 3,
-                        FRegisters[A + 2], FRegisters[A + 3], FRegisters[A + 4],
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  // The first operand is the callee's `this`; the rest are its
+                  // arguments, read straight out of the caller's registers.
+                  if B <= 1 then
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, nil, 0, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp)
                   else
-                    begin
-                      SetLength(RegisterArgs, B - 1);
-                      for I := 1 to B - 1 do
-                        RegisterArgs[I - 1] := FRegisters[A + 1 + I];
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    end;
-                  end;
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @FRegisters[A + 2], B - 1, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   goto LDispatchNext;
                 end
                 // The dense hole-free gate is what makes the direct element
@@ -2626,56 +2644,28 @@
                       BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
                         FRealm));
                   PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  case ArgsArray.Elements.Count of
-                    0:
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, TGocciaRegisterArray(nil), 0,
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    1:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 1,
-                          ApplyArgRegister0, RegisterUndefined, RegisterUndefined,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
-                    2:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        ApplyArgRegister1 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[1]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 2,
-                          ApplyArgRegister0, ApplyArgRegister1, RegisterUndefined,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
-                    3:
-                      begin
-                        ApplyArgRegister0 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[0]);
-                        ApplyArgRegister1 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[1]);
-                        ApplyArgRegister2 :=
-                          VMValueToRegisterFast(ArgsArray.Elements[2]);
-                        SetupNewFrame(BytecodeFunction.FClosure,
-                          CallThisRegister, TGocciaRegisterArray(nil), 3,
-                          ApplyArgRegister0, ApplyArgRegister1, ApplyArgRegister2,
-                          True, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                      end;
+                  // Up to three arguments are staged in a stack array, which
+                  // spares the common short apply a heap staging array.
+                  if ArgsArray.Elements.Count <= Length(ApplyArgRegisters) then
+                  begin
+                    for I := 0 to ArgsArray.Elements.Count - 1 do
+                      ApplyArgRegisters[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @ApplyArgRegisters[0],
+                      ArgsArray.Elements.Count, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  end
                   else
-                    begin
-                      SetLength(RegisterArgs, ArgsArray.Elements.Count);
-                      for I := 0 to High(RegisterArgs) do
-                        RegisterArgs[I] :=
-                          VMValueToRegisterFast(ArgsArray.Elements[I]);
-                      SetupNewFrame(BytecodeFunction.FClosure,
-                        CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                        RegisterUndefined, RegisterUndefined, RegisterUndefined,
-                        False, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                    end;
+                  begin
+                    SetLength(RegisterArgs, ArgsArray.Elements.Count);
+                    for I := 0 to High(RegisterArgs) do
+                      RegisterArgs[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, PGocciaRegister(RegisterArgs),
+                      Length(RegisterArgs), True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
                   end;
                   goto LDispatchNext;
                 end;
@@ -2684,8 +2674,7 @@
           end;
         end;
 
-        if (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue) then
+        if CalleeIsBytecodeFunction then
         begin
           BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
           if Assigned(BytecodeFunction.FClosure) and
@@ -2703,9 +2692,8 @@
                   FRealm));
             if (C and 1) = 0 then
             begin
-              SetLength(RegisterArgs, B);
-              for I := 0 to B - 1 do
-                RegisterArgs[I] := FRegisters[A + 1 + I];
+              // See OP_CALL: the arguments are read straight out of the
+              // caller's registers.
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2713,8 +2701,7 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, B,
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end
@@ -2725,7 +2712,7 @@
                 TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
 	              for I := 0 to High(RegisterArgs) do
 	                RegisterArgs[I] := VMValueToRegisterFast(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntToStr(I)));
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -2733,8 +2720,8 @@
                 PushFrame(A, Frame.IP, Template, PrevCovLine,
                   ProfileEntryTimestamp);
               SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, RegisterArgs, Length(RegisterArgs),
-                RegisterUndefined, RegisterUndefined, RegisterUndefined, False, True,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
               goto LDispatchNext;
             end;
@@ -2750,7 +2737,7 @@
           begin
             if GetRegister(B) is TGocciaArrayValue then
               for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntToStr(I)));
+                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
           end
           else
             for I := 0 to B - 1 do
@@ -2764,9 +2751,9 @@
              (GetRegister(A) is TGocciaBoundFunctionValue) or
              (GetRegister(A) is TGocciaProxyValue) then
           begin
-            if TGocciaCallStack.Instance <> nil then
+            if FCallStack <> nil then
               SavedConstructFrameOk :=
-                TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
             else
               SavedConstructFrameOk := False;
             // See OP_CALL: also stamps the recorded call-site position for a
@@ -2778,8 +2765,8 @@
             finally
               LeaveGocciaCallSite(PreviousCallSite);
             end;
-            if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-              TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
           end
           else
             SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
@@ -2810,9 +2797,9 @@
             construction locates the `new`, then restore it on success so the
             stamp does not leak onto a later throw in the same function
             (`new Map(); JSON.parse('{')`). On a throw the frame unwinds. }
-          if TGocciaCallStack.Instance <> nil then
+          if FCallStack <> nil then
             SavedConstructFrameOk :=
-              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+              FCallStack.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
           StampCurrentCallSiteLocation;
@@ -2829,8 +2816,8 @@
           finally
             ReleaseArguments(CallArgs);
           end;
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -2843,7 +2830,7 @@
           SetLength(RegisterArgs, SpreadArray.Elements.Count);
           for I := 0 to SpreadArray.Elements.Count - 1 do
             RegisterArgs[I] := VMValueToRegisterFast(
-              SpreadArray.GetProperty(IntToStr(I)));
+              SpreadArray.GetProperty(IntegerToString(I)));
           FRegisters[A] := TGocciaVMClassValue(FRegisters[B].ObjectValue)
             .InstantiateRegisters(RegisterArgs);
         end
@@ -2853,16 +2840,16 @@
             ThrowNotConstructorHere(GetRegister(B));
           // Snapshot/stamp/restore as in OP_CONSTRUCT, so a successful spread
           // construct does not leave the caller frame stamped for a later throw.
-          if TGocciaCallStack.Instance <> nil then
+          if FCallStack <> nil then
             SavedConstructFrameOk :=
-              TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+              FCallStack.TryGetTopFrame(SavedConstructFrame)
           else
             SavedConstructFrameOk := False;
           StampCurrentCallSiteLocation;
           CallArgs := AcquireArguments(SpreadArray.Elements.Count);
           try
             for I := 0 to SpreadArray.Elements.Count - 1 do
-              CallArgs.Add(SpreadArray.GetProperty(IntToStr(I)));
+              CallArgs.Add(SpreadArray.GetProperty(IntegerToString(I)));
             EnterCurrentInstructionCallSite(PreviousCallSite);
             try
               SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
@@ -2872,8 +2859,8 @@
           finally
             ReleaseArguments(CallArgs);
           end;
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -3684,9 +3671,9 @@
         // pending) records this location instead of the deferred frame's 0:0,
         // matching the tree-walk interpreter. Snapshot/restore so it does not
         // perturb the location seen by later instructions.
-        if TGocciaCallStack.Instance <> nil then
+        if FCallStack <> nil then
           SavedConstructFrameOk :=
-            TGocciaCallStack.Instance.TryGetTopFrame(SavedConstructFrame)
+            FCallStack.TryGetTopFrame(SavedConstructFrame)
         else
           SavedConstructFrameOk := False;
         StampCurrentInstructionLocation;
@@ -3755,8 +3742,8 @@
           end;
         end;
         finally
-          if SavedConstructFrameOk and (TGocciaCallStack.Instance <> nil) then
-            TGocciaCallStack.Instance.SetTopFrame(SavedConstructFrame);
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
         end;
       end;
 
@@ -3847,7 +3834,7 @@
                  (DoneValue is TGocciaArrayValue) then
 	                for I := 0 to TGocciaArrayValue(DoneValue).Elements.Count - 1 do
 	                  TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
-	                    TGocciaArrayValue(DoneValue).GetProperty(IntToStr(I)));
+	                    TGocciaArrayValue(DoneValue).GetProperty(IntegerToString(I)));
             end;
 
           COLLECTION_OP_TRY_ITERABLE_TO_ARRAY:
@@ -4041,9 +4028,8 @@
       OP_RETURN:
       begin
         ReturnValue := FRegisters[A];
-        if Assigned(GActiveBytecodeGenerator) and
-           (GActiveBytecodeGenerator.FClosure = AClosure) then
-          GActiveBytecodeGenerator.FReturnRequiresAwait := B <> 0;
+        if Assigned(EntryGenerator) then
+          EntryGenerator.FReturnRequiresAwait := B <> 0;
         if FClosedNumericFrameStackCount >
            InitialClosedNumericFrameCount then
         begin

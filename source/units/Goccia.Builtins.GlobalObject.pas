@@ -417,22 +417,10 @@ var
 
   function IsReadonlyStringExoticKey(const ATarget: TGocciaObjectValue;
     const AName: string): Boolean;
-  var
-    Index: Integer;
-    StringValue: string;
   begin
-    Result := False;
-    if not (ATarget is TGocciaStringObjectValue) then
-      Exit;
-
-    if AName = PROP_LENGTH then
-      Exit(True);
-
-    if TryStrToInt(AName, Index) and (AName = IntToStr(Index)) then
-    begin
-      StringValue := TGocciaStringObjectValue(ATarget).Primitive.ToStringLiteral.Value;
-      Result := (Index >= 0) and (Index < UTF16CodeUnitLength(StringValue));
-    end;
+    Result := (ATarget is TGocciaStringObjectValue) and
+      IsNonConfigurableStringExoticProperty(
+        TGocciaStringObjectValue(ATarget).Primitive, AName);
   end;
 
   procedure AssignStringKey(const AName: string);

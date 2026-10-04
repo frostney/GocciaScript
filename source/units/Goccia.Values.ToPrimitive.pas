@@ -93,20 +93,18 @@ begin
   end;
 end;
 
-// ES2026 §7.1.1 ToPrimitive(input [, preferredType])
-function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
+// ES2026 §7.1.1 ToPrimitive(input [, preferredType]) step 1, for a value that
+// is not already primitive. The error paths load resource strings into managed
+// temporaries, so this function carries an implicit exception frame; ToPrimitive
+// returns a primitive without entering it (docs/core-patterns.md, "Managed
+// Locals on Hot Paths").
+function ToPrimitiveGeneric(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint): TGocciaValue;
 var
   Obj: TGocciaObjectValue;
   ExoticToPrim: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Roots: TGocciaActiveRootFrame;
 begin
-  if AValue.IsPrimitive then
-  begin
-    Result := AValue;
-    Exit;
-  end;
-
   if AValue is TGocciaObjectValue then
   begin
     Obj := TGocciaObjectValue(AValue);
@@ -159,6 +157,15 @@ begin
   end;
 
   Result := AValue;
+end;
+
+// ES2026 §7.1.1 ToPrimitive(input [, preferredType])
+function ToPrimitive(const AValue: TGocciaValue; const AHint: TGocciaToPrimitiveHint = tphDefault): TGocciaValue;
+begin
+  if AValue.IsPrimitive then
+    Result := AValue
+  else
+    Result := ToPrimitiveGeneric(AValue, AHint);
 end;
 
 // ES2026 §7.1.19 ToPropertyKey(argument). Symbols pass through; non-symbols

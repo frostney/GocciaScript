@@ -30,7 +30,17 @@ type
       assigned as a function's own `apply`, a future built-in named `call` —
       must be called on its own terms instead. }
     nikFunctionCall,
-    nikFunctionApply
+    nikFunctionApply,
+    { The getters of %TypedArray%.prototype.buffer, byteLength, byteOffset and
+      length. Marked so a typed array's property read can tell that the
+      accessor its prototype chain resolved to is still the built-in one, whose
+      result it may then compute from the internal slots without a call. A
+      getter a program installs under one of those names carries no kind and
+      is called. }
+    nikTypedArrayBuffer,
+    nikTypedArrayByteLength,
+    nikTypedArrayByteOffset,
+    nikTypedArrayLength
   );
 
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)

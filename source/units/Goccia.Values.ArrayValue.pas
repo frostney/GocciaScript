@@ -125,6 +125,7 @@ uses
   Math,
   SysUtils,
 
+  NumericText,
   StringBuffer,
 
   Goccia.Arguments.Callbacks,
@@ -351,13 +352,13 @@ begin
       Exit;
     end;
     // Hole or out-of-range: fall back to Obj.GetProperty for prototype lookup
-    Result := Obj.GetProperty(IntToStr(AIndex));
+    Result := Obj.GetProperty(IntegerToString(AIndex));
     if not Assigned(Result) then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end
   else
   begin
-    Result := Obj.GetProperty(IntToStr(AIndex));
+    Result := Obj.GetProperty(IntegerToString(AIndex));
     if not Assigned(Result) then
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
@@ -368,11 +369,11 @@ begin
   if Assigned(Arr) then
   begin
     if not Arr.SetElement(AIndex, AValue) then
-      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntToStr(AIndex)]),
+      ThrowTypeError(Format(SErrorCannotAssignReadOnly, [IntegerToString(AIndex)]),
         SSuggestCannotDeleteNonConfigurable);
   end
   else
-    Obj.AssignProperty(IntToStr(AIndex), AValue);
+    Obj.AssignProperty(IntegerToString(AIndex), AValue);
 end;
 
 function TArrayLikeView.HasIndex(const AIndex: Integer): Boolean;
@@ -397,11 +398,11 @@ begin
       Exit;
     end;
     // Hole or out-of-range: fall back to HasProperty for prototype lookup
-    Result := Obj.HasProperty(IntToStr(AIndex));
+    Result := Obj.HasProperty(IntegerToString(AIndex));
   end
   else
     // ES spec uses [[HasProperty]] which traverses the prototype chain
-    Result := Obj.HasProperty(IntToStr(AIndex));
+    Result := Obj.HasProperty(IntegerToString(AIndex));
 end;
 
 function TArrayLikeView.Get64(const AIndex: Int64): TGocciaValue;
@@ -413,7 +414,7 @@ begin
     Result := Arr.Elements[AIndex];
     Exit;
   end;
-  Result := Obj.GetProperty(IntToStr(AIndex));
+  Result := Obj.GetProperty(IntegerToString(AIndex));
   if not Assigned(Result) then
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -427,7 +428,7 @@ begin
     Result := True;
     Exit;
   end;
-  Result := Obj.HasProperty(IntToStr(AIndex));
+  Result := Obj.HasProperty(IntegerToString(AIndex));
 end;
 
 function TArrayLikeView.NeedsSparsePath: Boolean;
@@ -456,14 +457,14 @@ procedure TArrayLikeView.DeleteIndex(const AIndex: Integer);
 begin
   if Assigned(Arr) then
   begin
-    if not Arr.DeleteProperty(IntToStr(AIndex)) then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
+    if not Arr.DeleteProperty(IntegerToString(AIndex)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(AIndex)]),
         SSuggestCannotDeleteNonConfigurable);
   end
   else
   begin
-    if not Obj.DeleteProperty(IntToStr(AIndex)) then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(AIndex)]),
+    if not Obj.DeleteProperty(IntegerToString(AIndex)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(AIndex)]),
         SSuggestCannotDeleteNonConfigurable);
   end;
 end;
@@ -635,7 +636,7 @@ begin
 
       if (SparsePos >= 0) and (SparseIndex = CandidateIndex) then
       begin
-        if not AArray.DeleteProperty(IntToStr(CandidateIndex)) then
+        if not AArray.DeleteProperty(IntegerToString(CandidateIndex)) then
         begin
           AFailedIndex := CandidateIndex;
           Exit(False);
@@ -1442,7 +1443,7 @@ begin
     Exit;
   end;
 
-  IndexName := IntToStr(AIndex);
+  IndexName := IntegerToString(AIndex);
   NoteIndexedOwnProperty(IndexName);
   Descriptor := GetOwnPropertyDescriptor(IndexName);
   if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1522,11 +1523,11 @@ var
 begin
   if AIndex < 0 then
   begin
-    SetProperty(IntToStr(AIndex), AValue);
+    SetProperty(IntegerToString(AIndex), AValue);
     Exit;
   end;
 
-  IndexName := IntToStr(AIndex);
+  IndexName := IntegerToString(AIndex);
   NoteIndexedOwnProperty(IndexName);
   Descriptor := GetOwnPropertyDescriptor(IndexName);
   if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1582,7 +1583,7 @@ begin
     end;
   end
   else
-    inherited DefineProperty(IntToStr(AIndex),
+    inherited DefineProperty(IntegerToString(AIndex),
       TGocciaPropertyDescriptorData.Create(AValue,
         [pfEnumerable, pfConfigurable, pfWritable]));
 
@@ -2474,7 +2475,7 @@ begin
     K := View.Len64;
     for I := 0 to AArgs.Length - 1 do
     begin
-      View.Obj.AssignProperty(IntToStr(K), AArgs.GetElement(I));
+      View.Obj.AssignProperty(IntegerToString(K), AArgs.GetElement(I));
       Inc(K);
     end;
     View.Obj.AssignProperty(PROP_LENGTH,
@@ -2487,7 +2488,7 @@ begin
   NewLen := View.Len;
   for I := 0 to AArgs.Length - 1 do
   begin
-    View.Obj.AssignProperty(IntToStr(NewLen), AArgs.GetElement(I));
+    View.Obj.AssignProperty(IntegerToString(NewLen), AArgs.GetElement(I));
     Inc(NewLen);
   end;
   if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
@@ -2516,8 +2517,8 @@ begin
   begin
     NewLen64 := View.Len64 - 1;
     Result := View.Get64(NewLen64);
-    if not View.Obj.DeleteProperty(IntToStr(NewLen64)) then
-      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(NewLen64)]),
+    if not View.Obj.DeleteProperty(IntegerToString(NewLen64)) then
+      ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntegerToString(NewLen64)]),
         SSuggestCannotDeleteNonConfigurable);
     View.Obj.AssignProperty(PROP_LENGTH,
       TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
@@ -3034,8 +3035,8 @@ begin
     while Count64 > 0 do
     begin
       if View.HasIndex64(From64) then
-        View.Obj.AssignProperty(IntToStr(To64), View.Get64(From64))
-      else if not View.Obj.DeleteProperty(IntToStr(To64)) then
+        View.Obj.AssignProperty(IntegerToString(To64), View.Get64(From64))
+      else if not View.Obj.DeleteProperty(IntegerToString(To64)) then
         ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(To64)]),
           SSuggestCannotDeleteNonConfigurable);
       From64 := From64 + Direction;
@@ -3434,22 +3435,22 @@ begin
 
       if LowerExists and UpperExists then
       begin
-        View.Obj.AssignProperty(IntToStr(LowerIndex), Upper);
-        View.Obj.AssignProperty(IntToStr(UpperIndex), Lower);
+        View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
+        View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
       end
       else if UpperExists then
       begin
-        View.Obj.AssignProperty(IntToStr(LowerIndex), Upper);
-        if not View.Obj.DeleteProperty(IntToStr(UpperIndex)) then
+        View.Obj.AssignProperty(IntegerToString(LowerIndex), Upper);
+        if not View.Obj.DeleteProperty(IntegerToString(UpperIndex)) then
           ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(UpperIndex)]),
             SSuggestCannotDeleteNonConfigurable);
       end
       else if LowerExists then
       begin
-        if not View.Obj.DeleteProperty(IntToStr(LowerIndex)) then
+        if not View.Obj.DeleteProperty(IntegerToString(LowerIndex)) then
           ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(LowerIndex)]),
             SSuggestCannotDeleteNonConfigurable);
-        View.Obj.AssignProperty(IntToStr(UpperIndex), Lower);
+        View.Obj.AssignProperty(IntegerToString(UpperIndex), Lower);
       end;
 
       Inc(LowerIndex);
@@ -3988,7 +3989,7 @@ begin
     Count := 0;
     for I := 0 to NumericKeys.Count - 1 do
     begin
-      Result[Count] := IntToStr(NumericKeys[I]);
+      Result[Count] := IntegerToString(NumericKeys[I]);
       Inc(Count);
     end;
     for I := 0 to OtherKeys.Count - 1 do
@@ -4397,7 +4398,7 @@ begin
       while K < DeleteCount64 do
       begin
         if View.HasIndex64(RemovedRangeStart + K) then
-          Removed.CreateDataPropertyOrThrow(IntToStr(K),
+          Removed.CreateDataPropertyOrThrow(IntegerToString(K),
             View.Get64(RemovedRangeStart + K));
         Inc(K);
       end;
@@ -4409,7 +4410,7 @@ begin
       // FPC rejects Int64 as a classic for-loop counter on 32-bit targets;
       // the enumerator form `for K in TArray<Int64>` compiles everywhere.
       for K in RemovedSparse do
-        Removed.CreateDataPropertyOrThrow(IntToStr(K - RemovedRangeStart),
+        Removed.CreateDataPropertyOrThrow(IntegerToString(K - RemovedRangeStart),
           View.Get64(K));
     end;
 
@@ -4426,12 +4427,12 @@ begin
       DestSparse := CollectSparseIndicesInRange(View.Obj,
         ActualStart64 + Int64(ItemCount), NewLen64);
       for K in SourceSparse do
-        View.Obj.AssignProperty(IntToStr(K - Shift), View.Get64(K));
+        View.Obj.AssignProperty(IntegerToString(K - Shift), View.Get64(K));
       for K in DestSparse do
       begin
         TargetSrcKey := K + Shift;
         if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-          View.Obj.DeleteProperty(IntToStr(K));
+          View.Obj.DeleteProperty(IntegerToString(K));
       end;
 
       // Delete properties in [NewLen, RawLen) — the original trailing range
@@ -4440,7 +4441,7 @@ begin
       TrailingSparse := CollectSparseIndicesInRange(View.Obj,
         NewLen64, Len64);
       for K in TrailingSparse do
-        View.Obj.DeleteProperty(IntToStr(K));
+        View.Obj.DeleteProperty(IntegerToString(K));
     end
     else if Int64(ItemCount) > DeleteCount64 then
     begin
@@ -4456,20 +4457,20 @@ begin
       for I := Length(SourceSparse) - 1 downto 0 do
       begin
         K := SourceSparse[I];
-        View.Obj.AssignProperty(IntToStr(K + Shift), View.Get64(K));
+        View.Obj.AssignProperty(IntegerToString(K + Shift), View.Get64(K));
       end;
       for I := Length(DestSparse) - 1 downto 0 do
       begin
         K := DestSparse[I];
         TargetSrcKey := K - Shift;
         if not SortedInt64ArrayContains(SourceSparse, TargetSrcKey) then
-          View.Obj.DeleteProperty(IntToStr(K));
+          View.Obj.DeleteProperty(IntegerToString(K));
       end;
     end;
 
     // Insert new items.
     for I := 0 to ItemCount - 1 do
-      View.Obj.AssignProperty(IntToStr(ActualStart64 + Int64(I)),
+      View.Obj.AssignProperty(IntegerToString(ActualStart64 + Int64(I)),
         AArgs.GetElement(I + 2));
 
     // Set the spec-relative length on the receiver.
@@ -4586,7 +4587,7 @@ var
     DestSparse := CollectSparseIndicesInRange(View.Obj,
       AFirstSource + ArgCount, ALastSource + ArgCount + 1);
     for DeleteIndex in DestSparse do
-      if not View.Obj.DeleteProperty(IntToStr(DeleteIndex)) then
+      if not View.Obj.DeleteProperty(IntegerToString(DeleteIndex)) then
         ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [IntToStr(DeleteIndex)]),
           SSuggestCannotDeleteNonConfigurable);
   end;
@@ -4632,13 +4633,13 @@ begin
       DeleteDestinationsForAbsentSources(SourceIndex + 1, Boundary);
       Element := View.Get64(SourceIndex);
       DestIndex := SourceIndex + ArgCount;
-      View.Obj.AssignProperty(IntToStr(DestIndex), Element);
+      View.Obj.AssignProperty(IntegerToString(DestIndex), Element);
       Boundary := SourceIndex - 1;
     end;
     DeleteDestinationsForAbsentSources(0, Boundary);
 
     for I := 0 to ArgCount - 1 do
-      View.Obj.AssignProperty(IntToStr(I), AArgs.GetElement(I));
+      View.Obj.AssignProperty(IntegerToString(I), AArgs.GetElement(I));
     View.Obj.AssignProperty(PROP_LENGTH,
       TGocciaNumberLiteralValue.Create(Int64ToDouble(NewLen64)));
 
@@ -4653,13 +4654,13 @@ begin
   for I := View.Len - 1 downto 0 do
   begin
     if View.HasIndex(I) then
-      View.Obj.AssignProperty(IntToStr(I + ArgCount), View.Get(I))
+      View.Obj.AssignProperty(IntegerToString(I + ArgCount), View.Get(I))
     else
       View.DeleteIndex(I + ArgCount);
   end;
   // Set items at front
   for I := 0 to ArgCount - 1 do
-    View.Obj.AssignProperty(IntToStr(I), AArgs.GetElement(I));
+    View.Obj.AssignProperty(IntegerToString(I), AArgs.GetElement(I));
   if (not Assigned(View.Arr)) or (View.Arr.FLength <> NewLen) then
     View.SetLen(NewLen);
 
@@ -4700,7 +4701,7 @@ begin
     I64 := Start64;
     while I64 < End64 do
     begin
-      View.Obj.AssignProperty(IntToStr(I64), FillValue);
+      View.Obj.AssignProperty(IntegerToString(I64), FillValue);
       Inc(I64);
     end;
 

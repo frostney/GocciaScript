@@ -44,6 +44,16 @@ type
     FRegExpData: TObject;
     function BuiltinTagFallback: Boolean; virtual;
     procedure NoteIndexedOwnProperty(const AName: string);
+    // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
+    // own property AName. For a subclass that reads its own properties itself.
+    function GetPropertyFromPrototype(const AName: string;
+      const AThisContext: TGocciaValue): TGocciaValue;
+    // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1.c.i for a strict
+    // assignment to this object that has walked up to AParent, a parent that
+    // answers [[Set]] itself (not UsesOrdinarySet): hands the assignment to
+    // it, and throws TypeError if it refuses.
+    procedure AssignThroughExoticParent(const AParent: TGocciaObjectValue;
+      const AName: string; const AValue: TGocciaValue);
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -221,6 +231,34 @@ type
       write FErrorHostSuggestion;
   end;
 
+// True while AObject answers [[Set]] with TGocciaObjectValue's own
+// AssignPropertyWithReceiver. A walk over own-property descriptors stands in
+// for [[Set]] only for such an object; any other (a Proxy, a typed array) has
+// to be asked through AssignPropertyWithReceiver itself.
+function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+
+{ One native call into AObject's own [[Get]], [[HasProperty]] or [[Set]]. A
+  prototype walk makes it when its next object does not keep the ordinary
+  lookup, and a Proxy when it forwards to its target. A call into a Proxy is
+  counted against MAX_PROPERTY_DELEGATION_DEPTH (Goccia.StackLimit): every
+  prototype cycle passes through one, because the cycle checks of
+  [[SetPrototypeOf]] stop only there. A call into any other object counts
+  against the much larger MAX_OBJECT_DELEGATION_DEPTH, so a long chain of
+  arrays or classes still reads, and a cycle holding many of them still ends
+  in a RangeError. }
+function DelegateGetProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AReceiver: TGocciaValue): TGocciaValue;
+function DelegateGetSymbolProperty(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue;
+  const AReceiver: TGocciaValue): TGocciaValue;
+function DelegateHasProperty(const AObject: TGocciaObjectValue;
+  const AName: string): Boolean;
+function DelegateSetProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue, AReceiver: TGocciaValue): Boolean;
+function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue;
+  const AValue, AReceiver: TGocciaValue): Boolean;
+
 
 implementation
 
@@ -234,6 +272,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.ObjectModel,
+  Goccia.StackLimit,
   Goccia.Utils,
   Goccia.Values.ArgumentsObjectValue,
   Goccia.Values.ArrayValue,
@@ -259,10 +298,251 @@ var
   GObjectMethodHostSlot: TGocciaRealmSlotId;
 
 const
-  MAX_PROTOTYPE_CHAIN_DEPTH = 256;
   BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
+
+{ Prototype walks.
+
+  ES2026 §10.1.8.1 OrdinaryGet, §10.1.7.1 OrdinaryHasProperty and §10.1.9.2
+  OrdinarySetWithOwnDescriptor each end by calling the parent's own internal
+  method. For a parent that keeps this unit's implementation that call is the
+  same procedure again, so the walks below step to it in a loop: a chain of
+  ordinary objects takes no native stack and has no length limit. A parent
+  whose class overrides the lookup (a Proxy, an exotic object) is entered by a
+  real call through the Delegate* functions, which count it.
+
+  The Inherits* functions tell the two apart by the method the parent's class
+  resolves to, so a new subclass that overrides a lookup is handed over to
+  without being listed anywhere. }
+
+type
+  TGocciaGetPropertyMethod = function(const AName: string;
+    const AThisContext: TGocciaValue): TGocciaValue of object;
+  TGocciaGetOwnPropertyMethod = function(
+    const AName: string): TGocciaPropertyDescriptor of object;
+  TGocciaHasPropertyMethod = function(const AName: string): Boolean of object;
+  TGocciaSetPropertyMethod = function(const AName: string;
+    const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean of object;
+  TGocciaGetSymbolPropertyMethod = function(const ASymbol: TGocciaSymbolValue;
+    const AReceiver: TGocciaValue): TGocciaValue of object;
+  TGocciaSetSymbolPropertyMethod = function(const ASymbol: TGocciaSymbolValue;
+    const AValue: TGocciaValue; const AReceiver: TGocciaValue): Boolean of object;
+
+function InheritsGet(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Method: TGocciaGetPropertyMethod;
+begin
+  Method := AObject.GetPropertyWithContext;
+  Result := TMethod(Method).Code = @TGocciaObjectValue.GetPropertyWithContext;
+end;
+
+function InheritsGetOwnProperty(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Method: TGocciaGetOwnPropertyMethod;
+begin
+  Method := AObject.GetOwnPropertyDescriptor;
+  Result := TMethod(Method).Code = @TGocciaObjectValue.GetOwnPropertyDescriptor;
+end;
+
+function InheritsHas(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Method: TGocciaHasPropertyMethod;
+begin
+  Method := AObject.HasProperty;
+  Result := TMethod(Method).Code = @TGocciaObjectValue.HasProperty;
+end;
+
+function UsesOrdinarySet(const AObject: TGocciaObjectValue): Boolean;
+var
+  Method: TGocciaSetPropertyMethod;
+begin
+  Method := AObject.AssignPropertyWithReceiver;
+  Result := TMethod(Method).Code = @TGocciaObjectValue.AssignPropertyWithReceiver;
+end;
+
+function InheritsGetSymbol(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Method: TGocciaGetSymbolPropertyMethod;
+begin
+  Method := AObject.GetSymbolPropertyWithReceiver;
+  Result := TMethod(Method).Code =
+    @TGocciaObjectValue.GetSymbolPropertyWithReceiver;
+end;
+
+function InheritsSetSymbol(const AObject: TGocciaObjectValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Method: TGocciaSetSymbolPropertyMethod;
+begin
+  Method := AObject.AssignSymbolPropertyWithReceiver;
+  Result := TMethod(Method).Code =
+    @TGocciaObjectValue.AssignSymbolPropertyWithReceiver;
+end;
+
+function DelegateGetProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AReceiver: TGocciaValue): TGocciaValue;
+begin
+  if AObject.ClassType <> TGocciaProxyValue then
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.GetPropertyWithContext(AName, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
+  EnterPropertyDelegation;
+  try
+    Result := AObject.GetPropertyWithContext(AName, AReceiver);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+function DelegateGetSymbolProperty(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue;
+  const AReceiver: TGocciaValue): TGocciaValue;
+begin
+  if AObject.ClassType <> TGocciaProxyValue then
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
+  EnterPropertyDelegation;
+  try
+    Result := AObject.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+function DelegateHasProperty(const AObject: TGocciaObjectValue;
+  const AName: string): Boolean;
+begin
+  if AObject.ClassType <> TGocciaProxyValue then
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.HasProperty(AName);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
+  EnterPropertyDelegation;
+  try
+    Result := AObject.HasProperty(AName);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+function DelegateSetProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AValue, AReceiver: TGocciaValue): Boolean;
+begin
+  if AObject.ClassType <> TGocciaProxyValue then
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.AssignPropertyWithReceiver(AName, AValue, AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
+  EnterPropertyDelegation;
+  try
+    Result := AObject.AssignPropertyWithReceiver(AName, AValue, AReceiver);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+function DelegateSetSymbolProperty(const AObject: TGocciaObjectValue;
+  const ASymbol: TGocciaSymbolValue;
+  const AValue, AReceiver: TGocciaValue): Boolean;
+begin
+  if AObject.ClassType <> TGocciaProxyValue then
+  begin
+    EnterObjectDelegation;
+    try
+      Result := AObject.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
+        AReceiver);
+    finally
+      LeaveObjectDelegation;
+    end;
+    Exit;
+  end;
+  EnterPropertyDelegation;
+  try
+    Result := AObject.AssignSymbolPropertyWithReceiver(ASymbol, AValue,
+      AReceiver);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+// The value [[Get]] returns for a property found as ADescriptor: the data
+// value, or the getter's result with AReceiver as its this value.
+function PropertyValueFromDescriptor(
+  const ADescriptor: TGocciaPropertyDescriptor;
+  const AReceiver: TGocciaValue): TGocciaValue;
+var
+  Getter: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+begin
+  if ADescriptor is TGocciaPropertyDescriptorData then
+    Exit(TGocciaPropertyDescriptorData(ADescriptor).Value);
+
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if not (ADescriptor is TGocciaPropertyDescriptorAccessor) then
+    Exit;
+  Getter := TGocciaPropertyDescriptorAccessor(ADescriptor).Getter;
+  if Assigned(Getter) and Getter.IsCallable then
+  begin
+    Args := TGocciaArgumentsCollection.Create;
+    try
+      Result := InvokeCallable(Getter, Args, AReceiver);
+    finally
+      Args.Free;
+    end;
+  end;
+end;
+
+// The step of a [[Get]] walk at a parent that does not keep the ordinary
+// lookup. True: AValue is the answer. False: AParent has no own property AName
+// and the walk continues at its prototype.
+function GetThroughExoticParent(const AParent: TGocciaObjectValue;
+  const AName: string; const AReceiver: TGocciaValue;
+  out AValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  // ES2026 §10.5.8: a Proxy's [[Get]] is its get trap or its target's [[Get]].
+  // Its [[GetOwnProperty]] is a different trap, so it is not asked.
+  if AParent.ClassType <> TGocciaProxyValue then
+  begin
+    // Any other exotic object describes its own properties through
+    // [[GetOwnProperty]] (a typed array's elements, a String object's
+    // indices), whether or not its class also overrides [[Get]].
+    Descriptor := AParent.GetOwnPropertyDescriptor(AName);
+    if Assigned(Descriptor) then
+    begin
+      AValue := PropertyValueFromDescriptor(Descriptor, AReceiver);
+      Exit(True);
+    end;
+    if InheritsGet(AParent) then
+      Exit(False);
+  end;
+  AValue := DelegateGetProperty(AParent, AName, AReceiver);
+  Result := True;
+end;
 
 function IsInternalPrivateStorageKey(const AName: string): Boolean;
 begin
@@ -483,10 +763,17 @@ begin
   Result := nil;
 end;
 
-function ObjectPrototypeOf(const AObject: TGocciaObjectValue): TGocciaValue;
+// One [[GetPrototypeOf]] step of a prototype walk. AProxySteps counts the
+// steps taken through a Proxy, the only ones that can repeat without end.
+function ObjectPrototypeOf(const AObject: TGocciaObjectValue;
+  var AProxySteps: Integer): TGocciaValue;
 begin
   if AObject is TGocciaProxyValue then
+  begin
+    Inc(AProxySteps);
+    CheckProxyPrototypeSteps(AProxySteps);
     Exit(TGocciaProxyValue(AObject).GetPrototypeTrap);
+  end;
 
   if Assigned(AObject.Prototype) then
     Result := AObject.Prototype
@@ -802,6 +1089,7 @@ function TGocciaObjectValue.ObjectPrototypeIsPrototypeOf(const AArgs: TGocciaArg
 var
   V: TGocciaObjectValue;
   Current: TGocciaValue;
+  ProxySteps: Integer;
 begin
   // Step 1: If V is not an Object, return false
   if (AArgs.Length = 0) or not (AArgs.GetElement(0) is TGocciaObjectValue) then
@@ -815,13 +1103,14 @@ begin
 
   V := TGocciaObjectValue(AArgs.GetElement(0));
   // Step 3: Repeat — walk V's prototype chain
-  Current := ObjectPrototypeOf(V);
+  ProxySteps := 0;
+  Current := ObjectPrototypeOf(V, ProxySteps);
   while Current is TGocciaObjectValue do
   begin
     // Step 3a: If SameValue(O, V.[[Prototype]]) is true, return true
     if Current = AThisValue then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
-    Current := ObjectPrototypeOf(TGocciaObjectValue(Current));
+    Current := ObjectPrototypeOf(TGocciaObjectValue(Current), ProxySteps);
   end;
 
   Result := TGocciaBooleanLiteralValue.FalseValue;
@@ -1057,7 +1346,6 @@ var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   Proto: TGocciaObjectValue;
-  ChainDepth: Integer;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -1089,14 +1377,16 @@ begin
     end;
   end;
 
-  // ES2026 §10.1.9 step 2-3: Walk prototype chain for inherited accessor descriptors
+  // ES2026 §10.1.9.2 step 1: walk the prototype chain for an inherited
+  // accessor or read-only property.
   Proto := FPrototype;
-  ChainDepth := 0;
   while Assigned(Proto) do
   begin
-    Inc(ChainDepth);
-    if ChainDepth > MAX_PROTOTYPE_CHAIN_DEPTH then
-      ThrowTypeError(Format(SErrorProtoChainDepthExceeded, [AName]), SSuggestPrototypeChainTooDeep);
+    if not UsesOrdinarySet(Proto) then
+    begin
+      AssignThroughExoticParent(Proto, AName, AValue);
+      Exit;
+    end;
     Descriptor := Proto.GetOwnPropertyDescriptor(AName);
     if Assigned(Descriptor) then
     begin
@@ -1143,15 +1433,26 @@ var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   ReceiverObj: TGocciaObjectValue;
+  Current, Parent: TGocciaObjectValue;
 begin
-  // Step 1: Let ownDesc be O.[[GetOwnProperty]](P)
-  OwnDesc := GetOwnPropertyDescriptor(AName);
+  // Step 1: Let ownDesc be O.[[GetOwnProperty]](P). Steps 1.a-1.c.i call the
+  // parent's [[Set]] when there is none: a loop while the parent keeps this
+  // procedure, a counted call when it answers [[Set]] itself.
+  Current := Self;
+  repeat
+    OwnDesc := Current.GetOwnPropertyDescriptor(AName);
+    if Assigned(OwnDesc) then
+      Break;
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Break;
+    if not UsesOrdinarySet(Parent) then
+      Exit(DelegateSetProperty(Parent, AName, AValue, AReceiver));
+    Current := Parent;
+  until False;
 
   if OwnDesc = nil then
   begin
-    // Step 1a-b: Walk prototype chain
-    if Assigned(FPrototype) then
-      Exit(FPrototype.AssignPropertyWithReceiver(AName, AValue, AReceiver));
     // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
     // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
     if not (AReceiver is TGocciaObjectValue) then
@@ -1598,70 +1899,76 @@ begin
   AssignProperty(AName, AValue);
 end;
 
+// ES2026 §10.1.8.1 OrdinaryGet(O, P, Receiver)
 function TGocciaObjectValue.GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue;
 var
+  Current, Parent: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
 begin
-  if FProperties.TryGetValue(AName, Descriptor) then
-  begin
-    Descriptor := MaterializeOwnLazyProperty(AName, Descriptor);
-    if Descriptor is TGocciaPropertyDescriptorAccessor then
+  Current := Self;
+  repeat
+    if Current.FProperties.TryGetValue(AName, Descriptor) then
     begin
-      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
-      begin
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          Result := InvokeCallable(Accessor.Getter, Args, AThisContext);
-        finally
-          Args.Free;
-        end;
-        Exit;
-      end;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
-      Exit;
+      Descriptor := Current.MaterializeOwnLazyProperty(AName, Descriptor);
+      if Descriptor is TGocciaPropertyDescriptorData then
+        Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
+      Exit(PropertyValueFromDescriptor(Descriptor, AThisContext));
     end;
-  end;
 
-  if Assigned(FPrototype) then
-  begin
-    Descriptor := FPrototype.GetOwnPropertyDescriptor(AName);
-    if Assigned(Descriptor) then
-    begin
-      if Descriptor is TGocciaPropertyDescriptorAccessor then
-      begin
-        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        if Assigned(Accessor.Getter) and Accessor.Getter.IsCallable then
-        begin
-          Args := TGocciaArgumentsCollection.Create;
-          try
-            Result := InvokeCallable(Accessor.Getter, Args, AThisContext);
-          finally
-            Args.Free;
-          end;
-          Exit;
-        end;
-        Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        Exit;
-      end
-      else if Descriptor is TGocciaPropertyDescriptorData then
-      begin
-        Result := TGocciaPropertyDescriptorData(Descriptor).Value;
-        Exit;
-      end;
-    end;
-    Result := FPrototype.GetPropertyWithContext(AName, AThisContext);
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    // The loop reads a parent's property map itself, which is that parent's
+    // [[Get]] only while its class overrides neither [[Get]] nor
+    // [[GetOwnProperty]].
+    if not (InheritsGet(Parent) and InheritsGetOwnProperty(Parent)) and
+       GetThroughExoticParent(Parent, AName, AThisContext, Result) then
+      Exit;
+    Current := Parent;
+  until False;
+end;
+
+function TGocciaObjectValue.GetPropertyFromPrototype(const AName: string;
+  const AThisContext: TGocciaValue): TGocciaValue;
+var
+  Parent, GrandParent: TGocciaObjectValue;
+begin
+  Parent := FPrototype;
+  if not Assigned(Parent) then
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  if Parent.ClassType = TGocciaProxyValue then
+    Exit(DelegateGetProperty(Parent, AName, AThisContext));
+  // A parent that keeps the ordinary [[Get]] but describes some own
+  // properties only through [[GetOwnProperty]] (a typed array's elements) is
+  // asked that first.
+  if InheritsGet(Parent) and not InheritsGetOwnProperty(Parent) and
+     GetThroughExoticParent(Parent, AName, AThisContext, Result) then
     Exit;
-  end;
+  // Any other parent answers with its own [[Get]]. The common case is an
+  // array or class instance reading its prototype (Array.prototype is itself
+  // an array, whose own prototype is ordinary): that call stays direct and
+  // uncounted, since the walk it starts continues in a loop. A parent whose
+  // own prototype also overrides the lookup is a counted call, so a chain or
+  // cycle of such objects is bounded.
+  GrandParent := Parent.FPrototype;
+  if not Assigned(GrandParent) or
+     (InheritsGet(GrandParent) and InheritsGetOwnProperty(GrandParent)) then
+    Result := Parent.GetPropertyWithContext(AName, AThisContext)
+  else
+    Result := DelegateGetProperty(Parent, AName, AThisContext);
+end;
 
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+procedure TGocciaObjectValue.AssignThroughExoticParent(
+  const AParent: TGocciaObjectValue; const AName: string;
+  const AValue: TGocciaValue);
+begin
+  if DelegateSetProperty(AParent, AName, AValue, Self) then
+    Exit;
+  if AParent.ClassType = TGocciaProxyValue then
+    ThrowTypeError(Format(SErrorProxySetReturnedFalse, [AName]),
+      SSuggestProxyTrapInvariant);
+  ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]),
+    SSuggestCannotDeleteNonConfigurable);
 end;
 
 function TGocciaObjectValue.GetOwnPropertyDescriptor(const AName: string): TGocciaPropertyDescriptor;
@@ -1672,12 +1979,22 @@ begin
     Result := nil;
 end;
 
+// ES2026 §10.1.7.1 OrdinaryHasProperty(O, P)
 function TGocciaObjectValue.HasProperty(const AName: string): Boolean;
+var
+  Current, Parent: TGocciaObjectValue;
 begin
-  Result := HasOwnProperty(AName);
-
-  if not Result and Assigned(FPrototype) then
-    Result := FPrototype.HasProperty(AName);
+  Current := Self;
+  repeat
+    if Current.HasOwnProperty(AName) then
+      Exit(True);
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Exit(False);
+    if not InheritsHas(Parent) then
+      Exit(DelegateHasProperty(Parent, AName));
+    Current := Parent;
+  until False;
 end;
 
 function TGocciaObjectValue.HasOwnProperty(const AName: string): Boolean;
@@ -1867,6 +2184,16 @@ var
   Args: TGocciaArgumentsCollection;
   Current: TGocciaObjectValue;
 begin
+  // This procedure is not virtual, so an object that answers [[Set]] itself (a
+  // Proxy) is handed its own [[Set]] here, and a parent of that kind below.
+  if not InheritsSetSymbol(Self) then
+  begin
+    if not AssignSymbolPropertyWithReceiver(ASymbol, AValue, Self) then
+      ThrowTypeError(SErrorReadOnlySymbolProperty,
+        SSuggestCannotDeleteNonConfigurable);
+    Exit;
+  end;
+
   if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1901,6 +2228,13 @@ begin
   Current := FPrototype;
   while Assigned(Current) do
   begin
+    if not InheritsSetSymbol(Current) then
+    begin
+      if not DelegateSetSymbolProperty(Current, ASymbol, AValue, Self) then
+        ThrowTypeError(SErrorReadOnlySymbolProperty,
+          SSuggestCannotDeleteNonConfigurable);
+      Exit;
+    end;
     if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
@@ -1943,15 +2277,24 @@ var
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
   ReceiverObj: TGocciaObjectValue;
+  Current, Parent: TGocciaObjectValue;
 begin
-  // Step 1: Let ownDesc be O.[[GetOwnProperty]](P)
-  OwnDesc := GetOwnSymbolPropertyDescriptor(ASymbol);
+  // Step 1, as in AssignPropertyWithReceiver.
+  Current := Self;
+  repeat
+    OwnDesc := Current.GetOwnSymbolPropertyDescriptor(ASymbol);
+    if Assigned(OwnDesc) then
+      Break;
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Break;
+    if not InheritsSetSymbol(Parent) then
+      Exit(DelegateSetSymbolProperty(Parent, ASymbol, AValue, AReceiver));
+    Current := Parent;
+  until False;
 
   if OwnDesc = nil then
   begin
-    // Step 1a-b: Walk prototype chain
-    if Assigned(FPrototype) then
-      Exit(FPrototype.AssignSymbolPropertyWithReceiver(ASymbol, AValue, AReceiver));
     // Step 1c: No prototype — ownDesc defaults to writable data descriptor,
     // fall through to step 2 which consults Receiver.[[GetOwnProperty]](P)
     if not (AReceiver is TGocciaObjectValue) then
@@ -2028,48 +2371,24 @@ begin
   Result := GetSymbolPropertyWithReceiver(ASymbol, Self);
 end;
 
+// ES2026 §10.1.8.1 OrdinaryGet(O, P, Receiver) — symbol variant
 function TGocciaObjectValue.GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue;
 var
+  Current, Parent: TGocciaObjectValue;
   Descriptor: TGocciaPropertyDescriptor;
-  Accessor: TGocciaPropertyDescriptorAccessor;
-  Args: TGocciaArgumentsCollection;
 begin
-  if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
-  begin
-    if Descriptor is TGocciaPropertyDescriptorData then
-    begin
-      Result := TGocciaPropertyDescriptorData(Descriptor).Value;
-      Exit;
-    end
-    else if Descriptor is TGocciaPropertyDescriptorAccessor then
-    begin
-      Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-      if Assigned(Accessor.Getter) then
-      begin
-        Args := TGocciaArgumentsCollection.Create;
-        try
-          if Accessor.Getter.IsCallable then
-            Result := InvokeCallable(Accessor.Getter, Args, AReceiver)
-          else
-            Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-        finally
-          Args.Free;
-        end;
-        Exit;
-      end;
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      Exit;
-    end;
-  end;
+  Current := Self;
+  repeat
+    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+      Exit(PropertyValueFromDescriptor(Descriptor, AReceiver));
 
-  // Check prototype chain
-  if Assigned(FPrototype) then
-  begin
-    Result := FPrototype.GetSymbolPropertyWithReceiver(ASymbol, AReceiver);
-    Exit;
-  end;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+    if not InheritsGetSymbol(Parent) then
+      Exit(DelegateGetSymbolProperty(Parent, ASymbol, AReceiver));
+    Current := Parent;
+  until False;
 end;
 
 function TGocciaObjectValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;

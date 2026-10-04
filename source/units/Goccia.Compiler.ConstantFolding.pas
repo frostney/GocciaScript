@@ -420,6 +420,7 @@ begin
   end;
 
   if ACtx.OptimizationOptions.EnableConstPropagation and
+     (not ACtx.Scope.DirectEvalMayShadow(AExpr.Name)) and
      ACtx.Scope.TryGetVisibleConstantValue(AExpr.Name, AValue) then
     Exit(True);
 

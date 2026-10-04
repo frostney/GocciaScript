@@ -33,6 +33,7 @@ type
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
+    FLoopReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
@@ -84,6 +85,7 @@ uses
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.NumericProof,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
   Goccia.Keywords.Reserved,
@@ -169,6 +171,8 @@ begin
       FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
+    FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -291,6 +295,8 @@ function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Bool
 var
   Ctx: TGocciaCompilationContext;
   PreviousLabelReentryStatement: TGocciaStatement;
+  PreviousLoopReentryStatement: TGocciaStatement;
+  LoopScope: TGocciaCompilerScope;
 begin
   Result := False;
   Ctx := BuildContext;
@@ -302,6 +308,32 @@ begin
       Exit(Goccia.Compiler.Statements.CompileLabeledStatement(Ctx, AStmt));
     finally
       FLabelReentryStatement := PreviousLabelReentryStatement;
+    end;
+  end;
+
+  // A loop is the only construct that sends control back to code compiled
+  // earlier, so a closure created anywhere in it exists when the reads compiled
+  // ahead of it run again. Those reads have to know that before they are
+  // compiled. A loop nested in one that may create a closure inherits the
+  // answer without being walked: a closure created in an outer loop also
+  // outlives the reads of an inner one. Any other loop is examined itself,
+  // even while another loop is open, because the compiler can be inside a loop
+  // that does not contain this one (an inlined finally block; see EnterLoop).
+  if Goccia.Compiler.Statements.StatementIsIteration(AStmt) and
+     (FLoopReentryStatement <> AStmt) then
+  begin
+    PreviousLoopReentryStatement := FLoopReentryStatement;
+    LoopScope := FCurrentScope;
+    LoopScope.EnterLoop(
+      not FOptimizationOptions.PreserveCoverageShape and
+      (LoopScope.LoopMayCreateClosure or
+       not StatementCreatesNoClosure(AStmt)));
+    FLoopReentryStatement := AStmt;
+    try
+      Exit(DoCompileStatement(AStmt));
+    finally
+      FLoopReentryStatement := PreviousLoopReentryStatement;
+      LoopScope.LeaveLoop;
     end;
   end;
 
@@ -1209,6 +1241,7 @@ begin
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
+  FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try

@@ -46,6 +46,10 @@ type
     procedure InitializePrototype;
     procedure SyncBufferData;
     function GetLength: Integer;
+    function GetByteLength: Integer;
+    function GetObservableByteOffset: Integer;
+    function TryGetNamedPropertyWithoutCall(const AName: string;
+      out AValue: TGocciaValue): Boolean;
     function HasValidBackingRange(const ALength: Integer): Boolean;
     function HasValidElementIndex(const AIndex: Integer): Boolean;
     function HasValidFixedLengthElementIndex(
@@ -195,6 +199,8 @@ implementation
 
 uses
   Math,
+
+  NumericText,
 
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
@@ -420,6 +426,23 @@ begin
   if not HasValidBackingRange(FLength) then
     Exit(0);
   Result := FLength;
+end;
+
+// ES2026 §23.2.3.3 get %TypedArray%.prototype.byteLength, steps 4-6: +0 for an
+// out-of-bounds view, which GetLength already reports as length 0.
+function TGocciaTypedArrayValue.GetByteLength: Integer;
+begin
+  Result := GetLength * FElementSize;
+end;
+
+// ES2026 §23.2.3.4 get %TypedArray%.prototype.byteOffset, steps 4-6: +0 for an
+// out-of-bounds view, [[ByteOffset]] otherwise.
+function TGocciaTypedArrayValue.GetObservableByteOffset: Integer;
+begin
+  if IsTypedArrayOutOfBounds(Self) then
+    Result := 0
+  else
+    Result := FByteOffset;
 end;
 
 function TGocciaTypedArrayValue.HasValidBackingRange(const ALength: Integer): Boolean;
@@ -679,24 +702,48 @@ begin
   Result := True;
 end;
 
-function TryCanonicalNumericIndexString(const AName: string;
-  out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
+// The String -> Number -> String round trip of CanonicalNumericIndexString. It
+// allocates and holds a managed temporary, so it lives apart from the checks a
+// property name such as "length" is rejected by (docs/core-patterns.md,
+// "Managed Locals on Hot Paths").
+function RoundTripsAsCanonicalNumericString(const AName: string;
+  out ANumericIndex: Double): Boolean;
 var
   NumberValue: TGocciaNumberLiteralValue;
+begin
+  NumberValue := TGocciaStringLiteralValue.Create(AName).ToNumberLiteral;
+  ANumericIndex := NumberValue.Value;
+  Result := NumberValue.ToStringLiteral.Value = AName;
+end;
+
+// ES2026 §7.1.21 CanonicalNumericIndexString(argument)
+function TryCanonicalNumericIndexString(const AName: string;
+  out ANumericIndex: Double; out AIsNegativeZero: Boolean): Boolean;
 begin
   AIsNegativeZero := False;
   if TryFastCanonicalIntegerIndex(AName, ANumericIndex) then
     Exit(True);
+
+  // A canonical numeric string is "-0" or Number::toString of some Number
+  // (ES2026 §6.1.6.1.20), which starts with a digit or "-", or is "Infinity"
+  // or "NaN". Every other name is decided by its first character, so the
+  // named reads `length`, `byteLength`, `fill`, ... pay no number parse.
+  ANumericIndex := 0;
+  if AName = '' then
+    Exit(False);
+  case AName[1] of
+    '0'..'9', '-', 'I', 'N':;
+  else
+    Exit(False);
+  end;
+
   if AName = '-0' then
   begin
-    ANumericIndex := 0;
     AIsNegativeZero := True;
     Exit(True);
   end;
 
-  NumberValue := TGocciaStringLiteralValue.Create(AName).ToNumberLiteral;
-  ANumericIndex := NumberValue.Value;
-  Result := NumberValue.ToStringLiteral.Value = AName;
+  Result := RoundTripsAsCanonicalNumericString(AName, ANumericIndex);
 end;
 
 function TGocciaTypedArrayValue.GetElementAsValue(const AIndex: Integer): TGocciaValue;
@@ -917,6 +964,31 @@ end;
 
 { Prototype initialization }
 
+// Stamp the identity TryGetNamedPropertyWithoutCall matches on, so it
+// recognises the built-in getter itself rather than whatever function a
+// program later defines under the same name.
+procedure MarkSlotGetter(const APrototype: TGocciaObjectValue;
+  const AName: string; const AKind: TGocciaNativeIntrinsicKind);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
+begin
+  Descriptor := APrototype.GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter
+  else
+    Getter := nil;
+  // A miss here would silently send every read of AName through the getter
+  // call: still correct, so no behaviour test could notice.
+  Assert(Getter is TGocciaNativeFunctionValue,
+    '%TypedArray%.prototype.' + AName + ' must have a native getter to ' +
+    'carry its intrinsic kind');
+  // Production builds compile assertions out (source/shared/Shared.inc), so
+  // the type test has to stand on its own before the cast.
+  if Getter is TGocciaNativeFunctionValue then
+    TGocciaNativeFunctionValue(Getter).IntrinsicKind := AKind;
+end;
+
 procedure TGocciaTypedArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -980,6 +1052,10 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  MarkSlotGetter(Shared.Prototype, PROP_BUFFER, nikTypedArrayBuffer);
+  MarkSlotGetter(Shared.Prototype, PROP_BYTE_LENGTH, nikTypedArrayByteLength);
+  MarkSlotGetter(Shared.Prototype, PROP_BYTE_OFFSET, nikTypedArrayByteOffset);
+  MarkSlotGetter(Shared.Prototype, PROP_LENGTH, nikTypedArrayLength);
   ValuesMethod := Shared.Prototype.GetProperty('values');
   Shared.Prototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -1048,9 +1124,67 @@ end;
 
 { Property access — indexed elements }
 
-function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
+// The ordinary lookup of a name that is not a canonical numeric string, for the
+// prototype chains it can answer without calling anything: every object from
+// the typed array to the one holding the property is a plain object, and the
+// property is a plain data property or one of the %TypedArray%.prototype
+// accessors with its built-in getter. That getter only reads internal slots of
+// its receiver, so its result is computed here rather than through a call and
+// an arguments collection. `length`, `byteLength`, `byteOffset` and `buffer`
+// are such accessors and nothing more (ES2026 §23.2.3), so a replaced
+// prototype, a null prototype, an own property and a getter a subclass or a
+// program defines are all found by the same walk, which then declines and
+// leaves the read to the full lookup. No managed locals: this runs on every
+// named read of a typed array (docs/core-patterns.md, "Managed Locals on Hot
+// Paths").
+function TGocciaTypedArrayValue.TryGetNamedPropertyWithoutCall(
+  const AName: string; out AValue: TGocciaValue): Boolean;
 var
   Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
+  Holder: TGocciaObjectValue;
+begin
+  AValue := nil;
+  Result := False;
+  Holder := Self;
+  repeat
+    if Holder.Properties.TryGetValue(AName, Descriptor) then
+    begin
+      // Exact classes: a not-yet-materialized lazy descriptor is a subclass of
+      // the data descriptor and must take the full lookup, which replaces it.
+      if Descriptor.ClassType = TGocciaPropertyDescriptorData then
+      begin
+        AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+        Exit(True);
+      end;
+      if Descriptor.ClassType <> TGocciaPropertyDescriptorAccessor then
+        Exit;
+      Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+      if (not Assigned(Getter)) or
+         (Getter.ClassType <> TGocciaNativeFunctionValue) then
+        Exit;
+      case TGocciaNativeFunctionValue(Getter).IntrinsicKind of
+        nikTypedArrayLength:
+          AValue := TGocciaNumberLiteralValue.Create(GetLength);
+        nikTypedArrayByteLength:
+          AValue := TGocciaNumberLiteralValue.Create(GetByteLength);
+        nikTypedArrayByteOffset:
+          AValue := TGocciaNumberLiteralValue.Create(GetObservableByteOffset);
+        nikTypedArrayBuffer:
+          AValue := FBufferValue;
+      else
+        Exit;
+      end;
+      Exit(True);
+    end;
+    Holder := Holder.Prototype;
+  until (not Assigned(Holder)) or (Holder.ClassType <> TGocciaObjectValue);
+end;
+
+// ES2026 §10.4.5.5 [[Get]](P, Receiver): only a canonical numeric string is
+// answered from the elements; every other key is OrdinaryGet.
+function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
+var
   IsNegativeZero: Boolean;
   Index: Integer;
   NumericIndex: Double;
@@ -1063,25 +1197,8 @@ begin
       Result := TGocciaUndefinedLiteralValue.UndefinedValue;
     Exit;
   end;
-  Descriptor := inherited GetOwnPropertyDescriptor(AName);
-  if Assigned(Descriptor) then
-    Exit(inherited GetProperty(AName));
-
-  if AName = PROP_LENGTH then
-    Exit(TGocciaNumberLiteralValue.Create(GetLength));
-  if AName = PROP_BYTE_LENGTH then
-    Exit(TGocciaNumberLiteralValue.Create(GetLength * BytesPerElement(FKind)));
-  if AName = PROP_BYTE_OFFSET then
-  begin
-    if IsTypedArrayOutOfBounds(Self) then
-      Exit(TGocciaNumberLiteralValue.Create(0));
-    Exit(TGocciaNumberLiteralValue.Create(FByteOffset));
-  end;
-  if AName = PROP_BUFFER then
-    Exit(FBufferValue);
-  if AName = PROP_BYTES_PER_ELEMENT then
-    Exit(TGocciaNumberLiteralValue.Create(BytesPerElement(FKind)));
-  Result := inherited GetProperty(AName);
+  if not TryGetNamedPropertyWithoutCall(AName, Result) then
+    Result := inherited GetProperty(AName);
 end;
 
 procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean);
@@ -1253,8 +1370,6 @@ begin
   if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) and
      IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
     Result := True
-  else if AName = PROP_LENGTH then
-    Result := True
   else
     Result := inherited HasOwnProperty(AName);
 end;
@@ -1274,7 +1389,7 @@ begin
 
   for I := 0 to Len - 1 do
   begin
-    Result[Count] := IntToStr(I);
+    Result[Count] := IntegerToString(I);
     Inc(Count);
   end;
 
@@ -1639,7 +1754,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.byteLength');
-  Result := TGocciaNumberLiteralValue.Create(TA.GetLength * BytesPerElement(TA.FKind));
+  Result := TGocciaNumberLiteralValue.Create(TA.GetByteLength);
 end;
 
 function TGocciaTypedArrayValue.TypedArrayByteOffsetGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1647,9 +1762,7 @@ var
   TA: TGocciaTypedArrayValue;
 begin
   TA := RequireTypedArray(AThisValue, 'TypedArray.prototype.byteOffset');
-  if IsTypedArrayOutOfBounds(TA) then
-    Exit(TGocciaNumberLiteralValue.Create(0));
-  Result := TGocciaNumberLiteralValue.Create(TA.FByteOffset);
+  Result := TGocciaNumberLiteralValue.Create(TA.GetObservableByteOffset);
 end;
 
 function TGocciaTypedArrayValue.TypedArrayLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -1993,7 +2106,7 @@ begin
       ThrowRangeError(SErrorTypedArraySourceTooLarge, SSuggestTypedArrayLength);
     for I := 0 to SrcLen - 1 do
       TA.SetIntegerIndexedElement(TargetOffset + I, False,
-        SrcObj.GetProperty(IntToStr(I)));
+        SrcObj.GetProperty(IntegerToString(I)));
   end;
 
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
@@ -3332,7 +3445,7 @@ begin
       ThrowRangeError(SErrorInvalidTypedArrayLength, SSuggestTypedArrayLength);
     NewTA := TGocciaTypedArrayValue.Create(FKind, Len);
     for I := 0 to Len - 1 do
-      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntToStr(I)));
+      NewTA.WriteValueToElement(I, TGocciaObjectValue(FirstArg).GetProperty(IntegerToString(I)));
     Exit(NewTA);
   end;
 
@@ -3561,7 +3674,7 @@ begin
     try
       for I := 0 to Len - 1 do
       begin
-        Val := SrcObj.GetProperty(IntToStr(I));
+        Val := SrcObj.GetProperty(IntegerToString(I));
         if HasMapFn then
         begin
           MapArgs := TGocciaArgumentsCollection.Create;
