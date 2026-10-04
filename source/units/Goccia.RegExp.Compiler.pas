@@ -55,7 +55,7 @@ function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
   (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
   operand, instead of losing its high bits. }
 function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
-  const AOperand: Integer): UInt32;
+  const AOperand: Integer): UInt32; inline;
 
 implementation
 
@@ -393,10 +393,19 @@ begin
     Result := False;
 end;
 
+// The raise lives here so that EncodeRegExpInstruction, which runs once per
+// emitted instruction, can be inlined: in FPC 3.2.2 a function that raises
+// gets a full frame and is not inlined (docs/core-patterns.md, "Managed
+// Locals on Hot Paths").
+procedure RaiseRegExpTooLarge;
+begin
+  raise EConvertError.Create(SErrorRegExpTooLarge);
+end;
+
 procedure TRegExpCompiler.Emit(AInstr: UInt32);
 begin
   if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
-    raise EConvertError.Create(SErrorRegExpTooLarge);
+    RaiseRegExpTooLarge;
   if FCodeLen >= Length(FCode) then
     SetLength(FCode, FCodeLen * 2 + 16);
   FCode[FCodeLen] := AInstr;
@@ -431,7 +440,7 @@ function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
   const AOperand: Integer): UInt32;
 begin
   if (AOperand < 0) or (AOperand > REGEXP_MAX_OPERAND) then
-    raise EConvertError.Create(SErrorRegExpTooLarge);
+    RaiseRegExpTooLarge;
   Result := UInt32(Ord(AOp)) or (UInt32(AOperand) shl 8);
 end;
 
@@ -441,7 +450,7 @@ function EncodeLookaroundInstruction(const AOp: TRegExpOpCode;
   const ATarget: Integer; const ANegated: Boolean): UInt32;
 begin
   if (ATarget < 0) or (ATarget > LOOK_TARGET_MASK) then
-    raise EConvertError.Create(SErrorRegExpTooLarge);
+    RaiseRegExpTooLarge;
   if ANegated then
     Result := EncodeRegExpInstruction(AOp, ATarget or LOOK_NEGATED_FLAG)
   else
@@ -452,7 +461,7 @@ end;
 procedure TRegExpCompiler.AddCapture;
 begin
   if FCaptureCount >= BACKREF_INDEX_MASK then
-    raise EConvertError.Create(SErrorRegExpTooLarge);
+    RaiseRegExpTooLarge;
   Inc(FCaptureCount);
 end;
 
@@ -2266,7 +2275,7 @@ begin
         // this engine treats it as a back reference, so a number past the
         // index bits is reported as too large.)
         if BackrefIdx > BACKREF_INDEX_MASK then
-          raise EConvertError.Create(SErrorRegExpTooLarge);
+          RaiseRegExpTooLarge;
         Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
@@ -2800,7 +2809,7 @@ end;
 procedure TRegExpCompiler.EnsureCodeCapacity(ANeeded: Integer);
 begin
   if Int64(FCodeLen) + ANeeded > REGEXP_MAX_PROGRAM_LENGTH then
-    raise EConvertError.Create(SErrorRegExpTooLarge);
+    RaiseRegExpTooLarge;
   if FCodeLen + ANeeded >= Length(FCode) then
     SetLength(FCode, (FCodeLen + ANeeded) * 2 + 16);
 end;
