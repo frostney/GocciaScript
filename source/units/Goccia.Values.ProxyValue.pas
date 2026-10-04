@@ -36,6 +36,10 @@ type
       const AName: string): TGocciaPropertyDescriptor;
     function TargetGetOwnSymbolPropertyDescriptor(
       const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
+    function TargetGetOwnPropertyDescriptorForKey(
+      const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+    // [[OwnPropertyKeys]]: string and symbol keys in one ordered list.
+    function TargetOwnPropertyKeyValues: TArray<TGocciaValue>;
     function TargetDeleteProperty(const AName: string): Boolean;
     procedure TargetDefineProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor);
@@ -285,6 +289,28 @@ begin
   EnterPropertyDelegation;
   try
     Result := TGocciaProxyValue(FTarget).GetOwnSymbolPropertyDescriptor(ASymbol);
+  finally
+    LeavePropertyDelegation;
+  end;
+end;
+
+function TGocciaProxyValue.TargetGetOwnPropertyDescriptorForKey(
+  const AKey: TGocciaValue): TGocciaPropertyDescriptor;
+begin
+  if AKey is TGocciaSymbolValue then
+    Result := TargetGetOwnSymbolPropertyDescriptor(TGocciaSymbolValue(AKey))
+  else
+    Result := TargetGetOwnPropertyDescriptor(
+      TGocciaStringLiteralValue(AKey).Value);
+end;
+
+function TGocciaProxyValue.TargetOwnPropertyKeyValues: TArray<TGocciaValue>;
+begin
+  if FTarget.ClassType <> TGocciaProxyValue then
+    Exit(TGocciaObjectValue(FTarget).OwnPropertyKeyValues);
+  EnterPropertyDelegation;
+  try
+    Result := TGocciaProxyValue(FTarget).GetOwnPropertyKeyValues;
   finally
     LeavePropertyDelegation;
   end;
@@ -838,6 +864,51 @@ begin
   end;
 end;
 
+function IsSamePropertyKey(const A, B: TGocciaValue): Boolean;
+begin
+  if A is TGocciaSymbolValue then
+    Result := A = B
+  else
+    Result := (B is TGocciaStringLiteralValue) and
+      (TGocciaStringLiteralValue(A).Value = TGocciaStringLiteralValue(B).Value);
+end;
+
+function PropertyKeyLabel(const AKey: TGocciaValue): string;
+begin
+  if AKey is TGocciaSymbolValue then
+    Result := TGocciaSymbolValue(AKey).ToStringLiteral.Value
+  else
+    Result := TGocciaStringLiteralValue(AKey).Value;
+end;
+
+procedure SplitPropertyKeys(const AOrderedKeys: TArray<TGocciaValue>;
+  out AStringKeys: TArray<string>;
+  out ASymbolKeys: TArray<TGocciaSymbolValue>);
+var
+  I, StringCount, SymbolCount: Integer;
+begin
+  SetLength(AStringKeys, Length(AOrderedKeys));
+  SetLength(ASymbolKeys, Length(AOrderedKeys));
+  StringCount := 0;
+  SymbolCount := 0;
+  for I := 0 to High(AOrderedKeys) do
+  begin
+    if AOrderedKeys[I] is TGocciaStringLiteralValue then
+    begin
+      AStringKeys[StringCount] := TGocciaStringLiteralValue(AOrderedKeys[I]).Value;
+      Inc(StringCount);
+    end
+    else if AOrderedKeys[I] is TGocciaSymbolValue then
+    begin
+      ASymbolKeys[SymbolCount] := TGocciaSymbolValue(AOrderedKeys[I]);
+      Inc(SymbolCount);
+    end;
+  end;
+  SetLength(AStringKeys, StringCount);
+  SetLength(ASymbolKeys, SymbolCount);
+end;
+
+// ES2026 §10.5.11 [[OwnPropertyKeys]] ( )
 procedure TGocciaProxyValue.CollectOwnPropertyTrapKeys(
   out AStringKeys: TArray<string>;
   out ASymbolKeys: TArray<TGocciaSymbolValue>;
@@ -846,19 +917,39 @@ var
   Args: TGocciaArgumentsCollection;
   Count: Integer;
   Element: TGocciaValue;
-  Found: Boolean;
+  ExtensibleTarget: Boolean;
+  HasNonconfigurableKey: Boolean;
   I, J: Integer;
   OrderedCount: Integer;
-  ResultObject: TGocciaObjectValue;
+  ResultChecked: TArray<Boolean>;
   ResultLength: Integer;
+  ResultObject: TGocciaObjectValue;
+  Roots: TGocciaActiveRootFrame;
   SymbolCount: Integer;
   SymbolElement: TGocciaSymbolValue;
   TargetDesc: TGocciaPropertyDescriptor;
-  TargetKeys: TArray<string>;
-  TargetObj: TGocciaObjectValue;
-  TargetSymbols: TArray<TGocciaSymbolValue>;
+  TargetKeyNonconfigurable: TArray<Boolean>;
+  TargetKeys: TArray<TGocciaValue>;
   Trap: TGocciaValue;
   TrapResult: TGocciaValue;
+
+  // ES2026 §10.5.11 steps 19.a-b and 21.a-b: AKey must be in
+  // uncheckedResultKeys; remove it. trapResult holds no duplicates (step 9),
+  // so marking its one occurrence checked is the removal.
+  procedure CheckResultKey(const AKey: TGocciaValue);
+  var
+    K: Integer;
+  begin
+    for K := 0 to High(AOrderedKeys) do
+      if not ResultChecked[K] and IsSamePropertyKey(AKey, AOrderedKeys[K]) then
+      begin
+        ResultChecked[K] := True;
+        Exit;
+      end;
+    ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [PropertyKeyLabel(AKey)]),
+      SSuggestProxyTrapInvariant);
+  end;
+
 begin
   CheckRevoked;
   SetLength(AStringKeys, 0);
@@ -868,41 +959,16 @@ begin
   Trap := GetTrap(PROP_OWN_KEYS);
   if not Assigned(Trap) then
   begin
+    // ES2026 §10.5.11 step 6.a: Return ? target.[[OwnPropertyKeys]]().
     if FTarget is TGocciaProxyValue then
     begin
-      // A Proxy target is counted; see MAX_PROPERTY_DELEGATION_DEPTH.
-      EnterPropertyDelegation;
-      try
-        AOrderedKeys := TGocciaProxyValue(FTarget).GetOwnPropertyKeyValues;
-      finally
-        LeavePropertyDelegation;
-      end;
-      SetLength(AStringKeys, Length(AOrderedKeys));
-      SetLength(ASymbolKeys, Length(AOrderedKeys));
-      Count := 0;
-      SymbolCount := 0;
-      for I := 0 to High(AOrderedKeys) do
-      begin
-        if AOrderedKeys[I] is TGocciaStringLiteralValue then
-        begin
-          AStringKeys[Count] :=
-            TGocciaStringLiteralValue(AOrderedKeys[I]).Value;
-          Inc(Count);
-        end
-        else if AOrderedKeys[I] is TGocciaSymbolValue then
-        begin
-          ASymbolKeys[SymbolCount] := TGocciaSymbolValue(AOrderedKeys[I]);
-          Inc(SymbolCount);
-        end;
-      end;
-      SetLength(AStringKeys, Count);
-      SetLength(ASymbolKeys, SymbolCount);
+      AOrderedKeys := TargetOwnPropertyKeyValues;
+      SplitPropertyKeys(AOrderedKeys, AStringKeys, ASymbolKeys);
     end
     else if FTarget is TGocciaObjectValue then
     begin
-      TargetObj := TGocciaObjectValue(FTarget);
-      AStringKeys := TargetObj.GetOwnPropertyKeys;
-      ASymbolKeys := TargetObj.GetOwnSymbols;
+      AStringKeys := TGocciaObjectValue(FTarget).GetOwnPropertyKeys;
+      ASymbolKeys := TGocciaObjectValue(FTarget).GetOwnSymbols;
       SetLength(AOrderedKeys, Length(AStringKeys) + Length(ASymbolKeys));
       OrderedCount := 0;
       for I := 0 to High(AStringKeys) do
@@ -931,143 +997,109 @@ begin
   if not (TrapResult is TGocciaObjectValue) then
     ThrowTypeError(SErrorProxyOwnKeysArray, SSuggestProxyTrapReturnType);
 
-  ResultObject := TGocciaObjectValue(TrapResult);
-  ResultLength := LengthOfArrayLike(ResultObject);
+  // The trap result, its keys and the target's keys are held only by this
+  // frame while the target's traps and the result's element getters run.
+  Roots.Initialize;
+  try
+    Roots.Add(Self);
+    Roots.Add(TrapResult);
 
-  SetLength(AStringKeys, ResultLength);
-  SetLength(ASymbolKeys, ResultLength);
-  SetLength(AOrderedKeys, ResultLength);
-  Count := 0;
-  SymbolCount := 0;
-  OrderedCount := 0;
-  for I := 0 to ResultLength - 1 do
-  begin
-    Element := ResultObject.GetProperty(IntToStr(I));
-    if not (Element is TGocciaStringLiteralValue) and
-       not (Element is TGocciaSymbolValue) then
-      ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);
-    if Element is TGocciaStringLiteralValue then
+    ResultObject := TGocciaObjectValue(TrapResult);
+    ResultLength := LengthOfArrayLike(ResultObject);
+
+    SetLength(AStringKeys, ResultLength);
+    SetLength(ASymbolKeys, ResultLength);
+    SetLength(AOrderedKeys, ResultLength);
+    Count := 0;
+    SymbolCount := 0;
+    OrderedCount := 0;
+    for I := 0 to ResultLength - 1 do
     begin
-      for J := 0 to Count - 1 do
-        if AStringKeys[J] = TGocciaStringLiteralValue(Element).Value then
-          ThrowTypeError(SErrorProxyOwnKeysDuplicate,
-            SSuggestProxyTrapInvariant);
-      AStringKeys[Count] := TGocciaStringLiteralValue(Element).Value;
-      Inc(Count);
-    end
-    else
-    begin
-      SymbolElement := TGocciaSymbolValue(Element);
-      for J := 0 to SymbolCount - 1 do
-        if ASymbolKeys[J] = SymbolElement then
-          ThrowTypeError(SErrorProxyOwnKeysDuplicate,
-            SSuggestProxyTrapInvariant);
-      ASymbolKeys[SymbolCount] := SymbolElement;
-      Inc(SymbolCount);
+      Element := ResultObject.GetProperty(IntToStr(I));
+      if not (Element is TGocciaStringLiteralValue) and
+         not (Element is TGocciaSymbolValue) then
+        ThrowTypeError(SErrorProxyOwnKeysTypes, SSuggestProxyTrapReturnType);
+      Roots.Add(Element);
+      if Element is TGocciaStringLiteralValue then
+      begin
+        for J := 0 to Count - 1 do
+          if AStringKeys[J] = TGocciaStringLiteralValue(Element).Value then
+            ThrowTypeError(SErrorProxyOwnKeysDuplicate,
+              SSuggestProxyTrapInvariant);
+        AStringKeys[Count] := TGocciaStringLiteralValue(Element).Value;
+        Inc(Count);
+      end
+      else
+      begin
+        SymbolElement := TGocciaSymbolValue(Element);
+        for J := 0 to SymbolCount - 1 do
+          if ASymbolKeys[J] = SymbolElement then
+            ThrowTypeError(SErrorProxyOwnKeysDuplicate,
+              SSuggestProxyTrapInvariant);
+        ASymbolKeys[SymbolCount] := SymbolElement;
+        Inc(SymbolCount);
+      end;
+      AOrderedKeys[OrderedCount] := Element;
+      Inc(OrderedCount);
     end;
-    AOrderedKeys[OrderedCount] := Element;
-    Inc(OrderedCount);
-  end;
-  SetLength(AStringKeys, Count);
-  SetLength(ASymbolKeys, SymbolCount);
-  SetLength(AOrderedKeys, OrderedCount);
+    SetLength(AStringKeys, Count);
+    SetLength(ASymbolKeys, SymbolCount);
+    SetLength(AOrderedKeys, OrderedCount);
 
-  if not (FTarget is TGocciaObjectValue) then
-    Exit;
+    if not (FTarget is TGocciaObjectValue) then
+      Exit;
 
-  TargetObj := TGocciaObjectValue(FTarget);
-  TargetKeys := TargetObj.GetOwnPropertyKeys;
-  for I := 0 to Length(TargetKeys) - 1 do
-  begin
-    TargetDesc := TargetGetOwnPropertyDescriptor(TargetKeys[I]);
-    if Assigned(TargetDesc) and not TargetDesc.Configurable then
+    // ES2026 §10.5.11 step 10: Let extensibleTarget be ? IsExtensible(target).
+    ExtensibleTarget := ProxyTargetIsExtensible(FTarget);
+    // ES2026 §10.5.11 step 11: Let targetKeys be ? target.[[OwnPropertyKeys]]().
+    // One read gives the string and symbol keys together, in target order.
+    TargetKeys := TargetOwnPropertyKeyValues;
+    for I := 0 to High(TargetKeys) do
+      Roots.Add(TargetKeys[I]);
+
+    // ES2026 §10.5.11 step 16: read each key's descriptor in targetKeys order
+    // and sort it into the configurable or non-configurable keys.
+    SetLength(TargetKeyNonconfigurable, Length(TargetKeys));
+    HasNonconfigurableKey := False;
+    for I := 0 to High(TargetKeys) do
     begin
-      Found := False;
-      for J := 0 to Length(AStringKeys) - 1 do
-        if AStringKeys[J] = TargetKeys[I] then
-        begin
-          Found := True;
-          Break;
-        end;
-      if not Found then
-        ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [TargetKeys[I]]),
-          SSuggestProxyTrapInvariant);
+      TargetDesc := TargetGetOwnPropertyDescriptorForKey(TargetKeys[I]);
+      TargetKeyNonconfigurable[I] := Assigned(TargetDesc) and
+        not TargetDesc.Configurable;
+      if TargetKeyNonconfigurable[I] then
+        HasNonconfigurableKey := True;
     end;
-  end;
 
-  TargetSymbols := TargetObj.GetOwnSymbols;
-  for I := 0 to Length(TargetSymbols) - 1 do
-  begin
-    TargetDesc := TargetGetOwnSymbolPropertyDescriptor(TargetSymbols[I]);
-    if Assigned(TargetDesc) and not TargetDesc.Configurable then
-    begin
-      Found := False;
-      for J := 0 to Length(ASymbolKeys) - 1 do
-        if ASymbolKeys[J] = TargetSymbols[I] then
-        begin
-          Found := True;
-          Break;
-        end;
-      if not Found then
-        ThrowTypeError(Format(SErrorProxyOwnKeysMissing,
-          [TargetSymbols[I].ToStringLiteral.Value]),
-          SSuggestProxyTrapInvariant);
-    end;
-  end;
+    // ES2026 §10.5.11 step 17
+    if ExtensibleTarget and not HasNonconfigurableKey then
+      Exit;
 
-  if ProxyTargetIsExtensible(FTarget) then
-    Exit;
+    // ES2026 §10.5.11 step 18: uncheckedResultKeys is trapResult.
+    SetLength(ResultChecked, Length(AOrderedKeys));
+    for I := 0 to High(ResultChecked) do
+      ResultChecked[I] := False;
 
-  for I := 0 to Length(TargetKeys) - 1 do
-  begin
-    Found := False;
-    for J := 0 to Length(AStringKeys) - 1 do
-      if AStringKeys[J] = TargetKeys[I] then
-      begin
-        Found := True;
-        Break;
-      end;
-    if not Found then
-      ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [TargetKeys[I]]),
-        SSuggestProxyTrapInvariant);
-  end;
-  for I := 0 to Length(TargetSymbols) - 1 do
-  begin
-    Found := False;
-    for J := 0 to Length(ASymbolKeys) - 1 do
-      if ASymbolKeys[J] = TargetSymbols[I] then
-      begin
-        Found := True;
-        Break;
-      end;
-    if not Found then
-      ThrowTypeError(Format(SErrorProxyOwnKeysMissing,
-        [TargetSymbols[I].ToStringLiteral.Value]),
-        SSuggestProxyTrapInvariant);
-  end;
-  for I := 0 to Length(AStringKeys) - 1 do
-  begin
-    Found := False;
-    for J := 0 to Length(TargetKeys) - 1 do
-      if TargetKeys[J] = AStringKeys[I] then
-      begin
-        Found := True;
-        Break;
-      end;
-    if not Found then
-      ThrowTypeError(SErrorProxyOwnKeysExtra, SSuggestProxyTrapInvariant);
-  end;
-  for I := 0 to Length(ASymbolKeys) - 1 do
-  begin
-    Found := False;
-    for J := 0 to Length(TargetSymbols) - 1 do
-      if TargetSymbols[J] = ASymbolKeys[I] then
-      begin
-        Found := True;
-        Break;
-      end;
-    if not Found then
-      ThrowTypeError(SErrorProxyOwnKeysExtra, SSuggestProxyTrapInvariant);
+    // ES2026 §10.5.11 step 19: every non-configurable target key is reported.
+    for I := 0 to High(TargetKeys) do
+      if TargetKeyNonconfigurable[I] then
+        CheckResultKey(TargetKeys[I]);
+
+    // ES2026 §10.5.11 step 20
+    if ExtensibleTarget then
+      Exit;
+
+    // ES2026 §10.5.11 step 21: a non-extensible target's configurable keys
+    // are reported too.
+    for I := 0 to High(TargetKeys) do
+      if not TargetKeyNonconfigurable[I] then
+        CheckResultKey(TargetKeys[I]);
+
+    // ES2026 §10.5.11 step 22: and nothing else is.
+    for I := 0 to High(ResultChecked) do
+      if not ResultChecked[I] then
+        ThrowTypeError(SErrorProxyOwnKeysExtra, SSuggestProxyTrapInvariant);
+  finally
+    Roots.Clear;
   end;
 end;
 
