@@ -2937,6 +2937,8 @@ var
   end;
 
 begin
+  // Every initializer and computed key is a TGocciaExpression, so this asks
+  // whether the list contains one at all.
   if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then
   begin
     for I := 0 to High(AParams) do
