@@ -229,14 +229,7 @@ begin
   // a native call that a chain of such handlers would repeat; count it like a
   // forward to a Proxy target.
   if FHandler.ClassType = TGocciaProxyValue then
-  begin
-    EnterPropertyDelegation;
-    try
-      TrapValue := FHandler.GetProperty(ATrapName);
-    finally
-      LeavePropertyDelegation;
-    end;
-  end
+    TrapValue := DelegateGetProperty(FHandler, ATrapName, FHandler)
   else
     TrapValue := FHandler.GetProperty(ATrapName);
   if (TrapValue is TGocciaUndefinedLiteralValue) or
@@ -347,7 +340,14 @@ function TGocciaProxyValue.TargetTryDefineProperty(const AName: string;
 begin
   if FTarget.ClassType <> TGocciaProxyValue then
     Exit(TGocciaObjectValue(FTarget).TryDefineProperty(AName, ADescriptor));
-  EnterPropertyDelegation;
+  // The call takes ownership of ADescriptor, so it is freed here when the
+  // bound stops the call before it starts.
+  try
+    EnterPropertyDelegation;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
   try
     Result := TGocciaProxyValue(FTarget).TryDefineProperty(AName, ADescriptor);
   finally
@@ -362,7 +362,13 @@ begin
   if FTarget.ClassType <> TGocciaProxyValue then
     Exit(TGocciaObjectValue(FTarget).TryDefineSymbolProperty(ASymbol,
       ADescriptor));
-  EnterPropertyDelegation;
+  // See TargetTryDefineProperty.
+  try
+    EnterPropertyDelegation;
+  except
+    ADescriptor.Free;
+    raise;
+  end;
   try
     Result := TGocciaProxyValue(FTarget).TryDefineSymbolProperty(ASymbol,
       ADescriptor);

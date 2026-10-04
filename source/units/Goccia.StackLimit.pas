@@ -28,9 +28,14 @@ const
   // through a nest of N Proxies goes down the nest twice (the innermost
   // [[Set]] defines the property on the outermost Proxy, and [[Construct]]
   // reads `prototype` from it), so N up to half the cap still completes.
-  // Together with MAX_OBJECT_DELEGATION_DEPTH this fits the native stack even
-  // under the deepest recursion the default --max-stack allows.
-  MAX_PROPERTY_DELEGATION_DEPTH = 2500;
+  // A level costs more native stack when its trap is a native function
+  // reached through a bound function or a Proxy (`Reflect.apply.bind(null)`,
+  // `new Proxy(Reflect.apply, {})`): in a production build on Linux x86-64,
+  // interpreted, under the deepest recursion the default --max-stack allows,
+  // such a nest ran out of native stack after about 2,130 levels. The cap
+  // stays below that. A trap wrapped in several bound functions costs more again and is
+  // not covered.
+  MAX_PROPERTY_DELEGATION_DEPTH = 2000;
 
   // The same walk enters an array, function, class or class instance by a
   // native call too, because their classes override the lookup. Those calls

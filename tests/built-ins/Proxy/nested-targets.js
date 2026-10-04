@@ -61,23 +61,24 @@ describe("Proxies nested 500 deep forward every internal method", () => {
   });
 });
 
-describe("Proxies nested 1,200 deep", () => {
+describe("Proxies nested 900 deep", () => {
   // An assignment and a `new` go down the nest twice: the innermost [[Set]]
   // defines the property on the outermost Proxy, and [[Construct]] reads
-  // `prototype` from it.
+  // `prototype` from it. Both still complete through a nest of up to half the
+  // engine's bound.
   test("an assignment and a construction reach the target", () => {
     const target = {};
-    const proxy = nest(1200, target);
+    const proxy = nest(900, target);
     proxy.y = 2;
     expect(target.y).toBe(2);
     expect(Reflect.set(proxy, "z", 3)).toBe(true);
     class Made {}
-    expect(new (nest(1200, Made))() instanceof Made).toBe(true);
+    expect(new (nest(900, Made))() instanceof Made).toBe(true);
   });
 });
 
 // The engine bounds the native calls through a nest (MAX_PROPERTY_DELEGATION_DEPTH,
-// 2,500), so a 3,000-deep nest throws RangeError however much native stack is
+// 2,000), so a 3,000-deep nest throws RangeError however much native stack is
 // left. Node.js has no such bound and completes these.
 describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past the engine's bound", () => {
   const proxy = nest(3000, { x: 1 });
@@ -103,6 +104,8 @@ describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past t
     ["a call", () => callable()],
     ["new", () => new constructable()],
     ["a read through a chain of handlers", () => handlerChain.x],
+    ["Object.keys through a native ownKeys trap on every level", () => Object.keys(nest(3000, { x: 1 }, { ownKeys: Reflect.ownKeys }))],
+    ["isFrozen", () => Object.isFrozen(proxy)],
   ];
 
   test.each(operations)("%s throws RangeError", (_, operation) => {
@@ -120,20 +123,10 @@ describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past t
 const is64Bit = typeof Goccia !== "undefined" &&
   ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
 
-describe("Proxies nested 20,000 deep", () => {
-  // Node.js completes some of these and throws RangeError for others; either
-  // is allowed, a crash is not.
-  const outcome = (operation) => {
-    try {
-      operation();
-      return "completed";
-    } catch (error) {
-      return error.constructor.name;
-    }
-  };
-  const allowed = ["completed", "RangeError"];
-
-  test.runIf(is64Bit)("every forwarded internal method and a native trap complete or throw RangeError", () => {
+// The block runs on GocciaScript only (is64Bit), where every operation is past
+// the engine's bound.
+describe.runIf(is64Bit)("Proxies nested 20,000 deep", () => {
+  test("every forwarded internal method and a native trap throw RangeError, and the engine keeps working", () => {
     // The ownKeys trap on every level is a native function, so ownKeys and
     // keys recurse through trap calls; the other operations forward.
     const proxy = nest(20000, { x: 1 }, { ownKeys: Reflect.ownKeys });
@@ -150,15 +143,15 @@ describe("Proxies nested 20,000 deep", () => {
       () => Object.preventExtensions(proxy),
     ];
     for (const operation of operations) {
-      expect(allowed.includes(outcome(operation))).toBe(true);
+      expect(operation).toThrow(RangeError);
     }
     expect(Object.getOwnPropertyDescriptor({ y: 2 }, "y").value).toBe(2);
   });
 
-  test.runIf(is64Bit)("call and new complete or throw RangeError, and typeof sees the function", () => {
+  test("call and new throw RangeError, and typeof sees the function", () => {
     const callable = nest(20000, () => 1);
     expect(typeof callable).toBe("function");
-    expect(allowed.includes(outcome(() => callable()))).toBe(true);
-    expect(allowed.includes(outcome(() => new (nest(20000, class {}))()))).toBe(true);
+    expect(() => callable()).toThrow(RangeError);
+    expect(() => new (nest(20000, class {}))()).toThrow(RangeError);
   });
 });
