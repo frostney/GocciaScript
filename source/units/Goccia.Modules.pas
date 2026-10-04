@@ -155,6 +155,8 @@ type
     FResolvedBindings: TGocciaModuleImportBindingMap;
     procedure ClearResolvedBindings;
     procedure DetachModule;
+    function AcceptsDescriptor(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean;
   public
     constructor Create(const AModule: TGocciaModule);
     destructor Destroy; override;
@@ -1033,12 +1035,17 @@ begin
   Result := inherited DeleteProperty(AName);
 end;
 
+// DefineProperty follows the base contract: it takes ownership of ADescriptor
+// only on success, and leaves it to the caller when it throws. Going through
+// TryDefineProperty here freed the descriptor before the throw, so callers
+// such as Object.defineProperty freed it a second time.
 procedure TGocciaModuleNamespaceObject.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  if not TryDefineProperty(AName, ADescriptor) then
+  if not AcceptsDescriptor(AName, ADescriptor) then
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
+  ADescriptor.Free;
 end;
 
 function TGocciaModuleNamespaceObject.GetAllPropertyNames: TArray<string>;
@@ -1232,26 +1239,35 @@ begin
 end;
 
 // ES2026 §10.4.6.6 Module Namespace Exotic Objects [[DefineOwnProperty]](P, Desc)
-function TGocciaModuleNamespaceObject.TryDefineProperty(const AName: string;
+// for a string key: the export must exist and the descriptor must describe it
+// unchanged. Owns nothing.
+function TGocciaModuleNamespaceObject.AcceptsDescriptor(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   CurrentValue: TGocciaValue;
 begin
+  if not TryGetExportValue(AName, CurrentValue) then
+    Exit(False);
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit(False);
+  if ADescriptor.HasEnumerableField and not ADescriptor.Enumerable then
+    Exit(False);
+  if IsAccessorDescriptor(ADescriptor) then
+    Exit(False);
+  if ADescriptor.HasWritableField and not ADescriptor.Writable then
+    Exit(False);
+  if ADescriptor.HasValue then
+    Exit(IsSameValue(TGocciaPropertyDescriptorData(ADescriptor).Value,
+      CurrentValue));
+  Result := True;
+end;
+
+// Takes ownership of ADescriptor in every case, like the base TryDefineProperty.
+function TGocciaModuleNamespaceObject.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
   try
-    if not TryGetExportValue(AName, CurrentValue) then
-      Exit(False);
-    if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
-      Exit(False);
-    if ADescriptor.HasEnumerableField and not ADescriptor.Enumerable then
-      Exit(False);
-    if IsAccessorDescriptor(ADescriptor) then
-      Exit(False);
-    if ADescriptor.HasWritableField and not ADescriptor.Writable then
-      Exit(False);
-    if ADescriptor.HasValue then
-      Exit(IsSameValue(TGocciaPropertyDescriptorData(ADescriptor).Value,
-        CurrentValue));
-    Result := True;
+    Result := AcceptsDescriptor(AName, ADescriptor);
   finally
     ADescriptor.Free;
   end;
