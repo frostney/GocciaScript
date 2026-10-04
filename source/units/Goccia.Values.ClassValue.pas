@@ -1792,6 +1792,12 @@ end;
 
 function TGocciaClassValue.NativeInstanceDefaultPrototype: TGocciaObjectValue;
 begin
+  { A class declared in script is exactly TGocciaClassValue, which none of the
+    built-in class values below is. Answering it first keeps the construction
+    and super() paths, which ask this for every class on the chain, from
+    running twenty type checks on ordinary classes. }
+  if ClassType = TGocciaClassValue then
+    Exit(nil);
   if (Self is TGocciaArrayClassValue) or
      (Self is TGocciaMapClassValue) or
      (Self is TGocciaSetClassValue) or
