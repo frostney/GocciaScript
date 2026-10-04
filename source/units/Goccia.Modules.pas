@@ -867,10 +867,19 @@ end;
 
 function TGocciaModule.CanResolveExport(const AExportName: string): Boolean;
 var
+  Binding: TGocciaModuleExportBinding;
   BindingModule: TGocciaModule;
   BindingName: string;
   Value: TGocciaValue;
 begin
+  // ES2026 §16.2.1.7.2.2 ResolveExport: a local export resolves to this
+  // module's own binding, with no resolveSet to track. Answer that common
+  // case without allocating one.
+  if (not FAmbiguousExports.ContainsKey(AExportName)) and
+     FExportBindings.TryGetValue(AExportName, Binding) and
+     (not Assigned(Binding.FSourceModule)) and
+     Assigned(Binding.FEnvironment) then
+    Exit(True);
   Result := TryResolveExportIdentity(AExportName, BindingModule, BindingName,
     Value);
 end;
