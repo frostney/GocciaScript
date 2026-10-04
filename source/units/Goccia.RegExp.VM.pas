@@ -889,17 +889,26 @@ var
         CheckExecutionTimeout;
     end;
 
-    // The protocol's order: continue after the loop at the longest count,
-    // then at each shorter count down to zero iterations.
-    // The scan did the work of one step per character.
-    Inc(StepCount, InputPos - RunStart);
-    if StepCount > StepLimit then
-      raise ERegExpRuntimeError.Create(SStepLimitExceeded);
-    if not SimpleTail and (InputPos > RunStart) then
+    if not SimpleTail then
     begin
-      PushBacktrack(-AExitPC - 1, InputPos - CodePointWidthBefore(InputPos,
-        RunStart));
-      AStack[StackTop].RunStart := RunStart;
+      // Before runs were kept, a loop whose tail can fail iterated one
+      // character at a time at three steps each. Its scan costs one step
+      // per code unit, so that rescans (^a*a*b rescans the second a* for
+      // every count of the first) stay within the step limit. A loop whose
+      // tail can only accept was scanned without a charge and still is:
+      // charging it would make /^[ab]*a*$/ throw on 5,000 characters, where
+      // it returns false.
+      Inc(StepCount, InputPos - RunStart);
+      if StepCount > StepLimit then
+        raise ERegExpRuntimeError.Create(SStepLimitExceeded);
+      // The protocol's order: continue after the loop at the longest count,
+      // then at each shorter count down to zero iterations.
+      if InputPos > RunStart then
+      begin
+        PushBacktrack(-AExitPC - 1, InputPos - CodePointWidthBefore(InputPos,
+          RunStart));
+        AStack[StackTop].RunStart := RunStart;
+      end;
     end;
     PC := AExitPC;
     Result := True;

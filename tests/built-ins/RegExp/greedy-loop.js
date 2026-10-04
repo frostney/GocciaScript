@@ -40,7 +40,23 @@ test("each shorter count is tried after the longer ones fail", () => {
   expect(/^(a*)?a{40}b{5}$/.exec(subject)[1]).toBeUndefined();
 });
 
-test("a step-limit failure and a backtrack-stack failure report different messages", () => {
+test("a loop at the end of the pattern is rescanned for every count of an earlier loop without reaching the step limit", () => {
+  // [ab]* gives back one character at a time, and a* rescans the rest each
+  // time: 12.5 million characters for 5,000, more than the step limit.
+  expect(/^[ab]*a*$/.test("a".repeat(5000) + "!")).toBe(false);
+});
+
+test("a greedy loop prunes the same failed states on a long run as on a short one", () => {
+  // Under 32 code units the loop iterates one character at a time; from 32
+  // on it keeps one entry for the whole run. Both find the same match.
+  const short = /(.*)[ab]*\1{3}/.exec("bccc");
+  const long = /(.*)[ab]*\1{3}/.exec("b" + "c".repeat(48));
+  expect(long.index).toBe(short.index);
+  expect(long[1]).toBe(short[1]);
+  expect(long[0]).toBe(short[0]);
+});
+
+test("the step limit reports its own message", () => {
   let message = "";
   try {
     /^(a+)+$/.test("a".repeat(30) + "b");

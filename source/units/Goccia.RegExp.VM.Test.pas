@@ -21,6 +21,7 @@ type
     procedure TestMatcherMatchesRepeatedly;
     procedure TestMatcherReleasesStackWhenLimitRaises;
     procedure TestGreedyLoopKeepsOneBacktrackEntry;
+    procedure TestGreedyLoopScanCountsTowardStepLimit;
   public
     procedure SetupTests; override;
   end;
@@ -42,6 +43,8 @@ begin
     TestMatcherReleasesStackWhenLimitRaises);
   Test('a greedy single-character loop does not keep an entry per iteration',
     TestGreedyLoopKeepsOneBacktrackEntry);
+  Test('a greedy loop rescanned by backtracking counts toward the step limit',
+    TestGreedyLoopScanCountsTowardStepLimit);
 end;
 
 procedure TRegExpVMTests.TestShortSubjectGetsFloor;
@@ -147,6 +150,30 @@ begin
     Expect<Boolean>(Matcher.Exec(0, False)).ToBe(True);
     Expect<Integer>(Matcher.Slot(1)).ToBe(501);
     Expect<Boolean>(Matcher.RetainedBacktrackCapacity < 500).ToBe(True);
+  finally
+    Matcher.Free;
+  end;
+end;
+
+procedure TRegExpVMTests.TestGreedyLoopScanCountsTowardStepLimit;
+var
+  Matcher: TRegExpMatcher;
+  Message: string;
+begin
+  // The second a* is rescanned for each of the 20,000 counts of the first:
+  // 200 million characters, against a step limit of 10 million.
+  Matcher := TRegExpMatcher.Create(CompileRegExp('^a*a*b', ''),
+    StringOfChar('a', 20000));
+  try
+    Message := '';
+    try
+      Matcher.Exec(0, False);
+    except
+      on E: ERegExpRuntimeError do
+        Message := E.Message;
+    end;
+    Expect<string>(Message).ToBe(
+      'Maximum regular expression step count exceeded');
   finally
     Matcher.Free;
   end;
