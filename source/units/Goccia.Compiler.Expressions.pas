@@ -7072,6 +7072,22 @@ begin
         Exit;
       end;
       Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+      // ES2026 §13.4.2.1 and §13.4.3.1: a postfix update stores the new value
+      // and then returns the old one, so its result cannot share the binding's
+      // register. A default parameter initializer and a var initializer compile
+      // straight into the register of the binding they initialize, and so does
+      // any comma or conditional expression around them; an update of that same
+      // binding there takes its result in a temporary, which then replaces the
+      // binding's value as the initializer's PutValue or InitializeBinding
+      // does (§14.3.2.1, §10.2.11).
+      if AKeepResult and not AExpr.IsPrefix and (ADest = Slot) then
+      begin
+        RegResult := ACtx.Scope.AllocateRegister;
+        CompileIncrement(ACtx, AExpr, RegResult);
+        EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegResult, 0));
+        ACtx.Scope.FreeRegister;
+        Exit;
+      end;
       if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, Slot, UInt16(Slot)));
       EmitIncrementStep(ACtx, AExpr, ADest, Slot, Op, NumericOp,
