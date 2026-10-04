@@ -204,6 +204,25 @@ describe("this around super()", () => {
     expect(escaped.self().size).toBe(1);
   });
 
+  test("an arrow function made before super() sees the receiver however the class is constructed", () => {
+    class Tracked extends Array {
+      constructor(...items) {
+        const self = () => this;
+        super(...items);
+        this.same = self() === this;
+      }
+    }
+    class Leaf extends Tracked {}
+    const Bound = Tracked.bind(null, 1);
+
+    expect(Reflect.construct(Tracked, [1, 2]).same).toBe(true);
+    expect(Reflect.construct(Leaf, [1, 2]).same).toBe(true);
+    expect(Reflect.construct(Tracked, [1, 2], Leaf).same).toBe(true);
+    expect(new Bound(2).same).toBe(true);
+    expect(Reflect.construct(Bound, [2]).same).toBe(true);
+    expect(new Tracked(1, 2, 3).map((item) => item).same).toBe(true);
+  });
+
   test("an arrow function made before super() sees an object the base constructor returned", () => {
     class Base { constructor() { return { tag: "returned" }; } }
     class Derived extends Base {
@@ -225,7 +244,7 @@ describe("this around super()", () => {
     expect(typed.length).toBe(3);
   });
 
-  test("the built-in reads new.target.prototype before it processes the super() arguments", () => {
+  test("the built-in reads new.target.prototype before or after the super() arguments as it does when constructed directly", () => {
     const log = [];
     const entries = { [Symbol.iterator]() { log.push("iterate"); return [][Symbol.iterator](); } };
     class Entries extends Map { constructor() { super(entries); } }
@@ -243,8 +262,19 @@ describe("this around super()", () => {
       },
     });
 
+    class NegativeBuffer extends ArrayBuffer { constructor() { super(-1); } }
+    const ThrowingBuffer = new Proxy(NegativeBuffer, {
+      get(target, key, receiver) {
+        if (key === "prototype") throw new SyntaxError("prototype");
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
     Reflect.construct(Entries, [], Target);
     expect(log.slice(0, 2)).toEqual(["proto", "iterate"]);
     expect(() => Reflect.construct(Negative, [], Throwing)).toThrow(SyntaxError);
+    // §25.1.4.1 ArrayBuffer step 2 validates the length before
+    // AllocateArrayBuffer reads the prototype.
+    expect(() => Reflect.construct(NegativeBuffer, [], ThrowingBuffer)).toThrow(RangeError);
   });
 });

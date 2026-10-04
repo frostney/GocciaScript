@@ -3731,6 +3731,10 @@ begin
     else if Assigned(ClassConstructor.ConstructorMethod) then
     begin
       RunBaseSuperclassInitializers(ClassConstructor, AReceiver, AContext);
+      // A derived constructor body's super() may replace this receiver.
+      if ClassConstructor.HasDerivedConstructorKind and
+         (AReceiver is TGocciaObjectValue) then
+        TGocciaObjectValue(AReceiver).IsConstructorStandIn := True;
       SuperResult := ClassConstructor.ConstructorMethod.CallWithThisValue(
         AArguments, AReceiver, ConstructorThisValue, EffectiveNewTarget);
       ValidateClassConstructorReturn(ClassConstructor, SuperResult);
