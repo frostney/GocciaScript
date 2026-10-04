@@ -4163,6 +4163,86 @@ console.log("Runtime diagnostic parity...");
   }
 }
 
+// -- Entry module linking (bytecode) ------------------------------------------
+
+// ES2026 §16.2.1.6.1.2 Link(): a name the entry imports or re-exports that does
+// not resolve is a SyntaxError before any module of the graph evaluates. The
+// entry is the file the runner was given, so a suite cannot observe its own
+// link failure; these run the CLI instead. Bytecode only: the interpreter
+// evaluates the entry's earlier imports before it links the later ones and
+// reports a script's missing import as a RuntimeError, and it is being removed
+// (#825), so #1274 fixes only the bytecode half.
+console.log("Entry module linking (bytecode)...");
+{
+  const tmp = mkdtemp("goccia-entry-link-");
+  try {
+    const files: Record<string, string> = {
+      "marker.js": 'console.log("marker evaluated");\nexport const ready = "ready";\n',
+      "dep.js": 'console.log("dep evaluated");\nexport const present = 1;\n',
+      "ns-barrel.js": 'console.log("barrel evaluated");\nexport * as ns from "./dep.js";\n',
+      "star-a.js": 'console.log("star-a evaluated");\nexport const dup = "a";\n',
+      "star-b.js": 'console.log("star-b evaluated");\nexport const dup = "b";\n',
+      "star-both.js": 'export * from "./star-a.js";\nexport * from "./star-b.js";\n',
+      "cycle-a.js": 'import { nothere } from "./cycle-b.js";\nconsole.log("cycle-a evaluated");\nexport const fromA = 1;\n',
+      "cycle-b.js": 'import { fromA } from "./cycle-a.js";\nconsole.log("cycle-b evaluated");\nexport const fromB = 1;\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const cases: Array<[string, string, string]> = [
+      ["named", 'import { missing } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["aliased", 'import { missing as renamed } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["default", 'import fallback from "./dep.js";', 'Module "./dep.js" has no export named "default"'],
+      ["re-export", 'export { missing } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["namespace re-export", 'import { ns, nope } from "./ns-barrel.js";', 'Module "./ns-barrel.js" has no export named "nope"'],
+      ["star-export ambiguity", 'import { dup } from "./star-both.js";', 'Module "./star-both.js" has no export named "dup"'],
+      ["cycle", 'import "./cycle-a.js";', 'Module "./cycle-b.js" has no export named "nothere"'],
+    ];
+    for (const [label, badImport, message] of cases) {
+      const entry = join(tmp, "entry.js");
+      // A valid import ahead of the bad one: linking the whole graph first means
+      // even it must not evaluate.
+      writeFileSync(
+        entry,
+        ['import { ready } from "./marker.js";', badImport, 'console.log("entry evaluated");', ""].join("\n"),
+      );
+      for (const sourceType of ["script", "module"]) {
+        const run = await $`${RUNNER} ${entry} --mode=bytecode --source-type=${sourceType} 2>&1`.nothrow().quiet();
+        const out = run.text();
+        if (run.exitCode !== 1)
+          throw new Error(`Entry link (${label}, ${sourceType}) should exit 1, got ${run.exitCode}: ${out}`);
+        if (!out.includes(`SyntaxError: ${message}`))
+          throw new Error(`Entry link (${label}, ${sourceType}) should throw SyntaxError: ${message}, got: ${out}`);
+        if (out.includes("evaluated"))
+          throw new Error(`Entry link (${label}, ${sourceType}) must fail before any module evaluates, got: ${out}`);
+      }
+    }
+
+    // Each REPL input links its own requests: a failed input evaluates nothing,
+    // and the module it linked evaluates once a later input imports it.
+    const repl = Bun.spawnSync([join(process.cwd(), REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { ready } from "./marker.js"; import { missing } from "./dep.js";',
+          'import { ready } from "./marker.js"; [ready, "linked"].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+    if (!output.includes('SyntaxError: Module "./dep.js" has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing import at link time, got: ${output}`);
+    if (output.includes("dep evaluated") || output.split("marker evaluated").length !== 2)
+      throw new Error(`REPL (bytecode) should evaluate only the later input's module, once, got: ${output}`);
+    if (!output.includes("ready:linked"))
+      throw new Error(`REPL (bytecode) should run the input after a failed link, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 // -- Timers: containment and uncaught attribution ------------------------------
 
 // Two properties that only show up in the runner's output, so neither can be
