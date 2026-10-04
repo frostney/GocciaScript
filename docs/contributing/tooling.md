@@ -7,7 +7,7 @@
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
 - **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
-- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of depth limits in both execution modes
+- **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of depth limits in each execution mode
 
 ## Auto-Formatting
 
@@ -327,7 +327,7 @@ chains, native-trap nests, deep prototype chains, deep recursion, deeply nested
 values through `JSON`, `structuredClone`, `join` and `flat`, deep syntactic
 nesting, and recovery after a caught `RangeError`. Where the fuzz harness asks
 whether one input breaks the engine, the probe asks where its depth limits are
-and what happens past them, in both execution modes.
+and what happens past them, in each execution mode the runner supports.
 
 It is **manual-only**. Nothing in CI, Lefthook, or the nightly runs it. Run it
 when you change recursion, stack limits, Proxy forwarding, the parser's
@@ -335,12 +335,18 @@ nesting, or the collector, and when you investigate a depth crash.
 
 ```bash
 ./build.pas --prod runner
-bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog, both modes
+bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog, every mode
 npx tsx scripts/depth-probe.ts build/GocciaRunner --list  # probes, growth class, default depths
 bun scripts/depth-probe.ts build/GocciaRunner --probe=proxy-getOwnPropertyDescriptor --depth=30000
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
 bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17 --mode=bytecode
 ```
+
+`--modes` chooses the execution modes (default `interpreted,bytecode`;
+`--mode=NAME` is one of them). Before probing, the tool runs a trivial program
+in each mode: a mode the runner rejects is listed as skipped rather than
+counted as a finding, so the tool keeps working against a runner with fewer
+executors.
 
 Probe production and development builds separately: the production build
 compiles without FPC's stack checking (`-Ct`), so a native stack overflow that

@@ -2,10 +2,10 @@
 /**
  * depth-probe.ts
  *
- * Runs depth and nesting probes against a GocciaRunner binary, in both
- * execution modes, and classifies how each one ends: completed, a catchable
- * error, an engine fatal error, a crash, a timeout, or a kill by the memory
- * cap. A seeded fuzz mode composes the same shapes pseudo-randomly.
+ * Runs depth and nesting probes against a GocciaRunner binary, in each
+ * execution mode it supports, and classifies how each one ends: completed, a
+ * catchable error, an engine fatal error, a crash, a timeout, or a kill by the
+ * memory cap. A seeded fuzz mode composes the same shapes pseudo-randomly.
  *
  * MANUAL USE ONLY. This is a developer and agent tool; it is deliberately not
  * wired into CI, Lefthook, or any other automatic path. See
@@ -561,7 +561,9 @@ and a timeout. Manual use only; see docs/contributing/tooling.md.
 Selection:
   --list                       List the catalog and exit
   --probe=a,b                  Only these probes (an exact id, or part of one)
-  --mode=both|interpreted|bytecode   Execution modes (default both)
+  --modes=a,b                  Execution modes to probe (default interpreted,bytecode);
+                               a mode the runner rejects is reported and skipped
+  --mode=NAME                  One execution mode; same as --modes=NAME
   --depth=N                    Run every selected probe at exactly N
   --depths=a,b                 Depths for linear probes (default 1000,30000)
   --quadratic-depths=a,b       Depths for quadratic probes (default 300,3000)
@@ -673,11 +675,16 @@ const parseOptions = (argv: string[]): Options => {
         process.exit(0);
       case "--list": options.list = true; break;
       case "--probe": options.probes = value.split(",").filter(Boolean); break;
+      // Mode names are passed through to the runner, which decides which it
+      // supports; see the preflight in main().
       case "--mode":
-        if (value === "both") options.modes = ["interpreted", "bytecode"];
-        else if (value === "interpreted" || value === "bytecode") options.modes = [value];
-        else fail(`--mode must be both, interpreted or bytecode, got: ${value}`);
+      case "--modes": {
+        const modes = value.split(",").map((mode) => mode.trim());
+        if (modes.some((mode) => !/^[a-z][a-z0-9-]*$/.test(mode))) fail(`${name} takes mode names such as bytecode, got: ${value}`);
+        options.modes = [...new Set(modes)];
+        if (name === "--mode" && options.modes.length !== 1) fail(`--mode takes one mode; use --modes=${value}`);
         break;
+      }
       case "--depth": options.depth = parseInteger(name, value, 0); break;
       case "--depths": options.depths.linear = parseList(name, value); break;
       case "--quadratic-depths": options.depths.quadratic = parseList(name, value); break;
@@ -1074,7 +1081,6 @@ const main = async (): Promise<void> => {
   console.log(`timeout:     ${options.timeoutSeconds}s per process${launcher.usesTimeoutCommand ? "" : " (enforced by this script; timeout(1) not found)"}`);
   if (options.fuzz) console.log(`fuzz seed:   ${options.seed} (${jobs.length} program${jobs.length === 1 ? "" : "s"}; replay with --fuzz --seed=${options.seed})`);
   if (options.runnerArgs.length > 0) console.log(`runner args: ${options.runnerArgs.join(" ")}`);
-  console.log("");
 
   const work = mkdtempSync(join(tmpdir(), "goccia-depth-probe-"));
   removeWorkDir = () => rmSync(work, { recursive: true, force: true });
@@ -1084,6 +1090,36 @@ const main = async (): Promise<void> => {
       removeWorkDir();
       process.exit(status);
     });
+  }
+
+  // Preflight: run a trivial program in each requested mode. A mode the
+  // runner rejects as an option (for example after an executor is removed)
+  // is skipped and reported, not counted as a finding; a runner that cannot
+  // run the trivial program at all is a setup error.
+  const preflight = join(work, "preflight.js");
+  writeFileSync(preflight, PRELUDE + "report(() => 1 + 1);\n");
+  const modes: string[] = [];
+  const skipped: string[] = [];
+  for (const mode of options.modes) {
+    const result = await runProgram(launcher, options, preflight, mode);
+    if (result.outcome === "completed" && result.detail === "2") {
+      modes.push(mode);
+      continue;
+    }
+    const message = result.output.trim().split("\n")[0] ?? "";
+    if (/\bmode\b/i.test(message) && result.outcome !== "crash" && result.outcome !== "timeout") {
+      skipped.push(`${mode} (${truncate(message, 100)})`);
+      continue;
+    }
+    removeWorkDir();
+    fail(`the runner cannot run a trivial program in --mode=${mode}: ${result.outcome}: ${result.detail}`);
+  }
+  console.log(`modes:       ${modes.join(", ") || "none"}`);
+  if (skipped.length > 0) console.log(`skipped:     ${skipped.join("; ")}: not supported by this runner`);
+  console.log("");
+  if (modes.length === 0) {
+    removeWorkDir();
+    fail("the runner supports none of the requested modes");
   }
 
   const header = `${"probe".padEnd(32)}${"growth".padEnd(7)}${"depth".padEnd(8)}${"mode".padEnd(12)}${"outcome".padEnd(12)}${"time".padEnd(9)}detail`;
@@ -1099,7 +1135,7 @@ const main = async (): Promise<void> => {
       const file = join(work, `probe-${jobIndex}.js`);
       writeFileSync(file, source);
       if (job.shape) console.log(`${job.id}  ${job.shape}`);
-      for (const mode of options.modes) {
+      for (const mode of modes) {
         const result = await runProgram(launcher, options, file, mode);
         counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1);
         console.log(
