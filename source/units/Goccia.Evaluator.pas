@@ -7106,16 +7106,15 @@ end;
 { The call scope that owns `this` for code in AScope: the nearest enclosing
   call scope that is not an arrow function's. Nil unless that is a class
   method's (a constructor's) call scope that still binds AThis, the only place
-  a stand-in receiver is the `this` binding. A field initializer's scope owns
-  its own `this`, so the walk stops there too. }
+  a stand-in receiver is the `this` binding. A field initializer runs in the
+  scope its class was declared in, so the call scope found from there belongs
+  to the enclosing method and binds another `this`. }
 function FindConstructorCallScope(const AScope: TGocciaScope;
   const AThis: TGocciaValue): TGocciaScope;
 begin
   Result := AScope;
   while Assigned(Result) do
   begin
-    if Result is TGocciaClassInitScope then
-      Exit(nil);
     if (Result is TGocciaCallScope) and
        not (Result is TGocciaArrowCallScope) then
     begin
