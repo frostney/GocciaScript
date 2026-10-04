@@ -3664,6 +3664,74 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
 
+    console.log("Loader: branch coverage of conditional and logical expressions a constant decides...");
+    // The compiler can decide these from a const local or a literal, and with
+    // strict types can read `flag && true` as `flag`. Under coverage each keeps
+    // its taken and its untaken branch record, and the report matches the one
+    // for a form the compiler cannot decide.
+    const branchRecords = (lcov: string) =>
+      [...lcov.matchAll(/^BRDA:(\d+),\d+,(\d+),(\S+)$/gm)].map((m) => `${m[1]}:${m[2]}:${m[3]}`).sort();
+    const constantBranchCases = [
+      {
+        name: "constant-branch",
+        lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        decided: { args: [] as string[], decl: "const" },
+        undecided: { args: [] as string[], decl: "let" },
+        source: (decl: string) => [
+          "const pick = (value) => {",
+          `  ${decl} verbose = false;`,
+          `  ${decl} missing = null;`,
+          '  const label = verbose ? "long" : "short";',
+          "  const shown = verbose && value;",
+          "  const fallback = verbose || value;",
+          '  const chosen = missing ?? "none";',
+          "  const size = (verbose ? 1 : 2) + 1;",
+          "  if (verbose && value) { return label; }",
+          "  const negated = !(verbose || false);",
+          '  const literal = true ? "yes" : "no";',
+          "  return [label, shown, fallback, chosen, size, negated, literal].join();",
+          "};",
+          "console.log(pick(1));",
+          "",
+        ],
+      },
+      {
+        name: "strict-type-branch",
+        lines: [3, 4],
+        decided: { args: ["--strict-types"], decl: "const" },
+        undecided: { args: [] as string[], decl: "const" },
+        source: (decl: string) => [
+          "const check = (value) => {",
+          `  ${decl} flag = value > 0;`,
+          "  const both = flag && true;",
+          "  const either = flag || false;",
+          "  return [both, either].join();",
+          "};",
+          "console.log(check(1));",
+          "",
+        ],
+      },
+    ];
+    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+      const reports: Record<string, string> = {};
+      for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
+        const sourcePath = join(tmp, `${name}-${kind}.js`);
+        const lcovPath = join(tmp, `${name}-${kind}.lcov`);
+        writeFileSync(sourcePath, source(decl).join("\n"));
+        await $`${RUNNER} ${args} --coverage --coverage-format=lcov --coverage-output=${lcovPath} ${sourcePath}`.quiet();
+        reports[kind] = readFileSync(lcovPath, "utf-8");
+      }
+      for (const line of lines) {
+        if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
+            !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
+          throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {
+        throw new Error(`${name}: a decided and an undecided form should report the same branches, got:\n${reports.decided}\nand:\n${reports.undecided}`);
+      }
+    }
+
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(

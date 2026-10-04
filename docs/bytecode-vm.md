@@ -406,7 +406,7 @@ A top-level `const` of a script or an imported module lives in the global or mod
 
 What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no non-strict function lies between the read and the declaration. A sloppy direct `eval` in such a function can declare a `var` of the same name, which shadows the enclosing binding at run time. Strict code, the default, is unaffected.
 
-When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
+When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report. An `if` statement or a loop keeps its conditional jump, and so does a ternary or a `&&`, `||` or `??` expression that a constant decides: the compiler does not fold it, nor reduce `flag && true` or `flag || false` to `flag` under `--strict-types`. Its operands are still folded and propagated.
 
 ### How Opcode Additions Work
 
