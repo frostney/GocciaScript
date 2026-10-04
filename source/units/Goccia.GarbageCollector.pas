@@ -240,7 +240,10 @@ type
     function PressureReserve: Int64; {$IFDEF FPC}inline;{$ENDIF}
     function HeapTriggerBytes: Int64;
     procedure SampleHeap;
-    procedure NoteCollectionFinished;
+    // AFull is False for CollectYoung, which keeps every object older than
+    // its watermark: what it leaves in use is not a measure of what a
+    // collection cannot reclaim, so it does not move the back-off baseline.
+    procedure NoteCollectionFinished(const AFull: Boolean);
     // Asks the next pressure checkpoint to collect: sets the pending flag the
     // checkpoints test and zeroes the VM's countdown so it checks at once.
     procedure RequestPressureCollection; {$IFDEF FPC}inline;{$ENDIF}
@@ -1154,7 +1157,7 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
-      NoteCollectionFinished;
+      NoteCollectionFinished(True);
       // This collection supersedes whatever the last forced one observed, so
       // the next failing reservation is entitled to force again. The floor is
       // part of the accounting family a cross-thread release reads and
@@ -1323,13 +1326,14 @@ begin
   end;
 end;
 
-procedure TGarbageCollector.NoteCollectionFinished;
+procedure TGarbageCollector.NoteCollectionFinished(const AFull: Boolean);
 begin
   if FHeapPressurePending then
     Inc(FHeapTriggeredCollections);
   FHeapPressurePending := False;
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
-  FHeapAfterLastCollect := CurrentHeapBytes;
+  if AFull then
+    FHeapAfterLastCollect := CurrentHeapBytes;
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
@@ -1427,7 +1431,7 @@ begin
       FAllocationsSinceLastGC := 0;
       FExternalBytesAllocatedSinceGC := 0;
       FExternalPressurePending := False;
-      NoteCollectionFinished;
+      NoteCollectionFinished(False);
       // Same locked reset as Collect: either order with a concurrent
       // conditional invalidation lands on -1.
       CriticalSectionEnter(FAccountingLock);

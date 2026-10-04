@@ -156,10 +156,14 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  { Heap-triggered collection reads the FPC heap manager's status; other
+    compilers report no heap total, so the trigger is inert there. }
+  {$IFDEF FPC}
   Test('Heap growth triggers collection before garbage outgrows the ceiling',
     TestHeapTriggerKeepsGarbageNearTheCeiling);
   Test('Heap-triggered collection backs off when the heap it cannot reclaim exceeds the ceiling',
     TestHeapTriggerBacksOffAboveSurvivors);
+  {$ENDIF}
 end;
 
 const
