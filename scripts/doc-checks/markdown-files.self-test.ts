@@ -10,7 +10,7 @@
  *   npx tsx scripts/doc-checks/markdown-files.self-test.ts
  */
 
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { dirname, join, relative } from "path";
 import { clean, mkdtemp } from "../test-cli/tmpdir";
@@ -37,6 +37,22 @@ const expectFiles = (name: string, actual: string[], expected: string[]): void =
   } else {
     failures++;
     console.log(`  FAIL  ${name}\n        expected ${JSON.stringify(want)}\n        actual   ${JSON.stringify(actual)}`);
+  }
+};
+
+const expectThrows = (name: string, run: () => unknown, pattern: RegExp): void => {
+  try {
+    const result = run();
+    failures++;
+    console.log(`  FAIL  ${name}\n        expected an error matching ${pattern}, got ${JSON.stringify(result)}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (pattern.test(message)) {
+      console.log(`  PASS  ${name}`);
+    } else {
+      failures++;
+      console.log(`  FAIL  ${name}\n        expected an error matching ${pattern}, got ${JSON.stringify(message)}`);
+    }
   }
 };
 
@@ -70,6 +86,14 @@ try {
     "docs/page.mdx",
     "docs/untracked.md",
   ]);
+
+  // A git failure inside a work tree must not fall back to the walk, which
+  // would scan the gitignored copy.
+  const index = join(root, ".git", "index");
+  const savedIndex = readFileSync(index);
+  writeFileSync(index, "not an index");
+  expectThrows("git checkout: a failing git ls-files throws instead of walking", () => discover(root), /git ls-files failed/);
+  writeFileSync(index, savedIndex);
 
   rmSync(join(root, ".git"), { recursive: true, force: true });
   expectFiles(

@@ -25,7 +25,9 @@ const hasMarkdownExtension = (name: string): boolean =>
 
 /**
  * Lists the files under `dir` that git tracks or would add, relative to `dir`,
- * or returns null when `dir` is not inside a git work tree.
+ * or returns null when git is not installed or `dir` is not inside a git work
+ * tree. Any other git failure throws: walking instead would scan the ignored
+ * trees this listing exists to skip.
  */
 const listGitFiles = (dir: string): string[] | null => {
   const pathspecs = [...EXTENSIONS].map((ext) => `*${ext}`);
@@ -33,9 +35,16 @@ const listGitFiles = (dir: string): string[] | null => {
     cwd: dir,
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
+    // Keep git's messages in English so "not a git repository" can be matched.
+    env: { ...process.env, LC_ALL: "C" },
   });
-  if (result.error || result.status !== 0) return null;
-  return result.stdout.split("\0").filter((path) => path.length > 0);
+  if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw result.error;
+  }
+  if (result.status === 0) return result.stdout.split("\0").filter((path) => path.length > 0);
+  if (/not a git repository/i.test(result.stderr)) return null;
+  throw new Error(`git ls-files failed in ${dir} (exit ${result.status}): ${result.stderr.trim()}`);
 };
 
 const walkFiles = (dir: string): string[] => {
