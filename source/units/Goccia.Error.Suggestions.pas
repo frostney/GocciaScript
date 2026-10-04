@@ -381,6 +381,7 @@ resourcestring
 
   // Runtime errors — GC memory limit
   SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
+  SSuggestStackMemoryLimitExceeded = 'the call stack reached the memory limit; bound the recursion, or increase the limit with --max-memory';
 
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';

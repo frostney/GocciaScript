@@ -244,6 +244,8 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 # Set call stack depth limit (default 2200; 0 = unlimited)
 ./build/GocciaRunner example.js --max-stack=5000
 ./build/GocciaRunner example.js --max-stack=0
+# With 0, a bytecode recursion is bounded by --max-memory instead (ADR 0130): it throws
+# a catchable "RangeError: Maximum call stack size exceeded" when its stacks reach the ceiling
 # Caveat (#1274): with 0, deep interpreted recursion exits 1 with "Fatal error: Stack overflow"
 
 # Write .map source map alongside execution

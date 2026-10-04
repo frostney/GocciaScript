@@ -11382,6 +11382,100 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
     clean(tmp);
   }
 });
+
+// With --max-stack=0 nothing bounds a bytecode recursion but the memory
+// ceiling, so the VM stacks are charged to it (ADR 0130). They were neither
+// charged nor gated before, and this script grew until the kernel's OOM
+// killer stopped it (#1472). The refusal must be a catchable RangeError, and
+// the charge must be given back once the recursion has unwound: the 24 MiB
+// ArrayBuffer after it does not fit beside the ~47 MiB the stacks hold at the
+// refusal. --max-instructions is only the backstop that keeps a regression
+// from taking the CI host with it: the refusal needs about 1M instructions
+// here, while 4M without one reach ~800k frames and ~340 MiB resident, which
+// fails the RSS ceiling below.
+await section("Memory budget: unbounded bytecode recursion is refused at the ceiling...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "recursion.js");
+    writeFileSync(
+      file,
+      "let d = 0;\n" +
+        "const f = () => { d++; f(); };\n" +
+        'try { f(); } catch (e) { console.log(e.constructor.name + ": " + e.message + " at " + d); }\n' +
+        "const buffer = new ArrayBuffer(24 * 1024 * 1024);\n" +
+        'console.log("after " + buffer.byteLength);\n',
+    );
+
+    const run = await runWithPeakRss([
+      RUNNER,
+      "--mode=bytecode",
+      "--max-stack=0",
+      "--max-memory=64MiB",
+      "--max-instructions=4000000",
+      file,
+    ]);
+    if (run.exitCode !== 0)
+      throw new Error(`Unbounded recursion did not end in a caught RangeError (exit ${run.exitCode}):\n${run.output}`);
+    const refused = run.output.match(/RangeError: Maximum call stack size exceeded at (\d+)/);
+    if (!refused)
+      throw new Error(`Expected a caught "Maximum call stack size exceeded" RangeError:\n${run.output}`);
+    // Measured at 195,413 frames. A refusal far earlier would come from
+    // something other than the ceiling.
+    if (Number(refused[1]) < 100000)
+      throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
+    if (!run.output.includes(`after ${24 * 1024 * 1024}`))
+      throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
+    // Measured ~147 MiB: the charged stacks, the per-frame call-stack and
+    // execution-context entries the charge does not cover, and the
+    // RangeError's stack trace, which lists every frame.
+    assertPeakRssBelow(run, "unbounded bytecode recursion", 256 * 1024 * 1024);
+
+    // A heap that fills most of the ceiling must not turn an ordinary
+    // recursion into a stack overflow: small stacks may still grow into the
+    // memory-pressure reserve that a deep recursion is kept out of.
+    const heavy = join(tmp, "heavy-heap.js");
+    writeFileSync(
+      heavy,
+      "const big = new ArrayBuffer(56 * 1024 * 1024);\n" +
+        "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1));\n" +
+        'console.log("depth " + f(1000) + " " + big.byteLength);\n',
+    );
+    const heavyRun = Bun.spawnSync([RUNNER, "--mode=bytecode", "--max-memory=64MiB", heavy], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const heavyOut = heavyRun.stdout.toString() + heavyRun.stderr.toString();
+    if (heavyRun.exitCode !== 0 || !heavyOut.includes(`depth 1000 ${56 * 1024 * 1024}`))
+      throw new Error(`A 1000-deep recursion beside a 56 MiB heap was refused under a 64 MiB ceiling:\n${heavyOut}`);
+
+    // A generator is charged for the frame it suspends, and gives the charge
+    // back when it finishes rather than when the collector frees it.
+    const generators = join(tmp, "generators.js");
+    writeFileSync(
+      generators,
+      "const source = { *make(seed) { const a = seed + 1; const b = a * 2; yield a + b; yield b; } };\n" +
+        "const all = Array.from({ length: 2000 }, (_, i) => source.make(i));\n" +
+        "for (const g of all) g.next();\n" +
+        "Goccia.gc();\n" +
+        "const suspended = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of all) { g.next(); g.next(); }\n" +
+        "Goccia.gc();\n" +
+        'console.log("released " + (suspended - Goccia.gc.bytesAllocated));\n',
+    );
+    const generatorRun = Bun.spawnSync([RUNNER, "--mode=bytecode", generators], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const generatorOut = generatorRun.stdout.toString() + generatorRun.stderr.toString();
+    const released = generatorOut.match(/released (-?\d+)/);
+    // Each suspended frame holds at least its receiver, its argument and two
+    // locals, 64 bytes; measured 128 bytes a generator.
+    if (generatorRun.exitCode !== 0 || !released || Number(released[1]) < 2000 * 64)
+      throw new Error(`Finished generators kept the charge for their suspended frames:\n${generatorOut}`);
+  } finally {
+    clean(tmp);
+  }
+});
 // ── Sandbox mode engine options (WP-5) ─────────────────────────────────
 //
 // Sandbox mode builds its own engine, because it needs its own module
