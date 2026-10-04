@@ -14490,7 +14490,10 @@ procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
 var
   Saved: PGocciaVMCallFrame;
 begin
-  CheckStackDepth(FFrameDepth + 1);
+  // The limit caps nested calls. FFrameDepth also counts the outermost frame,
+  // the top level or a function the host called while no script ran, which is
+  // not one, so this call is the FFrameDepth-th nested call.
+  CheckStackDepth(FFrameDepth);
   if FFrameStackCount >= Length(FFrameStack) then
     GrowFrameStack;
   // Through a pointer: indexing the array for each field recomputes the
@@ -14585,7 +14588,8 @@ begin
       raise Exception.Create('Invalid non-numeric OP_CALL_SELF_NUM argument');
   end;
 
-  CheckStackDepth(FFrameDepth + 1);
+  // As in PushFrame: FFrameDepth includes the outermost frame.
+  CheckStackDepth(FFrameDepth);
   if FClosedNumericFrameStackCount >= Length(FClosedNumericFrameStack) then
     GrowClosedNumericFrameStack;
   FClosedNumericFrameStack[FClosedNumericFrameStackCount].IP := AFrame.IP;
