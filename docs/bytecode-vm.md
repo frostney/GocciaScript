@@ -52,7 +52,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
-- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit (CLI default 2 200 frames, `--max-stack=N`). Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
+- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
 - Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)). See [Type Annotations](type-annotations.md).
 
 ## Opcode Layout
