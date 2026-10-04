@@ -98,6 +98,9 @@ jobs:
       - name: Check doc symbol references
         run: npx tsx scripts/check-doc-symbols.ts
 
+      - name: Self-test doc-check file discovery
+        run: npx tsx scripts/doc-checks/markdown-files.self-test.ts
+
       - name: Check doc duplication
         run: npx tsx scripts/check-doc-duplication.ts
 
