@@ -115,6 +115,19 @@ describe("const assignment error message", () => {
       const early = 0;
     })).toBe(tdz("early"));
     expect(messageOf(() => {
+      for (early of [1]) {
+      }
+      const early = 0;
+    })).toBe(tdz("early"));
+    expect(messageOf(() => {
+      const loop = () => {
+        for (early of [1]) {
+        }
+      };
+      loop();
+      const early = 0;
+    })).toBe(tdz("early"));
+    expect(messageOf(() => {
       class Self extends (Self = Object) {}
     })).toBe(tdz("Self"));
   });
