@@ -1605,7 +1605,8 @@ end;
 
 { Worker procedure executed on each thread for a single file.
   Runs the script, extracts numeric results into a thread-safe record,
-  and frees all GC-managed objects before returning. }
+  and collects the worker's GC heap before returning, so the next file
+  starts without this file's garbage. }
 procedure TTestRunnerApp.TestWorkerProc(const AFileName: string;
   const AIndex: Integer; out AConsoleOutput: string;
   out AErrorMessage: string; AData: Pointer);

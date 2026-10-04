@@ -1006,13 +1006,13 @@ begin
     if IsSideEffectShim(Shim.Name) then
       // Mutates Object.prototype with no exported global to bind lazily, so it
       // runs eagerly at boot.
-      LoadShimValue(FInterpreter, Shim)
+      LoadShimValue(FInterpreter, I)
     else
     begin
       // Defer the name-bound shim's lex/parse/tree-walk until the global is
       // first touched.  The heaviest shim (Date, ~671 source lines) is then
       // never parsed for scripts that don't use it.
-      Materializer := TGocciaShimMaterializer.Create(FInterpreter, Shim);
+      Materializer := TGocciaShimMaterializer.Create(FInterpreter, I);
       FLazyThunks.Add(Materializer);
       RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
     end;

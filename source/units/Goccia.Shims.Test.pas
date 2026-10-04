@@ -3,10 +3,11 @@
   Every engine used to lex and parse each shim it loaded. A parsed AST is never
   released — the functions a shim defines point into it, and
   TGocciaProgram.Free frees only the program node — so each engine leaked a
-  full shim AST. The test runner builds one engine per file and the testing
-  library loads the Date shim in every one, which made the interpreted suite
-  grow its heap by about 1.1 MB per file on 64-bit and run a 32-bit process out
-  of address space. }
+  full shim AST: about 1.1 MB per engine that uses Date on 64-bit, 0.93 MB of
+  it the Date shim and 0.18 MB the seven eager Object.prototype shims. The
+  test runner builds one engine per file and the testing library loads the
+  Date shim in every one, which helped run a 32-bit process out of address
+  space. }
 
 program Goccia.Shims.Test;
 
@@ -14,13 +15,21 @@ program Goccia.Shims.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes,
   SysUtils,
 
   TestingPascalLibrary,
 
+  Goccia.AST.Expressions,
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
   Goccia.Engine,
+  Goccia.Evaluator,
+  Goccia.Evaluator.Context,
+  Goccia.Executor.Interpreter,
   Goccia.GarbageCollector,
   Goccia.Shims,
+  Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.ThreadCleanupRegistry,
   Goccia.Values.Primitives;
@@ -31,6 +40,8 @@ type
     function RunNumber(const ASource: string): Double;
     function RunString(const ASource: string): string;
     function LiveHeapBytes: Int64;
+    function TemplateObjectsInAFreshRealm(
+      const AProgram: TGocciaProgram): Integer;
   public
     procedure SetupTests; override;
 
@@ -38,7 +49,7 @@ type
     procedure TestEachEngineEvaluatesTheSharedProgramIntoItsOwnRealm;
     procedure TestEnginesStillLoadShimsAfterTheCacheIsReleased;
     procedure TestCacheReleaseIsRegistered;
-    procedure TestNoDefaultShimContainsATemplateLiteral;
+    procedure TestASharedProgramKeepsItsTemplateObjectsInEachRealm;
   end;
 
 procedure TTestShims.SetupTests;
@@ -51,8 +62,8 @@ begin
     TestEnginesStillLoadShimsAfterTheCacheIsReleased);
   Test('the cached shim programs are released by the thread cleanup registry',
     TestCacheReleaseIsRegistered);
-  Test('no default shim contains a template literal',
-    TestNoDefaultShimContainsATemplateLiteral);
+  Test('a program evaluated in one engine after another keeps its template objects in each realm',
+    TestASharedProgramKeepsItsTemplateObjectsInEachRealm);
 end;
 
 function TTestShims.RunNumber(const ASource: string): Double;
@@ -77,10 +88,10 @@ procedure TTestShims.TestEnginesDoNotGrowTheHeapByAShimProgramEach;
 const
   WARM_UP_ENGINES = 3;
   MEASURED_ENGINES = 10;
-  { The Date shim's AST alone is about 700 KB on 64-bit, and an engine also
-    runs the eager Object.prototype shims, so the per-engine leak this pins
-    was well above 800 KB. What an engine still leaves behind is a few KB of
-    allocator and cache bookkeeping. }
+  { Without the cache each of these engines leaked about 1.1 MB on 64-bit:
+    0.93 MB of Date shim AST and 0.18 MB of eager Object.prototype shim ASTs.
+    What an engine still leaves behind is a few KB of allocator and cache
+    bookkeeping. }
   MAX_GROWTH_PER_ENGINE_BYTES = 64 * 1024;
   SOURCE = 'new Date(Date.UTC(2020, 0, 2)).getUTCDate();';
 var
@@ -114,13 +125,21 @@ begin
 end;
 
 procedure TTestShims.TestEnginesStillLoadShimsAfterTheCacheIsReleased;
+var
+  Cached: Integer;
 begin
   Expect<Double>(RunNumber('new Date(86400000).getUTCDate();')).ToBe(2);
+  { The seven eager Object.prototype shims and Date. }
+  Cached := CachedShimProgramCount;
+  Expect<Integer>(Cached).ToBe(8);
   ReleaseShimProgramCache;
+  Expect<Integer>(CachedShimProgramCount).ToBe(0);
   Expect<Double>(RunNumber('new Date(86400000).getUTCDate();')).ToBe(2);
+  Expect<Integer>(CachedShimProgramCount).ToBe(Cached);
   { Releasing an already-empty cache is a no-op. }
   ReleaseShimProgramCache;
   ReleaseShimProgramCache;
+  Expect<Integer>(CachedShimProgramCount).ToBe(0);
   Expect<Double>(RunNumber('new Date(0).getUTCFullYear();')).ToBe(1970);
 end;
 
@@ -130,15 +149,71 @@ begin
     .ToBe(True);
 end;
 
-procedure TTestShims.TestNoDefaultShimContainsATemplateLiteral;
+function TTestShims.TemplateObjectsInAFreshRealm(
+  const AProgram: TGocciaProgram): Integer;
 var
+  Engine: TGocciaEngine;
+  Executor: TGocciaInterpreterExecutor;
+  Source: TStringList;
+  Context: TGocciaEvaluationContext;
   I: Integer;
 begin
-  { A tagged template caches its template object on the AST node, and the
-    template object belongs to one realm. A shared shim program must not
-    carry one from an earlier engine into a later one. }
-  for I := 0 to DefaultShimCount - 1 do
-    Expect<Integer>(Pos('`', DefaultShim(I).Source)).ToBe(0);
+  Source := TStringList.Create;
+  Executor := TGocciaInterpreterExecutor.Create;
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create('<shims-test>', Source, Executor);
+    Context := CreateShimEvaluationContext(Engine.Interpreter, 'test');
+    for I := 0 to AProgram.Body.Count - 1 do
+      EvaluateStatement(AProgram.Body[I], Context);
+    Result := Engine.Realm.TemplateMapCount;
+  finally
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TTestShims.TestASharedProgramKeepsItsTemplateObjectsInEachRealm;
+const
+  SOURCE =
+    'const tag = (strings) => strings;' + LineEnding +
+    'tag`a${1}b`;' + LineEnding +
+    '(() => tag`c`)();' + LineEnding;
+var
+  Options: TGocciaSourcePipelineOptions;
+  ParseResult: TGocciaSourcePipelineModuleResult;
+  ProgramNode: TGocciaProgram;
+  Site: TGocciaTaggedTemplateExpression;
+  I: Integer;
+begin
+  { Sharing a shim program across engines relies on evaluation writing
+    nothing into the AST. A tagged template's template object is the one
+    value the evaluator could cache on a node, and it must go into the
+    realm's template map instead (ES2026 §13.2.8.3 GetTemplateObject), both
+    at the top level and inside a function the program defines. }
+  Options := TGocciaSourcePipeline.DefaultOptions;
+  Options.Preprocessors := [];
+  Options.Compatibility := [cfFunction];
+  Options.SourceType := stModule;
+  ParseResult := TGocciaSourcePipeline.ParseModuleSource(SOURCE,
+    '<shims-test-template>', Options);
+  try
+    ProgramNode := ParseResult.TakeProgramNode;
+  finally
+    ParseResult.Free;
+  end;
+  try
+    Site := (ProgramNode.Body[1] as TGocciaExpressionStatement).Expression as
+      TGocciaTaggedTemplateExpression;
+    for I := 1 to 2 do
+    begin
+      Expect<Integer>(TemplateObjectsInAFreshRealm(ProgramNode)).ToBe(2);
+      Expect<Boolean>(Assigned(Site.TemplateObject)).ToBe(False);
+    end;
+  finally
+    ProgramNode.Free;
+  end;
 end;
 
 begin

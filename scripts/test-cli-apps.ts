@@ -4911,11 +4911,11 @@ await section("TestRunner: JSON multi-file structure...", async () => {
 await section("TestRunner: a parallel worker reclaims each file's garbage before the next file...", async () => {
   // Workers run with automatic collection off. Before the runner collected
   // after each file, every object a worker allocated stayed live until the
-  // worker exited, so a run held the garbage of all its files at once: the
-  // interpreted suite peaked at 2.85 GB resident with four workers on 64-bit
-  // and ran a 32-bit process out of address space. The peak live GC heap is
-  // the observable: summed over the workers, it must not grow with the number
-  // of files each worker runs.
+  // worker exited, so a run held the garbage of all its files at once. With
+  // the shims parsed once per thread, that alone raised the interpreted
+  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // peak live GC heap is the observable: summed over the workers, it must not
+  // grow with the number of files each worker runs.
   const tmp = makeTmp();
   try {
     const source = [
