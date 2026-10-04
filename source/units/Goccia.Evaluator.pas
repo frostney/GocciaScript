@@ -3621,8 +3621,12 @@ var
           that validate or coerce their arguments first (a typed array from a
           length or an iterable, ArrayBuffer, SharedArrayBuffer, DataView,
           Function) read it afterwards, as TGocciaClassValue.Instantiate does. }
+        // §22.1.1.1 String and §21.1.1.1 Number coerce their argument
+        // before reading the prototype too.
         DelayPrototypeLookup := ShouldDelayNativePrototypeLookup(
-          ClassConstructor, AArguments);
+          ClassConstructor, AArguments) or
+          (ClassConstructor is TGocciaStringClassValue) or
+          (ClassConstructor is TGocciaNumberClassValue);
         ReceiverPrototype := nil;
         if not DelayPrototypeLookup then
           ReceiverPrototype := GetNativePrototypeFromConstructor(
@@ -7101,17 +7105,22 @@ end;
 
 { The call scope that owns `this` for code in AScope: the nearest enclosing
   call scope that is not an arrow function's. Nil unless that is a class
-  method's (a constructor's) call scope, the only place a stand-in receiver
-  is the `this` binding. }
-function FindConstructorCallScope(const AScope: TGocciaScope): TGocciaScope;
+  method's (a constructor's) call scope that still binds AThis, the only place
+  a stand-in receiver is the `this` binding. A field initializer's scope owns
+  its own `this`, so the walk stops there too. }
+function FindConstructorCallScope(const AScope: TGocciaScope;
+  const AThis: TGocciaValue): TGocciaScope;
 begin
   Result := AScope;
   while Assigned(Result) do
   begin
+    if Result is TGocciaClassInitScope then
+      Exit(nil);
     if (Result is TGocciaCallScope) and
        not (Result is TGocciaArrowCallScope) then
     begin
-      if not (Result is TGocciaMethodCallScope) then
+      if not (Result is TGocciaMethodCallScope) or
+         (Result.ThisValue <> AThis) then
         Result := nil;
       Exit;
     end;
@@ -7142,7 +7151,7 @@ begin
   if (AContext.Scope.ThisValue is TGocciaObjectValue) and
      TGocciaObjectValue(AContext.Scope.ThisValue).IsConstructorStandIn then
     TGocciaArrowFunctionValue(Result).ThisScope :=
-      FindConstructorCallScope(AContext.Scope);
+      FindConstructorCallScope(AContext.Scope, AContext.Scope.ThisValue);
   ApplyFunctionObjectPrototype(Result,
     FunctionIntrinsicKind(AArrowFunctionExpression.IsAsync, False));
   TGocciaFunctionValue(Result).HideNestedFunctionSourceText :=
@@ -11566,9 +11575,14 @@ begin
   begin
     Instance := TGocciaInstanceValue.Create(AClassValue);
     Instance.Prototype := InstancePrototype;
-    // A derived constructor body's super() may replace this receiver.
-    Instance.IsConstructorStandIn := ConstructorBodyBeforeBuiltIn and
-      HasDerivedConstructorReturnRestriction;
+    // A derived constructor body's super() may replace this receiver; a base
+    // constructor body has no super() to replace it.
+    if Assigned(AClassValue.ConstructorMethod) then
+      Instance.IsConstructorStandIn := HasDerivedConstructorReturnRestriction
+    else
+      Instance.IsConstructorStandIn := Assigned(ImplicitSuperClass) and
+        Assigned(ImplicitSuperClass.ConstructorMethod) and
+        ImplicitSuperClass.HasDerivedConstructorKind;
   end;
 
   RootedInstance := Instance;

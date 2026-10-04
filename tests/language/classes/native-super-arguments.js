@@ -232,6 +232,42 @@ describe("this around super()", () => {
     expect(new Derived().seen).toBe("returned");
   });
 
+  test("an arrow function in a field initializer sees the instance, wherever the class is declared", () => {
+    const factory = {
+      inheritedConstructor() {
+        class Base { constructor() {} }
+        class Derived extends Base { arrow = () => this; }
+        return new Derived();
+      },
+      baseFieldDuringSuper() {
+        class Base { arrow = () => this; }
+        class Derived extends Base { constructor() { super(); } }
+        return new Derived();
+      },
+      ownConstructor() {
+        class Base {}
+        class Derived extends Base {
+          arrow = () => this;
+          #hidden = () => [1].map(() => this)[0];
+          constructor() { super(); }
+          hidden() { return this.#hidden(); }
+        }
+        return new Derived();
+      },
+      baseClass() {
+        class Base { arrow = () => this; constructor() {} }
+        return new Base();
+      },
+    };
+
+    for (const make of Object.values(factory)) {
+      const made = make();
+      expect(made.arrow()).toBe(made);
+    }
+    const own = factory.ownConstructor();
+    expect(own.hidden()).toBe(own);
+  });
+
   test("super() from an arrow function through a class without a constructor rebinds this", () => {
     class MapMiddle extends Map {}
     class MapLeaf extends MapMiddle { constructor() { (() => super([[1, 2]]))(); } }

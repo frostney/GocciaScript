@@ -2126,9 +2126,13 @@ begin
     Instance := TGocciaInstanceValue.Create(Self,
       EstimatedInstancePropertyCapacity);
     Instance.Prototype := InstancePrototype;
-    // A derived constructor body's super() may replace this receiver.
-    Instance.IsConstructorStandIn := Assigned(ConstructorToCall) and
-      HasDerivedConstructorKind;
+    // A derived constructor body's super() may replace this receiver; a base
+    // constructor body has no super() to replace it.
+    if Assigned(FConstructorMethod) then
+      Instance.IsConstructorStandIn := HasDerivedConstructorKind
+    else
+      Instance.IsConstructorStandIn := Assigned(ConstructorToCall) and
+        Chain.HostClass.HasDerivedConstructorKind;
   end;
 
   if NativeInstanceInitialized and (NativeInstance is TGocciaInstanceValue) then
