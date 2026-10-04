@@ -216,6 +216,7 @@ describe("this around super()", () => {
     const Bound = Tracked.bind(null, 1);
 
     expect(Reflect.construct(Tracked, [1, 2]).same).toBe(true);
+    expect(new Leaf(1, 2).same).toBe(true);
     expect(Reflect.construct(Leaf, [1, 2]).same).toBe(true);
     expect(Reflect.construct(Tracked, [1, 2], Leaf).same).toBe(true);
     expect(new Bound(2).same).toBe(true);
