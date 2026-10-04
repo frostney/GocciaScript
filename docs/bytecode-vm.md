@@ -23,6 +23,8 @@ An imported module adds a second such coupling. Its environment is initialized w
 
 The program the executor runs itself — the entry file or a REPL input — is linked by no module loader. The compiler therefore records its static imports and re-exports, in source order, in the bytecode module's request table, and `TGocciaBytecodeExecutor` links each one through `TGocciaModuleLoader.LinkModuleRequest` before the program runs (ES2026 §16.2.1.6.1.2 Link()). A name that does not resolve is a `SyntaxError` before any module of the graph evaluates; the program's own `OP_IMPORT`s then evaluate the linked modules, re-exported ones included.
 
+A module-source entry is also a Module Record of its own. Before its requests are linked, `TGocciaEngine.RunModuleForSourceType` registers it with the module loader under its resolved path, stamped with its file's modification time, and marks it evaluating, as `Execute` does for the interpreter. An import that resolves to the entry's own file — directly or through a cycle — therefore gets the entry back instead of evaluating the file a second time (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation). The compiler records the entry's local exports in the bytecode module's export table; the engine binds each one, in its temporal dead zone, before any import evaluates, and the program's `OP_EXPORT`s initialize and update them, so a module in a cycle with the entry reads its exports live. A script-source entry is a Script, not a Module Record, so an import of its own file loads that file as a separate module.
+
 ## Pipeline
 
 ```text

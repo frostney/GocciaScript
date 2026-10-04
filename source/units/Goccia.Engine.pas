@@ -538,6 +538,7 @@ uses
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue,
   Goccia.Version,
+  Goccia.VM,
   Goccia.VM.Exception;
 
 threadvar
@@ -2791,8 +2792,12 @@ function TGocciaEngine.RunModuleForSourceType(
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
+  EntryLastModified: TDateTime;
+  EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedRuntimeModule: TGocciaModule;
+  VM: TGocciaVM;
 begin
   // Bytecode execution entry (the interpreter path uses Execute). Bind
   // code-frame capture to this engine's own scope for the run, as Execute does.
@@ -2807,7 +2812,35 @@ begin
       ModuleScope.NonStrictMode := False;
       ModuleScope.ArgumentsObjectEnabled :=
         cfArgumentsObject in FCompatibility;
-      Result := RunModuleInScope(AModule, ModuleScope);
+      { ES2026 §16.2.1.10 HostLoadImportedModule: an import that resolves to
+        the entry's own file gets the entry's Module Record, which
+        InnerModuleEvaluation (§16.2.1.6.1.3.1) does not evaluate again while
+        it is evaluating or once it is evaluated. Register the entry under its
+        resolved path, stamped with its file's modification time, and mark it
+        evaluating before its imports are linked, as Execute does. As the
+        VM's current runtime module it gets the program's exports
+        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT). }
+      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
+         EntryLastModified) then
+        EntryModule.LastModified := EntryLastModified;
+      FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
+      VM := nil;
+      SavedRuntimeModule := nil;
+      if FExecutor is TGocciaBytecodeExecutor then
+      begin
+        VM := TGocciaBytecodeExecutor(FExecutor).VM;
+        SavedRuntimeModule := VM.CurrentRuntimeModule;
+        VM.CurrentRuntimeModule := EntryModule;
+      end;
+      FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
+      try
+        Result := RunModuleInScope(AModule, ModuleScope);
+      finally
+        FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+        if Assigned(VM) then
+          VM.CurrentRuntimeModule := SavedRuntimeModule;
+      end;
     end
     else
       Result := RunModule(AModule);
@@ -2881,6 +2914,7 @@ var
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
   EntryPromise: TGocciaPromiseValue;
+  EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
@@ -2984,6 +3018,13 @@ begin
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
           EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          { Stamp the entry with its file's modification time, as the
+            loader stamps every module it loads. Unstamped, a later
+            import of the entry's own path took it for a changed file
+            and evaluated its body a second time. }
+          if FModuleLoader.ContentProvider.TryGetLastModified(
+             EntryModule.Path, EntryLastModified) then
+            EntryModule.LastModified := EntryLastModified;
           EntryModule.SetEnvironment(ModuleScope);
           FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
           ModuleContext.CurrentModule := EntryModule;

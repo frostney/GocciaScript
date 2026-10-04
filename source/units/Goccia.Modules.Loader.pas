@@ -1576,23 +1576,35 @@ begin
 end;
 
 procedure TGocciaModuleLoader.BeginEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.AddOrSetValue(APath, True);
-  FEvaluatingModules.AddOrSetValue(ExpandFileName(APath), True);
   FLoadingModules.AddOrSetValue(APath, True);
-  FLoadingModules.AddOrSetValue(ExpandFileName(APath), True);
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.AddOrSetValue(ExpandedPath, True);
+    FLoadingModules.AddOrSetValue(ExpandedPath, True);
+  end;
 end;
 
 procedure TGocciaModuleLoader.EndEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.Remove(APath);
-  FEvaluatingModules.Remove(ExpandFileName(APath));
   FLoadingModules.Remove(APath);
-  FLoadingModules.Remove(ExpandFileName(APath));
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.Remove(ExpandedPath);
+    FLoadingModules.Remove(ExpandedPath);
+  end;
 end;
 
 function TGocciaModuleLoader.IsEvaluatingModulePath(
@@ -1653,14 +1665,27 @@ procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
   const AModule: TGocciaModule);
 var
   CacheKey: string;
+
+  { The loader owns every module it caches. A module this registration
+    replaces (an entry run again under the same path, as each REPL input
+    is) is retired, so the loader still frees it, rather than leaked. }
+  procedure CacheUnder(const AKey: string);
+  var
+    Existing: TGocciaModule;
+  begin
+    if FModules.TryGetValue(AKey, Existing) and (Existing <> AModule) then
+      RetireModule(Existing);
+    FModules.AddOrSetValue(AKey, AModule);
+  end;
+
 begin
   if (AResolvedPath = '') or not Assigned(AModule) then
     Exit;
 
   CacheKey := ExpandFileName(AResolvedPath);
-  FModules.AddOrSetValue(CacheKey, AModule);
+  CacheUnder(CacheKey);
   if CacheKey <> AResolvedPath then
-    FModules.AddOrSetValue(AResolvedPath, AModule);
+    CacheUnder(AResolvedPath);
   if AModule.IsHostOwned then
     MarkHostOwnedAddress(AResolvedPath);
 end;

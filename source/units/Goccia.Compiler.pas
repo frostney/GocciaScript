@@ -720,6 +720,27 @@ begin
     IsNamedDefaultFunctionDeclaration(ANode);
 end;
 
+{ An anonymous default function declaration (`export default function`
+  without a name) is a HoistableDeclaration too: ES2026
+  §16.2.1.7.3.1 InitializeEnvironment instantiates it before any requested
+  module evaluates. The module loader does that for the modules it links;
+  a program no loader links (the entry) hoists it with its other function
+  declarations, so a module in a cycle with the entry can call it. }
+function IsAnonymousDefaultFunctionDeclaration(
+  const ANode: TGocciaASTNode): Boolean;
+var
+  ExportDefault: TGocciaExportDefaultDeclaration;
+begin
+  Result := False;
+  if not (ANode is TGocciaExportDefaultDeclaration) then
+    Exit;
+
+  ExportDefault := TGocciaExportDefaultDeclaration(ANode);
+  Result := ExportDefault.IsDirectDeclaration and
+    (ExportDefault.LocalName = GOCCIA_DEFAULT_EXPORT_BINDING) and
+    (ExportDefault.Expression is TGocciaFunctionExpression);
+end;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
@@ -1266,6 +1287,98 @@ begin
   end;
 end;
 
+{ Records the exports of a program no loader links (a module-source entry)
+  in the module's export table (ES2026 §16.2.1.7 ExportEntry Records), so the
+  host can bind them all before the entry's imports evaluate (§16.2.1.7.3.1
+  InitializeEnvironment). A lexical export stays in its temporal dead zone
+  until its declaration's OP_EXPORT runs. A var export is initialized to
+  undefined here, as InitializeEnvironment does; a hoisted function export
+  is exported when the function is instantiated. An imported binding that is
+  exported again, and every re-export, is bound to its module request. }
+procedure DeclareEntryModuleExports(const ACtx: TGocciaCompilationContext;
+  const AModule: TGocciaBytecodeModule;
+  const AStatements: TObjectList<TGocciaStatement>);
+var
+  HasUndefinedReg: Boolean;
+  I, J: Integer;
+  Local: TGocciaCompilerLocal;
+  Pair: TStringStringMap.TKeyValuePair;
+  ReExportDecl: TGocciaReExportDeclaration;
+  Request: string;
+  UndefinedReg: UInt16;
+begin
+  HasUndefinedReg := False;
+  UndefinedReg := 0;
+  for I := 0 to ACtx.Scope.LocalCount - 1 do
+  begin
+    Local := ACtx.Scope.GetLocal(I);
+    for J := 0 to Local.ExportNameCount - 1 do
+    begin
+      if Local.IsImportBinding then
+      begin
+        case Local.ImportPhase of
+          icpSource:
+            AModule.AddExport(Local.ExportNames[J], 0, mekSource,
+              Local.ImportModulePath);
+          icpDefer:
+            AModule.AddExport(Local.ExportNames[J], 0, mekDeferredNamespace,
+              Local.ImportModulePath);
+        else
+          if Local.ImportExportName = '' then
+            AModule.AddExport(Local.ExportNames[J], 0, mekNamespace,
+              Local.ImportModulePath)
+          else
+            AModule.AddExport(Local.ExportNames[J], 0, mekIndirect,
+              Local.ImportModulePath, Local.ImportExportName);
+        end;
+        Continue;
+      end;
+      AModule.AddExport(Local.ExportNames[J], Local.Slot);
+      if Local.IsVar then
+      begin
+        if not HasUndefinedReg then
+        begin
+          UndefinedReg := ACtx.Scope.AllocateRegister;
+          HasUndefinedReg := True;
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UndefinedReg,
+            0, 0));
+        end;
+        EmitInstruction(ACtx, EncodeABx(OP_EXPORT, UndefinedReg,
+          ACtx.Template.AddConstantString(Local.ExportNames[J])));
+      end;
+    end;
+  end;
+  if HasUndefinedReg then
+    ACtx.Scope.FreeRegister;
+
+  for I := 0 to AStatements.Count - 1 do
+  begin
+    { `export default <expression>` binds *default*, which is declared when
+      the statement compiles and stays uninitialized until it runs. }
+    if (AStatements[I] is TGocciaExportDefaultDeclaration) and
+       (TGocciaExportDefaultDeclaration(AStatements[I]).LocalName =
+        GOCCIA_DEFAULT_EXPORT_BINDING) then
+      AModule.AddExport(KEYWORD_DEFAULT, 0)
+    else if AStatements[I] is TGocciaReExportDeclaration then
+    begin
+      ReExportDecl := TGocciaReExportDeclaration(AStatements[I]);
+      Request := EncodeImportSpecifierAttribute(ReExportDecl.ModulePath,
+        ReExportDecl.AttributeType);
+      if ReExportDecl.IsStarExport then
+      begin
+        if ReExportDecl.NamespaceName <> '' then
+          AModule.AddExport(ReExportDecl.NamespaceName, 0, mekNamespace,
+            Request)
+        else
+          AModule.AddExport('', 0, mekStar, Request);
+      end
+      else
+        for Pair in ReExportDecl.ExportsTable do
+          AModule.AddExport(Pair.Key, 0, mekIndirect, Request, Pair.Value);
+    end;
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -1319,11 +1432,15 @@ begin
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
           PredeclaredLocal.Slot, 0, 0));
     end;
+    if not FPreinitializedTopLevelFunctions and not FGlobalBackedTopLevel then
+      DeclareEntryModuleExports(Ctx, FModule, AProgram.Body);
 
     // Check if there are function declarations to hoist
     HasFunctionDecl := False;
     for I := 0 to AProgram.Body.Count - 1 do
-      if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
+      if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+         ((not FPreinitializedTopLevelFunctions) and
+          IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) then
       begin
         HasFunctionDecl := True;
         Break;
@@ -1333,7 +1450,9 @@ begin
     begin
       // Hoist function declarations: compile initializers before other statements
       for I := 0 to AProgram.Body.Count - 1 do
-        if IsHoistedFunctionDeclaration(AProgram.Body[I]) then
+        if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+           ((not FPreinitializedTopLevelFunctions) and
+            IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) then
           DoCompileStatement(AProgram.Body[I]);
     end;
 
@@ -1356,6 +1475,8 @@ begin
     begin
       // Skip function declarations — already compiled during hoisting.
       if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+         ((not FPreinitializedTopLevelFunctions) and
+          IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) or
          (AProgram.Body[I] is TGocciaImportDeclaration) or
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
         Continue;
