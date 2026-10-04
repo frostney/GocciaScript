@@ -52,6 +52,7 @@ type
     constructor CreateForwarding(const ASourceModule: TGocciaModule;
       const ASourceExportName: string);
     function GetValue: TGocciaValue;
+    function IsUninitialized: Boolean;
     procedure UpdateValue(const AValue: TGocciaValue);
     procedure MarkReferences;
   end;
@@ -360,6 +361,36 @@ begin
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
+{ Whether GetValue would raise the TDZ ReferenceError: the binding, or the
+  forwarding chain behind it, ends at a module-scope binding that is still
+  uninitialized. Answered without raising. False only means this check could
+  not prove it; GetValue then decides. A plain TGocciaScope is required
+  because a subclass may resolve a read before its own lexical bindings. }
+function TGocciaModuleExportBinding.IsUninitialized: Boolean;
+const
+  MAX_FORWARDING_HOPS = 32;
+var
+  Binding: TGocciaModuleExportBinding;
+  Hop: Integer;
+  SourceModule: TGocciaModule;
+begin
+  Binding := Self;
+  for Hop := 0 to MAX_FORWARDING_HOPS do
+  begin
+    SourceModule := Binding.FSourceModule;
+    if not Assigned(SourceModule) then
+      Exit(Assigned(Binding.FEnvironment) and
+        (Binding.FEnvironment.ClassType = TGocciaScope) and
+        TGocciaScope(Binding.FEnvironment).IsOwnBindingUninitialized(
+          Binding.FLocalName));
+    if SourceModule.FAmbiguousExports.ContainsKey(Binding.FSourceExportName) or
+       not SourceModule.FExportBindings.TryGetValue(Binding.FSourceExportName,
+         Binding) then
+      Exit(False);
+  end;
+  Result := False;
+end;
+
 procedure TGocciaModuleExportBinding.UpdateValue(const AValue: TGocciaValue);
 begin
   FEnvironment := nil;
@@ -531,12 +562,18 @@ begin
   FStarExportNames.Remove(AExportName);
   FExportBindings.AddOrSetValue(AExportName, ABinding);
 
-  try
-    Value := ABinding.GetValue;
-  except
-    on TGocciaReferenceError do
-      Value := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
+  // An export linked before its module evaluates is still in its temporal
+  // dead zone and snapshots as undefined. Settle that common case without
+  // raising and catching the ReferenceError a real read of it still throws.
+  if ABinding.IsUninitialized then
+    Value := TGocciaUndefinedLiteralValue.UndefinedValue
+  else
+    try
+      Value := ABinding.GetValue;
+    except
+      on TGocciaReferenceError do
+        Value := TGocciaUndefinedLiteralValue.UndefinedValue;
+    end;
   FExportsTable.AddOrSetValue(AExportName, Value);
 end;
 
@@ -869,10 +906,19 @@ end;
 
 function TGocciaModule.CanResolveExport(const AExportName: string): Boolean;
 var
+  Binding: TGocciaModuleExportBinding;
   BindingModule: TGocciaModule;
   BindingName: string;
   Value: TGocciaValue;
 begin
+  // ES2026 §16.2.1.7.2.2 ResolveExport: a local export resolves to this
+  // module's own binding, with no resolveSet to track. Answer that common
+  // case without allocating one.
+  if (not FAmbiguousExports.ContainsKey(AExportName)) and
+     FExportBindings.TryGetValue(AExportName, Binding) and
+     (not Assigned(Binding.FSourceModule)) and
+     Assigned(Binding.FEnvironment) then
+    Exit(True);
   Result := TryResolveExportIdentity(AExportName, BindingModule, BindingName,
     Value);
 end;

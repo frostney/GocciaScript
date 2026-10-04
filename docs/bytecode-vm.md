@@ -21,6 +21,8 @@ Both execution modes are implementations of `TGocciaExecutor` (see [Architecture
 
 An imported module adds a second such coupling. Its environment is initialized while linking (ES2026 §16.2.1.7.3.1 InitializeEnvironment), and the module loader creates the top-level function declarations there with the tree-walk evaluator (`HoistFunctionDeclarations`). Bytecode compilation of that module therefore reuses those preinitialized bindings for exported declarations instead of compiling them (`PreinitializedTopLevelFunctions`), and their bodies keep running under the evaluator in bytecode mode. Everything an evaluator path can be handed from such a body — including a compiled `TGocciaVMClassValue` reached by `new`, `super()`, or a bound wrapper — must therefore work in both directions; `TGocciaClassValue.UsesOwnInstantiation` and `TryConstructOnReceiver` are what route construction of a compiled class back to the VM. `scripts/differential/l-modulefndecl.test.js` gates this split.
 
+The program the executor runs itself — the entry file or a REPL input — is linked by no module loader. The compiler therefore records its static imports and re-exports, in source order, in the bytecode module's request table, and `TGocciaBytecodeExecutor` links each one through `TGocciaModuleLoader.LinkModuleRequest` before the program runs (ES2026 §16.2.1.6.1.2 Link()). A name that does not resolve is a `SyntaxError` before any module of the graph evaluates; the program's own `OP_IMPORT`s then evaluate the linked modules, re-exported ones included.
+
 ## Pipeline
 
 ```text
@@ -293,7 +295,12 @@ machinery keep that true:
   `ConstructValue`, so a constructor's position does not leak onto a later throw
   (`new Map(); JSON.parse("{")` reports the JSON fault at its own line, not the
   `new`). Native calls stamp the call site around the invoke, likewise restored,
-  so a native callee's error carries a location rather than `0:0`.
+  so a native callee's error carries a location rather than `0:0`. A throw
+  skips those restores, so `HandleExceptionUnwind` clears the position of the
+  frame whose handler it lands in (`TGocciaCallStack.ClearTopFrameLocation`):
+  the stamp of the call the throw abandoned, or of the fault that raised it,
+  does not locate a later error in that frame. The work stays on the throw
+  path, so a call that returns pays nothing for it.
 
 ### `.gbc` parity note
 
