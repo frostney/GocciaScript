@@ -176,11 +176,16 @@ type
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
-    // Depth of native VM re-entries (ExecuteClosureRegistersInternal invocations
-    // nested via generator resume, host eval, or native callbacks). Bounded
-    // separately from FFrameDepth because each native re-entry costs a real
-    // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
+    // Depth of native VM re-entries (ExecuteClosureRegistersInternal
+    // invocations: constructors, async functions, generator resume, accessors,
+    // Proxy traps, host eval and native callbacks). Each one costs a real
+    // native stack frame, so besides counting against --max-stack through
+    // FFrameDepth it is refused once the native stack nears its end; see
+    // CheckNativeStackHeadroom in Goccia.StackLimit.
     FNativeExecutionDepth: Integer;
+    // NativeStackLimit of the thread the VM is bound to, looked up by the
+    // first check that needs it after BindToCurrentThread.
+    FNativeStackLimit: NativeUInt;
     FMemoryPressureCheckCountdown: Integer;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
@@ -6669,6 +6674,7 @@ const
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
   // that SetupNewFrame pushes on the hot path. This is class-level, so it is
@@ -14401,6 +14407,7 @@ begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
     FExecutionSourcePath := '';
@@ -14652,6 +14659,20 @@ begin
     Generator);
 end;
 
+{ A typed arithmetic or comparison opcode's operands, when one of them is not
+  a number. Out of line, so that the conversion's call to ToNumber is not
+  inlined into the dispatch loop: an inlined call there makes the compiler
+  keep a stack slot for the left operand, which it holds across the call, in
+  every native re-entry's frame, one slot per opcode. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure RegistersToDoubles(const ALeft, ARight: TGocciaRegister;
+  out ALeftNumber, ARightNumber: Double);
+begin
+  ALeftNumber := RegisterToDouble(ALeft);
+  ARightNumber := RegisterToDouble(ARight);
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
+
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: PGocciaRegister; const AArgCount: Integer;
@@ -14722,6 +14743,9 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;
+  // The operands of a typed arithmetic or comparison opcode when one is not a
+  // number, converted out of line by RegistersToDoubles.
+  LeftDouble, RightDouble: Double;
   PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
@@ -14970,13 +14994,19 @@ var
 
 begin
   // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
-  // frame. Bound the native re-entry depth before any state is saved so the
-  // throw unwinds cleanly (the matching Inc/Dec are paired with the try/finally
-  // below). Without this, generator resume / eval / native-callback recursion
-  // overflows the native stack (SIGSEGV) instead of throwing RangeError.
-  CheckNativeReentryDepth(FNativeExecutionDepth + 1);
+  // frame. Both checks run before any state is saved, so their throw unwinds
+  // cleanly (the matching Inc/Dec are paired with the try/finally below).
+  //
+  // The frame SetupNewFrame pushes is a function call, and counts against
+  // --max-stack like one PushFrame pushes: FFrameDepth includes the outermost
+  // frame, which is not a nested call, so this is the FFrameDepth-th.
+  CheckStackDepth(FFrameDepth);
   if FNativeExecutionDepth = 0 then
     BindToCurrentThread;
+  // Each entry also costs kilobytes of native stack. Without this, recursion
+  // through constructors, generators or callbacks overflows the native stack
+  // (SIGSEGV) once --max-stack allows more entries than the stack holds.
+  CheckNativeStackHeadroom(FNativeExecutionDepth + 1, FNativeStackLimit);
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
