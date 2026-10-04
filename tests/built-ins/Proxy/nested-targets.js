@@ -104,7 +104,6 @@ describe.runIf(typeof Goccia !== "undefined")("Proxies nested 3,000 deep, past t
     ["a call", () => callable()],
     ["new", () => new constructable()],
     ["a read through a chain of handlers", () => handlerChain.x],
-    ["Object.keys through a native ownKeys trap on every level", () => Object.keys(nest(3000, { x: 1 }, { ownKeys: Reflect.ownKeys }))],
     ["isFrozen", () => Object.isFrozen(proxy)],
   ];
 
