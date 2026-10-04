@@ -864,23 +864,6 @@ begin
   end;
 end;
 
-function IsSamePropertyKey(const A, B: TGocciaValue): Boolean;
-begin
-  if A is TGocciaSymbolValue then
-    Result := A = B
-  else
-    Result := (B is TGocciaStringLiteralValue) and
-      (TGocciaStringLiteralValue(A).Value = TGocciaStringLiteralValue(B).Value);
-end;
-
-function PropertyKeyLabel(const AKey: TGocciaValue): string;
-begin
-  if AKey is TGocciaSymbolValue then
-    Result := TGocciaSymbolValue(AKey).ToStringLiteral.Value
-  else
-    Result := TGocciaStringLiteralValue(AKey).Value;
-end;
-
 procedure SplitPropertyKeys(const AOrderedKeys: TArray<TGocciaValue>;
   out AStringKeys: TArray<string>;
   out ASymbolKeys: TArray<TGocciaSymbolValue>);
@@ -941,13 +924,13 @@ var
     K: Integer;
   begin
     for K := 0 to High(AOrderedKeys) do
-      if not ResultChecked[K] and IsSamePropertyKey(AKey, AOrderedKeys[K]) then
+      if not ResultChecked[K] and IsSameValue(AKey, AOrderedKeys[K]) then
       begin
         ResultChecked[K] := True;
         Exit;
       end;
-    ThrowTypeError(Format(SErrorProxyOwnKeysMissing, [PropertyKeyLabel(AKey)]),
-      SSuggestProxyTrapInvariant);
+    ThrowTypeError(Format(SErrorProxyOwnKeysMissing,
+      [AKey.ToStringLiteral.Value]), SSuggestProxyTrapInvariant);
   end;
 
 begin
