@@ -305,7 +305,7 @@ function assertPreservesBodyFailure(outputPath: string, label: string): void {
 // -- JSON output (interpreted + bytecode) ---------------------------------------
 
 await section("Loader: JSON output (interpreted)...", async () => {
-  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n");
+  const { json } = runLoaderJson("console.log('hi'); 2 + 2;\n", ["--mode=interpreted"]);
   const file = json.files?.[0];
   if (json.ok !== true) throw new Error(`JSON ok should be true, got ${json.ok}`);
   if (json.fileName !== undefined) throw new Error(`JSON fileName should only be present per-file, got ${json.fileName}`);
@@ -821,7 +821,7 @@ await section("Bare Loader: .mjs module inference...", async () => {
   }
 });
 
-// --mode option: bare loader defaults to interpreter mode; both values must execute.
+// --mode option: bare loader defaults to bytecode mode; both values must execute.
 await section("Bare Loader: --mode=interpreted...", async () => {
   const proc = Bun.spawnSync([BARE, "--print", "--mode=interpreted"], {
     stdin: new TextEncoder().encode("21 * 2;\n"),
@@ -4407,7 +4407,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
     ].join("\n");
     writeFileSync(external, externalSource);
 
-    let proc = run([external]);
+    let proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode !== 0)
       throw new Error(`Snapshot creation failed: ${proc.stdout}${proc.stderr}`);
     const expectedSnapshot = [
@@ -4486,7 +4486,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       throw new Error(`Bytecode snapshot comparison failed: ${proc.stdout}${proc.stderr}`);
 
     writeFileSync(external, externalSource.replace('z: 1', 'z: 2'));
-    proc = run([external]);
+    proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode === 0)
       throw new Error("Snapshot mismatch should fail without update mode");
     if (!readFileSync(snapshot, "utf-8").includes('"z": 1'))
@@ -4500,7 +4500,7 @@ await section("TestRunner: Vitest-compatible snapshot lifecycle (interpreted + b
       .replace('z: 1', 'z: 2')
       .split('  test("custom serializer"')[0] + '});\n';
     writeFileSync(external, withoutSerializer);
-    proc = run([external]);
+    proc = run([external, "--mode=interpreted"]);
     if (proc.exitCode !== 0 || !readFileSync(snapshot, "utf-8").includes('custom serializer'))
       throw new Error("Local obsolete snapshots should be retained without failing");
     proc = run([external], ciEnv);
@@ -6902,7 +6902,7 @@ await section("REPL: repeated tagged template execution (interpreted + bytecode)
   ].join("\n") + "\n";
 
   for (const [label, args] of [
-    ["interpreted", []],
+    ["interpreted", ["--mode=interpreted"]],
     ["bytecode", ["--mode=bytecode"]],
   ] as const) {
     const proc = Bun.spawnSync([REPL, ...args], {

@@ -3200,10 +3200,11 @@ var
 begin
   Executor := TGocciaBytecodeExecutor.Create;
   try
-    { Script source: top-level bindings live on the global object. }
-    Executor.GlobalBackedTopLevel := True;
     Engine := TGocciaEngine.Create(AFileName, ASource, Executor);
     try
+      { Script source keeps its top-level bindings on the global object;
+        a module file name (.mjs) gives module source, which does not. }
+      Executor.GlobalBackedTopLevel := Engine.SourceType = stScript;
       Result := Engine.Execute;
     finally
       Engine.Free;

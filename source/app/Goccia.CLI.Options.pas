@@ -22,7 +22,6 @@ const
   DEFAULT_EXECUTION_MODE = emBytecode;
 
 type
-
   TGocciaCompatibilityFlagDescriptor = record
     OptionName: string;
     HelpText: string;

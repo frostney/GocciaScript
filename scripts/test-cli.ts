@@ -3074,7 +3074,7 @@ console.log("--max-memory (manual gc reclaims inside active calls)...");
   ].join("\n");
 
   for (const modeArgs of [["--mode=interpreted"], ["--mode=bytecode"]] as const) {
-    const label = modeArgs.length > 0 ? modeArgs.join(" ") : "interpreter";
+    const label = modeArgs.join(" ");
     const { exitCode, json, stderr } = runLoaderJson(src, ["--max-memory=500000", "--compat-asi", ...modeArgs], { timeout: 30_000 });
     if (exitCode !== 0) throw new Error(`Manual GC active-call ${label} exit code should be 0, got ${exitCode}: ${JSON.stringify(json)}${stderr}`);
     if (typeof json.files?.[0]?.result !== "number" || json.files[0].result <= 0) throw new Error(`Manual GC active-call ${label} should return positive bytesAllocated`);

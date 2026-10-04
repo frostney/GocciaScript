@@ -706,7 +706,7 @@ console.log("A per-file config usage error stops the run before any file execute
     writeFileSync(join(tmp, "a", "s.js"), 'console.log("A-RAN");\n');
     writeFileSync(join(tmp, "b", "s.js"), 'console.log("B-RAN");\n');
     writeFileSync(join(tmp, "b", "goccia.json"), '{"unsafe-ffi": true}\n');
-    for (const args of [[], ["--jobs=2"], ["--mode=bytecode"]]) {
+    for (const args of [["--mode=interpreted"], ["--jobs=2"], ["--mode=bytecode"]]) {
       const loader = run(RUNNER, [join("a", "s.js"), join("b", "s.js"), ...args], { cwd: tmp });
       expectExit(loader, 2, `Loader multi-file ${args.join(" ")}`);
       expectIncludes(loader.stderr, `Error: ${join(tmp, "b", "goccia.json")}: "unsafe-ffi" ${REMOVED}`, "Loader multi-file");
