@@ -3197,9 +3197,27 @@ console.log("--max-stack (default overflow)...");
 }
 
 console.log("--max-stack (custom limit)...");
-{
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100`.text();
-  if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
+// The limit is the number of nested calls: n counts the calls that started,
+// and the 101st is refused. The top level is not a call.
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const sourceType of ["script", "module"]) {
+    const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100 --mode=${mode} --source-type=${sourceType}`.text();
+    if (!containsLine(out, "100"))
+      throw new Error(`--max-stack=100 (${mode}, ${sourceType}) should allow 100 nested calls, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (TestRunner test function)...");
+// The runner calls the test function itself, so its calls have the whole limit.
+for (const mode of ["interpreted", "bytecode"]) {
+  const src = [
+    "const count = (k) => (k <= 1 ? 1 : count(k - 1) + 1);",
+    'test("ten nested calls", () => { expect(count(10)).toBe(10); });',
+    'test("eleven nested calls", () => { expect(() => count(11)).toThrow(RangeError); });',
+  ].join("\n");
+  const out = await $`echo ${src} | ${TESTRUNNER} --max-stack=10 --mode=${mode} --no-progress`.nothrow().text();
+  if (!out.includes("Passed: 2"))
+    throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
 }
 
 console.log("--max-stack (bytecode trampoline)...");

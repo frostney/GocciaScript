@@ -140,6 +140,7 @@ type
     procedure TestGlobalBackedShortCircuitChecksStrictType;
     procedure TestGlobalBackedCompoundChecksStrictType;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
+    procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -274,6 +275,8 @@ begin
   Test('Global-backed short-circuit checks strict type', TestGlobalBackedShortCircuitChecksStrictType);
   Test('Global-backed compound checks strict type', TestGlobalBackedCompoundChecksStrictType);
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
+  Test('Reassigned local keeps type only when every value is a Number',
+    TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -2310,6 +2313,56 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // The string assigned at the end of the body reaches the reads at its
+  // start on the next iteration.
+  Module := CompileSource(
+    'let a = 1;' + sLineBreak +
+    'for (const s of [0, 1]) { a + 1; a + a; a = "x"; }',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // The string assigned in one branch reaches the read after the join.
+  Module := CompileSource(
+    'let a = 1;' + sLineBreak +
+    'if (a > 0) { a = "x"; } else { a = 2; }' + sLineBreak +
+    'a + 1;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // Every value given to a and b is a Number, so every read stays typed,
+  // including the reads after assignments the compiler cannot type itself.
+  Module := CompileSource(
+    'let a = 1; let b = 0.5;' + sLineBreak +
+    'for (const s of [0, 1]) { b = b * 2 - a; a += 2; a = a ^ 3; }' + sLineBreak +
+    'a + b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_MUL_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
   finally
     Module.Free;
   end;
