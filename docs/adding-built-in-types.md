@@ -344,7 +344,7 @@ end;
 
 **In the implementation uses clause**, add `Goccia.Values.YourValue`.
 
-**When the instance is created.** For `new YourType(args)` and for a subclass with no constructor of its own, the instance is created before construction with the `new` arguments. For a subclass whose constructor body calls `super(...)`, the `super(...)` that reaches the built-in creates it with its own arguments: `CreateNativeInstance`, then `InitializeNativeFromArguments`, the prototype from `new.target`, then `FinalizeNativeFromArguments`, and the result becomes `this` (ES2026 §13.3.7.1).
+**When the instance is created.** For `new YourType(args)` and for a subclass with no constructor of its own, the instance is created before construction with the `new` arguments. For a subclass whose constructor body calls `super(...)`, the `super(...)` that reaches the built-in creates it with its own arguments: the prototype from `new.target`, `CreateNativeInstance`, `InitializeNativeFromArguments`, then `FinalizeNativeFromArguments`, and the result becomes `this` (ES2026 §13.3.7.1). A built-in that validates or coerces its arguments before `OrdinaryCreateFromConstructor` (listed in `ShouldDelayNativePrototypeLookup`, plus `String` and `Number` on this path) reads the prototype after `InitializeNativeFromArguments` instead.
 
 ## Step 4: Engine Or Runtime Integration
 
