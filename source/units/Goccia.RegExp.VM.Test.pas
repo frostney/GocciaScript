@@ -181,7 +181,9 @@ begin
   // The second a* is rescanned for each count of the first, n * n / 2
   // characters in all. At three steps per character, as when the loop
   // iterated, 2,500 "a"s stay under the 10,000,000-step limit and 3,000
-  // exceed it, the same lengths at which iterating stopped.
+  // exceed it, the same lengths at which iterating stopped. 2,500 is about
+  // 3% under the limit (main switched between 2,500 and 2,580), so any
+  // added cost per pop or memo hit in the rescan flips this test.
   Expect<string>(GreedyRescanOutcome(2500)).ToBe('no match');
   Expect<string>(GreedyRescanOutcome(3000)).ToBe(
     'Maximum regular expression step count exceeded');
