@@ -6665,7 +6665,14 @@ end;
 
 constructor TGocciaVM.Create;
 const
-  INITIAL_STACK_SIZE = 4096;
+  // The register, local-cell and argument arenas and the frame stack start
+  // small and double on demand (AcquireRegisters, AcquireLocalCells,
+  // AcquireArgumentWindow, EnsureRegisterCapacity, EnsureLocalCapacity,
+  // PushFrame). SetLength zero-fills the whole allocation, so a large initial
+  // size is paid on every engine boot even by a program that needs a handful
+  // of slots: 4096 slots each cost about 30,000 instructions per VM.
+  INITIAL_STACK_SIZE = 64;
+  INITIAL_FRAME_STACK_SIZE = 8;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
@@ -6698,7 +6705,7 @@ begin
   FArgumentBase := 0;
   FArguments := nil;
   FArgCount := 0;
-  SetLength(FFrameStack, 64);
+  SetLength(FFrameStack, INITIAL_FRAME_STACK_SIZE);
   FFrameStackCount := 0;
   SetLength(FClosedNumericFrameStack, 64);
   FClosedNumericFrameStackCount := 0;

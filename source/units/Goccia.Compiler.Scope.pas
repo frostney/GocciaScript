@@ -54,6 +54,8 @@ type
     ExportNameCount: Integer;
   end;
 
+  PGocciaCompilerLocal = ^TGocciaCompilerLocal;
+
   TGocciaCompilerUpvalue = record
     Name: string;
     Index: UInt16;
@@ -140,6 +142,10 @@ type
     property NextSlot: Integer read FNextSlot;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
+    // The local in place, without copying the record and its managed fields.
+    // The pointer is valid only until the next DeclareLocal or DeclareVarLocal,
+    // which can reallocate the local array.
+    function LocalAt(const AIndex: Integer): PGocciaCompilerLocal; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
     procedure MarkLocalInitialized(const AIndex: Integer);
@@ -312,7 +318,7 @@ begin
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
-  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[FLocalCount].ConstantValue, ctvkUnknown);
   FLocals[FLocalCount].IsImportBinding := False;
   FLocals[FLocalCount].ImportPhase := icpEvaluation;
   FLocals[FLocalCount].ImportModulePath := '';
@@ -367,7 +373,7 @@ begin
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
-  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[FLocalCount].ConstantValue, ctvkUnknown);
   FLocals[FLocalCount].IsImportBinding := False;
   FLocals[FLocalCount].ImportPhase := icpEvaluation;
   FLocals[FLocalCount].ImportModulePath := '';
@@ -549,6 +555,12 @@ begin
   Result := FLocals[AIndex];
 end;
 
+function TGocciaCompilerScope.LocalAt(
+  const AIndex: Integer): PGocciaCompilerLocal;
+begin
+  Result := @FLocals[AIndex];
+end;
+
 function TGocciaCompilerScope.GetUpvalue(
   const AIndex: Integer): TGocciaCompilerUpvalue;
 begin
@@ -688,7 +700,7 @@ end;
 procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
-  FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[AIndex].ConstantValue, ctvkUnknown);
 end;
 
 procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
@@ -741,14 +753,14 @@ begin
     if Result then
       AValue := FLocals[LocalIdx].ConstantValue
     else
-      AValue := UnknownCompileTimeValue;
+      ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit;
   end;
 
   if Assigned(FParent) then
     Exit(FParent.TryGetVisibleConstantValue(AName, AValue));
 
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
   Result := False;
 end;
 
