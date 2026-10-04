@@ -38,6 +38,9 @@ type
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
+    // True when every value this binding can hold is a Number, so its Number
+    // hint stays valid across assignments (Goccia.Compiler.NumericBindings).
+    HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
     ParamTypeSignature: string;
@@ -156,6 +159,8 @@ type
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
       const AProvenNumeric: Boolean);
+    procedure SetLocalHoldsOnlyNumbers(const AIndex: Integer;
+      const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
@@ -301,6 +306,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
@@ -355,6 +361,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
@@ -649,6 +656,12 @@ procedure TGocciaCompilerScope.SetLocalCallProvenNumeric(
   const AIndex: Integer; const AProvenNumeric: Boolean);
 begin
   FLocals[AIndex].IsCallProvenNumeric := AProvenNumeric;
+end;
+
+procedure TGocciaCompilerScope.SetLocalHoldsOnlyNumbers(
+  const AIndex: Integer; const AHoldsOnlyNumbers: Boolean);
+begin
+  FLocals[AIndex].HoldsOnlyNumbers := AHoldsOnlyNumbers;
 end;
 
 procedure TGocciaCompilerScope.SetLocalTypeAnnotation(const AIndex: Integer;
