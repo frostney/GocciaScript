@@ -52,6 +52,9 @@ type
     ImportExportName: string;
     ExportNames: TGocciaCompilerExportNameArray;
     ExportNameCount: Integer;
+    // This local's entry in the template's debug locals, which name the
+    // binding in a temporal-dead-zone error; -1 before a template is attached.
+    DebugLocalIndex: Integer;
   end;
 
   TGocciaCompilerUpvalue = record
@@ -110,7 +113,9 @@ type
     // FLoopMayCreateClosure as it was when each open loop was entered.
     FOuterLoopMayCreateClosure: array of Boolean;
     FDirectEvalSeen: Boolean;
+    FTemplate: TGocciaFunctionTemplate;
     procedure EnsureLocalIndex;
+    procedure RecordDebugLocal(const AIndex: Integer);
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
     constructor Create(const AParent: TGocciaCompilerScope;
@@ -125,6 +130,12 @@ type
     function AddUpvalue(const AName: string; const AIndex: UInt16;
       const AIsLocal: Boolean; const AIsConst: Boolean = False;
       const AIsVar: Boolean = False): Integer;
+
+    { Makes ATemplate the function whose debug info records this scope's
+      locals, with the code range each one occupies its slot over. Locals
+      declared before the template was attached start at its current PC.
+      Only the first call attaches; later ones are no-ops. }
+    procedure AttachTemplate(const ATemplate: TGocciaFunctionTemplate);
 
     function AllocateRegister: UInt16;
     procedure FreeRegister;
@@ -267,6 +278,7 @@ begin
   FLoopDepth := 0;
   FLoopMayCreateClosure := False;
   FDirectEvalSeen := False;
+  FTemplate := nil;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
     FWithBindingCount := AParent.FWithBindingCount;
@@ -319,6 +331,7 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
+  RecordDebugLocal(FLocalCount);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -374,6 +387,7 @@ begin
   FLocals[FLocalCount].ImportExportName := '';
   FLocals[FLocalCount].ExportNameCount := 0;
   SetLength(FLocals[FLocalCount].ExportNames, 0);
+  RecordDebugLocal(FLocalCount);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -497,6 +511,28 @@ begin
   Inc(FUpvalueCount);
 end;
 
+procedure TGocciaCompilerScope.RecordDebugLocal(const AIndex: Integer);
+begin
+  FLocals[AIndex].DebugLocalIndex := -1;
+  if not (Assigned(FTemplate) and Assigned(FTemplate.DebugInfo)) then
+    Exit;
+  FLocals[AIndex].DebugLocalIndex := FTemplate.DebugInfo.LocalCount;
+  FTemplate.DebugInfo.AddLocal(FLocals[AIndex].Name, FLocals[AIndex].Slot,
+    UInt32(FTemplate.CodeCount), High(UInt32));
+end;
+
+procedure TGocciaCompilerScope.AttachTemplate(
+  const ATemplate: TGocciaFunctionTemplate);
+var
+  I: Integer;
+begin
+  if Assigned(FTemplate) then
+    Exit;
+  FTemplate := ATemplate;
+  for I := 0 to FLocalCount - 1 do
+    RecordDebugLocal(I);
+end;
+
 function TGocciaCompilerScope.AllocateRegister: UInt16;
 begin
   if FNextSlot >= High(UInt16) then
@@ -529,6 +565,9 @@ begin
   begin
     RemovedName := FLocals[FLocalCount - 1].Name;
     Dec(FLocalCount);
+    if FLocals[FLocalCount].DebugLocalIndex >= 0 then
+      FTemplate.DebugInfo.SetLocalEndPC(FLocals[FLocalCount].DebugLocalIndex,
+        UInt32(FTemplate.CodeCount));
     if FLocals[FLocalCount].IsCaptured then
     begin
       if AClosedCount >= Length(AClosedLocals) then

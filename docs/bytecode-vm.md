@@ -203,8 +203,8 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Runtime Error Diagnostics
 
-A runtime fault must read identically in both execution modes. Three pieces of
-machinery keep that true:
+A runtime fault must read identically in both execution modes. This machinery
+keeps that true:
 
 - **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
   table mapping a call/construct instruction's start PC to the callee as the
@@ -221,6 +221,21 @@ machinery keep that true:
   through the same functions. The table is **not** serialised to `.gbc`: a
   module loaded from binary bytecode falls back to the runtime-type-name form of
   the message (see the note below).
+- **Binding names.** A temporal-dead-zone `ReferenceError` reads
+  `Cannot access 'x' before initialization` and a const assignment reads
+  `Assignment to constant variable 'x'`, as in the evaluator. The compiler
+  records each local's name, slot and live PC range in the template's debug
+  locals (`TGocciaCompilerScope.AttachTemplate`, closed at `EndScope`), and
+  upvalue descriptors already carry names; the VM's hole checks look the name up
+  only once they are about to throw (`ThrowUninitializedLocal`,
+  `ThrowUninitializedUpvalue`), so a read of an initialized binding does no
+  extra work. The const-assignment message is a constant compiled into the
+  throwing instruction. An assignment to a const still in its dead zone reads
+  the binding first, so its `ReferenceError` wins over the `TypeError`
+  (ES2026 §9.1.1.1.5 step 3). Debug locals are serialised to `.gbc` in the
+  section the format already had; bytecode without them, such as a `.gbc` from
+  an earlier build, falls back to the unnamed
+  `Cannot access lexical binding before initialization`.
 - **Throw-path source positions.** Deferred call frames carry no position
   ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
   every bytecode-mode stack frame at `file:0:0` and the runner with no line to

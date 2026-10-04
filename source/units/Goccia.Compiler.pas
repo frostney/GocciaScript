@@ -172,7 +172,10 @@ begin
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
+  begin
     FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
+    FCurrentScope.AttachTemplate(FCurrentTemplate);
+  end;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -1242,6 +1245,7 @@ begin
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
+  FCurrentScope.AttachTemplate(FCurrentTemplate);
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try

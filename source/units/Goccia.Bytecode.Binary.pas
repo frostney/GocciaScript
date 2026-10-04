@@ -686,6 +686,9 @@ var
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
+  LocalName: string;
+  LocalSlot: UInt16;
+  LocalStartPC, LocalEndPC: UInt32;
   DeclarationLine: UInt32;
   DeclarationColumn: UInt16;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
@@ -819,8 +822,16 @@ begin
 
     LocalCount := ReadUInt32;
     RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
+    // Read each field into its own variable: Pascal does not fix the order
+    // in which a call's arguments are evaluated.
     for I := 0 to Integer(LocalCount) - 1 do
-      DebugInfo.AddLocal(ReadString, ReadUInt16, ReadUInt32, ReadUInt32);
+    begin
+      LocalName := ReadString;
+      LocalSlot := ReadUInt16;
+      LocalStartPC := ReadUInt32;
+      LocalEndPC := ReadUInt32;
+      DebugInfo.AddLocal(LocalName, LocalSlot, LocalStartPC, LocalEndPC);
+    end;
 
     Result.DebugInfo := DebugInfo;
   end;

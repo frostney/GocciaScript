@@ -126,7 +126,8 @@
       begin
         FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP,
+            DecodeBx(Instruction));
       end;
 
       OP_SET_LOCAL:
@@ -157,7 +158,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             SetRegisterRaw(A, Upvalue.Cell.Value)
           end
           else
@@ -175,7 +176,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
@@ -195,8 +196,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
@@ -233,8 +233,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, C);
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
@@ -842,7 +841,7 @@
       begin
         FRegisters[A] := GetLocalRegister(B);
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP, B);
         B := A;
         goto LGetPropConstShared;
       end;
@@ -1513,7 +1512,7 @@
           // a local's own register as B, where a hole is a lexical binding
           // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1540,7 +1539,7 @@
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1607,7 +1606,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1681,7 +1680,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
