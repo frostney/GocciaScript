@@ -5,6 +5,8 @@ unit Goccia.Executor.Bytecode;
 interface
 
 uses
+  OrderedStringMap,
+
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
@@ -24,6 +26,12 @@ type
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
+    FLinkedModules: TOrderedStringMap<TGocciaModule>;
+    FLinkedReferrer: string;
+    function RealmExposesDirectEval: Boolean;
+    procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
+    function LoadLinkedModule(const AModulePath,
+      AImportingFilePath: string): TGocciaModule;
   public
     constructor Create;
     destructor Destroy; override;
@@ -136,6 +144,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
@@ -206,6 +215,15 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
+// Ordinary realms have no `eval`. A host that offers direct eval (the Test262
+// host, and a ShadowRealm created from such a realm) says so on the realm when
+// it installs the function; the global `eval` property itself is not asked,
+// because a script can delete or move it while eval-created code lives on.
+function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
+begin
+  Result := Assigned(FRealm) and FRealm.HostsDirectEval;
+end;
+
 function TGocciaBytecodeExecutor.CompileModule(
   const AProgram: TGocciaProgram): TGocciaCompiledModule;
 var
@@ -225,6 +243,7 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally
@@ -232,10 +251,53 @@ begin
   end;
 end;
 
+{ ES2026 §16.2.1.6.1.2 Link(): a program run here was linked by no module
+  loader, so link the graph behind each of its static requests, in source
+  order, before it runs. A name it imports or re-exports that does not
+  resolve is a SyntaxError raised before any module of the graph evaluates.
+  The linked modules are kept for the run, so the program's own OP_IMPORTs
+  evaluate them without resolving their requests a second time. }
+procedure TGocciaBytecodeExecutor.LinkModuleRequests(
+  const AModule: TGocciaBytecodeModule);
+var
+  I, J: Integer;
+  ModuleRequest: TGocciaModuleImport;
+  Names: array of string;
+begin
+  if (AModule.ImportCount = 0) or not Assigned(FModuleLoader) then
+    Exit;
+  FLinkedModules := TOrderedStringMap<TGocciaModule>.Create;
+  FLinkedReferrer := AModule.SourcePath;
+  for I := 0 to AModule.ImportCount - 1 do
+  begin
+    ModuleRequest := AModule.GetImport(I);
+    SetLength(Names, Length(ModuleRequest.Bindings));
+    for J := 0 to High(ModuleRequest.Bindings) do
+      Names[J] := ModuleRequest.Bindings[J].ExportName;
+    FLinkedModules.AddOrSetValue(ModuleRequest.ModulePath,
+      FModuleLoader.LinkModuleRequest(ModuleRequest.ModulePath,
+        AModule.SourcePath, Names, ModuleRequest.Line, ModuleRequest.Column));
+  end;
+  FVM.LoadModule := LoadLinkedModule;
+end;
+
+function TGocciaBytecodeExecutor.LoadLinkedModule(const AModulePath,
+  AImportingFilePath: string): TGocciaModule;
+begin
+  if Assigned(FLinkedModules) and (AImportingFilePath = FLinkedReferrer) and
+     FLinkedModules.TryGetValue(AModulePath, Result) then
+    Result := FModuleLoader.EvaluateModule(Result)
+  else
+    Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
+end;
+
 function TGocciaBytecodeExecutor.RunCompiledModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
 var
   GC: TGarbageCollector;
+  SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
+  SavedLinkedReferrer: string;
+  SavedLoadModule: TLoadModuleCallback;
   WasEnabled: Boolean;
 begin
   GC := TGarbageCollector.Instance;
@@ -250,9 +312,20 @@ begin
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
   FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  { A run can nest (the Function constructor runs its body here), so the
+    outer run's linked modules are set aside, not overwritten. }
+  SavedLinkedModules := FLinkedModules;
+  SavedLinkedReferrer := FLinkedReferrer;
+  SavedLoadModule := FVM.LoadModule;
+  FLinkedModules := nil;
   try
+    LinkModuleRequests(TGocciaBytecodeModule(AModule));
     Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
   finally
+    FVM.LoadModule := SavedLoadModule;
+    FLinkedModules.Free;
+    FLinkedModules := SavedLinkedModules;
+    FLinkedReferrer := SavedLinkedReferrer;
     GC.Enabled := WasEnabled;
   end;
 end;

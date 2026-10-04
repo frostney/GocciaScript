@@ -102,6 +102,11 @@ type
     FShape: TGocciaShape;
     FShapeEntryCount: Integer;
     function OwnerRealmIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    // The stale-shape walk behind EnsureShape. It owns the managed key
+    // temporary, and with it the implicit exception frame, so EnsureShape
+    // itself stays free of both (docs/core-patterns.md, "Managed Locals on
+    // Hot Paths").
+    function ExtendShape: TGocciaShape;
   protected
     // Property storage is sized by the script: `obj[k] = v` in a loop grows
     // this map without bound, and neither the entry array nor the bucket
@@ -351,11 +356,6 @@ begin
 end;
 
 function TGocciaShapedPropertyMap.EnsureShape: TGocciaShape;
-var
-  Table: TGocciaShapeTable;
-  Walk, Next: TGocciaShape;
-  Profiler: TGocciaProfiler;
-  I: Integer;
 begin
   if FShape = GDictionaryShape then
     Exit(GDictionaryShape);
@@ -371,7 +371,16 @@ begin
     Exit(FShape);
   if FShapeEntryCount = CountFast then
     Exit(FShape);
+  Result := ExtendShape;
+end;
 
+function TGocciaShapedPropertyMap.ExtendShape: TGocciaShape;
+var
+  Table: TGocciaShapeTable;
+  Walk, Next: TGocciaShape;
+  Profiler: TGocciaProfiler;
+  I: Integer;
+begin
   Walk := FShape;
   if not Assigned(Walk) then
   begin

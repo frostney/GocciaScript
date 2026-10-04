@@ -37,9 +37,6 @@ type
     0..OPCODE_PAIR_SIZE - 1] of Int64;
   PGocciaOpcodePairArray = ^TGocciaOpcodePairArray;
 
-threadvar
-  GProfilingAllocations: Boolean;
-
 type
   TGocciaProfiler = class
   private
@@ -103,7 +100,9 @@ type
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.ThreadPolls;
 
 { TGocciaProfiler }
 
@@ -131,7 +130,7 @@ var
   I: Integer;
 begin
   inherited Create;
-  GProfilingAllocations := False;
+  GThreadPolls.ProfilingAllocations := False;
   FEnabled := False;
   FMode := [];
   for I := 0 to MAX_OPCODE_ORDINAL do

@@ -26,6 +26,7 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FNumericParameterProofs: TNumericParameterProofMap;
+    FNumberBindingProofs: TNumberBindingProofMap;
     FGlobalBackedTopLevel: Boolean;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -33,6 +34,7 @@ type
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
+    FLoopReentryStatement: TGocciaStatement;
     FOptimizationOptions: TGocciaCompilerOptimizationOptions;
     FDerivedConstructorThisGuard: Boolean;
     FTemplateDerivedConstructorThisGuards: TDictionary<TGocciaFunctionTemplate, Boolean>;
@@ -83,7 +85,9 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.NumericBindings,
   Goccia.Compiler.NumericProof,
+  Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
   Goccia.Compiler.Statements,
   Goccia.Keywords.Reserved,
@@ -97,6 +101,7 @@ begin
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FNumericParameterProofs := TNumericParameterProofMap.Create;
+  FNumberBindingProofs := TNumberBindingProofMap.Create;
   FTemplateDerivedConstructorThisGuards :=
     TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
@@ -109,6 +114,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
   FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
@@ -122,6 +128,7 @@ begin
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.NumericParameterProofs := FNumericParameterProofs;
+  Result.NumberBindingProofs := FNumberBindingProofs;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
@@ -169,6 +176,8 @@ begin
       FCurrentTemplate, FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
+    FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   if not Assigned(FCurrentTemplate) or
      not FTemplateDerivedConstructorThisGuards.TryGetValue(
        FCurrentTemplate, FDerivedConstructorThisGuard) then
@@ -291,6 +300,8 @@ function TGocciaCompiler.DoCompileStatement(const AStmt: TGocciaStatement): Bool
 var
   Ctx: TGocciaCompilationContext;
   PreviousLabelReentryStatement: TGocciaStatement;
+  PreviousLoopReentryStatement: TGocciaStatement;
+  LoopScope: TGocciaCompilerScope;
 begin
   Result := False;
   Ctx := BuildContext;
@@ -302,6 +313,32 @@ begin
       Exit(Goccia.Compiler.Statements.CompileLabeledStatement(Ctx, AStmt));
     finally
       FLabelReentryStatement := PreviousLabelReentryStatement;
+    end;
+  end;
+
+  // A loop is the only construct that sends control back to code compiled
+  // earlier, so a closure created anywhere in it exists when the reads compiled
+  // ahead of it run again. Those reads have to know that before they are
+  // compiled. A loop nested in one that may create a closure inherits the
+  // answer without being walked: a closure created in an outer loop also
+  // outlives the reads of an inner one. Any other loop is examined itself,
+  // even while another loop is open, because the compiler can be inside a loop
+  // that does not contain this one (an inlined finally block; see EnterLoop).
+  if Goccia.Compiler.Statements.StatementIsIteration(AStmt) and
+     (FLoopReentryStatement <> AStmt) then
+  begin
+    PreviousLoopReentryStatement := FLoopReentryStatement;
+    LoopScope := FCurrentScope;
+    LoopScope.EnterLoop(
+      not FOptimizationOptions.PreserveCoverageShape and
+      (LoopScope.LoopMayCreateClosure or
+       not StatementCreatesNoClosure(AStmt)));
+    FLoopReentryStatement := AStmt;
+    try
+      Exit(DoCompileStatement(AStmt));
+    finally
+      FLoopReentryStatement := PreviousLoopReentryStatement;
+      LoopScope.LeaveLoop;
     end;
   end;
 
@@ -707,6 +744,8 @@ begin
       Block := TGocciaBlockStatement(ABody);
 
       DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
+      DiscoverNumberBindings(Block, FCurrentScope,
+        NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
 
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
@@ -1190,6 +1229,50 @@ begin
   end;
 end;
 
+{ Records a static module request of a program no loader links (the entry,
+  a REPL input) in the module's request table, which the bytecode executor
+  links before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
+  defer-phase imports keep their own load paths and are not recorded. }
+procedure AddModuleRequest(const AModule: TGocciaBytecodeModule;
+  const AStmt: TGocciaStatement);
+var
+  Bindings: array of TGocciaModuleBinding;
+  I: Integer;
+  ImportDecl: TGocciaImportDeclaration;
+  Pair: TStringStringMap.TKeyValuePair;
+  ReExportDecl: TGocciaReExportDeclaration;
+begin
+  I := 0;
+  if AStmt is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(AStmt);
+    if ImportDecl.Phase <> icpEvaluation then
+      Exit;
+    SetLength(Bindings, ImportDecl.Imports.Count);
+    for Pair in ImportDecl.Imports do
+    begin
+      Bindings[I].ExportName := Pair.Value;
+      Bindings[I].LocalSlot := 0;
+      Inc(I);
+    end;
+    AModule.AddImport(EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+      ImportDecl.AttributeType), Bindings, AStmt.Line, AStmt.Column);
+  end
+  else if AStmt is TGocciaReExportDeclaration then
+  begin
+    ReExportDecl := TGocciaReExportDeclaration(AStmt);
+    SetLength(Bindings, ReExportDecl.ExportsTable.Count);
+    for Pair in ReExportDecl.ExportsTable do
+    begin
+      Bindings[I].ExportName := Pair.Value;
+      Bindings[I].LocalSlot := 0;
+      Inc(I);
+    end;
+    AModule.AddImport(EncodeImportSpecifierAttribute(ReExportDecl.ModulePath,
+      ReExportDecl.AttributeType), Bindings, AStmt.Line, AStmt.Column);
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -1201,6 +1284,7 @@ var
   PredeclaredLocal: TGocciaCompilerLocal;
 begin
   FNumericParameterProofs.Clear;
+  FNumberBindingProofs.Clear;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
@@ -1209,9 +1293,13 @@ begin
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
+  FCurrentScope.NonStrictCode := not FCurrentTemplate.StrictCode;
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try
+    DiscoverProgramNumberBindings(AProgram, FCurrentScope,
+      NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
+
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled,
@@ -1268,7 +1356,12 @@ begin
     for I := 0 to AProgram.Body.Count - 1 do
       if (AProgram.Body[I] is TGocciaImportDeclaration) or
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
+      begin
+        // A loader-linked module's requests were linked by the loader.
+        if not FPreinitializedTopLevelFunctions then
+          AddModuleRequest(FModule, AProgram.Body[I]);
         DoCompileStatement(AProgram.Body[I]);
+      end;
 
     for I := 0 to AProgram.Body.Count - 1 do
     begin

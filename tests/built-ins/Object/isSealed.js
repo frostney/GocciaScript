@@ -59,4 +59,21 @@ describe("Object.isSealed", () => {
     });
     expect(Object.isSealed(obj)).toBe(false);
   });
+
+  test("a class is sealed once it is non-extensible and its length and name are non-configurable", () => {
+    class K {
+      static level = 1;
+    }
+    expect(Object.isSealed(K)).toBe(false);
+
+    Object.preventExtensions(K);
+    expect(Object.isSealed(K)).toBe(false);
+
+    Object.seal(K);
+    expect(Object.isSealed(K)).toBe(true);
+
+    class Frozen {}
+    Object.freeze(Frozen);
+    expect(Object.isSealed(Frozen)).toBe(true);
+  });
 });

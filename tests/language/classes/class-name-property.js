@@ -85,4 +85,89 @@ describe("static name override", () => {
     class Foo { static set name(v) {} }
     expect(Foo.name).toBe(undefined);
   });
+
+  test("assigning to a deleted name does not add it back", () => {
+    class Plain {}
+    delete Plain.name;
+    expect(() => {
+      Plain.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Plain, "name")).toBe(false);
+    expect(Plain.name).toBe("");
+
+    class Frozen {}
+    delete Frozen.name;
+    Object.freeze(Frozen);
+    expect(() => {
+      Frozen.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.hasOwn(Frozen, "name")).toBe(false);
+    expect(Object.isFrozen(Frozen)).toBe(true);
+    expect(Object.getOwnPropertyNames(Frozen)).toEqual(["length", "prototype"]);
+  });
+
+  test("assigning to the name of a non-extensible class throws and keeps the name", () => {
+    class Fixed {}
+    Object.preventExtensions(Fixed);
+
+    expect(() => {
+      Fixed.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Fixed, "name")).toEqual({
+      value: "Fixed",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a deleted name can be defined again", () => {
+    class Renamed {}
+    delete Renamed.name;
+    Object.defineProperty(Renamed, "name", { value: "Again", configurable: true });
+
+    expect(Renamed.name).toBe("Again");
+    expect(Object.hasOwn(Renamed, "name")).toBe(true);
+  });
+
+  test("assigning to the name of a class with a null prototype throws and keeps it non-writable", () => {
+    class Orphan {}
+    Object.setPrototypeOf(Orphan, null);
+
+    expect(() => {
+      Orphan.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Object.getOwnPropertyDescriptor(Orphan, "name").writable).toBe(false);
+    expect(Orphan.name).toBe("Orphan");
+  });
+
+  test("assigning to the name of a subclass whose base has a writable name throws", () => {
+    class Base {}
+    Object.defineProperty(Base, "name", { writable: true });
+    class Derived extends Base {}
+
+    expect(() => {
+      Derived.name = "Changed";
+    }).toThrow(TypeError);
+    expect(Derived.name).toBe("Derived");
+  });
+
+  test("assigning to a deleted name runs an inherited static setter and does not add the name back", () => {
+    let received;
+    class Base {
+      static get name() {
+        return "Base";
+      }
+      static set name(value) {
+        received = value;
+      }
+    }
+    class Derived extends Base {}
+    delete Derived.name;
+
+    Derived.name = "Changed";
+
+    expect(received).toBe("Changed");
+    expect(Object.hasOwn(Derived, "name")).toBe(false);
+  });
 });

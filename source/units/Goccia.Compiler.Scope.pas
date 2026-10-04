@@ -23,9 +23,11 @@ type
     Depth: Integer;
     IsCaptured: Boolean;
     IsConst: Boolean;
-    // True once the declaration that initializes this const binding has been
-    // compiled. A read compiled after that point cannot observe the TDZ hole,
-    // and a const never changes afterwards, so the read may use the register.
+    // True once the code that initializes this binding has been compiled: its
+    // declaration, the for...of or counted-loop step that fills it, or the
+    // parameter preamble. A read compiled after that point cannot observe the
+    // TDZ hole. Whether the read may also take the register as an operand is
+    // decided where the operand is compiled; see TryResolveSettledLocalName.
     IsInitialized: Boolean;
     // Above zero while the code being compiled is outside this local's scope
     // although the local is still declared: ResolveLocal skips it then. See
@@ -36,6 +38,9 @@ type
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
+    // True when every value this binding can hold is a Number, so its Number
+    // hint stays valid across assignments (Goccia.Compiler.NumericBindings).
+    HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
     ReturnTypeHint: TGocciaLocalType;
@@ -98,10 +103,16 @@ type
     FPrivatePrefixes: array of string;
     FPrivateNameCount: Integer;
     FIsArrow: Boolean;
+    FNonStrictCode: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
     FWithBindingCount: Integer;
+    FLoopDepth: Integer;
+    FLoopMayCreateClosure: Boolean;
+    // FLoopMayCreateClosure as it was when each open loop was entered.
+    FOuterLoopMayCreateClosure: array of Boolean;
+    FDirectEvalSeen: Boolean;
     procedure EnsureLocalIndex;
     procedure RestoreLocalIndexBinding(const ARemovedName: string);
   public
@@ -136,6 +147,10 @@ type
     procedure MarkCaptured(const AIndex: Integer);
     procedure MarkLocalInitialized(const AIndex: Integer);
     procedure ClearInitializedAtDepth(const ADepth: Integer);
+    procedure EnterLoop(const AMayCreateClosure: Boolean);
+    procedure LeaveLoop;
+    procedure MarkDirectEvalSeen;
+    function MutableLocalsMayLeaveRegisters: Boolean;
     procedure MarkNonStrictImmutable(const AIndex: Integer);
     procedure MarkGlobalBacked(const AIndex: Integer);
     procedure SetLocalTypeHint(const AIndex: Integer;
@@ -146,6 +161,8 @@ type
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
       const AProvenNumeric: Boolean);
+    procedure SetLocalHoldsOnlyNumbers(const AIndex: Integer;
+      const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalReturnTypeHint(const AIndex: Integer;
       const AReturnTypeHint: TGocciaLocalType);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
@@ -166,6 +183,7 @@ type
     function TryGetVisibleConstantValue(const AName: string;
       out AValue: TGocciaCompileTimeValue): Boolean;
     function HasVisibleLocal(const AName: string): Boolean;
+    function DirectEvalMayShadow(const AName: string): Boolean;
     function ResolvePrivatePrefix: string;
     function ResolvePrivatePrefixForName(const AName: string): string;
     procedure DeclarePrivateNamePrefix(const AName, APrefix: string);
@@ -181,8 +199,11 @@ type
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
+    property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
+    property LoopDepth: Integer read FLoopDepth;
+    property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -248,6 +269,9 @@ begin
   FPrivateNameCount := 0;
   FDirectEvalSyntheticArgumentsSlot := -1;
   FWithBindingCount := 0;
+  FLoopDepth := 0;
+  FLoopMayCreateClosure := False;
+  FDirectEvalSeen := False;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
     FWithBindingCount := AParent.FWithBindingCount;
@@ -286,6 +310,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
@@ -341,6 +366,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
@@ -558,6 +584,49 @@ begin
       FLocals[I].IsInitialized := False;
 end;
 
+// AMayCreateClosure describes the subtree of the loop being entered. A loop
+// nested in one that may create a closure inherits that answer, and every loop
+// is asked for its own: a loop compiled while another is open is not always
+// part of that loop's subtree. A finally block is compiled again at each
+// return, break or continue that leaves its try statement, so a loop inside a
+// finally block can be compiled in the middle of a loop it does not belong to.
+procedure TGocciaCompilerScope.EnterLoop(const AMayCreateClosure: Boolean);
+begin
+  if FLoopDepth >= Length(FOuterLoopMayCreateClosure) then
+    SetLength(FOuterLoopMayCreateClosure, FLoopDepth * 2 + 4);
+  FOuterLoopMayCreateClosure[FLoopDepth] := FLoopMayCreateClosure;
+  FLoopMayCreateClosure := FLoopMayCreateClosure or AMayCreateClosure;
+  Inc(FLoopDepth);
+end;
+
+procedure TGocciaCompilerScope.LeaveLoop;
+begin
+  Dec(FLoopDepth);
+  FLoopMayCreateClosure := FOuterLoopMayCreateClosure[FLoopDepth];
+end;
+
+procedure TGocciaCompilerScope.MarkDirectEvalSeen;
+begin
+  FDirectEvalSeen := True;
+end;
+
+// True where a let binding or a parameter of this function may hold its
+// current value somewhere other than its register, although no closure
+// compiled so far has captured it. Two things cause that:
+//
+// - A closure created later in an enclosing loop. It is compiled after the
+//   read, so the read cannot see IsCaptured, yet on the next iteration the
+//   read runs after the closure has written the binding's cell.
+// - Direct eval. Code it creates keeps writing the caller's registers after
+//   the eval call has returned, from inside calls the compiler cannot see.
+//   This covers the function that contains the eval call; a host that offers
+//   direct eval at all switches the direct read off for every function (see
+//   DirectEvalAvailable in TGocciaCompilerOptimizationOptions).
+function TGocciaCompilerScope.MutableLocalsMayLeaveRegisters: Boolean;
+begin
+  Result := FLoopMayCreateClosure or FDirectEvalSeen;
+end;
+
 procedure TGocciaCompilerScope.MarkNonStrictImmutable(const AIndex: Integer);
 begin
   FLocals[AIndex].IsNonStrictImmutable := True;
@@ -602,6 +671,12 @@ procedure TGocciaCompilerScope.SetLocalCallProvenNumeric(
   const AIndex: Integer; const AProvenNumeric: Boolean);
 begin
   FLocals[AIndex].IsCallProvenNumeric := AProvenNumeric;
+end;
+
+procedure TGocciaCompilerScope.SetLocalHoldsOnlyNumbers(
+  const AIndex: Integer; const AHoldsOnlyNumbers: Boolean);
+begin
+  FLocals[AIndex].HoldsOnlyNumbers := AHoldsOnlyNumbers;
 end;
 
 procedure TGocciaCompilerScope.SetLocalTypeAnnotation(const AIndex: Integer;
@@ -696,6 +771,26 @@ begin
     Exit(True);
 
   Result := Assigned(FParent) and FParent.HasVisibleLocal(AName);
+end;
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation: a sloppy direct eval declares
+// its vars in the variable environment of the function that calls it, where
+// they shadow a same-named binding of any enclosing function. What the
+// compiler knows about such a binding, its constant value or its type, holds
+// for a reference only when no non-strict function lies between the reference
+// and the declaration.
+function TGocciaCompilerScope.DirectEvalMayShadow(const AName: string): Boolean;
+var
+  Scope: TGocciaCompilerScope;
+begin
+  Scope := Self;
+  while Assigned(Scope) and (Scope.ResolveLocal(AName) < 0) do
+  begin
+    if Scope.FNonStrictCode then
+      Exit(True);
+    Scope := Scope.FParent;
+  end;
+  Result := False;
 end;
 
 function TGocciaCompilerScope.ResolvePrivatePrefix: string;

@@ -54,7 +54,7 @@ type
     procedure Push(const AFunctionName, AFilePath: string; const ALine, AColumn: Integer);
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
-    procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string);
+    procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
     { Stamps the currently executing frame with a source position.
 
       A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
@@ -65,6 +65,11 @@ type
       tree-walk evaluator's per-call frame would have carried. }
     procedure SetTopFrameLocation(const AFilePath: string;
       const ALine, AColumn: Integer);
+    { Returns the currently executing deferred frame to the unlocated state
+      PushTemplate leaves it in. The VM calls this when a throw lands in a handler of that frame:
+      a stamp made for the throw, or for a call the throw abandoned, would
+      otherwise stay on the frame and locate a later error at it. }
+    procedure ClearTopFrameLocation;
     { Snapshot / restore the whole top frame, for a caller that stamps the
       executing frame's location for the duration of a nested operation (an
       interpreter `new` whose native constructor captures a trace) and must
@@ -72,7 +77,7 @@ type
       statement's diagnostics. }
     function TryGetTopFrame(var AFrame: TGocciaCallFrame): Boolean;
     procedure SetTopFrame(const AFrame: TGocciaCallFrame);
-    procedure Pop;
+    procedure Pop; {$IFDEF FPC}inline;{$ENDIF}
 
     // Registers the resolver used to materialise deferred template frames.
     // Class-level: one registration applies to every thread's instance.
@@ -149,16 +154,25 @@ begin
   Inc(FCount);
 end;
 
+{ Runs once per bytecode call. A string assignment is a call into the RTL even
+  when both sides are empty, and a slot a deferred frame is pushed into almost
+  always holds the strings it is about to be given, so each one is assigned
+  only when it differs. }
 procedure TGocciaCallStack.PushTemplate(const ATemplate: Pointer; const AFallbackPath: string);
+var
+  Frame: PGocciaCallFrame;
 begin
   if FCount >= FCapacity then
     Grow;
-  FFrames[FCount].Template := ATemplate;
-  FFrames[FCount].FunctionName := '';
-  FFrames[FCount].FilePath := AFallbackPath;
-  FFrames[FCount].Line := 0;
-  FFrames[FCount].Column := 0;
-  FFrames[FCount].HasExplicitLocation := False;
+  Frame := @FFrames[FCount];
+  Frame^.Template := ATemplate;
+  if Pointer(Frame^.FunctionName) <> nil then
+    Frame^.FunctionName := '';
+  if Pointer(Frame^.FilePath) <> Pointer(AFallbackPath) then
+    Frame^.FilePath := AFallbackPath;
+  Frame^.Line := 0;
+  Frame^.Column := 0;
+  Frame^.HasExplicitLocation := False;
   Inc(FCount);
 end;
 
@@ -174,6 +188,18 @@ begin
     FFrames[FCount - 1].FilePath := AFilePath;
     FFrames[FCount - 1].HasExplicitLocation := True;
   end;
+end;
+
+{ The VM stamps its executing frame with that frame's own template source, and
+  a deferred frame reads the stamped path only while HasExplicitLocation is
+  set, so clearing the flag resolves the path as it was when pushed. }
+procedure TGocciaCallStack.ClearTopFrameLocation;
+begin
+  if FCount = 0 then
+    Exit;
+  FFrames[FCount - 1].Line := 0;
+  FFrames[FCount - 1].Column := 0;
+  FFrames[FCount - 1].HasExplicitLocation := False;
 end;
 
 { The snapshot and its restore bracket every native call the bytecode VM

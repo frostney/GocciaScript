@@ -599,7 +599,7 @@ The `GocciaTestRunner` program:
 
 1. Scans the provided path for `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, and `.mts` files. A directory named `node_modules` is never descended into: a committed `node_modules` tree is a module-resolution fixture the suites beside it import (see [Module Resolution](module-resolution.md)), not a suite of its own.
 2. For each file, creates a fresh `TGocciaEngine` with the capability set its options and `goccia.json` resolve to, applies source type from CLI/config or `.mjs`/`.mts` inference, attaches `TGocciaRuntimeCore`, applies the test-runner runtime profile, and installs the FFI runtime extension when that set grants `ffi` (`--allow-ffi` or the `permissions` block of the file's `goccia.json`).
-3. Loads the source. In bytecode mode a `runTests(...)` call is appended; in interpreter mode the runner calls `runTests` directly after evaluation.
+3. Loads the source. In both modes the runner calls `runTests` directly after evaluation, so a test function starts with the whole `--max-stack` limit. In bytecode mode the runner then waits for the work the tests left pending, such as a timer an `afterAll` set, and a rejection that work leaves unhandled fails the file.
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
@@ -765,7 +765,7 @@ test-structure
 
 **`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, `main` only) — Uploads release binaries after all checks pass. `test262` is **not** a gating dependency — failing tests there cannot block a release.
 
-**`nightly`** (`.github/workflows/nightly.yml`) — Runs after a `CI` run for a push to `main` succeeds, and publishes that run's builds as the `nightly` prerelease at most once per day. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
+**`nightly`** (`.github/workflows/nightly.yml`) — Runs on a schedule, every three hours. It takes the newest `CI` run that succeeded for a push to `main` and publishes that run's builds as the `nightly` prerelease when its commit is ahead of the one the last nightly was built from, or has diverged from it after a rewritten `main`; when nothing new has passed, or the run's one-day build artifacts have expired, it publishes nothing. "Run workflow" on `main` publishes the newest passing build at once. A missing target artifact fails the job and leaves the existing release in place. It needs the whole run to succeed, so `test-structure` and `test262-merge` gate it as well: failing test262 tests do not fail `test262-merge`, but a missing or timed-out shard does. See [Build System](build-system.md#ciyml--push-to-main--tags).
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 
