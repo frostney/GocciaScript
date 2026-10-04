@@ -14,9 +14,16 @@ type
     LocalSlot: UInt16;
   end;
 
+  { One static module request of the compiled program, in source order: an
+    evaluation-phase import or a re-export. ModulePath is the request as
+    EncodeImportSpecifierAttribute writes it; Bindings name what the program
+    imports or re-exports from it. Line and Column locate the declaration
+    and are not serialized, so a module read from a .gbc file reports 0. }
   TGocciaModuleImport = record
     ModulePath: string;
     Bindings: array of TGocciaModuleBinding;
+    Line: Integer;
+    Column: Integer;
   end;
 
   TGocciaModuleExport = record
@@ -40,7 +47,8 @@ type
     destructor Destroy; override;
 
     procedure AddImport(const AModulePath: string;
-      const ABindings: array of TGocciaModuleBinding);
+      const ABindings: array of TGocciaModuleBinding;
+      const ALine: Integer = 0; const AColumn: Integer = 0);
     procedure AddExport(const AName: string; const ALocalSlot: UInt16);
 
     function GetImport(const AIndex: Integer): TGocciaModuleImport;
@@ -79,7 +87,8 @@ begin
 end;
 
 procedure TGocciaBytecodeModule.AddImport(const AModulePath: string;
-  const ABindings: array of TGocciaModuleBinding);
+  const ABindings: array of TGocciaModuleBinding; const ALine,
+  AColumn: Integer);
 var
   I: Integer;
 begin
@@ -89,6 +98,8 @@ begin
   SetLength(FImports[FImportCount].Bindings, Length(ABindings));
   for I := 0 to High(ABindings) do
     FImports[FImportCount].Bindings[I] := ABindings[I];
+  FImports[FImportCount].Line := ALine;
+  FImports[FImportCount].Column := AColumn;
   Inc(FImportCount);
 end;
 
