@@ -38,6 +38,9 @@ type
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
+    // True when every value this binding can hold is a Number, so its Number
+    // hint stays valid across assignments (Goccia.Compiler.NumericBindings).
+    HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
     ReturnTypeHint: TGocciaLocalType;
@@ -158,6 +161,8 @@ type
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
       const AProvenNumeric: Boolean);
+    procedure SetLocalHoldsOnlyNumbers(const AIndex: Integer;
+      const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalReturnTypeHint(const AIndex: Integer;
       const AReturnTypeHint: TGocciaLocalType);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
@@ -305,6 +310,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
@@ -360,6 +366,7 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
   FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
@@ -664,6 +671,12 @@ procedure TGocciaCompilerScope.SetLocalCallProvenNumeric(
   const AIndex: Integer; const AProvenNumeric: Boolean);
 begin
   FLocals[AIndex].IsCallProvenNumeric := AProvenNumeric;
+end;
+
+procedure TGocciaCompilerScope.SetLocalHoldsOnlyNumbers(
+  const AIndex: Integer; const AHoldsOnlyNumbers: Boolean);
+begin
+  FLocals[AIndex].HoldsOnlyNumbers := AHoldsOnlyNumbers;
 end;
 
 procedure TGocciaCompilerScope.SetLocalTypeAnnotation(const AIndex: Integer;
