@@ -1017,8 +1017,7 @@ function EvaluateWithInferredName(const AExpression: TGocciaExpression;
   const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
 begin
   if IsAnonymousClassExpression(AExpression) then
-    Exit(EvaluateClassExpression(TGocciaClassExpression(AExpression),
-      AContext, AName));
+    Exit(EvaluateNamedExpression(AExpression, AContext, AName));
 
   Result := AExpression.Evaluate(AContext);
   if IsAnonymousFunctionNameExpression(AExpression) and

@@ -202,6 +202,37 @@ describe("an anonymous class named by its context", () => {
     expect(destructured.a.self).toBe(destructured.a);
     expect(destructured.a.name).toBe("a");
     expect(destructured.b).toBe(5);
+
+    // An assignment whose class completed before the yield, in a position the
+    // resumed generator evaluates again: a member key and a conditional test.
+    let builds = 0;
+    const assignedKey = drive(
+      {
+        *build() {
+          let x;
+          const target = {};
+          target[x = class { static { builds++; } }] = yield 1;
+          return { x, after: Object.values(target)[0] };
+        },
+      }.build,
+    );
+    expect(builds).toBe(1);
+    expect(assignedKey.x.name).toBe("x");
+    expect(assignedKey.after).toBe(5);
+
+    builds = 0;
+    const assignedTest = drive(
+      {
+        *build() {
+          let x;
+          const after = (x = class { static { builds++; } }) ? yield 1 : 0;
+          return { x, after };
+        },
+      }.build,
+    );
+    expect(builds).toBe(1);
+    expect(assignedTest.x.name).toBe("x");
+    expect(assignedTest.after).toBe(5);
   });
 
   // The message text is implementation-defined (V8 leaves the name out for a
