@@ -232,9 +232,12 @@ keeps that true:
   only once they are about to throw (`ThrowUninitializedLocal`,
   `ThrowUninitializedUpvalue`), so a read of an initialized binding does no
   extra work. The const-assignment message is a constant compiled into the
-  throwing instruction. An assignment to a const still in its dead zone reads
-  the binding first, so its `ReferenceError` wins over the `TypeError`
-  (ES2026 §9.1.1.1.5 step 3). Debug locals are serialised to `.gbc` in the
+  throwing instruction. An assignment to a const first checks the binding
+  with `OP_CHECK_BINDING_INITIALIZED`, so a const still in its dead zone
+  throws the `ReferenceError` rather than the `TypeError` (ES2026 §9.1.1.1.5
+  step 3). That opcode checks the captured cell or global binding the
+  assignment resolved before its right-hand side ran, never a same-named var
+  a direct eval in the right-hand side declared. Debug locals are serialised to `.gbc` in the
   section the format already had; bytecode without them, such as a `.gbc` from
   an earlier build, falls back to the unnamed
   `Cannot access lexical binding before initialization`.

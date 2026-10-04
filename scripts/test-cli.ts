@@ -462,6 +462,54 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Test262 Runner ${mode} direct eval shadowing a top-level const expected 5,7,16,16, got: ${evalShadowOut}`);
     }
 
+    // An assignment resolves its target before the right-hand side runs
+    // (ES2026 §13.15.2), so a same-named var that a direct eval declares
+    // there does not redirect it: a const still in its dead zone throws the
+    // ReferenceError, an initialized one the TypeError (§9.1.1.1.5 step 3).
+    const evalConstTargetSource = [
+      "const outcome = function (run) {",
+      "  try { run(); return 'none'; } catch (e) { return e.constructor.name + ': ' + e.message; }",
+      "};",
+      "const results = [",
+      "  outcome(function () {",
+      '    const inner = function () { early = eval("var early = 5; 1"); };',
+      "    inner();",
+      "    const early = 0;",
+      "  }),",
+      "  outcome(function () {",
+      '    const inner = function () { TOP_LATE = eval("var TOP_LATE = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "  outcome(function () {",
+      "    const fixed = 0;",
+      '    const inner = function () { fixed = eval("var fixed = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "];",
+      "const TOP_LATE = 1;",
+      'print(results.join(" | "));',
+      "",
+    ].join("\n");
+    const evalConstTargetExpected = [
+      "ReferenceError: Cannot access 'early' before initialization",
+      "ReferenceError: Cannot access 'TOP_LATE' before initialization",
+      "TypeError: Assignment to constant variable 'fixed'",
+    ].join(" | ");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalConstTarget = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalConstTargetSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalConstTargetOut =
+        evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
+      if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
+        throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
       wideCapturedBlockSrc,

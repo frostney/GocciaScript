@@ -202,6 +202,23 @@
         end;
       end;
 
+      OP_CHECK_BINDING_INITIALIZED:
+        if A = CHECK_BINDING_GLOBAL then
+        begin
+          // The global scope's own lookup raises the binding's named
+          // ReferenceError while it is uninitialized.
+          if Assigned(FGlobalScope) then
+            FGlobalScope.TryGetBindingValue(Template.GetConstantUnchecked(
+              DecodeBx(Instruction)).StringValue, GlobalBindingValue);
+        end
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
+             (Upvalue.Cell.Value.Kind = grkHole) then
+            ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
+        end;
+
       OP_RESOLVE_UPVALUE_REF:
       begin
         Desc := Template.GetUpvalueDescriptor(B);

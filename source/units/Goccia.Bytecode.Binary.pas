@@ -235,6 +235,17 @@ begin
       OP_GET_UPVALUE, OP_SET_UPVALUE, OP_SET_UPVALUE_DYNAMIC:
         RequireUpvalue(DecodeBx(Instruction));
 
+      OP_CHECK_BINDING_INITIALIZED:
+        case A of
+          CHECK_BINDING_UPVALUE:
+            RequireUpvalue(DecodeBx(Instruction));
+          CHECK_BINDING_GLOBAL:
+            RequireConstant(DecodeBx(Instruction));
+        else
+          RejectInvalidBytecode(ATemplate, PC,
+            Format('binding-check mode %d is not 0 or 1', [A]));
+        end;
+
       OP_RESOLVE_UPVALUE_REF:
         RequireUpvalue(B);
 

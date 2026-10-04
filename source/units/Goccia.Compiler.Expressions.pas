@@ -580,34 +580,26 @@ end;
 
 // ES2026 §9.1.1.1.5 SetMutableBinding step 3: assigning to a const that is
 // still in its temporal dead zone throws ReferenceError, not the const
-// TypeError. These probes read the binding into a scratch register so that
-// read's TDZ check raises it; they are emitted only ahead of
-// EmitConstAssignmentError, which always throws.
+// TypeError. These probes are emitted only ahead of EmitConstAssignmentError,
+// which always throws. They check the binding itself rather than read its
+// name: a direct eval in the right-hand side can declare a same-named var
+// that OP_GET_UPVALUE or OP_GET_GLOBAL would read, while the assignment still
+// targets the binding it resolved before the right-hand side ran.
 procedure EmitGlobalConstTDZProbe(const ACtx: TGocciaCompilationContext;
   const AName: string);
-var
-  ProbeReg: UInt16;
 begin
-  ProbeReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ProbeReg,
-    ACtx.Template.AddConstantString(AName)));
-  ACtx.Scope.FreeRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_CHECK_BINDING_INITIALIZED,
+    CHECK_BINDING_GLOBAL, ACtx.Template.AddConstantString(AName)));
 end;
 
 procedure EmitUpvalueConstTDZProbe(const ACtx: TGocciaCompilationContext;
   const AUpvalue: TGocciaCompilerUpvalue; const AUpvalueIndex: Integer);
-var
-  ProbeReg: UInt16;
 begin
   if AUpvalue.IsGlobalBacked then
-  begin
-    EmitGlobalConstTDZProbe(ACtx, AUpvalue.Name);
-    Exit;
-  end;
-  ProbeReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ProbeReg,
-    UInt16(AUpvalueIndex)));
-  ACtx.Scope.FreeRegister;
+    EmitGlobalConstTDZProbe(ACtx, AUpvalue.Name)
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_CHECK_BINDING_INITIALIZED,
+      CHECK_BINDING_UPVALUE, UInt16(AUpvalueIndex)));
 end;
 
 function ShouldIgnoreNonStrictImmutableLocalAssignment(
