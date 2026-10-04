@@ -603,7 +603,7 @@ The `GocciaTestRunner` program:
 4. Executes the script — `describe`/`test` blocks register themselves during execution. Nested `describe` blocks are supported; suite names are composed with ` > ` separators (e.g., `"Outer > Inner"`). Skip state is inherited by nested describes.
 5. `runTests()` executes all registered tests, reconciles snapshots through the
    installed host, and collects results.
-6. `GC.Collect` runs after each file, on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one, so memory does not grow with the number of files a worker runs.
+6. When the run has more than one file, `GC.Collect` runs after each file: on the main thread in a sequential run (`--jobs=1`) and on the worker that ran the file in a parallel one. This reclaims the file's garbage before the next file starts. It does not reclaim the file's parsed AST, which is never freed, so memory still grows by roughly the size of each file's AST. A one-file run does not collect after its file.
 7. Aggregates pass/fail/skip counts across all files.
 8. Prints a summary with total statistics.
 
@@ -787,7 +787,7 @@ docs, test-structure (no build)       * also needs build-main, a build of the PR
 
 `docs` runs the Markdown lint and the `scripts/check-doc-*.ts` / `check-conformance-claims.ts` checks.
 
-The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. Both runners collect after every file, the test runner on the worker that ran it, and the collection count includes those collections. Reclaiming a worker's heap at shutdown is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
+The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics for interpreter mode and bytecode mode. GC memory rows aggregate the main thread plus all worker thread-local GCs. The benchmark runner collects after every file. The test runner collects after every file of a run with more than one file, on the worker that ran it. The collection count includes those collections. Reclaiming a worker's heap at shutdown is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
 The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, and the latest Node Current release. The underlying `awfy-report` artifact keeps the five raw interleaved samples per engine, min/max/CV, environment metadata, and first-class failure outcomes.
 
