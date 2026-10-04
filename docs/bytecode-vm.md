@@ -293,7 +293,12 @@ machinery keep that true:
   `ConstructValue`, so a constructor's position does not leak onto a later throw
   (`new Map(); JSON.parse("{")` reports the JSON fault at its own line, not the
   `new`). Native calls stamp the call site around the invoke, likewise restored,
-  so a native callee's error carries a location rather than `0:0`.
+  so a native callee's error carries a location rather than `0:0`. A throw
+  skips those restores, so `HandleExceptionUnwind` clears the position of the
+  frame whose handler it lands in (`TGocciaCallStack.ClearTopFrameLocation`):
+  the stamp of the call the throw abandoned, or of the fault that raised it,
+  does not locate a later error in that frame. The work stays on the throw
+  path, so a call that returns pays nothing for it.
 
 ### `.gbc` parity note
 
