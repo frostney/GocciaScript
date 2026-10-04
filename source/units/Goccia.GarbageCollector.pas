@@ -27,11 +27,12 @@ type
     // an instance must unregister from the same one, and a collector that is
     // destroyed first nils this so unregistration cannot reach freed memory.
     FRootSourceOwner: TGarbageCollector;
-    // Set once AfterConstruction has run. A constructor that raises (the
-    // development build's stack check can raise in any of them) frees the
-    // instance without it, leaving the reference count
-    // TInterfacedObject.NewInstance set, which TInterfacedObject's
-    // BeforeDestruction would report as an invalid pointer operation.
+    // Set once AfterConstruction has run its inherited part. When
+    // AfterConstruction raises before that (the development build's stack
+    // check can fire in its prologue), FPC still destroys the instance through
+    // BeforeDestruction, with the reference count TInterfacedObject.NewInstance
+    // set still in place, and TInterfacedObject's BeforeDestruction reports
+    // that as an invalid pointer operation.
     FRootSourceConstructed: Boolean;
   public
     procedure AfterConstruction; override;

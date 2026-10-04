@@ -33,8 +33,8 @@ const
   // `new Proxy(Reflect.apply, {})`): in a production build on Linux x86-64,
   // interpreted, under the deepest recursion the default --max-stack allows,
   // such a nest ran out of native stack after about 2,130 levels. The cap
-  // stays below that. A trap wrapped in several bound functions costs more again and is
-  // not covered.
+  // stays below that. A trap wrapped in several bound functions costs more
+  // again and is not covered: three already exhaust the stack there.
   MAX_PROPERTY_DELEGATION_DEPTH = 2000;
 
   // The same walk enters an array, function, class or class instance by a

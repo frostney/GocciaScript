@@ -1833,15 +1833,24 @@ var
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
-  CheckRevoked;
   // Same window as DefineProperty; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    PushDefineTrapRoots(Roots, ADescriptor);
-    Trap := GetTrap(PROP_DEFINE_PROPERTY);
+    // ADescriptor is owned here until the trap call or the target takes it;
+    // a revoked Proxy, or a trap lookup stopped by the delegation bound,
+    // throws before then.
+    try
+      CheckRevoked;
+      PushDefineTrapRoots(Roots, ADescriptor);
+      Trap := GetTrap(PROP_DEFINE_PROPERTY);
+      if Assigned(Trap) then
+        DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
     if Assigned(Trap) then
     begin
-      DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
@@ -1886,15 +1895,22 @@ var
   TrapResult: TGocciaValue;
   Roots: TGocciaActiveRootFrame;
 begin
-  CheckRevoked;
   // Same window as DefineProperty; see PushDefineTrapRoots.
   Roots.Initialize;
   try
-    PushDefineTrapRoots(Roots, ADescriptor);
-    Trap := GetTrap(PROP_DEFINE_PROPERTY);
+    // See TryDefineProperty.
+    try
+      CheckRevoked;
+      PushDefineTrapRoots(Roots, ADescriptor);
+      Trap := GetTrap(PROP_DEFINE_PROPERTY);
+      if Assigned(Trap) then
+        DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
+    except
+      ADescriptor.Free;
+      raise;
+    end;
     if Assigned(Trap) then
     begin
-      DescObj := CreateProxyTrapDescriptorObject(ADescriptor);
       Roots.Add(DescObj);
       Args := TGocciaArgumentsCollection.Create;
       try
