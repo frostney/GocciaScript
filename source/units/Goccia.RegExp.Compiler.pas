@@ -402,6 +402,14 @@ begin
   raise EConvertError.Create(SErrorRegExpTooLarge);
 end;
 
+function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
+  const AOperand: Integer): UInt32;
+begin
+  if (AOperand < 0) or (AOperand > REGEXP_MAX_OPERAND) then
+    RaiseRegExpTooLarge;
+  Result := UInt32(Ord(AOp)) or (UInt32(AOperand) shl 8);
+end;
+
 procedure TRegExpCompiler.Emit(AInstr: UInt32);
 begin
   if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
@@ -434,14 +442,6 @@ end;
 function TRegExpCompiler.EncodeOp(AOp: TRegExpOpCode): UInt32;
 begin
   Result := UInt32(Ord(AOp));
-end;
-
-function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
-  const AOperand: Integer): UInt32;
-begin
-  if (AOperand < 0) or (AOperand > REGEXP_MAX_OPERAND) then
-    RaiseRegExpTooLarge;
-  Result := UInt32(Ord(AOp)) or (UInt32(AOperand) shl 8);
 end;
 
 // A lookaround's operand holds its end target in the low 23 bits and the
