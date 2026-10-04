@@ -14646,6 +14646,11 @@ begin
       // before the region it protects, so those scopes own the slots above it.
       for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
         FLocalCells[I] := nil;
+      // The throw skipped the restore of any position stamped on this frame
+      // for it: the call it abandoned, or the fault that raised it. Clear it
+      // here, off the call path, so a later error is not located there.
+      if Assigned(FCallStack) then
+        FCallStack.ClearTopFrameLocation;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;

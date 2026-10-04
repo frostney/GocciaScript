@@ -4670,10 +4670,24 @@ end;
 
 procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
+var
+  ModReg: UInt16;
 begin
   // Re-exports are link-time module graph declarations. The module loader
   // registers their forwardings before evaluation, so bytecode must not
   // snapshot them with OP_EXPORT during execution.
+  if ACtx.PreinitializedTopLevelFunctions then
+    Exit;
+  // ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation evaluates every requested
+  // module, a re-export's included, before the module body. A loader-linked
+  // module's requests are evaluated by the loader; a program no loader linked
+  // (the entry, a REPL input) evaluates this request here, in source order
+  // with its imports.
+  ModReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg,
+    ACtx.Template.AddConstantString(EncodeImportSpecifierAttribute(
+      AStmt.ModulePath, AStmt.AttributeType))));
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;

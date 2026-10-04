@@ -2795,7 +2795,8 @@
             frame, stamp it at the construct site so a trace captured during
             construction locates the `new`, then restore it on success so the
             stamp does not leak onto a later throw in the same function
-            (`new Map(); JSON.parse('{')`). On a throw the frame unwinds. }
+            (`new Map(); JSON.parse('{')`). On a throw, the handler that
+            catches it in this frame clears the stamp (HandleExceptionUnwind). }
           if FCallStack <> nil then
             SavedConstructFrameOk :=
               FCallStack.TryGetTopFrame(SavedConstructFrame)
