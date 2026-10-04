@@ -7,6 +7,7 @@
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
 - **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific), endian-dependent byte indexing
+- **Fuzzing and probes** — `GocciaFuzzHarness` and the scheduled memory-safety run cover single inputs; `scripts/depth-probe.ts` is a manual, memory-capped probe of depth limits in both execution modes
 
 ## Auto-Formatting
 
@@ -317,3 +318,69 @@ such as macOS the message is `Can't create assembler file: …` instead).
 Both run on Linux only. Valgrind slows the suite by roughly an order of
 magnitude, which is why neither runs per-PR. Findings upload as artifacts with
 a 30-day retention.
+
+## Depth and Fuzz Probe
+
+`scripts/depth-probe.ts` runs depth and nesting shapes against a `GocciaRunner`
+binary you choose: Proxy nests forwarding each internal method, Proxy handler
+chains, native-trap nests, deep prototype chains, deep recursion, deeply nested
+values through `JSON`, `structuredClone`, `join` and `flat`, deep syntactic
+nesting, and recovery after a caught `RangeError`. Where the fuzz harness asks
+whether one input breaks the engine, the probe asks where its depth limits are
+and what happens past them, in both execution modes.
+
+It is **manual-only**. Nothing in CI, Lefthook, or the nightly runs it. Run it
+when you change recursion, stack limits, Proxy forwarding, the parser's
+nesting, or the collector, and when you investigate a depth crash.
+
+```bash
+./build.pas --prod runner
+bun scripts/depth-probe.ts build/GocciaRunner            # the whole catalog, both modes
+npx tsx scripts/depth-probe.ts build/GocciaRunner --list  # probes, growth class, default depths
+bun scripts/depth-probe.ts build/GocciaRunner --probe=proxy-getOwnPropertyDescriptor --depth=30000
+bun scripts/depth-probe.ts build/GocciaRunner --fuzz --count=200 --keep
+bun scripts/depth-probe.ts build/GocciaRunner --fuzz --seed=1234 --index=17 --mode=bytecode
+```
+
+Probe production and development builds separately: the production build
+compiles without FPC's stack checking (`-Ct`), so a native stack overflow that
+the development build reports as an error is a segmentation fault there.
+
+**Every probe process is memory-capped and timed out by default** (2 GiB,
+60 s; `--memory` and `--timeout` change them). Exponential shapes and
+uncollected garbage have taken a runner past 8 GB and 27 GB, and the kernel OOM
+killer then picks processes across the whole host. The cap is a systemd user
+scope (`MemoryMax`, `MemorySwapMax=0`) when `systemd-run --user` can apply it,
+else an address-space rlimit (`ulimit -v`). An address-space limit counts
+reserved as well as used memory, so prefer the systemd cap where both work.
+Where neither works the tool refuses to run unless you pass `--no-memory-cap`.
+Probe processes also run with core dumps minimised, so a crash records a few
+kilobytes instead of the runner's heap.
+
+Each run ends in one of these outcomes:
+
+| Outcome | Meaning | Fails the run |
+|---------|---------|---------------|
+| `completed` | The probe returned a value | No |
+| `error` | A catchable error (`RangeError`, a parse-time `SyntaxError`, ...), with its constructor and message | No |
+| `timeout` | No result within the timeout | No |
+| `memory-cap` | Killed by, or refused memory under, the cap | No |
+| `fatal` | The runner printed `Fatal error: ...` | Yes |
+| `crash` | Killed by a signal such as `SIGSEGV`, or an FPC runtime error | Yes |
+| `unexpected` | Any other ending, including a wrong answer after a caught error | Yes |
+
+Probes are labelled by how their cost grows with depth. Linear probes default
+to depths 1,000 and 30,000; quadratic and exponential ones run at small depths
+(`--quadratic-depths`, `--exponential-depths`). Each fuzz program's
+exponential layers share a depth budget, `--max-exponential-depth`, so stacking
+layers cannot multiply past it. An exponential probe at a large depth is
+expected to end in `timeout` or `memory-cap`; the cap is what keeps that from
+reaching the host.
+
+`--fuzz` composes the catalog's shapes and depths pseudo-randomly. It prints
+the seed and each program's identity (`fuzz:<seed>:<index>`) and shape, and
+every finding comes with the exact command that replays it. `--keep` writes
+each crash, fatal error, unexpected ending, timeout and memory-cap program to
+`tmp/depth-probe/` (or `--out`) with that command in its header. The kept file
+also runs directly under `GocciaRunner`. Pass extra runner options, such as
+`--runner-arg=--max-stack=0`, to probe a configuration other than the default.
