@@ -552,24 +552,11 @@ begin
       Result := ExpressionType(AScope,
         Sequence.Expressions[Sequence.Expressions.Count - 1]);
   end
-  else if AExpr is TGocciaCallExpression then
-  begin
-    if TGocciaCallExpression(AExpr).Callee is TGocciaIdentifierExpression then
-    begin
-      LocalIdx := AScope.ResolveLocal(
-        TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-      if LocalIdx >= 0 then
-        Result := AScope.GetLocal(LocalIdx).ReturnTypeHint
-      else
-      begin
-        LocalIdx := AScope.ResolveUpvalue(
-          TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-        if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
-             TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name) then
-          Result := AScope.GetUpvalue(LocalIdx).ReturnTypeHint;
-      end;
-    end;
-  end
+  // A call expression stays untyped. ES2026 §13.3.6.2 EvaluateCall yields
+  // whatever the callee returns, and a return-type annotation is not checked
+  // in either mode (#1276), so it cannot justify typed opcodes that skip
+  // §13.15.3 ApplyStringOrNumericBinaryOperator's ToPrimitive and String
+  // checks, nor a skipped strict-types check on the receiving binding.
   else if AExpr is TGocciaConditionalExpression then
   begin
     LeftType := ExpressionType(AScope,
@@ -929,14 +916,9 @@ begin
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
-      begin
-        ACtx.Scope.SetLocalReturnTypeHint(LocalIdx,
-          TypeAnnotationToLocalType(
-            TGocciaArrowFunctionExpression(Info.Initializer).ReturnType));
         ACtx.Scope.SetLocalParamTypeSignature(LocalIdx,
           BuildParamTypeSignature(
             TGocciaArrowFunctionExpression(Info.Initializer).Parameters));
-      end;
     end;
 
     if UseWithVarInitializer then
@@ -1483,7 +1465,6 @@ begin
   ACtx.Scope.SetLocalHoldsOnlyNumbers(ATargetIdx, Source.HoldsOnlyNumbers);
   ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
   ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
-  ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);
   ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
     Source.ParamTypeSignature);
   ACtx.Scope.SetLocalTypeAnnotation(ATargetIdx, Source.TypeAnnotation);

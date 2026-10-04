@@ -17,9 +17,10 @@
  *   DOC_LENGTH_LIMIT=600 npx tsx scripts/check-doc-length.ts
  */
 
-import { readFileSync, readdirSync, lstatSync, realpathSync } from "fs";
+import { readFileSync } from "fs";
 import { join, relative, dirname } from "path";
 import { fileURLToPath } from "url";
+import { findMarkdownFiles } from "./doc-checks/markdown-files";
 
 // ── Config ─────────────────────────────────────────────────────────────
 
@@ -27,11 +28,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const DEFAULT_LIMIT = parseInt(process.env.DOC_LENGTH_LIMIT ?? "800", 10);
 const VERBOSE = process.argv.includes("--verbose");
-const EXTENSIONS = new Set([".md", ".mdx"]);
-const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", ".claude", "dist", "build", ".next", "vendor"]);
-// Build artifacts whose contents are synced from elsewhere and validated at
-// the source location. Path-prefix matched against repo-relative paths.
-const IGNORE_PATH_PREFIXES = ["website/content/docs/"];
 // Generated history files are expected to grow past the human-doc line budget.
 const EXEMPT_FILES = new Set(["CHANGELOG.md"]);
 
@@ -40,37 +36,6 @@ const EXEMPT_FILES = new Set(["CHANGELOG.md"]);
 const ELEVATED_LIMITS: Record<string, number> = {
   // All files currently fit within the default 800-line limit.
   // Add entries here if a file legitimately needs more space.
-};
-
-// ── File discovery ─────────────────────────────────────────────────────
-
-const findMarkdownFiles = (dir: string): string[] => {
-  const results: string[] = [];
-  const seen = new Set<string>();
-  const isIgnoredPath = (full: string): boolean => {
-    const rel = relative(ROOT, full).split("\\").join("/");
-    return IGNORE_PATH_PREFIXES.some((p) => rel === p.replace(/\/$/, "") || rel.startsWith(p));
-  };
-  const walk = (d: string): void => {
-    const entries = readdirSync(d, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = join(d, entry.name);
-      if (entry.isDirectory()) {
-        if (IGNORE_DIRS.has(entry.name)) continue;
-        if (isIgnoredPath(full)) continue;
-        walk(full);
-      } else if (EXTENSIONS.has(entry.name.slice(entry.name.lastIndexOf(".")))) {
-        if (isIgnoredPath(full)) continue;
-        const real = lstatSync(full).isSymbolicLink() ? realpathSync(full) : full;
-        if (!seen.has(real)) {
-          seen.add(real);
-          results.push(full);
-        }
-      }
-    }
-  };
-  walk(dir);
-  return results;
 };
 
 // ── Per-file limit override ────────────────────────────────────────────
@@ -88,7 +53,7 @@ const parseFileLimit = (content: string): number | null => {
 // ── Main ───────────────────────────────────────────────────────────────
 
 const main = (): void => {
-  const files = findMarkdownFiles(ROOT);
+  const files = findMarkdownFiles(ROOT, ROOT);
   let failures = 0;
   let exemptCount = 0;
   const results: { file: string; lines: number; limit: number }[] = [];
