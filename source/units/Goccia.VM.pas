@@ -180,8 +180,8 @@ type
     // invocations: constructors, async functions, generator resume, accessors,
     // Proxy traps, host eval and native callbacks). Each one costs a real
     // native stack frame, so besides counting against --max-stack through
-    // FFrameDepth it is refused once the native stack nears its end; see
-    // CheckNativeStackHeadroom in Goccia.StackLimit.
+    // FFrameDepth it is refused once the native stack runs low (see
+    // CheckNativeStackHeadroom in Goccia.StackLimit).
     FNativeExecutionDepth: Integer;
     // NativeStackLimit of the thread the VM is bound to, looked up by the
     // first check that needs it after BindToCurrentThread.

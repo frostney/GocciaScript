@@ -406,7 +406,7 @@ Three patterns keep them off those paths:
 | Pattern | Where | What it replaces |
 |---------|-------|------------------|
 | One mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` reads `GThreadPolls.Any` once and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Four lookups per allocated value (`CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
-| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread` | A lookup per bytecode call, backward jump and native call site |
+| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread`, and `FNativeStackLimit`, which it clears for the first deep native entry to look up | A lookup per bytecode call, backward jump and native call site |
 | A handle captured at the loop boundary | `CaptureInstructionLimitState` / `PollInstructionLimit` | A lookup per opcode in the instrumented loop |
 
 Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out.
