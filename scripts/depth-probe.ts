@@ -172,7 +172,7 @@ const CATALOG: Probe[] = [
   {
     id: "proxy-native-ownKeys",
     growth: "exponential",
-    summary: "Proxy nest with { ownKeys: Reflect.ownKeys }; invariant checks re-read the target (#1441)",
+    summary: "Proxy nest with { ownKeys: Reflect.ownKeys }; each level's invariant check reads the rest of the nest once more (2^d - 1 trap calls, #1441)",
     body: (d) => `report(() => Reflect.ownKeys(nest(${d}, { x: 1 }, { ownKeys: Reflect.ownKeys })).length);\n`,
   },
   {
