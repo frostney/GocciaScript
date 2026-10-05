@@ -138,3 +138,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0126 — A bytecode call clears only what a new frame could read stale, binds thread state per outermost entry, and identifies its callee by exact class](0126-bytecode-call-path-arena-fills-and-thread-binding.md)
 - [0129 — The collector also triggers on the heap manager's in-use total, and refusal stays on tracked bytes](0129-heap-triggered-collection.md)
 - [0130 — The bytecode VM's stacks are charged to the memory budget, and a refusal is a catchable RangeError at the next instruction boundary](0130-vm-stacks-are-charged-to-the-memory-budget.md)
+- [0132 — The call-stack records and the copy a stack growth makes are charged with the VM stacks](0132-call-stack-records-and-stack-copies-are-charged.md)

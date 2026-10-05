@@ -11742,11 +11742,11 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     writeFileSync(idle, 'console.log("idle");\n');
     const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
     if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
-    // Measured 69.6 to 70.1 MiB above an idle run's 11.3 MiB over 12 runs on
-    // Linux x64, 1.09 times the ceiling, with the RangeError's stack text
-    // capped (#1503). Before the call-stack records and the stack copies were
-    // charged, the same run held 132 MiB above it, 2.07 times the ceiling. The
-    // bound leaves 13 MiB for other platforms' allocators and page sizes.
+    // Measured 69.4 to 70.3 MiB above an idle run's 11.0 to 11.3 MiB over 12
+    // runs on Linux x64, 1.09 times the ceiling. Before the call-stack records
+    // and the stack copies were charged, the same run held 132 MiB above it,
+    // 2.07 times the ceiling. The bound leaves 13 MiB for other platforms'
+    // allocators and page sizes.
     if (idleRun.peakRssBytes !== null)
       assertPeakRssBelow(
         run,
