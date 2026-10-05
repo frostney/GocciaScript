@@ -186,11 +186,16 @@ growth that does not fit is made uncharged, and the next instruction boundary
 settles it: it collects, then charges the growth or throws.
 `TGarbageCollector.TryChargeExternalBytes` is the non-collecting charge both
 sites use. Unlike `TryReserveExternalBytes`, it does not latch memory pressure.
-With the refused error's stack text capped, a recursion's peak resident memory
-is the idle process plus 1.04 to 1.05 times the ceiling, measured from 64 MiB
-to 1 GiB. What is left above the ceiling is garbage, which `BytesAllocated`
-counts at its `InstanceSize` rather than at what the heap holds for it. See
-[ADR 0130 and its Amendment 1](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
+Everything a bytecode recursion holds per frame is therefore charged, and the
+refused error's stack trace lists at most 100 frames
+([Stack Traces](errors.md#stack-traces)), so a recursion's peak resident memory
+stays close to the ceiling. What still exceeds it is garbage, which
+`BytesAllocated` counts at its `InstanceSize` rather than at what the heap
+holds for it, and memory a shrunk stack has given back, which stays resident in
+the heap manager. See
+[ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md) and
+[ADR 0132](adr/0132-call-stack-records-and-stack-copies-are-charged.md), which
+records the measurements.
 
 ### Gated growth points
 
