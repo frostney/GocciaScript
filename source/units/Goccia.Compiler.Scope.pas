@@ -149,6 +149,10 @@ type
     function LocalAt(const AIndex: Integer): PGocciaCompilerLocal; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
+    // Takes the local out of name resolution under its current name. Its slot
+    // stays allocated and the closures already compiled keep capturing it; a
+    // name lookup from here on, including DeclareVarLocal, no longer finds it.
+    procedure RenameLocal(const AIndex: Integer; const ANewName: string);
     procedure MarkLocalInitialized(const AIndex: Integer);
     procedure ClearInitializedAtDepth(const ADepth: Integer);
     procedure EnterLoop(const AMayCreateClosure: Boolean);
@@ -206,6 +210,7 @@ type
     property WithBindingCount: Integer read FWithBindingCount;
     property LoopDepth: Integer read FLoopDepth;
     property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
+    property DirectEvalSeen: Boolean read FDirectEvalSeen;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -568,6 +573,17 @@ end;
 procedure TGocciaCompilerScope.MarkCaptured(const AIndex: Integer);
 begin
   FLocals[AIndex].IsCaptured := True;
+end;
+
+procedure TGocciaCompilerScope.RenameLocal(const AIndex: Integer;
+  const ANewName: string);
+var
+  OldName: string;
+begin
+  OldName := FLocals[AIndex].Name;
+  FLocals[AIndex].Name := ANewName;
+  RestoreLocalIndexBinding(OldName);
+  RestoreLocalIndexBinding(ANewName);
 end;
 
 procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);
