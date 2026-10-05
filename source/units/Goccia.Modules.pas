@@ -960,6 +960,11 @@ begin
   Result := FAmbiguousExports.ContainsKey(AExportName);
 end;
 
+{ A change to the module's exports drops what the namespace object resolved,
+  but keeps the object: ES2026 §16.2.1.13 GetModuleNamespace creates a
+  module's [[Namespace]] once, so every namespace import and `export * as`
+  of the module is the same object, however late an export is registered.
+  Only a module that is going away detaches and releases it. }
 procedure TGocciaModule.InvalidateNamespaceObject(const ADetachModule: Boolean);
 begin
   InvalidateExportResolutions;
@@ -971,6 +976,8 @@ begin
       if ADetachModule then
         TGocciaModuleNamespaceObject(FNamespaceObject).DetachModule;
     end;
+    if not ADetachModule then
+      Exit;
     if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
     FNamespaceObject := nil;

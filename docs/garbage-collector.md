@@ -72,7 +72,7 @@ When working with the GC, follow these rules:
 - **Scopes** register with the GC in their constructor and unregister through `BeforeDestruction`. Active call scopes are tracked via `PushActiveRoot`/`PopActiveRoot`.
 - **VM register rooting** uses a bytecode VM stack root and only traverses object-bearing register slots.
 - **The execution-context stacks are deliberately unrooted, and that is a contract on their push sites.** `Goccia.ExecutionContext.pas` and the `Goccia.Realm.pas` function-context facade each keep a raw thread-local array of GC-managed scopes and function values that no root source marks. What keeps an entry's objects alive is the push site, which must name objects a root the collector already walks holds for at least as long as the entry — a VM frame's closure, the engine global scope, a module scope the evaluator holds, a temp-rooted eval activation, an active-rooted call scope, or a field the owning evaluation object marks itself. The per-site rooting arguments live next to the arrays they justify (the `threadvar` comments in both units) rather than here; read those before adding a push site. One that cannot name such a root makes the array the last reference to a collectible object and needs a real `TGCRootSource` — `TGocciaAsyncContextRoots` in `Goccia.AsyncContext.pas` is the shape to copy. `tests/language/execution-context-gc-roots.js` is the regression guard.
-- Automatic collection is disabled during bytecode execution. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, while parallel test workers reclaim their thread-local GC heap at worker shutdown. Explicit `Goccia.gc()` is still available in worker threads and is serialized by the collector lock.
+- Automatic collection is disabled during bytecode execution. CLI hosts may still call `Collect` explicitly between files; the benchmark runner does this after each benchmark file, and the test runner after each test file, on the main thread and on every parallel worker. Explicit `Goccia.gc()` is still available in worker threads and is serialized by the collector lock.
 
 ## Design Rationale
 
@@ -152,6 +152,29 @@ capacity can exceed its currently allocated native buffer. It preserves
 non-collecting primitive reads while reducing physical copying; see
 [ADR 0116](adr/0116-bounded-string-prefixes.md).
 
+The bytecode VM's stacks are charged as well. The register, local-cell,
+argument, frame and closed-numeric-frame stacks are charged for everything they
+hold past their initial capacities. A stack shrinks back at an instruction
+boundary once the recursion that grew it has returned, and the VM releases the
+rest when it is destroyed. A generator or async function charges the frame it
+suspends: its registers, local cells, arguments and handler entries. The charge
+covers the largest frame that generator has held, and is released when the
+generator finishes or is destroyed. With `--max-stack=0` this charge is all
+that stops a bytecode recursion. Deep stacks grow only up to the
+memory-pressure reserve below the ceiling. Stacks smaller than that reserve
+may use it, so a program whose heap fills the ceiling can still make calls.
+The refusal is the catchable `RangeError: Maximum call stack size exceeded`.
+
+A stack grows inside call setup, which can neither collect nor throw. So a
+growth that does not fit is made uncharged, and the next instruction boundary
+settles it: it collects, then charges the growth or throws.
+`TGarbageCollector.TryChargeExternalBytes` is the non-collecting charge both
+sites use. Unlike `TryReserveExternalBytes`, it does not latch memory pressure.
+The per-frame call-stack and execution-context entries are not charged, and
+neither is the refused error's stack trace, which lists every frame. Peak
+resident memory therefore still runs to two to three times the ceiling. See
+[ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
+
 ### Gated growth points
 
 Backing storage sized by the running script is checked against the ceiling *before* it is allocated, without being charged to it (`Goccia.MemoryLimit`: `CanAllocateNativeBytes` / `RequireNativeBytes`, raising the host-catchable `TGocciaMemoryLimitError`). Two growth points are gated: array element extension (`ExtendElementsWithHoles`) and object property storage, where the map's entry and bucket arrays grow past a small-block threshold. Both belong to containers with no hook to release a reservation, so a charge would leak budget the engine could never give back; a gate bounds the peak instead. What is reported to the gate is the *transient* footprint — the block being allocated plus the block still live while it is — because `SetLength` may allocate and copy rather than extend in place, and compaction holds both entry arrays at once by construction.
@@ -175,8 +198,8 @@ The order is collect lock → accounting lock, never the reverse (and never two 
 
 Key behavior on worker threads:
 
-- **Automatic GC collection is disabled** (`Enabled := False`) so worker execution does not collect between ordinary allocations. Explicit `Collect` calls still run under the global collector lock; `Goccia.gc()` therefore has the same observable behavior in worker threads as on the main thread. `GocciaTestRunner` still lets worker shutdown reclaim each thread-local GC heap instead of collecting after every file.
-- **`BytesAllocated` still increments** on every allocation, even with automatic collection disabled. Without explicit host collection, the counter grows across all files a worker processes.
+- **Automatic GC collection is disabled** (`Enabled := False`) so worker execution does not collect between ordinary allocations. Explicit `Collect` calls still run under the global collector lock; `Goccia.gc()` therefore has the same observable behavior in worker threads as on the main thread. `GocciaTestRunner` collects at the end of every file a worker runs. Without that, a worker holds every object it allocated until it exits, so the workers together hold the garbage of the whole run. On four 64-bit workers that raised the interpreted suite's peak from 0.70 GB to 1.27 GB resident, and a 32-bit process has 2 GB of address space.
+- **`BytesAllocated` still increments** on every allocation, even with automatic collection disabled. A host that runs many files on one worker without collecting between them sees the counter grow across all of them.
 - **The memory ceiling check still fires.** The limit check in `TGocciaValue.AfterConstruction` does not depend on `GC.Enabled` — it checks `MaxBytes > 0` and `BytesAllocated > MaxBytes` regardless. This is the sole protection against unbounded memory growth on workers.
 - **No pre-allocation.** `MaxBytes` is a threshold, not a reservation. Memory is allocated on demand by the FPC heap manager; the GC only checks whether the running total exceeds the ceiling.
 - **Each worker gets the same ceiling as the main thread.** The limit is per-thread, not divided across workers. With N workers, the theoretical maximum total allocation is `N × MaxBytes`, though in practice worker allocations are far below the ceiling.

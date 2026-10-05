@@ -295,6 +295,10 @@ type
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
     function NeedsMemoryPressureCollection: Boolean; overload;
+    // The band below MaxBytes within which the pressure checks collect:
+    // MaxBytes / 8, clamped to 16 KiB..16 MiB. Meaningful only when MaxBytes
+    // is positive.
+    function MemoryPressureReserve: Int64;
 
     // Collects when pressure has been latched by an external reservation or
     // when the live set has crossed the reserve below the ceiling. AForce
@@ -333,6 +337,13 @@ type
       const AProtect: TGCManagedObject = nil): Boolean;
     function TryReserveExternalBytes(const ABytes: Int64;
       const AProtect: TGCManagedObject = nil): Boolean;
+    // Charges ABytes when they fit under MaxBytes now, and never collects.
+    // For a caller that cannot be a safe point: the bytecode VM charges its
+    // stack growth here from inside call setup, where the callee, receiver
+    // and arguments can still be held only in Pascal locals, and settles a
+    // refused charge at its next instruction boundary instead (ADR 0130).
+    // Release with ReleaseExternalBytes.
+    function TryChargeExternalBytes(const ABytes: Int64): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
     function ExchangeMemoryPressureCountdown(
       const ACountdown: PInteger): PInteger;
@@ -1211,15 +1222,19 @@ begin
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit;
 
-  Reserve := FMaxBytes div 8;
-  if Reserve < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
-    Reserve := MEMORY_PRESSURE_COLLECTION_MIN_RESERVE;
-  if Reserve > MEMORY_PRESSURE_COLLECTION_MAX_RESERVE then
-    Reserve := MEMORY_PRESSURE_COLLECTION_MAX_RESERVE;
-  if Reserve >= FMaxBytes then
-    Reserve := FMaxBytes div 2;
-
+  Reserve := MemoryPressureReserve;
   Result := ABytesAllocated >= (FMaxBytes - Reserve);
+end;
+
+function TGarbageCollector.MemoryPressureReserve: Int64;
+begin
+  Result := FMaxBytes div 8;
+  if Result < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
+    Result := MEMORY_PRESSURE_COLLECTION_MIN_RESERVE;
+  if Result > MEMORY_PRESSURE_COLLECTION_MAX_RESERVE then
+    Result := MEMORY_PRESSURE_COLLECTION_MAX_RESERVE;
+  if Result >= FMaxBytes then
+    Result := FMaxBytes div 2;
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
@@ -1499,6 +1514,34 @@ begin
   CriticalSectionEnter(FAccountingLock);
   try
     Result := TryChargeExternalBytesLocked(ABytes);
+  finally
+    CriticalSectionLeave(FAccountingLock);
+  end;
+end;
+
+function TGarbageCollector.TryChargeExternalBytes(
+  const ABytes: Int64): Boolean;
+begin
+  if ABytes <= 0 then
+    Exit(True);
+  // Charged the way RegisterObject charges a value, not the way
+  // TryChargeExternalBytesLocked charges a reservation: no pressure latch.
+  // A latch would arm a collection at the next poll for every charge made
+  // within the reserve below the ceiling, and a generator charges its
+  // suspended frame at every await, so an async chain near the ceiling would
+  // collect at every await. The periodic pressure check sees these bytes
+  // like any others.
+  CriticalSectionEnter(FAccountingLock);
+  try
+    Result := FitsWithinLimitLocked(ABytes);
+    if Result then
+    begin
+      Inc(FBytesAllocated, ABytes);
+      Inc(FExternalBytes, ABytes);
+      Inc(FTotalBytesAllocated, ABytes);
+      if FBytesAllocated > FPeakBytesAllocated then
+        FPeakBytesAllocated := FBytesAllocated;
+    end;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;

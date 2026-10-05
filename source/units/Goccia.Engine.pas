@@ -545,6 +545,7 @@ uses
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue,
   Goccia.Version,
+  Goccia.VM,
   Goccia.VM.Exception;
 
 threadvar
@@ -1013,13 +1014,13 @@ begin
     if IsSideEffectShim(Shim.Name) then
       // Mutates Object.prototype with no exported global to bind lazily, so it
       // runs eagerly at boot.
-      LoadShimValue(FInterpreter, Shim)
+      LoadShimValue(FInterpreter, I)
     else
     begin
       // Defer the name-bound shim's lex/parse/tree-walk until the global is
       // first touched.  The heaviest shim (Date, ~671 source lines) is then
       // never parsed for scripts that don't use it.
-      Materializer := TGocciaShimMaterializer.Create(FInterpreter, Shim);
+      Materializer := TGocciaShimMaterializer.Create(FInterpreter, I);
       FLazyThunks.Add(Materializer);
       RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
     end;
@@ -1552,7 +1553,7 @@ begin
   TGocciaObjectValue.InitializeSharedPrototype;
   TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
   TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaClassValue;
+  TypeDef.ClassValueClass := TGocciaObjectClassValue;
   TypeDef.ExposePrototype := nil;
   TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
@@ -2798,8 +2799,12 @@ function TGocciaEngine.RunModuleForSourceType(
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
+  EntryLastModified: TDateTime;
+  EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedRuntimeModule: TGocciaModule;
+  VM: TGocciaVM;
 begin
   // Bytecode execution entry (the interpreter path uses Execute). Bind
   // code-frame capture to this engine's own scope for the run, as Execute does.
@@ -2814,7 +2819,45 @@ begin
       ModuleScope.NonStrictMode := False;
       ModuleScope.ArgumentsObjectEnabled :=
         cfArgumentsObject in FCompatibility;
-      Result := RunModuleInScope(AModule, ModuleScope);
+      { ES2026 §16.2.1.10 HostLoadImportedModule: an import that resolves to
+        the entry's own file gets the entry's Module Record, which
+        InnerModuleEvaluation (§16.2.1.6.1.3.1) does not evaluate again while
+        it is evaluating or once it is evaluated. Register the entry under its
+        resolved path, stamped with its file's modification time, and mark it
+        evaluating before its imports are linked, as Execute does. As the
+        VM's current runtime module it gets the program's exports
+        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT). }
+      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
+         EntryLastModified) then
+        EntryModule.LastModified := EntryLastModified;
+      FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
+      VM := nil;
+      SavedRuntimeModule := nil;
+      if FExecutor is TGocciaBytecodeExecutor then
+      begin
+        VM := TGocciaBytecodeExecutor(FExecutor).VM;
+        SavedRuntimeModule := VM.CurrentRuntimeModule;
+        VM.CurrentRuntimeModule := EntryModule;
+      end;
+      FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
+      try
+        try
+          Result := RunModuleInScope(AModule, ModuleScope);
+        except
+          on E: Exception do
+          begin
+            { A later import of the entry gets its error, never the record
+              of this incomplete run. }
+            FModuleLoader.FailEntryModule(EntryModule, E);
+            raise;
+          end;
+        end;
+      finally
+        FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+        if Assigned(VM) then
+          VM.CurrentRuntimeModule := SavedRuntimeModule;
+      end;
     end
     else
       Result := RunModule(AModule);
@@ -2926,6 +2969,7 @@ var
   EntryModuleEvaluationStarted: Boolean;
   EntryRequestedModules: TGocciaModuleList;
   EntryPromise: TGocciaPromiseValue;
+  EntryLastModified: TDateTime;
   SavedVMGlobalScope: TGocciaScope;
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
@@ -3029,6 +3073,13 @@ begin
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
           EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
+          { Stamp the entry with its file's modification time, as the
+            loader stamps every module it loads. Unstamped, a later
+            import of the entry's own path took it for a changed file
+            and evaluated its body a second time. }
+          if FModuleLoader.ContentProvider.TryGetLastModified(
+             EntryModule.Path, EntryLastModified) then
+            EntryModule.LastModified := EntryLastModified;
           EntryModule.SetEnvironment(ModuleScope);
           FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
           ModuleContext.CurrentModule := EntryModule;
@@ -3066,9 +3117,13 @@ begin
                   SavedVMGlobalScope;
             end;
           except
-            FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
-            EntryModuleEvaluationStarted := False;
-            raise;
+            on E: Exception do
+            begin
+              FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+              EntryModuleEvaluationStarted := False;
+              FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         end
         else
@@ -3085,49 +3140,60 @@ begin
         if Assigned(GC) then
           GC.AddTempRoot(ModuleScope);
         try
-          ModuleResult := FExecutor.EvaluateModuleBody(
-            PipelineResult.ProgramNode, ModuleContext,
-            ModuleProgramConsumed);
-          if Assigned(EntryModule) then
-            RegisterEntrySyntheticDefaultExports(EntryModule,
-              PipelineResult.ProgramNode, ModuleScope);
-          if ModuleProgramConsumed then
-            PipelineResult.TakeProgramNode;
-          if Assigned(ModuleResult) and Assigned(GC) then
-            GC.AddTempRoot(ModuleResult);
           try
-            SavedVMGlobalScope := nil;
-            if FExecutor is TGocciaBytecodeExecutor then
-            begin
-              SavedVMGlobalScope :=
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
-              TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
-            end;
-            try
-              WaitForRuntimeIdle;
-              if ModuleResult is TGocciaPromiseValue then
-              begin
-                EntryPromise := TGocciaPromiseValue(ModuleResult);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              if Assigned(EntryModule) and
-                 (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-              begin
-                EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              RaiseUnhandledRejection;
-              FLastTiming.Result := ModuleResult;
-            finally
-              if FExecutor is TGocciaBytecodeExecutor then
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
-                  SavedVMGlobalScope;
-            end;
-          finally
+            ModuleResult := FExecutor.EvaluateModuleBody(
+              PipelineResult.ProgramNode, ModuleContext,
+              ModuleProgramConsumed);
+            if Assigned(EntryModule) then
+              RegisterEntrySyntheticDefaultExports(EntryModule,
+                PipelineResult.ProgramNode, ModuleScope);
+            if ModuleProgramConsumed then
+              PipelineResult.TakeProgramNode;
             if Assigned(ModuleResult) and Assigned(GC) then
-              GC.RemoveTempRoot(ModuleResult);
+              GC.AddTempRoot(ModuleResult);
+            try
+              SavedVMGlobalScope := nil;
+              if FExecutor is TGocciaBytecodeExecutor then
+              begin
+                SavedVMGlobalScope :=
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
+                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
+              end;
+              try
+                WaitForRuntimeIdle;
+                if ModuleResult is TGocciaPromiseValue then
+                begin
+                  EntryPromise := TGocciaPromiseValue(ModuleResult);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                if Assigned(EntryModule) and
+                   (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
+                begin
+                  EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                RaiseUnhandledRejection;
+                FLastTiming.Result := ModuleResult;
+              finally
+                if FExecutor is TGocciaBytecodeExecutor then
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
+                    SavedVMGlobalScope;
+              end;
+            finally
+              if Assigned(ModuleResult) and Assigned(GC) then
+                GC.RemoveTempRoot(ModuleResult);
+            end;
+          except
+            on E: Exception do
+            begin
+              { A later import of the entry gets its error, never the
+                record of this incomplete run. }
+              if Assigned(EntryModule) and Assigned(FModuleLoader) then
+                FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         finally
           if EntryModuleEvaluationStarted and Assigned(FModuleLoader) then
