@@ -168,6 +168,8 @@ begin
   Test('The heap trigger comes back down once heap it could not reclaim is freed',
     TestHeapTriggerReturnsAfterUnownedHeapIsFreed);
   {$ENDIF}
+  Test('A non-collecting charge neither collects nor latches pressure',
+    TestNonCollectingChargeNeverCollectsOrLatches);
 end;
 
 const
@@ -330,8 +332,9 @@ begin
   finally
     if Assigned(Retained) then
       FreeMem(Retained);
-  Test('A non-collecting charge neither collects nor latches pressure',
-    TestNonCollectingChargeNeverCollectsOrLatches);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
 end;
 
 procedure TTestGarbageCollector.TestNonCollectingChargeNeverCollectsOrLatches;
