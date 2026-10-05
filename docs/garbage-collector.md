@@ -162,11 +162,14 @@ capacity can exceed its currently allocated native buffer. It preserves
 non-collecting primitive reads while reducing physical copying; see
 [ADR 0116](adr/0116-bounded-string-prefixes.md).
 
-The bytecode VM's stacks are charged as well. The register, local-cell,
-argument, frame and closed-numeric-frame stacks are charged for everything they
-hold past their initial capacities. A stack shrinks back at an instruction
-boundary once the recursion that grew it has returned, and the VM releases the
-rest when it is destroyed. A generator or async function charges the frame it
+The bytecode VM's stacks are charged as well: the register, local-cell,
+argument, frame, closed-numeric-frame and handler stacks, and the thread's
+call stack and execution-context stack, which the VM grows for every call it
+makes. Each is charged for the capacity it has past its initial capacity. A
+stack shrinks back at an instruction boundary once the recursion that grew it
+has returned, and the VM releases the rest when it is destroyed. The thread's
+two stacks give back no more than the VM charged for them, since other code
+can grow them too. A generator or async function charges the frame it
 suspends: its registers, local cells, arguments and handler entries. The charge
 covers the largest frame that generator has held, and is released when the
 generator finishes or is destroyed. With `--max-stack=0` this charge is all
@@ -174,16 +177,20 @@ that stops a bytecode recursion. Deep stacks grow only up to the
 memory-pressure reserve below the ceiling. Stacks smaller than that reserve
 may use it, so a program whose heap fills the ceiling can still make calls.
 The refusal is the catchable `RangeError: Maximum call stack size exceeded`.
+`SetLength` holds a stack's old and new blocks together while it copies one
+into the other, so a growth must also leave room under the ceiling itself to
+copy the largest stack once more.
 
 A stack grows inside call setup, which can neither collect nor throw. So a
 growth that does not fit is made uncharged, and the next instruction boundary
 settles it: it collects, then charges the growth or throws.
 `TGarbageCollector.TryChargeExternalBytes` is the non-collecting charge both
 sites use. Unlike `TryReserveExternalBytes`, it does not latch memory pressure.
-The per-frame call-stack and execution-context entries are not charged, and
-neither is the refused error's stack trace, which lists every frame. Peak
-resident memory therefore still runs to two to three times the ceiling. See
-[ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
+With the refused error's stack text capped, a recursion's peak resident memory
+is the idle process plus 1.04 to 1.05 times the ceiling, measured from 64 MiB
+to 1 GiB. What is left above the ceiling is garbage, which `BytesAllocated`
+counts at its `InstanceSize` rather than at what the heap holds for it. See
+[ADR 0130 and its Amendment 1](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
 
 ### Gated growth points
 
