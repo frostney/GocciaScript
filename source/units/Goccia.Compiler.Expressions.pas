@@ -115,6 +115,8 @@ function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boole
 
 procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
+procedure EmitBodyVarEnvironment(const ACtx: TGocciaCompilationContext;
+  const AParams: TGocciaParameterArray; const ABody: TGocciaASTNode);
 procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
   const AParams: TGocciaParameterArray; const AHasArgumentsObject: Boolean);
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
@@ -152,6 +154,7 @@ uses
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.Statements,
@@ -3051,6 +3054,132 @@ begin
   end;
 end;
 
+// Compiles the end of the parameter preamble that instantiates the body's var
+// declarations, called once EmitParameterInitialization has bound every
+// parameter. ES2026 §10.2.11 FunctionDeclarationInstantiation step 29: without
+// an expression in the parameter list the body's vars share the parameters'
+// Environment Record, a var named like a parameter is the parameter, and
+// HoistVarLocals declares the other vars when the body is compiled. Nothing is
+// emitted then.
+//
+// Step 30: with one (hasParameterExpressions), the vars get an Environment
+// Record of their own, varEnv, "to ensure that closures created by expressions
+// in the formal parameter list do not have visibility of declarations in the
+// function body". Every name in VarDeclaredNames becomes a new binding there.
+// It starts as undefined (step 30.e.i.3), except that a name in
+// parameterBindings, a parameter or `arguments` when the function has an
+// arguments object, starts with the value of that binding (step 30.e.i.4)
+// unless a body function declaration has the name too; step 37 stores the
+// function object into it before the body runs.
+//
+// In non-strict code, the web-compat step after step 30 (Annex B.3.2.1 up to
+// ES2025) adds the name of a function declared in a block to varEnv as well,
+// starting as undefined, unless a var already has the name or it is
+// `arguments`, and only for the declarations Goccia.Compiler.BlockFunctions
+// gives a var binding: none whose name a parameter has or whose `var` would be
+// an early error, such as one under a `let` of the name in an enclosing block.
+//
+// Closures in the parameter list were compiled before this point and keep the
+// parameter's slot. When one of them captured the parameter, its local leaves
+// name resolution and a var local takes its name, so the body, its closures,
+// its var declarations and a direct eval in it all reach the var.
+//
+// A new var's register is not undefined on entry: the parameter preamble uses
+// registers above the parameters for temporaries, and a call copies its
+// surplus arguments there too. So every new var is set to undefined, except
+// the name of a body function declaration, whose function object is stored
+// into it before the body runs.
+procedure EmitBodyVarEnvironment(const ACtx: TGocciaCompilationContext;
+  const AParams: TGocciaParameterArray; const ABody: TGocciaASTNode);
+var
+  Block: TGocciaBlockStatement;
+  VarNames: TUnicodeStringList;
+  BlockFunctionNames: TUnicodeStringList;
+  FunctionNames: TUnicodeStringList;
+  I, LocalIdx, LocalCount: Integer;
+  Name: string;
+  ParameterLocal: TGocciaCompilerLocal;
+  VarSlot: UInt16;
+begin
+  if not (ABody is TGocciaBlockStatement) then
+    Exit;
+  if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then
+    Exit;
+  Block := TGocciaBlockStatement(ABody);
+
+  VarNames := TUnicodeStringList.Create;
+  BlockFunctionNames := TUnicodeStringList.Create;
+  FunctionNames := TUnicodeStringList.Create;
+  try
+    CollectVarBindingNamesFromNodes(Block.Nodes, VarNames);
+    for I := 0 to Block.Nodes.Count - 1 do
+      if Block.Nodes[I] is TGocciaFunctionDeclaration then
+        FunctionNames.Add(TGocciaFunctionDeclaration(Block.Nodes[I]).Name);
+
+    for I := 0 to VarNames.Count - 1 do
+    begin
+      Name := VarNames[I];
+      // Of the locals declared before the body, only the parameters and the
+      // arguments object are bindings a var can name. An arrow function's
+      // `arguments` local is the synthetic one direct eval in a default
+      // needs, not an arguments object.
+      LocalIdx := ACtx.Scope.ResolveLocal(Name);
+      if (LocalIdx >= 0) and
+         (ParameterListBindsName(AParams, Name) or
+          ((Name = IDENTIFIER_ARGUMENTS) and
+           (ACtx.Scope.GetLocal(LocalIdx).Slot <>
+            ACtx.Scope.DirectEvalSyntheticArgumentsSlot))) then
+      begin
+        ParameterLocal := ACtx.Scope.GetLocal(LocalIdx);
+        // Only code compiled in the parameter list can reach the parameter
+        // binding once the body runs: a closure that captured it, or a direct
+        // eval given its register. With neither, the var's own binding would
+        // start with the same value and nothing could tell the two apart, so
+        // the var keeps the parameter's local, and the direct register reads
+        // a parameter allows.
+        if not ParameterLocal.IsCaptured and
+           not ACtx.Scope.DirectEvalSeen then
+          Continue;
+        ACtx.Scope.RenameLocal(LocalIdx, '`#parameter`:' + Name);
+        VarSlot := ACtx.Scope.DeclareVarLocal(Name);
+        // OP_GET_LOCAL reads the parameter's cell, where a closure in the
+        // parameter list writes it.
+        if FunctionNames.IndexOf(Name) < 0 then
+          EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, VarSlot,
+            ParameterLocal.Slot));
+        Continue;
+      end;
+
+      LocalCount := ACtx.Scope.LocalCount;
+      VarSlot := ACtx.Scope.DeclareVarLocal(Name);
+      if (ACtx.Scope.LocalCount > LocalCount) and
+         (FunctionNames.IndexOf(Name) < 0) then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, VarSlot, 0, 0));
+    end;
+
+    if ACtx.NonStrictMode then
+    begin
+      DiscoverBlockFunctionVarBindings(Block, ACtx.Scope,
+        ACtx.BlockFunctionVarBindings, BlockFunctionNames);
+      for I := 0 to BlockFunctionNames.Count - 1 do
+      begin
+        Name := BlockFunctionNames[I];
+        if (VarNames.IndexOf(Name) >= 0) or
+           (Name = IDENTIFIER_ARGUMENTS) then
+          Continue;
+        LocalCount := ACtx.Scope.LocalCount;
+        VarSlot := ACtx.Scope.DeclareVarLocal(Name);
+        if ACtx.Scope.LocalCount > LocalCount then
+          EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, VarSlot, 0, 0));
+      end;
+    end;
+  finally
+    FunctionNames.Free;
+    BlockFunctionNames.Free;
+    VarNames.Free;
+  end;
+end;
+
 // Called once the parameter preamble has been compiled: from here on every
 // named parameter holds its argument or its default, so a read in the function
 // body cannot observe the TDZ hole that default initializers see.
@@ -4070,6 +4199,7 @@ begin
 
     EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5396,6 +5526,7 @@ begin
       Length(SetterParams));
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5556,6 +5687,7 @@ begin
       Length(SetterParams));
     EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
+    EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -6245,6 +6377,7 @@ begin
 
     EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
+    EmitBodyVarEnvironment(ChildCtx, AExpr.Parameters, AExpr.Body);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
     ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);

@@ -50,6 +50,7 @@ type
     FRealm: TGocciaRealm;
     FRealmExecutionContext: TGocciaExecutionContextScope;
     procedure TestExecuteIntegerAddition;
+    procedure TestExecuteIntegerMultiplicationSignOfZero;
     procedure TestExecuteLocalsRoundTrip;
     procedure TestExecuteLiteralLoads;
     procedure TestExecuteConstString;
@@ -103,6 +104,8 @@ end;
 procedure TTestGocciaVM.SetupTests;
 begin
   Test('Execute integer addition', TestExecuteIntegerAddition);
+  Test('Integer multiplication gives -0 for a zero product with a negative ' +
+    'operand', TestExecuteIntegerMultiplicationSignOfZero);
   Test('Execute locals round trip', TestExecuteLocalsRoundTrip);
   Test('Execute literal loads', TestExecuteLiteralLoads);
   Test('Execute constant string', TestExecuteConstString);
@@ -154,6 +157,38 @@ begin
     VM.Free;
     Template.Free;
   end;
+end;
+
+{ The compiler does not emit OP_MUL_INT for any source today, but a bytecode
+  artifact can carry it, so its integer path is exercised directly. }
+procedure TTestGocciaVM.TestExecuteIntegerMultiplicationSignOfZero;
+
+  function Multiply(const ALeft, ARight: Integer): TGocciaNumberLiteralValue;
+  var
+    Template: TGocciaFunctionTemplate;
+    VM: TGocciaVM;
+  begin
+    Template := TGocciaFunctionTemplate.Create('multiply');
+    VM := TGocciaVM.Create;
+    try
+      Template.MaxRegisters := 3;
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, ALeft));
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, ARight));
+      Template.EmitInstruction(EncodeABC(OP_MUL_INT, 2, 0, 1));
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
+      Result := VM.ExecuteFunction(Template).ToNumberLiteral;
+    finally
+      VM.Free;
+      Template.Free;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(Multiply(0, -1).IsNegativeZero).ToBe(True);
+  Expect<Boolean>(Multiply(-1, 0).IsNegativeZero).ToBe(True);
+  Expect<Boolean>(Multiply(0, 1).IsNegativeZero).ToBe(False);
+  Expect<Boolean>(Multiply(0, 0).IsNegativeZero).ToBe(False);
+  Expect<Double>(Multiply(-3, 7).Value).ToBe(-21);
 end;
 
 procedure TTestGocciaVM.TestExecuteLocalsRoundTrip;

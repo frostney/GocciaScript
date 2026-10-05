@@ -37,16 +37,20 @@ interface
 uses
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.AST.Node,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope;
 
 // Adds to AResult each function declaration in ABody, a function body, that
-// gets a var binding. AScope is the scope the body is compiled in; its
-// parameter names are parameterNames.
+// gets a var binding, and its name to ANames when that is given. AScope is the
+// scope the body is compiled in; its parameter names are parameterNames.
+// Scanning a body again adds nothing new.
 procedure DiscoverBlockFunctionVarBindings(const ABody: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AResult: TBlockFunctionVarBindingSet);
+  const AResult: TBlockFunctionVarBindingSet;
+  const ANames: TUnicodeStringList = nil);
 
 // Adds to AResult each function declaration in AStatements, the statements of
 // a script, that gets a var binding.
@@ -62,8 +66,6 @@ function BlockFunctionHasVarBinding(
 implementation
 
 uses
-  UnicodeStringList,
-
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements;
 
@@ -72,6 +74,7 @@ type
   private
     FScope: TGocciaCompilerScope;
     FResult: TBlockFunctionVarBindingSet;
+    FNames: TUnicodeStringList;
     // One list of lexically declared names per statement list or binding
     // construct that encloses the statement being scanned, innermost last.
     FFrames: TObjectList<TUnicodeStringList>;
@@ -86,18 +89,21 @@ type
     procedure ScanStatement(const ANode: TGocciaASTNode);
   public
     constructor Create(const AScope: TGocciaCompilerScope;
-      const AResult: TBlockFunctionVarBindingSet);
+      const AResult: TBlockFunctionVarBindingSet;
+      const ANames: TUnicodeStringList);
     destructor Destroy; override;
     procedure ScanTopLevelNode(const ANode: TGocciaASTNode);
     procedure AddTopLevelLexicalNames(const ANode: TGocciaASTNode);
   end;
 
 constructor TBlockFunctionScan.Create(const AScope: TGocciaCompilerScope;
-  const AResult: TBlockFunctionVarBindingSet);
+  const AResult: TBlockFunctionVarBindingSet;
+  const ANames: TUnicodeStringList);
 begin
   inherited Create;
   FScope := AScope;
   FResult := AResult;
+  FNames := ANames;
   FFrames := TObjectList<TUnicodeStringList>.Create(True);
   // The frame of the function body's or the script's top-level declarations.
   PushFrame;
@@ -189,6 +195,8 @@ begin
       Exit;
 
   FResult.AddOrSetValue(ADeclaration, True);
+  if Assigned(FNames) and (FNames.IndexOf(Name) < 0) then
+    FNames.Add(Name);
 end;
 
 // A Block's StatementList.
@@ -341,7 +349,8 @@ end;
 
 procedure DiscoverBlockFunctionVarBindings(const ABody: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AResult: TBlockFunctionVarBindingSet);
+  const AResult: TBlockFunctionVarBindingSet;
+  const ANames: TUnicodeStringList);
 var
   Scan: TBlockFunctionScan;
   Nodes: TObjectList<TGocciaASTNode>;
@@ -350,7 +359,7 @@ begin
   if not (ABody is TGocciaBlockStatement) then
     Exit;
   Nodes := TGocciaBlockStatement(ABody).Nodes;
-  Scan := TBlockFunctionScan.Create(AScope, AResult);
+  Scan := TBlockFunctionScan.Create(AScope, AResult, ANames);
   try
     for I := 0 to Nodes.Count - 1 do
       Scan.AddTopLevelLexicalNames(Nodes[I]);
@@ -368,7 +377,7 @@ var
   Scan: TBlockFunctionScan;
   I: Integer;
 begin
-  Scan := TBlockFunctionScan.Create(nil, AResult);
+  Scan := TBlockFunctionScan.Create(nil, AResult, nil);
   try
     for I := 0 to AStatements.Count - 1 do
       Scan.AddTopLevelLexicalNames(AStatements[I]);
