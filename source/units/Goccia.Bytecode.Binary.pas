@@ -441,7 +441,16 @@ begin
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
-    WriteUInt32(AProto.GetInstruction(I));
+    // A template loaded from a file holds the runtime-only OP_CALL_SELF where
+    // the file had OP_CALL_SELF_NUM. Write the file opcode back, so saving a
+    // loaded module produces a file the verifier accepts; the next load
+    // de-specializes it again. The operands are unchanged, and an OP_WIDE
+    // prefix word never has OP_CALL_SELF as its low byte.
+    if DecodeOp(AProto.GetInstruction(I)) = OP_CALL_SELF then
+      WriteUInt32((AProto.GetInstruction(I) and not UInt32($FF)) or
+        Ord(OP_CALL_SELF_NUM))
+    else
+      WriteUInt32(AProto.GetInstruction(I));
 
   WriteUInt16(UInt16(AProto.ConstantCount));
   for I := 0 to AProto.ConstantCount - 1 do

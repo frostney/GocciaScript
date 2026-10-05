@@ -35,6 +35,7 @@ type
     procedure TestAcceptsIterableValidateBoundAboveRegisterCount;
     procedure TestAcceptsObjectValidateWithUnusedOperandC;
     procedure TestLoadedClosedNumericSelfCallIsDeSpecialized;
+    procedure TestLoadedClosedNumericSelfCallSavesAndReloads;
     procedure TestRejectsClosedNumericSelfCallInNonArrowTemplate;
     procedure TestRoundTripsDebugLocals;
   public
@@ -53,6 +54,8 @@ begin
     TestAcceptsObjectValidateWithUnusedOperandC);
   Test('A loaded closed numeric self-call is de-specialized to OP_CALL_SELF',
     TestLoadedClosedNumericSelfCallIsDeSpecialized);
+  Test('A loaded closed numeric self-call saves and loads again',
+    TestLoadedClosedNumericSelfCallSavesAndReloads);
   Test('Rejects a closed numeric self-call in a non-arrow template',
     TestRejectsClosedNumericSelfCallInNonArrowTemplate);
   Test('Round-trips debug locals field by field',
@@ -152,6 +155,92 @@ end;
 // OP_CALL_SELF, whose frame the collector marks. This builds a module whose
 // one (arrow) function recursively calls itself numerically, loads it, and
 // checks the loaded code holds OP_CALL_SELF, not OP_CALL_SELF_NUM.
+// A module loaded from a file holds the runtime-only OP_CALL_SELF, which the
+// verifier rejects in a file. Saving that module must write OP_CALL_SELF_NUM
+// back, so a load-save-load round trip succeeds and de-specializes again.
+procedure TBytecodeBinaryTests.TestLoadedClosedNumericSelfCallSavesAndReloads;
+var
+  Module, Loaded, Reloaded: TGocciaBytecodeModule;
+  Arrow: TGocciaFunctionTemplate;
+  Reader: TGocciaBytecodeReader;
+  Writer: TGocciaBytecodeWriter;
+  Stream: TMemoryStream;
+  Reason: string;
+begin
+  Stream := TMemoryStream.Create;
+  try
+    Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG,
+      TEST_SOURCE_PATH);
+    try
+      Arrow := TGocciaFunctionTemplate.Create('fib');
+      Arrow.MaxRegisters := TEST_MAX_REGISTERS;
+      Arrow.ParameterCount := 1;
+      Arrow.IsArrow := True;
+      Arrow.EmitInstruction(EncodeABC(OP_CALL_SELF_NUM, 2, 1, 1));
+      Arrow.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
+      Module.TopLevel := TGocciaFunctionTemplate.Create('main');
+      Module.TopLevel.MaxRegisters := TEST_MAX_REGISTERS;
+      Module.TopLevel.AddFunction(Arrow);
+      Module.TopLevel.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+      Module.HasDebugInfo := False;
+      Writer := TGocciaBytecodeWriter.Create(Stream);
+      try
+        Writer.WriteModule(Module);
+      finally
+        Writer.Free;
+      end;
+    finally
+      Module.Free;
+    end;
+
+    Stream.Position := 0;
+    Reader := TGocciaBytecodeReader.Create(Stream);
+    try
+      Loaded := Reader.ReadModule;
+    finally
+      Reader.Free;
+    end;
+
+    // Save the loaded module, which holds OP_CALL_SELF, and load it again.
+    Stream.Clear;
+    try
+      Writer := TGocciaBytecodeWriter.Create(Stream);
+      try
+        Writer.WriteModule(Loaded);
+      finally
+        Writer.Free;
+      end;
+    finally
+      Loaded.Free;
+    end;
+
+    Reason := '';
+    Reloaded := nil;
+    Stream.Position := 0;
+    Reader := TGocciaBytecodeReader.Create(Stream);
+    try
+      try
+        Reloaded := Reader.ReadModule;
+      except
+        on E: Exception do
+          Reason := E.Message;
+      end;
+    finally
+      Reader.Free;
+    end;
+    try
+      Expect<string>(Reason).ToBe('');
+      if Assigned(Reloaded) then
+        Expect<Integer>(DecodeOp(Reloaded.TopLevel.GetFunction(0)
+          .GetInstruction(0))).ToBe(OP_CALL_SELF);
+    finally
+      Reloaded.Free;
+    end;
+  finally
+    Stream.Free;
+  end;
+end;
+
 procedure TBytecodeBinaryTests.TestLoadedClosedNumericSelfCallIsDeSpecialized;
 var
   Module, Loaded: TGocciaBytecodeModule;
