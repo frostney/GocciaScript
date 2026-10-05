@@ -3087,41 +3087,29 @@ begin
   EmitSetGlobalByName(ACtx, AValueReg, AName);
 end;
 
-function DestructuringPatternHasSuspendingDefault(
-  const APattern: TGocciaDestructuringPattern): Boolean;
+// ES2026 §8.6.3 IteratorBindingInitialization: SingleNameBinding and
+// BindingElement : BindingPattern Initializer? step the iterator, then run the
+// element's Initializer and nested BindingInitialization before the next
+// element is stepped.  An element other than a hole or a plain identifier can
+// run user code, so the pattern must step one element at a time.  Elements
+// after a rest element cannot exist, and the rest element itself drains the
+// iterator before its own pattern runs.
+function ArrayBindingPatternRunsCodePerElement(
+  const APattern: TGocciaArrayDestructuringPattern): Boolean;
 var
-  ArrPat: TGocciaArrayDestructuringPattern;
-  ObjPat: TGocciaObjectDestructuringPattern;
-  AssignPat: TGocciaAssignmentDestructuringPattern;
+  Element: TGocciaDestructuringPattern;
   I: Integer;
 begin
   Result := False;
-  if not Assigned(APattern) then
-    Exit;
-
-  if APattern is TGocciaAssignmentDestructuringPattern then
+  for I := 0 to APattern.Elements.Count - 1 do
   begin
-    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    if ExpressionContainsSuspension(AssignPat.Right) then
+    Element := APattern.Elements[I];
+    if not Assigned(Element) then
+      Continue;
+    if Element is TGocciaRestDestructuringPattern then
+      Exit;
+    if not (Element is TGocciaIdentifierDestructuringPattern) then
       Exit(True);
-    Exit(DestructuringPatternHasSuspendingDefault(AssignPat.Left));
-  end;
-
-  if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if DestructuringPatternHasSuspendingDefault(ArrPat.Elements[I]) then
-        Exit(True);
-    Exit;
-  end;
-
-  if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-      if DestructuringPatternHasSuspendingDefault(ObjPat.Properties[I].Pattern) then
-        Exit(True);
   end;
 end;
 
@@ -3650,8 +3638,13 @@ begin
         RestIndex := I;
         Break;
       end;
-    if AAssignmentMode or
-       ((not HasRest) and DestructuringPatternHasSuspendingDefault(ArrPat)) then
+    // A binding pattern whose elements are only holes and identifiers (plus an
+    // optional rest) evaluates no initializer or nested pattern between
+    // steps, so it keeps draining the needed elements up front.  Any default
+    // or nested pattern instead steps the iterator one element at a time and
+    // closes it once, after the whole pattern (ES2026 §8.6.2
+    // BindingInitialization, BindingPattern : ArrayBindingPattern, steps 2-3).
+    if AAssignmentMode or ArrayBindingPatternRunsCodePerElement(ArrPat) then
     begin
       EmitStreamingArrayDestructuring(ACtx, ArrPat, ASrcReg, AAssignmentMode);
       Exit;

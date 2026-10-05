@@ -57,7 +57,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
 - Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
-- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)). See [Type Annotations](type-annotations.md).
+- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)), so the compiler never takes a call's result type from one: arithmetic on the call uses the generic opcodes, and a binding initialized from it gets no inferred type. See [Type Annotations](type-annotations.md).
 
 ## Opcode Layout
 
@@ -417,7 +417,7 @@ What the compiler knows about a binding of an enclosing function, the constant v
 
 Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
 
-When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
+When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report. An `if` statement or a loop keeps its conditional jump, and so does a ternary or a `&&`, `||` or `??` expression that a constant decides: the compiler does not fold it, nor reduce `flag && true` or `flag || false` to `flag` under `--strict-types`. Its operands are still folded and propagated.
 
 ### How Opcode Additions Work
 
