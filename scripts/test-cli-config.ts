@@ -349,8 +349,11 @@ console.log("Config max-stack...");
       "let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};\n",
     );
 
-    const out = await $`${RUNNER} ${join(tmp, "test.js")} 2>&1`.text();
-    if (!out.includes("50")) throw new Error(`max-stack config should limit to 50, got: ${out}`);
+    for (const mode of ["interpreted", "bytecode"]) {
+      const out = await $`${RUNNER} ${join(tmp, "test.js")} --mode=${mode} 2>&1`.text();
+      if (!containsLine(out, "50"))
+        throw new Error(`max-stack config should allow 50 nested calls (${mode}), got: ${out}`);
+    }
   } finally {
     clean(tmp);
   }

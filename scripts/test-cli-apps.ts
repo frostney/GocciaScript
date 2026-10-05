@@ -2213,6 +2213,87 @@ await section("Test262 Runner: eval rejects arguments in generator method defaul
   }
 });
 
+await section("Test262 Runner: a decorator's replacement method does not let eval use super...", async () => {
+  // The decorators proposal (tc39/ecma262 PR #2417) stores a decorator's
+  // returned function as the element's value, getter or setter without
+  // calling MakeMethod on it, so it keeps the home object it was created
+  // with (here none) and §19.2.1.1 PerformEval rejects super inside it.
+  // A decorated method that is kept or wrapped is still a method.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const replacement = function () { return eval('super.describe()'); };",
+    "const replace = (value, context) => replacement;",
+    "const replaceFresh = (value, context) => function () { return eval('super.describe()'); };",
+    "class Derived extends Base {",
+    "  @replace m() { return 'original'; }",
+    "  @replaceFresh static s() { return 'original'; }",
+    "}",
+    "probe('instance method', () => new Derived().m());",
+    "probe('static method', () => Derived.s());",
+    "probe('replacement afterwards', () => replacement.call({}));",
+    "const replaceArrow = (value, context) => () => eval('super.describe()');",
+    "class ArrowDerived extends Base { @replaceArrow m() { return 'original'; } }",
+    "probe('arrow', () => new ArrowDerived().m());",
+    "const replaceGetter = (value, context) => function () { return eval('super.describe()'); };",
+    "class GetterDerived extends Base {",
+    "  @replaceGetter get g() { return 'original'; }",
+    "  @replaceGetter static get sg() { return 'original'; }",
+    "}",
+    "probe('getter', () => new GetterDerived().g);",
+    "probe('static getter', () => GetterDerived.sg);",
+    "let setterResult;",
+    "const replaceSetter = (value, context) => function (v) { setterResult = eval('super.describe()'); };",
+    "class SetterDerived extends Base { @replaceSetter set s(v) {} @replaceSetter static set ss(v) {} }",
+    "probe('setter', () => { setterResult = undefined; new SetterDerived().s = 1; return setterResult; });",
+    "probe('static setter', () => { setterResult = undefined; SetterDerived.ss = 1; return setterResult; });",
+    "const replaceAccessor = (value, context) => ({ get: function () { return eval('super.describe()'); } });",
+    "class AccessorDerived extends Base { @replaceAccessor accessor a = 1; }",
+    "probe('accessor getter', () => new AccessorDerived().a);",
+    "const keep = (value, context) => value;",
+    "class KeptDerived extends Base {",
+    "  @keep m() { return eval('super.describe()'); }",
+    "  @keep static s() { return eval('super.describe()'); }",
+    "  @keep get g() { return eval('super.describe()'); }",
+    "}",
+    "probe('kept method', () => new KeptDerived().m());",
+    "probe('kept static method', () => KeptDerived.s());",
+    "probe('kept getter', () => new KeptDerived().g);",
+    "const wrap = (value, context) => function (...args) { return 'wrapped ' + value.call(this, ...args); };",
+    "class WrappedDerived extends Base { @wrap m() { return eval('super.describe()'); } }",
+    "probe('wrapped method', () => new WrappedDerived().m());",
+    "",
+  ].join("\n");
+  const expected = [
+    "instance method: SyntaxError",
+    "static method: SyntaxError",
+    "replacement afterwards: SyntaxError",
+    "arrow: SyntaxError",
+    "getter: SyntaxError",
+    "static getter: SyntaxError",
+    "setter: SyntaxError",
+    "static setter: SyntaxError",
+    "accessor getter: SyntaxError",
+    "kept method: base-proto",
+    "kept static method: base-static",
+    "kept getter: base-proto",
+    "wrapped method: wrapped base-proto",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode} decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode} decorator replacement eval super got: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval super permissions stop at ordinary function boundary...", async () => {
   const source = [
     "class Base { method() { return 11; } }",
@@ -5055,6 +5136,62 @@ await section("TestRunner: JSON multi-file structure...", async () => {
   }
 });
 
+await section("TestRunner: a parallel worker reclaims each file's garbage before the next file...", async () => {
+  // Workers run with automatic collection off. Before the runner collected
+  // after each file, every object a worker allocated stayed live until the
+  // worker exited, so a run held the garbage of all its files at once. With
+  // the shims parsed once per thread, that alone raised the interpreted
+  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // peak live GC heap is the observable: summed over the workers, it must not
+  // grow with the number of files each worker runs.
+  const tmp = makeTmp();
+  try {
+    const source = [
+      'describe("garbage", () => {',
+      '  test("allocates objects it does not keep", () => {',
+      "    let total = 0;",
+      "    for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      "      const item = { index: i, pair: [i, i + 1] };",
+      "      total += item.pair.length;",
+      "    }",
+      "    expect(total).toBe(10000);",
+      "  });",
+      "});",
+      "",
+    ].join("\n");
+    const peakLiveBytes = (mode: string, fileCount: number): number => {
+      const dir = join(tmp, `${mode}-${fileCount}`);
+      mkdirSync(dir);
+      for (let i = 0; i < fileCount; i++) writeFileSync(join(dir, `garbage-${i}.js`), source);
+      const resultsPath = join(tmp, `${mode}-${fileCount}.json`);
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=2", "--no-progress", `--mode=${mode}`, `--output=${resultsPath}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
+      if (json.passed !== fileCount || json.workers.used !== 2)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) should pass on 2 workers: ${json.passed} passed, ${json.workers.used} workers`);
+      return json.memory.gc.peakLiveBytes;
+    };
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Two files give each worker one; sixteen give each worker eight. With a
+      // collection between files the peaks match; without one the sixteen-file
+      // peak is about eight times the two-file peak.
+      const oneFileEach = peakLiveBytes(mode, 2);
+      const eightFilesEach = peakLiveBytes(mode, 16);
+      if (eightFilesEach > oneFileEach * 2)
+        throw new Error(
+          `TestRunner (${mode}) peak live GC heap grew with the files per worker: ` +
+            `${eightFilesEach} bytes for 16 files vs ${oneFileEach} bytes for 2 files on 2 workers`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {
@@ -5816,6 +5953,39 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
           !jobFailures.includes("job from a hook"))
         throw new Error(`TestRunner (${mode}) should fail only the unit whose queued job threw, got ${JSON.stringify({ passed: jobsFile.passed, failed: jobsFile.failed, suiteErrors: jobsFile.suiteErrors, failures: jobsFile.failedTests, errorMessage: jobsFile.errorMessage })}`);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("TestRunner (bytecode): work the tests leave pending runs, and a rejection it leaves fails the file...", async () => {
+  // runTests runs after the file. Work left pending once it returns, here by
+  // afterAll, still runs before the file ends, and a rejection that work
+  // leaves fails the file. The interpreted path does not wait for it.
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "late.test.js");
+    writeFileSync(
+      file,
+      [
+        'test("leaves a timer", () => { setTimeout(() => console.log("TIMER " + "AFTER TEST"), 5); });',
+        "afterAll(() => {",
+        '  setTimeout(() => console.log("TIMER " + "AFTER ALL"), 5);',
+        '  setTimeout(() => { Promise.reject(new Error("late rejection")); }, 10);',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", file, "--no-progress", "--mode=bytecode"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    for (const line of ["TIMER AFTER TEST", "TIMER AFTER ALL"])
+      if (!containsLine(out, line))
+        throw new Error(`TestRunner (bytecode) should run ${JSON.stringify(line)}, got:\n${out}`);
+    if (proc.exitCode !== 1 || !out.includes("late.test.js: Error: late rejection"))
+      throw new Error(`TestRunner (bytecode) should fail the file for a late rejection, got exit ${proc.exitCode}:\n${out}`);
   } finally {
     clean(tmp);
   }
