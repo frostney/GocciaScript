@@ -133,16 +133,19 @@ type
     ProfileEntryTimestamp: Int64;
   end;
 
-  { One native entry into the dispatch loop (ExecuteClosureRegistersInternal),
-    from the innermost one down. The call-stack frames it pushed start at
-    FirstCallFrame. For each one except its executing frame, the instruction
-    pointer is saved in the frame stack from FirstSavedFrame, followed by the
-    closed numeric frame stack from FirstClosedNumericFrame. The executing
-    frame's template and current instruction are the entry's own locals,
-    which the probes point at. }
+  { One native entry into the dispatch loop (ExecuteClosureRegistersInternal).
+    The call-stack frames it pushed start at FirstCallFrame. For each one
+    except its executing frame, the instruction pointer is saved in the frame
+    stack from FirstSavedFrame, followed by the closed numeric frame stack
+    from FirstClosedNumericFrame. The executing frame's template and
+    instruction pointer are the entry's own locals, which the probes point
+    at. FrameIPProbe points past the instruction being executed, and stays
+    right between a call or return and the next instruction, while the start
+    the instruction probe holds is refreshed only at the next instruction. }
   TGocciaVMActivation = record
     TemplateProbe: PPointer;
     InstructionIPProbe: PInteger;
+    FrameIPProbe: PInteger;
     FirstCallFrame: Integer;
     FirstSavedFrame: Integer;
     FirstClosedNumericFrame: Integer;
@@ -543,8 +546,8 @@ type
     procedure PopSavedStateRoot;
     procedure BindToCurrentThread;
     procedure EnterActivation(const ATemplateProbe: PPointer;
-      const AInstructionIPProbe: PInteger; const AFirstSavedFrame,
-      AFirstClosedNumericFrame: Integer);
+      const AInstructionIPProbe, AFrameIPProbe: PInteger;
+      const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
     procedure LeaveActivation;
     procedure ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
       const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
@@ -6863,6 +6866,10 @@ destructor TGocciaVM.Destroy;
 var
   I: Integer;
 begin
+  // Never leave the call stack holding a resolver into a freed VM.
+  if (FActivationCount > 0) and Assigned(FCallStack) then
+    FCallStack.LocationResolver := FPreviousLocationResolver;
+  FActivationCount := 0;
   if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
@@ -14847,14 +14854,15 @@ end;
   already made room in FActivations. The outermost entry also installs this
   VM as the call stack's location resolver. }
 procedure TGocciaVM.EnterActivation(const ATemplateProbe: PPointer;
-  const AInstructionIPProbe: PInteger; const AFirstSavedFrame,
-  AFirstClosedNumericFrame: Integer);
+  const AInstructionIPProbe, AFrameIPProbe: PInteger;
+  const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
 var
   Activation: PGocciaVMActivation;
 begin
   Activation := @FActivations[FActivationCount];
   Activation^.TemplateProbe := ATemplateProbe;
   Activation^.InstructionIPProbe := AInstructionIPProbe;
+  Activation^.FrameIPProbe := AFrameIPProbe;
   if Assigned(FCallStack) then
     Activation^.FirstCallFrame := FCallStack.Count
   else
@@ -14917,7 +14925,10 @@ begin
 end;
 
 { A suspended frame's saved instruction pointer is the instruction after the
-  call it is making. That call is one word, or two behind an OP_WIDE prefix. }
+  call it is making, and so is an executing frame's, which the dispatch loop
+  advances past an instruction before running it. That instruction is one
+  word, or two behind an OP_WIDE prefix. A frame that has not started (IP 0)
+  is left unlocated. }
 procedure LocateFrameAfterCall(const ATemplate: TGocciaFunctionTemplate;
   const AReturnIP: Integer; var ALocation: TGocciaFrameLocation);
 var
@@ -14988,8 +14999,9 @@ begin
               FClosedNumericFrameStack[Activation^.FirstClosedNumericFrame +
                 Ordinal - SavedCount].IP, ALocations[I])
           else if Activation^.TemplateProbe^ = AFrames[I].Template then
-            LocateFrameAt(TGocciaFunctionTemplate(AFrames[I].Template),
-              Activation^.InstructionIPProbe^, ALocations[I]);
+            LocateFrameAfterCall(
+              TGocciaFunctionTemplate(AFrames[I].Template),
+              Activation^.FrameIPProbe^, ALocations[I]);
         end;
         Inc(Ordinal);
       end;
@@ -15620,7 +15632,7 @@ begin
       // Template makes the stamp a no-op until the loop sets a real one.
       Template := nil;
       InstructionStartIP := 0;
-      EnterActivation(PPointer(@Template), @InstructionStartIP,
+      EnterActivation(PPointer(@Template), @InstructionStartIP, @Frame.IP,
         InitialFrameStackCount, InitialClosedNumericFrameCount);
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,

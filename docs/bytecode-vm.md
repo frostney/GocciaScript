@@ -269,7 +269,8 @@ keeps that true:
   pointer when that frame made its call, so the two sequences pair up in
   order. `TGocciaVM.ResolveFrameLocations` steps back from each saved
   pointer to the call instruction and looks it up in the call-site table,
-  falling back to the line map. The executing frame uses its probe instead.
+  falling back to the line map. The executing frame is located the same way
+  from its `Frame.IP` probe.
   The VM installs this resolver on the thread's `TGocciaCallStack` for as
   long as it runs. A call does no position work at all; a native entry
   stores one activation record.
