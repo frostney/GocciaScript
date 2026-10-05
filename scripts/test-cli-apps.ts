@@ -6386,6 +6386,73 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
   }
 }
 
+await section("Bundler: constants folding to Infinity, NaN and -0 compile + roundtrip...", async () => {
+  const tmp = makeTmp();
+  try {
+    // [constant expression, the value it folds to]. String(-0) is "0", so the
+    // program names -0 through Object.is.
+    const folds: [string, string][] = [
+      ["1 / 0", "Infinity"],
+      ["1e308 * 10", "Infinity"],
+      ["2 ** 1024", "Infinity"],
+      ["-1 / 0", "-Infinity"],
+      ["-1e308 * 10", "-Infinity"],
+      ["0 / 0", "NaN"],
+      ["Infinity - Infinity", "NaN"],
+      ["0 * -1", "-0"],
+      ["0 / -1", "-0"],
+    ];
+    const expected = folds.map(([expression, value]) => `fold ${expression} = ${value}`).join("\n");
+    const foldLines = (output: string): string =>
+      normalizeLineEndings(output)
+        .split("\n")
+        .filter((line) => line.startsWith("fold "))
+        .join("\n");
+    const run = (...args: string[]): string =>
+      foldLines(Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" }).stdout.toString());
+
+    const src = join(tmp, "folded.js");
+    const gbc = join(tmp, "folded.gbc");
+    writeFileSync(
+      src,
+      [
+        'const show = (value) => (Object.is(value, -0) ? "-0" : String(value));',
+        ...folds.map(
+          ([expression], i) => `const c${i} = ${expression};\nconsole.log("fold ${expression} =", show(c${i}));`,
+        ),
+        "",
+      ].join("\n"),
+    );
+    const compile = Bun.spawnSync([BUNDLER, src, `--output=${gbc}`], { stdout: "pipe", stderr: "pipe" });
+    if (compile.exitCode !== 0 || !existsSync(gbc))
+      throw new Error(
+        `Folded non-finite constants should compile to .gbc, got exit ${compile.exitCode}: ${compile.stdout.toString()}${compile.stderr.toString()}`,
+      );
+    const fromSource = run(src, "--mode=bytecode");
+    if (fromSource !== expected)
+      throw new Error(`Folded constants run from source in bytecode mode should print:\n${expected}\ngot:\n${fromSource}`);
+    const fromGbc = run(gbc);
+    if (fromGbc !== expected)
+      throw new Error(`Folded constants roundtrip should print:\n${expected}\ngot:\n${fromGbc}`);
+
+    // Each worker thread has its own floating-point state.
+    const dir = join(tmp, "workers");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "a.js"), 'console.log("fold a =", 1 / 0);\n');
+    writeFileSync(join(dir, "b.js"), 'console.log("fold b =", 0 / 0);\n');
+    const parallel = Bun.spawnSync([BUNDLER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    if (parallel.exitCode !== 0)
+      throw new Error(
+        `Folded non-finite constants should compile on worker threads, got exit ${parallel.exitCode}: ${parallel.stdout.toString()}${parallel.stderr.toString()}`,
+      );
+    const fromWorkers = `${run(join(dir, "a.gbc"))}\n${run(join(dir, "b.gbc"))}`;
+    if (fromWorkers !== "fold a = Infinity\nfold b = NaN")
+      throw new Error(`Worker-compiled folded constants should print Infinity and NaN, got:\n${fromWorkers}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 // ============================================================================
 // GocciaBenchmarkRunner
 // ============================================================================
