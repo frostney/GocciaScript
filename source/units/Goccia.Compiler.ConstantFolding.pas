@@ -148,7 +148,7 @@ begin
       AValue := NumberCompileTimeValue(NumberToUint32(ALeft) shr
         (NumberToUint32(ARight) and 31));
   else
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Result := False;
   end;
 end;
@@ -190,7 +190,7 @@ begin
     gttBitwiseXor:
       AValue := BigIntCompileTimeValue(ALeft.BitwiseXor(ARight));
   else
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Result := False;
   end;
 end;
@@ -366,7 +366,7 @@ begin
           end;
       end;
   else
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Result := False;
   end;
 end;
@@ -378,7 +378,7 @@ var
   LeftNum, RightNum: Double;
 begin
   Result := False;
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
 
   if AOp in [gttEqual, gttNotEqual, gttLess, gttGreater, gttLessEqual,
     gttGreaterEqual] then
@@ -415,7 +415,7 @@ function TryEvaluateIdentifier(const ACtx: TGocciaCompilationContext;
 begin
   if Assigned(ACtx.Scope) and (ACtx.Scope.WithBindingCount > 0) then
   begin
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit(False);
   end;
 
@@ -426,7 +426,7 @@ begin
 
   if ACtx.Scope.HasVisibleLocal(AExpr.Name) then
   begin
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit(False);
   end;
 
@@ -438,7 +438,7 @@ begin
     AValue := NumberCompileTimeValue(Infinity)
   else
   begin
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit(False);
   end;
 
@@ -452,7 +452,7 @@ var
   Operand: TGocciaCompileTimeValue;
   NumberValue: Double;
 begin
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
 
   if AExpr.Operator = gttDelete then
     Exit(False);
@@ -519,7 +519,7 @@ function TryEvaluateBinaryExpression(const ACtx: TGocciaCompilationContext;
 var
   LeftValue, RightValue: TGocciaCompileTimeValue;
 begin
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
 
   if not TryEvaluateConstantExpression(ACtx, AExpr.Left, LeftValue) then
     Exit(False);
@@ -585,7 +585,7 @@ begin
   for I := 0 to AExpr.Expressions.Count - 1 do
     if not TryEvaluateConstantExpression(ACtx, AExpr.Expressions[I], AValue) then
     begin
-      AValue := UnknownCompileTimeValue;
+      ResetCompileTimeValue(AValue, ctvkUnknown);
       Exit(False);
     end;
   Result := True;
@@ -599,7 +599,7 @@ var
 begin
   if not TryEvaluateConstantExpression(ACtx, AExpr.Condition, Condition) then
   begin
-    AValue := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit(False);
   end;
 
@@ -623,7 +623,7 @@ begin
   begin
     if not TryEvaluateConstantExpression(ACtx, AExpr.Parts[I], PartValue) then
     begin
-      AValue := UnknownCompileTimeValue;
+      ResetCompileTimeValue(AValue, ctvkUnknown);
       Exit(False);
     end;
 
@@ -646,7 +646,7 @@ end;
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue): Boolean;
 begin
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
   if not (ACtx.OptimizationOptions.EnableConstantFolding or
           ACtx.OptimizationOptions.EnableConstPropagation or
           ACtx.OptimizationOptions.EnableDeadBranchElimination) then
@@ -674,8 +674,8 @@ begin
     Result := TryEvaluateConditionalExpression(ACtx, TGocciaConditionalExpression(AExpr), AValue)
   else if AExpr is TGocciaTemplateLiteralExpression then
   begin
-    AValue := StringCompileTimeValue(
-      TGocciaTemplateLiteralExpression(AExpr).Value);
+    ResetCompileTimeValue(AValue, ctvkString);
+    AValue.StringValue := TGocciaTemplateLiteralExpression(AExpr).Value;
     Result := True;
   end
   else if AExpr is TGocciaTemplateWithInterpolationExpression then
