@@ -242,7 +242,8 @@ type
     procedure SampleHeap;
     // AFull is False for CollectYoung, which keeps every object older than
     // its watermark: what it leaves in use is not a measure of what a
-    // collection cannot reclaim, so it does not move the back-off baseline.
+    // collection cannot reclaim, so it moves neither the back-off baseline
+    // nor the sampling countdown.
     procedure NoteCollectionFinished(const AFull: Boolean);
     // Asks the next pressure checkpoint to collect: sets the pending flag the
     // checkpoints test and zeroes the VM's countdown so it checks at once.
@@ -1331,9 +1332,14 @@ begin
   if FHeapPressurePending then
     Inc(FHeapTriggeredCollections);
   FHeapPressurePending := False;
-  FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
+  // A young collection leaves the sample cadence alone: repeated young
+  // collections between fewer than HEAP_SAMPLE_INTERVAL registrations would
+  // otherwise keep postponing the next heap sample.
   if AFull then
+  begin
+    FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
     FHeapAfterLastCollect := CurrentHeapBytes;
+  end;
 end;
 
 procedure TGarbageCollector.CollectForMemoryPressure(
