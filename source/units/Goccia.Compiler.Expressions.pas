@@ -113,12 +113,10 @@ function ExpressionContainsDirectEval(const AExpr: TGocciaExpression): Boolean;
 function ExpressionContainsSuspension(const AExpr: TGocciaExpression): Boolean;
 function ExpressionCreatesClosureBoundary(const AExpr: TGocciaExpression): Boolean;
 
-procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
+procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
   const AParams: TGocciaParameterArray; const AHasArgumentsObject: Boolean);
-function ParameterListHasDefaultValues(
-  const AParams: TGocciaParameterArray): Boolean;
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
 function SyntheticParamLocalName(const AIndex: Integer): string;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
@@ -139,8 +137,6 @@ procedure EmitWithAssignmentOrFallback(const ACtx: TGocciaCompilationContext;
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
   const APattern: TGocciaDestructuringPattern; const ASrcReg: UInt16;
   const AAssignmentMode: Boolean = False);
-procedure EmitDestructuringParameters(const ACtx: TGocciaCompilationContext;
-  const AParams: TGocciaParameterArray);
 procedure CompileDestructuringAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaDestructuringAssignmentExpression; const ADest: UInt16);
 
@@ -1706,17 +1702,6 @@ begin
   Result := False;
 end;
 
-function ParameterListHasDefaultValues(
-  const AParams: TGocciaParameterArray): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(AParams) do
-    if Assigned(AParams[I].DefaultValue) then
-      Exit(True);
-  Result := False;
-end;
-
 function IsDirectEvalVisibleCompilerName(const AName: string): Boolean;
 begin
   Result := (AName <> '') and
@@ -2881,37 +2866,98 @@ begin
   end;
 end;
 
-procedure EmitDefaultParameters(const ACtx: TGocciaCompilationContext;
+// Compiles the parameter preamble. ES2026 §10.2.11 FunctionDeclarationInstantiation
+// creates every binding of the formal parameters uninitialized and then runs
+// IteratorBindingInitialization of the formals (§8.6.3): one parameter at a
+// time, left to right, each taking its argument and running its initializer
+// when that is undefined. A pattern initializes its bindings right there, in
+// order, through BindingInitialization of its elements and properties (§8.6.3,
+// §14.3.3.3 KeyedBindingInitialization) with their nested initializers. Any
+// read of a binding not initialized yet, a later parameter's or the one being
+// initialized, throws a ReferenceError (§9.1.1.1.6 GetBindingValue, step 2).
+//
+// That order and that TDZ are only observable through an expression in the
+// parameter list (§15.1.2 ContainsExpression: an initializer or a computed
+// property key). With one, every parameter binding starts as the hole and
+// each parameter in turn loads its argument or packs the rest, runs its
+// initializer and is destructured. Without one the arguments the call left in
+// the parameter registers stay there; only a rest parameter is packed and the
+// patterns are destructured.
+procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 var
-  I, LocalIdx: Integer;
+  I, J, LocalIdx: Integer;
   Slot: UInt16;
   JumpIdx: Integer;
   IsCaptured: Boolean;
-begin
-  if not ParameterListHasDefaultValues(AParams) then
-    Exit;
+  Names: TUnicodeStringList;
 
-  for I := 0 to High(AParams) do
+  function ParameterLocalIndex(const AIndex: Integer): Integer;
   begin
-    if AParams[I].IsPattern then
-      LocalIdx := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(I))
+    if AParams[AIndex].IsPattern then
+      Result := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(AIndex))
     else
-      LocalIdx := ACtx.Scope.ResolveLocal(AParams[I].Name);
-    if LocalIdx < 0 then
-      Continue;
-    Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
-    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      Result := ACtx.Scope.ResolveLocal(AParams[AIndex].Name);
+  end;
+
+  procedure EmitUninitializedBinding(const ALocalIdx: Integer);
+  var
+    HoleSlot: UInt16;
+  begin
+    if ALocalIdx < 0 then
+      Exit;
+    HoleSlot := ACtx.Scope.GetLocal(ALocalIdx).Slot;
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, HoleSlot, 0, 0));
+    if ACtx.Scope.GetLocal(ALocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, HoleSlot,
+        UInt16(HoleSlot)));
+  end;
+
+begin
+  // Every initializer and computed key is a TGocciaExpression, so this asks
+  // whether the list contains one at all.
+  if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then
+  begin
+    for I := 0 to High(AParams) do
+    begin
+      if not AParams[I].IsRest then
+        Continue;
+      LocalIdx := ParameterLocalIndex(I);
+      if LocalIdx >= 0 then
+        EmitInstruction(ACtx, EncodeABC(OP_PACK_ARGS,
+          ACtx.Scope.GetLocal(LocalIdx).Slot, UInt16(I), 0));
+    end;
+    for I := 0 to High(AParams) do
+    begin
+      if not AParams[I].IsPattern or not Assigned(AParams[I].Pattern) then
+        Continue;
+      LocalIdx := ParameterLocalIndex(I);
+      if LocalIdx >= 0 then
+        EmitDestructuring(ACtx, AParams[I].Pattern,
+          ACtx.Scope.GetLocal(LocalIdx).Slot);
+    end;
+    Exit;
+  end;
+
+  Names := TUnicodeStringList.Create;
+  try
+    for I := 0 to High(AParams) do
+    begin
+      EmitUninitializedBinding(ParameterLocalIndex(I));
+      if not AParams[I].IsPattern then
+        Continue;
+      Names.Clear;
+      CollectPatternBindingNames(AParams[I].Pattern, Names);
+      for J := 0 to Names.Count - 1 do
+        EmitUninitializedBinding(ACtx.Scope.ResolveLocal(Names[J]));
+    end;
+  finally
+    Names.Free;
   end;
 
   for I := 0 to High(AParams) do
   begin
-    if AParams[I].IsPattern then
-      LocalIdx := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(I))
-    else
-      LocalIdx := ACtx.Scope.ResolveLocal(AParams[I].Name);
+    LocalIdx := ParameterLocalIndex(I);
     if LocalIdx < 0 then
       Continue;
     Slot := ACtx.Scope.GetLocal(LocalIdx).Slot;
@@ -2924,21 +2970,24 @@ begin
     if IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
 
-    if not Assigned(AParams[I].DefaultValue) then
-      Continue;
+    if Assigned(AParams[I].DefaultValue) then
+    begin
+      EmitUndefinedCheck(ACtx, Slot, JumpIdx);
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
+      if IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      if AParams[I].IsPattern then
+        ACtx.CompileExpression(AParams[I].DefaultValue, Slot)
+      else
+        CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
+          AParams[I].Name);
+      if IsCaptured then
+        EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
+      PatchJumpTarget(ACtx, JumpIdx);
+    end;
 
-    EmitUndefinedCheck(ACtx, Slot, JumpIdx);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Slot, 0, 0));
-    if IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
-    if AParams[I].IsPattern then
-      ACtx.CompileExpression(AParams[I].DefaultValue, Slot)
-    else
-      CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
-        AParams[I].Name);
-    if IsCaptured then
-      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
-    PatchJumpTarget(ACtx, JumpIdx);
+    if AParams[I].IsPattern and Assigned(AParams[I].Pattern) then
+      EmitDestructuring(ACtx, AParams[I].Pattern, Slot);
   end;
 end;
 
@@ -3790,27 +3839,6 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-procedure EmitDestructuringParameters(const ACtx: TGocciaCompilationContext;
-  const AParams: TGocciaParameterArray);
-var
-  I, LocalIdx: Integer;
-  ParamSlot: UInt16;
-begin
-  for I := 0 to High(AParams) do
-  begin
-    if not AParams[I].IsPattern then
-      Continue;
-    if not Assigned(AParams[I].Pattern) then
-      Continue;
-
-    LocalIdx := ACtx.Scope.ResolveLocal(SyntheticParamLocalName(I));
-    if LocalIdx < 0 then
-      Continue;
-    ParamSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-    EmitDestructuring(ACtx, AParams[I].Pattern, ParamSlot);
-  end;
-end;
-
 procedure ApplyParameterTypeAnnotations(
   const AScope: TGocciaCompilerScope;
   const ATemplate: TGocciaFunctionTemplate;
@@ -3894,8 +3922,6 @@ var
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FormalCount: Integer;
-  RestParamIndex: Integer;
-  RestReg: Integer;
   I: Integer;
   OldDerivedGuard: Boolean;
   NumericProof: TClosedNumericCallProof;
@@ -3921,15 +3947,12 @@ begin
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AExpr.Parameters) do
   begin
     if AExpr.Parameters[I].IsRest or Assigned(AExpr.Parameters[I].DefaultValue) then
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AExpr.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AExpr.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -3983,19 +4006,7 @@ begin
       not ChildTemplate.StrictCode;
     ChildCtx.DerivedConstructorThisGuard := OldDerivedGuard;
 
-    if (RestParamIndex >= 0) and
-       not ParameterListHasDefaultValues(AExpr.Parameters) then
-    begin
-      if AExpr.Parameters[RestParamIndex].IsPattern then
-        RestReg := ChildScope.ResolveLocal(SyntheticParamLocalName(RestParamIndex))
-      else
-        RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
-      EmitInstruction(ChildCtx,
-        EncodeABC(OP_PACK_ARGS, UInt16(RestReg), UInt16(RestParamIndex), 0));
-    end;
-
-    EmitDefaultParameters(ChildCtx, AExpr.Parameters);
-    EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
@@ -5321,8 +5332,7 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitDefaultParameters(ChildCtx, SetterParams);
-    EmitDestructuringParameters(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
@@ -5482,8 +5492,7 @@ begin
     EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
       ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
       Length(SetterParams));
-    EmitDefaultParameters(ChildCtx, SetterParams);
-    EmitDestructuringParameters(ChildCtx, SetterParams);
+    EmitParameterInitialization(ChildCtx, SetterParams);
     EmitParameterTypeChecks(ChildCtx, SetterParams);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');
@@ -6093,8 +6102,6 @@ var
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
   FormalCount: Integer;
-  RestParamIndex: Integer;
-  RestReg: Integer;
   I: Integer;
   ArgumentsSlot: Integer;
   HasNameBinding: Boolean;
@@ -6133,15 +6140,12 @@ begin
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AExpr.Parameters) do
   begin
     if AExpr.Parameters[I].IsRest or Assigned(AExpr.Parameters[I].DefaultValue) then
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AExpr.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AExpr.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -6177,19 +6181,7 @@ begin
       ChildCtx.NonStrictMode and ParameterListIsSimple(AExpr.Parameters),
       Length(AExpr.Parameters));
 
-    if (RestParamIndex >= 0) and
-       not ParameterListHasDefaultValues(AExpr.Parameters) then
-    begin
-      if AExpr.Parameters[RestParamIndex].IsPattern then
-        RestReg := ChildScope.ResolveLocal(SyntheticParamLocalName(RestParamIndex))
-      else
-        RestReg := ChildScope.ResolveLocal(AExpr.Parameters[RestParamIndex].Name);
-      EmitInstruction(ChildCtx,
-        EncodeABC(OP_PACK_ARGS, UInt16(RestReg), UInt16(RestParamIndex), 0));
-    end;
-
-    EmitDefaultParameters(ChildCtx, AExpr.Parameters);
-    EmitDestructuringParameters(ChildCtx, AExpr.Parameters);
+    EmitParameterInitialization(ChildCtx, AExpr.Parameters);
     EmitParameterTypeChecks(ChildCtx, AExpr.Parameters);
     if ChildTemplate.CodeCount > High(UInt16) then
       raise Exception.Create('Parameter preamble is too large to encode');

@@ -5188,7 +5188,7 @@ var
   FuncIdx: UInt16;
   MethodReg: UInt16;
   MethodNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
   DisplayName: string;
   OldDerivedGuard: Boolean;
@@ -5212,7 +5212,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5220,8 +5219,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5262,15 +5259,7 @@ begin
     EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
       UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5440,8 +5429,7 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5614,8 +5602,7 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5661,7 +5648,7 @@ var
   FuncIdx: UInt16;
   FnReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -5681,7 +5668,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5689,8 +5675,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5722,15 +5706,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
     Length(AMethod.Parameters));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
