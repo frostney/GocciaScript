@@ -3180,9 +3180,27 @@ console.log("--max-stack (default overflow)...");
 }
 
 console.log("--max-stack (custom limit)...");
-{
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100`.text();
-  if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
+// The limit is the number of nested calls: n counts the calls that started,
+// and the 101st is refused. The top level is not a call.
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const sourceType of ["script", "module"]) {
+    const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100 --mode=${mode} --source-type=${sourceType}`.text();
+    if (!containsLine(out, "100"))
+      throw new Error(`--max-stack=100 (${mode}, ${sourceType}) should allow 100 nested calls, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (TestRunner test function)...");
+// The runner calls the test function itself, so its calls have the whole limit.
+for (const mode of ["interpreted", "bytecode"]) {
+  const src = [
+    "const count = (k) => (k <= 1 ? 1 : count(k - 1) + 1);",
+    'test("ten nested calls", () => { expect(count(10)).toBe(10); });',
+    'test("eleven nested calls", () => { expect(() => count(11)).toThrow(RangeError); });',
+  ].join("\n");
+  const out = await $`echo ${src} | ${TESTRUNNER} --max-stack=10 --mode=${mode} --no-progress`.nothrow().text();
+  if (!out.includes("Passed: 2"))
+    throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
 }
 
 console.log("--max-stack (bytecode trampoline)...");
@@ -4262,6 +4280,78 @@ console.log("Entry module linking (bytecode)...");
       throw new Error(`REPL (bytecode) should evaluate only the later input's module, once, got: ${output}`);
     if (!output.includes("ready:linked"))
       throw new Error(`REPL (bytecode) should run the input after a failed link, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Entry module evaluated once (#1447) --------------------------------------
+
+// ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation: a module record evaluates once,
+// and an import that resolves to the entry's own file must get the entry's own
+// record (§16.2.1.10 HostLoadImportedModule). The entry is the file the runner
+// was given, so the path it was named by (relative, ./, absolute) and the .gbc
+// form can only be exercised from the CLI. tests/language/modules covers the
+// test runner, live bindings and the temporal dead zone.
+console.log("Entry module evaluated once...");
+{
+  const tmp = mkdtemp("goccia-entry-once-");
+  try {
+    const files: Record<string, string> = {
+      "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
+      "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
+      "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',
+      "self.js": 'import "./self.js";\nconsole.log("self ran");\n',
+      "id.js": 'export const o = {};\nimport { o as p } from "./id.js";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.js": 'import "./cycle-b.js";\nconsole.log("a ran");\n',
+      "cycle-b.js": 'import "./cycle-a.js";\nconsole.log("b ran");\n',
+      "bundled.mjs": 'import "./bundled.gbc";\nconsole.log("bundled ran");\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const programOutput = (out: string): string[] =>
+      normalizeLineEndings(out)
+        .split("\n")
+        .filter((line) => line.endsWith(" ran") || line.startsWith("same record:"));
+    const expectRun = async (label: string, args: string[], expected: string[]): Promise<void> => {
+      const run = await $`${join(process.cwd(), RUNNER)} ${args}`.cwd(tmp).nothrow().quiet();
+      const out = run.text() + run.stderr.toString();
+      const lines = programOutput(out);
+      if (run.exitCode !== 0 || JSON.stringify(lines) !== JSON.stringify(expected))
+        throw new Error(`${label}: expected ${JSON.stringify(expected)}, got exit ${run.exitCode}: ${out}`);
+    };
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Module source: the entry record is the one its own path resolves to.
+      for (const entry of ["self.mjs", "./self.mjs", join(tmp, "self.mjs")])
+        await expectRun(`module entry ${entry} (${mode})`, [entry, `--mode=${mode}`], ["self ran"]);
+      await expectRun(`module entry importing itself by absolute path (${mode})`,
+        ["abs.mjs", `--mode=${mode}`], ["abs ran"]);
+      await expectRun(`module entry record identity (${mode})`,
+        ["id.mjs", `--mode=${mode}`], ["same record: true"]);
+      await expectRun(`module entry in a cycle (${mode})`,
+        ["cycle-a.mjs", `--mode=${mode}`], ["b ran", "a ran"]);
+      await expectRun(`--source-type=module entry (${mode})`,
+        ["self.js", `--mode=${mode}`, "--source-type=module"], ["self ran"]);
+
+      // Script source: the entry is a Script Record (§16.1.4), not a Module
+      // Record, so its own path names a separate module record. That module
+      // evaluates once, before the script body, and its bindings are its own.
+      await expectRun(`script entry importing itself (${mode})`,
+        ["self.js", `--mode=${mode}`], ["self ran", "self ran"]);
+      await expectRun(`script entry record identity (${mode})`,
+        ["id.js", `--mode=${mode}`], ["same record: true", "same record: false"]);
+      await expectRun(`script entry in a cycle (${mode})`,
+        ["cycle-a.js", `--mode=${mode}`], ["a ran", "b ran", "a ran"]);
+    }
+
+    // A bundled module-source entry is the .gbc file: an import of that file
+    // gets the running entry instead of reading the bytecode as source.
+    const bundle = await $`${join(process.cwd(), BUNDLER)} bundled.mjs`.cwd(tmp).nothrow().quiet();
+    if (bundle.exitCode !== 0) throw new Error(`Bundling bundled.mjs failed: ${bundle.text()}`);
+    await expectRun("module .gbc entry importing itself", ["bundled.gbc", "--source-type=module"], ["bundled ran"]);
   } finally {
     clean(tmp);
   }

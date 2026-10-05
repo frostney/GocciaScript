@@ -38,9 +38,11 @@ type
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
+    // True when every value this binding can hold is a Number, so its Number
+    // hint stays valid across assignments (Goccia.Compiler.NumericBindings).
+    HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
-    ReturnTypeHint: TGocciaLocalType;
     ParamTypeSignature: string;
     TypeAnnotation: string;
     ElementTypeAnnotation: string;
@@ -57,6 +59,8 @@ type
     DebugLocalIndex: Integer;
   end;
 
+  PGocciaCompilerLocal = ^TGocciaCompilerLocal;
+
   TGocciaCompilerUpvalue = record
     Name: string;
     Index: UInt16;
@@ -67,7 +71,6 @@ type
     IsGlobalBacked: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
-    ReturnTypeHint: TGocciaLocalType;
     ParamTypeSignature: string;
     IsImportBinding: Boolean;
     ImportPhase: TGocciaImportCallPhase;
@@ -151,6 +154,10 @@ type
     property NextSlot: Integer read FNextSlot;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
+    // The local in place, without copying the record and its managed fields.
+    // The pointer is valid only until the next DeclareLocal or DeclareVarLocal,
+    // which can reallocate the local array.
+    function LocalAt(const AIndex: Integer): PGocciaCompilerLocal; {$IFDEF FPC}inline;{$ENDIF}
     function GetUpvalue(const AIndex: Integer): TGocciaCompilerUpvalue;
     procedure MarkCaptured(const AIndex: Integer);
     procedure MarkLocalInitialized(const AIndex: Integer);
@@ -169,8 +176,8 @@ type
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
       const AProvenNumeric: Boolean);
-    procedure SetLocalReturnTypeHint(const AIndex: Integer;
-      const AReturnTypeHint: TGocciaLocalType);
+    procedure SetLocalHoldsOnlyNumbers(const AIndex: Integer;
+      const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
@@ -317,14 +324,14 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
-  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
-  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[FLocalCount].ConstantValue, ctvkUnknown);
   FLocals[FLocalCount].IsImportBinding := False;
   FLocals[FLocalCount].ImportPhase := icpEvaluation;
   FLocals[FLocalCount].ImportModulePath := '';
@@ -373,14 +380,14 @@ begin
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
+  FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
-  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].ParamTypeSignature := '';
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
-  FLocals[FLocalCount].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[FLocalCount].ConstantValue, ctvkUnknown);
   FLocals[FLocalCount].IsImportBinding := False;
   FLocals[FLocalCount].ImportPhase := icpEvaluation;
   FLocals[FLocalCount].ImportModulePath := '';
@@ -435,7 +442,6 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
-    FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
     FUpvalues[Idx].IsImportBinding := FParent.FLocals[LocalIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FLocals[LocalIdx].ImportPhase;
@@ -462,7 +468,6 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
-    FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
     FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
     FUpvalues[Idx].IsImportBinding := FParent.FUpvalues[UpvalueIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FUpvalues[UpvalueIdx].ImportPhase;
@@ -499,7 +504,6 @@ begin
   FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
-  FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].ParamTypeSignature := '';
   FUpvalues[FUpvalueCount].IsImportBinding := False;
   FUpvalues[FUpvalueCount].ImportPhase := icpEvaluation;
@@ -586,6 +590,12 @@ function TGocciaCompilerScope.GetLocal(
   const AIndex: Integer): TGocciaCompilerLocal;
 begin
   Result := FLocals[AIndex];
+end;
+
+function TGocciaCompilerScope.LocalAt(
+  const AIndex: Integer): PGocciaCompilerLocal;
+begin
+  Result := @FLocals[AIndex];
 end;
 
 function TGocciaCompilerScope.GetUpvalue(
@@ -675,12 +685,6 @@ begin
   FLocals[AIndex].TypeHint := ATypeHint;
 end;
 
-procedure TGocciaCompilerScope.SetLocalReturnTypeHint(const AIndex: Integer;
-  const AReturnTypeHint: TGocciaLocalType);
-begin
-  FLocals[AIndex].ReturnTypeHint := AReturnTypeHint;
-end;
-
 procedure TGocciaCompilerScope.SetLocalParamTypeSignature(const AIndex: Integer;
   const ASignature: string);
 begin
@@ -705,6 +709,12 @@ begin
   FLocals[AIndex].IsCallProvenNumeric := AProvenNumeric;
 end;
 
+procedure TGocciaCompilerScope.SetLocalHoldsOnlyNumbers(
+  const AIndex: Integer; const AHoldsOnlyNumbers: Boolean);
+begin
+  FLocals[AIndex].HoldsOnlyNumbers := AHoldsOnlyNumbers;
+end;
+
 procedure TGocciaCompilerScope.SetLocalTypeAnnotation(const AIndex: Integer;
   const AAnnotation: string);
 begin
@@ -727,7 +737,7 @@ end;
 procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
-  FLocals[AIndex].ConstantValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(FLocals[AIndex].ConstantValue, ctvkUnknown);
 end;
 
 procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
@@ -780,14 +790,14 @@ begin
     if Result then
       AValue := FLocals[LocalIdx].ConstantValue
     else
-      AValue := UnknownCompileTimeValue;
+      ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit;
   end;
 
   if Assigned(FParent) then
     Exit(FParent.TryGetVisibleConstantValue(AName, AValue));
 
-  AValue := UnknownCompileTimeValue;
+  ResetCompileTimeValue(AValue, ctvkUnknown);
   Result := False;
 end;
 
