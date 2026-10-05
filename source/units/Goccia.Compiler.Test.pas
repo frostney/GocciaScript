@@ -52,6 +52,10 @@ type
       const AOp: TGocciaOpCode): Integer;
     function FindFunctionWithOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
+    // Counts a raw opcode byte, for the runtime-only opcodes that are not
+    // TGocciaOpCode members.
+    function CountRawOpRecursive(const ATemplate: TGocciaFunctionTemplate;
+      const AOp: UInt8): Integer;
     function CountArithmeticOps(
       const ATemplate: TGocciaFunctionTemplate): Integer;
     function HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -440,6 +444,19 @@ begin
   Result := CountOp(ATemplate, AOp);
   for I := 0 to ATemplate.FunctionCount - 1 do
     Inc(Result, CountOpRecursive(ATemplate.GetFunction(I), AOp));
+end;
+
+function TTestCompiler.CountRawOpRecursive(
+  const ATemplate: TGocciaFunctionTemplate; const AOp: UInt8): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ATemplate.CodeCount - 1 do
+    if DecodeOp(ATemplate.GetInstruction(I)) = AOp then
+      Inc(Result);
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    Inc(Result, CountRawOpRecursive(ATemplate.GetFunction(I), AOp));
 end;
 
 function TTestCompiler.FindFunctionWithOp(
@@ -1432,10 +1449,8 @@ begin
       // serialized (ADR 0101, ADR 0127).
       Expect<Boolean>(Assigned(FindFunctionWithOp(Loaded.TopLevel,
         OP_CALL_SELF_NUM))).ToBe(False);
-      LoadedFunction := FindFunctionWithOp(Loaded.TopLevel, OP_CALL_SELF);
-      Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
-      if Assigned(LoadedFunction) then
-        Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF)).ToBe(2);
+      Expect<Integer>(CountRawOpRecursive(Loaded.TopLevel, OP_CALL_SELF))
+        .ToBe(2);
     finally
       Loaded.Free;
     end;

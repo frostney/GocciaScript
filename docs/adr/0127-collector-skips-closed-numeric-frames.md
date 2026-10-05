@@ -29,8 +29,10 @@ verifier therefore rewrites a loaded `OP_CALL_SELF_NUM` in a synchronous arrow
 to the ordinary self-call `OP_CALL_SELF`, whose frame is marked, and rejects
 the opcode in any other template kind. Code compiled in process keeps the fast
 path; a `.gbc` produced by the bundler loses it for its numeric self-recursions
-and runs them on ordinary frames. `OP_CALL_SELF` is runtime-only and never
-appears in a file.
+and runs them on ordinary frames. `OP_CALL_SELF` is runtime-only: it takes
+opcode 255, reserved at the top of the range outside `TGocciaOpCode`, so it
+never collides with an appended file opcode and the loader rejects it in a
+file.
 
 ## Considered Options
 

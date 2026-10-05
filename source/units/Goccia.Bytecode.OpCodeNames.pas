@@ -223,13 +223,15 @@ begin
     OP_SUB_NUM_IMM:                    Result := 'OP_SUB_NUM_IMM';
     OP_JUMP_IF_NUM_NOT_LTE_IMM:        Result := 'OP_JUMP_IF_NUM_NOT_LTE_IMM';
     OP_CALL_SELF_NUM:                  Result := 'OP_CALL_SELF_NUM';
-    OP_CALL_SELF:                      Result := 'OP_CALL_SELF';
     OP_ADD_NUM_IMM:                    Result := 'OP_ADD_NUM_IMM';
     OP_GET_LOCAL_PROP_CONST:           Result := 'OP_GET_LOCAL_PROP_CONST';
     OP_JUMP_IF_NOT_LT:                 Result := 'OP_JUMP_IF_NOT_LT';
     OP_COMPUTED_IMPORT_SPECIFIER:      Result := 'OP_COMPUTED_IMPORT_SPECIFIER';
   else
-    Result := Format('OP_UNKNOWN_%d', [AOp]);
+    if AOp = OP_CALL_SELF then
+      Result := 'OP_CALL_SELF'
+    else
+      Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;
 end;
 

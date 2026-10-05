@@ -224,7 +224,7 @@ begin
           // serialized: the collector does not mark closed numeric frames. A
           // loaded template therefore calls itself through an ordinary frame.
           ATemplate.PatchInstruction(PC,
-            (Instruction and not UInt32($FF)) or Ord(OP_CALL_SELF));
+            (Instruction and not UInt32($FF)) or OP_CALL_SELF);
         end;
 
       OP_ITER_CLOSE:

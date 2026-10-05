@@ -199,7 +199,7 @@ begin
     begin
       if DecodeOp(LoadedArrow.GetInstruction(I)) = Ord(OP_CALL_SELF_NUM) then
         Inc(SelfNumCount);
-      if DecodeOp(LoadedArrow.GetInstruction(I)) = Ord(OP_CALL_SELF) then
+      if DecodeOp(LoadedArrow.GetInstruction(I)) = OP_CALL_SELF then
         Inc(SelfCount);
     end;
     Expect<Integer>(SelfNumCount).ToBe(0);

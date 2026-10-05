@@ -355,6 +355,9 @@ collector reclaim it. The verifier rewrites a loaded `OP_CALL_SELF_NUM` in a
 synchronous arrow to `OP_CALL_SELF`, the ordinary self-call whose frame the
 collector marks, and rejects the opcode in any other template kind. Code
 compiled in process keeps the fast path; only loaded templates are rewritten.
+`OP_CALL_SELF` is runtime-only: it is reserved at 255, the top of the opcode
+range, outside `TGocciaOpCode`, so the loader rejects it in a file, and file
+opcodes must stay below it.
 
 ## Current Status
 

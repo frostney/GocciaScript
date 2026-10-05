@@ -470,14 +470,19 @@ type
     // No operands. Emitted immediately before a dynamic-import opcode whose
     // specifier is not a string literal, so the module loader treats the
     // request as outside the static module graph (ADR 0122).
-    OP_COMPUTED_IMPORT_SPECIFIER = 233,
-    // Runtime-only, never read from a file: A = destination, B = first
-    // contiguous argument register, C = argument count. Calls the running
-    // closure through an ordinary frame. The bytecode loader turns a loaded
-    // OP_CALL_SELF_NUM into it, because the proof that makes a closed numeric
-    // frame safe is not serialized.
-    OP_CALL_SELF = 234
+    OP_COMPUTED_IMPORT_SPECIFIER = 233
   );
+
+const
+  // Runtime-only opcode, reserved at the top of the opcode range and never
+  // valid in a file: it is deliberately not a TGocciaOpCode member, so
+  // IsValidGocciaOpCode (bounded by High(TGocciaOpCode)) rejects it at load.
+  // File opcodes must stay below it. A = destination, B = first contiguous
+  // argument register, C = argument count: calls the running closure through
+  // an ordinary frame. The bytecode loader turns a loaded OP_CALL_SELF_NUM into
+  // it, because the proof that makes a closed numeric frame safe is not
+  // serialized (ADR 0127).
+  OP_CALL_SELF = 255;
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
@@ -509,7 +514,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 144..166, Ord(OP_CALL_SELF)]);
+    not (AOp in [99, 144..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
