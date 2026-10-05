@@ -17,10 +17,11 @@ unit Goccia.Compiler.BlockFunctions;
 // named F keeps its value.
 //
 // `var F` in f's place is an early error when F is lexically declared by a
-// statement list f sits in, other than by f itself: a `let`, `const`, `class`,
-// `using` or enum declaration in the function body or the script, in f's block
-// or an enclosing block or case block, or another function declaration in f's
-// block or an enclosing one. A `let` or `const` loop head that encloses f and
+// statement list that encloses f's: a `let`, `const`, `class`, `using` or
+// enum declaration in the function body or the script or in an enclosing block
+// or case block, or a function declaration in an enclosing block. Duplicate
+// function declarations in f's own block do not count (see
+// ConsiderDeclaration). A `let` or `const` loop head that encloses f and
 // a destructured catch parameter that binds F are early errors too (§14.7.4.1,
 // §14.7.5.1, and Annex B.3.4 VariableStatements in Catch Blocks, which allows
 // `var F` only under a catch parameter that is a plain identifier).
@@ -160,31 +161,27 @@ begin
   AddLexicalNames(ANode, False, FFrames[0]);
 end;
 
-// ADeclaration sits directly in the statement list of the innermost frame,
-// which lists ADeclaration's own name once.
+// ADeclaration sits directly in the statement list of the innermost frame.
+// That frame is not consulted: in non-strict code the only other declarations
+// of the name it may hold are function declarations (§14.2.1 allows the
+// duplicates), and those all keep the var binding. Read literally, `var F`
+// next to a second `function F` is an early error, but SpiderMonkey and V8
+// give every duplicate the var binding, and test262's
+// staging/sm/lexical-environment/block-scoped-functions-deprecated-redecl.js
+// expects that ("Annex B still works"). A declaration of the name in an
+// enclosing statement list does block it
+// (annexB/language/function-code/block-decl-nested-blocks-with-fun-decl.js).
 procedure TBlockFunctionScan.ConsiderDeclaration(
   const ADeclaration: TGocciaFunctionDeclaration);
 var
   Name: string;
-  Own: TUnicodeStringList;
-  I, Count: Integer;
+  I: Integer;
 begin
   if ADeclaration.FunctionExpression.IsAsync or
      ADeclaration.FunctionExpression.IsGenerator then
     Exit;
   Name := ADeclaration.Name;
   if Assigned(FScope) and FScope.HasParameterName(Name) then
-    Exit;
-
-  // Another declaration of the name in the same statement list, a duplicate
-  // function declaration that the §14.2.1 Block early errors allow in
-  // non-strict code, would conflict with the var as well.
-  Own := FFrames[FFrames.Count - 1];
-  Count := 0;
-  for I := 0 to Own.Count - 1 do
-    if Own[I] = Name then
-      Inc(Count);
-  if Count > 1 then
     Exit;
 
   for I := 0 to FFrames.Count - 2 do

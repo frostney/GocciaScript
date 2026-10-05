@@ -665,7 +665,7 @@ console.log("Bytecode block-level function var binding skipped on a collision...
     ["let in an enclosing block", "(() => { function f() { { let a = 1; { function a() {} } } return typeof a; } return f(); })()", "undefined"],
     ["let loop head", "(() => { function f() { for (let a of [1]) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
     ["destructured catch parameter", "(() => { function f() { try { throw {}; } catch ({ a }) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
-    ["two declarations in one block", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return typeof a; } return f(); })()", "undefined"],
+    ["two declarations in one block both keep it", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return a(); } return f(); })()", "2"],
     ["same name in a nested block", "(() => { function f() { { function a() { return 1; } { function a() { return 2; } } } return a(); } return f(); })()", "1"],
   ];
   const source = cases
