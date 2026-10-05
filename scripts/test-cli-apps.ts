@@ -11765,7 +11765,16 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
         "const suspended = Goccia.gc.bytesAllocated;\n" +
         "for (const g of all) { g.next(); g.next(); }\n" +
         "Goccia.gc();\n" +
-        'console.log("released " + (suspended - Goccia.gc.bytesAllocated));\n',
+        'console.log("released " + (suspended - Goccia.gc.bytesAllocated));\n' +
+        // Default parameters give a generator a frame before its first
+        // resume; return() before that start must give it back too.
+        "const preset = { *make(seed = 1, other = seed * 2) { yield seed + other; } };\n" +
+        "const fresh = Array.from({ length: 2000 }, (_, i) => preset.make(i));\n" +
+        "Goccia.gc();\n" +
+        "const created = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of fresh) g.return(0);\n" +
+        "Goccia.gc();\n" +
+        'console.log("unstarted " + (created - Goccia.gc.bytesAllocated));\n',
     );
     const generatorRun = Bun.spawnSync([RUNNER, "--mode=bytecode", generators], {
       stdout: "pipe",
@@ -11777,6 +11786,10 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     // locals, 64 bytes; measured 128 bytes a generator.
     if (generatorRun.exitCode !== 0 || !released || Number(released[1]) < 2000 * 64)
       throw new Error(`Finished generators kept the charge for their suspended frames:\n${generatorOut}`);
+    const unstarted = generatorOut.match(/unstarted (-?\d+)/);
+    // Measured 96 bytes a generator.
+    if (!unstarted || Number(unstarted[1]) < 2000 * 48)
+      throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
   } finally {
     clean(tmp);
   }

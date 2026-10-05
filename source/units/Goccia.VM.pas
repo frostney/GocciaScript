@@ -4984,9 +4984,12 @@ begin
   if FState = bgsExecuting then
     raise TGocciaThrowValue.Create(VMGeneratorExecutingError);
 
+  // A generator whose parameters set up a frame before its first resume
+  // already holds a frame charge (CaptureInitialContinuation).
   if (FState = bgsSuspendedStart) and (AKind = bgrkReturn) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     ADone := True;
     Exit(AValue);
   end;
@@ -4994,6 +4997,7 @@ begin
   if (FState = bgsSuspendedStart) and (AKind = bgrkThrow) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     raise TGocciaThrowValue.Create(AValue);
   end;
 
