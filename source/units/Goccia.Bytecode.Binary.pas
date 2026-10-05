@@ -581,6 +581,9 @@ begin
     Export_ := AModule.GetExport(I);
     WriteString(Export_.Name);
     WriteUInt16(Export_.LocalSlot);
+    WriteUInt8(UInt8(Ord(Export_.Kind)));
+    WriteString(Export_.ModuleRequest);
+    WriteString(Export_.ImportName);
   end;
 
   WriteFunctionTemplate(AModule.TopLevel);
@@ -869,7 +872,9 @@ var
   HasDebug: Boolean;
   ImportCount, ExportCount: UInt16;
   I, J: Integer;
-  ModulePath: string;
+  ExportImportName, ExportName, ExportRequest, ModulePath: string;
+  ExportKindTag: UInt8;
+  ExportSlot: UInt16;
   BindingCount: UInt16;
   Bindings: array of TGocciaModuleBinding;
 begin
@@ -906,7 +911,20 @@ begin
 
   ExportCount := ReadUInt16;
   for I := 0 to ExportCount - 1 do
-    Result.AddExport(ReadString, ReadUInt16);
+  begin
+    { Read in stream order: Pascal does not fix the order in which a call's
+      arguments are evaluated. }
+    ExportName := ReadString;
+    ExportSlot := ReadUInt16;
+    ExportKindTag := ReadUInt8;
+    if ExportKindTag > Ord(High(TGocciaModuleExportKind)) then
+      raise Exception.CreateFmt('Invalid module export kind: %d',
+        [ExportKindTag]);
+    ExportRequest := ReadString;
+    ExportImportName := ReadString;
+    Result.AddExport(ExportName, ExportSlot,
+      TGocciaModuleExportKind(ExportKindTag), ExportRequest, ExportImportName);
+  end;
 
   Result.TopLevel := ReadFunctionTemplate;
   VerifyFunctionTemplate(Result.TopLevel, 1);

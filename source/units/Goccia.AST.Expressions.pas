@@ -1011,17 +1011,18 @@ begin
      (TGocciaClassExpression(AExpression).ClassDefinition.Name = ''));
 end;
 
+// ES2026 §8.4.5 NamedEvaluation: an anonymous class is named inside its
+// evaluation, before its static elements run; a function once it exists.
 function EvaluateWithInferredName(const AExpression: TGocciaExpression;
   const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
 begin
-  Result := AExpression.Evaluate(AContext);
-  if not IsAnonymousFunctionNameExpression(AExpression) then
-    Exit;
+  if IsAnonymousClassExpression(AExpression) then
+    Exit(EvaluateNamedExpression(AExpression, AContext, AName));
 
-  if Result is TGocciaFunctionValue then
-    TGocciaFunctionValue(Result).SetInferredName(AName)
-  else if Result is TGocciaClassValue then
-    TGocciaClassValue(Result).SetInferredName(AName);
+  Result := AExpression.Evaluate(AContext);
+  if IsAnonymousFunctionNameExpression(AExpression) and
+     (Result is TGocciaFunctionValue) then
+    TGocciaFunctionValue(Result).SetInferredName(AName);
 end;
 
 function NormalizeAssignmentValue(const AValue: TGocciaValue): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
