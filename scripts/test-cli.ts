@@ -71,6 +71,57 @@ for (const [label, source] of [
     throw new Error(`Top-level ${label} self-reference should throw ReferenceError, got ${json.error?.type}`);
 }
 
+console.log("Bytecode stack frames locate each caller at the call it is making...");
+{
+  // The docs/errors.md § Stack Traces sample. Each caller frame is located at
+  // its own call to the next frame, and the top level at its call to outer.
+  const source = [
+    "const inner = (obj) => {",
+    "  return obj.x;",
+    "};",
+    "const middle = (obj) => {",
+    "  inner(obj);",
+    "};",
+    "const outer = () => {",
+    "  middle(null);",
+    "};",
+    "try {",
+    "  outer();",
+    "} catch (e) {",
+    "  console.log(e.stack);",
+    "}",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString();
+  for (const frame of [
+    "    at inner (<stdin>:2:13)",
+    "    at middle (<stdin>:5:8)",
+    "    at outer (<stdin>:8:9)",
+    "    at <module> (<stdin>:11:8)",
+  ]) {
+    if (!containsLine(out, frame))
+      throw new Error(`Bytecode stack should contain "${frame}", got: ${out}`);
+  }
+}
+
+console.log("--output=json reports where a thrown error was created...");
+for (const mode of ["interpreted", "bytecode"]) {
+  const { exitCode, json } = runLoaderJson(
+    'const fail = () => {\n  throw new TypeError("boom");\n};\nfail();\n',
+    [`--mode=${mode}`],
+  );
+  if (exitCode === 0) throw new Error(`A thrown TypeError should fail the run (${mode})`);
+  if (json.error?.line !== 2 || json.error?.column !== 9)
+    throw new Error(
+      `JSON error should be located at 2:9 (${mode}), got ${json.error?.line}:${json.error?.column}`,
+    );
+}
+
 console.log("Top-level const with a mismatched strict type...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(

@@ -137,3 +137,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0125 — A host can observe unhandled rejections through an engine hook](0125-unhandled-rejection-hook.md)
 - [0126 — A bytecode call clears only what a new frame could read stale, binds thread state per outermost entry, and identifies its callee by exact class](0126-bytecode-call-path-arena-fills-and-thread-binding.md)
 - [0130 — The bytecode VM's stacks are charged to the memory budget, and a refusal is a catchable RangeError at the next instruction boundary](0130-vm-stacks-are-charged-to-the-memory-budget.md)
+- [0131 — A bytecode caller frame's position is worked out when a stack is captured, from the instruction pointers the VM already saves](0131-bytecode-frame-positions-at-capture.md)
