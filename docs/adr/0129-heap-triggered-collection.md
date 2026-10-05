@@ -71,7 +71,9 @@ below the ceiling, like the tracked trigger. After each full collection the
 collector records the heap still in use: survivors plus everything the
 collector does not own, such as source text, ASTs, bytecode and its own object
 list. A young collection (`CollectYoung`, used only between benchmark rounds)
-keeps every older object, so it does not move that record. When that level
+keeps every older object, so it does not move that record; a heap sample below
+the record lowers it, since memory the collector does not own can be freed
+between collections. When that level
 already sits within a reserve of the trigger, the trigger moves to the larger
 of a reserve and half that level above it. Without this, a heap that
 collecting cannot bring under the ceiling would collect at every growth of one

@@ -1312,12 +1312,20 @@ begin
 end;
 
 procedure TGarbageCollector.SampleHeap;
+var
+  HeapBytes: Int64;
 begin
   FHeapSampleCountdown := HEAP_SAMPLE_INTERVAL;
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring or
      FHeapPressurePending then
     Exit;
-  if CurrentHeapBytes >= HeapTriggerBytes then
+  HeapBytes := CurrentHeapBytes;
+  // Memory the collector does not own can be freed between collections (a
+  // released AST or buffer). A sample below the recorded baseline proves the
+  // baseline no longer holds, so the back-off must not keep the trigger up.
+  if HeapBytes < FHeapAfterLastCollect then
+    FHeapAfterLastCollect := HeapBytes;
+  if HeapBytes >= HeapTriggerBytes then
   begin
     // Rides the external-pressure latch so the interpreter's per-expression
     // checkpoint keeps testing a single flag; FHeapPressurePending only

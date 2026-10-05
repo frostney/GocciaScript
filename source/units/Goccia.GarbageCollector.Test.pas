@@ -76,6 +76,7 @@ type
     procedure TestRegisterObjectAdvancesEveryByteCounter;
     procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
     procedure TestHeapTriggerBacksOffAboveSurvivors;
+    procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
   end;
 
 var
@@ -163,6 +164,8 @@ begin
     TestHeapTriggerKeepsGarbageNearTheCeiling);
   Test('Heap-triggered collection backs off when the heap it cannot reclaim exceeds the ceiling',
     TestHeapTriggerBacksOffAboveSurvivors);
+  Test('The heap trigger comes back down once heap it could not reclaim is freed',
+    TestHeapTriggerReturnsAfterUnownedHeapIsFreed);
   {$ENDIF}
 end;
 
@@ -289,6 +292,43 @@ begin
       HeapAfterRetaining div 2 + SLACK).ToBe(True);
   finally
     FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
+const
+  CEILING_ABOVE_HEAP = 8 * 1024 * 1024;
+  RETAINED_BYTES = 24 * 1024 * 1024;
+  GARBAGE_OBJECTS = 200000;
+  SLACK = 2 * 1024 * 1024;
+var
+  GC: TGarbageCollector;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+  Retained: Pointer;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  GetMem(Retained, RETAINED_BYTES);
+  try
+    FillChar(Retained^, RETAINED_BYTES, 0);
+    { This collection records a baseline far above the ceiling, so the
+      trigger backs off above it. }
+    GC.Collect;
+    FreeMem(Retained);
+    Retained := nil;
+    { The baseline no longer holds once the unowned block is gone. The next
+      heap sample sees that, and the trigger is back below the ceiling
+      without waiting for a collection to re-measure it. }
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+    Expect<Boolean>(PeakHeap <= GC.MaxBytes + SLACK).ToBe(True);
+  finally
+    if Assigned(Retained) then
+      FreeMem(Retained);
     GC.MaxBytes := PreviousMaxBytes;
     GC.Collect;
   end;
