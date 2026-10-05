@@ -8706,18 +8706,23 @@ begin
   Inc(AFreed, Given);
 end;
 
+// Stacks still at their initial capacity are skipped without a call: this runs
+// at every memory-pressure checkpoint while any stack holds a charge.
 procedure TGocciaVM.ShrinkThreadStacks(var AFreed: Int64);
 var
   NewLength: Integer;
 begin
-  if Assigned(FCallStack) then
+  if Assigned(FCallStack) and
+     (FCallStack.Capacity > VM_INITIAL_RECORD_STACK_SIZE) then
   begin
     NewLength := ThreadStackShrunkLength(FCallStackAccount, FCallStack,
       FCallStack.Capacity, FCallStack.Count, SizeOf(TGocciaCallFrame), AFreed);
     if NewLength < FCallStack.Capacity then
       FCallStack.SetCapacity(NewLength);
   end;
-  if Assigned(FExecutionContextThread) then
+  if Assigned(FExecutionContextThread) and
+     (TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread) > VM_INITIAL_RECORD_STACK_SIZE) then
   begin
     NewLength := ThreadStackShrunkLength(FContextStackAccount,
       FExecutionContextThread,
