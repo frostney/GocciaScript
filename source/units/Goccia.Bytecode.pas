@@ -190,7 +190,10 @@ const
   //               temporal-dead-zone check an assignment to a const makes
   //               before its TypeError. Opcode 234 is reserved for
   //               OP_CREATE_GLOBAL_IMPORT_BINDING, a separate change.
-  GOCCIA_FORMAT_VERSION = 84;
+  //   v84 -> v85: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
+  //               publishes a global-backed script's named import to the
+  //               global scope so a later script against it reads the binding.
+  GOCCIA_FORMAT_VERSION = 85;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -482,6 +485,10 @@ type
     // specifier is not a string literal, so the module loader treats the
     // request as outside the static module graph (ADR 0122).
     OP_COMPUTED_IMPORT_SPECIFIER = 233,
+    // A = module namespace register, B = local-name constant index,
+    // C = export-name constant index. Binds the global scope's predeclared
+    // local name to the module's live export.
+    OP_CREATE_GLOBAL_IMPORT_BINDING = 234,
     // A = CHECK_BINDING_UPVALUE: Bx = upvalue index, checks the closure's
     // own captured cell. A = CHECK_BINDING_GLOBAL: Bx = name-constant index,
     // checks the global scope's binding. Throws the binding's
@@ -533,8 +540,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    // 234 is reserved for OP_CREATE_GLOBAL_IMPORT_BINDING.
-    not (AOp in [99, 144..166, 234]);
+    not (AOp in [99, 144..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;

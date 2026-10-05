@@ -18,7 +18,7 @@ import {
   symlinkSync,
   linkSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import {
   RUNNER,
   BARE,
@@ -102,6 +102,83 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`REPL (${mode}) top-level const across inputs expected 16,17,16, got: ${output}`);
   if (!output.includes("SyntaxError"))
     throw new Error(`REPL (${mode}) should reject redeclaring a top-level const, got: ${output}`);
+}
+
+console.log("REPL import bindings across inputs...");
+{
+  const tmp = mkdtemp("goccia-repl-import-");
+  try {
+    writeFileSync(
+      join(tmp, "dep.mjs"),
+      [
+        "export const answer = 42;",
+        "export let count = 0;",
+        "export const increment = () => { count = count + 1; };",
+        'export default "fallback";',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const repl = Bun.spawnSync([resolve(REPL), `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode(
+          [
+            'import { answer, count, increment } from "./dep.mjs";',
+            'import { answer as renamed } from "./dep.mjs";',
+            'import fallback from "./dep.mjs";',
+            'import * as ns from "./dep.mjs";',
+            '[answer, renamed, fallback, ns.answer].join(",");',
+            "increment();",
+            '["live", count, ns.count].join(":");',
+            "answer = 1;",
+            "const answer = 2;",
+            'import { count as renamed } from "./dep.mjs";',
+            '["kept", answer, renamed].join(":");',
+            "",
+          ].join("\n"),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+      if (repl.exitCode !== 0 || !output.includes("42,42,fallback,42"))
+        throw new Error(`REPL (${mode}) imports across inputs expected 42,42,fallback,42, got: ${output}`);
+      if (!output.includes("live:1:1"))
+        throw new Error(`REPL (${mode}) import binding should stay live across inputs, got: ${output}`);
+      if (!output.includes("TypeError: Assignment to constant variable 'answer'"))
+        throw new Error(`REPL (${mode}) should reject assigning to an import binding, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'answer' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject redeclaring an imported name, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'renamed' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject importing an already imported name again, got: ${output}`);
+      if (!output.includes("kept:42:42"))
+        throw new Error(`REPL (${mode}) import binding should survive the rejected inputs, got: ${output}`);
+    }
+
+    // Bytecode rejects a missing export before the input runs, so the name is
+    // never declared and a corrected import of it succeeds. The interpreter
+    // declares the name first and leaves it uninitialized (#1274).
+    const retry = Bun.spawnSync([resolve(REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { missing as answer } from "./dep.mjs";',
+          'import { answer } from "./dep.mjs";',
+          '["retried", answer].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const retryOutput = normalizeLineEndings(retry.stdout.toString() + retry.stderr.toString());
+    if (!retryOutput.includes('has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing export, got: ${retryOutput}`);
+    if (retry.exitCode !== 0 || !retryOutput.includes("retried:42"))
+      throw new Error(`REPL (bytecode) should accept a corrected import after a missing export, got: ${retryOutput}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -787,6 +864,74 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     if (!existsSync(warningOut)) throw new Error("Bundler --warning-unsupported-features should preserve warning recovery mode");
   } finally {
     clean(tmp);
+  }
+}
+
+// -- Body var named like a parameter starts with its value (bytecode) ---------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30.e.i.4: with an
+// expression in the parameter list, a body var named like a parameter (or
+// `arguments`) is a binding of its own that starts with that binding's value.
+// The JavaScript suite under tests/ covers the separation in both modes; these
+// cases read the var before the body assigns it, which the interpreter still
+// answers with undefined, so only bytecode is checked here.
+
+console.log("Bytecode body var named like a parameter starts with its value...");
+{
+  const cases: [string, string, string][] = [
+    ["var without an initializer", "((a, f = () => a) => { var a; return [a, f()]; })(1)", "1,1"],
+    ["default closure writes the parameter", "((a, f = () => { a = 7; }) => { var a; f(); return a; })(1)", "1"],
+    ["defaulted parameter", "((a = 2, f = () => a) => { var a; return [a, f()]; })()", "2,2"],
+    ["destructured parameter with a default", "(({ a = 0 }) => { var a; return a; })({ a: 1 })", "1"],
+    ["function declaration", "(() => { function h(a, f = () => a) { var a; return a; } return h(1); })()", "1"],
+    ["method", "({ m(a, f = () => a) { var a; return [a, f()]; } }).m(3)", "3,3"],
+    ["var named arguments", "(() => { function g(a, f = () => arguments) { var arguments; return [arguments === f(), arguments.length]; } return g(1, undefined, 3); })()", "true,3"],
+    ["unmapped arguments object", "(() => { function g(a, b = 1) { arguments[0] = 9; var a; return [a, arguments[0]]; } return g(1); })()", "1,9"],
+    ["generator copies when called", "(() => { let w; function* g(a, f = (w = () => { a = 9; })) { var a; yield a; } const it = g(1); w(); return it.next().value; })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const { exitCode, json } = runLoaderJson(source, [
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-arguments-object",
+    "--compat-non-strict-mode",
+  ]);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode body var cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode body var (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  // A direct eval in the body reaches the body var; one in a default reaches
+  // the parameter. The interpreter agrees except where the var is read before
+  // it is assigned (the last case).
+  const evalSource = [
+    'function read(a, f = () => a) { var a = 5; return [eval("a"), f()]; }',
+    'function write(a, f = () => a) { var a = 5; eval("a = 6"); return [a, f()]; }',
+    'function inDefault(a, f = eval("() => a")) { var a = 5; return [a, f()]; }',
+    'function closureWrites(a, f = () => { a = 7; }) { var a = 3; f(); return [eval("a"), a]; }',
+    'function unassigned(a, f = () => a) { var a; return [eval("a"), f()]; }',
+    'const shared = [read(1), write(1), inDefault(1), closureWrites(1)].map((r) => r.join(":")).join(",");',
+    'print(shared);',
+    'print(unassigned(1).join(":"));',
+    "",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const evalRun = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode(evalSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const evalOut = normalizeLineEndings(evalRun.stdout.toString()).split("\n");
+    const evalAll = evalRun.stdout.toString() + evalRun.stderr.toString();
+    if (evalRun.exitCode !== 0 || evalOut[0] !== "5:1,6:1,5:1,3:3")
+      throw new Error(`Test262 Runner ${mode} direct eval with a body var expected 5:1,6:1,5:1,3:3, got: ${evalAll}`);
+    if (mode === "bytecode" && evalOut[1] !== "1:1")
+      throw new Error(`Test262 Runner bytecode direct eval of an unassigned body var expected 1:1, got: ${evalAll}`);
   }
 }
 

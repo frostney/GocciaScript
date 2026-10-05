@@ -2417,8 +2417,9 @@ begin
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
-// performs, since integer arithmetic on LongInt-range inputs cannot produce
-// NaN, Infinity, negative zero, or fractional results.
+// performs, since integer addition and subtraction on LongInt-range inputs
+// cannot produce NaN, Infinity, negative zero, or fractional results. A product
+// can be negative zero; multiplication goes through VMIntProductResult.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
 function VMIntResult(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
@@ -2432,6 +2433,22 @@ begin
     FloatValue := AValue;
     Result := RegisterFloat(FloatValue);
   end;
+end;
+
+// IEEE 754 multiplication gives a zero product the exclusive-or of the operand
+// signs, so 0 * -1 is -0. That is the one integer operation whose result an
+// integer register cannot hold. ES2026 §6.1.6.1.4 Number::multiply spells out
+// only the -0 operand cases (steps 4 and 5); read literally its last step gives
+// +0 here, but the float path and every engine follow IEEE 754.
+function VMIntProductResult(const ALeft, ARight: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Product: Int64;
+begin
+  Product := ALeft * ARight;
+  if (Product = 0) and ((ALeft < 0) or (ARight < 0)) then
+    Result := RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue)
+  else
+    Result := VMIntResult(Product);
 end;
 
 // ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
