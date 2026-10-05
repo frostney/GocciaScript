@@ -51,4 +51,34 @@ describe("var redeclaring a catch parameter under strict types", () => {
     expect(inner).toBe("text");
     expect(count).toBe(1);
   });
+
+  test("a redeclaration without an initializer does not give the catch parameter the var's inferred type", () => {
+    const subtract = () => {
+      var x = 1;
+      let inner;
+      try {
+        throw "s";
+      } catch (x) {
+        var x;
+        inner = x - 1;
+      }
+      return [inner, x - 1];
+    };
+    const [inner, outer] = subtract();
+    expect(Number.isNaN(inner)).toBe(true);
+    expect(outer).toBe(0);
+  });
+
+  test("a redeclaration without an initializer does not give the catch parameter the var's annotated type", () => {
+    const subtract = () => {
+      var x: number = 1;
+      try {
+        throw "s";
+      } catch (x) {
+        var x;
+        return x - 1;
+      }
+    };
+    expect(Number.isNaN(subtract())).toBe(true);
+  });
 });

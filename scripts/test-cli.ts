@@ -462,6 +462,54 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Test262 Runner ${mode} direct eval shadowing a top-level const expected 5,7,16,16, got: ${evalShadowOut}`);
     }
 
+    // An assignment resolves its target before the right-hand side runs
+    // (ES2026 §13.15.2), so a same-named var that a direct eval declares
+    // there does not redirect it: a const still in its dead zone throws the
+    // ReferenceError, an initialized one the TypeError (§9.1.1.1.5 step 3).
+    const evalConstTargetSource = [
+      "const outcome = function (run) {",
+      "  try { run(); return 'none'; } catch (e) { return e.constructor.name + ': ' + e.message; }",
+      "};",
+      "const results = [",
+      "  outcome(function () {",
+      '    const inner = function () { early = eval("var early = 5; 1"); };',
+      "    inner();",
+      "    const early = 0;",
+      "  }),",
+      "  outcome(function () {",
+      '    const inner = function () { TOP_LATE = eval("var TOP_LATE = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "  outcome(function () {",
+      "    const fixed = 0;",
+      '    const inner = function () { fixed = eval("var fixed = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "];",
+      "const TOP_LATE = 1;",
+      'print(results.join(" | "));',
+      "",
+    ].join("\n");
+    const evalConstTargetExpected = [
+      "ReferenceError: Cannot access 'early' before initialization",
+      "ReferenceError: Cannot access 'TOP_LATE' before initialization",
+      "TypeError: Assignment to constant variable 'fixed'",
+    ].join(" | ");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalConstTarget = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalConstTargetSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalConstTargetOut =
+        evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
+      if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
+        throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
       wideCapturedBlockSrc,
@@ -3198,6 +3246,34 @@ for (const mode of ["interpreted", "bytecode"]) {
   const out = await $`echo ${src} | ${TESTRUNNER} --max-stack=10 --mode=${mode} --no-progress`.nothrow().text();
   if (!out.includes("Passed: 2"))
     throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
+}
+
+console.log("--max-stack (imported module top level)...");
+// A module's top level is not a call, wherever it is imported from: each
+// module counts its nested calls before the RangeError and prints them.
+{
+  const tmp = mkdtemp("goccia-max-stack-import-");
+  try {
+    const count = (label: string) =>
+      `let n = 0; const f = () => { n++; f(); }; try { f(); } catch (e) { console.log("${label}", n, e.name); }\n`;
+    writeFileSync(join(tmp, "dep.js"), `${count("dep")}export const dep = 1;\n`);
+    writeFileSync(join(tmp, "inner.js"), `${count("inner")}export const inner = 1;\n`);
+    writeFileSync(join(tmp, "outer.js"), `import { inner } from "./inner.js";\n${count("outer")}export const outer = 1;\n`);
+    writeFileSync(join(tmp, "dynamic.js"), `${count("dynamic")}export const dynamic = 1;\n`);
+    writeFileSync(
+      join(tmp, "main.js"),
+      `import { dep } from "./dep.js";\nimport { outer } from "./outer.js";\n${count("main")}await import("./dynamic.js");\n`,
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const out = await $`${RUNNER} ${join(tmp, "main.js")} --max-stack=10 --mode=${mode}`.nothrow().text();
+      for (const label of ["dep", "inner", "outer", "main", "dynamic"]) {
+        if (!containsLine(out, `${label} 10 RangeError`))
+          throw new Error(`--max-stack=10 (${mode}): ${label}.js's top level should allow 10 nested calls, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("--max-stack (bytecode trampoline)...");

@@ -546,16 +546,42 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ABaseReg + 1, ASuperReg, 0));
 end;
 
-procedure EmitConstAssignmentError(const ACtx: TGocciaCompilationContext);
+procedure EmitConstAssignmentError(const ACtx: TGocciaCompilationContext;
+  const AName: string);
 var
   MsgIdx: UInt16;
 begin
-  MsgIdx := ACtx.Template.AddConstantString('Assignment to constant variable.');
+  MsgIdx := ACtx.Template.AddConstantString(
+    Format(SErrorAssignToConstant, [AName]));
   if MsgIdx <= High(UInt8) then
     EmitInstruction(ACtx, EncodeABC(OP_THROW_TYPE_ERROR_CONST, 0, 0,
       UInt16(MsgIdx)))
   else
     EmitInstruction(ACtx, EncodeABx(OP_THROW_TYPE_ERROR_CONST_LONG, 0, MsgIdx));
+end;
+
+// ES2026 §9.1.1.1.5 SetMutableBinding step 3: assigning to a const that is
+// still in its temporal dead zone throws ReferenceError, not the const
+// TypeError. These probes are emitted only ahead of EmitConstAssignmentError,
+// which always throws. They check the binding itself rather than read its
+// name: a direct eval in the right-hand side can declare a same-named var
+// that OP_GET_UPVALUE or OP_GET_GLOBAL would read, while the assignment still
+// targets the binding it resolved before the right-hand side ran.
+procedure EmitGlobalConstTDZProbe(const ACtx: TGocciaCompilationContext;
+  const AName: string);
+begin
+  EmitInstruction(ACtx, EncodeABx(OP_CHECK_BINDING_INITIALIZED,
+    CHECK_BINDING_GLOBAL, ACtx.Template.AddConstantString(AName)));
+end;
+
+procedure EmitUpvalueConstTDZProbe(const ACtx: TGocciaCompilationContext;
+  const AUpvalue: TGocciaCompilerUpvalue; const AUpvalueIndex: Integer);
+begin
+  if AUpvalue.IsGlobalBacked then
+    EmitGlobalConstTDZProbe(ACtx, AUpvalue.Name)
+  else
+    EmitInstruction(ACtx, EncodeABx(OP_CHECK_BINDING_INITIALIZED,
+      CHECK_BINDING_UPVALUE, UInt16(AUpvalueIndex)));
 end;
 
 function ShouldIgnoreNonStrictImmutableLocalAssignment(
@@ -2522,7 +2548,10 @@ begin
   if AUpvalue.IsConst then
   begin
     if not ShouldIgnoreNonStrictImmutableUpvalueAssignment(ACtx, AUpvalue) then
-      EmitConstAssignmentError(ACtx);
+    begin
+      EmitUpvalueConstTDZProbe(ACtx, AUpvalue, AUpvalueIndex);
+      EmitConstAssignmentError(ACtx, AUpvalue.Name);
+    end;
   end
   else
   begin
@@ -2704,7 +2733,9 @@ begin
     begin
       if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
         Exit;
-      EmitConstAssignmentError(ACtx);
+      if Local.IsGlobalBacked then
+        EmitGlobalConstTDZProbe(ACtx, AExpr.Name);
+      EmitConstAssignmentError(ACtx, AExpr.Name);
       Exit;
     end;
     if Local.IsGlobalBacked then
@@ -3091,7 +3122,9 @@ begin
     begin
       if ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx, Local) then
         Exit;
-      EmitConstAssignmentError(ACtx);
+      if Local.IsGlobalBacked then
+        EmitGlobalConstTDZProbe(ACtx, AName);
+      EmitConstAssignmentError(ACtx, AName);
       Exit;
     end;
     if AAssignmentMode and Local.IsStrictlyTyped and
@@ -6303,7 +6336,7 @@ begin
         begin
           if not ShouldIgnoreNonStrictImmutableLocalAssignment(ACtx,
              ACtx.Scope.GetLocal(LocalIdx)) then
-            EmitConstAssignmentError(ACtx);
+            EmitConstAssignmentError(ACtx, AExpr.Name);
         end
         else
         begin
@@ -6338,7 +6371,7 @@ begin
             EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegVal, 0));
         end
         else
-          EmitConstAssignmentError(ACtx);
+          EmitConstAssignmentError(ACtx, AExpr.Name);
         ACtx.Scope.FreeRegister;
       end
       else
@@ -6460,7 +6493,7 @@ begin
           // ES2026 §13.15.2 steps 8-9: the operator runs before PutValue
           // throws for the immutable binding. See the slot-backed path below.
           EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
-          EmitConstAssignmentError(ACtx);
+          EmitConstAssignmentError(ACtx, AExpr.Name);
         end;
       end
       else
@@ -6516,7 +6549,7 @@ begin
         // The operator runs on the temporary holding the old value; only
         // then does the assignment to the immutable binding throw.
         EmitInstruction(ACtx, EncodeABC(Op, RegOld, RegOld, RegVal));
-        EmitConstAssignmentError(ACtx);
+        EmitConstAssignmentError(ACtx, AExpr.Name);
       end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -7054,7 +7087,7 @@ begin
         EmitIncrementStep(ACtx, AExpr, RegResult, RegResult, Op, NumericOp,
           PostNumericOp, False);
         ACtx.Scope.FreeRegister;
-        EmitConstAssignmentError(ACtx);
+        EmitConstAssignmentError(ACtx, Ident.Name);
         Exit;
       end;
       if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then

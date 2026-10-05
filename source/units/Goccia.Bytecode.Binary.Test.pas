@@ -11,6 +11,7 @@ uses
   Goccia.Bytecode,
   Goccia.Bytecode.Binary,
   Goccia.Bytecode.Chunk,
+  Goccia.Bytecode.Debug,
   Goccia.Bytecode.Module;
 
 const
@@ -20,6 +21,10 @@ const
   TEST_IN_RANGE_REGISTER = 1;
   TEST_RUNTIME_TAG = 'test';
   TEST_SOURCE_PATH = 'validate.js';
+  TEST_LOCAL_NAME = 'binding';
+  TEST_LOCAL_SLOT = 3;
+  TEST_LOCAL_START_PC = 7;
+  TEST_LOCAL_END_PC = 11;
 
 type
   TBytecodeBinaryTests = class(TTestSuite)
@@ -29,6 +34,7 @@ type
     procedure TestAcceptsMemberValidateKeyRegisterInRange;
     procedure TestAcceptsIterableValidateBoundAboveRegisterCount;
     procedure TestAcceptsObjectValidateWithUnusedOperandC;
+    procedure TestRoundTripsDebugLocals;
   public
     procedure SetupTests; override;
   end;
@@ -43,6 +49,8 @@ begin
     TestAcceptsIterableValidateBoundAboveRegisterCount);
   Test('Accepts an object-validate with an unused operand C',
     TestAcceptsObjectValidateWithUnusedOperandC);
+  Test('Round-trips debug locals field by field',
+    TestRoundTripsDebugLocals);
 end;
 
 // Serialises a one-instruction module and reads it back through the ordinary
@@ -128,6 +136,67 @@ procedure TBytecodeBinaryTests.TestAcceptsObjectValidateWithUnusedOperandC;
 begin
   Expect<string>(LoadRejectionReason(EncodeABC(OP_VALIDATE_VALUE, 0,
     VALIDATE_OP_REQUIRE_OBJECT, TEST_OUT_OF_RANGE_REGISTER))).ToBe('');
+end;
+
+// The VM names a temporal-dead-zone binding from these entries, so a module
+// loaded from .gbc must read each one back with its fields in order.
+procedure TBytecodeBinaryTests.TestRoundTripsDebugLocals;
+var
+  Loaded, Module: TGocciaBytecodeModule;
+  Reader: TGocciaBytecodeReader;
+  Stream: TMemoryStream;
+  Template: TGocciaFunctionTemplate;
+  Writer: TGocciaBytecodeWriter;
+  Local: TGocciaLocalInfo;
+  Name: string;
+begin
+  Stream := TMemoryStream.Create;
+  try
+    Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+    try
+      Template := TGocciaFunctionTemplate.Create('main');
+      Template.MaxRegisters := TEST_MAX_REGISTERS;
+      Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      Template.DebugInfo := TGocciaDebugInfo.Create(TEST_SOURCE_PATH);
+      Template.DebugInfo.AddLocal(TEST_LOCAL_NAME, TEST_LOCAL_SLOT,
+        TEST_LOCAL_START_PC, TEST_LOCAL_END_PC);
+      Module.TopLevel := Template;
+
+      Writer := TGocciaBytecodeWriter.Create(Stream);
+      try
+        Writer.WriteModule(Module);
+      finally
+        Writer.Free;
+      end;
+    finally
+      Module.Free;
+    end;
+
+    Stream.Position := 0;
+    Reader := TGocciaBytecodeReader.Create(Stream);
+    try
+      Loaded := Reader.ReadModule;
+      try
+        Expect<Integer>(Loaded.TopLevel.DebugInfo.LocalCount).ToBe(1);
+        Local := Loaded.TopLevel.DebugInfo.GetLocalInfo(0);
+        Expect<string>(Local.Name).ToBe(TEST_LOCAL_NAME);
+        Expect<Integer>(Local.Slot).ToBe(TEST_LOCAL_SLOT);
+        Expect<Integer>(Local.StartPC).ToBe(TEST_LOCAL_START_PC);
+        Expect<Integer>(Local.EndPC).ToBe(TEST_LOCAL_END_PC);
+        Expect<Boolean>(Loaded.TopLevel.DebugInfo.TryGetLocalName(
+          TEST_LOCAL_SLOT, TEST_LOCAL_START_PC, Name)).ToBe(True);
+        Expect<string>(Name).ToBe(TEST_LOCAL_NAME);
+        Expect<Boolean>(Loaded.TopLevel.DebugInfo.TryGetLocalName(
+          TEST_LOCAL_SLOT, TEST_LOCAL_END_PC, Name)).ToBe(False);
+      finally
+        Loaded.Free;
+      end;
+    finally
+      Reader.Free;
+    end;
+  finally
+    Stream.Free;
+  end;
 end;
 
 begin
