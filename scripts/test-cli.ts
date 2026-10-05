@@ -3449,6 +3449,18 @@ console.log("--max-stack (bytecode trampoline)...");
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
+console.log("--max-stack (deep RangeError trace keeps 100 frames)...");
+// A stack trace renders its innermost 100 frames and counts the rest, so the
+// RangeError of a 200,000-deep recursion is as short as one of 101 frames.
+// The frames are the 200,000 calls of f and the top level.
+{
+  const src =
+    'let d = 0; const f = () => { d++; f(); }; try { f(); } catch (e) { const lines = e.stack.split("\\n"); console.log(lines.length, d, lines[lines.length - 1].trim()); }';
+  const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=200000`.text();
+  if (!containsLine(out, "102 200000 ... 199901 more frames"))
+    throw new Error(`A 200,000-deep RangeError should keep 100 frames and count 199,901 more, got: ${out}`);
+}
+
 // -- Console observable behavior (Loader, interpreted + bytecode) ---------------
 
 console.log("Console observable behavior...");

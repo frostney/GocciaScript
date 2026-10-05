@@ -11730,9 +11730,9 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
       throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
     if (!run.output.includes(`after ${24 * 1024 * 1024}`))
       throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
-    // Measured ~147 MiB: the charged stacks, the per-frame call-stack and
-    // execution-context entries the charge does not cover, and the
-    // RangeError's stack trace, which lists every frame.
+    // Measured ~147 MiB: the charged stacks and the per-frame call-stack and
+    // execution-context entries the charge does not cover. The RangeError's
+    // stack trace lists at most 100 frames.
     assertPeakRssBelow(run, "unbounded bytecode recursion", 256 * 1024 * 1024);
 
     // A heap that fills most of the ceiling must not turn an ordinary

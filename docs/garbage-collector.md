@@ -180,9 +180,10 @@ growth that does not fit is made uncharged, and the next instruction boundary
 settles it: it collects, then charges the growth or throws.
 `TGarbageCollector.TryChargeExternalBytes` is the non-collecting charge both
 sites use. Unlike `TryReserveExternalBytes`, it does not latch memory pressure.
-The per-frame call-stack and execution-context entries are not charged, and
-neither is the refused error's stack trace, which lists every frame. Peak
-resident memory therefore still runs to two to three times the ceiling. See
+The per-frame call-stack and execution-context entries are not charged. The
+refused error's stack trace is not charged either, but it lists at most 100
+frames ([Stack Traces](errors.md#stack-traces)). Peak resident memory therefore
+still runs to two to three times the ceiling. See
 [ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
 
 ### Gated growth points
