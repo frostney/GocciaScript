@@ -1236,7 +1236,7 @@ begin
       if FOptions.ProfileDir <> '' then
       begin
         ProfilePath := ProfilePathForTest(ACase.Id);
-        ForceDirectories(ExtractFileDir(ProfilePath));
+        ForceHostDirectories(ExtractFileDir(ProfilePath));
       end;
 
       Executor := CreateTest262Executor(FOptions.Mode);

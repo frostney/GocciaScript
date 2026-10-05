@@ -552,24 +552,11 @@ begin
       Result := ExpressionType(AScope,
         Sequence.Expressions[Sequence.Expressions.Count - 1]);
   end
-  else if AExpr is TGocciaCallExpression then
-  begin
-    if TGocciaCallExpression(AExpr).Callee is TGocciaIdentifierExpression then
-    begin
-      LocalIdx := AScope.ResolveLocal(
-        TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-      if LocalIdx >= 0 then
-        Result := AScope.GetLocal(LocalIdx).ReturnTypeHint
-      else
-      begin
-        LocalIdx := AScope.ResolveUpvalue(
-          TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name);
-        if (LocalIdx >= 0) and not AScope.DirectEvalMayShadow(
-             TGocciaIdentifierExpression(TGocciaCallExpression(AExpr).Callee).Name) then
-          Result := AScope.GetUpvalue(LocalIdx).ReturnTypeHint;
-      end;
-    end;
-  end
+  // A call expression stays untyped. ES2026 §13.3.6.2 EvaluateCall yields
+  // whatever the callee returns, and a return-type annotation is not checked
+  // in either mode (#1276), so it cannot justify typed opcodes that skip
+  // §13.15.3 ApplyStringOrNumericBinaryOperator's ToPrimitive and String
+  // checks, nor a skipped strict-types check on the receiving binding.
   else if AExpr is TGocciaConditionalExpression then
   begin
     LeftType := ExpressionType(AScope,
@@ -761,6 +748,16 @@ begin
   EmitInstruction(ACtx, EncodeABx(OpCode, ASlot, NameIdx));
 end;
 
+function DeclarationHoldsOnlyNumbers(const ACtx: TGocciaCompilationContext;
+  const AStmt: TGocciaVariableDeclaration; const AIndex: Integer): Boolean;
+var
+  Mask: UInt64;
+begin
+  Result := Assigned(ACtx.NumberBindingProofs) and (AIndex < 64) and
+    ACtx.NumberBindingProofs.TryGetValue(AStmt, Mask) and
+    ((Mask and (UInt64(1) shl AIndex)) <> 0);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -774,7 +771,7 @@ var
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
   IsVarRedeclaration, UseWithVarInitializer: Boolean;
-  CanTrackConstant: Boolean;
+  CanTrackConstant, HoldsOnlyNumbers: Boolean;
   InitSlot: UInt16;
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
@@ -869,12 +866,28 @@ begin
       When disabled, type annotations are parsed but not enforced. }
     IsStrict := ACtx.StrictTypes and (TypeHint <> sltUntyped);
 
+    // ES2026 §14.3.1: a let or var binding takes whatever value is assigned
+    // to it later, and that assignment can run before a read compiled ahead
+    // of it (a loop's back edge, the other branch of a join). Without
+    // enforcement such a binding keeps a type only when every value it can
+    // hold is a Number; a const keeps the type of its initializer.
+    HoldsOnlyNumbers := False;
+    if not IsStrict and not AStmt.IsConst then
+    begin
+      HoldsOnlyNumbers := IsKnownNumeric(TypeHint) and
+        not IsTopLevelGlobalBacked and
+        DeclarationHoldsOnlyNumbers(ACtx, AStmt, I);
+      if not HoldsOnlyNumbers then
+        TypeHint := sltUntyped;
+    end;
+
     if TypeHint <> sltUntyped then
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
+        ACtx.Scope.SetLocalHoldsOnlyNumbers(LocalIdx, HoldsOnlyNumbers);
         ACtx.Template.SetLocalType(Slot, TypeHint);
         if IsStrict then
         begin
@@ -903,14 +916,9 @@ begin
     begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
       if LocalIdx >= 0 then
-      begin
-        ACtx.Scope.SetLocalReturnTypeHint(LocalIdx,
-          TypeAnnotationToLocalType(
-            TGocciaArrowFunctionExpression(Info.Initializer).ReturnType));
         ACtx.Scope.SetLocalParamTypeSignature(LocalIdx,
           BuildParamTypeSignature(
             TGocciaArrowFunctionExpression(Info.Initializer).Parameters));
-      end;
     end;
 
     if UseWithVarInitializer then
@@ -1454,9 +1462,9 @@ begin
   Target := ACtx.Scope.GetLocal(ATargetIdx);
 
   ACtx.Scope.SetLocalTypeHint(ATargetIdx, Source.TypeHint);
+  ACtx.Scope.SetLocalHoldsOnlyNumbers(ATargetIdx, Source.HoldsOnlyNumbers);
   ACtx.Scope.SetLocalStrictlyTyped(ATargetIdx, Source.IsStrictlyTyped);
   ACtx.Scope.SetLocalArrayTyped(ATargetIdx, Source.IsArrayTyped);
-  ACtx.Scope.SetLocalReturnTypeHint(ATargetIdx, Source.ReturnTypeHint);
   ACtx.Scope.SetLocalParamTypeSignature(ATargetIdx,
     Source.ParamTypeSignature);
   ACtx.Scope.SetLocalTypeAnnotation(ATargetIdx, Source.TypeAnnotation);
@@ -4670,10 +4678,24 @@ end;
 
 procedure CompileReExportDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaReExportDeclaration);
+var
+  ModReg: UInt16;
 begin
   // Re-exports are link-time module graph declarations. The module loader
   // registers their forwardings before evaluation, so bytecode must not
   // snapshot them with OP_EXPORT during execution.
+  if ACtx.PreinitializedTopLevelFunctions then
+    Exit;
+  // ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation evaluates every requested
+  // module, a re-export's included, before the module body. A loader-linked
+  // module's requests are evaluated by the loader; a program no loader linked
+  // (the entry, a REPL input) evaluates this request here, in source order
+  // with its imports.
+  ModReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABx(OP_IMPORT, ModReg,
+    ACtx.Template.AddConstantString(EncodeImportSpecifierAttribute(
+      AStmt.ModulePath, AStmt.AttributeType))));
+  ACtx.Scope.FreeRegister;
 end;
 
 procedure CompileSwitchStatement(const ACtx: TGocciaCompilationContext;
