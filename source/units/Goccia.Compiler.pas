@@ -26,6 +26,7 @@ type
     FSourcePath: string;
     FFormalParameterCounts: TFormalParameterCountMap;
     FNumericParameterProofs: TNumericParameterProofMap;
+    FNumberBindingProofs: TNumberBindingProofMap;
     FGlobalBackedTopLevel: Boolean;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -84,6 +85,7 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
+  Goccia.Compiler.NumericBindings,
   Goccia.Compiler.NumericProof,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.PatternMatching,
@@ -99,6 +101,7 @@ begin
   FSourcePath := ASourcePath;
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FNumericParameterProofs := TNumericParameterProofMap.Create;
+  FNumberBindingProofs := TNumberBindingProofMap.Create;
   FTemplateDerivedConstructorThisGuards :=
     TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
@@ -111,6 +114,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
   FTemplateDerivedConstructorThisGuards.Free;
   FFormalParameterCounts.Free;
@@ -124,6 +128,7 @@ begin
   Result.SourcePath := FSourcePath;
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.NumericParameterProofs := FNumericParameterProofs;
+  Result.NumberBindingProofs := FNumberBindingProofs;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
@@ -674,13 +679,13 @@ end;
 procedure MarkTopLevelGlobalBackedLocals(const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth = 0) and (Local.Name <> '__receiver') and
-       not Local.IsImportBinding then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth = 0) and (Local^.Name <> '__receiver') and
+       not Local^.IsImportBinding then
       AScope.MarkGlobalBacked(I);
   end;
 end;
@@ -730,7 +735,7 @@ var
   StatementAbrupt: Boolean;
   SavedFinally: TObject;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
-  PredeclaredLocal: TGocciaCompilerLocal;
+  PredeclaredLocal: PGocciaCompilerLocal;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
@@ -739,6 +744,8 @@ begin
       Block := TGocciaBlockStatement(ABody);
 
       DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
+      DiscoverNumberBindings(Block, FCurrentScope,
+        NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
 
       // Hoist var declarations to function scope
       for I := 0 to Block.Nodes.Count - 1 do
@@ -764,10 +771,10 @@ begin
       for PredeclaredLexicalIndex := PredeclaredLexicalStart to
         FCurrentScope.LocalCount - 1 do
       begin
-        PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-        if not PredeclaredLocal.IsVar then
+        PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
+        if not PredeclaredLocal^.IsVar then
           EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
-            PredeclaredLocal.Slot, 0, 0));
+            PredeclaredLocal^.Slot, 0, 0));
       end;
 
       if HasFunctionDecl then
@@ -1168,12 +1175,12 @@ end;
 procedure MarkHoistedVarsGlobalBacked(const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth = 0) and (Local.Name <> '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth = 0) and (Local^.Name <> '__receiver') then
       AScope.MarkGlobalBacked(I);
   end;
 end;
@@ -1182,19 +1189,19 @@ procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext
   const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
   NameIdx: UInt16;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth <> 0) or (Local.Name = '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth <> 0) or (Local^.Name = '__receiver') then
       Continue;
 
-    NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
+    NameIdx := ACtx.Template.AddConstantString(Local^.Name);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local^.Slot, 0, 0));
     EmitInstruction(ACtx, EncodeABx(OP_DEFINE_GLOBAL_VAR_DECL_LONG,
-      Local.Slot, NameIdx));
+      Local^.Slot, NameIdx));
   end;
 end;
 
@@ -1203,22 +1210,66 @@ procedure EmitGlobalLexicalPredeclarations(const ACtx: TGocciaCompilationContext
 var
   I: Integer;
   OpCode: TGocciaOpCode;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
   NameIdx: UInt16;
 begin
   for I := AStartIndex to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth <> 0) or Local.IsVar or Local.IsImportBinding or
-       (Local.Name = '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth <> 0) or Local^.IsVar or Local^.IsImportBinding or
+       (Local^.Name = '__receiver') then
       Continue;
 
-    if Local.IsConst then
+    if Local^.IsConst then
       OpCode := OP_PREDECLARE_GLOBAL_CONST_LONG
     else
       OpCode := OP_PREDECLARE_GLOBAL_LET_LONG;
-    NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    EmitInstruction(ACtx, EncodeABx(OpCode, Local.Slot, NameIdx));
+    NameIdx := ACtx.Template.AddConstantString(Local^.Name);
+    EmitInstruction(ACtx, EncodeABx(OpCode, Local^.Slot, NameIdx));
+  end;
+end;
+
+{ Records a static module request of a program no loader links (the entry,
+  a REPL input) in the module's request table, which the bytecode executor
+  links before running it (ES2026 §16.2.1.6.1.2 Link()). Source- and
+  defer-phase imports keep their own load paths and are not recorded. }
+procedure AddModuleRequest(const AModule: TGocciaBytecodeModule;
+  const AStmt: TGocciaStatement);
+var
+  Bindings: array of TGocciaModuleBinding;
+  I: Integer;
+  ImportDecl: TGocciaImportDeclaration;
+  Pair: TStringStringMap.TKeyValuePair;
+  ReExportDecl: TGocciaReExportDeclaration;
+begin
+  I := 0;
+  if AStmt is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(AStmt);
+    if ImportDecl.Phase <> icpEvaluation then
+      Exit;
+    SetLength(Bindings, ImportDecl.Imports.Count);
+    for Pair in ImportDecl.Imports do
+    begin
+      Bindings[I].ExportName := Pair.Value;
+      Bindings[I].LocalSlot := 0;
+      Inc(I);
+    end;
+    AModule.AddImport(EncodeImportSpecifierAttribute(ImportDecl.ModulePath,
+      ImportDecl.AttributeType), Bindings, AStmt.Line, AStmt.Column);
+  end
+  else if AStmt is TGocciaReExportDeclaration then
+  begin
+    ReExportDecl := TGocciaReExportDeclaration(AStmt);
+    SetLength(Bindings, ReExportDecl.ExportsTable.Count);
+    for Pair in ReExportDecl.ExportsTable do
+    begin
+      Bindings[I].ExportName := Pair.Value;
+      Bindings[I].LocalSlot := 0;
+      Inc(I);
+    end;
+    AModule.AddImport(EncodeImportSpecifierAttribute(ReExportDecl.ModulePath,
+      ReExportDecl.AttributeType), Bindings, AStmt.Line, AStmt.Column);
   end;
 end;
 
@@ -1230,9 +1281,10 @@ var
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
-  PredeclaredLocal: TGocciaCompilerLocal;
+  PredeclaredLocal: PGocciaCompilerLocal;
 begin
   FNumericParameterProofs.Clear;
+  FNumberBindingProofs.Clear;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
@@ -1245,6 +1297,9 @@ begin
   FCurrentScope.DeclareLocal('__receiver', False);
 
   try
+    DiscoverProgramNumberBindings(AProgram, FCurrentScope,
+      NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
+
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled,
@@ -1270,10 +1325,10 @@ begin
     for PredeclaredLexicalIndex := PredeclaredLexicalStart to
       FCurrentScope.LocalCount - 1 do
     begin
-      PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-      if not PredeclaredLocal.IsVar then
+      PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
+      if not PredeclaredLocal^.IsVar then
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
-          PredeclaredLocal.Slot, 0, 0));
+          PredeclaredLocal^.Slot, 0, 0));
     end;
 
     // Check if there are function declarations to hoist
@@ -1301,7 +1356,12 @@ begin
     for I := 0 to AProgram.Body.Count - 1 do
       if (AProgram.Body[I] is TGocciaImportDeclaration) or
          (AProgram.Body[I] is TGocciaReExportDeclaration) then
+      begin
+        // A loader-linked module's requests were linked by the loader.
+        if not FPreinitializedTopLevelFunctions then
+          AddModuleRequest(FModule, AProgram.Body[I]);
         DoCompileStatement(AProgram.Body[I]);
+      end;
 
     for I := 0 to AProgram.Body.Count - 1 do
     begin

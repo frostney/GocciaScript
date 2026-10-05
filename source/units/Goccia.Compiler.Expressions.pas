@@ -363,8 +363,12 @@ begin
   Result := '';
 end;
 
-procedure SetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
-  const ALocalIdx: Integer; const ATypeHint: TGocciaLocalType);
+// Called after code that assigns the local. A hint that is not enforced has to
+// hold for every read of the binding, including reads compiled before this
+// assignment that run after it, so the assignment cannot set one. It leaves
+// the hint of a binding that holds only Numbers in place and clears any other.
+procedure ForgetNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
+  const ALocalIdx: Integer);
 var
   Local: TGocciaCompilerLocal;
 begin
@@ -372,18 +376,11 @@ begin
     Exit;
 
   Local := ACtx.Scope.GetLocal(ALocalIdx);
-  if Local.IsStrictlyTyped then
+  if Local.IsStrictlyTyped or Local.HoldsOnlyNumbers then
     Exit;
 
-  ACtx.Scope.SetLocalTypeHint(ALocalIdx, ATypeHint);
-  ACtx.Template.SetLocalType(Local.Slot, ATypeHint);
-end;
-
-procedure RefreshNonStrictLocalTypeHint(const ACtx: TGocciaCompilationContext;
-  const ALocalIdx: Integer; const AExpr: TGocciaExpression);
-begin
-  SetNonStrictLocalTypeHint(ACtx, ALocalIdx,
-    InferredExpressionType(ACtx.Scope, AExpr));
+  ACtx.Scope.SetLocalTypeHint(ALocalIdx, sltUntyped);
+  ACtx.Template.SetLocalType(Local.Slot, sltUntyped);
 end;
 
 procedure EmitStrictLocalTypeCheck(const ACtx: TGocciaCompilationContext;
@@ -2605,7 +2602,6 @@ var
   ObjReg, KeyReg, CondReg: UInt16;
   TargetReg: Integer;
   NameIdx: UInt16;
-  ValueType: TGocciaLocalType;
   GlobalExistsJump, MissJump, EndJump: Integer;
   I, EndCount: Integer;
   EndJumps: array of Integer;
@@ -2703,11 +2699,7 @@ begin
         InferLocalType(AExpr.Value));
       EmitExportBindingUpdates(ACtx, Local.ExportNames,
         Local.ExportNameCount, ADest);
-      if not Local.IsStrictlyTyped then
-      begin
-        ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
-      end;
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       Exit;
     end;
   end;
@@ -2748,7 +2740,7 @@ begin
       EmitSetGlobalByName(ACtx, ADest, AExpr.Name);
       EmitExportBindingUpdates(ACtx, Local.ExportNames,
         Local.ExportNameCount, ADest);
-      RefreshNonStrictLocalTypeHint(ACtx, LocalIdx, AExpr.Value);
+      ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       Exit;
     end;
     Slot := Local.Slot;
@@ -2760,11 +2752,7 @@ begin
     end;
     EmitExportBindingUpdates(ACtx, Local.ExportNames,
       Local.ExportNameCount, ADest);
-    if not Local.IsStrictlyTyped then
-    begin
-      ValueType := InferredExpressionType(ACtx.Scope, AExpr.Value);
-      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ValueType);
-    end;
+    ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
     Exit;
   end;
 
@@ -3099,41 +3087,29 @@ begin
   EmitSetGlobalByName(ACtx, AValueReg, AName);
 end;
 
-function DestructuringPatternHasSuspendingDefault(
-  const APattern: TGocciaDestructuringPattern): Boolean;
+// ES2026 §8.6.3 IteratorBindingInitialization: SingleNameBinding and
+// BindingElement : BindingPattern Initializer? step the iterator, then run the
+// element's Initializer and nested BindingInitialization before the next
+// element is stepped.  An element other than a hole or a plain identifier can
+// run user code, so the pattern must step one element at a time.  Elements
+// after a rest element cannot exist, and the rest element itself drains the
+// iterator before its own pattern runs.
+function ArrayBindingPatternRunsCodePerElement(
+  const APattern: TGocciaArrayDestructuringPattern): Boolean;
 var
-  ArrPat: TGocciaArrayDestructuringPattern;
-  ObjPat: TGocciaObjectDestructuringPattern;
-  AssignPat: TGocciaAssignmentDestructuringPattern;
+  Element: TGocciaDestructuringPattern;
   I: Integer;
 begin
   Result := False;
-  if not Assigned(APattern) then
-    Exit;
-
-  if APattern is TGocciaAssignmentDestructuringPattern then
+  for I := 0 to APattern.Elements.Count - 1 do
   begin
-    AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
-    if ExpressionContainsSuspension(AssignPat.Right) then
+    Element := APattern.Elements[I];
+    if not Assigned(Element) then
+      Continue;
+    if Element is TGocciaRestDestructuringPattern then
+      Exit;
+    if not (Element is TGocciaIdentifierDestructuringPattern) then
       Exit(True);
-    Exit(DestructuringPatternHasSuspendingDefault(AssignPat.Left));
-  end;
-
-  if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrPat := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrPat.Elements.Count - 1 do
-      if DestructuringPatternHasSuspendingDefault(ArrPat.Elements[I]) then
-        Exit(True);
-    Exit;
-  end;
-
-  if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjPat := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjPat.Properties.Count - 1 do
-      if DestructuringPatternHasSuspendingDefault(ObjPat.Properties[I].Pattern) then
-        Exit(True);
   end;
 end;
 
@@ -3662,8 +3638,13 @@ begin
         RestIndex := I;
         Break;
       end;
-    if AAssignmentMode or
-       ((not HasRest) and DestructuringPatternHasSuspendingDefault(ArrPat)) then
+    // A binding pattern whose elements are only holes and identifiers (plus an
+    // optional rest) evaluates no initializer or nested pattern between
+    // steps, so it keeps draining the needed elements up front.  Any default
+    // or nested pattern instead steps the iterator one element at a time and
+    // closes it once, after the whole pattern (ES2026 §8.6.2
+    // BindingInitialization, BindingPattern : ArrayBindingPattern, steps 2-3).
+    if AAssignmentMode or ArrayBindingPatternRunsCodePerElement(ArrPat) then
     begin
       EmitStreamingArrayDestructuring(ACtx, ArrPat, ASrcReg, AAssignmentMode);
       Exit;
@@ -6320,7 +6301,7 @@ begin
           EmitExportBindingUpdates(ACtx,
             ACtx.Scope.GetLocal(LocalIdx).ExportNames,
             ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-          SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+          ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
         end;
         PatchJumpTarget(ACtx, JumpIdx);
         Exit;
@@ -6361,7 +6342,7 @@ begin
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
           ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+        ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       end;
       PatchJumpTarget(ACtx, JumpIdx);
       Exit;
@@ -6475,7 +6456,7 @@ begin
         EmitExportBindingUpdates(ACtx,
           ACtx.Scope.GetLocal(LocalIdx).ExportNames,
           ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, ADest);
-        SetNonStrictLocalTypeHint(ACtx, LocalIdx, sltUntyped);
+        ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
       end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
@@ -6539,10 +6520,7 @@ begin
     EmitExportBindingUpdates(ACtx,
       ACtx.Scope.GetLocal(LocalIdx).ExportNames,
       ACtx.Scope.GetLocal(LocalIdx).ExportNameCount, RegTemp);
-    if not ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
-    begin
-      SetNonStrictLocalTypeHint(ACtx, LocalIdx, ResultType);
-    end;
+    ForgetNonStrictLocalTypeHint(ACtx, LocalIdx);
     if ADest <> Slot then
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, RegTemp, 0));
     ACtx.Scope.FreeRegister;
