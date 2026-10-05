@@ -273,6 +273,13 @@ type
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
     function GetLocalRegister(const AIndex: Integer): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+    { Temporal-dead-zone ReferenceErrors, named from the template's debug
+      locals or upvalue descriptors. Only the throw path calls them, so the
+      binding name costs the non-throwing dispatch nothing. }
+    procedure ThrowUninitializedLocal(const ATemplate: TGocciaFunctionTemplate;
+      const APC, ASlot: Integer);
+    procedure ThrowUninitializedUpvalue(
+      const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
     function GetRegister(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     function GetRegisterFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
@@ -8741,6 +8748,37 @@ begin
     NoteLocalCells(AIndex + 1);
   end;
   Result := FLocalCells[AIndex];
+end;
+
+const
+  // Binary bytecode written without debug locals cannot name the binding.
+  SErrorCannotAccessLexicalBeforeInit =
+    'Cannot access lexical binding before initialization';
+
+procedure TGocciaVM.ThrowUninitializedLocal(
+  const ATemplate: TGocciaFunctionTemplate; const APC, ASlot: Integer);
+var
+  Name: string;
+begin
+  if Assigned(ATemplate) and Assigned(ATemplate.DebugInfo) and
+     ATemplate.DebugInfo.TryGetLocalName(UInt16(ASlot), UInt32(APC), Name) then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
+end;
+
+procedure TGocciaVM.ThrowUninitializedUpvalue(
+  const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
+var
+  Name: string;
+begin
+  Name := ATemplate.GetUpvalueDescriptor(AIndex).Name;
+  if Name <> '' then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
 end;
 
 function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
