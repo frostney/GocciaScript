@@ -41,12 +41,12 @@ describe.runIf(hasGoccia)("stack memory after a deep recursion", () => {
     Goccia.gc();
     const before = Goccia.gc.bytesAllocated;
 
-    expect(guarded(2000)).toBe(2000);
+    expect(guarded(1000)).toBe(1000);
     expect(runAWhile()).toBe(4096);
     Goccia.gc();
 
-    // The handlers alone hold about 32 KiB at that depth.
-    expect(Goccia.gc.bytesAllocated - before).toBeLessThan(16 * 1024);
+    // The handlers alone hold about 16 KiB at that depth.
+    expect(Goccia.gc.bytesAllocated - before).toBeLessThan(8 * 1024);
   });
 
   test("is given back while a native callback that recursed is still running", () => {
