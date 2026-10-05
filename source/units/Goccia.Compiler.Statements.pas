@@ -758,6 +758,90 @@ begin
     ((Mask and (UInt64(1) shl AIndex)) <> 0);
 end;
 
+// True when AName, at the current point, resolves to a block-level binding
+// rather than to the var binding, which has scope depth 0. ES2026 B.3.4 lets a
+// var redeclare one such name, a catch parameter. Every other block-level
+// binding a var redeclares is an early SyntaxError that the parser does not
+// report yet; there, too, the initializer assigns the inner binding.
+function VarNameResolvesToBlockBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := AScope.ResolveLocal(AName);
+  Result := (LocalIdx >= 0) and (AScope.GetLocal(LocalIdx).Depth > 0);
+end;
+
+// ES2026 §14.3.2.1: `var x = value` evaluates ResolveBinding("x") and assigns
+// value to it. Inside `catch (x)` that binding is the catch parameter, not the
+// hoisted var (B.3.4), so the initializer is an assignment to the catch
+// parameter, typed as the catch parameter is. The var binding only has to
+// exist: at a global-backed top level it is created here without a value.
+procedure CompileBlockBindingVarInitializer(
+  const ACtx: TGocciaCompilationContext; const AInfo: TGocciaVariableInfo;
+  const AVarSlot: UInt16; const AIsVarRedeclaration: Boolean);
+var
+  LocalIdx, FuncCount: Integer;
+  ValueReg: UInt16;
+  AnnotationType: TGocciaLocalType;
+  InferredTemplate: TGocciaFunctionTemplate;
+begin
+  if ACtx.GlobalBackedTopLevel then
+  begin
+    LocalIdx := FindLocalBySlot(ACtx.Scope, AInfo.Name, AVarSlot);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+    EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
+  end
+  else if not AIsVarRedeclaration then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, AVarSlot, 0, 0));
+
+  ValueReg := ACtx.Scope.AllocateRegister;
+  try
+    FuncCount := ACtx.Template.FunctionCount;
+    if (AInfo.Initializer is TGocciaClassExpression) and
+       (TGocciaClassExpression(AInfo.Initializer).ClassDefinition.Name = '') then
+      CompileClassExpression(ACtx,
+        TGocciaClassExpression(AInfo.Initializer).ClassDefinition, ValueReg,
+        AInfo.Name)
+    else
+      ACtx.CompileExpression(AInfo.Initializer, ValueReg);
+
+    if ((AInfo.Initializer is TGocciaArrowFunctionExpression) or
+        (AInfo.Initializer is TGocciaFunctionExpression)) and
+       (ACtx.Template.FunctionCount > FuncCount) then
+    begin
+      InferredTemplate := ACtx.Template.GetFunction(
+        ACtx.Template.FunctionCount - 1);
+      if (InferredTemplate.Name = '<arrow>') or
+         (InferredTemplate.Name = '<function>') or
+         (InferredTemplate.Name = '<method>') then
+        InferredTemplate.Name := AInfo.Name;
+    end;
+
+    // The declaration's own annotation still constrains its initializer, as
+    // it does for a var that receives the value.
+    AnnotationType := TypeAnnotationToLocalType(AInfo.TypeAnnotation);
+    if ACtx.StrictTypes and (AnnotationType <> sltUntyped) and
+       not IsUndefinedInitializer(AInfo.Initializer) and
+       not TypesAreCompatible(InferLocalType(AInfo.Initializer),
+         AnnotationType) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ValueReg,
+        UInt8(Ord(AnnotationType)), 0));
+
+    EmitBindingAssignmentFromRegister(ACtx, AInfo.Name, ValueReg, True);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+function VarInitializerUsesWithBinding(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := (ACtx.Scope.WithBindingCount > 0) and
+    (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
@@ -822,6 +906,14 @@ begin
       LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
+      if Info.HasInitializer and Assigned(Info.Initializer) and
+         not VarInitializerUsesWithBinding(ACtx) and
+         VarNameResolvesToBlockBinding(ACtx.Scope, Info.Name) then
+      begin
+        CompileBlockBindingVarInitializer(ACtx, Info, Slot,
+          IsVarRedeclaration);
+        Continue;
+      end;
     end
     else
     begin
@@ -850,8 +942,7 @@ begin
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
     UseWithVarInitializer := AStmt.IsVar and HasInitializer and
-      (ACtx.Scope.WithBindingCount > 0) and
-      (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+      VarInitializerUsesWithBinding(ACtx);
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
