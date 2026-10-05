@@ -65,6 +65,11 @@ type
       tree-walk evaluator's per-call frame would have carried. }
     procedure SetTopFrameLocation(const AFilePath: string;
       const ALine, AColumn: Integer);
+    { Returns the currently executing deferred frame to the unlocated state
+      PushTemplate leaves it in. The VM calls this when a throw lands in a handler of that frame:
+      a stamp made for the throw, or for a call the throw abandoned, would
+      otherwise stay on the frame and locate a later error at it. }
+    procedure ClearTopFrameLocation;
     { Snapshot / restore the whole top frame, for a caller that stamps the
       executing frame's location for the duration of a nested operation (an
       interpreter `new` whose native constructor captures a trace) and must
@@ -183,6 +188,18 @@ begin
     FFrames[FCount - 1].FilePath := AFilePath;
     FFrames[FCount - 1].HasExplicitLocation := True;
   end;
+end;
+
+{ The VM stamps its executing frame with that frame's own template source, and
+  a deferred frame reads the stamped path only while HasExplicitLocation is
+  set, so clearing the flag resolves the path as it was when pushed. }
+procedure TGocciaCallStack.ClearTopFrameLocation;
+begin
+  if FCount = 0 then
+    Exit;
+  FFrames[FCount - 1].Line := 0;
+  FFrames[FCount - 1].Column := 0;
+  FFrames[FCount - 1].HasExplicitLocation := False;
 end;
 
 { The snapshot and its restore bracket every native call the bytecode VM

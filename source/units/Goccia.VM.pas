@@ -118,10 +118,7 @@ type
     caoHandlePrivateKeys,
     // Get: try the VM literal-object own-data fast path before the generic
     // GetProperty walk (OP_GET_INDEX).
-    caoLiteralFastPath,
-    // Set: class receivers install the value with DefineProperty
-    // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
-    caoClassDefineSemantics
+    caoLiteralFastPath
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
@@ -643,7 +640,9 @@ const
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+  // How far TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast looks
+  // up the chain before it leaves the store to the general assignment path.
+  LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
@@ -1692,21 +1691,6 @@ begin
       Exit(True);
     CurrentProto := CurrentProto.Prototype;
   end;
-end;
-
-function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-var
-  Current: TGocciaObjectValue;
-begin
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
-  end;
-  Result := False;
 end;
 
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
@@ -3430,7 +3414,7 @@ begin
   while Assigned(Current) do
   begin
     Inc(ChainDepth);
-    if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+    if ChainDepth > LITERAL_FAST_SET_MAX_CHAIN_DEPTH then
       Exit(False);
     // A Proxy or exotic parent answers [[Set]] itself; leave it to the
     // generic AssignProperty walk.
@@ -8722,7 +8706,7 @@ const
     [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoClassDefineSemantics, caoHandlePrivateKeys];                 // OP_SET_INDEX
+    [caoHandlePrivateKeys];                                         // OP_SET_INDEX
 
 function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
   const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
@@ -9028,40 +9012,11 @@ begin
     end;
   end
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
-          (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
-  begin
-    Key := ClassifyPropertyKey(AKeyReg, False);
-    if caoClassDefineSemantics in AOptions then
-    begin
-      if Key.Kind = pkkSymbol then
-        TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-          .DefineSymbolProperty(Key.Symbol,
-            TGocciaPropertyDescriptorData.Create(
-              Value, [pfConfigurable, pfWritable]))
-      else
-      begin
-        KeyName := PropertyKeyName(Key);
-        if (caoHandlePrivateKeys in AOptions) and
-           IsBytecodePrivateKey(KeyName) then
-          SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName,
-            Value)
-        else
-          TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-            .DefineProperty(KeyName,
-              TGocciaPropertyDescriptorData.Create(
-                Value, [pfConfigurable, pfWritable]));
-      end;
-    end
-    else if Key.Kind = pkkSymbol then
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .AssignSymbolProperty(Key.Symbol, Value)
-    else
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .SetProperty(PropertyKeyName(Key), Value);
-  end
-  else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
+    // ES2026 §6.2.5.6 PutValue: an assignment runs [[Set]] on every object,
+    // a class included, so an inherited static setter is called and a
+    // non-writable property rejects the write.
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
@@ -9766,7 +9721,8 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
+  CycleMark: TGocciaObjectValue;
+  CycleSteps, CycleLimit: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -9784,15 +9740,19 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links and has no length limit.
+      // Those links should not form a cycle (every [[SetPrototypeOf]] refuses
+      // one, and the walk does not follow a Proxy's [[GetPrototypeOf]], so a
+      // cycle closed through a Proxy ends it), but an internal write that
+      // skipped the check would make the walk loop forever. Brent's method
+      // notices a revisited link without remembering the objects: CycleMark
+      // jumps to the current link after 1, 2, 4, ... steps.
       Current := Obj;
-      ChainDepth := 0;
+      CycleMark := Obj;
+      CycleSteps := 0;
+      CycleLimit := 1;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
@@ -9823,6 +9783,15 @@ begin
           end;
         end;
         Current := Current.Prototype;
+        if Current = CycleMark then
+          ThrowRangeError(SErrorMaxCallStackExceeded);
+        Inc(CycleSteps);
+        if CycleSteps = CycleLimit then
+        begin
+          CycleMark := Current;
+          CycleSteps := 0;
+          CycleLimit := CycleLimit * 2;
+        end;
       end;
     finally
       Visited.Free;
@@ -11943,6 +11912,11 @@ var
         AName, TGocciaMethodValue(AValue));
   end;
 
+  { These three install a decorator's replacement. The decorators proposal
+    (tc39/ecma262 PR #2417, ApplyDecoratorsToElementDefinition) stores the
+    returned function as the element's [[Value]], [[Get]] or [[Set]] without
+    calling MakeMethod on it, so the replacement keeps whatever
+    [[HomeObject]] it was created with; none is set here. }
   procedure DefineDecoratedMethodProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, AValue: TGocciaValue);
   var
@@ -11957,10 +11931,6 @@ var
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    if AIsStatic then
-      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AValue, TargetObject);
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
         TGocciaSymbolValue(KeyValue),
@@ -12009,10 +11979,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AGetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
@@ -12060,10 +12026,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(ASetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
@@ -13505,13 +13467,8 @@ begin
       ResolvedKey := AKey;
     if ResolvedKey is TGocciaSymbolValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if TGocciaObjectValue(AObject).HasSymbolProperty(TGocciaSymbolValue(ResolvedKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(
+        TGocciaSymbolValue(ResolvedKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
@@ -13636,21 +13593,13 @@ begin
   begin
     if AObject is TGocciaObjectValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if VMHasSymbolPropertyInChain(TGocciaObjectValue(AObject),
-        TGocciaSymbolValue(AKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
 
     Boxed := AObject.Box;
-    if Assigned(Boxed) and VMHasSymbolPropertyInChain(Boxed,
-      TGocciaSymbolValue(AKey)) then
+    if Assigned(Boxed) and Boxed.HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
@@ -14120,7 +14069,10 @@ procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
 var
   Saved: PGocciaVMCallFrame;
 begin
-  CheckStackDepth(FFrameDepth + 1);
+  // The limit caps nested calls. FFrameDepth also counts the outermost frame,
+  // the top level or a function the host called while no script ran, which is
+  // not one, so this call is the FFrameDepth-th nested call.
+  CheckStackDepth(FFrameDepth);
   if FFrameStackCount >= Length(FFrameStack) then
     SetLength(FFrameStack, FFrameStackCount * 2 + 8);
   // Through a pointer: indexing the array for each field recomputes the
@@ -14215,7 +14167,8 @@ begin
       raise Exception.Create('Invalid non-numeric OP_CALL_SELF_NUM argument');
   end;
 
-  CheckStackDepth(FFrameDepth + 1);
+  // As in PushFrame: FFrameDepth includes the outermost frame.
+  CheckStackDepth(FFrameDepth);
   if FClosedNumericFrameStackCount >= Length(FClosedNumericFrameStack) then
     SetLength(FClosedNumericFrameStack,
       FClosedNumericFrameStackCount * 2 + 8);
@@ -14608,6 +14561,11 @@ begin
       // before the region it protects, so those scopes own the slots above it.
       for I := Handler.CatchRegister + 1 to FLocalCellCount - 1 do
         FLocalCells[I] := nil;
+      // The throw skipped the restore of any position stamped on this frame
+      // for it: the call it abandoned, or the fault that raised it. Clear it
+      // here, off the call path, so a later error is not located there.
+      if Assigned(FCallStack) then
+        FCallStack.ClearTopFrameLocation;
       SetRegister(Handler.CatchRegister, AErrorValue);
       Exit;
     end;
