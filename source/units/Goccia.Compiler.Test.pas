@@ -160,6 +160,8 @@ type
     procedure TestCoveragePreservesGlobalBackedConstantBranch;
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
+    procedure TestStrictTypesHintOnlyEnforcedLocals;
+    procedure TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
     procedure TestSwitchExitJumpsCloseUpvalues;
   public
     procedure SetupTests; override;
@@ -304,6 +306,9 @@ begin
     TestCoveragePreservesGlobalBackedConstantBranch);
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
+  Test('Strict types hint only enforced locals', TestStrictTypesHintOnlyEnforcedLocals);
+  Test('Strict var redeclaration in a catch block keeps its type on the var',
+    TestStrictVarRedeclarationInCatchKeepsTypeOnVar);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
 end;
 
@@ -2710,6 +2715,78 @@ begin
   Module := CompileSource('let b: boolean = true; !!b;', True);
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_NOT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictTypesHintOnlyEnforcedLocals;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A literal-initialized or annotated let is enforced, so it keeps its typed
+  // arithmetic and a guard on each incompatible assignment.
+  Module := CompileSource(
+    'let a = 1; let b: number = 2; a + b; a = "x"; b = "y";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // An expression-initialized let is not enforced, so neither its
+  // initializer nor a later assignment gives it a hint.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a; c = 3; c + a; c = "x";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A const cannot be reassigned, so it keeps the wider inference.
+  Module := CompileSource(
+    'let a = 1; const c = a + 2.5; c + a;',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // Without strict types nothing is enforced and inference is unchanged.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // `var x;` inside `catch (x)` redeclares the function's var binding, but
+  // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
+  // enforced Number type stays on the var: the read after the try statement
+  // is typed, the catch parameter read is not.
+  Module := CompileSource(
+    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    True, False, False, False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
   finally
     Module.Free;
   end;

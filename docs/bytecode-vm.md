@@ -58,6 +58,7 @@ Public bytecode artifacts use the `.gbc` extension.
 - The VM is integrated with the shared garbage collector and shared call stack.
 - Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. The memory ceiling then bounds the recursion: the register, local-cell, argument, frame and closed-numeric-frame stacks are charged to `--max-memory` for what they hold past their initial capacities and shrink back once idle, and a growth that does not fit is settled or refused with the same `RangeError` at the next instruction boundary ([ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md)). Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
 - Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)), so the compiler never takes a call's result type from one: arithmetic on the call uses the generic opcodes, and a binding initialized from it gets no inferred type. See [Type Annotations](type-annotations.md).
+- Like the outermost frame, an imported module's top level is not a nested call. It runs above the frame of whatever evaluates it (the importer's top level, or a call that read a deferred namespace), and `TGocciaVM.ExecuteImportedModule` gives its frame that frame's depth instead of one more, so `--max-stack` counts only the calls live below it. Because the frame below can hold exception handlers at the same depth, an exception unwinding in a native VM entry matches only the handlers that entry installed.
 
 ## Opcode Layout
 
@@ -218,8 +219,8 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Runtime Error Diagnostics
 
-A runtime fault must read identically in both execution modes. Three pieces of
-machinery keep that true:
+A runtime fault must read identically in both execution modes. This machinery
+keeps that true:
 
 - **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
   table mapping a call/construct instruction's start PC to the callee as the
@@ -236,6 +237,24 @@ machinery keep that true:
   through the same functions. The table is **not** serialised to `.gbc`: a
   module loaded from binary bytecode falls back to the runtime-type-name form of
   the message (see the note below).
+- **Binding names.** A temporal-dead-zone `ReferenceError` reads
+  `Cannot access 'x' before initialization` and a const assignment reads
+  `Assignment to constant variable 'x'`, as in the evaluator. The compiler
+  records each local's name, slot and live PC range in the template's debug
+  locals (`TGocciaCompilerScope.AttachTemplate`, closed at `EndScope`), and
+  upvalue descriptors already carry names; the VM's hole checks look the name up
+  only once they are about to throw (`ThrowUninitializedLocal`,
+  `ThrowUninitializedUpvalue`), so a read of an initialized binding does no
+  extra work. The const-assignment message is a constant compiled into the
+  throwing instruction. An assignment to a const first checks the binding
+  with `OP_CHECK_BINDING_INITIALIZED`, so a const still in its dead zone
+  throws the `ReferenceError` rather than the `TypeError` (ES2026 §9.1.1.1.5
+  step 3). That opcode checks the captured cell or global binding the
+  assignment resolved before its right-hand side ran, never a same-named var
+  a direct eval in the right-hand side declared. Debug locals are serialised to `.gbc` in the
+  section the format already had; bytecode without them, such as a `.gbc` from
+  an earlier build, falls back to the unnamed
+  `Cannot access lexical binding before initialization`.
 - **Throw-path source positions.** Deferred call frames carry no position
   ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
   every bytecode-mode stack frame at `file:0:0` and the runner with no line to

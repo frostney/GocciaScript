@@ -227,6 +227,7 @@ begin
     OP_GET_LOCAL_PROP_CONST:           Result := 'OP_GET_LOCAL_PROP_CONST';
     OP_JUMP_IF_NOT_LT:                 Result := 'OP_JUMP_IF_NOT_LT';
     OP_COMPUTED_IMPORT_SPECIFIER:      Result := 'OP_COMPUTED_IMPORT_SPECIFIER';
+    OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
   else
     if AOp = OP_CALL_SELF then
       Result := 'OP_CALL_SELF'
