@@ -772,19 +772,48 @@ begin
   Result := (LocalIdx >= 0) and (AScope.GetLocal(LocalIdx).Depth > 0);
 end;
 
+// Compiles a declaration's initializer into ADestReg. An anonymous function or
+// class initializer takes the binding's name (ES2026 §8.4.5 NamedEvaluation).
+procedure CompileNamedInitializer(const ACtx: TGocciaCompilationContext;
+  const AInitializer: TGocciaExpression; const AName: string;
+  const ADestReg: UInt16);
+var
+  FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+begin
+  FuncCount := ACtx.Template.FunctionCount;
+  if (AInitializer is TGocciaClassExpression) and
+     (TGocciaClassExpression(AInitializer).ClassDefinition.Name = '') then
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AInitializer).ClassDefinition, ADestReg, AName)
+  else
+    ACtx.CompileExpression(AInitializer, ADestReg);
+
+  if ((AInitializer is TGocciaArrowFunctionExpression) or
+      (AInitializer is TGocciaFunctionExpression)) and
+     (ACtx.Template.FunctionCount > FuncCount) then
+  begin
+    InferredTemplate := ACtx.Template.GetFunction(
+      ACtx.Template.FunctionCount - 1);
+    if (InferredTemplate.Name = '<arrow>') or
+       (InferredTemplate.Name = '<function>') or
+       (InferredTemplate.Name = '<method>') then
+      InferredTemplate.Name := AName;
+  end;
+end;
+
 // ES2026 §14.3.2.1: `var x = value` evaluates ResolveBinding("x") and assigns
 // value to it. Inside `catch (x)` that binding is the catch parameter, not the
 // hoisted var (B.3.4), so the initializer is an assignment to the catch
-// parameter, typed as the catch parameter is. The var binding only has to
-// exist: at a global-backed top level it is created here without a value.
+// parameter, typed as the catch parameter is. The hoisted var binding only has
+// to exist: at a global-backed top level it is created here without a value.
 procedure CompileBlockBindingVarInitializer(
   const ACtx: TGocciaCompilationContext; const AInfo: TGocciaVariableInfo;
-  const AVarSlot: UInt16; const AIsVarRedeclaration: Boolean);
+  const AVarSlot: UInt16);
 var
-  LocalIdx, FuncCount: Integer;
+  LocalIdx: Integer;
   ValueReg: UInt16;
   AnnotationType: TGocciaLocalType;
-  InferredTemplate: TGocciaFunctionTemplate;
 begin
   if ACtx.GlobalBackedTopLevel then
   begin
@@ -792,32 +821,11 @@ begin
     if LocalIdx >= 0 then
       ACtx.Scope.MarkGlobalBacked(LocalIdx);
     EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
-  end
-  else if not AIsVarRedeclaration then
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, AVarSlot, 0, 0));
+  end;
 
   ValueReg := ACtx.Scope.AllocateRegister;
   try
-    FuncCount := ACtx.Template.FunctionCount;
-    if (AInfo.Initializer is TGocciaClassExpression) and
-       (TGocciaClassExpression(AInfo.Initializer).ClassDefinition.Name = '') then
-      CompileClassExpression(ACtx,
-        TGocciaClassExpression(AInfo.Initializer).ClassDefinition, ValueReg,
-        AInfo.Name)
-    else
-      ACtx.CompileExpression(AInfo.Initializer, ValueReg);
-
-    if ((AInfo.Initializer is TGocciaArrowFunctionExpression) or
-        (AInfo.Initializer is TGocciaFunctionExpression)) and
-       (ACtx.Template.FunctionCount > FuncCount) then
-    begin
-      InferredTemplate := ACtx.Template.GetFunction(
-        ACtx.Template.FunctionCount - 1);
-      if (InferredTemplate.Name = '<arrow>') or
-         (InferredTemplate.Name = '<function>') or
-         (InferredTemplate.Name = '<method>') then
-        InferredTemplate.Name := AInfo.Name;
-    end;
+    CompileNamedInitializer(ACtx, AInfo.Initializer, AInfo.Name, ValueReg);
 
     // The declaration's own annotation still constrains its initializer, as
     // it does for a var that receives the value.
@@ -845,11 +853,10 @@ end;
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, FuncCount, LocalIdx: Integer;
+  I, LocalIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
-  InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
@@ -910,8 +917,7 @@ begin
          not VarInitializerUsesWithBinding(ACtx) and
          VarNameResolvesToBlockBinding(ACtx.Scope, Info.Name) then
       begin
-        CompileBlockBindingVarInitializer(ACtx, Info, Slot,
-          IsVarRedeclaration);
+        CompileBlockBindingVarInitializer(ACtx, Info, Slot);
         Continue;
       end;
     end
@@ -1048,34 +1054,12 @@ begin
         for LocalIdx := 0 to ProbeEndCount - 1 do
           PatchJumpTarget(ACtx, ProbeEndJumps[LocalIdx]);
 
-        FuncCount := ACtx.Template.FunctionCount;
-
-        if (Info.Initializer is TGocciaClassExpression) and
-           (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-          CompileClassExpression(ACtx,
-            TGocciaClassExpression(Info.Initializer).ClassDefinition,
-            InitSlot, Info.Name)
-        else
-          ACtx.CompileExpression(Info.Initializer, InitSlot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
 
         if IsStrict and HasRealInitializer then
           if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
             EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
               UInt8(Ord(TypeHint)), 0));
-
-        if (Info.Initializer is TGocciaArrowFunctionExpression) or
-           (Info.Initializer is TGocciaFunctionExpression) then
-        begin
-          if ACtx.Template.FunctionCount > FuncCount then
-          begin
-            InferredTemplate := ACtx.Template.GetFunction(
-              ACtx.Template.FunctionCount - 1);
-            if (InferredTemplate.Name = '<arrow>') or
-               (InferredTemplate.Name = '<function>') or
-               (InferredTemplate.Name = '<method>') then
-              InferredTemplate.Name := Info.Name;
-          end;
-        end;
 
         TargetMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
           TargetObjReg, GOCCIA_NULLISH_MATCH_HOLE);
@@ -1100,19 +1084,11 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      FuncCount := ACtx.Template.FunctionCount;
-
       if not AStmt.IsVar then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
-          if (Info.Initializer is TGocciaClassExpression) and
-             (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-            CompileClassExpression(ACtx,
-              TGocciaClassExpression(Info.Initializer).ClassDefinition,
-              InitSlot, Info.Name)
-          else
-            ACtx.CompileExpression(Info.Initializer, InitSlot);
+          CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
           // Keep the lexical binding in its hole state until the entire
           // initializer has completed. Initializers that reference or assign
           // the binding must therefore observe the TDZ.
@@ -1121,32 +1097,13 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end
-      else if (Info.Initializer is TGocciaClassExpression) and
-              (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-        CompileClassExpression(ACtx,
-          TGocciaClassExpression(Info.Initializer).ClassDefinition, Slot,
-          Info.Name)
       else
-        ACtx.CompileExpression(Info.Initializer, Slot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, Slot);
 
       if IsStrict and HasRealInitializer then
         if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
             UInt8(Ord(TypeHint)), 0));
-
-      if (Info.Initializer is TGocciaArrowFunctionExpression) or
-         (Info.Initializer is TGocciaFunctionExpression) then
-      begin
-        if ACtx.Template.FunctionCount > FuncCount then
-        begin
-          InferredTemplate := ACtx.Template.GetFunction(
-            ACtx.Template.FunctionCount - 1);
-          if (InferredTemplate.Name = '<arrow>') or
-             (InferredTemplate.Name = '<function>') or
-             (InferredTemplate.Name = '<method>') then
-            InferredTemplate.Name := Info.Name;
-        end;
-      end;
     end
     else if not (AStmt.IsVar and IsVarRedeclaration) then
       // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
