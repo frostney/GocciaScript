@@ -298,17 +298,6 @@ begin
   Result := HasExactNumberProof(AScope, IdentExpr);
 end;
 
-function IsAnonymousFunctionNameExpression(
-  const AExpr: TGocciaExpression): Boolean;
-begin
-  Result := (AExpr is TGocciaObjectMethodDefinition) or
-    (AExpr is TGocciaArrowFunctionExpression) or
-    ((AExpr is TGocciaFunctionExpression) and
-     (TGocciaFunctionExpression(AExpr).Name = '')) or
-    ((AExpr is TGocciaClassExpression) and
-     (TGocciaClassExpression(AExpr).ClassDefinition.Name = ''));
-end;
-
 procedure CompileExpressionWithInferredName(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16;
   const AInferredName: string);
@@ -5589,15 +5578,15 @@ begin
                 CompileFunctionExpression(ACtx,
                   TGocciaObjectMethodDefinition(Pair.Value).FunctionExpression,
                   ValReg, '<method>');
+                EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
+                  KeyReg, FUNCTION_NAME_PREFIX_NONE));
               end
               else
               begin
                 DefineOp := OP_DEFINE_DATA_PROP;
-                ACtx.CompileExpression(Pair.Value, ValReg);
+                Goccia.Compiler.Statements.CompileValueWithComputedName(ACtx,
+                  Pair.Value, ValReg, KeyReg);
               end;
-              if IsAnonymousFunctionNameExpression(Pair.Value) then
-                EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-                  KeyReg, FUNCTION_NAME_PREFIX_NONE));
               EmitInstruction(ACtx, EncodeABC(DefineOp, ADest, KeyReg, ValReg));
               ACtx.Scope.FreeRegister;
               ACtx.Scope.FreeRegister;

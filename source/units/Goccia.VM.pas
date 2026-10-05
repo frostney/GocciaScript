@@ -9188,6 +9188,17 @@ begin
     Prefix := '';
   end;
 
+  { The compiler emits this for a class right after OP_NEW_CLASS, before any
+    class element, so the class still has its synthesized name; setting the
+    internal name keeps it synthesized and puts it in the class's error
+    messages too. }
+  if AFunction is TGocciaClassValue then
+  begin
+    TGocciaClassValue(AFunction).SetInferredName(
+      FunctionNameFromPropertyKey(AKey, Prefix));
+    Exit;
+  end;
+
   TGocciaObjectValue(AFunction).DefineProperty(PROP_NAME,
     TGocciaPropertyDescriptorData.Create(
       TGocciaStringLiteralValue.Create(
