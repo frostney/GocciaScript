@@ -186,10 +186,14 @@ const
   //               export table, which the host binds before the entry's
   //               imports evaluate. Each entry adds a kind tag, a module
   //               request and an import name after its name and local slot.
-  //   v83 -> v84: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
+  //   v83 -> v84: added OP_CHECK_BINDING_INITIALIZED (opcode 235), the
+  //               temporal-dead-zone check an assignment to a const makes
+  //               before its TypeError. Opcode 234 is reserved for
+  //               OP_CREATE_GLOBAL_IMPORT_BINDING, a separate change.
+  //   v84 -> v85: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
   //               publishes a global-backed script's named import to the
   //               global scope so a later script against it reads the binding.
-  GOCCIA_FORMAT_VERSION = 84;
+  GOCCIA_FORMAT_VERSION = 85;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -213,6 +217,9 @@ const
   // carries the key register, still holding the UNCOERCED key: this validate is
   // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
   VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
+  // A operand of OP_CHECK_BINDING_INITIALIZED.
+  CHECK_BINDING_UPVALUE = 0;
+  CHECK_BINDING_GLOBAL = 1;
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
@@ -481,7 +488,15 @@ type
     // A = module namespace register, B = local-name constant index,
     // C = export-name constant index. Binds the global scope's predeclared
     // local name to the module's live export.
-    OP_CREATE_GLOBAL_IMPORT_BINDING = 234
+    OP_CREATE_GLOBAL_IMPORT_BINDING = 234,
+    // A = CHECK_BINDING_UPVALUE: Bx = upvalue index, checks the closure's
+    // own captured cell. A = CHECK_BINDING_GLOBAL: Bx = name-constant index,
+    // checks the global scope's binding. Throws the binding's
+    // temporal-dead-zone ReferenceError when it is uninitialized. Unlike
+    // OP_GET_UPVALUE and OP_GET_GLOBAL it never consults a direct eval's var
+    // scope, so it checks the binding an assignment resolved before its
+    // right-hand side ran (ES2026 §9.1.1.1.5 SetMutableBinding step 3).
+    OP_CHECK_BINDING_INITIALIZED = 235
   );
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
@@ -520,7 +535,8 @@ end;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
-    OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER]);
+    OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER,
+    OP_CHECK_BINDING_INITIALIZED]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
