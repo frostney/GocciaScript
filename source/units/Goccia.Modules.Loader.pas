@@ -264,6 +264,13 @@ type
       AImportingFilePath: string): string;
     function ResolveModuleURL(const AModulePath,
       AImportingFilePath: string): string;
+    { The address the module in the host file APath is known by: its
+      canonical host path. A symlinked directory, or macOS's /var and
+      /private/var, gives one file several spellings, and each must reach the
+      same module record. Anything but an absolute path to an existing host
+      file, such as a goccia: or global module request or a virtual module,
+      is its own address. }
+    function ModuleAddressOf(const APath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
     { Settles an entry module whose run raised AError. See the body. }
@@ -1077,6 +1084,8 @@ begin
   finally
     LeaveGocciaCallSite(PreviousCallSite);
   end;
+  { The module cache key, as the eager path computes it. }
+  Result := ModuleAddressOf(Result);
   if AAttributeType <> '' then
     Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
 end;
@@ -1365,6 +1374,30 @@ procedure TGocciaModuleLoader.CopyVirtualModulesFrom(
 begin
   if Assigned(ASource) then
     FVirtualModules.CopyFrom(ASource.VirtualModules);
+end;
+
+{ ES2026 §16.2.1.10 HostLoadImportedModule: a host returns the same Module
+  Record each time it is asked for the same module, and InnerModuleEvaluation
+  (§16.2.1.6.1.3.1) evaluates a record once. Modules are cached by address, so
+  every spelling of one file must yield one address, or the file is loaded and
+  evaluated once per spelling, the entry included. The canonical path is that
+  address, as in Node: it does not depend on which spelling came first, the
+  module's relative imports resolve beside the file itself, and the module is
+  read through the same path its read check judged. }
+function TGocciaModuleLoader.ModuleAddressOf(const APath: string): string;
+begin
+  Result := APath;
+  { A virtual module may shadow a host file at the same path; it is its own
+    module, never an alias of the file. A relative name would canonicalize
+    against the working directory, which is how a file could stand in for a
+    goccia: or global module. }
+  if (APath = '') or (not IsAbsoluteHostPath(APath)) or
+     StartsStr('goccia:', APath) or HasGlobalModuleRequest(APath) or
+     FVirtualModules.Contains(APath) then
+    Exit;
+  Result := CanonicalHostPath(APath);
+  if Result = '' then
+    Result := APath;
 end;
 
 function TGocciaModuleLoader.ResolveModuleURL(const AModulePath,
@@ -1894,6 +1927,8 @@ begin
   else
     ResolvedPath := ResolveModuleAddress(AModulePath, AImportingFilePath);
   MarkHostOwnedAddress(ResolvedPath);
+  { The module is cached, and its ownership looked up, under its address. }
+  MarkHostOwnedAddress(ModuleAddressOf(ResolvedPath));
   Inc(FHostRequestDepth);
   FHostRequestSpecifier := AModulePath;
   FHostRequestImporter := AImportingFilePath;
@@ -2580,6 +2615,10 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, ImportingFilePath, nil);
   end;
 
+  { Every spelling of one file reaches one record, and the file is judged
+    and read through that one path. }
+  ResolvedPath := ModuleAddressOf(ResolvedPath);
+
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, ImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(ResolvedPath);
@@ -2874,6 +2913,9 @@ begin
     on E: Exception do
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
+
+  { As InstantiateModule: one record per file. }
+  ResolvedPath := ModuleAddressOf(ResolvedPath);
 
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
   if IsHostOwned then
@@ -3284,6 +3326,9 @@ begin
           nil);
     end;
   end;
+
+  { As InstantiateModule: one record per file. }
+  ResolvedPath := ModuleAddressOf(ResolvedPath);
 
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
   if IsHostOwned then

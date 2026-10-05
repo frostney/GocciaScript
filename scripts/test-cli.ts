@@ -4469,7 +4469,13 @@ console.log("Entry module linking (bytecode)...");
 console.log("Entry module evaluated once...");
 {
   const tmp = mkdtemp("goccia-entry-once-");
+  // A second spelling of tmp, so every platform has two spellings of one
+  // file, as macOS has for any temp directory (/var is a symlink to
+  // /private/var). A junction needs no privilege on Windows (#1498).
+  const linkParent = mkdtemp("goccia-entry-once-link-");
+  const link = join(linkParent, "link");
   try {
+    symlinkSync(tmp, link, process.platform === "win32" ? "junction" : "dir");
     const files: Record<string, string> = {
       "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
       "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
@@ -4481,13 +4487,49 @@ console.log("Entry module evaluated once...");
       "cycle-a.js": 'import "./cycle-b.js";\nconsole.log("a ran");\n',
       "cycle-b.js": 'import "./cycle-a.js";\nconsole.log("b ran");\n',
       "bundled.mjs": 'import "./bundled.gbc";\nconsole.log("bundled ran");\n',
+      "via-link.mjs": `import ${JSON.stringify(join(link, "via-link.mjs"))};\nconsole.log("via-link ran");\n`,
+      "via-real.mjs": `import ${JSON.stringify(join(tmp, "via-real.mjs"))};\nconsole.log("via-real ran");\n`,
+      "dep.mjs": 'export const o = {};\nconsole.log("dep ran");\n',
+      "two-spellings.mjs":
+        `import { o as a } from "./dep.mjs";\nimport { o as b } from ${JSON.stringify(join(link, "dep.mjs"))};\n` +
+        'console.log("same record:", a === b);\n',
+      "dynamic-two.mjs":
+        `const a = await import("./dep.mjs");\nconst b = await import(${JSON.stringify(join(link, "dep.mjs"))});\n` +
+        'console.log("same record:", a === b);\n',
+      // dep-reexport.mjs reaches dep.mjs through the link, so the deferred
+      // graph walk resolves a second spelling too.
+      "dep-reexport.mjs": `export { o } from ${JSON.stringify(join(link, "dep.mjs"))};\n`,
+      "defer-two.mjs":
+        `import defer * as a from "./dep.mjs";\nimport defer * as b from ${JSON.stringify(join(link, "dep.mjs"))};\n` +
+        'import defer * as c from "./dep-reexport.mjs";\nconsole.log("same record:", a === b && a.o === c.o);\n',
     };
     for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+    // POSIX only: a Windows file name cannot hold a colon, and a file symlink
+    // there needs a privilege. A file named like a builtin must not stand in
+    // for it, and a symlinked file's relative imports resolve beside the file
+    // it links to, whichever spelling is loaded first.
+    const posix = process.platform !== "win32";
+    if (posix) {
+      writeFileSync(join(tmp, "goccia:json5"), 'export const parse = () => "file";\nconsole.log("file ran");\n');
+      writeFileSync(join(tmp, "builtin-file-first.mjs"),
+        'import "./goccia:json5";\nimport defer * as d from "goccia:json5";\nconsole.log("builtin:", d.parse("{a:1}").a === 1);\n');
+      writeFileSync(join(tmp, "builtin-defer-first.mjs"),
+        'import defer * as d from "goccia:json5";\nconst f = await import("./goccia:json5");\n' +
+        'console.log("builtin:", d.parse("{a:1}").a === 1 && f.parse() === "file");\n');
+      for (const dir of ["a", "b"]) {
+        mkdirSync(join(tmp, dir));
+        writeFileSync(join(tmp, dir, "sib.mjs"), `export const who = "${dir}";\n`);
+      }
+      writeFileSync(join(tmp, "a", "real.mjs"), 'export { who } from "./sib.mjs";\n');
+      symlinkSync(join(tmp, "a", "real.mjs"), join(tmp, "b", "link.mjs"));
+      writeFileSync(join(tmp, "base-link-first.mjs"),
+        'import { who as l } from "./b/link.mjs";\nimport { who as r } from "./a/real.mjs";\nconsole.log("base:", l, r);\n');
+    }
 
     const programOutput = (out: string): string[] =>
       normalizeLineEndings(out)
         .split("\n")
-        .filter((line) => line.endsWith(" ran") || line.startsWith("same record:"));
+        .filter((line) => line.endsWith(" ran") || /^(same record|builtin|base):/.test(line));
     const expectRun = async (label: string, args: string[], expected: string[]): Promise<void> => {
       const run = await $`${join(process.cwd(), RUNNER)} ${args}`.cwd(tmp).nothrow().quiet();
       const out = run.text() + run.stderr.toString();
@@ -4502,6 +4544,25 @@ console.log("Entry module evaluated once...");
         await expectRun(`module entry ${entry} (${mode})`, [entry, `--mode=${mode}`], ["self ran"]);
       await expectRun(`module entry importing itself by absolute path (${mode})`,
         ["abs.mjs", `--mode=${mode}`], ["abs ran"]);
+      // One file named through two spellings is one module record (#1498).
+      await expectRun(`module entry importing itself through a symlinked directory (${mode})`,
+        ["via-link.mjs", `--mode=${mode}`], ["via-link ran"]);
+      await expectRun(`module entry run through a symlinked directory importing its real path (${mode})`,
+        [join(link, "via-real.mjs"), `--mode=${mode}`], ["via-real ran"]);
+      await expectRun(`module imported through two spellings (${mode})`,
+        ["two-spellings.mjs", `--mode=${mode}`], ["dep ran", "same record: true"]);
+      await expectRun(`module dynamically imported through two spellings (${mode})`,
+        ["dynamic-two.mjs", `--mode=${mode}`], ["dep ran", "same record: true"]);
+      await expectRun(`module deferred through two spellings (${mode})`,
+        ["defer-two.mjs", `--mode=${mode}`], ["dep ran", "same record: true"]);
+      if (posix) {
+        await expectRun(`goccia: builtin beside a file of its name, file first (${mode})`,
+          ["builtin-file-first.mjs", `--mode=${mode}`], ["file ran", "builtin: true"]);
+        await expectRun(`goccia: builtin beside a file of its name, builtin first (${mode})`,
+          ["builtin-defer-first.mjs", `--mode=${mode}`], ["file ran", "builtin: true"]);
+        await expectRun(`symlinked file imports beside its target (${mode})`,
+          ["base-link-first.mjs", `--mode=${mode}`], ["base: a a"]);
+      }
       await expectRun(`module entry record identity (${mode})`,
         ["id.mjs", `--mode=${mode}`], ["same record: true"]);
       await expectRun(`module entry in a cycle (${mode})`,
@@ -4526,6 +4587,7 @@ console.log("Entry module evaluated once...");
     if (bundle.exitCode !== 0) throw new Error(`Bundling bundled.mjs failed: ${bundle.text()}`);
     await expectRun("module .gbc entry importing itself", ["bundled.gbc", "--source-type=module"], ["bundled ran"]);
   } finally {
+    clean(linkParent);
     clean(tmp);
   }
 }

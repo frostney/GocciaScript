@@ -36,6 +36,22 @@ TypeScript source candidates for a `.js`-style specifier, then each configured
 extension, then `<path>/index.<ext>`. A specifier therefore does not need a
 file extension, and a directory resolves to its `index` file.
 
+### One module per file
+
+The loader caches a host file's module under the file's canonical path, with
+every symbolic link resolved, as Node does. A symlinked directory, a Windows
+junction, or macOS's `/var` and `/private/var` therefore reach one module
+record, which evaluates once (ES2026 §16.2.1.10 HostLoadImportedModule). The
+entry file takes part as well, so an entry that imports itself through another
+spelling is not evaluated a second time. The canonical path is the module's
+path: its relative imports resolve beside the file a link points to, and its
+diagnostics and `import.meta.url` name that file, which on macOS means a
+`/private/var/...` path for a file in a temporary directory.
+`import.meta.resolve` still answers with the spelling it was given. Hardlinks
+are separate files, as they are to Node. `goccia:` and other global module
+names and virtual modules are never canonicalized. The read capability judges
+the canonical path too, so a second spelling neither gains nor loses access.
+
 ## Enabling `node_modules`
 
 ```bash
