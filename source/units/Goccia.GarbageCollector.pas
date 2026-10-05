@@ -27,6 +27,13 @@ type
     // an instance must unregister from the same one, and a collector that is
     // destroyed first nils this so unregistration cannot reach freed memory.
     FRootSourceOwner: TGarbageCollector;
+    // Set once AfterConstruction has run its inherited part. When
+    // AfterConstruction raises before that (the development build's stack
+    // check can fire in its prologue), FPC still destroys the instance through
+    // BeforeDestruction, with the reference count TInterfacedObject.NewInstance
+    // set still in place, and TInterfacedObject's BeforeDestruction reports
+    // that as an invalid pointer operation.
+    FRootSourceConstructed: Boolean;
   public
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
@@ -555,6 +562,7 @@ end;
 procedure TGCRootSource.AfterConstruction;
 begin
   inherited;
+  FRootSourceConstructed := True;
   FRootSourceIndex := -1;
   FRootSourceOwner := TGarbageCollector.Instance;
   if Assigned(FRootSourceOwner) then
@@ -568,7 +576,8 @@ begin
     FRootSourceOwner.UnregisterRootSource(Self);
     FRootSourceOwner := nil;
   end;
-  inherited;
+  if FRootSourceConstructed then
+    inherited;
 end;
 
 function TGCRootSource.RegisteredCollector: TGarbageCollector;

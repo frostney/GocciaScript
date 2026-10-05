@@ -116,6 +116,56 @@ test("clones object with null prototype value", () => {
   expect(clone.b).toBe(undefined);
 });
 
+// StructuredDeserialize creates "a new Object in targetRealm": an ordinary
+// object whose prototype is the current realm's Object.prototype, whatever
+// prototype the source had.
+describe("prototype of a cloned object", () => {
+  test("is Object.prototype", () => {
+    const clone = structuredClone({ a: 1 });
+    expect(Object.getPrototypeOf(clone)).toBe(Object.prototype);
+    expect(clone.constructor).toBe(Object);
+    expect(clone.hasOwnProperty("a")).toBe(true);
+    expect(String(clone)).toBe("[object Object]");
+  });
+
+  test("is Object.prototype for nested objects", () => {
+    const clone = structuredClone({ inner: { b: 2 }, list: [{ c: 3 }] });
+    expect(Object.getPrototypeOf(clone.inner)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(clone.list[0])).toBe(Object.prototype);
+  });
+
+  test("is Object.prototype for objects held in a Map or Set", () => {
+    const clone = structuredClone(new Map([["k", { v: 1 }]]));
+    expect(Object.getPrototypeOf(clone.get("k"))).toBe(Object.prototype);
+    const [item] = structuredClone(new Set([{ v: 2 }]));
+    expect(Object.getPrototypeOf(item)).toBe(Object.prototype);
+  });
+
+  test("is Object.prototype when the source has a null prototype", () => {
+    const original = Object.create(null);
+    original.a = 1;
+    const clone = structuredClone(original);
+    expect(Object.getPrototypeOf(clone)).toBe(Object.prototype);
+    expect(clone.a).toBe(1);
+  });
+
+  test("is Object.prototype for a class instance, without inherited members", () => {
+    class Point {
+      constructor(x) {
+        this.x = x;
+      }
+      get double() {
+        return this.x * 2;
+      }
+    }
+    const clone = structuredClone(new Point(4));
+    expect(Object.getPrototypeOf(clone)).toBe(Object.prototype);
+    expect(clone instanceof Point).toBe(false);
+    expect(clone.x).toBe(4);
+    expect(clone.double).toBe(undefined);
+  });
+});
+
 test("clones object with mixed value types", () => {
   const original = {
     num: 42,

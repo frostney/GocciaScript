@@ -273,6 +273,13 @@ type
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
     function GetLocalRegister(const AIndex: Integer): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+    { Temporal-dead-zone ReferenceErrors, named from the template's debug
+      locals or upvalue descriptors. Only the throw path calls them, so the
+      binding name costs the non-throwing dispatch nothing. }
+    procedure ThrowUninitializedLocal(const ATemplate: TGocciaFunctionTemplate;
+      const APC, ASlot: Integer);
+    procedure ThrowUninitializedUpvalue(
+      const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
     function GetRegister(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     function GetRegisterFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
@@ -560,6 +567,8 @@ type
     procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    function ExecuteImportedModule(
+      const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
@@ -2408,8 +2417,9 @@ begin
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
-// performs, since integer arithmetic on LongInt-range inputs cannot produce
-// NaN, Infinity, negative zero, or fractional results.
+// performs, since integer addition and subtraction on LongInt-range inputs
+// cannot produce NaN, Infinity, negative zero, or fractional results. A product
+// can be negative zero; multiplication goes through VMIntProductResult.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
 function VMIntResult(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
@@ -2423,6 +2433,22 @@ begin
     FloatValue := AValue;
     Result := RegisterFloat(FloatValue);
   end;
+end;
+
+// IEEE 754 multiplication gives a zero product the exclusive-or of the operand
+// signs, so 0 * -1 is -0. That is the one integer operation whose result an
+// integer register cannot hold. ES2026 §6.1.6.1.4 Number::multiply spells out
+// only the -0 operand cases (steps 4 and 5); read literally its last step gives
+// +0 here, but the float path and every engine follow IEEE 754.
+function VMIntProductResult(const ALeft, ARight: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Product: Int64;
+begin
+  Product := ALeft * ARight;
+  if (Product = 0) and ((ALeft < 0) or (ARight < 0)) then
+    Result := RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue)
+  else
+    Result := VMIntResult(Product);
 end;
 
 // ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
@@ -8743,6 +8769,37 @@ begin
   Result := FLocalCells[AIndex];
 end;
 
+const
+  // Binary bytecode written without debug locals cannot name the binding.
+  SErrorCannotAccessLexicalBeforeInit =
+    'Cannot access lexical binding before initialization';
+
+procedure TGocciaVM.ThrowUninitializedLocal(
+  const ATemplate: TGocciaFunctionTemplate; const APC, ASlot: Integer);
+var
+  Name: string;
+begin
+  if Assigned(ATemplate) and Assigned(ATemplate.DebugInfo) and
+     ATemplate.DebugInfo.TryGetLocalName(UInt16(ASlot), UInt32(APC), Name) then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
+end;
+
+procedure TGocciaVM.ThrowUninitializedUpvalue(
+  const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
+var
+  Name: string;
+begin
+  Name := ATemplate.GetUpvalueDescriptor(AIndex).Name;
+  if Name <> '' then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
+end;
+
 function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
 begin
   if (AIndex >= 0) and (AIndex < FLocalCellCount) and Assigned(FLocalCells[AIndex]) then
@@ -14940,7 +14997,10 @@ begin
 
   while True do
   begin
-    if (not FHandlerStack.IsEmpty) and
+    // A handler below ASavedHandlerCount belongs to a frame of an outer
+    // native entry, even at this frame's depth: an imported module's top
+    // level runs at the depth of the frame below it (ExecuteImportedModule).
+    if (FHandlerStack.Count > ASavedHandlerCount) and
        (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
     begin
       Handler := FHandlerStack.Peek;
@@ -15792,6 +15852,30 @@ begin
   finally
     TopClosure.Free;
     EmptyArgs.Free;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation runs a module's top level for
+  the module that imports it, so the importer's frame, or the call that read a
+  deferred namespace, is still live below it. The top level is not a function
+  call, and --max-stack caps nested calls (docs/embedding.md): its frame takes
+  the depth of the frame below instead of one more, as the interpreter, which
+  evaluates a module body without a call-stack entry, counts it. A module
+  imported from a top level keeps the whole limit; one evaluated k calls deep
+  keeps the limit less those k calls. With no frame below, the top level is the
+  outermost frame, which FFrameDepth already counts as no call. }
+function TGocciaVM.ExecuteImportedModule(
+  const AModule: TGocciaBytecodeModule): TGocciaValue;
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
   end;
 end;
 
