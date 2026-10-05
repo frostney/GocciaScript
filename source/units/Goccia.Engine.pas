@@ -1552,7 +1552,7 @@ begin
   TGocciaObjectValue.InitializeSharedPrototype;
   TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
   TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaClassValue;
+  TypeDef.ClassValueClass := TGocciaObjectClassValue;
   TypeDef.ExposePrototype := nil;
   TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
