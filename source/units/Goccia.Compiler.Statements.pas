@@ -855,7 +855,7 @@ end;
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, LocalIdx: Integer;
+  I, LocalIdx, DeclaredIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
@@ -954,12 +954,30 @@ begin
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
+    // Under strict types a hint is enforced on every assignment, so a
+    // reassignable binding takes one only from the initializer forms
+    // InferLocalType names, the rule the interpreter applies. The wider
+    // inference is not kept as an unenforced hint there: typed opcodes do not
+    // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
       TypeHint := AnnotationType
-    else if (Info.TypeAnnotation = '') and HasRealInitializer then
-      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer)
+    else if (Info.TypeAnnotation <> '') or not HasRealInitializer then
+      TypeHint := sltUntyped
+    else if ACtx.StrictTypes and not AStmt.IsConst then
+      TypeHint := InferLocalType(Info.Initializer)
     else
-      TypeHint := sltUntyped;
+      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
+
+    // A var redeclaration stores into the existing var binding, so an
+    // initializer that brings no type of its own is checked against the type
+    // enforced on that binding. ResolveLocal could pick a same-named catch
+    // parameter instead (ES2026 B.3.4), which is not the slot written here.
+    if (TypeHint = sltUntyped) and IsVarRedeclaration then
+    begin
+      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
+        TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    end;
 
     { Strict-types enforcement is opt-in via --strict-types / config.
       When disabled, type annotations are parsed but not enforced. }
@@ -980,9 +998,17 @@ begin
         TypeHint := sltUntyped;
     end;
 
+    // The type belongs to the declared binding. For a var that is the
+    // depth-0 var local; ResolveLocal could find a same-named catch parameter
+    // (ES2026 B.3.4), which would then be typed from a binding it is not.
+    if AStmt.IsVar then
+      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+    else
+      DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
+
     if TypeHint <> sltUntyped then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
@@ -998,7 +1024,7 @@ begin
 
     if Info.TypeAnnotation <> '' then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeAnnotation(LocalIdx, Info.TypeAnnotation);
