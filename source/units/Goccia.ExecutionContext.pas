@@ -73,9 +73,9 @@ type
       ASourcePathRef comes from InternSourcePath on the same thread.
 
       PushFunctionContext does not grow the stack: when FunctionContextsFull,
-      the caller makes room first through SetFunctionContextCapacity. The VM grows it that way so that the growth
-      is charged to --max-memory with its own stacks (ADR 0130,
-      Amendment 1). }
+      the caller makes room first through SetFunctionContextCapacity. The VM
+      grows it that way so that the growth is charged to --max-memory with
+      its own stacks (ADR 0132). }
     class function ThreadState: Pointer; static;
     class procedure PushFunctionContext(const AThreadState: Pointer;
       const ARealm: TGocciaRealm; const AScope: TGocciaScope;

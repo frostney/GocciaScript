@@ -133,6 +133,14 @@ type
     ProfileEntryTimestamp: Int64;
   end;
 
+  // What a VM has accounted for one of its thread's stacks, the call stack or
+  // the execution-context stack. Those belong to the thread, so the account
+  // records which thread's stack the bytes are for (ADR 0132).
+  TGocciaVMThreadStackAccount = record
+    Stack: Pointer;
+    Bytes: Int64;
+  end;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -191,15 +199,10 @@ type
     FStackChargeCollector: TGarbageCollector;
     FStackChargePending: Boolean;
     // The thread's call stack and execution-context stack are grown by the
-    // VM too, and their growth is charged with its own stacks (ADR 0130,
-    // Amendment 1).
-    // They belong to the thread, not to the VM, so the VM records how many
-    // bytes of each it accounted for, and for which instance, and a shrink
-    // gives back no more than that.
-    FCallStackAccountedBytes: Int64;
-    FCallStackAccountedFor: TGocciaCallStack;
-    FContextStackAccountedBytes: Int64;
-    FContextStackAccountedFor: Pointer;
+    // VM too, and their growth is charged with its own stacks (ADR 0132). A
+    // shrink gives back no more than the VM accounted for each of them.
+    FCallStackAccount: TGocciaVMThreadStackAccount;
+    FContextStackAccount: TGocciaVMThreadStackAccount;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FClosedNumericFrameStack: array of TGocciaClosedNumericFrame;
@@ -277,10 +280,18 @@ type
     procedure GrowFrameStack;
     procedure GrowClosedNumericFrameStack;
     procedure GrowCallStack;
+    procedure PushNamedCallFrame(const AName: string);
     procedure GrowExecutionContextStack;
     procedure GrowHandlerStack(const ARequired: Integer);
     function RecordStackGrowthLength(const ACurrentLength, ARequiredLength,
       AEntrySize: Integer): Integer;
+    function ThreadStackGrowthLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ACurrentLength, ARequiredLength,
+      AEntrySize: Integer): Integer;
+    function ThreadStackShrunkLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ALength, AUsed, AEntrySize: Integer;
+      var AFreed: Int64): Integer;
+    procedure ShrinkThreadStacks(var AFreed: Int64);
     function LargestStackBytes: Int64;
     procedure SettleStackGrowth;
     procedure ShrinkIdleStacks;
@@ -705,8 +716,7 @@ const
   VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE = 64;
   // The call stack, the execution-context stack and the handler stack grow to
   // this many entries uncharged; past it the VM grows them like its own
-  // stacks, charged, and shrinks them back no further (ADR 0130,
-  // Amendment 1).
+  // stacks, charged, and shrinks them back no further (ADR 0132).
   VM_INITIAL_RECORD_STACK_SIZE = 64;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
   // A pooled argument collection keeps its backing store only when the call
@@ -6856,6 +6866,7 @@ end;
 destructor TGocciaVM.Destroy;
 var
   I: Integer;
+  Freed: Int64;
 begin
   if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
@@ -6865,8 +6876,17 @@ begin
      (FStackChargeCollector = TGarbageCollector.Instance) then
     FStackChargeCollector.ReleaseExternalBytes(FStackChargedBytes);
   FStackChargedBytes := 0;
-  FCallStackAccountedBytes := 0;
-  FContextStackAccountedBytes := 0;
+  // The thread's stacks are released with the rest of the charge, so give
+  // their memory back too while this is still the thread the VM ran on.
+  // Otherwise the next engine on the thread would use it uncharged: a
+  // recursion that ends in an uncaught error leaves no instruction boundary
+  // at which to shrink them.
+  if Assigned(FCallStack) and (FCallStack = TGocciaCallStack.Instance) and
+     (FExecutionContextThread = TGocciaExecutionContextStack.ThreadState) then
+  begin
+    Freed := 0;
+    ShrinkThreadStacks(Freed);
+  end;
   if Assigned(FActiveDecoratorSession) then
   begin
     TGarbageCollector.Instance.RemoveTempRoot(
@@ -8467,7 +8487,20 @@ begin
   FArguments := @FArgumentStack[FArgumentBase];
 end;
 
-{ VM stack growth and --max-memory (ADR 0130 and its Amendment 1).
+// The length an idle stack shrinks to: a stack holding four times what it
+// uses shrinks to twice that, never below its initial capacity.
+function ShrunkStackLength(const ALength, AUsed, AInitial: Integer): Integer;
+begin
+  Result := ALength;
+  if (ALength > AInitial) and (Int64(AUsed) * 4 < ALength) then
+  begin
+    Result := AUsed * 2;
+    if Result < AInitial then
+      Result := AInitial;
+  end;
+end;
+
+{ VM stack growth and --max-memory (ADR 0130, ADR 0132).
 
   The register, local-cell, argument, frame and closed-numeric-frame stacks,
   the handler stack, and the thread's call stack and execution-context stack
@@ -8631,51 +8664,109 @@ begin
       ARequiredLength * 2, AEntrySize);
 end;
 
+// The length one of the thread's stacks grows to, recording in AAccount what
+// the VM accounted for it. If the VM now runs on another thread's stack, what
+// it accounted for the previous one stays charged until the VM is destroyed,
+// because that memory is still allocated.
+function TGocciaVM.ThreadStackGrowthLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ACurrentLength, ARequiredLength, AEntrySize: Integer): Integer;
+begin
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
+  Result := RecordStackGrowthLength(ACurrentLength, ARequiredLength,
+    AEntrySize);
+  if Result > VM_INITIAL_RECORD_STACK_SIZE then
+    Inc(AAccount.Bytes, Int64(Result - ACurrentLength) * AEntrySize);
+end;
+
+// The length one of the thread's idle stacks shrinks to. What it gives back is
+// added to AFreed, and is never more than the VM accounted for that stack:
+// other code can grow the thread's stacks too, uncharged.
+function TGocciaVM.ThreadStackShrunkLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ALength, AUsed, AEntrySize: Integer; var AFreed: Int64): Integer;
+var
+  Given: Int64;
+begin
+  Result := ALength;
+  if (AAccount.Stack <> AStack) or (AAccount.Bytes = 0) then
+    Exit;
+  Result := ShrunkStackLength(ALength, AUsed, VM_INITIAL_RECORD_STACK_SIZE);
+  Given := Int64(ALength - Result) * AEntrySize;
+  if Given > AAccount.Bytes then
+    Given := AAccount.Bytes;
+  Dec(AAccount.Bytes, Given);
+  Inc(AFreed, Given);
+end;
+
+procedure TGocciaVM.ShrinkThreadStacks(var AFreed: Int64);
+var
+  NewLength: Integer;
+begin
+  if Assigned(FCallStack) then
+  begin
+    NewLength := ThreadStackShrunkLength(FCallStackAccount, FCallStack,
+      FCallStack.Capacity, FCallStack.Count, SizeOf(TGocciaCallFrame), AFreed);
+    if NewLength < FCallStack.Capacity then
+      FCallStack.SetCapacity(NewLength);
+  end;
+  if Assigned(FExecutionContextThread) then
+  begin
+    NewLength := ThreadStackShrunkLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread),
+      SizeOf(TGocciaExecutionContextStackEntry), AFreed);
+    if NewLength < TGocciaExecutionContextStack.FunctionContextCapacity(
+         FExecutionContextThread) then
+      TGocciaExecutionContextStack.SetFunctionContextCapacity(
+        FExecutionContextThread, NewLength);
+  end;
+end;
+
 // Makes room for one more frame record on the thread's call stack before
 // SetupNewFrame or PushClosedNumericFrame pushes it.
 procedure TGocciaVM.GrowCallStack;
-var
-  Current, NewLength: Integer;
 begin
-  if FCallStackAccountedFor <> FCallStack then
-  begin
-    // The VM now runs on another thread's call stack. What it accounted for
-    // the previous one stays charged until the VM is destroyed, because that
-    // memory is still allocated.
-    FCallStackAccountedFor := FCallStack;
-    FCallStackAccountedBytes := 0;
-  end;
-  Current := FCallStack.Capacity;
-  NewLength := RecordStackGrowthLength(Current, FCallStack.Count + 1,
-    SizeOf(TGocciaCallFrame));
-  if NewLength > VM_INITIAL_RECORD_STACK_SIZE then
-    Inc(FCallStackAccountedBytes,
-      Int64(NewLength - Current) * SizeOf(TGocciaCallFrame));
-  FCallStack.SetCapacity(NewLength);
+  FCallStack.SetCapacity(ThreadStackGrowthLength(FCallStackAccount,
+    FCallStack, FCallStack.Capacity, FCallStack.Count + 1,
+    SizeOf(TGocciaCallFrame)));
+end;
+
+// Pushes a named frame for a call the VM makes into native code, such as a
+// native constructor. On the call stack the VM is bound to, the VM makes the
+// room itself, so that a deep recursion of such calls is charged like any
+// other (ADR 0132).
+procedure TGocciaVM.PushNamedCallFrame(const AName: string);
+var
+  CallStack: TGocciaCallStack;
+begin
+  CallStack := TGocciaCallStack.Instance;
+  if CallStack = nil then
+    Exit;
+  if (CallStack = FCallStack) and (CallStack.Count >= CallStack.Capacity) then
+    GrowCallStack;
+  CallStack.Push(AName, '', 0, 0);
 end;
 
 // Makes room for one more context on the thread's execution-context stack
 // before SetupNewFrame pushes it.
 procedure TGocciaVM.GrowExecutionContextStack;
-var
-  Current, NewLength: Integer;
 begin
-  if FContextStackAccountedFor <> FExecutionContextThread then
-  begin
-    FContextStackAccountedFor := FExecutionContextThread;
-    FContextStackAccountedBytes := 0;
-  end;
-  Current := TGocciaExecutionContextStack.FunctionContextCapacity(
-    FExecutionContextThread);
-  NewLength := RecordStackGrowthLength(Current,
-    TGocciaExecutionContextStack.FunctionContextCount(
-      FExecutionContextThread) + 1,
-    SizeOf(TGocciaExecutionContextStackEntry));
-  if NewLength > VM_INITIAL_RECORD_STACK_SIZE then
-    Inc(FContextStackAccountedBytes,
-      Int64(NewLength - Current) * SizeOf(TGocciaExecutionContextStackEntry));
   TGocciaExecutionContextStack.SetFunctionContextCapacity(
-    FExecutionContextThread, NewLength);
+    FExecutionContextThread, ThreadStackGrowthLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread) + 1,
+      SizeOf(TGocciaExecutionContextStackEntry)));
 end;
 
 procedure TGocciaVM.GrowHandlerStack(const ARequired: Integer);
@@ -8764,25 +8855,13 @@ end;
 // live entry is dropped; the bytes freed pay off uncharged growth first and
 // then release the charge.
 procedure TGocciaVM.ShrinkIdleStacks;
-
-  function ShrunkLength(const ALength, AUsed, AInitial: Integer): Integer;
-  begin
-    Result := ALength;
-    if (ALength > AInitial) and (Int64(AUsed) * 4 < ALength) then
-    begin
-      Result := AUsed * 2;
-      if Result < AInitial then
-        Result := AInitial;
-    end;
-  end;
-
 var
-  Freed, Shared: Int64;
+  Freed: Int64;
   NewLength: Integer;
   GC: TGarbageCollector;
 begin
   Freed := 0;
-  NewLength := ShrunkLength(Length(FRegisterStack),
+  NewLength := ShrunkStackLength(Length(FRegisterStack),
     FRegisterBase + FRegisterCount, VM_INITIAL_STACK_SIZE);
   if NewLength < Length(FRegisterStack) then
   begin
@@ -8791,7 +8870,7 @@ begin
     SetLength(FRegisterStack, NewLength);
     FRegisters := @FRegisterStack[FRegisterBase];
   end;
-  NewLength := ShrunkLength(Length(FLocalCellStack),
+  NewLength := ShrunkStackLength(Length(FLocalCellStack),
     FLocalCellBase + FLocalCellCount, VM_INITIAL_STACK_SIZE);
   if NewLength < Length(FLocalCellStack) then
   begin
@@ -8802,7 +8881,7 @@ begin
     if FLocalCellStaleTop > NewLength then
       FLocalCellStaleTop := NewLength;
   end;
-  NewLength := ShrunkLength(Length(FArgumentStack),
+  NewLength := ShrunkStackLength(Length(FArgumentStack),
     FArgumentBase + FArgCount + 1, VM_INITIAL_STACK_SIZE);
   if NewLength < Length(FArgumentStack) then
   begin
@@ -8811,7 +8890,7 @@ begin
     SetLength(FArgumentStack, NewLength);
     FArguments := @FArgumentStack[FArgumentBase];
   end;
-  NewLength := ShrunkLength(Length(FFrameStack), FFrameStackCount,
+  NewLength := ShrunkStackLength(Length(FFrameStack), FFrameStackCount,
     VM_INITIAL_FRAME_STACK_SIZE);
   if NewLength < Length(FFrameStack) then
   begin
@@ -8819,7 +8898,7 @@ begin
       SizeOf(TGocciaVMCallFrame));
     SetLength(FFrameStack, NewLength);
   end;
-  NewLength := ShrunkLength(Length(FClosedNumericFrameStack),
+  NewLength := ShrunkStackLength(Length(FClosedNumericFrameStack),
     FClosedNumericFrameStackCount,
     VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE);
   if NewLength < Length(FClosedNumericFrameStack) then
@@ -8828,7 +8907,7 @@ begin
       SizeOf(TGocciaClosedNumericFrame));
     SetLength(FClosedNumericFrameStack, NewLength);
   end;
-  NewLength := ShrunkLength(FHandlerStack.Capacity, FHandlerStack.Count,
+  NewLength := ShrunkStackLength(FHandlerStack.Capacity, FHandlerStack.Count,
     VM_INITIAL_RECORD_STACK_SIZE);
   if NewLength < FHandlerStack.Capacity then
   begin
@@ -8836,47 +8915,7 @@ begin
       SizeOf(TGocciaBytecodeHandlerEntry));
     FHandlerStack.SetCapacity(NewLength);
   end;
-  // The thread's stacks give back at most what this VM accounted for them.
-  if Assigned(FCallStack) and (FCallStackAccountedFor = FCallStack) and
-     (FCallStackAccountedBytes > 0) then
-  begin
-    NewLength := ShrunkLength(FCallStack.Capacity, FCallStack.Count,
-      VM_INITIAL_RECORD_STACK_SIZE);
-    if NewLength < FCallStack.Capacity then
-    begin
-      Shared := Int64(FCallStack.Capacity - NewLength) *
-        SizeOf(TGocciaCallFrame);
-      if Shared > FCallStackAccountedBytes then
-        Shared := FCallStackAccountedBytes;
-      Dec(FCallStackAccountedBytes, Shared);
-      Inc(Freed, Shared);
-      FCallStack.SetCapacity(NewLength);
-    end;
-  end;
-  if Assigned(FExecutionContextThread) and
-     (FContextStackAccountedFor = FExecutionContextThread) and
-     (FContextStackAccountedBytes > 0) then
-  begin
-    NewLength := ShrunkLength(
-      TGocciaExecutionContextStack.FunctionContextCapacity(
-        FExecutionContextThread),
-      TGocciaExecutionContextStack.FunctionContextCount(
-        FExecutionContextThread),
-      VM_INITIAL_RECORD_STACK_SIZE);
-    if NewLength < TGocciaExecutionContextStack.FunctionContextCapacity(
-         FExecutionContextThread) then
-    begin
-      Shared := Int64(TGocciaExecutionContextStack.FunctionContextCapacity(
-        FExecutionContextThread) - NewLength) *
-        SizeOf(TGocciaExecutionContextStackEntry);
-      if Shared > FContextStackAccountedBytes then
-        Shared := FContextStackAccountedBytes;
-      Dec(FContextStackAccountedBytes, Shared);
-      Inc(Freed, Shared);
-      TGocciaExecutionContextStack.SetFunctionContextCapacity(
-        FExecutionContextThread, NewLength);
-    end;
-  end;
+  ShrinkThreadStacks(Freed);
   if Freed = 0 then
     Exit;
   if Freed <= FStackUnchargedBytes then
@@ -10712,8 +10751,7 @@ begin
           [TGocciaNativeFunctionValue(AConstructor).Name]),
         SSuggestNotConstructorType);
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
-    if (TGocciaCallStack.Instance <> nil) then
-      TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+    PushNamedCallFrame(ConstructorName);
     try
       Result := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
@@ -10767,8 +10805,7 @@ begin
     ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
     TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      if (TGocciaCallStack.Instance <> nil) then
-        TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+      PushNamedCallFrame(ConstructorName);
       try
         // InvokeConstructableWithReceiver merges bound args, dispatches to
         // the underlying target, and applies the spec return rules

@@ -40,8 +40,7 @@ type
     function Capacity: Integer; {$IFDEF FPC}inline;{$ENDIF}
     // Resizes the entries to ACapacity, at least Count. The VM grows the
     // stack through this before Push and RestoreFrom need room, so that the
-    // growth is charged to --max-memory with its other stacks (ADR 0130,
-    // Amendment 1).
+    // growth is charged to --max-memory with its other stacks (ADR 0132).
     procedure SetCapacity(const ACapacity: Integer);
     property Count: Integer read FCount;
   end;
@@ -168,8 +167,8 @@ var
 begin
   if Length(AEntries) = 0 then
     Exit;
-  if FCount + Length(AEntries) > Length(FEntries) then
-    SetLength(FEntries, (FCount + Length(AEntries)) * 2);
+  Assert(FCount + Length(AEntries) <= Length(FEntries),
+    'Handler restore without room');
   for I := 0 to High(AEntries) do
   begin
     FEntries[FCount] := AEntries[I];

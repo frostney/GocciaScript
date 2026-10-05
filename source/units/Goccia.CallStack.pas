@@ -56,7 +56,7 @@ type
     // module-path fallback, deferring all string work to CaptureStackTrace.
     // The caller makes room first (Count < Capacity): the VM grows this
     // stack itself, through SetCapacity, so that the growth is charged to
-    // --max-memory with its own stacks (ADR 0130, Amendment 1).
+    // --max-memory with its own stacks (ADR 0132).
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
     // Resizes the frame records to ACapacity entries, which must be at least
     // Count. Used to grow ahead of PushTemplate and to shrink an idle stack.
