@@ -2842,7 +2842,17 @@ begin
       end;
       FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
       try
-        Result := RunModuleInScope(AModule, ModuleScope);
+        try
+          Result := RunModuleInScope(AModule, ModuleScope);
+        except
+          on E: Exception do
+          begin
+            { A later import of the entry gets its error, never the record
+              of this incomplete run. }
+            FModuleLoader.FailEntryModule(EntryModule, E);
+            raise;
+          end;
+        end;
       finally
         FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
         if Assigned(VM) then
@@ -3107,9 +3117,13 @@ begin
                   SavedVMGlobalScope;
             end;
           except
-            FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
-            EntryModuleEvaluationStarted := False;
-            raise;
+            on E: Exception do
+            begin
+              FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+              EntryModuleEvaluationStarted := False;
+              FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         end
         else
@@ -3126,49 +3140,60 @@ begin
         if Assigned(GC) then
           GC.AddTempRoot(ModuleScope);
         try
-          ModuleResult := FExecutor.EvaluateModuleBody(
-            PipelineResult.ProgramNode, ModuleContext,
-            ModuleProgramConsumed);
-          if Assigned(EntryModule) then
-            RegisterEntrySyntheticDefaultExports(EntryModule,
-              PipelineResult.ProgramNode, ModuleScope);
-          if ModuleProgramConsumed then
-            PipelineResult.TakeProgramNode;
-          if Assigned(ModuleResult) and Assigned(GC) then
-            GC.AddTempRoot(ModuleResult);
           try
-            SavedVMGlobalScope := nil;
-            if FExecutor is TGocciaBytecodeExecutor then
-            begin
-              SavedVMGlobalScope :=
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
-              TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
-            end;
-            try
-              WaitForRuntimeIdle;
-              if ModuleResult is TGocciaPromiseValue then
-              begin
-                EntryPromise := TGocciaPromiseValue(ModuleResult);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              if Assigned(EntryModule) and
-                 (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-              begin
-                EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              RaiseUnhandledRejection;
-              FLastTiming.Result := ModuleResult;
-            finally
-              if FExecutor is TGocciaBytecodeExecutor then
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
-                  SavedVMGlobalScope;
-            end;
-          finally
+            ModuleResult := FExecutor.EvaluateModuleBody(
+              PipelineResult.ProgramNode, ModuleContext,
+              ModuleProgramConsumed);
+            if Assigned(EntryModule) then
+              RegisterEntrySyntheticDefaultExports(EntryModule,
+                PipelineResult.ProgramNode, ModuleScope);
+            if ModuleProgramConsumed then
+              PipelineResult.TakeProgramNode;
             if Assigned(ModuleResult) and Assigned(GC) then
-              GC.RemoveTempRoot(ModuleResult);
+              GC.AddTempRoot(ModuleResult);
+            try
+              SavedVMGlobalScope := nil;
+              if FExecutor is TGocciaBytecodeExecutor then
+              begin
+                SavedVMGlobalScope :=
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
+                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
+              end;
+              try
+                WaitForRuntimeIdle;
+                if ModuleResult is TGocciaPromiseValue then
+                begin
+                  EntryPromise := TGocciaPromiseValue(ModuleResult);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                if Assigned(EntryModule) and
+                   (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
+                begin
+                  EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                RaiseUnhandledRejection;
+                FLastTiming.Result := ModuleResult;
+              finally
+                if FExecutor is TGocciaBytecodeExecutor then
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
+                    SavedVMGlobalScope;
+              end;
+            finally
+              if Assigned(ModuleResult) and Assigned(GC) then
+                GC.RemoveTempRoot(ModuleResult);
+            end;
+          except
+            on E: Exception do
+            begin
+              { A later import of the entry gets its error, never the
+                record of this incomplete run. }
+              if Assigned(EntryModule) and Assigned(FModuleLoader) then
+                FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         finally
           if EntryModuleEvaluationStarted and Assigned(FModuleLoader) then
