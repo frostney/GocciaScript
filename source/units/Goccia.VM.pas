@@ -2911,7 +2911,11 @@ type
     FContinuationHandlers: TGocciaBytecodeHandlerEntryArray;
     // The largest suspended frame this generator has held, charged to the
     // collector and released when it finishes or is destroyed (ADR 0130).
+    // The release goes to the collector that took the charge, which outlives
+    // this object (it is freed before its collector shuts down), whichever
+    // thread finishes or frees it.
     FContinuationChargedBytes: Int64;
+    FContinuationChargeCollector: TGarbageCollector;
     FContinuationPrevCovLine: UInt32;
     FContinuationDynamicVarScope: TGocciaScope;
     FDelegateActive: Boolean;
@@ -4527,7 +4531,12 @@ begin
       SizeOf(TGocciaBytecodeHandlerEntry));
   if FrameBytes > FContinuationChargedBytes then
   begin
-    GC := TGarbageCollector.Instance;
+    GC := FContinuationChargeCollector;
+    if not Assigned(GC) then
+    begin
+      GC := TGarbageCollector.Instance;
+      FContinuationChargeCollector := GC;
+    end;
     if Assigned(GC) then
     begin
       if not GC.TryChargeExternalBytes(
@@ -4599,14 +4608,11 @@ end;
 // A completed generator holds no suspended frame, so it gives back the
 // charge for one (ADR 0130).
 procedure TGocciaBytecodeGeneratorObjectValue.ReleaseContinuationCharge;
-var
-  GC: TGarbageCollector;
 begin
-  if FContinuationChargedBytes <= 0 then
-    Exit;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-    GC.ReleaseExternalBytes(FContinuationChargedBytes);
+  if (FContinuationChargedBytes > 0) and
+     Assigned(FContinuationChargeCollector) then
+    FContinuationChargeCollector.ReleaseExternalBytes(
+      FContinuationChargedBytes);
   FContinuationChargedBytes := 0;
 end;
 
@@ -6799,6 +6805,7 @@ begin
   FClosedNumericFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
   EnsureStackRootRegistered;
+  FStackChargeCollector := TGarbageCollector.Instance;
 end;
 
 destructor TGocciaVM.Destroy;
@@ -8438,17 +8445,14 @@ end;
   collects if that could help, charges the growth if it now fits, and
   otherwise throws RangeError. }
 
-// The collector that stack growth is charged to. A VM can be entered from a
-// different thread between two outermost entries, and every thread has its
-// own collector; the charge held by the previous one stays with it.
+// The collector that stack growth is charged to: the one the VM's stack
+// root is registered with, bound when the VM is created. A VM can be entered
+// from another thread between two outermost entries; its charges and
+// releases still go to that collector, as its roots do, so a charge is never
+// stranded on one collector or released against another.
 function TGocciaVM.StackChargeCollector: TGarbageCollector;
 begin
-  Result := TGarbageCollector.Instance;
-  if Result <> FStackChargeCollector then
-  begin
-    FStackChargeCollector := Result;
-    FStackChargedBytes := 0;
-  end;
+  Result := FStackChargeCollector;
 end;
 
 // How many more bytes the stacks may take now. Stacks that reached into the
@@ -8678,8 +8682,8 @@ begin
   FStackUnchargedBytes := 0;
   if Freed > FStackChargedBytes then
     Freed := FStackChargedBytes;
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) and (GC = FStackChargeCollector) and (Freed > 0) then
+  GC := StackChargeCollector;
+  if Assigned(GC) and (Freed > 0) then
     GC.ReleaseExternalBytes(Freed);
   Dec(FStackChargedBytes, Freed);
 end;

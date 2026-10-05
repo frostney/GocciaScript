@@ -122,6 +122,13 @@ charge does not collect either. If it does not fit, the yield or await throws
 the charged `RangeError` before anything has changed. This is how a value
 allocation is refused.
 
+**A charge is released against the collector that took it.** The VM charges
+the collector its stack root is registered with, bound when the VM is created,
+even when it later runs on another thread. A generator records the collector
+that took its first charge and releases its charge there. A VM moved between
+threads therefore neither strands a charge on one collector nor releases it
+against another.
+
 **`TryChargeExternalBytes` does not latch memory pressure.**
 `TryReserveExternalBytes` does: a reservation near the ceiling arms a
 collection at the next poll. An async function charges its frame at every
