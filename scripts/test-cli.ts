@@ -132,7 +132,8 @@ console.log("REPL import bindings across inputs...");
             '["live", count, ns.count].join(":");',
             "answer = 1;",
             "const answer = 2;",
-            '["kept", answer].join(":");',
+            'import { count as renamed } from "./dep.mjs";',
+            '["kept", answer, renamed].join(":");',
             "",
           ].join("\n"),
         ),
@@ -148,9 +149,33 @@ console.log("REPL import bindings across inputs...");
         throw new Error(`REPL (${mode}) should reject assigning to an import binding, got: ${output}`);
       if (!output.includes("SyntaxError: Identifier 'answer' has already been declared"))
         throw new Error(`REPL (${mode}) should reject redeclaring an imported name, got: ${output}`);
-      if (!output.includes("kept:42"))
+      if (!output.includes("SyntaxError: Identifier 'renamed' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject importing an already imported name again, got: ${output}`);
+      if (!output.includes("kept:42:42"))
         throw new Error(`REPL (${mode}) import binding should survive the rejected inputs, got: ${output}`);
     }
+
+    // Bytecode rejects a missing export before the input runs, so the name is
+    // never declared and a corrected import of it succeeds. The interpreter
+    // declares the name first and leaves it uninitialized (#1274).
+    const retry = Bun.spawnSync([resolve(REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { missing as answer } from "./dep.mjs";',
+          'import { answer } from "./dep.mjs";',
+          '["retried", answer].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const retryOutput = normalizeLineEndings(retry.stdout.toString() + retry.stderr.toString());
+    if (!retryOutput.includes('has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing export, got: ${retryOutput}`);
+    if (retry.exitCode !== 0 || !retryOutput.includes("retried:42"))
+      throw new Error(`REPL (bytecode) should accept a corrected import after a missing export, got: ${retryOutput}`);
   } finally {
     clean(tmp);
   }
