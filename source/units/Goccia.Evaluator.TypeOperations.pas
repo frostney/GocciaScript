@@ -87,17 +87,10 @@ begin
 
   if ResolvedKey is TGocciaSymbolValue then
   begin
-    if ARight is TGocciaProxyValue then
-    begin
-      if TGocciaProxyValue(ARight).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)) then
-        Result := TGocciaBooleanLiteralValue.TrueValue
-      else
-        Result := TGocciaBooleanLiteralValue.FalseValue;
-      Exit;
-    end;
     if ARight is TGocciaObjectValue then
     begin
-      if TGocciaObjectValue(ARight).HasSymbolProperty(TGocciaSymbolValue(ResolvedKey)) then
+      if TGocciaObjectValue(ARight).HasSymbolPropertyInChain(
+        TGocciaSymbolValue(ResolvedKey)) then
         Result := TGocciaBooleanLiteralValue.TrueValue
       else
         Result := TGocciaBooleanLiteralValue.FalseValue;
