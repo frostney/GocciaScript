@@ -5355,6 +5355,7 @@ begin
       UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5525,6 +5526,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
   EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5698,6 +5700,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
   EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5802,6 +5805,7 @@ begin
     Length(AMethod.Parameters));
 
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);

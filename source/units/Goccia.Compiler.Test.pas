@@ -97,6 +97,7 @@ type
     procedure TestLoopThatCreatesClosureKeepsGetLocal;
     procedure TestSwitchClauseForgetsInitializedLets;
     procedure TestDefaultParameterValueKeepsGetLocal;
+    procedure TestParameterExpressionBodyVarEnvironment;
     procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
     procedure TestCountedForVariableOperandSkipsGetLocal;
     procedure TestCoverageKeepsLetAndParameterOperandCopies;
@@ -206,6 +207,8 @@ begin
     TestSwitchClauseForgetsInitializedLets);
   Test('A default parameter value keeps OP_GET_LOCAL',
     TestDefaultParameterValueKeepsGetLocal);
+  Test('With parameter expressions the body vars get their own environment',
+    TestParameterExpressionBodyVarEnvironment);
   Test('An operand that is its own destination keeps OP_GET_LOCAL',
     TestOperandThatIsItsOwnDestinationKeepsGetLocal);
   Test('A counted for variable operand skips OP_GET_LOCAL',
@@ -1189,6 +1192,69 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30: with an expression
+// in the parameter list the body's vars get an Environment Record of their own.
+procedure TTestCompiler.TestParameterExpressionBodyVarEnvironment;
+
+  function PreambleOps(const ASource: string; const AOp: TGocciaOpCode;
+    out AAllGetLocals: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := -1;
+    AAllGetLocals := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if not Assigned(Func) then
+        Exit;
+      Result := 0;
+      for I := 0 to Func.ParameterPreambleSize - 1 do
+        if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = AOp then
+          Inc(Result);
+      AAllGetLocals := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  AllGetLocals: Integer;
+begin
+  // No closure in the parameter list captured `a`, so its var keeps the
+  // parameter's register, and reads it in place like a parameter.
+  Expect<Integer>(PreambleOps(
+    'const f = (a, b = 1) => { var a; return a * b; };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+  Expect<Integer>(AllGetLocals).ToBe(0);
+
+  // `g` captured `a`: the var is a register of its own, which the preamble
+  // fills from the parameter's cell (step 30.e.i.4).
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { var a; return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+
+  // A var that names no parameter starts as undefined (step 30.e.i.3). Its
+  // register can hold a preamble temporary or a surplus argument, so the
+  // preamble clears it.
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = p.x * p.y) => { var t; return t * a; };',
+    OP_LOAD_UNDEFINED, AllGetLocals) - PreambleOps(
+    'const f = (p, a = p.x * p.y) => { return p * a; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = 1) => { var t; return t * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals) - PreambleOps(
+    'const f = (p, a = 1) => { return a * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
 end;
 
 procedure TTestCompiler.TestOperandThatIsItsOwnDestinationKeepsGetLocal;
