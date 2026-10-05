@@ -273,4 +273,32 @@ describe("auto-accessor initializer", () => {
     expect(accessors.hiddenName()).toBe(fields.hiddenName());
     expect(accessors.plain.name).not.toContain("storage");
   });
+
+  test("names an anonymous class before its static fields run, like a field of the same name", () => {
+    const key = "computed";
+    class WithAccessors {
+      accessor [key] = class {
+        static seen = this.name;
+      };
+      static accessor [key] = class {
+        static seen = this.name;
+      };
+    }
+    class WithFields {
+      [key] = class {
+        static seen = this.name;
+      };
+      static [key] = class {
+        static seen = this.name;
+      };
+    }
+
+    const accessor = new WithAccessors().computed;
+    const field = new WithFields().computed;
+
+    expect(accessor.seen).toBe(field.seen);
+    expect(accessor.seen).toBe(accessor.name);
+    expect(WithAccessors.computed.seen).toBe(WithFields.computed.seen);
+    expect(WithAccessors.computed.seen).toBe(WithAccessors.computed.name);
+  });
 });

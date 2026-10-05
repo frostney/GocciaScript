@@ -6387,11 +6387,7 @@ begin
         { An auto-accessor's initializer is named after the accessor
           ([[ClassFieldInitializerName]]), not after its storage. }
         Elem := AClassDef.FElements[AClassDef.FFieldOrder[I].ElementIndex];
-        CompileFieldValueWithInferredName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
-          ClassFieldInferredName(Elem));
-        if Elem.IsComputed and IsAnonymousFunctionNameInitializer(
-           AClassDef.FFieldOrder[I].FieldInitializer) then
+        if Elem.IsComputed then
         begin
           KeyReg := ChildScope.AllocateRegister;
           ComputedKeyName := FindComputedFieldKeyLocalName(
@@ -6401,10 +6397,14 @@ begin
             raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
           EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
             UInt16(UpvalueIdx)));
-          EmitInstruction(ChildCtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-            KeyReg, 0));
+          CompileValueWithComputedName(ChildCtx,
+            AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
           ChildScope.FreeRegister;
-        end;
+        end
+        else
+          CompileFieldValueWithInferredName(ChildCtx,
+            AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+            ClassFieldInferredName(Elem));
         EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
           '#slot:' + ChildScope.ResolvePrivatePrefix +
           AClassDef.FFieldOrder[I].Name);
