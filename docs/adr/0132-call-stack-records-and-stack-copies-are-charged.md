@@ -77,9 +77,9 @@ text at 100 frames (#1503):
 
 | `--max-memory` | Before: depth | Before: peak RSS | After: depth | After: peak RSS |
 |---|---:|---:|---:|---:|
-| 64 MiB | 331,783 | 143.2 MiB (2.24x) | 175,510 | 78.6 MiB (1.23x) |
-| 256 MiB | 1,401,400 | 563.9 MiB (2.20x) | 703,530 | 280.8 MiB (1.10x) |
-| 1 GiB | 6,143,728 | 2,266.8 MiB (2.21x) | 2,815,609 | 1,084.0 MiB (1.06x) |
+| 64 MiB | 331,783 | 143.2 MiB (2.24x) | 175,510 | 78.3 MiB (1.22x) |
+| 256 MiB | 1,401,400 | 563.9 MiB (2.20x) | 703,530 | 281.1 MiB (1.10x) |
+| 1 GiB | 6,143,728 | 2,266.8 MiB (2.21x) | 2,815,609 | 1,083.9 MiB (1.06x) |
 
 Above the idle run, the peak is now 1.05 times the ceiling at all three
 sizes.
@@ -103,6 +103,6 @@ handlers and gives them back.
 
 Callgrind instruction counts on the AWFY rows and the `perf/probes` set move
 by at most 0.04%, except `typed-array-update-loop`, 0.13% lower, and
-`fib-recursive`, 0.13% higher. There a numeric self-call costs about two more
-instructions now that the VM, rather than `PushTemplate`, checks the call
-stack for room.
+`fib-recursive`, 0.12% higher. There a numeric self-call costs one more
+check, now that the VM, rather than `PushTemplate`, checks the call stack for
+room.
