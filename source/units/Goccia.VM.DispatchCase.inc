@@ -516,7 +516,7 @@
 
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue)
         else
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
@@ -1719,7 +1719,7 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue);
         end
         else if RegisterIsNumericScalar(FRegisters[B]) and
