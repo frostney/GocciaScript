@@ -125,7 +125,13 @@ type
     function GetSymbolProperty(const ASymbol: TGocciaSymbolValue): TGocciaValue; virtual;
     function GetSymbolPropertyWithReceiver(const ASymbol: TGocciaSymbolValue; const AReceiver: TGocciaValue): TGocciaValue; virtual;
     function GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor; virtual;
+    // Own-property test for an ordinary object (a Proxy answers it with its
+    // has trap). HasSymbolPropertyInChain is [[HasProperty]].
     function HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean; virtual;
+    // ES2026 §10.1.7.1 OrdinaryHasProperty(O, P) for a symbol key: the
+    // prototype chain walked as HasProperty walks it, a Proxy in the chain
+    // asked through its has trap.
+    function HasSymbolPropertyInChain(const ASymbol: TGocciaSymbolValue): Boolean;
     function DeleteSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
     function GetEnumerableSymbolProperties: TArray<TPair<TGocciaSymbolValue, TGocciaValue>>;
     function GetOwnSymbols: TArray<TGocciaSymbolValue>; virtual;
@@ -2406,6 +2412,35 @@ end;
 function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 begin
   Result := FSymbolDescriptors.ContainsKey(ASymbol);
+end;
+
+function TGocciaObjectValue.HasSymbolPropertyInChain(
+  const ASymbol: TGocciaSymbolValue): Boolean;
+var
+  Current, Parent: TGocciaObjectValue;
+begin
+  // A Proxy's HasSymbolProperty is its has trap, which is already its whole
+  // [[HasProperty]].
+  if ClassType = TGocciaProxyValue then
+    Exit(HasSymbolProperty(ASymbol));
+  Current := Self;
+  repeat
+    if Current.HasSymbolProperty(ASymbol) then
+      Exit(True);
+    Parent := Current.FPrototype;
+    if not Assigned(Parent) then
+      Exit(False);
+    if Parent.ClassType = TGocciaProxyValue then
+    begin
+      EnterPropertyDelegation;
+      try
+        Exit(Parent.HasSymbolProperty(ASymbol));
+      finally
+        LeavePropertyDelegation;
+      end;
+    end;
+    Current := Parent;
+  until False;
 end;
 
 // ES2026 §10.1.10 [[Delete]](P)

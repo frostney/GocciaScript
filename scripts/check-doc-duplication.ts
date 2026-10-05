@@ -16,9 +16,10 @@
  *   DOC_DUP_MIN_WORDS=15 npx tsx ...                         # tune exact threshold
  */
 
-import { readFileSync, readdirSync, existsSync, lstatSync, realpathSync } from "fs";
+import { readFileSync } from "fs";
 import { join, relative, basename, dirname } from "path";
 import { fileURLToPath } from "url";
+import { findMarkdownFiles } from "./doc-checks/markdown-files";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -118,11 +119,6 @@ const FUZZY_MIN_WORDS = parseInt(process.env.DOC_DUP_FUZZY_MIN_WORDS ?? "15", 10
 const NUM_HASHES = 128;
 const NUM_BANDS = 32;
 const ROWS_PER_BAND = NUM_HASHES / NUM_BANDS; // 4
-const EXTENSIONS = new Set([".md", ".mdx"]);
-const IGNORE_DIRS = new Set(["node_modules", ".git", ".agents", ".claude", "dist", "build", ".next", "vendor"]);
-// Build artifacts whose contents are synced from elsewhere and validated at
-// the source location. Path-prefix matched against repo-relative paths.
-const IGNORE_PATH_PREFIXES = ["website/content/docs/"];
 
 // Utility: generate an index array [0, 1, ..., n-1]
 const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
@@ -130,38 +126,6 @@ const range = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
 // Utility: generate an index array [start, start+1, ..., end-1]
 const rangeFrom = (start: number, end: number): number[] =>
   Array.from({ length: end - start }, (_, i) => start + i);
-
-// ── File discovery ─────────────────────────────────────────────────────
-
-const findMarkdownFiles = (dir: string): string[] => {
-  const results: string[] = [];
-  const seen = new Set<string>();
-  const isIgnoredPath = (full: string): boolean => {
-    const rel = relative(ROOT, full).split("\\").join("/");
-    return IGNORE_PATH_PREFIXES.some((p) => rel === p.replace(/\/$/, "") || rel.startsWith(p));
-  };
-  const walk = (d: string): void => {
-    const entries = readdirSync(d, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = join(d, entry.name);
-      if (entry.isDirectory()) {
-        if (IGNORE_DIRS.has(entry.name)) continue;
-        if (isIgnoredPath(full)) continue;
-        walk(full);
-      } else if (EXTENSIONS.has(entry.name.slice(entry.name.lastIndexOf(".")))) {
-        if (isIgnoredPath(full)) continue;
-        // Resolve symlinks to avoid scanning the same file twice
-        const real = lstatSync(full).isSymbolicLink() ? realpathSync(full) : full;
-        if (!seen.has(real)) {
-          seen.add(real);
-          results.push(full);
-        }
-      }
-    }
-  };
-  walk(dir);
-  return results;
-};
 
 // ── Section heading index ─────────────────────────────────────────────
 
@@ -710,7 +674,7 @@ const main = (): void => {
 
   console.error(`doc-duplication: scanning ${root} (min ${MIN_WORDS} exact, fuzzy ≥${(FUZZY_THRESHOLD * 100).toFixed(0)}%, stopwords filtered)`);
 
-  const files = findMarkdownFiles(root);
+  const files = findMarkdownFiles(ROOT, root);
   if (files.length === 0) { console.error("No markdown files found."); process.exit(0); }
   console.error(`  Found ${files.length} file(s)`);
 

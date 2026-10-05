@@ -141,6 +141,7 @@ type
     procedure TestGlobalBackedCompoundChecksStrictType;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
+    procedure TestReturnAnnotationDoesNotTypeCallResult;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -277,6 +278,8 @@ begin
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
   Test('Reassigned local keeps type only when every value is a Number',
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
+  Test('Return annotation does not type call result',
+    TestReturnAnnotationDoesNotTypeCallResult);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -2363,6 +2366,41 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestReturnAnnotationDoesNotTypeCallResult;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A return-type annotation is not checked, so neither a direct call nor a
+  // call through a captured binding gets typed arithmetic from it.
+  Module := CompileSource(
+    'const f = (): number => 1; f() + 1; f() + f();' +
+    'const g = () => f() - 1; g();',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // Under strict types a binding initialized from the call is not enforced,
+  // and an enforced binding checks a value computed from the call.
+  Module := CompileSource(
+    'const f = (): number => 1; const r = f(); r + 1;' +
+    'let t: number = 0; t = t + f();',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;
