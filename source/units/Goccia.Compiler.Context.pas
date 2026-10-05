@@ -36,6 +36,9 @@ type
   end;
   TNumericParameterProofMap = TDictionary<TGocciaExpression,
     TClosedNumericCallProof>;
+  // Variable declaration -> bit (1 shl I) for each of its variables I whose
+  // binding holds only Numbers (see Goccia.Compiler.NumericBindings).
+  TNumberBindingProofMap = THashMap<TGocciaStatement, UInt64>;
 
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;
@@ -43,6 +46,7 @@ type
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
     NumericParameterProofs: TNumericParameterProofMap;
+    NumberBindingProofs: TNumberBindingProofMap;
     GlobalBackedTopLevel: Boolean;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;

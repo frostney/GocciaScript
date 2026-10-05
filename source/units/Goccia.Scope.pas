@@ -130,6 +130,10 @@ type
     // bindings before the scope's own var environment).
     function TryGetOwnBinding(const AName: string;
       out ABinding: TLexicalBinding): Boolean;
+    // Whether AName is an own lexical binding still in its temporal dead
+    // zone, the case TryGetBinding raises RaiseBindingNotInitialized for,
+    // answered without raising.
+    function IsOwnBindingUninitialized(const AName: string): Boolean;
     function GetBinding(const AName: string; const ALine: Integer = 0; const AColumn: Integer = 0): TLexicalBinding; virtual;
     function GetValue(const AName: string): TGocciaValue; virtual;
     function TryGetBindingValue(const AName: string;
@@ -1338,6 +1342,14 @@ begin
     Exit(True);
   ABinding := Default(TLexicalBinding);
   Result := False;
+end;
+
+function TGocciaScope.IsOwnBindingUninitialized(const AName: string): Boolean;
+var
+  LexicalBinding: TLexicalBinding;
+begin
+  Result := FLexicalBindings.TryGetValue(AName, LexicalBinding) and
+    not LexicalBinding.IsAccessible;
 end;
 
 function TGocciaScope.TryGetBindingValue(const AName: string;
