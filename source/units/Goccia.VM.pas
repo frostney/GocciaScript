@@ -8658,7 +8658,7 @@ function TGocciaVM.RecordStackGrowthLength(const ACurrentLength,
   ARequiredLength, AEntrySize: Integer): Integer;
 begin
   if ARequiredLength <= VM_INITIAL_RECORD_STACK_SIZE then
-    Result := VM_INITIAL_RECORD_STACK_SIZE
+    Result := Max(VM_INITIAL_RECORD_STACK_SIZE, ACurrentLength)
   else
     Result := StackGrowthLength(ACurrentLength, ARequiredLength,
       ARequiredLength * 2, AEntrySize);
@@ -8685,16 +8685,19 @@ end;
 
 // The length one of the thread's idle stacks shrinks to. What it gives back is
 // added to AFreed, and is never more than the VM accounted for that stack:
-// other code can grow the thread's stacks too, uncharged.
+// other code can grow the thread's stacks too, uncharged, and that growth is
+// shrunk without releasing anything.
 function TGocciaVM.ThreadStackShrunkLength(
   var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
   const ALength, AUsed, AEntrySize: Integer; var AFreed: Int64): Integer;
 var
   Given: Int64;
 begin
-  Result := ALength;
-  if (AAccount.Stack <> AStack) or (AAccount.Bytes = 0) then
-    Exit;
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
   Result := ShrunkStackLength(ALength, AUsed, VM_INITIAL_RECORD_STACK_SIZE);
   Given := Int64(ALength - Result) * AEntrySize;
   if Given > AAccount.Bytes then
@@ -8776,6 +8779,8 @@ begin
 end;
 
 // The size of the largest stack: the most that the next copy of one can add.
+// It lists every charged stack, as ShrinkIdleStacks and the Grow* helpers do;
+// a stack missing here would make the copy room too small.
 function TGocciaVM.LargestStackBytes: Int64;
 
   procedure Consider(const ABytes: Int64);
@@ -8807,10 +8812,9 @@ end;
 // a few more frames would be repeated every few frames, and the recursion
 // would slow quadratically on its way to the same refusal. That growth must
 // also leave room under the ceiling to copy the largest stack, as in
-// StackGrowthLength. A refused growth stays
-// in place, uncharged, because the frames that use it are live until the
-// RangeError unwinds them; a later boundary shrinks the stacks back
-// (ShrinkIdleStacks).
+// StackGrowthLength. A refused growth stays in place, uncharged, because the
+// frames that use it are live until the RangeError unwinds them; a later
+// boundary shrinks the stacks back (ShrinkIdleStacks).
 procedure TGocciaVM.SettleStackGrowth;
 var
   GC: TGarbageCollector;

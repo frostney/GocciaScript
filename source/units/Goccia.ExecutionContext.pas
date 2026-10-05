@@ -42,7 +42,8 @@ type
     Entries: array of TGocciaExecutionContextStackEntry;
     Count: Integer;
     // Length(Entries), kept beside Count so that the call path's capacity
-    // check is two loads.
+    // check is two loads. Entries is resized only through
+    // SetFunctionContextCapacity, which keeps the two equal.
     Capacity: Integer;
     // Goccia.Realm's current-realm variable for this thread, resolved by
     // ThreadState so the call-path push and pop switch realms through it.
@@ -248,10 +249,7 @@ begin
 
   State := @GExecutionContextState;
   if State^.Count >= State^.Capacity then
-  begin
-    SetLength(State^.Entries, State^.Count * 2 + 8);
-    State^.Capacity := Length(State^.Entries);
-  end;
+    SetFunctionContextCapacity(State, State^.Count * 2 + 8);
 
   Entry := @State^.Entries[State^.Count];
   Entry^.Context := AContext;
