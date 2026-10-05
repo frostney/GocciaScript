@@ -2826,12 +2826,8 @@ begin
         resolved path, stamped with its file's modification time, and mark it
         evaluating before its imports are linked, as Execute does. As the
         VM's current runtime module it gets the program's exports
-        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT).
-        The resolved path is the loader's address for the file, which an
-        import naming the file through another spelling (a symlinked
-        directory, or /var and /private/var on macOS) also reaches. }
-      EntryModule := TGocciaModule.Create(
-        FModuleLoader.ModuleAddressOf(ExpandFileName(AFileName)));
+        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT). }
+      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
@@ -3076,10 +3072,7 @@ begin
         if Assigned(FModuleLoader) then
         begin
           EntryRequestedModules := TGocciaModuleList.Create;
-          { Under the loader's address for the file, as
-            RunModuleForSourceType registers the bytecode entry. }
-          EntryModule := TGocciaModule.Create(
-            FModuleLoader.ModuleAddressOf(ExpandFileName(FSourcePath)));
+          EntryModule := TGocciaModule.Create(ExpandFileName(FSourcePath));
           { Stamp the entry with its file's modification time, as the
             loader stamps every module it loads. Unstamped, a later
             import of the entry's own path took it for a changed file

@@ -93,9 +93,6 @@ type
     FLinkingDepth: Integer;
     FLoadingModules: TOrderedStringMap<Boolean>;
     FModules: TOrderedStringMap<TGocciaModule>;
-    { A host file's canonical path to its module address; see
-      ModuleAddressOf. }
-    FModuleAddressesByFile: TOrderedStringMap<string>;
     FModuleLoadStates: TOrderedStringMap<TObject>;
     FModuleSourceValues: TOrderedStringMap<TGocciaValue>;
     FRetiredModules: TGocciaModuleList;
@@ -267,14 +264,6 @@ type
       AImportingFilePath: string): string;
     function ResolveModuleURL(const AModulePath,
       AImportingFilePath: string): string;
-    { The address the module in the host file APath is known by: the first
-      spelling of that file this loader was asked about that still names it.
-      A symlinked directory, or macOS's /var and /private/var, gives one file
-      several spellings, and each must reach the same module record. Anything
-      but an absolute path to an existing host file read from the host file
-      system, such as a goccia: or global module request or a virtual
-      module, is its own address. }
-    function ModuleAddressOf(const APath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
     { Settles an entry module whose run raised AError. See the body. }
@@ -586,7 +575,6 @@ begin
   FFailedModuleErrors := TOrderedStringMap<TGocciaValue>.Create;
   FFailedModuleErrorModifiedTimes := TOrderedStringMap<TDateTime>.Create;
   FModules := TOrderedStringMap<TGocciaModule>.Create;
-  FModuleAddressesByFile := TOrderedStringMap<string>.Create;
   FModuleLoadStates := TOrderedStringMap<TObject>.Create;
   FModuleSourceValues := TOrderedStringMap<TGocciaValue>.Create;
   FRetiredModules := TGocciaModuleList.Create;
@@ -673,7 +661,6 @@ begin
   FFailedModuleErrors.Free;
   FFailedModuleErrorModifiedTimes.Free;
   FModules.Free;
-  FModuleAddressesByFile.Free;
   FModuleSourceValues.Free;
   FRetiredModules.Free;
   FVirtualModules.Free;
@@ -1090,8 +1077,6 @@ begin
   finally
     LeaveGocciaCallSite(PreviousCallSite);
   end;
-  { The module cache key, as the eager path computes it. }
-  Result := ModuleAddressOf(Result);
   if AAttributeType <> '' then
     Result := EncodeImportSpecifierAttribute(Result, AAttributeType);
 end;
@@ -1380,43 +1365,6 @@ procedure TGocciaModuleLoader.CopyVirtualModulesFrom(
 begin
   if Assigned(ASource) then
     FVirtualModules.CopyFrom(ASource.VirtualModules);
-end;
-
-{ ES2026 §16.2.1.10 HostLoadImportedModule: a host returns the same Module
-  Record each time it is asked for the same module, and InnerModuleEvaluation
-  (§16.2.1.6.1.3.1) evaluates a record once. Modules are cached by address, so
-  every spelling of one file must yield one address, or the file is loaded and
-  evaluated once per spelling, the entry included. The address is the first
-  spelling, not the canonical path: the host names a module by the path it was
-  given — the test runner's coverage keys an entry by it, and a content
-  provider other than the host file system knows only that spelling — and
-  diagnostics and import.meta.url show the path the program used. }
-function TGocciaModuleLoader.ModuleAddressOf(const APath: string): string;
-var
-  PhysicalPath: string;
-begin
-  Result := APath;
-  { A virtual module may shadow a host file at the same path; it is its own
-    module, never an alias of the file. A relative name would canonicalize
-    against the working directory, which is how a file could stand in for a
-    goccia: or global module. }
-  if (APath = '') or (not IsAbsoluteHostPath(APath)) or
-     StartsStr('goccia:', APath) or HasGlobalModuleRequest(APath) or
-     FVirtualModules.Contains(APath) or
-     not FContentProvider.ReadsHostFileSystem then
-    Exit;
-  PhysicalPath := CanonicalHostPath(APath);
-  if PhysicalPath = '' then
-    Exit;
-  { Canonicalized on every request, never remembered per spelling: a symlink
-    can be retargeted, and the module is read through the address returned,
-    so it must name the file the request was judged on. A recorded spelling
-    that no longer names that file yields to this one. }
-  if FModuleAddressesByFile.TryGetValue(PhysicalPath, Result) and
-     ((Result = APath) or (CanonicalHostPath(Result) = PhysicalPath)) then
-    Exit;
-  Result := APath;
-  FModuleAddressesByFile.AddOrSetValue(PhysicalPath, Result);
 end;
 
 function TGocciaModuleLoader.ResolveModuleURL(const AModulePath,
@@ -1946,8 +1894,6 @@ begin
   else
     ResolvedPath := ResolveModuleAddress(AModulePath, AImportingFilePath);
   MarkHostOwnedAddress(ResolvedPath);
-  { The module is cached, and its ownership looked up, under its address. }
-  MarkHostOwnedAddress(ModuleAddressOf(ResolvedPath));
   Inc(FHostRequestDepth);
   FHostRequestSpecifier := AModulePath;
   FHostRequestImporter := AImportingFilePath;
@@ -2182,7 +2128,7 @@ var
   ReExportDecl: TGocciaReExportDeclaration;
   RequestedModules: TGocciaModuleList;
   RequestedModulePath: string;
-  PackageRoot, RequestedFilePath, ResolvedPath: string;
+  PackageRoot, ResolvedPath: string;
   Seen: TOrderedStringMap<Boolean>;
   SourceModule: TGocciaModule;
   Stmt: TGocciaStatement;
@@ -2634,12 +2580,6 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, ImportingFilePath, nil);
   end;
 
-  { Every spelling of one file reaches one record. The read check judges the
-    spelling this request named, which the address was just verified to
-    name as well. }
-  RequestedFilePath := ResolvedPath;
-  ResolvedPath := ModuleAddressOf(ResolvedPath);
-
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, ImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(ResolvedPath);
@@ -2651,7 +2591,7 @@ begin
   { Judged before any cache: a module already loaded — by the host, or through
     another request — is no reason to serve it to a request that may not read
     it. }
-  EnforceHostRead(RequestedModulePath, RequestedFilePath, ImportingFilePath,
+  EnforceHostRead(RequestedModulePath, ResolvedPath, ImportingFilePath,
     PackageRoot, not IsComputedRequest,
     IsHostRequest(RequestedModulePath, ImportingFilePath));
 
@@ -2882,7 +2822,7 @@ var
   IsComputedRequest: Boolean;
   ModuleRequest: string;
   RequestedModulePath: string;
-  PackageRoot, RequestedFilePath, ResolvedPath: string;
+  PackageRoot, ResolvedPath: string;
   SourceValue: TGocciaValue;
   VirtualContentType: TGocciaVirtualModuleContentType;
 begin
@@ -2935,10 +2875,6 @@ begin
       raise TGocciaRuntimeError.Create(E.Message, 0, 0, AImportingFilePath, nil);
   end;
 
-  { As InstantiateModule: one record per file. }
-  RequestedFilePath := ResolvedPath;
-  ResolvedPath := ModuleAddressOf(ResolvedPath);
-
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(ResolvedPath);
@@ -2946,7 +2882,7 @@ begin
   CacheKey := ResolvedPath;
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
-  EnforceHostRead(RequestedModulePath, RequestedFilePath, AImportingFilePath,
+  EnforceHostRead(RequestedModulePath, ResolvedPath, AImportingFilePath,
     PackageRoot, not IsComputedRequest,
     IsHostRequest(RequestedModulePath, AImportingFilePath));
   if FModuleSourceValues.TryGetValue(CacheKey, SourceValue) then
@@ -3315,7 +3251,7 @@ var
   ModuleRequest: string;
   IsHostOwned: Boolean;
   RequestedModulePath: string;
-  PackageRoot, RequestedFilePath, ResolvedPath: string;
+  PackageRoot, ResolvedPath: string;
   Seen: TOrderedStringMap<Boolean>;
 begin
   ModuleRequest := AModulePath;
@@ -3349,10 +3285,6 @@ begin
     end;
   end;
 
-  { As InstantiateModule: one record per file. }
-  RequestedFilePath := ResolvedPath;
-  ResolvedPath := ModuleAddressOf(ResolvedPath);
-
   IsHostOwned := IsHostOwnedLoad(ResolvedPath, AImportingFilePath);
   if IsHostOwned then
     MarkHostOwnedAddress(ResolvedPath);
@@ -3361,7 +3293,7 @@ begin
   if AttributeType <> '' then
     CacheKey := EncodeImportSpecifierAttribute(ResolvedPath, AttributeType);
 
-  EnforceHostRead(RequestedModulePath, RequestedFilePath, AImportingFilePath,
+  EnforceHostRead(RequestedModulePath, ResolvedPath, AImportingFilePath,
     PackageRoot, not IsComputedRequest,
     IsHostRequest(RequestedModulePath, AImportingFilePath));
 
