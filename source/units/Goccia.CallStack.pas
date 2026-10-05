@@ -54,7 +54,13 @@ type
     procedure Push(const AFunctionName, AFilePath: string; const ALine, AColumn: Integer);
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
+    // The caller makes room first (Count < Capacity): the VM grows this
+    // stack itself, through SetCapacity, so that the growth is charged to
+    // --max-memory with its own stacks (ADR 0130, Amendment 1).
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
+    // Resizes the frame records to ACapacity entries, which must be at least
+    // Count. Used to grow ahead of PushTemplate and to shrink an idle stack.
+    procedure SetCapacity(const ACapacity: Integer);
     { Stamps the currently executing frame with a source position.
 
       A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
@@ -97,6 +103,7 @@ type
       out AFilePath: string; out ALine, AColumn: Integer): Boolean;
 
     property Count: Integer read FCount;
+    property Capacity: Integer read FCapacity;
   end;
 
 implementation
@@ -137,7 +144,13 @@ end;
 
 procedure TGocciaCallStack.Grow;
 begin
-  FCapacity := FCapacity * 2;
+  SetCapacity(FCapacity * 2);
+end;
+
+procedure TGocciaCallStack.SetCapacity(const ACapacity: Integer);
+begin
+  Assert(ACapacity >= FCount, 'Call stack capacity below its frame count');
+  FCapacity := ACapacity;
   SetLength(FFrames, FCapacity);
 end;
 
@@ -162,8 +175,7 @@ procedure TGocciaCallStack.PushTemplate(const ATemplate: Pointer; const AFallbac
 var
   Frame: PGocciaCallFrame;
 begin
-  if FCount >= FCapacity then
-    Grow;
+  Assert(FCount < FCapacity, 'PushTemplate without room on the call stack');
   Frame := @FFrames[FCount];
   Frame^.Template := ATemplate;
   if Pointer(Frame^.FunctionName) <> nil then

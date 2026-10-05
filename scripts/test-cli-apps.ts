@@ -11693,11 +11693,19 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
 // charged nor gated before, and this script grew until the kernel's OOM
 // killer stopped it (#1472). The refusal must be a catchable RangeError, and
 // the charge must be given back once the recursion has unwound: the 24 MiB
-// ArrayBuffer after it does not fit beside the ~56 MiB the stacks hold at the
+// ArrayBuffer after it does not fit beside the ~44 MiB the stacks hold at the
 // refusal. --max-instructions is only the backstop that keeps a regression
 // from taking the CI host with it: the refusal needs about 1M instructions
 // here, while 4M without one reach ~800k frames and ~340 MiB resident, which
 // fails the RSS ceiling below.
+//
+// The ceiling must also bound what the process holds when the RangeError
+// fires (ADR 0130, Amendment 1): the thread's call-stack and
+// execution-context records are charged with the stacks, every stack is
+// charged for its capacity, and a growth leaves room under the ceiling to copy
+// the largest stack. Peak RSS is compared with an idle run of the same binary,
+// so that the bound does not depend on how much a platform's runtime and
+// libraries take before the script starts.
 await section("Memory budget: unbounded bytecode recursion is refused at the ceiling...", async () => {
   const tmp = makeTmp();
   try {
@@ -11724,16 +11732,25 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     const refused = run.output.match(/RangeError: Maximum call stack size exceeded at (\d+)/);
     if (!refused)
       throw new Error(`Expected a caught "Maximum call stack size exceeded" RangeError:\n${run.output}`);
-    // Measured at 195,413 frames. A refusal far earlier would come from
+    // Measured at 177,478 frames. A refusal far earlier would come from
     // something other than the ceiling.
     if (Number(refused[1]) < 100000)
       throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
     if (!run.output.includes(`after ${24 * 1024 * 1024}`))
       throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
-    // Measured ~147 MiB: the charged stacks, the per-frame call-stack and
-    // execution-context entries the charge does not cover, and the
-    // RangeError's stack trace, which lists every frame.
-    assertPeakRssBelow(run, "unbounded bytecode recursion", 256 * 1024 * 1024);
+    const idle = join(tmp, "idle.js");
+    writeFileSync(idle, 'console.log("idle");\n');
+    const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    // Measured RECURSION_RSS above an idle run's ~11 MiB. Before the call-stack
+    // records and the stack copies were charged, the same run held ~146 MiB
+    // above it, 2.3 times the ceiling.
+    if (idleRun.peakRssBytes !== null)
+      assertPeakRssBelow(
+        run,
+        "unbounded bytecode recursion, above an idle run",
+        idleRun.peakRssBytes + 1.2 * 64 * 1024 * 1024,
+      );
 
     // A heap that fills most of the ceiling must not turn an ordinary
     // recursion into a stack overflow: small stacks may still grow into the

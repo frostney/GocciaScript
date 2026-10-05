@@ -26,6 +26,7 @@ type
     FEntries: array of TGocciaBytecodeHandlerEntry;
     FCount: Integer;
   public
+    // The caller makes room first (Count < Capacity), through SetCapacity.
     procedure Push(const ACatchIP: Integer; const ACatchRegister: UInt16;
       const AFrameDepth: Integer;
       const AKind: TGocciaBytecodeHandlerKind = bhkCatch);
@@ -36,6 +37,12 @@ type
       const AFrameDepth: Integer);
     function Peek: TGocciaBytecodeHandlerEntry;
     function IsEmpty: Boolean;
+    function Capacity: Integer; {$IFDEF FPC}inline;{$ENDIF}
+    // Resizes the entries to ACapacity, at least Count. The VM grows the
+    // stack through this before Push and RestoreFrom need room, so that the
+    // growth is charged to --max-memory with its other stacks (ADR 0130,
+    // Amendment 1).
+    procedure SetCapacity(const ACapacity: Integer);
     property Count: Integer read FCount;
   end;
 
@@ -112,13 +119,23 @@ procedure TGocciaBytecodeHandlerStack.Push(const ACatchIP: Integer;
   const ACatchRegister: UInt16; const AFrameDepth: Integer;
   const AKind: TGocciaBytecodeHandlerKind);
 begin
-  if FCount >= Length(FEntries) then
-    SetLength(FEntries, FCount * 2 + 8);
+  Assert(FCount < Length(FEntries), 'Handler push without room');
   FEntries[FCount].CatchIP := ACatchIP;
   FEntries[FCount].CatchRegister := ACatchRegister;
   FEntries[FCount].FrameDepth := AFrameDepth;
   FEntries[FCount].Kind := AKind;
   Inc(FCount);
+end;
+
+function TGocciaBytecodeHandlerStack.Capacity: Integer;
+begin
+  Result := Length(FEntries);
+end;
+
+procedure TGocciaBytecodeHandlerStack.SetCapacity(const ACapacity: Integer);
+begin
+  Assert(ACapacity >= FCount, 'Handler stack capacity below its count');
+  SetLength(FEntries, ACapacity);
 end;
 
 procedure TGocciaBytecodeHandlerStack.Pop;

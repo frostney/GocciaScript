@@ -28,6 +28,27 @@ describe.runIf(hasGoccia)("stack memory after a deep recursion", () => {
     expect(Goccia.gc.bytesAllocated - before).toBeLessThan(32 * 1024);
   });
 
+  test("is given back after a recursion through try blocks", () => {
+    // Each level holds an exception handler as well as its frame.
+    const guarded = (n) => {
+      try {
+        return n === 0 ? 0 : 1 + guarded(n - 1);
+      } catch (error) {
+        throw error;
+      }
+    };
+    runAWhile();
+    Goccia.gc();
+    const before = Goccia.gc.bytesAllocated;
+
+    expect(guarded(2000)).toBe(2000);
+    expect(runAWhile()).toBe(4096);
+    Goccia.gc();
+
+    // The handlers alone hold about 32 KiB at that depth.
+    expect(Goccia.gc.bytesAllocated - before).toBeLessThan(16 * 1024);
+  });
+
   test("is given back while a native callback that recursed is still running", () => {
     const results = [1, 2, 3].map((x) => {
       const depth = deep(2000);
