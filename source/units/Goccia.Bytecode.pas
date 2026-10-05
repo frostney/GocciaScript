@@ -182,12 +182,16 @@ const
   //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
   //               declaration's module request in C, so a missing-export
   //               SyntaxError names the specifier, not the host path.
-  //   v82 -> v83: a public auto-accessor compiles to a private storage field
+  //   v82 -> v83: a module-source entry records its exports in the module
+  //               export table, which the host binds before the entry's
+  //               imports evaluate. Each entry adds a kind tag, a module
+  //               request and an import name after its name and local slot.
+  //   v83 -> v84: a public auto-accessor compiles to a private storage field
   //               and a getter/setter pair defined with OP_DEFINE_ACCESSOR_*
   //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
   //               declares private auto-accessor names, and
   //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
-  GOCCIA_FORMAT_VERSION = 83;
+  GOCCIA_FORMAT_VERSION = 84;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

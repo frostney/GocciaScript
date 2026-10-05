@@ -87,7 +87,9 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AInferredNameKeyReg: Integer = -1);
+procedure CompileValueWithComputedName(const ACtx: TGocciaCompilationContext;
+  const AExpression: TGocciaExpression; const ADest, AKeyReg: UInt16);
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
@@ -5186,7 +5188,7 @@ var
   FuncIdx: UInt16;
   MethodReg: UInt16;
   MethodNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
   DisplayName: string;
   OldDerivedGuard: Boolean;
@@ -5210,7 +5212,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5218,8 +5219,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5260,15 +5259,7 @@ begin
     EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
       UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5438,8 +5429,7 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5612,8 +5602,7 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5659,7 +5648,7 @@ var
   FuncIdx: UInt16;
   FnReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -5679,7 +5668,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5687,8 +5675,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5720,15 +5706,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
     Length(AMethod.Parameters));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -6212,10 +6190,41 @@ begin
     ACtx, AExpression, ADest, AInferredName);
 end;
 
+// The value of a property or field whose key is computed: an anonymous
+// function or class is named from the key in AKeyReg (ES2026 §8.4.5
+// NamedEvaluation). A class takes the name during its own evaluation; a
+// function, whose body cannot run first, once it exists.
+procedure CompileValueWithComputedName(const ACtx: TGocciaCompilationContext;
+  const AExpression: TGocciaExpression; const ADest, AKeyReg: UInt16);
+begin
+  if not Assigned(AExpression) then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ADest, 0));
+    Exit;
+  end;
+
+  if (AExpression is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpression).ClassDefinition.Name = '') then
+  begin
+    // CompileExpression maps the line before it dispatches; this path
+    // bypasses it, so coverage still sees the class's line.
+    EmitLineMapping(ACtx, AExpression.Line, AExpression.Column);
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AExpression).ClassDefinition, ADest, '',
+      AKeyReg);
+    Exit;
+  end;
+
+  ACtx.CompileExpression(AExpression, ADest);
+  if IsAnonymousFunctionNameInitializer(AExpression) then
+    EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest, AKeyReg,
+      FUNCTION_NAME_PREFIX_NONE));
+end;
+
 procedure CompileStaticFieldInitializerExpression(
   const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
   const AExpression: TGocciaExpression; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AInferredNameKeyReg: Integer = -1);
 var
   ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
@@ -6242,8 +6251,12 @@ begin
   try
     ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
-    CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
-      AInferredName);
+    if AInferredNameKeyReg >= 0 then
+      CompileValueWithComputedName(StrictCtx, AExpression, ADest,
+        UInt16(AInferredNameKeyReg))
+    else
+      CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
+        AInferredName);
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx,
@@ -6353,8 +6366,6 @@ begin
       ValReg := ChildScope.AllocateRegister;
       if AClassDef.FFieldOrder[I].IsComputed then
       begin
-        CompileFieldValueWithInferredName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, '');
         KeyReg := ChildScope.AllocateRegister;
         ComputedKeyName := FindComputedFieldKeyLocalName(
           AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
@@ -6363,10 +6374,8 @@ begin
           raise Exception.Create('Compiler error: computed class field key was not captured');
         EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
           UInt16(UpvalueIdx)));
-        if IsAnonymousFunctionNameInitializer(
-           AClassDef.FFieldOrder[I].FieldInitializer) then
-          EmitInstruction(ChildCtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-            KeyReg, 0));
+        CompileValueWithComputedName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
         EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
           KeyReg, ValReg));
         ChildScope.FreeRegister;
@@ -6879,17 +6888,16 @@ begin
       end
       else
         KeyReg := 0;
-      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+      if not Assigned(ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0))
+      else if ClassDef.FElements[I].IsComputed then
+        CompileStaticFieldInitializerExpression(
+          ACtx, ClassReg, ClassDef.FElements[I].FieldInitializer, ValReg, '',
+          KeyReg)
+      else
         CompileStaticFieldInitializerExpression(
           ACtx, ClassReg, ClassDef.FElements[I].FieldInitializer, ValReg,
-          ClassFieldInferredName(ClassDef.FElements[I]))
-      else
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-      if ClassDef.FElements[I].IsComputed and
-         IsAnonymousFunctionNameInitializer(
-           ClassDef.FElements[I].FieldInitializer) then
-        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-          KeyReg, 0));
+          ClassFieldInferredName(ClassDef.FElements[I]));
       { An auto-accessor's value goes to its private storage, which for a
         private auto-accessor is its own name. }
       if ClassDef.FElements[I].Kind = cekAccessor then
@@ -6956,7 +6964,7 @@ end;
 
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AInferredNameKeyReg: Integer = -1);
 var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg, KeyReg: UInt16;
@@ -6994,6 +7002,13 @@ begin
   else
     NameIdx := ACtx.Template.AddConstantString('<anonymous>');
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ADest, NameIdx));
+  { ES2026 §15.7.14 ClassDefinitionEvaluation calls SetFunctionName before it
+    evaluates any class element. A name that NamedEvaluation takes from a
+    computed key exists only at run time, so it is applied here, before the
+    first static field or static block can read or freeze the class. }
+  if (not HasNameBinding) and (AInferredNameKeyReg >= 0) then
+    EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest,
+      UInt16(AInferredNameKeyReg), FUNCTION_NAME_PREFIX_NONE));
   KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
@@ -7102,17 +7117,16 @@ begin
       end
       else
         KeyReg := 0;
-      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+      if not Assigned(ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0))
+      else if ClassDef.FElements[I].IsComputed then
+        CompileStaticFieldInitializerExpression(
+          ACtx, ADest, ClassDef.FElements[I].FieldInitializer, ValReg, '',
+          KeyReg)
+      else
         CompileStaticFieldInitializerExpression(
           ACtx, ADest, ClassDef.FElements[I].FieldInitializer, ValReg,
-          ClassFieldInferredName(ClassDef.FElements[I]))
-      else
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-      if ClassDef.FElements[I].IsComputed and
-         IsAnonymousFunctionNameInitializer(
-           ClassDef.FElements[I].FieldInitializer) then
-        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-          KeyReg, 0));
+          ClassFieldInferredName(ClassDef.FElements[I]));
       { An auto-accessor's value goes to its private storage, which for a
         private auto-accessor is its own name. }
       if ClassDef.FElements[I].Kind = cekAccessor then

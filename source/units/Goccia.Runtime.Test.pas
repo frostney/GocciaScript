@@ -14,6 +14,8 @@ uses
   Goccia.Engine,
   Goccia.Error,
   Goccia.Error.Messages,
+  Goccia.Executor,
+  Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
   Goccia.ModuleResolver,
   Goccia.Modules,
@@ -24,6 +26,7 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.JSON5,
+  Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -70,6 +73,11 @@ type
     procedure TestRuntimeRunScriptFromFileLoadsFile;
     procedure TestMalformedUTF8ModuleSurfacesGuestError;
     procedure TestMalformedUTF8ModuleRejectsDynamicImport;
+    procedure CheckFailedEntryRethrowsItsError(const AExecutor: TGocciaExecutor;
+      const ACompileAndRun: Boolean; const ATag: string);
+    procedure TestFailedEntryRethrowsItsErrorExecuteInterpreted;
+    procedure TestFailedEntryRethrowsItsErrorExecuteBytecode;
+    procedure TestFailedEntryRethrowsItsErrorBytecodeRun;
   public
     procedure SetupTests; override;
   end;
@@ -133,6 +141,15 @@ begin
   Test('a dynamic import of a malformed-UTF-8 module rejects in guest code ' +
     'without the host path',
     TestMalformedUTF8ModuleRejectsDynamicImport);
+  Test('an import of an entry whose run threw rethrows its error ' +
+    '(Execute, interpreted)',
+    TestFailedEntryRethrowsItsErrorExecuteInterpreted);
+  Test('an import of an entry whose run threw rethrows its error ' +
+    '(Execute, bytecode)',
+    TestFailedEntryRethrowsItsErrorExecuteBytecode);
+  Test('an import of an entry whose run threw rethrows its error ' +
+    '(compiled bytecode run)',
+    TestFailedEntryRethrowsItsErrorBytecodeRun);
 end;
 
 function TRuntimeTests.CreateEmptySource: TStringList;
@@ -688,6 +705,101 @@ begin
     Executor.Free;
     DeleteFile(BadPath);
   end;
+end;
+
+{ ES2026 §16.2.1.6.1.3 Evaluate: a module whose evaluation threw keeps the
+  error, and a later import of it throws that same value instead of handing
+  back the record of the incomplete run or evaluating the file again. The
+  entry is registered as a module, so the host's import of its own path after
+  a failed run must do the same. }
+procedure TRuntimeTests.CheckFailedEntryRethrowsItsError(
+  const AExecutor: TGocciaExecutor; const ACompileAndRun: Boolean;
+  const ATag: string);
+var
+  Engine: TGocciaEngine;
+  EntryError, ImportError: TGocciaValue;
+  EntryPath: string;
+  GlobalObject: TGocciaObjectValue;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+  Source: TStringList;
+begin
+  EntryPath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+    'goccia-failed-entry-' + ATag + '.mjs';
+  Source := TStringList.Create;
+  Source.Add('globalThis.entryRuns = (globalThis.entryRuns ?? 0) + 1;');
+  Source.Add('export const answer = 42;');
+  Source.Add('globalThis.entryError = new Error("entry failed");');
+  Source.Add('throw globalThis.entryError;');
+  WriteUTF8FileText(EntryPath, Source.Text);
+  Engine := nil;
+  try
+    Engine := TGocciaEngine.Create(EntryPath, Source, AExecutor,
+      TGocciaCapabilities.None.Allow(gcRead, GetTempDir(False)));
+    { The host filesystem provider, which knows the file's age. }
+    AttachRuntime(Engine);
+    if AExecutor is TGocciaBytecodeExecutor then
+      TGocciaBytecodeExecutor(AExecutor).GlobalBackedTopLevel := False;
+
+    EntryError := nil;
+    try
+      if ACompileAndRun then
+      begin
+        Options := TGocciaSourcePipeline.DefaultOptions;
+        Options.SourceType := Engine.SourceType;
+        Parsed := TGocciaSourcePipeline.Parse(Source, EntryPath, Options);
+        try
+          Engine.RunModuleForSourceType(
+            Engine.CompileModule(Parsed.ProgramNode), EntryPath);
+        finally
+          Parsed.Free;
+        end;
+      end
+      else
+        Engine.Execute;
+    except
+      on E: Exception do
+        EntryError := TGocciaObjectValue(Engine.Realm.GlobalObject)
+          .GetProperty('entryError');
+    end;
+    Expect<Boolean>(Assigned(EntryError) and
+      (EntryError is TGocciaObjectValue)).ToBe(True);
+
+    ImportError := nil;
+    try
+      Engine.ModuleLoader.LoadModule(EntryPath, EntryPath);
+    except
+      on E: TGocciaThrowValue do
+        ImportError := E.Value;
+    end;
+    Expect<Boolean>(ImportError = EntryError).ToBe(True);
+    GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
+    Expect<Double>(GlobalObject.GetProperty('entryRuns').ToNumberLiteral.Value)
+      .ToBe(1);
+  finally
+    Engine.Free;
+    AExecutor.Free;
+    Source.Free;
+    DeleteFile(EntryPath);
+  end;
+end;
+
+procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorExecuteInterpreted;
+begin
+  CheckFailedEntryRethrowsItsError(TGocciaInterpreterExecutor.Create, False,
+    'execute-interpreted');
+end;
+
+procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorExecuteBytecode;
+begin
+  CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, False,
+    'execute-bytecode');
+end;
+
+procedure TRuntimeTests.TestFailedEntryRethrowsItsErrorBytecodeRun;
+begin
+  CheckFailedEntryRethrowsItsError(TGocciaBytecodeExecutor.Create, True,
+    'bytecode-run');
 end;
 
 begin
