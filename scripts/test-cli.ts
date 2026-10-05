@@ -3203,6 +3203,34 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
 }
 
+console.log("--max-stack (imported module top level)...");
+// A module's top level is not a call, wherever it is imported from: each
+// module counts its nested calls before the RangeError and prints them.
+{
+  const tmp = mkdtemp("goccia-max-stack-import-");
+  try {
+    const count = (label: string) =>
+      `let n = 0; const f = () => { n++; f(); }; try { f(); } catch (e) { console.log("${label}", n, e.name); }\n`;
+    writeFileSync(join(tmp, "dep.js"), `${count("dep")}export const dep = 1;\n`);
+    writeFileSync(join(tmp, "inner.js"), `${count("inner")}export const inner = 1;\n`);
+    writeFileSync(join(tmp, "outer.js"), `import { inner } from "./inner.js";\n${count("outer")}export const outer = 1;\n`);
+    writeFileSync(join(tmp, "dynamic.js"), `${count("dynamic")}export const dynamic = 1;\n`);
+    writeFileSync(
+      join(tmp, "main.js"),
+      `import { dep } from "./dep.js";\nimport { outer } from "./outer.js";\n${count("main")}await import("./dynamic.js");\n`,
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const out = await $`${RUNNER} ${join(tmp, "main.js")} --max-stack=10 --mode=${mode}`.nothrow().text();
+      for (const label of ["dep", "inner", "outer", "main", "dynamic"]) {
+        if (!containsLine(out, `${label} 10 RangeError`))
+          throw new Error(`--max-stack=10 (${mode}): ${label}.js's top level should allow 10 nested calls, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("--max-stack (bytecode trampoline)...");
 {
   const src = "let n = 0; const f = () => { n++; if (n < 20000) f(); }; f(); console.log(n);";
