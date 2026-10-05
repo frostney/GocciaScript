@@ -749,6 +749,45 @@ begin
     (ExportDefault.Expression is TGocciaFunctionExpression);
 end;
 
+{ ES2026 §10.2.11 FunctionDeclarationInstantiation step 29.c.i.3 (and B.3.2.1
+  for a block function's var binding): each var the body declares starts as
+  undefined. Its register cannot be trusted to hold undefined on entry: the
+  call copies arguments past the last parameter into the registers above the
+  parameters, and the parameter preamble uses them for destructuring
+  temporaries. So every var that hoisting declared is set to undefined here,
+  from local AFirstLocal on, except the name of a body function declaration,
+  whose function object is stored into it before the body runs. A var named
+  like a parameter, or one the parameter preamble already declared, is not a
+  new local and keeps its value. A function body without a var emits
+  nothing. }
+procedure EmitHoistedVarInitialization(const ACtx: TGocciaCompilationContext;
+  const ABlock: TGocciaBlockStatement; const AFirstLocal: Integer);
+var
+  IsFunctionName: array of Boolean;
+  FunctionDecl: TGocciaFunctionDeclaration;
+  I, LocalIdx: Integer;
+  Local: PGocciaCompilerLocal;
+begin
+  if ACtx.Scope.LocalCount <= AFirstLocal then
+    Exit;
+  SetLength(IsFunctionName, ACtx.Scope.LocalCount - AFirstLocal);
+  for I := 0 to ABlock.Nodes.Count - 1 do
+  begin
+    FunctionDecl := GetFunctionDecl(ABlock.Nodes[I]);
+    if not Assigned(FunctionDecl) then
+      Continue;
+    LocalIdx := ACtx.Scope.ResolveLocal(FunctionDecl.Name);
+    if LocalIdx >= AFirstLocal then
+      IsFunctionName[LocalIdx - AFirstLocal] := True;
+  end;
+  for I := AFirstLocal to ACtx.Scope.LocalCount - 1 do
+  begin
+    Local := ACtx.Scope.LocalAt(I);
+    if Local^.IsVar and not IsFunctionName[I - AFirstLocal] then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local^.Slot, 0, 0));
+  end;
+end;
+
 procedure TGocciaCompiler.DoCompileFunctionBody(const ABody: TGocciaASTNode);
 var
   Block: TGocciaBlockStatement;
@@ -760,6 +799,7 @@ var
   SavedFinally: TObject;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
+  HoistedVarStart: Integer;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
@@ -772,9 +812,11 @@ begin
         NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
 
       // Hoist var declarations to function scope
+      HoistedVarStart := FCurrentScope.LocalCount;
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope,
           NonStrictBlockFunctionVarBindingsEnabled, True);
+      EmitHoistedVarInitialization(BuildContext, Block, HoistedVarStart);
 
       // Check if there are function declarations to hoist
       HasFunctionDecl := False;

@@ -160,6 +160,7 @@ type
     procedure TestStrictTypesHintOnlyEnforcedLocals;
     procedure TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
     procedure TestSwitchExitJumpsCloseUpvalues;
+    procedure TestBodyVarsStartUndefined;
   public
     procedure SetupTests; override;
   end;
@@ -309,6 +310,8 @@ begin
   Test('Strict var redeclaration in a catch block keeps its type on the var',
     TestStrictVarRedeclarationInCatchKeepsTypeOnVar);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
+  Test('Body vars start undefined; other bindings emit nothing',
+    TestBodyVarsStartUndefined);
 end;
 
 procedure TTestCompiler.TestASTSpansUseUTF16CodeUnitOffsets;
@@ -2877,6 +2880,41 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestBodyVarsStartUndefined;
+
+  function LoadUndefinedCount(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Every function body ends with an implicit `return undefined`: one
+  // OP_LOAD_UNDEFINED. Each var the body declares adds one, since its register
+  // may hold a surplus argument or a parameter-destructuring temporary.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var x, y; p.r = a * x; };')).ToBe(3);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = ({ a }, p) => { if (p) { var x; } p.r = a * x; };')).ToBe(2);
+  // A body without a var, and a var naming a parameter, add nothing.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { const x = a; p.r = a * x; };')).ToBe(1);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var a; p.r = a * a; };')).ToBe(1);
 end;
 
 begin
