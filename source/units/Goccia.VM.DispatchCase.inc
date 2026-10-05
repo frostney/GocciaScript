@@ -3390,6 +3390,24 @@
             SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
         end;
 
+      // ES2026 §9.1.1.5.5 CreateImportBinding(envRec, N, M, N2): the global
+      // scope keeps an immutable indirect binding to the module's export, so
+      // a later script against that scope reads the export's current value.
+      // An export the module cannot resolve leaves the predeclared name
+      // uninitialized.
+      OP_CREATE_GLOBAL_IMPORT_BINDING:
+        begin
+          GlobalName := Template.GetConstantUnchecked(C).StringValue;
+          if Assigned(FGlobalScope) and (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
+             TGocciaModuleNamespaceObject(
+               FRegisters[A].ObjectValue).CanResolveExport(GlobalName) then
+            FGlobalScope.CreateImportBinding(
+              Template.GetConstantUnchecked(B).StringValue,
+              TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module,
+              GlobalName);
+        end;
+
       OP_EXPORT:
         begin
           if Assigned(Template.DebugInfo) and

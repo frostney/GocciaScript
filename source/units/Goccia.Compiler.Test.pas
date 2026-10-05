@@ -1683,6 +1683,8 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);

@@ -1240,8 +1240,7 @@ begin
   for I := AStartIndex to AScope.LocalCount - 1 do
   begin
     Local := AScope.LocalAt(I);
-    if (Local^.Depth <> 0) or Local^.IsVar or Local^.IsImportBinding or
-       (Local^.Name = '__receiver') then
+    if (Local^.Depth <> 0) or Local^.IsVar or (Local^.Name = '__receiver') then
       Continue;
 
     if Local^.IsConst then

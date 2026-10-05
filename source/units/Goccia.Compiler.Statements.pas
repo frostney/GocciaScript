@@ -4415,9 +4415,9 @@ var
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt16;
   Captured: array of Boolean;
-  Names: array of string;
+  Names, LocalNames: array of string;
   EncodedPath: string;
-  HasNamespace, NamespaceCaptured: Boolean;
+  HasNamespace, NamespaceCaptured, InitializesGlobalBindings: Boolean;
   I, Count: Integer;
 
   function ImportSlot(const AName: string): UInt16;
@@ -4461,8 +4461,15 @@ begin
   SetLength(Slots, Count);
   SetLength(Captured, Count);
   SetLength(Names, Count);
+  SetLength(LocalNames, Count);
   EncodedPath := EncodeImportSpecifierAttribute(AStmt.ModulePath,
     AStmt.AttributeType);
+  // A linked module's environment already holds its import bindings. A
+  // global-backed script has no link step, so the declaration initializes the
+  // names predeclared in the global scope, where a later script against that
+  // scope (the next REPL input) resolves them.
+  InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
 
   if HasNamespace then
   begin
@@ -4476,6 +4483,7 @@ begin
   begin
     Slots[I] := ImportSlot(Pair.Key);
     Names[I] := Pair.Value;
+    LocalNames[I] := Pair.Key;
     if AStmt.Phase = icpEvaluation then
       MarkImportSlot(Pair.Key, Pair.Value)
     else
@@ -4497,6 +4505,8 @@ begin
   begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
     SyncCapturedImportSlot(NamespaceSlot, NamespaceCaptured);
+    if InitializesGlobalBindings then
+      EmitGlobalDefine(ACtx, NamespaceSlot, AStmt.NamespaceName, True);
   end;
 
   for I := 0 to Count - 1 do
@@ -4522,6 +4532,17 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;
+
+    if not InitializesGlobalBindings then
+      Continue;
+    if AStmt.Phase = icpEvaluation then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(LocalNames[I]);
+      EmitInstruction(ACtx, EncodeABC(OP_CREATE_GLOBAL_IMPORT_BINDING, ModReg,
+        NameIdx, ACtx.Template.AddConstantString(Names[I])));
+    end
+    else
+      EmitGlobalDefine(ACtx, Slots[I], LocalNames[I], True);
   end;
 
   ACtx.Scope.FreeRegister;
