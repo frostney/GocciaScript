@@ -294,21 +294,6 @@ begin
   Result := nil;
 end;
 
-function HasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean;
-var
-  Current: TGocciaObjectValue;
-begin
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
-  end;
-  Result := False;
-end;
-
 function HasMatchProperty(const ASubject, AKey: TGocciaValue): Boolean;
 var
   ResolvedKey: TGocciaValue;
@@ -324,22 +309,18 @@ begin
   begin
     if ASubject is TGocciaObjectValue then
     begin
-      if ASubject is TGocciaProxyValue then
-        Exit(TGocciaProxyValue(ASubject).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)));
-      Exit(HasSymbolPropertyInChain(TGocciaObjectValue(ASubject),
-        TGocciaSymbolValue(ResolvedKey)));
+      Exit(TGocciaObjectValue(ASubject).HasSymbolPropertyInChain(TGocciaSymbolValue(ResolvedKey)));
     end;
 
     BoxedSubject := BoxPrimitiveForMatch(ASubject);
     if Assigned(BoxedSubject) then
-      Exit(HasSymbolPropertyInChain(BoxedSubject, TGocciaSymbolValue(ResolvedKey)));
+      Exit(BoxedSubject.HasSymbolPropertyInChain(TGocciaSymbolValue(ResolvedKey)));
 
     if ASubject is TGocciaSymbolValue then
     begin
       SymbolPrototype := TGocciaSymbolValue.SharedPrototype;
       if SymbolPrototype is TGocciaObjectValue then
-        Exit(HasSymbolPropertyInChain(TGocciaObjectValue(SymbolPrototype),
-          TGocciaSymbolValue(ResolvedKey)));
+        Exit(TGocciaObjectValue(SymbolPrototype).HasSymbolPropertyInChain(TGocciaSymbolValue(ResolvedKey)));
     end;
 
     Exit(False);

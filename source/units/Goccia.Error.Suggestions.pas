@@ -235,7 +235,6 @@ resourcestring
   // Runtime errors — object property constraints
   SSuggestPropertyHasOnlyGetter = 'the property has only a getter and no setter defined';
   SSuggestObjectNotExtensible = 'the object has been frozen, sealed, or marked non-extensible with Object.preventExtensions()';
-  SSuggestPrototypeChainTooDeep = 'check for circular prototype chains';
   SSuggestPropertyDescriptorObject = 'pass an object with writable, enumerable, configurable, value, get, or set properties';
 
   // Runtime errors — string

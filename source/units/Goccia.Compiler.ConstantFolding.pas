@@ -635,6 +635,14 @@ begin
   Result := True;
 end;
 
+function IsCoverageBranchExpression(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := (AExpr is TGocciaConditionalExpression) or
+    ((AExpr is TGocciaBinaryExpression) and
+     (TGocciaBinaryExpression(AExpr).Operator in
+       [gttAnd, gttOr, gttNullishCoalescing]));
+end;
+
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue): Boolean;
 begin
@@ -642,6 +650,13 @@ begin
   if not (ACtx.OptimizationOptions.EnableConstantFolding or
           ACtx.OptimizationOptions.EnableConstPropagation or
           ACtx.OptimizationOptions.EnableDeadBranchElimination) then
+    Exit(False);
+
+  // Coverage records the arms of a conditional or logical expression at its
+  // conditional jump. Folding one that a constant decides would emit no jump,
+  // and the untaken arm would vanish from the report instead of reading zero.
+  if ACtx.OptimizationOptions.PreserveCoverageShape and
+     IsCoverageBranchExpression(AExpr) then
     Exit(False);
 
   if AExpr is TGocciaLiteralExpression then
@@ -727,6 +742,11 @@ begin
   else if AExpr is TGocciaBinaryExpression then
   begin
     Binary := TGocciaBinaryExpression(AExpr);
+    // Dropping the short circuit would drop its branch records too.
+    if ACtx.OptimizationOptions.PreserveCoverageShape and
+       IsCoverageBranchExpression(Binary) then
+      Exit;
+
     LeftType := ExpressionType(ACtx.Scope, Binary.Left);
     RightType := ExpressionType(ACtx.Scope, Binary.Right);
 
