@@ -82,6 +82,8 @@ type
       const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string;
+      const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
@@ -1182,8 +1184,9 @@ begin
   until (not Assigned(Holder)) or (Holder.ClassType <> TGocciaObjectValue);
 end;
 
-// ES2026 §10.4.5.5 [[Get]](P, Receiver): only a canonical numeric string is
-// answered from the elements; every other key is OrdinaryGet.
+// ES2026 §10.4.5.5 [[Get]](P, Receiver) with this typed array as the receiver:
+// GetPropertyWithContext below, written out so a plain read, the hot case,
+// pays no second virtual call.
 function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
 var
   IsNegativeZero: Boolean;
@@ -1199,7 +1202,36 @@ begin
     Exit;
   end;
   if not TryGetNamedPropertyWithoutCall(AName, Result) then
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, Self);
+end;
+
+// ES2026 §10.4.5.5 [[Get]](P, Receiver): Reflect.get, a Proxy without a get
+// trap and a prototype walk from an exotic object reach a typed array here.
+// Every key that is not a canonical numeric string is OrdinaryGet, which calls
+// an accessor with the receiver: TryGetNamedPropertyWithoutCall computes the
+// built-in getters from this typed array's slots, so it stands in for them
+// only when this typed array is the receiver.
+function TGocciaTypedArrayValue.GetPropertyWithContext(const AName: string;
+  const AThisContext: TGocciaValue): TGocciaValue;
+var
+  IsNegativeZero: Boolean;
+  Index: Integer;
+  NumericIndex: Double;
+begin
+  // ES2026 §10.4.5.5 step 1: a canonical numeric string reads this typed
+  // array's element, or undefined for an invalid index, and never the
+  // receiver or the prototype.
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
+      Result := GetElementAsValue(Index)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+  if (AThisContext <> Self) or
+     not TryGetNamedPropertyWithoutCall(AName, Result) then
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean);
