@@ -40,8 +40,8 @@ stacks into `BytesAllocated`, so the heap and the stacks share one ceiling,
 and a deep recursion leaves less room for the heap.
 
 Growth is charged for everything a stack holds past its initial capacity
-(4,096 entries for the register, local-cell and argument stacks, 64 for the
-two frame stacks). The stacks may grow up to the memory-pressure line: the
+(64 entries for the register, local-cell and argument stacks, 8 for the
+frame stack and 64 for the closed-numeric frame stack, as set by PR #1483). The stacks may grow up to the memory-pressure line: the
 reserve below the ceiling (`MaxBytes / 8`, clamped to 16 KiB–16 MiB, now
 exposed as `TGarbageCollector.MemoryPressureReserve`) in which the VM collects
 at every pressure check.
@@ -196,7 +196,7 @@ is running and across a numeric self-recursion that grows the stacks again.
 `Goccia.GarbageCollector.Test` asserts that `TryChargeExternalBytes` neither
 collects nor latches pressure.
 
-PR #1483 lowers the initial capacities to 64 entries for the register,
-local-cell and argument stacks and 8 for the frame stack, so more calls take
-the growth path. The suite and the instruction-count comparison were also run
-with those capacities applied.
+PR #1483 lowered the initial capacities from 4,096 and 64 entries to 64 and
+8 while this change was in review, so more calls take the growth path. The
+suite and the instruction-count comparison were run with both sets of
+capacities.

@@ -679,13 +679,13 @@ end;
 procedure MarkTopLevelGlobalBackedLocals(const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth = 0) and (Local.Name <> '__receiver') and
-       not Local.IsImportBinding then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth = 0) and (Local^.Name <> '__receiver') and
+       not Local^.IsImportBinding then
       AScope.MarkGlobalBacked(I);
   end;
 end;
@@ -735,7 +735,7 @@ var
   StatementAbrupt: Boolean;
   SavedFinally: TObject;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
-  PredeclaredLocal: TGocciaCompilerLocal;
+  PredeclaredLocal: PGocciaCompilerLocal;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
@@ -771,10 +771,10 @@ begin
       for PredeclaredLexicalIndex := PredeclaredLexicalStart to
         FCurrentScope.LocalCount - 1 do
       begin
-        PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-        if not PredeclaredLocal.IsVar then
+        PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
+        if not PredeclaredLocal^.IsVar then
           EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
-            PredeclaredLocal.Slot, 0, 0));
+            PredeclaredLocal^.Slot, 0, 0));
       end;
 
       if HasFunctionDecl then
@@ -1175,12 +1175,12 @@ end;
 procedure MarkHoistedVarsGlobalBacked(const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth = 0) and (Local.Name <> '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth = 0) and (Local^.Name <> '__receiver') then
       AScope.MarkGlobalBacked(I);
   end;
 end;
@@ -1189,19 +1189,19 @@ procedure EmitHoistedGlobalVarDeclarations(const ACtx: TGocciaCompilationContext
   const AScope: TGocciaCompilerScope);
 var
   I: Integer;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
   NameIdx: UInt16;
 begin
   for I := 0 to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth <> 0) or (Local.Name = '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth <> 0) or (Local^.Name = '__receiver') then
       Continue;
 
-    NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local.Slot, 0, 0));
+    NameIdx := ACtx.Template.AddConstantString(Local^.Name);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local^.Slot, 0, 0));
     EmitInstruction(ACtx, EncodeABx(OP_DEFINE_GLOBAL_VAR_DECL_LONG,
-      Local.Slot, NameIdx));
+      Local^.Slot, NameIdx));
   end;
 end;
 
@@ -1210,22 +1210,22 @@ procedure EmitGlobalLexicalPredeclarations(const ACtx: TGocciaCompilationContext
 var
   I: Integer;
   OpCode: TGocciaOpCode;
-  Local: TGocciaCompilerLocal;
+  Local: PGocciaCompilerLocal;
   NameIdx: UInt16;
 begin
   for I := AStartIndex to AScope.LocalCount - 1 do
   begin
-    Local := AScope.GetLocal(I);
-    if (Local.Depth <> 0) or Local.IsVar or Local.IsImportBinding or
-       (Local.Name = '__receiver') then
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth <> 0) or Local^.IsVar or Local^.IsImportBinding or
+       (Local^.Name = '__receiver') then
       Continue;
 
-    if Local.IsConst then
+    if Local^.IsConst then
       OpCode := OP_PREDECLARE_GLOBAL_CONST_LONG
     else
       OpCode := OP_PREDECLARE_GLOBAL_LET_LONG;
-    NameIdx := ACtx.Template.AddConstantString(Local.Name);
-    EmitInstruction(ACtx, EncodeABx(OpCode, Local.Slot, NameIdx));
+    NameIdx := ACtx.Template.AddConstantString(Local^.Name);
+    EmitInstruction(ACtx, EncodeABx(OpCode, Local^.Slot, NameIdx));
   end;
 end;
 
@@ -1281,7 +1281,7 @@ var
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
-  PredeclaredLocal: TGocciaCompilerLocal;
+  PredeclaredLocal: PGocciaCompilerLocal;
 begin
   FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
@@ -1325,10 +1325,10 @@ begin
     for PredeclaredLexicalIndex := PredeclaredLexicalStart to
       FCurrentScope.LocalCount - 1 do
     begin
-      PredeclaredLocal := FCurrentScope.GetLocal(PredeclaredLexicalIndex);
-      if not PredeclaredLocal.IsVar then
+      PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
+      if not PredeclaredLocal^.IsVar then
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
-          PredeclaredLocal.Slot, 0, 0));
+          PredeclaredLocal^.Slot, 0, 0));
     end;
 
     // Check if there are function declarations to hoist

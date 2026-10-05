@@ -669,8 +669,14 @@ const
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
   // Initial capacities of the VM stacks. Growth past them is charged to the
   // collector, and a stack never shrinks below them (ADR 0130).
-  VM_INITIAL_STACK_SIZE = 4096;
-  VM_INITIAL_FRAME_STACK_SIZE = 64;
+  // The register, local-cell and argument arenas and the frame stack start
+  // small and double on demand (AcquireRegisters, AcquireLocalCells,
+  // AcquireArgumentWindow, EnsureRegisterCapacity, EnsureLocalCapacity,
+  // PushFrame). SetLength zero-fills the whole allocation, so a large initial
+  // size is paid on every engine boot even by a program that needs a handful
+  // of slots: three 4096-slot arenas cost about 30,000 instructions per VM.
+  VM_INITIAL_STACK_SIZE = 64;
+  VM_INITIAL_FRAME_STACK_SIZE = 8;
   VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE = 64;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
   // A pooled argument collection keeps its backing store only when the call
@@ -9553,6 +9559,17 @@ begin
       Prefix := 'set';
   else
     Prefix := '';
+  end;
+
+  { The compiler emits this for a class right after OP_NEW_CLASS, before any
+    class element, so the class still has its synthesized name; setting the
+    internal name keeps it synthesized and puts it in the class's error
+    messages too. }
+  if AFunction is TGocciaClassValue then
+  begin
+    TGocciaClassValue(AFunction).SetInferredName(
+      FunctionNameFromPropertyKey(AKey, Prefix));
+    Exit;
   end;
 
   TGocciaObjectValue(AFunction).DefineProperty(PROP_NAME,

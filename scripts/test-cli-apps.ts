@@ -11693,7 +11693,7 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
 // charged nor gated before, and this script grew until the kernel's OOM
 // killer stopped it (#1472). The refusal must be a catchable RangeError, and
 // the charge must be given back once the recursion has unwound: the 24 MiB
-// ArrayBuffer after it does not fit beside the ~47 MiB the stacks hold at the
+// ArrayBuffer after it does not fit beside the ~56 MiB the stacks hold at the
 // refusal. --max-instructions is only the backstop that keeps a regression
 // from taking the CI host with it: the refusal needs about 1M instructions
 // here, while 4M without one reach ~800k frames and ~340 MiB resident, which
