@@ -595,6 +595,51 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
   }
 }
 
+// -- Block-level function var binding skipped on a collision (bytecode) --------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation and §16.1.7
+// GlobalDeclarationInstantiation, web-compat steps (Annex B.3.2.1 and B.3.2.2
+// up to ES2025): a non-strict block-level function declaration gets a var
+// binding only if no parameter has its name and `var` in its place would not
+// be an early error; B.3.3 puts an `if` clause's function declaration in a
+// block of its own. The JavaScript suite under tests/ covers the shapes both
+// modes get right; the interpreter still lets these block functions write the
+// outer binding, so only bytecode is checked here.
+
+console.log("Bytecode block-level function var binding skipped on a collision...");
+{
+  const cases: [string, string, string][] = [
+    ["parameter with a default", "(() => { function g(a, b = 2) { { function a() {} } return typeof a + ':' + a; } return g(1); })()", "number:1"],
+    ["parameter with a default, switch case", "(() => { function g(a, b = 2) { switch (1) { case 1: function a() {} } return a; } return g(1); })()", "1"],
+    ["parameter, if clause", "(() => { function h(a) { if (true) function a() {} return a; } return h(1); })()", "1"],
+    ["parameter, else clause", "(() => { function h(a) { if (false) ; else function a() {} return a; } return h(1); })()", "1"],
+    ["if clause without a collision", "(() => { function h() { const before = typeof q; if (true) function q() { return 7; } return before + ':' + q(); } return h(); })()", "undefined:7"],
+    ["let in an enclosing block", "(() => { function f() { { let a = 1; { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["let loop head", "(() => { function f() { for (let a of [1]) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["destructured catch parameter", "(() => { function f() { try { throw {}; } catch ({ a }) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["two declarations in one block", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return typeof a; } return f(); })()", "undefined"],
+    ["same name in a nested block", "(() => { function f() { { function a() { return 1; } { function a() { return 2; } } } return a(); } return f(); })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const flags = ["--mode=bytecode", "--compat-var", "--compat-function", "--compat-non-strict-mode"];
+  const { exitCode, json } = runLoaderJson(source, flags);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode block function cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode block function (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  const scriptRun = runLoaderJson(
+    "const k = 1;\nif (true) function k() {}\nconsole.log(typeof k + ':' + k);\n",
+    flags,
+  );
+  if (scriptRun.exitCode !== 0 || scriptRun.json.output[0] !== "number:1")
+    throw new Error(`Bytecode script if-clause function named like a const expected number:1, got: ${JSON.stringify(scriptRun.json)}`);
+}
+
 // -- --compat-non-strict-mode (Loader + Bundler + TestRunner + Bare) -----------
 
 console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)...");

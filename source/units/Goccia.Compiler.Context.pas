@@ -39,6 +39,10 @@ type
   // Variable declaration -> bit (1 shl I) for each of its variables I whose
   // binding holds only Numbers (see Goccia.Compiler.NumericBindings).
   TNumberBindingProofMap = THashMap<TGocciaStatement, UInt64>;
+  // The non-strict block-level function declarations that also get a var
+  // binding (see Goccia.Compiler.BlockFunctions). A declaration is a key only
+  // when it gets one; the value is unused.
+  TBlockFunctionVarBindingSet = THashMap<TGocciaStatement, Boolean>;
 
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;
@@ -47,6 +51,7 @@ type
     FormalParameterCounts: TFormalParameterCountMap;
     NumericParameterProofs: TNumericParameterProofMap;
     NumberBindingProofs: TNumberBindingProofMap;
+    BlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     GlobalBackedTopLevel: Boolean;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;

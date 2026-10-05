@@ -2866,7 +2866,34 @@ begin
   end;
 end;
 
-// Compiles the parameter preamble. ES2026 §10.2.11 FunctionDeclarationInstantiation
+// ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList)
+// step 5: parameterNames is the BoundNames of the formals, every name a
+// parameter or a parameter pattern binds. The function body reads them when it
+// decides which block-level function declarations get a var binding.
+procedure RecordParameterNames(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray);
+var
+  I, J: Integer;
+  Names: TUnicodeStringList;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsPattern then
+    begin
+      Names := TUnicodeStringList.Create;
+      try
+        CollectPatternBindingNames(AParams[I].Pattern, Names);
+        for J := 0 to Names.Count - 1 do
+          AScope.AddParameterName(Names[J]);
+      finally
+        Names.Free;
+      end;
+    end
+    else
+      AScope.AddParameterName(AParams[I].Name);
+end;
+
+// Compiles the parameter preamble, after recording the parameter names on the
+// scope (RecordParameterNames). ES2026 §10.2.11 FunctionDeclarationInstantiation
 // creates every binding of the formal parameters uninitialized and then runs
 // IteratorBindingInitialization of the formals (§8.6.3): one parameter at a
 // time, left to right, each taking its argument and running its initializer
@@ -2914,6 +2941,8 @@ var
   end;
 
 begin
+  RecordParameterNames(ACtx.Scope, AParams);
+
   // Every initializer and computed key is a TGocciaExpression, so this asks
   // whether the list contains one at all.
   if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then

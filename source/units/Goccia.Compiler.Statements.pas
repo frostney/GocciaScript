@@ -119,6 +119,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
@@ -1260,6 +1261,12 @@ begin
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True, True);
 end;
 
+// ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList) and
+// §16.1.7 GlobalDeclarationInstantiation(script, env), web-compat steps: when
+// a block-level function declaration has a var binding, evaluating it stores
+// the block's binding of the function into the var binding. A declaration
+// whose name a parameter or a lexical declaration has gets no var binding
+// (Goccia.Compiler.BlockFunctions) and evaluates to nothing here.
 procedure CompileCompatBlockFunctionActivation(
   const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
 var
@@ -1270,7 +1277,7 @@ begin
      (not ACtx.CompatibilityNonStrictMode) or
      (ACtx.Scope.Depth = 0) then
     Exit;
-  if AStmt.FunctionExpression.IsAsync or AStmt.FunctionExpression.IsGenerator then
+  if not BlockFunctionHasVarBinding(ACtx.BlockFunctionVarBindings, AStmt) then
     Exit;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
@@ -2289,6 +2296,33 @@ begin
   end;
 end;
 
+// ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
+// function declaration that is the whole body of an if or else clause, which
+// the parser accepts only in non-strict code, behaves as the only statement of
+// a block. Its binding is the block's, and the web-compat step decides whether
+// it reaches a var binding (CompileCompatBlockFunctionActivation).
+function CompileIfClause(const ACtx: TGocciaCompilationContext;
+  const AClause: TGocciaStatement): Boolean;
+var
+  Declaration: TGocciaFunctionDeclaration;
+  ClosedLocals: TArray<UInt16>;
+  ClosedCount, I: Integer;
+begin
+  if not (AClause is TGocciaFunctionDeclaration) then
+    Exit(ACtx.CompileStatement(AClause));
+
+  Declaration := TGocciaFunctionDeclaration(AClause);
+  ACtx.Scope.BeginScope;
+  PredeclareBlockFunctionLocal(Declaration, ACtx.Scope);
+  ACtx.CompileStatement(Declaration);
+  CompileCompatBlockFunctionActivation(ACtx, Declaration);
+  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+      UInt16(ClosedLocals[I])));
+  Result := False;
+end;
+
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
@@ -2321,9 +2355,9 @@ begin
      TryEvaluateConstantExpression(ACtx, AStmt.Condition, ConditionValue) then
   begin
     if CompileTimeValueToBoolean(ConditionValue) then
-      Result := ACtx.CompileStatement(AStmt.Consequent)
+      Result := CompileIfClause(ACtx, AStmt.Consequent)
     else if Assigned(AStmt.Alternate) then
-      Result := ACtx.CompileStatement(AStmt.Alternate);
+      Result := CompileIfClause(ACtx, AStmt.Alternate);
     Exit;
   end;
 
@@ -2341,7 +2375,7 @@ begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
       ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
     end;
-    ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
+    ConsequentAbrupt := CompileIfClause(ACtx, AStmt.Consequent);
 
     if HasPatternBindings then
     begin
@@ -2355,7 +2389,7 @@ begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
       PatchPatternFailureTarget;
-      AlternateAbrupt := ACtx.CompileStatement(AStmt.Alternate);
+      AlternateAbrupt := CompileIfClause(ACtx, AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
       Result := ConsequentAbrupt and AlternateAbrupt;
     end
