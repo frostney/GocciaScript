@@ -17,6 +17,7 @@ import {
   mkdirSync,
   symlinkSync,
   linkSync,
+  realpathSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -4469,10 +4470,16 @@ console.log("Entry module linking (bytecode)...");
 console.log("Entry module evaluated once...");
 {
   const tmp = mkdtemp("goccia-entry-once-");
+  // The runner names a relative entry by the working directory getcwd()
+  // reports, and on macOS that has the /var -> /private/var symlink resolved
+  // while tmpdir() keeps /var. abs.mjs must import itself by the spelling
+  // the runner gives it; one file reached through two spellings is #1498.
+  // Plain realpathSync keeps a Windows 8.3 name, as getcwd() does there.
+  const runnerTmp = realpathSync(tmp);
   try {
     const files: Record<string, string> = {
       "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
-      "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "abs.mjs": `import ${JSON.stringify(join(runnerTmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
       "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
       "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
       "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',
