@@ -1243,12 +1243,18 @@ var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
-  for Pair in FProperties do
-    Pair.Value.Free;
+  // A constructor that raises frees the object it was building, so the maps
+  // may not exist yet. The development build's stack check can raise inside
+  // any constructor, for example when a deep nest of Proxies with native
+  // traps reaches the end of the native stack.
+  if Assigned(FProperties) then
+    for Pair in FProperties do
+      Pair.Value.Free;
   FProperties.Free;
 
-  for SymPair in FSymbolDescriptors do
-    SymPair.Value.Free;
+  if Assigned(FSymbolDescriptors) then
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
   FSymbolDescriptors.Free;
 
   FSymbolInsertionOrder.Free;
