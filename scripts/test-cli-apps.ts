@@ -4908,6 +4908,62 @@ await section("TestRunner: JSON multi-file structure...", async () => {
   }
 });
 
+await section("TestRunner: a parallel worker reclaims each file's garbage before the next file...", async () => {
+  // Workers run with automatic collection off. Before the runner collected
+  // after each file, every object a worker allocated stayed live until the
+  // worker exited, so a run held the garbage of all its files at once. With
+  // the shims parsed once per thread, that alone raised the interpreted
+  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // peak live GC heap is the observable: summed over the workers, it must not
+  // grow with the number of files each worker runs.
+  const tmp = makeTmp();
+  try {
+    const source = [
+      'describe("garbage", () => {',
+      '  test("allocates objects it does not keep", () => {',
+      "    let total = 0;",
+      "    for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      "      const item = { index: i, pair: [i, i + 1] };",
+      "      total += item.pair.length;",
+      "    }",
+      "    expect(total).toBe(10000);",
+      "  });",
+      "});",
+      "",
+    ].join("\n");
+    const peakLiveBytes = (mode: string, fileCount: number): number => {
+      const dir = join(tmp, `${mode}-${fileCount}`);
+      mkdirSync(dir);
+      for (let i = 0; i < fileCount; i++) writeFileSync(join(dir, `garbage-${i}.js`), source);
+      const resultsPath = join(tmp, `${mode}-${fileCount}.json`);
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=2", "--no-progress", `--mode=${mode}`, `--output=${resultsPath}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
+      if (json.passed !== fileCount || json.workers.used !== 2)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) should pass on 2 workers: ${json.passed} passed, ${json.workers.used} workers`);
+      return json.memory.gc.peakLiveBytes;
+    };
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Two files give each worker one; sixteen give each worker eight. With a
+      // collection between files the peaks match; without one the sixteen-file
+      // peak is about eight times the two-file peak.
+      const oneFileEach = peakLiveBytes(mode, 2);
+      const eightFilesEach = peakLiveBytes(mode, 16);
+      if (eightFilesEach > oneFileEach * 2)
+        throw new Error(
+          `TestRunner (${mode}) peak live GC heap grew with the files per worker: ` +
+            `${eightFilesEach} bytes for 16 files vs ${oneFileEach} bytes for 2 files on 2 workers`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {
