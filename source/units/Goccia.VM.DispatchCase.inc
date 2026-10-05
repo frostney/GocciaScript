@@ -2275,6 +2275,18 @@
         goto LDispatchNext;
       end;
 
+      OP_CALL_SELF:
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
+        // The arguments are read straight out of the caller's registers, as
+        // in OP_CALL: SetupNewFrame copies them before it acquires registers.
+        PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+        SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B], C,
+          True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+        goto LDispatchNext;
+      end;
+
       OP_CALL:
       begin
         if FThreadPolls^.TimeoutArmed then

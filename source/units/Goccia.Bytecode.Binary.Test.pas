@@ -29,6 +29,8 @@ type
     procedure TestAcceptsMemberValidateKeyRegisterInRange;
     procedure TestAcceptsIterableValidateBoundAboveRegisterCount;
     procedure TestAcceptsObjectValidateWithUnusedOperandC;
+    procedure TestLoadedClosedNumericSelfCallIsDeSpecialized;
+    procedure TestRejectsClosedNumericSelfCallInNonArrowTemplate;
   public
     procedure SetupTests; override;
   end;
@@ -43,6 +45,10 @@ begin
     TestAcceptsIterableValidateBoundAboveRegisterCount);
   Test('Accepts an object-validate with an unused operand C',
     TestAcceptsObjectValidateWithUnusedOperandC);
+  Test('A loaded closed numeric self-call is de-specialized to OP_CALL_SELF',
+    TestLoadedClosedNumericSelfCallIsDeSpecialized);
+  Test('Rejects a closed numeric self-call in a non-arrow template',
+    TestRejectsClosedNumericSelfCallInNonArrowTemplate);
 end;
 
 // Serialises a one-instruction module and reads it back through the ordinary
@@ -128,6 +134,92 @@ procedure TBytecodeBinaryTests.TestAcceptsObjectValidateWithUnusedOperandC;
 begin
   Expect<string>(LoadRejectionReason(EncodeABC(OP_VALIDATE_VALUE, 0,
     VALIDATE_OP_REQUIRE_OBJECT, TEST_OUT_OF_RANGE_REGISTER))).ToBe('');
+end;
+
+// ADR 0101's closed numeric proof is a compiler-only fact that is not
+// serialized, and ADR 0127's collector change stops marking the registers of a
+// closed numeric frame. A loaded .gbc could otherwise hold an object in that
+// unmarked window and have the collector reclaim it. The loader de-specializes
+// a loaded OP_CALL_SELF_NUM in a synchronous arrow to the ordinary self-call
+// OP_CALL_SELF, whose frame the collector marks. This builds a module whose
+// one (arrow) function recursively calls itself numerically, loads it, and
+// checks the loaded code holds OP_CALL_SELF, not OP_CALL_SELF_NUM.
+procedure TBytecodeBinaryTests.TestLoadedClosedNumericSelfCallIsDeSpecialized;
+var
+  Module, Loaded: TGocciaBytecodeModule;
+  Arrow, LoadedArrow: TGocciaFunctionTemplate;
+  Reader: TGocciaBytecodeReader;
+  Writer: TGocciaBytecodeWriter;
+  Stream: TMemoryStream;
+  I: Integer;
+  SelfNumCount, SelfCount: Integer;
+begin
+  Stream := TMemoryStream.Create;
+  Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+  try
+    Arrow := TGocciaFunctionTemplate.Create('fib');
+    Arrow.MaxRegisters := TEST_MAX_REGISTERS;
+    Arrow.ParameterCount := 1;
+    Arrow.IsArrow := True;
+    // OP_CALL_SELF_NUM dest=2, argbase=1, count=1 — a numeric self-call. The
+    // body around it does not matter to the loader's instruction rewrite.
+    Arrow.EmitInstruction(EncodeABC(OP_CALL_SELF_NUM, 2, 1, 1));
+    Arrow.EmitInstruction(EncodeABC(OP_RETURN, 2, 0, 0));
+
+    Module.TopLevel := TGocciaFunctionTemplate.Create('main');
+    Module.TopLevel.MaxRegisters := TEST_MAX_REGISTERS;
+    Module.TopLevel.AddFunction(Arrow);
+    Module.TopLevel.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Module.HasDebugInfo := False;
+
+    Writer := TGocciaBytecodeWriter.Create(Stream);
+    try
+      Writer.WriteModule(Module);
+    finally
+      Writer.Free;
+    end;
+  finally
+    Module.Free;
+  end;
+
+  Stream.Position := 0;
+  Reader := TGocciaBytecodeReader.Create(Stream);
+  try
+    Loaded := Reader.ReadModule;
+  finally
+    Reader.Free;
+    Stream.Free;
+  end;
+
+  try
+    LoadedArrow := Loaded.TopLevel.GetFunction(0);
+    SelfNumCount := 0;
+    SelfCount := 0;
+    for I := 0 to LoadedArrow.CodeCount - 1 do
+    begin
+      if DecodeOp(LoadedArrow.GetInstruction(I)) = Ord(OP_CALL_SELF_NUM) then
+        Inc(SelfNumCount);
+      if DecodeOp(LoadedArrow.GetInstruction(I)) = Ord(OP_CALL_SELF) then
+        Inc(SelfCount);
+    end;
+    Expect<Integer>(SelfNumCount).ToBe(0);
+    Expect<Integer>(SelfCount).ToBe(1);
+  finally
+    Loaded.Free;
+  end;
+end;
+
+// The closed numeric frame contract only ever applies to a synchronous arrow.
+// A crafted .gbc that places OP_CALL_SELF_NUM in a non-arrow template is
+// rejected rather than rewritten, so the opcode can never reach the VM from a
+// template whose frame kind the rewrite does not cover.
+procedure TBytecodeBinaryTests.TestRejectsClosedNumericSelfCallInNonArrowTemplate;
+var
+  Reason: string;
+begin
+  Reason := LoadRejectionReason(EncodeABC(OP_CALL_SELF_NUM, 2, 1, 1));
+  Expect<Boolean>(Pos('closed numeric self-call outside a synchronous arrow',
+    Reason) > 0).ToBe(True);
 end;
 
 begin

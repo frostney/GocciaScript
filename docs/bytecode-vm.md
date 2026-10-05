@@ -346,6 +346,16 @@ function references, control-flow targets, and exception-handler metadata.
 The VM retains bounds checks on instruction, constant, and function access as
 defense in depth.
 
+A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
+memory-safe on its own. The closed numeric frame it would enter is sound only
+under the compiler's numeric-only proof, which is not serialized (ADR 0101),
+and the collector does not mark that frame's registers (ADR 0127), so a crafted
+file could otherwise park an object in the unmarked window and have the
+collector reclaim it. The verifier rewrites a loaded `OP_CALL_SELF_NUM` in a
+synchronous arrow to `OP_CALL_SELF`, the ordinary self-call whose frame the
+collector marks, and rejects the opcode in any other template kind. Code
+compiled in process keeps the fast path; only loaded templates are rewritten.
+
 ## Current Status
 
 - `--mode=bytecode` runs the Goccia VM directly.

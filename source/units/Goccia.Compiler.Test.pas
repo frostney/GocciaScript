@@ -1419,14 +1419,23 @@ begin
     '}; run();', False, False, False, False, False, False);
   TempFile := GetTempFileName + '.gbc';
   try
+    // The compiled module emits the closed numeric self-call...
+    LoadedFunction := FindFunctionWithOp(Original.TopLevel, OP_CALL_SELF_NUM);
+    Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
+    if Assigned(LoadedFunction) then
+      Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF_NUM)).ToBe(2);
     SaveModuleToFile(Original, TempFile);
     Loaded := LoadModuleFromFile(TempFile);
     try
-      LoadedFunction := FindFunctionWithOp(Loaded.TopLevel,
-        OP_CALL_SELF_NUM);
+      // ...but the loader de-specializes it to the ordinary self-call, because
+      // the proof that makes a closed numeric frame memory-safe is not
+      // serialized (ADR 0101, ADR 0127).
+      Expect<Boolean>(Assigned(FindFunctionWithOp(Loaded.TopLevel,
+        OP_CALL_SELF_NUM))).ToBe(False);
+      LoadedFunction := FindFunctionWithOp(Loaded.TopLevel, OP_CALL_SELF);
       Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
       if Assigned(LoadedFunction) then
-        Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF_NUM)).ToBe(2);
+        Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF)).ToBe(2);
     finally
       Loaded.Free;
     end;

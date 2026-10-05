@@ -214,7 +214,17 @@ begin
             RejectInvalidBytecode(ATemplate, PC, Format(
               'closed numeric self-call argument count %d is outside 1..3',
               [C]));
+          if not ATemplate.IsArrow or ATemplate.IsAsync or
+             ATemplate.IsGenerator then
+            RejectInvalidBytecode(ATemplate, PC,
+              'closed numeric self-call outside a synchronous arrow function');
           RequireRegisterRange(B, C);
+          // A closed numeric frame is safe only under the compiler's proof
+          // that the function stores nothing but numbers, and the proof is not
+          // serialized: the collector does not mark closed numeric frames. A
+          // loaded template therefore calls itself through an ordinary frame.
+          ATemplate.PatchInstruction(PC,
+            (Instruction and not UInt32($FF)) or Ord(OP_CALL_SELF));
         end;
 
       OP_ITER_CLOSE:

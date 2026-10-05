@@ -21,6 +21,17 @@ Development builds assert in `SetupNewFrame` that no frame is set up while a
 closed numeric frame is live; a change that lets one call out, such as proper
 tail calls in concise arrow bodies, has to bring the marking back for them.
 
+Because the collector no longer marks a closed numeric frame's window, the
+safety of `OP_CALL_SELF_NUM` rests entirely on the compiler's numeric-only
+proof. That proof is not serialized (ADR 0101), so a loaded `.gbc` could park
+an object in the unmarked window and have the collector reclaim it. The binary
+verifier therefore rewrites a loaded `OP_CALL_SELF_NUM` in a synchronous arrow
+to the ordinary self-call `OP_CALL_SELF`, whose frame is marked, and rejects
+the opcode in any other template kind. Code compiled in process keeps the fast
+path; a `.gbc` produced by the bundler loses it for its numeric self-recursions
+and runs them on ordinary frames. `OP_CALL_SELF` is runtime-only and never
+appears in a file.
+
 ## Considered Options
 
 Keeping the clear on push and tracking, VM-wide, the slots that only closed
