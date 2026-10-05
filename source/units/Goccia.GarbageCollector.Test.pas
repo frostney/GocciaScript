@@ -74,6 +74,7 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestNonCollectingChargeNeverCollectsOrLatches;
   end;
 
 var
@@ -154,6 +155,55 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  Test('A non-collecting charge neither collects nor latches pressure',
+    TestNonCollectingChargeNeverCollectsOrLatches);
+end;
+
+procedure TTestGarbageCollector.TestNonCollectingChargeNeverCollectsOrLatches;
+const
+  HEADROOM_BYTES = 64 * 1024;
+  CHARGE_BYTES = 1024;
+var
+  BaselineBytes, ChargedBytes, PreviousMaxBytes: Int64;
+  CollectionsBefore: Integer;
+  GC: TGarbageCollector;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  GChildDestructorCount := 0;
+  PreviousMaxBytes := GC.MaxBytes;
+  ChargedBytes := 0;
+  try
+    { Unrooted garbage that a collection would reclaim, so a charge that
+      collected before refusing could succeed. }
+    GC.RegisterObject(TChildManaged.Create);
+    BaselineBytes := GC.BytesAllocated;
+    GC.MaxBytes := BaselineBytes + HEADROOM_BYTES;
+    CollectionsBefore := GC.TotalCollections;
+
+    { The VM charges stack growth from inside call setup, where a collection
+      would sweep values held only in Pascal locals: a refusal must not walk
+      the heap. }
+    Expect<Boolean>(GC.TryChargeExternalBytes(HEADROOM_BYTES + 1)).ToBe(False);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+    Expect<Integer>(GChildDestructorCount).ToBe(0);
+    Expect<Int64>(GC.BytesAllocated).ToBe(BaselineBytes);
+
+    { A charge that fits is counted, inside the pressure reserve too, without
+      arming a collection: a generator charges its frame at every await. }
+    GC.MaxBytes := BaselineBytes + CHARGE_BYTES;
+    Expect<Boolean>(GC.TryChargeExternalBytes(CHARGE_BYTES)).ToBe(True);
+    ChargedBytes := CHARGE_BYTES;
+    Expect<Int64>(GC.BytesAllocated - BaselineBytes).ToBe(CHARGE_BYTES);
+    Expect<Boolean>(GC.NeedsMemoryPressureCollection).ToBe(True);
+    Expect<Boolean>(GC.ExternalPressurePending).ToBe(False);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore);
+  finally
+    if ChargedBytes > 0 then
+      GC.ReleaseExternalBytes(ChargedBytes);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
 end;
 
 procedure TTestGarbageCollector.TestDataDescriptorPushRootsProtectsValue;
