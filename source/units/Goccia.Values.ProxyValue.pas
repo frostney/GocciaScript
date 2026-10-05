@@ -496,32 +496,22 @@ end;
 function ProxyTargetHasSymbolProperty(
   const ATarget: TGocciaValue;
   const ASymbol: TGocciaSymbolValue): Boolean;
-var
-  Current: TGocciaObjectValue;
 begin
   if not (ATarget is TGocciaObjectValue) then
     Exit(False);
 
-  Current := TGocciaObjectValue(ATarget);
-  while Assigned(Current) do
+  if ATarget is TGocciaProxyValue then
   begin
-    if Current is TGocciaProxyValue then
-    begin
-      // A Proxy reached from the target is a native call into its
-      // [[HasProperty]]; see MAX_PROPERTY_DELEGATION_DEPTH.
-      EnterPropertyDelegation;
-      try
-        Exit(TGocciaProxyValue(Current).HasSymbolTrap(ASymbol));
-      finally
-        LeavePropertyDelegation;
-      end;
+    // A Proxy target is a native call into its [[HasProperty]]; see
+    // MAX_PROPERTY_DELEGATION_DEPTH.
+    EnterPropertyDelegation;
+    try
+      Exit(TGocciaProxyValue(ATarget).HasSymbolTrap(ASymbol));
+    finally
+      LeavePropertyDelegation;
     end;
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
   end;
-
-  Result := False;
+  Result := TGocciaObjectValue(ATarget).HasSymbolPropertyInChain(ASymbol);
 end;
 
 function CreateProxyTrapDescriptorObject(
