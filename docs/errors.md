@@ -374,6 +374,15 @@ TypeError: Cannot read properties of null (reading 'x')
     at outer (script.js:11:8)
 ```
 
+A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one line that counts the frames left out, so a stack-overflow `RangeError` still shows where the recursion is. For `const f = () => { f(); }; f();` at the default `--max-stack` of 2,200, the interpreter-mode trace is the header, 100 `at f` lines, and then:
+
+```text
+    at f (script.js:1:20)
+    ... 2101 more frames
+```
+
+The last line reads `... 1 more frame` when one frame is left out. Frames past the limit are not formatted at all, so creating an error costs the same at any depth: before the limit, a `RangeError` at a million frames spent most of its run building the trace. A stack of up to 100 frames renders exactly as it did before. The limit applies to every error that captures a stack, in both modes, and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
+
 Frame positions after the first are currently wrong in both modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)). In interpreter mode each outer frame shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame (`5:3`). In bytecode mode the first frame is `inner (script.js:2:13)`, every outer frame shows `0:0`, and a final `at <module> (script.js:0:0)` frame is added.
 
 ## Error.cause
