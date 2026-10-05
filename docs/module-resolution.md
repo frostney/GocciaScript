@@ -38,19 +38,24 @@ file extension, and a directory resolves to its `index` file.
 
 ### One module per file
 
-The loader caches a host file's module under the file's canonical path, with
-every symbolic link resolved, as Node does. A symlinked directory, a Windows
-junction, or macOS's `/var` and `/private/var` therefore reach one module
-record, which evaluates once (ES2026 §16.2.1.10 HostLoadImportedModule). The
-entry file takes part as well, so an entry that imports itself through another
-spelling is not evaluated a second time. The canonical path is the module's
-path: its relative imports resolve beside the file a link points to, and its
-diagnostics and `import.meta.url` name that file, which on macOS means a
-`/private/var/...` path for a file in a temporary directory.
+The loader caches a module by its address, and every spelling of one host file
+gets the same address: the first spelling of that file the loader was asked
+about, the entry's included. A symlinked directory, a Windows junction or 8.3
+short name, or macOS's `/var` and `/private/var` therefore reach one module
+record, which evaluates once (ES2026 §16.2.1.10 HostLoadImportedModule), so an
+entry that imports itself through another spelling is not evaluated a second
+time. The address is the module's path: diagnostics, `import.meta.url` and
+coverage show it, and the module's relative imports resolve beside it. A file
+symlinked into another directory therefore resolves `./x.js` beside whichever
+spelling was loaded first, where Node always uses the real file's directory.
 `import.meta.resolve` still answers with the spelling it was given. Hardlinks
 are separate files, as they are to Node. `goccia:` and other global module
-names and virtual modules are never canonicalized. The read capability judges
-the canonical path too, so a second spelling neither gains nor loses access.
+names, virtual modules, and modules read through an embedder's content
+provider rather than the host file system keep their spelling. Each request's
+read capability is judged on the file its own spelling names, and the address
+is checked to name that same file before the module is read through it, so a
+second spelling neither gains nor loses access, even after a symlink is
+retargeted.
 
 ## Enabling `node_modules`
 

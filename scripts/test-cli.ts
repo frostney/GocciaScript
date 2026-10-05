@@ -4506,8 +4506,8 @@ console.log("Entry module evaluated once...");
     for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
     // POSIX only: a Windows file name cannot hold a colon, and a file symlink
     // there needs a privilege. A file named like a builtin must not stand in
-    // for it, and a symlinked file's relative imports resolve beside the file
-    // it links to, whichever spelling is loaded first.
+    // for it, and a symlinked file is one module whose relative imports
+    // resolve beside the spelling it was first loaded through.
     const posix = process.platform !== "win32";
     if (posix) {
       writeFileSync(join(tmp, "goccia:json5"), 'export const parse = () => "file";\nconsole.log("file ran");\n');
@@ -4560,8 +4560,8 @@ console.log("Entry module evaluated once...");
           ["builtin-file-first.mjs", `--mode=${mode}`], ["file ran", "builtin: true"]);
         await expectRun(`goccia: builtin beside a file of its name, builtin first (${mode})`,
           ["builtin-defer-first.mjs", `--mode=${mode}`], ["file ran", "builtin: true"]);
-        await expectRun(`symlinked file imports beside its target (${mode})`,
-          ["base-link-first.mjs", `--mode=${mode}`], ["base: a a"]);
+        await expectRun(`symlinked file imports beside its first spelling (${mode})`,
+          ["base-link-first.mjs", `--mode=${mode}`], ["base: b b"]);
       }
       await expectRun(`module entry record identity (${mode})`,
         ["id.mjs", `--mode=${mode}`], ["same record: true"]);
