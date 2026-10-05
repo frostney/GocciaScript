@@ -416,7 +416,7 @@ What the compiler knows about a binding of an enclosing function, the constant v
 
 Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
 
-When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
+When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report. An `if` statement or a loop keeps its conditional jump, and so does a ternary or a `&&`, `||` or `??` expression that a constant decides: the compiler does not fold it, nor reduce `flag && true` or `flag || false` to `flag` under `--strict-types`. Its operands are still folded and propagated.
 
 ### How Opcode Additions Work
 
