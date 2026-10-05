@@ -6427,7 +6427,12 @@ begin
            ACtx.Scope.GetLocal(LocalIdx)) then
           EmitInstruction(ACtx, EncodeABC(Op, ADest, RegResult, RegVal))
         else
+        begin
+          // ES2026 §13.15.2 steps 8-9: the operator runs before PutValue
+          // throws for the immutable binding. See the slot-backed path below.
+          EmitInstruction(ACtx, EncodeABC(Op, RegResult, RegResult, RegVal));
           EmitConstAssignmentError(ACtx);
+        end;
       end
       else
       begin
@@ -6476,7 +6481,14 @@ begin
          ACtx.Scope.GetLocal(LocalIdx)) then
         EmitInstruction(ACtx, EncodeABC(Op, ADest, RegOld, RegVal))
       else
+      begin
+        // ES2026 §13.15.2 steps 8-9: ApplyStringOrNumericBinaryOperator runs
+        // before PutValue, and its conversions can call user code or throw.
+        // The operator runs on the temporary holding the old value; only
+        // then does the assignment to the immutable binding throw.
+        EmitInstruction(ACtx, EncodeABC(Op, RegOld, RegOld, RegVal));
         EmitConstAssignmentError(ACtx);
+      end;
       ACtx.Scope.FreeRegister;
       ACtx.Scope.FreeRegister;
       Exit;
