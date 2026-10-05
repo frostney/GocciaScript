@@ -5,6 +5,8 @@ unit Goccia.Executor.Bytecode;
 interface
 
 uses
+  OrderedStringMap,
+
   Goccia.AST.Node,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
@@ -24,7 +26,14 @@ type
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
+    FLinkedModules: TOrderedStringMap<TGocciaModule>;
+    FLinkedReferrer: string;
     function RealmExposesDirectEval: Boolean;
+    procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
+    procedure InitializeEntryExports(const AModule: TGocciaBytecodeModule;
+      const AEntry: TGocciaModule);
+    function LoadLinkedModule(const AModulePath,
+      AImportingFilePath: string): TGocciaModule;
   public
     constructor Create;
     destructor Destroy; override;
@@ -68,8 +77,10 @@ uses
   Goccia.Compiler.ConstantValue,
   Goccia.Coverage,
   Goccia.GarbageCollector,
+  Goccia.Keywords.Reserved,
   Goccia.Profiler,
   Goccia.Realm,
+  Goccia.Scope.BindingMap,
   Goccia.Scope.Redeclaration,
   Goccia.Values.PromiseValue;
 
@@ -244,10 +255,130 @@ begin
   end;
 end;
 
+{ ES2026 §16.2.1.6.1.2 Link(): a program run here was linked by no module
+  loader, so link the graph behind each of its static requests, in source
+  order, before it runs. A name it imports or re-exports that does not
+  resolve is a SyntaxError raised before any module of the graph evaluates.
+  The linked modules are kept for the run, so the program's own OP_IMPORTs
+  evaluate them without resolving their requests a second time. }
+procedure TGocciaBytecodeExecutor.LinkModuleRequests(
+  const AModule: TGocciaBytecodeModule);
+var
+  I, J: Integer;
+  ModuleRequest: TGocciaModuleImport;
+  Names: array of string;
+begin
+  if (AModule.ImportCount = 0) or not Assigned(FModuleLoader) then
+    Exit;
+  FLinkedModules := TOrderedStringMap<TGocciaModule>.Create;
+  FLinkedReferrer := AModule.SourcePath;
+  for I := 0 to AModule.ImportCount - 1 do
+  begin
+    ModuleRequest := AModule.GetImport(I);
+    SetLength(Names, Length(ModuleRequest.Bindings));
+    for J := 0 to High(ModuleRequest.Bindings) do
+      Names[J] := ModuleRequest.Bindings[J].ExportName;
+    FLinkedModules.AddOrSetValue(ModuleRequest.ModulePath,
+      FModuleLoader.LinkModuleRequest(ModuleRequest.ModulePath,
+        AModule.SourcePath, Names, ModuleRequest.Line, ModuleRequest.Column));
+  end;
+  FVM.LoadModule := LoadLinkedModule;
+end;
+
+{ ES2026 §16.2.1.7.3.1 InitializeEnvironment for a module-source entry, the
+  Module Record the engine registered as the VM's current runtime module.
+  Run after its requests are linked and before any of them evaluates, so a
+  module in a cycle with the entry resolves every name the entry exports.
+  A local export is a binding in its temporal dead zone, kept in a module
+  environment of its own (the program's top-level bindings live in VM
+  registers); the program's OP_EXPORTs initialize and update it. The other
+  kinds bind to the linked module of their request. }
+procedure TGocciaBytecodeExecutor.InitializeEntryExports(
+  const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
+var
+  Changed: Boolean;
+  ExportEnvironment: TGocciaScope;
+  Export_: TGocciaModuleExport;
+  I: Integer;
+  SourceModule: TGocciaModule;
+  StarName: string;
+begin
+  ExportEnvironment := nil;
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    if Export_.Kind <> mekLocal then
+      Continue;
+    if not Assigned(ExportEnvironment) then
+      ExportEnvironment := TGocciaScope.Create(nil, skModule,
+        'ModuleExports:' + AEntry.Path);
+    ExportEnvironment.PredeclareLexicalBinding(Export_.Name, dtLet);
+    AEntry.AddExportBinding(Export_.Name, Export_.Name, ExportEnvironment);
+  end;
+  if Assigned(ExportEnvironment) then
+    AEntry.SetEnvironment(ExportEnvironment);
+
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    case Export_.Kind of
+      mekSource:
+        AEntry.AddExportValue(Export_.Name,
+          FModuleLoader.LoadModuleSourceValue(Export_.ModuleRequest,
+            AModule.SourcePath));
+      mekDeferredNamespace:
+        AEntry.AddExportValue(Export_.Name,
+          FModuleLoader.LoadDeferredModuleNamespaceValue(
+            Export_.ModuleRequest, AModule.SourcePath));
+      mekIndirect, mekNamespace:
+        if Assigned(FLinkedModules) and
+           FLinkedModules.TryGetValue(Export_.ModuleRequest, SourceModule) then
+        begin
+          if Export_.Kind = mekNamespace then
+            AEntry.AddExportValue(Export_.Name,
+              SourceModule.GetNamespaceObject)
+          else
+            AEntry.AddExportForwarding(Export_.Name, SourceModule,
+              Export_.ImportName);
+        end;
+    end;
+  end;
+
+  { Star exports last: a name the entry exports explicitly is not replaced
+    by one a star export would forward (§16.2.1.7.2.2 ResolveExport). }
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    if (Export_.Kind <> mekStar) or not Assigned(FLinkedModules) or
+       not FLinkedModules.TryGetValue(Export_.ModuleRequest, SourceModule) then
+      Continue;
+    repeat
+      Changed := False;
+      for StarName in SourceModule.GetExportNames do
+        if StarName <> KEYWORD_DEFAULT then
+          Changed := AEntry.AddStarExportForwarding(StarName, SourceModule,
+            StarName) or Changed;
+    until not Changed;
+  end;
+end;
+
+function TGocciaBytecodeExecutor.LoadLinkedModule(const AModulePath,
+  AImportingFilePath: string): TGocciaModule;
+begin
+  if Assigned(FLinkedModules) and (AImportingFilePath = FLinkedReferrer) and
+     FLinkedModules.TryGetValue(AModulePath, Result) then
+    Result := FModuleLoader.EvaluateModule(Result)
+  else
+    Result := FModuleLoader.LoadModule(AModulePath, AImportingFilePath);
+end;
+
 function TGocciaBytecodeExecutor.RunCompiledModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
 var
   GC: TGarbageCollector;
+  SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
+  SavedLinkedReferrer: string;
+  SavedLoadModule: TLoadModuleCallback;
   WasEnabled: Boolean;
 begin
   GC := TGarbageCollector.Instance;
@@ -262,9 +393,24 @@ begin
     and TGocciaProfiler.Instance.Enabled
     and (pmFunctions in TGocciaProfiler.Instance.Mode);
   FVM.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+  { A run can nest (the Function constructor runs its body here), so the
+    outer run's linked modules are set aside, not overwritten. }
+  SavedLinkedModules := FLinkedModules;
+  SavedLinkedReferrer := FLinkedReferrer;
+  SavedLoadModule := FVM.LoadModule;
+  FLinkedModules := nil;
   try
+    LinkModuleRequests(TGocciaBytecodeModule(AModule));
+    if Assigned(FVM.CurrentRuntimeModule) and
+       (TGocciaBytecodeModule(AModule).ExportCount > 0) then
+      InitializeEntryExports(TGocciaBytecodeModule(AModule),
+        FVM.CurrentRuntimeModule);
     Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
   finally
+    FVM.LoadModule := SavedLoadModule;
+    FLinkedModules.Free;
+    FLinkedModules := SavedLinkedModules;
+    FLinkedReferrer := SavedLinkedReferrer;
     GC.Enabled := WasEnabled;
   end;
 end;

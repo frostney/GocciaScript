@@ -3184,9 +3184,27 @@ console.log("--max-stack (default overflow)...");
 }
 
 console.log("--max-stack (custom limit)...");
-{
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100`.text();
-  if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
+// The limit is the number of nested calls: n counts the calls that started,
+// and the 101st is refused. The top level is not a call.
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const sourceType of ["script", "module"]) {
+    const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100 --mode=${mode} --source-type=${sourceType}`.text();
+    if (!containsLine(out, "100"))
+      throw new Error(`--max-stack=100 (${mode}, ${sourceType}) should allow 100 nested calls, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (TestRunner test function)...");
+// The runner calls the test function itself, so its calls have the whole limit.
+for (const mode of ["interpreted", "bytecode"]) {
+  const src = [
+    "const count = (k) => (k <= 1 ? 1 : count(k - 1) + 1);",
+    'test("ten nested calls", () => { expect(count(10)).toBe(10); });',
+    'test("eleven nested calls", () => { expect(() => count(11)).toThrow(RangeError); });',
+  ].join("\n");
+  const out = await $`echo ${src} | ${TESTRUNNER} --max-stack=10 --mode=${mode} --no-progress`.nothrow().text();
+  if (!out.includes("Passed: 2"))
+    throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
 }
 
 console.log("--max-stack (bytecode trampoline)...");
@@ -4186,6 +4204,158 @@ console.log("Runtime diagnostic parity...");
           );
       }
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Entry module linking (bytecode) ------------------------------------------
+
+// ES2026 §16.2.1.6.1.2 Link(): a name the entry imports or re-exports that does
+// not resolve is a SyntaxError before any module of the graph evaluates. The
+// entry is the file the runner was given, so a suite cannot observe its own
+// link failure; these run the CLI instead. Bytecode only: the interpreter
+// evaluates the entry's earlier imports before it links the later ones and
+// reports a script's missing import as a RuntimeError, and it is being removed
+// (#825), so #1274 fixes only the bytecode half.
+console.log("Entry module linking (bytecode)...");
+{
+  const tmp = mkdtemp("goccia-entry-link-");
+  try {
+    const files: Record<string, string> = {
+      "marker.js": 'console.log("marker evaluated");\nexport const ready = "ready";\n',
+      "dep.js": 'console.log("dep evaluated");\nexport const present = 1;\n',
+      "ns-barrel.js": 'console.log("barrel evaluated");\nexport * as ns from "./dep.js";\n',
+      "star-a.js": 'console.log("star-a evaluated");\nexport const dup = "a";\n',
+      "star-b.js": 'console.log("star-b evaluated");\nexport const dup = "b";\n',
+      "star-both.js": 'export * from "./star-a.js";\nexport * from "./star-b.js";\n',
+      "cycle-a.js": 'import { nothere } from "./cycle-b.js";\nconsole.log("cycle-a evaluated");\nexport const fromA = 1;\n',
+      "cycle-b.js": 'import { fromA } from "./cycle-a.js";\nconsole.log("cycle-b evaluated");\nexport const fromB = 1;\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const cases: Array<[string, string, string]> = [
+      ["named", 'import { missing } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["aliased", 'import { missing as renamed } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["default", 'import fallback from "./dep.js";', 'Module "./dep.js" has no export named "default"'],
+      ["re-export", 'export { missing } from "./dep.js";', 'Module "./dep.js" has no export named "missing"'],
+      ["namespace re-export", 'import { ns, nope } from "./ns-barrel.js";', 'Module "./ns-barrel.js" has no export named "nope"'],
+      ["star-export ambiguity", 'import { dup } from "./star-both.js";', 'Module "./star-both.js" has no export named "dup"'],
+      ["cycle", 'import "./cycle-a.js";', 'Module "./cycle-b.js" has no export named "nothere"'],
+    ];
+    for (const [label, badImport, message] of cases) {
+      const entry = join(tmp, "entry.js");
+      // A valid import ahead of the bad one: linking the whole graph first means
+      // even it must not evaluate.
+      writeFileSync(
+        entry,
+        ['import { ready } from "./marker.js";', badImport, 'console.log("entry evaluated");', ""].join("\n"),
+      );
+      for (const sourceType of ["script", "module"]) {
+        const run = await $`${RUNNER} ${entry} --mode=bytecode --source-type=${sourceType} 2>&1`.nothrow().quiet();
+        const out = run.text();
+        if (run.exitCode !== 1)
+          throw new Error(`Entry link (${label}, ${sourceType}) should exit 1, got ${run.exitCode}: ${out}`);
+        if (!out.includes(`SyntaxError: ${message}`))
+          throw new Error(`Entry link (${label}, ${sourceType}) should throw SyntaxError: ${message}, got: ${out}`);
+        if (out.includes("evaluated"))
+          throw new Error(`Entry link (${label}, ${sourceType}) must fail before any module evaluates, got: ${out}`);
+      }
+    }
+
+    // Each REPL input links its own requests: a failed input evaluates nothing,
+    // and the module it linked evaluates once a later input imports it.
+    const repl = Bun.spawnSync([join(process.cwd(), REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { ready } from "./marker.js"; import { missing } from "./dep.js";',
+          'import { ready } from "./marker.js"; [ready, "linked"].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+    if (!output.includes('SyntaxError: Module "./dep.js" has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing import at link time, got: ${output}`);
+    if (output.includes("dep evaluated") || output.split("marker evaluated").length !== 2)
+      throw new Error(`REPL (bytecode) should evaluate only the later input's module, once, got: ${output}`);
+    if (!output.includes("ready:linked"))
+      throw new Error(`REPL (bytecode) should run the input after a failed link, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Entry module evaluated once (#1447) --------------------------------------
+
+// ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation: a module record evaluates once,
+// and an import that resolves to the entry's own file must get the entry's own
+// record (§16.2.1.10 HostLoadImportedModule). The entry is the file the runner
+// was given, so the path it was named by (relative, ./, absolute) and the .gbc
+// form can only be exercised from the CLI. tests/language/modules covers the
+// test runner, live bindings and the temporal dead zone.
+console.log("Entry module evaluated once...");
+{
+  const tmp = mkdtemp("goccia-entry-once-");
+  try {
+    const files: Record<string, string> = {
+      "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
+      "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
+      "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',
+      "self.js": 'import "./self.js";\nconsole.log("self ran");\n',
+      "id.js": 'export const o = {};\nimport { o as p } from "./id.js";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.js": 'import "./cycle-b.js";\nconsole.log("a ran");\n',
+      "cycle-b.js": 'import "./cycle-a.js";\nconsole.log("b ran");\n',
+      "bundled.mjs": 'import "./bundled.gbc";\nconsole.log("bundled ran");\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const programOutput = (out: string): string[] =>
+      normalizeLineEndings(out)
+        .split("\n")
+        .filter((line) => line.endsWith(" ran") || line.startsWith("same record:"));
+    const expectRun = async (label: string, args: string[], expected: string[]): Promise<void> => {
+      const run = await $`${join(process.cwd(), RUNNER)} ${args}`.cwd(tmp).nothrow().quiet();
+      const out = run.text() + run.stderr.toString();
+      const lines = programOutput(out);
+      if (run.exitCode !== 0 || JSON.stringify(lines) !== JSON.stringify(expected))
+        throw new Error(`${label}: expected ${JSON.stringify(expected)}, got exit ${run.exitCode}: ${out}`);
+    };
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Module source: the entry record is the one its own path resolves to.
+      for (const entry of ["self.mjs", "./self.mjs", join(tmp, "self.mjs")])
+        await expectRun(`module entry ${entry} (${mode})`, [entry, `--mode=${mode}`], ["self ran"]);
+      await expectRun(`module entry importing itself by absolute path (${mode})`,
+        ["abs.mjs", `--mode=${mode}`], ["abs ran"]);
+      await expectRun(`module entry record identity (${mode})`,
+        ["id.mjs", `--mode=${mode}`], ["same record: true"]);
+      await expectRun(`module entry in a cycle (${mode})`,
+        ["cycle-a.mjs", `--mode=${mode}`], ["b ran", "a ran"]);
+      await expectRun(`--source-type=module entry (${mode})`,
+        ["self.js", `--mode=${mode}`, "--source-type=module"], ["self ran"]);
+
+      // Script source: the entry is a Script Record (§16.1.4), not a Module
+      // Record, so its own path names a separate module record. That module
+      // evaluates once, before the script body, and its bindings are its own.
+      await expectRun(`script entry importing itself (${mode})`,
+        ["self.js", `--mode=${mode}`], ["self ran", "self ran"]);
+      await expectRun(`script entry record identity (${mode})`,
+        ["id.js", `--mode=${mode}`], ["same record: true", "same record: false"]);
+      await expectRun(`script entry in a cycle (${mode})`,
+        ["cycle-a.js", `--mode=${mode}`], ["a ran", "b ran", "a ran"]);
+    }
+
+    // A bundled module-source entry is the .gbc file: an import of that file
+    // gets the running entry instead of reading the bytecode as source.
+    const bundle = await $`${join(process.cwd(), BUNDLER)} bundled.mjs`.cwd(tmp).nothrow().quiet();
+    if (bundle.exitCode !== 0) throw new Error(`Bundling bundled.mjs failed: ${bundle.text()}`);
+    await expectRun("module .gbc entry importing itself", ["bundled.gbc", "--source-type=module"], ["bundled ran"]);
   } finally {
     clean(tmp);
   }

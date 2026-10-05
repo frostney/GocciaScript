@@ -670,7 +670,6 @@ resourcestring
   SErrorCannotConvertNullOrUndefined = 'Cannot convert undefined or null to object';
   SErrorReadOnlyPropertyFrozen = 'Cannot assign to read only property ''%s'' of frozen object';
   SErrorSetPropertyOnlyGetter = 'Cannot set property %s of #<%s> which has only a getter';
-  SErrorProtoChainDepthExceeded = 'Prototype chain depth exceeded safety limit while setting ''%s''';
   SErrorCannotAssignNonExistent = 'Cannot assign to non-existent property ''%s''';
   SErrorCannotAddPropertyNotExtensible = 'Cannot add property ''%s'', object is not extensible';
   SErrorCannotRedefineNonConfigurable = 'Cannot redefine non-configurable property ''%s''';
