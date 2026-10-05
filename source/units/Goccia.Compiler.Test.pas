@@ -157,7 +157,7 @@ type
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
     procedure TestStrictTypesHintOnlyEnforcedLocals;
-    procedure TestStrictVarRedeclarationInCatchChecksVarType;
+    procedure TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
     procedure TestSwitchExitJumpsCloseUpvalues;
   public
     procedure SetupTests; override;
@@ -303,8 +303,8 @@ begin
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
   Test('Strict types hint only enforced locals', TestStrictTypesHintOnlyEnforcedLocals);
-  Test('Strict var redeclaration in a catch block checks the var type',
-    TestStrictVarRedeclarationInCatchChecksVarType);
+  Test('Strict var redeclaration in a catch block keeps its type on the var',
+    TestStrictVarRedeclarationInCatchKeepsTypeOnVar);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
 end;
 
@@ -2749,31 +2749,20 @@ begin
   end;
 end;
 
-procedure TTestCompiler.TestStrictVarRedeclarationInCatchChecksVarType;
+procedure TTestCompiler.TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
 var
   Module: TGocciaBytecodeModule;
-  Instruction: UInt32;
-  I, CheckCount: Integer;
 begin
-  // The redeclaration's initializer is stored into the function's var
-  // binding, so it is checked against that binding's enforced type, not
-  // against the same-named catch parameter ResolveLocal would find.
+  // `var x;` inside `catch (x)` redeclares the function's var binding, but
+  // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
+  // enforced Number type stays on the var: the read after the try statement
+  // is typed, the catch parameter read is not.
   Module := CompileSource(
-    'const f = () => 1; var x: string = "a"; ' +
-    'try { throw 0; } catch (x) { var x = f(); }',
+    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
     True, False, False, False, False, False, False, False, True);
   try
-    CheckCount := 0;
-    for I := 0 to Module.TopLevel.CodeCount - 1 do
-    begin
-      Instruction := Module.TopLevel.GetInstruction(I);
-      if TGocciaOpCode(DecodeOp(Instruction)) = OP_CHECK_TYPE then
-      begin
-        Inc(CheckCount);
-        Expect<Integer>(DecodeB(Instruction)).ToBe(Ord(sltString));
-      end;
-    end;
-    Expect<Integer>(CheckCount).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
   finally
     Module.Free;
   end;

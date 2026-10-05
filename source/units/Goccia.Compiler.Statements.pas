@@ -855,7 +855,7 @@ end;
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, LocalIdx: Integer;
+  I, LocalIdx, DeclaredIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
@@ -998,9 +998,17 @@ begin
         TypeHint := sltUntyped;
     end;
 
+    // The type belongs to the declared binding. For a var that is the
+    // depth-0 var local; ResolveLocal could find a same-named catch parameter
+    // (ES2026 B.3.4), which would then be typed from a binding it is not.
+    if AStmt.IsVar then
+      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+    else
+      DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
+
     if TypeHint <> sltUntyped then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
@@ -1016,7 +1024,7 @@ begin
 
     if Info.TypeAnnotation <> '' then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeAnnotation(LocalIdx, Info.TypeAnnotation);
