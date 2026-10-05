@@ -237,7 +237,6 @@ type
 
     function GetManagedObjectCount: Integer;
     function GetWatermark: Integer; {$IFDEF FPC}inline;{$ENDIF}
-    function PressureReserve: Int64; {$IFDEF FPC}inline;{$ENDIF}
     function HeapTriggerBytes: Int64;
     procedure SampleHeap;
     // AFull is False for CollectYoung, which keeps every object older than
@@ -324,6 +323,10 @@ type
     procedure CollectIfNeeded(const AProtect: TGCManagedObject); overload;
 
     function NeedsMemoryPressureCollection: Boolean; overload;
+    // The band below MaxBytes within which the pressure checks collect:
+    // MaxBytes / 8, clamped to 16 KiB..16 MiB. Meaningful only when MaxBytes
+    // is positive.
+    function MemoryPressureReserve: Int64; {$IFDEF FPC}inline;{$ENDIF}
 
     // Collects when pressure has been latched by an external reservation or
     // when the live set has crossed the reserve below the ceiling. AForce
@@ -362,6 +365,13 @@ type
       const AProtect: TGCManagedObject = nil): Boolean;
     function TryReserveExternalBytes(const ABytes: Int64;
       const AProtect: TGCManagedObject = nil): Boolean;
+    // Charges ABytes when they fit under MaxBytes now, and never collects.
+    // For a caller that cannot be a safe point: the bytecode VM charges its
+    // stack growth here from inside call setup, where the callee, receiver
+    // and arguments can still be held only in Pascal locals, and settles a
+    // refused charge at its next instruction boundary instead (ADR 0130).
+    // Release with ReleaseExternalBytes.
+    function TryChargeExternalBytes(const ABytes: Int64): Boolean;
     procedure ReleaseExternalBytes(const ABytes: Int64);
     function ExchangeMemoryPressureCountdown(
       const ACountdown: PInteger): PInteger;
@@ -1254,7 +1264,7 @@ begin
     FMemoryPressureCountdown^ := 0;
 end;
 
-function TGarbageCollector.PressureReserve: Int64;
+function TGarbageCollector.MemoryPressureReserve: Int64;
 begin
   Result := FMaxBytes div 8;
   if Result < MEMORY_PRESSURE_COLLECTION_MIN_RESERVE then
@@ -1286,7 +1296,7 @@ begin
   if (FMaxBytes <= 0) or FCollecting or FMemoryLimitFiring then
     Exit;
 
-  Reserve := PressureReserve;
+  Reserve := MemoryPressureReserve;
   Result := ABytesAllocated >= (FMaxBytes - Reserve);
 end;
 
@@ -1294,7 +1304,7 @@ function TGarbageCollector.HeapTriggerBytes: Int64;
 var
   Reserve: Int64;
 begin
-  Reserve := PressureReserve;
+  Reserve := MemoryPressureReserve;
   Result := FMaxBytes - Reserve;
   // The trigger sits one pressure reserve below the ceiling, like the
   // tracked-bytes trigger. When what the last collection left behind already
@@ -1624,6 +1634,34 @@ begin
   CriticalSectionEnter(FAccountingLock);
   try
     Result := TryChargeExternalBytesLocked(ABytes);
+  finally
+    CriticalSectionLeave(FAccountingLock);
+  end;
+end;
+
+function TGarbageCollector.TryChargeExternalBytes(
+  const ABytes: Int64): Boolean;
+begin
+  if ABytes <= 0 then
+    Exit(True);
+  // Charged the way RegisterObject charges a value, not the way
+  // TryChargeExternalBytesLocked charges a reservation: no pressure latch.
+  // A latch would arm a collection at the next poll for every charge made
+  // within the reserve below the ceiling, and a generator charges its
+  // suspended frame at every await, so an async chain near the ceiling would
+  // collect at every await. The periodic pressure check sees these bytes
+  // like any others.
+  CriticalSectionEnter(FAccountingLock);
+  try
+    Result := FitsWithinLimitLocked(ABytes);
+    if Result then
+    begin
+      Inc(FBytesAllocated, ABytes);
+      Inc(FExternalBytes, ABytes);
+      Inc(FTotalBytesAllocated, ABytes);
+      if FBytesAllocated > FPeakBytesAllocated then
+        FPeakBytesAllocated := FBytesAllocated;
+    end;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;

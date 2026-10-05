@@ -162,6 +162,29 @@ capacity can exceed its currently allocated native buffer. It preserves
 non-collecting primitive reads while reducing physical copying; see
 [ADR 0116](adr/0116-bounded-string-prefixes.md).
 
+The bytecode VM's stacks are charged as well. The register, local-cell,
+argument, frame and closed-numeric-frame stacks are charged for everything they
+hold past their initial capacities. A stack shrinks back at an instruction
+boundary once the recursion that grew it has returned, and the VM releases the
+rest when it is destroyed. A generator or async function charges the frame it
+suspends: its registers, local cells, arguments and handler entries. The charge
+covers the largest frame that generator has held, and is released when the
+generator finishes or is destroyed. With `--max-stack=0` this charge is all
+that stops a bytecode recursion. Deep stacks grow only up to the
+memory-pressure reserve below the ceiling. Stacks smaller than that reserve
+may use it, so a program whose heap fills the ceiling can still make calls.
+The refusal is the catchable `RangeError: Maximum call stack size exceeded`.
+
+A stack grows inside call setup, which can neither collect nor throw. So a
+growth that does not fit is made uncharged, and the next instruction boundary
+settles it: it collects, then charges the growth or throws.
+`TGarbageCollector.TryChargeExternalBytes` is the non-collecting charge both
+sites use. Unlike `TryReserveExternalBytes`, it does not latch memory pressure.
+The per-frame call-stack and execution-context entries are not charged, and
+neither is the refused error's stack trace, which lists every frame. Peak
+resident memory therefore still runs to two to three times the ceiling. See
+[ADR 0130](adr/0130-vm-stacks-are-charged-to-the-memory-budget.md).
+
 ### Gated growth points
 
 Backing storage sized by the running script is checked against the ceiling *before* it is allocated, without being charged to it (`Goccia.MemoryLimit`: `CanAllocateNativeBytes` / `RequireNativeBytes`, raising the host-catchable `TGocciaMemoryLimitError`). Two growth points are gated: array element extension (`ExtendElementsWithHoles`) and object property storage, where the map's entry and bucket arrays grow past a small-block threshold. Both belong to containers with no hook to release a reservation, so a charge would leak budget the engine could never give back; a gate bounds the peak instead. What is reported to the gate is the *transient* footprint — the block being allocated plus the block still live while it is — because `SetLength` may allocate and copy rather than extend in place, and compaction holds both entry arrays at once by construction.
