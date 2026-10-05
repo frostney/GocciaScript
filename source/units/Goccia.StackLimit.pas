@@ -60,8 +60,7 @@ procedure CheckStackDepth(const ACurrentDepth: Integer);
 // NATIVE_STACK_LIMIT_UNSET until the first check that needs it looks it up.
 // The first NATIVE_REENTRY_UNCHECKED_DEPTH are let through unchecked, so a
 // program whose native re-entries do not nest never asks the system for the
-// bounds of its stack, which on the Linux main thread means reading
-// /proc/self/maps.
+// bounds of its stack, which on Linux means reading /proc/self/maps.
 procedure CheckNativeStackHeadroom(const ADepth: Integer;
   var ALimit: NativeUInt);
 // The lowest native stack address a native re-entry may start at on the
@@ -94,6 +93,7 @@ implementation
 
 uses
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
+  {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, UnixType,{$IFEND}
 
   Goccia.Error.Messages,
   Goccia.Values.ErrorHelper;
@@ -202,44 +202,109 @@ begin
   Result := (ASize > 0) and (StackTop > ASize);
 end;
 {$ELSEIF DEFINED(LINUX)}
-type
-  // pthread_attr_t is 56 bytes on 64-bit glibc and musl and 36 on 32-bit.
-  TPthreadAttrBuffer = array[0..127] of Byte;
+const
+  // The kernel keeps a growing stack this far above the mapping below it
+  // (stack_guard_gap, 256 pages by default).
+  STACK_GUARD_GAP = 1024 * 1024;
 
-function pthread_self: NativeUInt; cdecl; external 'c' name 'pthread_self';
-function pthread_getattr_np(AThread: NativeUInt;
-  AAttr: Pointer): Integer; cdecl; external 'c' name 'pthread_getattr_np';
-function Pthread_attr_getstack(AAttr: Pointer; AStackAddr: PPointer;
-  AStackSize: PNativeUInt): Integer; cdecl;
-  external 'c' name 'pthread_attr_getstack';
-function Pthread_attr_destroy(AAttr: Pointer): Integer; cdecl;
-  external 'c' name 'pthread_attr_destroy';
+// Parses the "start-end" address range at the start of a /proc/self/maps
+// line.
+function TryParseMapRange(const ALine: AnsiString;
+  out AStart, AEnd: NativeUInt): Boolean;
+var
+  I, Digit: Integer;
+  Value: NativeUInt;
+  InEnd: Boolean;
+begin
+  AStart := 0;
+  AEnd := 0;
+  Value := 0;
+  InEnd := False;
+  for I := 1 to Length(ALine) do
+  begin
+    case ALine[I] of
+      '0'..'9': Digit := Ord(ALine[I]) - Ord('0');
+      'a'..'f': Digit := Ord(ALine[I]) - Ord('a') + 10;
+      'A'..'F': Digit := Ord(ALine[I]) - Ord('A') + 10;
+      '-':
+        begin
+          if InEnd then
+            Exit(False);
+          AStart := Value;
+          Value := 0;
+          InEnd := True;
+          Continue;
+        end;
+    else
+      Break;
+    end;
+    Value := Value * 16 + NativeUInt(Digit);
+  end;
+  AEnd := Value;
+  Result := InEnd and (AEnd > AStart);
+end;
 
+// Reads the mapping that holds the running frame from /proc/self/maps, and
+// so needs neither libc nor libpthread: glibc before 2.34 keeps
+// pthread_getattr_np in libpthread, which not every program links. A thread
+// stack is a mapping of its own. The main thread's is marked [stack] and
+// grows down to RLIMIT_STACK below its top, but not into the guard gap above
+// the mapping beneath it.
 function TryGetSystemStackBounds(out ALow, ASize: NativeUInt): Boolean;
 var
-  Attr: TPthreadAttrBuffer;
-  StackAddr: Pointer;
-  StackSize: NativeUInt;
+  Maps: TextFile;
+  Line: AnsiString;
+  Position, MapStart, MapEnd, PreviousEnd, Size: NativeUInt;
+  Limits: TRLimit;
 begin
   ALow := 0;
   ASize := 0;
-  FillChar(Attr, SizeOf(Attr), 0);
-  // For the main thread glibc derives the bounds from the stack mapping and
-  // RLIMIT_STACK, which is what bounds its growth.
-  if pthread_getattr_np(pthread_self, @Attr) <> 0 then
-    Exit(False);
+  Result := False;
+  Position := NativeStackPosition;
+  AssignFile(Maps, '/proc/self/maps');
+  {$I-}
+  Reset(Maps);
+  {$I+}
+  if IOResult <> 0 then
+    Exit;
   try
-    StackAddr := nil;
-    StackSize := 0;
-    Result := (Pthread_attr_getstack(@Attr, @StackAddr, @StackSize) = 0) and
-      (StackSize > 0);
-    if Result then
+    PreviousEnd := 0;
+    while not Eof(Maps) do
     begin
-      ALow := NativeUInt(StackAddr);
-      ASize := StackSize;
+      ReadLn(Maps, Line);
+      if not TryParseMapRange(Line, MapStart, MapEnd) then
+        Continue;
+      if (Position >= MapStart) and (Position < MapEnd) then
+      begin
+        if Pos('[stack]', Line) > 0 then
+        begin
+          if (FpGetRLimit(RLIMIT_STACK, @Limits) = 0) and
+             (Limits.rlim_cur <> High(rlim_t)) then
+            Size := NativeUInt(Limits.rlim_cur)
+          else
+            Size := StackLength;
+          if MapEnd - PreviousEnd < Size + STACK_GUARD_GAP then
+          begin
+            if MapEnd - PreviousEnd <= STACK_GUARD_GAP then
+              Exit;
+            Size := MapEnd - PreviousEnd - STACK_GUARD_GAP;
+          end;
+          if Size > MapEnd then
+            Exit;
+          ALow := MapEnd - Size;
+          ASize := Size;
+        end
+        else
+        begin
+          ALow := MapStart;
+          ASize := MapEnd - MapStart;
+        end;
+        Exit(ASize > 0);
+      end;
+      PreviousEnd := MapEnd;
     end;
   finally
-    Pthread_attr_destroy(@Attr);
+    CloseFile(Maps);
   end;
 end;
 {$ELSE}
