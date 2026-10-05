@@ -157,6 +157,7 @@ type
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
     procedure TestStrictTypesHintOnlyEnforcedLocals;
+    procedure TestStrictVarRedeclarationInCatchChecksVarType;
     procedure TestSwitchExitJumpsCloseUpvalues;
   public
     procedure SetupTests; override;
@@ -302,6 +303,8 @@ begin
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
   Test('Strict types hint only enforced locals', TestStrictTypesHintOnlyEnforcedLocals);
+  Test('Strict var redeclaration in a catch block checks the var type',
+    TestStrictVarRedeclarationInCatchChecksVarType);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
 end;
 
@@ -2741,6 +2744,36 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
     Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictVarRedeclarationInCatchChecksVarType;
+var
+  Module: TGocciaBytecodeModule;
+  Instruction: UInt32;
+  I, CheckCount: Integer;
+begin
+  // The redeclaration's initializer is stored into the function's var
+  // binding, so it is checked against that binding's enforced type, not
+  // against the same-named catch parameter ResolveLocal would find.
+  Module := CompileSource(
+    'const f = () => 1; var x: string = "a"; ' +
+    'try { throw 0; } catch (x) { var x = f(); }',
+    True, False, False, False, False, False, False, False, True);
+  try
+    CheckCount := 0;
+    for I := 0 to Module.TopLevel.CodeCount - 1 do
+    begin
+      Instruction := Module.TopLevel.GetInstruction(I);
+      if TGocciaOpCode(DecodeOp(Instruction)) = OP_CHECK_TYPE then
+      begin
+        Inc(CheckCount);
+        Expect<Integer>(DecodeB(Instruction)).ToBe(Ord(sltString));
+      end;
+    end;
+    Expect<Integer>(CheckCount).ToBe(1);
   finally
     Module.Free;
   end;

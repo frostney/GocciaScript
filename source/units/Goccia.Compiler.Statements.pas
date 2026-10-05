@@ -869,11 +869,13 @@ begin
     else
       TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
 
-    // A var redeclaration assigns to the existing binding, so an initializer
-    // that brings no type of its own is checked against the enforced one.
+    // A var redeclaration stores into the existing var binding, so an
+    // initializer that brings no type of its own is checked against the type
+    // enforced on that binding. ResolveLocal could pick a same-named catch
+    // parameter instead (ES2026 B.3.4), which is not the slot written here.
     if (TypeHint = sltUntyped) and IsVarRedeclaration then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
       if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
         TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
     end;
