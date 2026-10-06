@@ -5,7 +5,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "address-feedback/SKILL.md",
-      "computedHash": "086806df5d48191dc24433a8de7ec78262194cefa371492b8ba8c3fb5a729d4d"
+      "computedHash": "7fe3084656a05181cd3c18da61012e7a0290185c3f04bd53782e423bceca1090"
     },
     "agent-writing": {
       "source": "frostney/known-good-route",
@@ -47,13 +47,13 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "deliver/SKILL.md",
-      "computedHash": "88548285f77be323ee451ec5280bbaa6c59ded1d488ed0e797deb5dd68751136"
+      "computedHash": "5ae935eb7330a01ae7a18f64b4bf0ae32d03c8a8255c3398270e2bcd4d346596"
     },
     "delivery-wait": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "delivery-wait/SKILL.md",
-      "computedHash": "50bfd48347318aaf0e54f814bfdc91f5e84e59d7fbe5679d749594c08d6a11e3"
+      "computedHash": "aa5fe976e758237191f1c69fbfcf5f4a5a44e83e89bc21fe78370beff18805f4"
     },
     "documentation-writer": {
       "source": "github/awesome-copilot",
@@ -77,7 +77,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "git-workflow/SKILL.md",
-      "computedHash": "3006d6c538f022813b7b2903e237083cfe67820afc9be09b7bf110f5d7c330a8"
+      "computedHash": "ae0b46e6be6e1e25a12bdf657d7155712708ac415cbd9d50b7ec5df1dab6683a"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
@@ -101,7 +101,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement/SKILL.md",
-      "computedHash": "3e3add8fd92b94a7061bd44b498b661c262976d99ccdd528a4b4a101b02e8977"
+      "computedHash": "277a101779243665c99ab0b7c6cdb2b6a4403fb2ccc3f10ae18ef5c0fc510e52"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
