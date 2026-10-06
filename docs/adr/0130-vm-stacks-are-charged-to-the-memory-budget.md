@@ -200,3 +200,5 @@ PR #1483 lowered the initial capacities from 4,096 and 64 entries to 64 and
 8 while this change was in review, so more calls take the growth path. The
 suite and the instruction-count comparison were run with both sets of
 capacities.
+
+**Refined by [ADR 0132](0132-call-stack-records-and-stack-copies-are-charged.md):** the call-stack, execution-context and handler entries, and the copy a stack growth makes, are charged as well.

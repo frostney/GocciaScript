@@ -11693,11 +11693,19 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
 // charged nor gated before, and this script grew until the kernel's OOM
 // killer stopped it (#1472). The refusal must be a catchable RangeError, and
 // the charge must be given back once the recursion has unwound: the 24 MiB
-// ArrayBuffer after it does not fit beside the ~56 MiB the stacks hold at the
+// ArrayBuffer after it does not fit beside the ~44 MiB the stacks hold at the
 // refusal. --max-instructions is only the backstop that keeps a regression
 // from taking the CI host with it: the refusal needs about 1M instructions
 // here, while 4M without one reach ~800k frames and ~340 MiB resident, which
 // fails the RSS ceiling below.
+//
+// The ceiling must also bound what the process holds when the RangeError
+// fires (ADR 0132): the thread's call-stack and
+// execution-context records are charged with the stacks, every stack is
+// charged for its capacity, and a growth leaves room under the ceiling to copy
+// the largest stack. Peak RSS is compared with an idle run of the same binary,
+// so that the bound does not depend on how much a platform's runtime and
+// libraries take before the script starts.
 await section("Memory budget: unbounded bytecode recursion is refused at the ceiling...", async () => {
   const tmp = makeTmp();
   try {
@@ -11724,16 +11732,27 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     const refused = run.output.match(/RangeError: Maximum call stack size exceeded at (\d+)/);
     if (!refused)
       throw new Error(`Expected a caught "Maximum call stack size exceeded" RangeError:\n${run.output}`);
-    // Measured at 195,413 frames. A refusal far earlier would come from
+    // Measured at 177,478 frames. A refusal far earlier would come from
     // something other than the ceiling.
     if (Number(refused[1]) < 100000)
       throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
     if (!run.output.includes(`after ${24 * 1024 * 1024}`))
       throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
-    // Measured ~147 MiB: the charged stacks and the per-frame call-stack and
-    // execution-context entries the charge does not cover. The RangeError's
-    // stack trace lists at most 100 frames.
-    assertPeakRssBelow(run, "unbounded bytecode recursion", 256 * 1024 * 1024);
+    const idle = join(tmp, "idle.js");
+    writeFileSync(idle, 'console.log("idle");\n');
+    const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    // Measured 69.4 to 70.3 MiB above an idle run's 11.0 to 11.3 MiB over 12
+    // runs on Linux x64, 1.09 times the ceiling. Before the call-stack records
+    // and the stack copies were charged, the same run held 132 MiB above it,
+    // 2.07 times the ceiling. The bound leaves 13 MiB for other platforms'
+    // allocators and page sizes.
+    if (idleRun.peakRssBytes !== null)
+      assertPeakRssBelow(
+        run,
+        "unbounded bytecode recursion, above an idle run",
+        idleRun.peakRssBytes + 1.3 * 64 * 1024 * 1024,
+      );
 
     // A heap that fills most of the ceiling must not turn an ordinary
     // recursion into a stack overflow: small stacks may still grow into the
@@ -11790,6 +11809,46 @@ await section("Memory budget: unbounded bytecode recursion is refused at the cei
     // Measured 96 bytes a generator.
     if (!unstarted || Number(unstarted[1]) < 2000 * 48)
       throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
+
+    // A frame inside a try block also holds an exception handler, which is
+    // charged with the stacks (ADR 0132) and given back once the recursion
+    // has returned. Each recursion runs in its own process, so that both
+    // start from the same stack capacities; what a try block adds at 1,000
+    // levels is then measured at 21,840 bytes, and 6,000 before the handlers
+    // were charged.
+    const recursionCharge = (name: string, body: string): { charged: number; kept: number } => {
+      const file = join(tmp, `${name}.js`);
+      writeFileSync(
+        file,
+        "const step = (x) => x + 1;\n" +
+          "const runAWhile = () => [...Array(4096).keys()].map(step).length;\n" +
+          "let peak = 0;\n" +
+          "const atBottom = () => { runAWhile(); peak = Goccia.gc.bytesAllocated; return 0; };\n" +
+          `const recurse = (n) => { ${body} };\n` +
+          "runAWhile(); Goccia.gc();\n" +
+          "const before = Goccia.gc.bytesAllocated;\n" +
+          "recurse(1000);\n" +
+          "runAWhile(); Goccia.gc();\n" +
+          'console.log("charged " + (peak - before) + " kept " + (Goccia.gc.bytesAllocated - before));\n',
+      );
+      const result = Bun.spawnSync([RUNNER, "--mode=bytecode", file], { stdout: "pipe", stderr: "pipe" });
+      const out = result.stdout.toString() + result.stderr.toString();
+      const match = out.match(/charged (-?\d+) kept (-?\d+)/);
+      if (result.exitCode !== 0 || !match) throw new Error(`The ${name} recursion did not run:\n${out}`);
+      return { charged: Number(match[1]), kept: Number(match[2]) };
+    };
+    const plainCharge = recursionCharge("plain", "if (n === 0) return atBottom(); return 1 + recurse(n - 1);");
+    const guardedCharge = recursionCharge(
+      "guarded",
+      "try { if (n === 0) return atBottom(); return 1 + recurse(n - 1); } catch (e) { throw e; }",
+    );
+    if (guardedCharge.charged - plainCharge.charged < 1000 * 12)
+      throw new Error(
+        `A recursion through try blocks was not charged for its handlers: ` +
+          `${guardedCharge.charged} bytes against ${plainCharge.charged} without them`,
+      );
+    if (guardedCharge.kept >= 8 * 1024)
+      throw new Error(`A recursion through try blocks kept ${guardedCharge.kept} bytes of charge after it returned`);
   } finally {
     clean(tmp);
   }
