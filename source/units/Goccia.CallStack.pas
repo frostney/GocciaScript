@@ -4,6 +4,13 @@ unit Goccia.CallStack;
 
 interface
 
+const
+  { The most frames CaptureStackTrace renders. A deeper stack keeps its
+    innermost frames and ends with a `    ... N more frames` line, so building
+    an error costs the same at any depth. JavaScriptCore's default
+    Error.stackTraceLimit is also 100 (SpiderMonkey keeps 128, V8 10). }
+  STACK_TRACE_FRAME_LIMIT = 100;
+
 type
   // Resolves a deferred call frame's function template (stored as an opaque
   // pointer so this low-level unit stays decoupled from the bytecode units)
@@ -74,7 +81,13 @@ type
     procedure Push(const AFunctionName, AFilePath: string; const ALine, AColumn: Integer);
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
+    // The caller makes room first (Count < Capacity): the VM grows this
+    // stack itself, through SetCapacity, so that the growth is charged to
+    // --max-memory with its own stacks (ADR 0132).
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
+    // Resizes the frame records to ACapacity entries, which must be at least
+    // Count. Used to grow ahead of PushTemplate and to shrink an idle stack.
+    procedure SetCapacity(const ACapacity: Integer);
     { Stamps the currently executing frame with a source position.
 
       A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
@@ -104,7 +117,10 @@ type
 
     { Captures the current call stack as a formatted string.
       AErrorName and AMessage form the first line: "ErrorName: message".
-      ASkipTop omits the topmost N frames (e.g. 1 to skip the Error constructor). }
+      ASkipTop omits the topmost N frames (e.g. 1 to skip the Error constructor).
+      At most STACK_TRACE_FRAME_LIMIT frames are rendered, innermost first; a
+      deeper stack ends with one `    ... N more frames` line instead of the
+      rest, which are neither resolved nor formatted. }
     function CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
 
     { The resolved source location of the frame CaptureStackTrace would render
@@ -121,6 +137,7 @@ type
       captured. }
     property LocationResolver: TGocciaFrameLocationResolver
       read FLocationResolver write FLocationResolver;
+    property Capacity: Integer read FCapacity;
   end;
 
 { A deferred frame with no position stamped on it: the VM has made no call
@@ -172,7 +189,13 @@ end;
 
 procedure TGocciaCallStack.Grow;
 begin
-  FCapacity := FCapacity * 2;
+  SetCapacity(FCapacity * 2);
+end;
+
+procedure TGocciaCallStack.SetCapacity(const ACapacity: Integer);
+begin
+  Assert(ACapacity >= FCount, 'Call stack capacity below its frame count');
+  FCapacity := ACapacity;
   SetLength(FFrames, FCapacity);
 end;
 
@@ -197,8 +220,7 @@ procedure TGocciaCallStack.PushTemplate(const ATemplate: Pointer; const AFallbac
 var
   Frame: PGocciaCallFrame;
 begin
-  if FCount >= FCapacity then
-    Grow;
+  Assert(FCount < FCapacity, 'PushTemplate without room on the call stack');
   Frame := @FFrames[FCount];
   Frame^.Template := ATemplate;
   if Pointer(Frame^.FunctionName) <> nil then
@@ -346,7 +368,7 @@ end;
 
 function TGocciaCallStack.CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
 var
-  I, EffectiveCount: Integer;
+  I, EffectiveCount, LowestRendered: Integer;
   Frame: TGocciaCallFrame;
   FuncName, Location, ResolvedName, ResolvedPath: string;
   Locations: TGocciaFrameLocationArray;
@@ -364,7 +386,15 @@ begin
     EffectiveCount := 0;
   Locations := ResolveLocations;
 
-  for I := EffectiveCount - 1 downto 0 do
+  // A deep stack (a stack-overflow RangeError has --max-stack frames) renders
+  // only its innermost frames: the frames below the limit are skipped without
+  // their names being resolved or their lines formatted; ResolveLocations
+  // still works out every frame's line and column.
+  LowestRendered := EffectiveCount - STACK_TRACE_FRAME_LIMIT;
+  if LowestRendered < 0 then
+    LowestRendered := 0;
+
+  for I := EffectiveCount - 1 downto LowestRendered do
   begin
     Frame := FFrames[I];
     // Deferred bytecode VM frames carry only a template pointer; materialise
@@ -399,6 +429,11 @@ begin
 
     Result := Result + #10 + '    at ' + FuncName + ' (' + Location + ')';
   end;
+
+  if LowestRendered = 1 then
+    Result := Result + #10 + '    ... 1 more frame'
+  else if LowestRendered > 1 then
+    Result := Result + #10 + '    ... ' + IntToStr(LowestRendered) + ' more frames';
 end;
 
 end.

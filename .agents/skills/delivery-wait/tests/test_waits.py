@@ -803,10 +803,17 @@ class WaitCommandsTest(unittest.TestCase):
             "--pr", "7", "--head", "head-1", "--all-workflows",
         )
         self.assertEqual(inspected["state"], "waiting")
+        # The census sequence, not a wall-clock deadline, bounds the wait: a
+        # short deadline can pass before the first observation completes.
         self.reset_census()
-        _, waited = self.census_wait(deadline=self.short_deadline())
-        self.assertEqual(waited["state"], "timed-out")
-        self.assertGreater(waited["metrics"]["observations"], 1)
+        complete = census(workflow_run(101, matrix_jobs(39)))
+        self.write_scenario(census=[partial, partial, complete])
+        _, waited = self.census_wait()
+        self.assertEqual(waited["state"], "satisfied")
+        self.assertEqual(len(waited["observation"]["runs"][0]["jobs"]), 39)
+        # Two identical partial observations, then two complete ones: a stable
+        # partial census never satisfies the wait.
+        self.assertEqual(waited["metrics"]["observations"], 4)
 
     def test_all_workflows_waits_for_jobs_that_spawn_later(self) -> None:
         self.write_scenario(census=[

@@ -61,8 +61,8 @@ This loop covers development only: `/deliver` owns end-to-end delivery and
 `/create-pr` owns publication. Reuse the confirmed requirements and approach.
 
 1. Reuse or create a focused branch/worktree under `git-workflow`. Apply its
-   clean-worktree and fresh-base gate before new work; preserve owned in-progress
-   changes when resuming the same implementation.
+   clean-worktree, fresh-base and default-branch health gates before new work;
+   preserve owned in-progress changes when resuming the same implementation.
 2. Implement the smallest complete change, then run and inspect the real result.
    For UI/UX work, compare affected states with the requested appearance,
    interactions and fidelity; include relevant accessibility and viewports.

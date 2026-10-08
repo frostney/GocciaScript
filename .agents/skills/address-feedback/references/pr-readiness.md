@@ -148,6 +148,7 @@ came first.
 | `blocked-unanswered` | `run`, `status` | Blocked: CodeRabbit did not answer the trigger. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-stalled` | `run`, `status` | Blocked: CodeRabbit's review never finished. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-unknown-wait` | `run`, `status` | Blocked: CodeRabbit refused the head without a stated wait. A person reads its notice on the PR and triggers when it allows. |
+| `blocked-no-capacity` | `run`, `status` | Blocked: a person checks CodeRabbit seats or plan. |
 | `blocked-lock-loss` | `run`, `status` | Blocked: CodeRabbit stopped the head's review after lock loss again after one retry. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-unconfirmed`, `unrecognized-status` | `run`, `status` | Blocked: escalate to a person. |
 | `closed` | `run`, `status` | Stop. |

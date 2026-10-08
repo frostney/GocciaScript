@@ -74,6 +74,9 @@ type
     procedure TestPushesOutsideTheGuardingTryLeakOnRaise;
     procedure TestCrossThreadReleaseKeepsAccountingExact;
     procedure TestRegisterObjectAdvancesEveryByteCounter;
+    procedure TestHeapTriggerKeepsGarbageNearTheCeiling;
+    procedure TestHeapTriggerBacksOffAboveSurvivors;
+    procedure TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
     procedure TestNonCollectingChargeNeverCollectsOrLatches;
   end;
 
@@ -155,8 +158,183 @@ begin
     TestCrossThreadReleaseKeepsAccountingExact);
   Test('Registering an object advances the live, total and peak byte counters',
     TestRegisterObjectAdvancesEveryByteCounter);
+  { Heap-triggered collection reads the FPC heap manager's status; other
+    compilers report no heap total, so the trigger is inert there. }
+  {$IFDEF FPC}
+  Test('Heap growth triggers collection before garbage outgrows the ceiling',
+    TestHeapTriggerKeepsGarbageNearTheCeiling);
+  Test('Heap-triggered collection backs off when the heap it cannot reclaim exceeds the ceiling',
+    TestHeapTriggerBacksOffAboveSurvivors);
+  Test('The heap trigger comes back down once heap it could not reclaim is freed',
+    TestHeapTriggerReturnsAfterUnownedHeapIsFreed);
+  {$ENDIF}
   Test('A non-collecting charge neither collects nor latches pressure',
     TestNonCollectingChargeNeverCollectsOrLatches);
+end;
+
+const
+  { Registrations between two simulated safe points. The interpreter checks
+    after every expression and the VM every 1024 instructions, so a checkpoint
+    per few dozen allocations is the realistic shape. }
+  CHECKPOINT_INTERVAL = 64;
+
+{ Allocates ACount unreachable objects, passing a pressure checkpoint every
+  CHECKPOINT_INTERVAL of them, and returns the highest heap-manager in-use
+  total observed at a checkpoint. }
+function ChurnGarbage(const AGC: TGarbageCollector;
+  const ACount: Integer): Int64;
+var
+  I: Integer;
+  Heap: Int64;
+begin
+  Result := CurrentHeapBytes;
+  for I := 1 to ACount do
+  begin
+    TGocciaObjectValue.Create;
+    if I mod CHECKPOINT_INTERVAL = 0 then
+    begin
+      Heap := CurrentHeapBytes;
+      if Heap > Result then
+        Result := Heap;
+      AGC.CollectForMemoryPressure(nil);
+    end;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapTriggerKeepsGarbageNearTheCeiling;
+const
+  MIN_CEILING_ABOVE_HEAP = 8 * 1024 * 1024;
+  GARBAGE_OBJECTS = 400000;
+  { Sampling drift (HEAP_SAMPLE_INTERVAL registrations) plus the allocation
+    between two checkpoints, with room for allocator rounding. }
+  SLACK = 2 * 1024 * 1024;
+var
+  CollectionsBefore, HeapCollectionsBefore: Integer;
+  GC: TGarbageCollector;
+  HeapAtStart: Int64;
+  Headroom: Int64;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  HeapAtStart := CurrentHeapBytes;
+  { The headroom must stay above two pressure reserves (a reserve is an eighth
+    of the ceiling), or the back-off for heap the collector cannot reclaim
+    would engage and this would test that instead. Matching the starting heap
+    keeps it there however large the heap already is. }
+  Headroom := MIN_CEILING_ABOVE_HEAP;
+  if Headroom < HeapAtStart then
+    Headroom := HeapAtStart;
+  { The ceiling sits well above what the heap already holds. Each garbage
+    object is charged its InstanceSize but costs the heap manager more than
+    twice that (its property map and allocator rounding are uncharged), so a
+    trigger on BytesAllocated alone lets the heap run past twice the ceiling
+    before the first collection. }
+  GC.MaxBytes := HeapAtStart + Headroom;
+  try
+    CollectionsBefore := GC.TotalCollections;
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+
+    Expect<Boolean>(GC.HeapTriggeredCollections > HeapCollectionsBefore)
+      .ToBe(True);
+    Expect<Boolean>(GC.TotalCollections > CollectionsBefore).ToBe(True);
+    Expect<Boolean>(PeakHeap <= GC.MaxBytes + SLACK).ToBe(True);
+  finally
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapTriggerBacksOffAboveSurvivors;
+const
+  CEILING_ABOVE_HEAP = 4 * 1024 * 1024;
+  { Heap the collector cannot reclaim: more than the ceiling allows on its
+    own, as an engine-held buffer or a large AST would be. }
+  RETAINED_BYTES = 12 * 1024 * 1024;
+  GARBAGE_OBJECTS = 200000;
+  { Without the back-off the trigger would sit one pressure reserve (512 KiB
+    at this ceiling) above the retained heap and collect every few thousand
+    allocations: about seventy collections for this churn. }
+  MAX_HEAP_COLLECTIONS = 12;
+  SLACK = 2 * 1024 * 1024;
+var
+  GC: TGarbageCollector;
+  HeapAfterRetaining: Int64;
+  HeapCollectionsBefore: Integer;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+  Retained: Pointer;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  GetMem(Retained, RETAINED_BYTES);
+  try
+    FillChar(Retained^, RETAINED_BYTES, 0);
+    GC.Collect;
+    HeapAfterRetaining := CurrentHeapBytes;
+    Expect<Boolean>(HeapAfterRetaining > GC.MaxBytes).ToBe(True);
+
+    HeapCollectionsBefore := GC.HeapTriggeredCollections;
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+
+    { Collecting cannot get under the ceiling, so it runs once per growth
+      step of half what the last collection left rather than at every
+      checkpoint, and the heap peaks near 1.5x that. Refusal still compares
+      BytesAllocated, which stays far below the ceiling: nothing is refused. }
+    Expect<Boolean>(GC.HeapTriggeredCollections > HeapCollectionsBefore)
+      .ToBe(True);
+    Expect<Boolean>(GC.HeapTriggeredCollections - HeapCollectionsBefore <=
+      MAX_HEAP_COLLECTIONS).ToBe(True);
+    Expect<Boolean>(PeakHeap <= HeapAfterRetaining +
+      HeapAfterRetaining div 2 + SLACK).ToBe(True);
+  finally
+    FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
+end;
+
+procedure TTestGarbageCollector.TestHeapTriggerReturnsAfterUnownedHeapIsFreed;
+const
+  CEILING_ABOVE_HEAP = 8 * 1024 * 1024;
+  RETAINED_BYTES = 24 * 1024 * 1024;
+  GARBAGE_OBJECTS = 200000;
+  SLACK = 2 * 1024 * 1024;
+var
+  GC: TGarbageCollector;
+  PeakHeap: Int64;
+  PreviousMaxBytes: Int64;
+  Retained: Pointer;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  PreviousMaxBytes := GC.MaxBytes;
+  GC.MaxBytes := CurrentHeapBytes + CEILING_ABOVE_HEAP;
+  GetMem(Retained, RETAINED_BYTES);
+  try
+    FillChar(Retained^, RETAINED_BYTES, 0);
+    { This collection records a baseline far above the ceiling, so the
+      trigger backs off above it. }
+    GC.Collect;
+    FreeMem(Retained);
+    Retained := nil;
+    { The baseline no longer holds once the unowned block is gone. The next
+      heap sample sees that, and the trigger is back below the ceiling
+      without waiting for a collection to re-measure it. }
+    PeakHeap := ChurnGarbage(GC, GARBAGE_OBJECTS);
+    Expect<Boolean>(PeakHeap <= GC.MaxBytes + SLACK).ToBe(True);
+  finally
+    if Assigned(Retained) then
+      FreeMem(Retained);
+    GC.MaxBytes := PreviousMaxBytes;
+    GC.Collect;
+  end;
 end;
 
 procedure TTestGarbageCollector.TestNonCollectingChargeNeverCollectsOrLatches;

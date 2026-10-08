@@ -17,6 +17,7 @@ import {
   mkdirSync,
   symlinkSync,
   linkSync,
+  realpathSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -771,6 +772,52 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
   }
 }
 
+// -- Block-level function var binding skipped on a collision (bytecode) --------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation and §16.1.7
+// GlobalDeclarationInstantiation, web-compat steps (Annex B.3.2.1 and B.3.2.2
+// up to ES2025): a non-strict block-level function declaration gets a var
+// binding only if no parameter has its name and `var` in its place would not
+// be an early error; B.3.3 puts an `if` clause's function declaration in a
+// block of its own. The JavaScript suite under tests/ covers the shapes both
+// modes get right; the interpreter still lets these block functions write the
+// outer binding, so only bytecode is checked here.
+
+console.log("Bytecode block-level function var binding skipped on a collision...");
+{
+  const cases: [string, string, string][] = [
+    ["parameter with a default", "(() => { function g(a, b = 2) { { function a() {} } return typeof a + ':' + a; } return g(1); })()", "number:1"],
+    ["parameter with a default, switch case", "(() => { function g(a, b = 2) { switch (1) { case 1: function a() {} } return a; } return g(1); })()", "1"],
+    ["parameter, if clause", "(() => { function h(a) { if (true) function a() {} return a; } return h(1); })()", "1"],
+    ["parameter, else clause", "(() => { function h(a) { if (false) ; else function a() {} return a; } return h(1); })()", "1"],
+    ["if clause without a collision", "(() => { function h() { const before = typeof q; if (true) function q() { return 7; } return before + ':' + q(); } return h(); })()", "undefined:7"],
+    ["let in an enclosing block", "(() => { function f() { { let a = 1; { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["let in an enclosing block, parameter with a default", "(() => { function f(x = 0) { { let a = 1; { function a() {} } } try { return a; } catch (e) { return e.name; } } return f(); })()", "ReferenceError"],
+    ["let loop head", "(() => { function f() { for (let a of [1]) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["destructured catch parameter", "(() => { function f() { try { throw {}; } catch ({ a }) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["two declarations in one block both keep it", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return a(); } return f(); })()", "2"],
+    ["same name in a nested block", "(() => { function f() { { function a() { return 1; } { function a() { return 2; } } } return a(); } return f(); })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const flags = ["--mode=bytecode", "--compat-var", "--compat-function", "--compat-non-strict-mode"];
+  const { exitCode, json } = runLoaderJson(source, flags);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode block function cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode block function (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  const scriptRun = runLoaderJson(
+    "const k = 1;\nif (true) function k() {}\nconsole.log(typeof k + ':' + k);\n",
+    flags,
+  );
+  if (scriptRun.exitCode !== 0 || scriptRun.json.output[0] !== "number:1")
+    throw new Error(`Bytecode script if-clause function named like a const expected number:1, got: ${JSON.stringify(scriptRun.json)}`);
+}
+
 // -- --compat-non-strict-mode (Loader + Bundler + TestRunner + Bare) -----------
 
 console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)...");
@@ -1289,6 +1336,71 @@ for (const mode of ["interpreted", "bytecode"]) {
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode} (${mode})`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
+}
+
+console.log("--max-memory (peak resident memory stays near the ceiling)...");
+if (process.platform === "linux") {
+  // BytesAllocated charges each value its InstanceSize, well under half of
+  // what the heap manager actually hands out, so a ceiling compared only
+  // against it let collectable garbage grow to about six times the ceiling
+  // before a collection ran (#1442). The collector now also triggers on the
+  // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
+  // churn garbage far past the ceiling: a flat loop of short-lived objects and
+  // arrays, and Promise jobs drained in batches. Linux only.
+  const ceiling = 64 * 1024 * 1024;
+  // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
+  // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
+  // two readings cannot be confused for these runs: the runner alone is
+  // resident for more than 8 MB, and neither script comes near 8 GB (8 million
+  // KiB) even with no collection at all.
+  const peakBytes = (maxRSS: number) => (maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS);
+  const scripts = {
+    flat: [
+      "let n = 0;",
+      "for (const _ of Array.from({ length: 250000 })) { n += Reflect.ownKeys({ x: 1 }).length; }",
+      "console.log('n', n);",
+      "",
+    ].join("\n"),
+    promise: [
+      "const N = 10000;",
+      "const noop = () => {};",
+      "const idx = Array.from({ length: N }, (_, i) => i);",
+      "const time = async (fn) => { for (const _ of [0, 1, 2, 3, 4]) { idx.forEach(fn); await null; } };",
+      "await time((i) => { Promise.resolve(i).then(noop); });",
+      "await time((i) => { Promise.reject(i).catch(noop); });",
+      "const thrower = async () => { throw 1; }; await time(() => { thrower().catch(noop); });",
+      "const ok = async () => 1; await time(() => { ok().then(noop); });",
+      "console.log('n', idx.length * 25);",
+      "",
+    ].join("\n"),
+  };
+  const expected = { flat: "n 250000", promise: "n 250000" };
+  const dir = mkdtemp("goccia-rss-");
+  try {
+    for (const [name, src] of Object.entries(scripts)) {
+      const path = join(dir, `${name}.js`);
+      writeFileSync(path, src);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync([RUNNER, path, `--mode=${mode}`, `--max-memory=${ceiling}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0 || !out.includes(expected[name as keyof typeof expected]))
+          throw new Error(`${name} (${mode}) at --max-memory=${ceiling} should complete, got exit ${proc.exitCode}: ${out}`);
+        const maxRSS = proc.resourceUsage?.maxRSS;
+        if (typeof maxRSS !== "number" || maxRSS <= 0)
+          throw new Error(`${name} (${mode}): Bun reported no peak RSS for the child`);
+        if (peakBytes(maxRSS) >= 2 * ceiling)
+          throw new Error(`${name} (${mode}) peaked at ${peakBytes(maxRSS)} bytes resident, at or above twice the ${ceiling}-byte ceiling`);
+      }
+    }
+  } finally {
+    clean(dir);
+  }
+} else {
+  console.log("  skipped: peak RSS is asserted on Linux only");
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
@@ -3434,6 +3546,18 @@ console.log("--max-stack (bytecode trampoline)...");
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
+console.log("--max-stack (deep RangeError trace keeps 100 frames)...");
+// A stack trace renders its innermost 100 frames and counts the rest, so the
+// RangeError of a 200,000-deep recursion is as short as one of 101 frames.
+// The frames are the 200,000 calls of f and the top level.
+{
+  const src =
+    'let d = 0; const f = () => { d++; f(); }; try { f(); } catch (e) { const lines = e.stack.split("\\n"); console.log(lines.length, d, lines[lines.length - 1].trim()); }';
+  const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=200000`.text();
+  if (!containsLine(out, "102 200000 ... 199901 more frames"))
+    throw new Error(`A 200,000-deep RangeError should keep 100 frames and count 199,901 more, got: ${out}`);
+}
+
 // -- Console observable behavior (Loader, interpreted + bytecode) ---------------
 
 console.log("Console observable behavior...");
@@ -4520,10 +4644,16 @@ console.log("Entry module linking (bytecode)...");
 console.log("Entry module evaluated once...");
 {
   const tmp = mkdtemp("goccia-entry-once-");
+  // The runner names a relative entry by the working directory getcwd()
+  // reports, and on macOS that has the /var -> /private/var symlink resolved
+  // while tmpdir() keeps /var. abs.mjs must import itself by the spelling
+  // the runner gives it; one file reached through two spellings is #1498.
+  // Plain realpathSync keeps a Windows 8.3 name, as getcwd() does there.
+  const runnerTmp = realpathSync(tmp);
   try {
     const files: Record<string, string> = {
       "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
-      "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "abs.mjs": `import ${JSON.stringify(join(runnerTmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
       "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
       "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
       "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',
