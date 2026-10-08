@@ -235,6 +235,17 @@ begin
       OP_GET_UPVALUE, OP_SET_UPVALUE, OP_SET_UPVALUE_DYNAMIC:
         RequireUpvalue(DecodeBx(Instruction));
 
+      OP_CHECK_BINDING_INITIALIZED:
+        case A of
+          CHECK_BINDING_UPVALUE:
+            RequireUpvalue(DecodeBx(Instruction));
+          CHECK_BINDING_GLOBAL:
+            RequireConstant(DecodeBx(Instruction));
+        else
+          RejectInvalidBytecode(ATemplate, PC,
+            Format('binding-check mode %d is not 0 or 1', [A]));
+        end;
+
       OP_RESOLVE_UPVALUE_REF:
         RequireUpvalue(B);
 
@@ -252,7 +263,7 @@ begin
       OP_PREDECLARE_GLOBAL_LET_LONG, OP_PREDECLARE_GLOBAL_CONST_LONG:
         RequireConstant(DecodeBx(Instruction));
 
-      OP_GET_IMPORT_BINDING:
+      OP_GET_IMPORT_BINDING, OP_CREATE_GLOBAL_IMPORT_BINDING:
         begin
           RequireConstant(B);
           RequireConstant(C);
@@ -571,6 +582,9 @@ begin
     Export_ := AModule.GetExport(I);
     WriteString(Export_.Name);
     WriteUInt16(Export_.LocalSlot);
+    WriteUInt8(UInt8(Ord(Export_.Kind)));
+    WriteString(Export_.ModuleRequest);
+    WriteString(Export_.ImportName);
   end;
 
   WriteFunctionTemplate(AModule.TopLevel);
@@ -686,6 +700,9 @@ var
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
+  LocalName: string;
+  LocalSlot: UInt16;
+  LocalStartPC, LocalEndPC: UInt32;
   DeclarationLine: UInt32;
   DeclarationColumn: UInt16;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
@@ -819,8 +836,16 @@ begin
 
     LocalCount := ReadUInt32;
     RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
+    // Read each field into its own variable: Pascal does not fix the order
+    // in which a call's arguments are evaluated.
     for I := 0 to Integer(LocalCount) - 1 do
-      DebugInfo.AddLocal(ReadString, ReadUInt16, ReadUInt32, ReadUInt32);
+    begin
+      LocalName := ReadString;
+      LocalSlot := ReadUInt16;
+      LocalStartPC := ReadUInt32;
+      LocalEndPC := ReadUInt32;
+      DebugInfo.AddLocal(LocalName, LocalSlot, LocalStartPC, LocalEndPC);
+    end;
 
     Result.DebugInfo := DebugInfo;
   end;
@@ -859,7 +884,9 @@ var
   HasDebug: Boolean;
   ImportCount, ExportCount: UInt16;
   I, J: Integer;
-  ModulePath: string;
+  ExportImportName, ExportName, ExportRequest, ModulePath: string;
+  ExportKindTag: UInt8;
+  ExportSlot: UInt16;
   BindingCount: UInt16;
   Bindings: array of TGocciaModuleBinding;
 begin
@@ -896,7 +923,20 @@ begin
 
   ExportCount := ReadUInt16;
   for I := 0 to ExportCount - 1 do
-    Result.AddExport(ReadString, ReadUInt16);
+  begin
+    { Read in stream order: Pascal does not fix the order in which a call's
+      arguments are evaluated. }
+    ExportName := ReadString;
+    ExportSlot := ReadUInt16;
+    ExportKindTag := ReadUInt8;
+    if ExportKindTag > Ord(High(TGocciaModuleExportKind)) then
+      raise Exception.CreateFmt('Invalid module export kind: %d',
+        [ExportKindTag]);
+    ExportRequest := ReadString;
+    ExportImportName := ReadString;
+    Result.AddExport(ExportName, ExportSlot,
+      TGocciaModuleExportKind(ExportKindTag), ExportRequest, ExportImportName);
+  end;
 
   Result.TopLevel := ReadFunctionTemplate;
   VerifyFunctionTemplate(Result.TopLevel, 1);

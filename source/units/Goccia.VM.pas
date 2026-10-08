@@ -133,6 +133,14 @@ type
     ProfileEntryTimestamp: Int64;
   end;
 
+  // What a VM has accounted for one of its thread's stacks, the call stack or
+  // the execution-context stack. Those belong to the thread, so the account
+  // records which thread's stack the bytes are for (ADR 0132).
+  TGocciaVMThreadStackAccount = record
+    Stack: Pointer;
+    Bytes: Int64;
+  end;
+
   TGocciaVM = class
   private
     FRegisterStack: TGocciaRegisterArray;
@@ -179,6 +187,22 @@ type
     // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
     FNativeExecutionDepth: Integer;
     FMemoryPressureCheckCountdown: Integer;
+    // The register, local-cell, argument, frame and closed-numeric-frame
+    // stacks are charged to the collector for everything they grow past their
+    // initial capacities, so --max-memory bounds a recursion that --max-stack
+    // does not (ADR 0130). Growth happens inside call setup, which is neither
+    // a safe point to collect at nor a consistent point to throw from, so a
+    // growth that does not fit is made uncharged and FStackChargePending asks
+    // the next instruction boundary to settle it or to refuse it.
+    FStackChargedBytes: Int64;
+    FStackUnchargedBytes: Int64;
+    FStackChargeCollector: TGarbageCollector;
+    FStackChargePending: Boolean;
+    // The thread's call stack and execution-context stack are grown by the
+    // VM too, and their growth is charged with its own stacks (ADR 0132). A
+    // shrink gives back no more than the VM accounted for each of them.
+    FCallStackAccount: TGocciaVMThreadStackAccount;
+    FContextStackAccount: TGocciaVMThreadStackAccount;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FClosedNumericFrameStack: array of TGocciaClosedNumericFrame;
@@ -246,11 +270,43 @@ type
     procedure NoteLocalCells(const AWindowCount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     function LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
     procedure AcquireArgumentWindow(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    function StackChargeCollector: TGarbageCollector;
+    function StackAllowance(const AGC: TGarbageCollector): Int64;
+    function StackGrowthLength(const ACurrentLength, ARequiredLength,
+      APreferredLength, AEntrySize: Integer): Integer;
+    procedure GrowRegisterStack(const ARequired: Integer);
+    procedure GrowLocalCellStack(const ARequired: Integer);
+    procedure GrowArgumentStack(const ARequired: Integer);
+    procedure GrowFrameStack;
+    procedure GrowClosedNumericFrameStack;
+    procedure GrowCallStack;
+    procedure PushNamedCallFrame(const AName: string);
+    procedure GrowExecutionContextStack;
+    procedure GrowHandlerStack(const ARequired: Integer);
+    function RecordStackGrowthLength(const ACurrentLength, ARequiredLength,
+      AEntrySize: Integer): Integer;
+    function ThreadStackGrowthLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ACurrentLength, ARequiredLength,
+      AEntrySize: Integer): Integer;
+    function ThreadStackShrunkLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ALength, AUsed, AEntrySize: Integer;
+      var AFreed: Int64): Integer;
+    procedure ShrinkThreadStacks(var AFreed: Int64);
+    function LargestStackBytes: Int64;
+    procedure SettleStackGrowth;
+    procedure ShrinkIdleStacks;
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
     function GetLocalRegister(const AIndex: Integer): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+    { Temporal-dead-zone ReferenceErrors, named from the template's debug
+      locals or upvalue descriptors. Only the throw path calls them, so the
+      binding name costs the non-throwing dispatch nothing. }
+    procedure ThrowUninitializedLocal(const ATemplate: TGocciaFunctionTemplate;
+      const APC, ASlot: Integer);
+    procedure ThrowUninitializedUpvalue(
+      const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
     function GetRegister(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     function GetRegisterFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
@@ -539,6 +595,8 @@ type
     procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
     function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    function ExecuteImportedModule(
+      const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
@@ -646,6 +704,21 @@ const
   LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
+  // Initial capacities of the VM stacks. Growth past them is charged to the
+  // collector, and a stack never shrinks below them (ADR 0130).
+  // The register, local-cell and argument arenas and the frame stack start
+  // small and double on demand (AcquireRegisters, AcquireLocalCells,
+  // AcquireArgumentWindow, EnsureRegisterCapacity, EnsureLocalCapacity,
+  // PushFrame). SetLength zero-fills the whole allocation, so a large initial
+  // size is paid on every engine boot even by a program that needs a handful
+  // of slots: three 4096-slot arenas cost about 30,000 instructions per VM.
+  VM_INITIAL_STACK_SIZE = 64;
+  VM_INITIAL_FRAME_STACK_SIZE = 8;
+  VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE = 64;
+  // The call stack, the execution-context stack and the handler stack grow to
+  // this many entries uncharged; past it the VM grows them like its own
+  // stacks, charged, and shrinks them back no further (ADR 0132).
+  VM_INITIAL_RECORD_STACK_SIZE = 64;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
   // A pooled argument collection keeps its backing store only when the call
   // it served carried at most this many arguments.
@@ -2413,8 +2486,9 @@ begin
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
-// performs, since integer arithmetic on LongInt-range inputs cannot produce
-// NaN, Infinity, negative zero, or fractional results.
+// performs, since integer addition and subtraction on LongInt-range inputs
+// cannot produce NaN, Infinity, negative zero, or fractional results. A product
+// can be negative zero; multiplication goes through VMIntProductResult.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
 function VMIntResult(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
@@ -2428,6 +2502,22 @@ begin
     FloatValue := AValue;
     Result := RegisterFloat(FloatValue);
   end;
+end;
+
+// IEEE 754 multiplication gives a zero product the exclusive-or of the operand
+// signs, so 0 * -1 is -0. That is the one integer operation whose result an
+// integer register cannot hold. ES2026 §6.1.6.1.4 Number::multiply spells out
+// only the -0 operand cases (steps 4 and 5); read literally its last step gives
+// +0 here, but the float path and every engine follow IEEE 754.
+function VMIntProductResult(const ALeft, ARight: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Product: Int64;
+begin
+  Product := ALeft * ARight;
+  if (Product = 0) and ((ALeft < 0) or (ARight < 0)) then
+    Result := RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue)
+  else
+    Result := VMIntResult(Product);
 end;
 
 // ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
@@ -2904,6 +2994,13 @@ type
     FContinuationRegisters: TGocciaRegisterArray;
     FContinuationLocalCells: TGocciaBytecodeCellArray;
     FContinuationHandlers: TGocciaBytecodeHandlerEntryArray;
+    // The largest suspended frame this generator has held, charged to the
+    // collector and released when it finishes or is destroyed (ADR 0130).
+    // The release goes to the collector that took the charge, which outlives
+    // this object (it is freed before its collector shuts down), whichever
+    // thread finishes or frees it.
+    FContinuationChargedBytes: Int64;
+    FContinuationChargeCollector: TGarbageCollector;
     FContinuationPrevCovLine: UInt32;
     FContinuationDynamicVarScope: TGocciaScope;
     FDelegateActive: Boolean;
@@ -2925,6 +3022,7 @@ type
     function RestoreContinuation(var AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; out APrevCovLine: UInt32): Boolean;
     procedure ClearDelegateState;
+    procedure ReleaseContinuationCharge;
   public
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
@@ -2956,7 +3054,6 @@ type
       const AContinuationIP: Integer);
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
@@ -3025,7 +3122,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaVMAsyncGeneratorYieldAwaitHandler = class(TGocciaObjectValue)
@@ -3126,6 +3222,24 @@ function TGocciaResolvedEnvironmentReferenceValue.ToStringLiteral:
   TGocciaStringLiteralValue;
 begin
   Result := TGocciaStringLiteralValue.Create('<environment-reference>');
+end;
+
+// The refusal of a charged VM allocation (ADR 0130): a catchable RangeError.
+// The error object allocates, and the charge it answers was refused because
+// the heap is near the ceiling, so the limit is suspended while it is built,
+// as it is for a value allocation the limit refuses.
+procedure ThrowVMMemoryLimitExceeded(const AGC: TGarbageCollector;
+  const AMessage, ASuggestion: string);
+var
+  WasFiring: Boolean;
+begin
+  WasFiring := AGC.MemoryLimitFiring;
+  AGC.MemoryLimitFiring := True;
+  try
+    ThrowRangeError(AMessage, ASuggestion);
+  finally
+    AGC.MemoryLimitFiring := WasFiring;
+  end;
 end;
 
 { TGocciaVMStackRoot }
@@ -4448,6 +4562,7 @@ end;
 
 destructor TGocciaBytecodeGeneratorObjectValue.Destroy;
 begin
+  ReleaseContinuationCharge;
   FClosure.Free;
   inherited;
 end;
@@ -4485,13 +4600,9 @@ var
   I: Integer;
   LiveLocalCellCount: Integer;
   LiveRegisterCount: Integer;
+  FrameBytes: Int64;
+  GC: TGarbageCollector;
 begin
-  FHasContinuation := True;
-  FContinuationIP := AContinuationIP;
-  FContinuationPrevCovLine := APrevCovLine;
-  FResumeRegister := AResumeRegister;
-  FContinuationDynamicVarScope := FVM.FCurrentDynamicVarScope;
-
   LiveLocalCellCount := FVM.FLocalCellCount;
   while (LiveLocalCellCount > 0) and
         not Assigned(FVM.FLocalCells[LiveLocalCellCount - 1]) do
@@ -4502,6 +4613,43 @@ begin
         (FVM.FRegisters[LiveRegisterCount - 1].Kind = grkUndefined) and
         (LiveRegisterCount > LiveLocalCellCount) do
     Dec(LiveRegisterCount);
+
+  // The suspended frame leaves the VM stacks for this generator, so it is
+  // charged like them (ADR 0130), before anything here changes: a refusal is
+  // a throw at the yield or await. Only growth past the largest frame this
+  // generator has already held is charged, so a generator that yields in a
+  // loop takes the accounting lock once. Nothing can collect here, because
+  // the value being yielded may be held only in the caller's locals, so the
+  // charge is the non-collecting one, as for a value allocation.
+  FrameBytes := Int64(LiveRegisterCount) * SizeOf(TGocciaRegister) +
+    Int64(LiveLocalCellCount) * SizeOf(TGocciaBytecodeCell) +
+    Int64(Length(FArguments)) * SizeOf(TGocciaRegister);
+  if FVM.FHandlerStack.Count > AHandlerBaseCount then
+    Inc(FrameBytes, Int64(FVM.FHandlerStack.Count - AHandlerBaseCount) *
+      SizeOf(TGocciaBytecodeHandlerEntry));
+  if FrameBytes > FContinuationChargedBytes then
+  begin
+    GC := FContinuationChargeCollector;
+    if not Assigned(GC) then
+    begin
+      GC := TGarbageCollector.Instance;
+      FContinuationChargeCollector := GC;
+    end;
+    if Assigned(GC) then
+    begin
+      if not GC.TryChargeExternalBytes(
+         FrameBytes - FContinuationChargedBytes) then
+        ThrowVMMemoryLimitExceeded(GC, SErrorMemoryLimitExceeded,
+          SSuggestMemoryLimitExceeded);
+      FContinuationChargedBytes := FrameBytes;
+    end;
+  end;
+
+  FHasContinuation := True;
+  FContinuationIP := AContinuationIP;
+  FContinuationPrevCovLine := APrevCovLine;
+  FResumeRegister := AResumeRegister;
+  FContinuationDynamicVarScope := FVM.FCurrentDynamicVarScope;
 
   SetLength(FContinuationRegisters, LiveRegisterCount);
   for I := 0 to High(FContinuationRegisters) do
@@ -4544,6 +4692,10 @@ begin
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
+  if FVM.FHandlerStack.Count + Length(FContinuationHandlers) >
+     FVM.FHandlerStack.Capacity then
+    FVM.GrowHandlerStack(FVM.FHandlerStack.Count +
+      Length(FContinuationHandlers));
   FVM.FHandlerStack.RestoreFrom(FContinuationHandlers, FVM.FFrameDepth);
 
   AFrame.IP := FContinuationIP;
@@ -4553,6 +4705,17 @@ begin
   SetLength(FContinuationRegisters, 0);
   SetLength(FContinuationLocalCells, 0);
   SetLength(FContinuationHandlers, 0);
+end;
+
+// A completed generator holds no suspended frame, so it gives back the
+// charge for one (ADR 0130).
+procedure TGocciaBytecodeGeneratorObjectValue.ReleaseContinuationCharge;
+begin
+  if (FContinuationChargedBytes > 0) and
+     Assigned(FContinuationChargeCollector) then
+    FContinuationChargeCollector.ReleaseExternalBytes(
+      FContinuationChargedBytes);
+  FContinuationChargedBytes := 0;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.ClearDelegateState;
@@ -4933,9 +5096,12 @@ begin
   if FState = bgsExecuting then
     raise TGocciaThrowValue.Create(VMGeneratorExecutingError);
 
+  // A generator whose parameters set up a frame before its first resume
+  // already holds a frame charge (CaptureInitialContinuation).
   if (FState = bgsSuspendedStart) and (AKind = bgrkReturn) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     ADone := True;
     Exit(AValue);
   end;
@@ -4943,6 +5109,7 @@ begin
   if (FState = bgsSuspendedStart) and (AKind = bgrkThrow) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     raise TGocciaThrowValue.Create(AValue);
   end;
 
@@ -4997,6 +5164,8 @@ begin
     end;
   finally
     GActiveBytecodeGenerator := PreviousGenerator;
+    if FState = bgsCompleted then
+      ReleaseContinuationCharge;
   end;
 end;
 
@@ -5334,11 +5503,6 @@ begin
   Result := 'Generator';
 end;
 
-function TGocciaBytecodeGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
-end;
-
 constructor TGocciaBytecodeAsyncGeneratorObjectValue.Create(const AVM: TGocciaVM;
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaValue;
   const AArguments: TGocciaArgumentsCollection);
@@ -5598,6 +5762,7 @@ begin
                (FInner.FState in [bgsSuspendedStart, bgsCompleted]) then
             begin
               FInner.FState := bgsCompleted;
+              FInner.ReleaseContinuationCharge;
               AwaitReturnValue(ARequest.Promise, ARequest.Value);
               Exit;
             end;
@@ -5649,6 +5814,7 @@ begin
               begin
 	                FInner.FState := bgsCompleted;
 	                FInner.ClearDelegateState;
+	                FInner.ReleaseContinuationCharge;
 	                ARequest.Promise.Reject(E.Value);
                 FinishRequest;
 	                Exit;
@@ -5800,11 +5966,6 @@ end;
 function TGocciaBytecodeAsyncGeneratorObjectValue.ToStringTag: string;
 begin
   Result := 'AsyncGenerator';
-end;
-
-function TGocciaBytecodeAsyncGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 function TGocciaBytecodeFunctionValue.GetFunctionName: string;
@@ -6703,8 +6864,6 @@ begin
 end;
 
 constructor TGocciaVM.Create;
-const
-  INITIAL_STACK_SIZE = 4096;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
@@ -6724,35 +6883,53 @@ begin
   FCurrentExecutionContextPushed := False;
   FCurrentDynamicVarScope := nil;
   FGlobalBackedTopLevel := False;
-  SetLength(FRegisterStack, INITIAL_STACK_SIZE);
+  SetLength(FRegisterStack, VM_INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
   FRegisterCount := 0;
-  SetLength(FLocalCellStack, INITIAL_STACK_SIZE);
+  SetLength(FLocalCellStack, VM_INITIAL_STACK_SIZE);
   FLocalCellStaleTop := 0;
   FLocalCellBase := 0;
   FLocalCells := nil;
   FLocalCellCount := 0;
-  SetLength(FArgumentStack, INITIAL_STACK_SIZE);
+  SetLength(FArgumentStack, VM_INITIAL_STACK_SIZE);
   FArgumentBase := 0;
   FArguments := nil;
   FArgCount := 0;
-  SetLength(FFrameStack, 64);
+  SetLength(FFrameStack, VM_INITIAL_FRAME_STACK_SIZE);
   FFrameStackCount := 0;
-  SetLength(FClosedNumericFrameStack, 64);
+  SetLength(FClosedNumericFrameStack,
+    VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE);
   FClosedNumericFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
   EnsureStackRootRegistered;
+  FStackChargeCollector := TGarbageCollector.Instance;
 end;
 
 destructor TGocciaVM.Destroy;
 var
   I: Integer;
+  Freed: Int64;
 begin
   if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
   FStackRoot.Free;
+  if (FStackChargedBytes > 0) and Assigned(FStackChargeCollector) and
+     (FStackChargeCollector = TGarbageCollector.Instance) then
+    FStackChargeCollector.ReleaseExternalBytes(FStackChargedBytes);
+  FStackChargedBytes := 0;
+  // The thread's stacks are released with the rest of the charge, so give
+  // their memory back too while this is still the thread the VM ran on.
+  // Otherwise the next engine on the thread would use it uncharged: a
+  // recursion that ends in an uncaught error leaves no instruction boundary
+  // at which to shrink them.
+  if Assigned(FCallStack) and (FCallStack = TGocciaCallStack.Instance) and
+     (FExecutionContextThread = TGocciaExecutionContextStack.ThreadState) then
+  begin
+    Freed := 0;
+    ShrinkThreadStacks(Freed);
+  end;
   if Assigned(FActiveDecoratorSession) then
   begin
     TGarbageCollector.Instance.RemoveTempRoot(
@@ -8311,7 +8488,7 @@ begin
   NewBase := FRegisterBase + FRegisterCount;
   Required := NewBase + ACount;
   if Required > Length(FRegisterStack) then
-    SetLength(FRegisterStack, Required * 2);
+    GrowRegisterStack(Required);
   FRegisterBase := NewBase;
   FRegisterCount := ACount;
   FRegisters := @FRegisterStack[FRegisterBase];
@@ -8325,7 +8502,7 @@ begin
   NewBase := FLocalCellBase + FLocalCellCount;
   Required := NewBase + ACount;
   if Required > Length(FLocalCellStack) then
-    SetLength(FLocalCellStack, Required * 2);
+    GrowLocalCellStack(Required);
   FLocalCellBase := NewBase;
   FLocalCellCount := ACount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
@@ -8389,10 +8566,465 @@ begin
   // valid address even for a zero-argument call (ACount = 0) under range checks.
   Required := NewBase + ACount + 1;
   if Required > Length(FArgumentStack) then
-    SetLength(FArgumentStack, Required * 2);
+    GrowArgumentStack(Required);
   FArgumentBase := NewBase;
   FArgCount := ACount;
   FArguments := @FArgumentStack[FArgumentBase];
+end;
+
+// The length an idle stack shrinks to: a stack holding four times what it
+// uses shrinks to twice that, never below its initial capacity.
+function ShrunkStackLength(const ALength, AUsed, AInitial: Integer): Integer;
+begin
+  Result := ALength;
+  if (ALength > AInitial) and (Int64(AUsed) * 4 < ALength) then
+  begin
+    Result := AUsed * 2;
+    if Result < AInitial then
+      Result := AInitial;
+  end;
+end;
+
+{ VM stack growth and --max-memory (ADR 0130, ADR 0132).
+
+  The register, local-cell, argument, frame and closed-numeric-frame stacks,
+  the handler stack, and the thread's call stack and execution-context stack
+  are charged to the collector for the capacity they have past their initial
+  capacities. The charge is released when a stack shrinks back after deep
+  recursion has returned, and when the VM is destroyed.
+
+  The stacks may grow up to the memory-pressure line, the reserve below the
+  ceiling within which the VM collects at every pressure check
+  (StackAllowance). A stack doubles while doubling leaves at least as much of
+  that allowance as it takes; past that it takes half of what is left, and at
+  the end only the entries its frame needs.
+
+  SetLength copies a growing stack into a new block before it frees the old
+  one, so for a moment both are allocated. A growth must therefore also leave
+  room under the ceiling itself to copy the largest stack once more: then
+  neither this copy nor the next one, charged or not, takes the process past
+  the ceiling.
+
+  A growth is decided inside call setup, which can neither collect nor throw.
+  It cannot collect because the callee, the receiver and the arguments of a
+  call made from native code are still held only in Pascal locals there
+  (SetupNewFrame copies them into the argument window before anything can
+  collect). It cannot throw because the caller's frame is already saved and
+  the callee's is not yet set up, and unwinding from between the two would
+  tear down a frame that does not exist. So a growth that does not fit takes
+  only the entries its frame needs, uncharged, and the next instruction
+  boundary, where the VM already collects for memory pressure, settles it: it
+  collects if that could help, charges the growth if it now fits, and
+  otherwise throws RangeError. }
+
+// The collector that stack growth is charged to: the one the VM's stack
+// root is registered with, bound when the VM is created. A VM can be entered
+// from another thread between two outermost entries; its charges and
+// releases still go to that collector, as its roots do, so a charge is never
+// stranded on one collector or released against another.
+function TGocciaVM.StackChargeCollector: TGarbageCollector;
+begin
+  Result := FStackChargeCollector;
+end;
+
+// How many more bytes the stacks may take now. Stacks that reached into the
+// pressure reserve would make every pressure check a full collection, each
+// marking every frame, so a deep recursion is refused at the line instead,
+// and the reserve is left for the RangeError and the handler that catches it.
+// Stacks no bigger than the reserve may still use it, up to the ceiling
+// itself, so that a program whose heap fills the ceiling can still make
+// calls.
+function TGocciaVM.StackAllowance(const AGC: TGarbageCollector): Int64;
+var
+  Live, Reserve, Small: Int64;
+begin
+  if AGC.MaxBytes <= 0 then
+    Exit(High(Int64) div 4);
+  Live := AGC.BytesAllocated;
+  Reserve := AGC.MemoryPressureReserve;
+  Result := AGC.MaxBytes - Reserve - Live;
+  Small := Reserve - FStackChargedBytes - FStackUnchargedBytes;
+  if Small > AGC.MaxBytes - Live then
+    Small := AGC.MaxBytes - Live;
+  if Small > Result then
+    Result := Small;
+end;
+
+// The length a stack of AEntrySize-byte entries grows to when it must hold
+// ARequiredLength entries and would double to APreferredLength.
+function TGocciaVM.StackGrowthLength(const ACurrentLength, ARequiredLength,
+  APreferredLength, AEntrySize: Integer): Integer;
+var
+  GC: TGarbageCollector;
+  Available, CopyRoom, Bytes: Int64;
+begin
+  GC := StackChargeCollector;
+  if not Assigned(GC) then
+    Exit(APreferredLength);
+  if FStackUnchargedBytes = 0 then
+  begin
+    Available := StackAllowance(GC);
+    // A growth of G bytes leaves the stacks G bytes bigger and their largest
+    // stack at most G bytes bigger, and both must fit under the ceiling
+    // together: 2G + largest <= MaxBytes - BytesAllocated.
+    if GC.MaxBytes > 0 then
+    begin
+      CopyRoom := (GC.MaxBytes - GC.BytesAllocated - LargestStackBytes) div 2;
+      if CopyRoom < Available then
+        Available := CopyRoom;
+    end;
+    if Int64(APreferredLength - ACurrentLength) * AEntrySize <=
+       Available div 2 then
+      Result := APreferredLength
+    else
+    begin
+      Result := ACurrentLength + Integer((Available div 2) div AEntrySize);
+      if Result < ARequiredLength then
+        Result := ARequiredLength;
+    end;
+    if Int64(Result - ACurrentLength) * AEntrySize <= Available then
+    begin
+      Bytes := Int64(Result - ACurrentLength) * AEntrySize;
+      if GC.TryChargeExternalBytes(Bytes) then
+      begin
+        Inc(FStackChargedBytes, Bytes);
+        Exit;
+      end;
+    end;
+  end;
+  // Nothing fits, or an earlier growth is still unsettled or was refused:
+  // take only the entries this frame needs, uncharged, and let the next
+  // instruction boundary settle the charge or refuse it. Taking no more than
+  // that is what stops a script that catches the RangeError and recurses
+  // again from doubling the stacks past the ceiling.
+  Result := ARequiredLength;
+  Inc(FStackUnchargedBytes, Int64(Result - ACurrentLength) * AEntrySize);
+  FStackChargePending := True;
+  FMemoryPressureCheckCountdown := 0;
+end;
+
+procedure TGocciaVM.GrowRegisterStack(const ARequired: Integer);
+begin
+  SetLength(FRegisterStack, StackGrowthLength(Length(FRegisterStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaRegister)));
+end;
+
+procedure TGocciaVM.GrowLocalCellStack(const ARequired: Integer);
+begin
+  SetLength(FLocalCellStack, StackGrowthLength(Length(FLocalCellStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaBytecodeCell)));
+end;
+
+procedure TGocciaVM.GrowArgumentStack(const ARequired: Integer);
+begin
+  SetLength(FArgumentStack, StackGrowthLength(Length(FArgumentStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaRegister)));
+end;
+
+procedure TGocciaVM.GrowFrameStack;
+begin
+  SetLength(FFrameStack, StackGrowthLength(Length(FFrameStack),
+    FFrameStackCount + 1, FFrameStackCount * 2 + 8,
+    SizeOf(TGocciaVMCallFrame)));
+end;
+
+procedure TGocciaVM.GrowClosedNumericFrameStack;
+begin
+  SetLength(FClosedNumericFrameStack, StackGrowthLength(
+    Length(FClosedNumericFrameStack), FClosedNumericFrameStackCount + 1,
+    FClosedNumericFrameStackCount * 2 + 8,
+    SizeOf(TGocciaClosedNumericFrame)));
+end;
+
+// The length the call stack, the execution-context stack or the handler stack
+// grows to. Up to VM_INITIAL_RECORD_STACK_SIZE entries it is not charged, as
+// the VM's own stacks are not charged for their initial capacities.
+function TGocciaVM.RecordStackGrowthLength(const ACurrentLength,
+  ARequiredLength, AEntrySize: Integer): Integer;
+begin
+  if ARequiredLength <= VM_INITIAL_RECORD_STACK_SIZE then
+    Result := Max(VM_INITIAL_RECORD_STACK_SIZE, ACurrentLength)
+  else
+    Result := StackGrowthLength(ACurrentLength, ARequiredLength,
+      ARequiredLength * 2, AEntrySize);
+end;
+
+// The length one of the thread's stacks grows to, recording in AAccount what
+// the VM accounted for it. If the VM now runs on another thread's stack, what
+// it accounted for the previous one stays charged until the VM is destroyed,
+// because that memory is still allocated.
+function TGocciaVM.ThreadStackGrowthLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ACurrentLength, ARequiredLength, AEntrySize: Integer): Integer;
+begin
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
+  Result := RecordStackGrowthLength(ACurrentLength, ARequiredLength,
+    AEntrySize);
+  if Result > VM_INITIAL_RECORD_STACK_SIZE then
+    Inc(AAccount.Bytes, Int64(Result - ACurrentLength) * AEntrySize);
+end;
+
+// The length one of the thread's idle stacks shrinks to. What it gives back is
+// added to AFreed, and is never more than the VM accounted for that stack:
+// other code can grow the thread's stacks too, uncharged, and that growth is
+// shrunk without releasing anything.
+function TGocciaVM.ThreadStackShrunkLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ALength, AUsed, AEntrySize: Integer; var AFreed: Int64): Integer;
+var
+  Given: Int64;
+begin
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
+  Result := ShrunkStackLength(ALength, AUsed, VM_INITIAL_RECORD_STACK_SIZE);
+  Given := Int64(ALength - Result) * AEntrySize;
+  if Given > AAccount.Bytes then
+    Given := AAccount.Bytes;
+  Dec(AAccount.Bytes, Given);
+  Inc(AFreed, Given);
+end;
+
+// Stacks still at their initial capacity are skipped without a call: this runs
+// at every memory-pressure checkpoint while any stack holds a charge.
+procedure TGocciaVM.ShrinkThreadStacks(var AFreed: Int64);
+var
+  NewLength: Integer;
+begin
+  if Assigned(FCallStack) and
+     (FCallStack.Capacity > VM_INITIAL_RECORD_STACK_SIZE) then
+  begin
+    NewLength := ThreadStackShrunkLength(FCallStackAccount, FCallStack,
+      FCallStack.Capacity, FCallStack.Count, SizeOf(TGocciaCallFrame), AFreed);
+    if NewLength < FCallStack.Capacity then
+      FCallStack.SetCapacity(NewLength);
+  end;
+  if Assigned(FExecutionContextThread) and
+     (TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread) > VM_INITIAL_RECORD_STACK_SIZE) then
+  begin
+    NewLength := ThreadStackShrunkLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread),
+      SizeOf(TGocciaExecutionContextStackEntry), AFreed);
+    if NewLength < TGocciaExecutionContextStack.FunctionContextCapacity(
+         FExecutionContextThread) then
+      TGocciaExecutionContextStack.SetFunctionContextCapacity(
+        FExecutionContextThread, NewLength);
+  end;
+end;
+
+// Makes room for one more frame record on the thread's call stack before
+// SetupNewFrame or PushClosedNumericFrame pushes it.
+procedure TGocciaVM.GrowCallStack;
+begin
+  FCallStack.SetCapacity(ThreadStackGrowthLength(FCallStackAccount,
+    FCallStack, FCallStack.Capacity, FCallStack.Count + 1,
+    SizeOf(TGocciaCallFrame)));
+end;
+
+// Pushes a named frame for a call the VM makes into native code, such as a
+// native constructor. On the call stack the VM is bound to, the VM makes the
+// room itself, so that a deep recursion of such calls is charged like any
+// other (ADR 0132).
+procedure TGocciaVM.PushNamedCallFrame(const AName: string);
+var
+  CallStack: TGocciaCallStack;
+begin
+  CallStack := TGocciaCallStack.Instance;
+  if CallStack = nil then
+    Exit;
+  if (CallStack = FCallStack) and (CallStack.Count >= CallStack.Capacity) then
+    GrowCallStack;
+  CallStack.Push(AName, '', 0, 0);
+end;
+
+// Makes room for one more context on the thread's execution-context stack
+// before SetupNewFrame pushes it.
+procedure TGocciaVM.GrowExecutionContextStack;
+begin
+  TGocciaExecutionContextStack.SetFunctionContextCapacity(
+    FExecutionContextThread, ThreadStackGrowthLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread) + 1,
+      SizeOf(TGocciaExecutionContextStackEntry)));
+end;
+
+procedure TGocciaVM.GrowHandlerStack(const ARequired: Integer);
+begin
+  FHandlerStack.SetCapacity(RecordStackGrowthLength(FHandlerStack.Capacity,
+    ARequired, SizeOf(TGocciaBytecodeHandlerEntry)));
+end;
+
+// The size of the largest stack: the most that the next copy of one can add.
+// It lists every charged stack, as ShrinkIdleStacks and the Grow* helpers do;
+// a stack missing here would make the copy room too small.
+function TGocciaVM.LargestStackBytes: Int64;
+
+  procedure Consider(const ABytes: Int64);
+  begin
+    if ABytes > Result then
+      Result := ABytes;
+  end;
+
+begin
+  Result := Int64(Length(FRegisterStack)) * SizeOf(TGocciaRegister);
+  Consider(Int64(Length(FLocalCellStack)) * SizeOf(TGocciaBytecodeCell));
+  Consider(Int64(Length(FArgumentStack)) * SizeOf(TGocciaRegister));
+  Consider(Int64(Length(FFrameStack)) * SizeOf(TGocciaVMCallFrame));
+  Consider(Int64(Length(FClosedNumericFrameStack)) *
+    SizeOf(TGocciaClosedNumericFrame));
+  Consider(Int64(FHandlerStack.Capacity) *
+    SizeOf(TGocciaBytecodeHandlerEntry));
+  if Assigned(FCallStack) then
+    Consider(Int64(FCallStack.Capacity) * SizeOf(TGocciaCallFrame));
+  if Assigned(FExecutionContextThread) then
+    Consider(Int64(TGocciaExecutionContextStack.FunctionContextCapacity(
+      FExecutionContextThread)) * SizeOf(TGocciaExecutionContextStackEntry));
+end;
+
+// Runs at an instruction boundary, where everything live is reachable from
+// the VM's roots, so the collector may run before the charge is decided. The
+// growth is kept only if the allowance then also has room for the stacks to
+// grow by a quarter: a collection marks every frame, so one that buys room for
+// a few more frames would be repeated every few frames, and the recursion
+// would slow quadratically on its way to the same refusal. That growth must
+// also leave room under the ceiling to copy the largest stack, as in
+// StackGrowthLength. A refused growth stays in place, uncharged, because the
+// frames that use it are live until the RangeError unwinds them; a later
+// boundary shrinks the stacks back (ShrinkIdleStacks).
+procedure TGocciaVM.SettleStackGrowth;
+var
+  GC: TGarbageCollector;
+  Needed, Reserve, Copy: Int64;
+  Fits: Boolean;
+begin
+  FStackChargePending := False;
+  GC := StackChargeCollector;
+  if not Assigned(GC) or (FStackUnchargedBytes = 0) then
+  begin
+    FStackUnchargedBytes := 0;
+    Exit;
+  end;
+  Needed := FStackUnchargedBytes + FStackChargedBytes div 4;
+  if GC.MaxBytes <= 0 then
+    Fits := True
+  else
+  begin
+    // The two halves of StackAllowance, each tested after a collection if
+    // one could make it fit, with room to copy the largest stack.
+    Reserve := GC.MemoryPressureReserve;
+    Copy := Needed + FStackChargedBytes div 4 + LargestStackBytes;
+    Fits := GC.TryCollectForLimitedBytes(Max(Needed + Reserve, Copy)) or
+      ((FStackChargedBytes + Needed <= Reserve) and
+       GC.TryCollectForLimitedBytes(Copy));
+  end;
+  if Fits then
+    if GC.TryChargeExternalBytes(FStackUnchargedBytes) then
+    begin
+      Inc(FStackChargedBytes, FStackUnchargedBytes);
+      FStackUnchargedBytes := 0;
+      Exit;
+    end;
+  FMemoryPressureCheckCountdown := 0;
+  ThrowVMMemoryLimitExceeded(GC, SErrorMaxCallStackExceeded,
+    SSuggestStackMemoryLimitExceeded);
+end;
+
+// Gives memory back once deep recursion has returned: a stack holding four
+// times what it uses shrinks to twice that, never below its initial
+// capacity. Every live window lies below the current top of its stack, so no
+// live entry is dropped; the bytes freed pay off uncharged growth first and
+// then release the charge.
+procedure TGocciaVM.ShrinkIdleStacks;
+var
+  Freed: Int64;
+  NewLength: Integer;
+  GC: TGarbageCollector;
+begin
+  Freed := 0;
+  NewLength := ShrunkStackLength(Length(FRegisterStack),
+    FRegisterBase + FRegisterCount, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FRegisterStack) then
+  begin
+    Inc(Freed, Int64(Length(FRegisterStack) - NewLength) *
+      SizeOf(TGocciaRegister));
+    SetLength(FRegisterStack, NewLength);
+    FRegisters := @FRegisterStack[FRegisterBase];
+  end;
+  NewLength := ShrunkStackLength(Length(FLocalCellStack),
+    FLocalCellBase + FLocalCellCount, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FLocalCellStack) then
+  begin
+    Inc(Freed, Int64(Length(FLocalCellStack) - NewLength) *
+      SizeOf(TGocciaBytecodeCell));
+    SetLength(FLocalCellStack, NewLength);
+    FLocalCells := @FLocalCellStack[FLocalCellBase];
+    if FLocalCellStaleTop > NewLength then
+      FLocalCellStaleTop := NewLength;
+  end;
+  NewLength := ShrunkStackLength(Length(FArgumentStack),
+    FArgumentBase + FArgCount + 1, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FArgumentStack) then
+  begin
+    Inc(Freed, Int64(Length(FArgumentStack) - NewLength) *
+      SizeOf(TGocciaRegister));
+    SetLength(FArgumentStack, NewLength);
+    FArguments := @FArgumentStack[FArgumentBase];
+  end;
+  NewLength := ShrunkStackLength(Length(FFrameStack), FFrameStackCount,
+    VM_INITIAL_FRAME_STACK_SIZE);
+  if NewLength < Length(FFrameStack) then
+  begin
+    Inc(Freed, Int64(Length(FFrameStack) - NewLength) *
+      SizeOf(TGocciaVMCallFrame));
+    SetLength(FFrameStack, NewLength);
+  end;
+  NewLength := ShrunkStackLength(Length(FClosedNumericFrameStack),
+    FClosedNumericFrameStackCount,
+    VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE);
+  if NewLength < Length(FClosedNumericFrameStack) then
+  begin
+    Inc(Freed, Int64(Length(FClosedNumericFrameStack) - NewLength) *
+      SizeOf(TGocciaClosedNumericFrame));
+    SetLength(FClosedNumericFrameStack, NewLength);
+  end;
+  NewLength := ShrunkStackLength(FHandlerStack.Capacity, FHandlerStack.Count,
+    VM_INITIAL_RECORD_STACK_SIZE);
+  if NewLength < FHandlerStack.Capacity then
+  begin
+    Inc(Freed, Int64(FHandlerStack.Capacity - NewLength) *
+      SizeOf(TGocciaBytecodeHandlerEntry));
+    FHandlerStack.SetCapacity(NewLength);
+  end;
+  ShrinkThreadStacks(Freed);
+  if Freed = 0 then
+    Exit;
+  if Freed <= FStackUnchargedBytes then
+  begin
+    Dec(FStackUnchargedBytes, Freed);
+    Exit;
+  end;
+  Dec(Freed, FStackUnchargedBytes);
+  FStackUnchargedBytes := 0;
+  if Freed > FStackChargedBytes then
+    Freed := FStackChargedBytes;
+  GC := StackChargeCollector;
+  if Assigned(GC) and (Freed > 0) then
+    GC.ReleaseExternalBytes(Freed);
+  Dec(FStackChargedBytes, Freed);
 end;
 
 // Copy the current frame's live argument window out of the arena into a
@@ -8417,7 +9049,7 @@ begin
     Growth := ACount - FRegisterCount;
     Required := FRegisterBase + ACount;
     if Required > Length(FRegisterStack) then
-      SetLength(FRegisterStack, Required * 2);
+      GrowRegisterStack(Required);
     FillChar(FRegisterStack[FRegisterBase + FRegisterCount],
       Growth * SizeOf(TGocciaRegister), 0);
     FRegisterCount := ACount;
@@ -8434,7 +9066,7 @@ begin
     GrowthStart := FLocalCellBase + FLocalCellCount;
     Required := FLocalCellBase + ACount;
     if Required > Length(FLocalCellStack) then
-      SetLength(FLocalCellStack, Required * 2);
+      GrowLocalCellStack(Required);
     if GrowthStart < FLocalCellStaleTop then
       ClearStaleLocalCells(GrowthStart, Required);
     Assert(LocalCellsAreClear(GrowthStart, Required),
@@ -8454,6 +9086,37 @@ begin
     NoteLocalCells(AIndex + 1);
   end;
   Result := FLocalCells[AIndex];
+end;
+
+const
+  // Binary bytecode written without debug locals cannot name the binding.
+  SErrorCannotAccessLexicalBeforeInit =
+    'Cannot access lexical binding before initialization';
+
+procedure TGocciaVM.ThrowUninitializedLocal(
+  const ATemplate: TGocciaFunctionTemplate; const APC, ASlot: Integer);
+var
+  Name: string;
+begin
+  if Assigned(ATemplate) and Assigned(ATemplate.DebugInfo) and
+     ATemplate.DebugInfo.TryGetLocalName(UInt16(ASlot), UInt32(APC), Name) then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
+end;
+
+procedure TGocciaVM.ThrowUninitializedUpvalue(
+  const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
+var
+  Name: string;
+begin
+  Name := ATemplate.GetUpvalueDescriptor(AIndex).Name;
+  if Name <> '' then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
 end;
 
 function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
@@ -9280,6 +9943,17 @@ begin
       Prefix := 'set';
   else
     Prefix := '';
+  end;
+
+  { The compiler emits this for a class right after OP_NEW_CLASS, before any
+    class element, so the class still has its synthesized name; setting the
+    internal name keeps it synthesized and puts it in the class's error
+    messages too. }
+  if AFunction is TGocciaClassValue then
+  begin
+    TGocciaClassValue(AFunction).SetInferredName(
+      FunctionNameFromPropertyKey(AKey, Prefix));
+    Exit;
   end;
 
   TGocciaObjectValue(AFunction).DefineProperty(PROP_NAME,
@@ -10175,8 +10849,7 @@ begin
           [TGocciaNativeFunctionValue(AConstructor).Name]),
         SSuggestNotConstructorType);
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
-    if (TGocciaCallStack.Instance <> nil) then
-      TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+    PushNamedCallFrame(ConstructorName);
     try
       Result := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
@@ -10230,8 +10903,7 @@ begin
     ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
     TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      if (TGocciaCallStack.Instance <> nil) then
-        TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+      PushNamedCallFrame(ConstructorName);
       try
         // InvokeConstructableWithReceiver merges bound args, dispatches to
         // the underlying target, and applies the spec return rules
@@ -14212,7 +14884,7 @@ begin
   // not one, so this call is the FFrameDepth-th nested call.
   CheckStackDepth(FFrameDepth);
   if FFrameStackCount >= Length(FFrameStack) then
-    SetLength(FFrameStack, FFrameStackCount * 2 + 8);
+    GrowFrameStack;
   // Through a pointer: indexing the array for each field recomputes the
   // element address every time.
   Saved := @FFrameStack[FFrameStackCount];
@@ -14308,8 +14980,7 @@ begin
   // As in PushFrame: FFrameDepth includes the outermost frame.
   CheckStackDepth(FFrameDepth);
   if FClosedNumericFrameStackCount >= Length(FClosedNumericFrameStack) then
-    SetLength(FClosedNumericFrameStack,
-      FClosedNumericFrameStackCount * 2 + 8);
+    GrowClosedNumericFrameStack;
   FClosedNumericFrameStack[FClosedNumericFrameStackCount].IP := AFrame.IP;
   FClosedNumericFrameStack[FClosedNumericFrameStackCount].ReturnRegister :=
     AResultRegister;
@@ -14324,7 +14995,7 @@ begin
   NewBase := FRegisterBase + FRegisterCount;
   Required := NewBase + FRegisterCount;
   if Required > Length(FRegisterStack) then
-    SetLength(FRegisterStack, Required * 2);
+    GrowRegisterStack(Required);
   if Required > AInitializedRegisterTop then
   begin
     ClearStart := Max(NewBase, AInitializedRegisterTop);
@@ -14346,11 +15017,15 @@ begin
 
   Inc(FFrameDepth);
   if Assigned(FCallStack) then
+  begin
+    if FCallStack.Count >= FCallStack.Capacity then
+      GrowCallStack;
     if Assigned(ATemplate.DebugInfo) and
        (ATemplate.DebugInfo.SourceFile <> '') then
       FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
       FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+  end;
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -14567,10 +15242,14 @@ begin
   // in the constructor reproduces ATemplate.Name and the frame's source path
   // at capture time, keeping Error.stack output byte-identical.
   if Assigned(FCallStack) then
+  begin
+    if FCallStack.Count >= FCallStack.Capacity then
+      GrowCallStack;
     if HasOwnSourceFile then
       FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
       FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+  end;
 
   // The dispatch loop's frame record carries only the instruction pointer and
   // the template; its other fields exist for the entries PushFrame saves and
@@ -14650,6 +15329,9 @@ begin
     else if Pointer(FCurrentModuleSourcePath) <>
             Pointer(FExecutionSourcePath) then
       InternExecutionSourcePath(FCurrentModuleSourcePath);
+    if TGocciaExecutionContextStack.FunctionContextsFull(
+         FExecutionContextThread) then
+      GrowExecutionContextStack;
     TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
       ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
     FCurrentExecutionContextPushed := True;
@@ -14684,7 +15366,10 @@ begin
 
   while True do
   begin
-    if (not FHandlerStack.IsEmpty) and
+    // A handler below ASavedHandlerCount belongs to a frame of an outer
+    // native entry, even at this frame's depth: an imported module's top
+    // level runs at the depth of the frame below it (ExecuteImportedModule).
+    if (FHandlerStack.Count > ASavedHandlerCount) and
        (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
     begin
       Handler := FHandlerStack.Peek;
@@ -15172,6 +15857,11 @@ begin
                 try
                   AwaitPromise := PromiseResolveIntrinsic(
                     GActiveBytecodeGenerator.FReturnValue);
+                  // Inside the same handlers: the capture charges the frame
+                  // and throws if that does not fit (ADR 0130).
+                  GActiveBytecodeGenerator.CaptureContinuation(Frame,
+                    SavedHandlerCount, PrevCovLine,
+                    GActiveBytecodeGenerator.FResumeRegister, Frame.IP);
                 except
                   on E: EGocciaBytecodeThrow do
                   begin
@@ -15193,9 +15883,6 @@ begin
                 if not ReturnAwaitAbrupt then
                 begin
                   GActiveBytecodeGenerator.FReturnResumeValueAwaited := True;
-                  GActiveBytecodeGenerator.CaptureContinuation(Frame,
-                    SavedHandlerCount, PrevCovLine,
-                    GActiveBytecodeGenerator.FResumeRegister, Frame.IP);
                   GActiveBytecodeGenerator.FState := bgsSuspendedYield;
                   AwaitPromise.InvokeThen(
                     TGocciaVMAsyncAwaitContinuationValue.Create(Self,
@@ -15318,6 +16005,10 @@ LDispatchCase:
           if Assigned(GC) then
             GC.CollectForMemoryPressure(nil);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+          if FStackChargePending then
+            SettleStackGrowth
+          else if FStackChargedBytes + FStackUnchargedBytes > 0 then
+            ShrinkIdleStacks;
         end
         else
           Dec(FMemoryPressureCheckCountdown);
@@ -15530,6 +16221,30 @@ begin
   finally
     TopClosure.Free;
     EmptyArgs.Free;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation runs a module's top level for
+  the module that imports it, so the importer's frame, or the call that read a
+  deferred namespace, is still live below it. The top level is not a function
+  call, and --max-stack caps nested calls (docs/embedding.md): its frame takes
+  the depth of the frame below instead of one more, as the interpreter, which
+  evaluates a module body without a call-stack entry, counts it. A module
+  imported from a top level keeps the whole limit; one evaluated k calls deep
+  keeps the limit less those k calls. With no frame below, the top level is the
+  outermost frame, which FFrameDepth already counts as no call. }
+function TGocciaVM.ExecuteImportedModule(
+  const AModule: TGocciaBytecodeModule): TGocciaValue;
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
   end;
 end;
 

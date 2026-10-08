@@ -52,7 +52,6 @@ type
     procedure Close; override;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
     function GeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function GeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function GeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
@@ -121,7 +120,6 @@ type
     destructor Destroy; override;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
     function AsyncGeneratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncGeneratorReturn(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function AsyncGeneratorThrow(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
@@ -722,11 +720,6 @@ end;
 function TGocciaGeneratorObjectValue.ToStringTag: string;
 begin
   Result := 'Generator';
-end;
-
-function TGocciaGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 function TGocciaGeneratorObjectValue.GeneratorNext(
@@ -1331,11 +1324,6 @@ end;
 function TGocciaAsyncGeneratorObjectValue.ToStringTag: string;
 begin
   Result := 'AsyncGenerator';
-end;
-
-function TGocciaAsyncGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 function TGocciaAsyncGeneratorObjectValue.AsyncGeneratorNext(
