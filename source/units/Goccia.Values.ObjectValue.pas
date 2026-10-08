@@ -43,7 +43,6 @@ type
     FErrorStack: string;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
-    function BuiltinTagFallback: Boolean; virtual;
     procedure NoteIndexedOwnProperty(const AName: string);
     // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
     // own property AName. For a subclass that reads its own properties itself.
@@ -68,7 +67,6 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
-    property HasBuiltinTagFallback: Boolean read BuiltinTagFallback;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -285,6 +283,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
@@ -1014,22 +1013,6 @@ var
     Result := False;
   end;
 
-  function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
-  begin
-    if AObject is TGocciaStringObjectValue then
-      Result := CONSTRUCTOR_STRING
-    else if AObject is TGocciaNumberObjectValue then
-      Result := CONSTRUCTOR_NUMBER
-    else if AObject is TGocciaBooleanObjectValue then
-      Result := CONSTRUCTOR_BOOLEAN
-    else
-    begin
-      Result := AObject.ToStringTag;
-      if AObject.HasBuiltinTagFallback then
-        Result := CONSTRUCTOR_OBJECT;
-    end;
-  end;
-
 begin
   if AThisValue is TGocciaUndefinedLiteralValue then
     Exit(TGocciaStringLiteralValue.Create('[object Undefined]'));
@@ -1040,20 +1023,30 @@ begin
   if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
+    // Steps 4-14: builtinTag comes only from the internal slots listed here.
+    // Every other tag (Map, Uint8Array, Temporal.Instant, ...) is read from
+    // @@toStringTag below, so it goes away with the prototype that holds it.
+    // A Proxy has none of these slots; IsArray and IsCallable see through it.
     if IsArrayObject(Obj) then
       Tag := CONSTRUCTOR_ARRAY
+    else if IsArgumentsObjectValue(Obj) then
+      Tag := 'Arguments'
     else if Obj.IsCallable then
       Tag := 'Function'
     else if Obj.HasErrorData then
       Tag := 'Error'
+    else if Obj is TGocciaBooleanObjectValue then
+      Tag := CONSTRUCTOR_BOOLEAN
+    else if Obj is TGocciaNumberObjectValue then
+      Tag := CONSTRUCTOR_NUMBER
+    else if Obj is TGocciaStringObjectValue then
+      Tag := CONSTRUCTOR_STRING
+    else if HasDateValue(Obj) then
+      Tag := 'Date'
     else if Obj.HasRegExpData then
       Tag := 'RegExp'
-    else if IsArgumentsObjectValue(Obj) then
-      Tag := 'Arguments'
-    else if Obj is TGocciaProxyValue then
-      Tag := CONSTRUCTOR_OBJECT
     else
-      Tag := LegacyBuiltinTagForObject(Obj);
+      Tag := CONSTRUCTOR_OBJECT;
 
     SymbolTag := Obj.GetSymbolPropertyWithReceiver(
       TGocciaSymbolValue.WellKnownToStringTag, AThisValue);
@@ -1326,11 +1319,6 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_OBJECT;
-end;
-
-function TGocciaObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := False;
 end;
 
 // ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString
