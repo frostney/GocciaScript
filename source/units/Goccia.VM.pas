@@ -13989,7 +13989,8 @@ begin
   if not BindingObject.HasProperty(KeyStr) then
   begin
     if AStrict then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -14020,7 +14021,8 @@ begin
     StillExists := BindingObject.HasProperty(KeyStr);
 
     if AStrict and not StillExists then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
 
     if AStrict then
       SetPropertyValue(BindingObject, KeyStr, AValue)
