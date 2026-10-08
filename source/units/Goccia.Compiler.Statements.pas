@@ -119,6 +119,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
@@ -760,14 +761,105 @@ begin
     ((Mask and (UInt64(1) shl AIndex)) <> 0);
 end;
 
+// True when AName, at the current point, resolves to a block-level binding
+// rather than to the var binding, which has scope depth 0. ES2026 B.3.4 lets a
+// var redeclare one such name, a catch parameter. Every other block-level
+// binding a var redeclares is an early SyntaxError that the parser does not
+// report yet; there, too, the initializer assigns the inner binding.
+function VarNameResolvesToBlockBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := AScope.ResolveLocal(AName);
+  Result := (LocalIdx >= 0) and (AScope.GetLocal(LocalIdx).Depth > 0);
+end;
+
+// Compiles a declaration's initializer into ADestReg. An anonymous function or
+// class initializer takes the binding's name (ES2026 §8.4.5 NamedEvaluation).
+procedure CompileNamedInitializer(const ACtx: TGocciaCompilationContext;
+  const AInitializer: TGocciaExpression; const AName: string;
+  const ADestReg: UInt16);
+var
+  FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+begin
+  FuncCount := ACtx.Template.FunctionCount;
+  if (AInitializer is TGocciaClassExpression) and
+     (TGocciaClassExpression(AInitializer).ClassDefinition.Name = '') then
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AInitializer).ClassDefinition, ADestReg, AName)
+  else
+    ACtx.CompileExpression(AInitializer, ADestReg);
+
+  if ((AInitializer is TGocciaArrowFunctionExpression) or
+      (AInitializer is TGocciaFunctionExpression)) and
+     (ACtx.Template.FunctionCount > FuncCount) then
+  begin
+    InferredTemplate := ACtx.Template.GetFunction(
+      ACtx.Template.FunctionCount - 1);
+    if (InferredTemplate.Name = '<arrow>') or
+       (InferredTemplate.Name = '<function>') or
+       (InferredTemplate.Name = '<method>') then
+      InferredTemplate.Name := AName;
+  end;
+end;
+
+// ES2026 §14.3.2.1: `var x = value` evaluates ResolveBinding("x") and assigns
+// value to it. Inside `catch (x)` that binding is the catch parameter, not the
+// hoisted var (B.3.4), so the initializer is an assignment to the catch
+// parameter, typed as the catch parameter is. The hoisted var binding only has
+// to exist: at a global-backed top level it is created here without a value.
+procedure CompileBlockBindingVarInitializer(
+  const ACtx: TGocciaCompilationContext; const AInfo: TGocciaVariableInfo;
+  const AVarSlot: UInt16);
+var
+  LocalIdx: Integer;
+  ValueReg: UInt16;
+  AnnotationType: TGocciaLocalType;
+begin
+  if ACtx.GlobalBackedTopLevel then
+  begin
+    LocalIdx := FindLocalBySlot(ACtx.Scope, AInfo.Name, AVarSlot);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+    EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
+  end;
+
+  ValueReg := ACtx.Scope.AllocateRegister;
+  try
+    CompileNamedInitializer(ACtx, AInfo.Initializer, AInfo.Name, ValueReg);
+
+    // The declaration's own annotation still constrains its initializer, as
+    // it does for a var that receives the value.
+    AnnotationType := TypeAnnotationToLocalType(AInfo.TypeAnnotation);
+    if ACtx.StrictTypes and (AnnotationType <> sltUntyped) and
+       not IsUndefinedInitializer(AInfo.Initializer) and
+       not TypesAreCompatible(InferLocalType(AInfo.Initializer),
+         AnnotationType) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ValueReg,
+        UInt8(Ord(AnnotationType)), 0));
+
+    EmitBindingAssignmentFromRegister(ACtx, AInfo.Name, ValueReg, True);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+function VarInitializerUsesWithBinding(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := (ACtx.Scope.WithBindingCount > 0) and
+    (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, FuncCount, LocalIdx: Integer;
+  I, LocalIdx, DeclaredIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
-  InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
@@ -824,6 +916,13 @@ begin
       LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
+      if Info.HasInitializer and Assigned(Info.Initializer) and
+         not VarInitializerUsesWithBinding(ACtx) and
+         VarNameResolvesToBlockBinding(ACtx.Scope, Info.Name) then
+      begin
+        CompileBlockBindingVarInitializer(ACtx, Info, Slot);
+        Continue;
+      end;
     end
     else
     begin
@@ -852,17 +951,34 @@ begin
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
     UseWithVarInitializer := AStmt.IsVar and HasInitializer and
-      (ACtx.Scope.WithBindingCount > 0) and
-      (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+      VarInitializerUsesWithBinding(ACtx);
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
+    // Under strict types a hint is enforced on every assignment, so a
+    // reassignable binding takes one only from the initializer forms
+    // InferLocalType names, the rule the interpreter applies. The wider
+    // inference is not kept as an unenforced hint there: typed opcodes do not
+    // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
       TypeHint := AnnotationType
-    else if (Info.TypeAnnotation = '') and HasRealInitializer then
-      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer)
+    else if (Info.TypeAnnotation <> '') or not HasRealInitializer then
+      TypeHint := sltUntyped
+    else if ACtx.StrictTypes and not AStmt.IsConst then
+      TypeHint := InferLocalType(Info.Initializer)
     else
-      TypeHint := sltUntyped;
+      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
+
+    // A var redeclaration stores into the existing var binding, so an
+    // initializer that brings no type of its own is checked against the type
+    // enforced on that binding. ResolveLocal could pick a same-named catch
+    // parameter instead (ES2026 B.3.4), which is not the slot written here.
+    if (TypeHint = sltUntyped) and IsVarRedeclaration then
+    begin
+      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
+        TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    end;
 
     { Strict-types enforcement is opt-in via --strict-types / config.
       When disabled, type annotations are parsed but not enforced. }
@@ -883,9 +999,17 @@ begin
         TypeHint := sltUntyped;
     end;
 
+    // The type belongs to the declared binding. For a var that is the
+    // depth-0 var local; ResolveLocal could find a same-named catch parameter
+    // (ES2026 B.3.4), which would then be typed from a binding it is not.
+    if AStmt.IsVar then
+      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+    else
+      DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
+
     if TypeHint <> sltUntyped then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
@@ -901,7 +1025,7 @@ begin
 
     if Info.TypeAnnotation <> '' then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeAnnotation(LocalIdx, Info.TypeAnnotation);
@@ -959,34 +1083,12 @@ begin
         for LocalIdx := 0 to ProbeEndCount - 1 do
           PatchJumpTarget(ACtx, ProbeEndJumps[LocalIdx]);
 
-        FuncCount := ACtx.Template.FunctionCount;
-
-        if (Info.Initializer is TGocciaClassExpression) and
-           (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-          CompileClassExpression(ACtx,
-            TGocciaClassExpression(Info.Initializer).ClassDefinition,
-            InitSlot, Info.Name)
-        else
-          ACtx.CompileExpression(Info.Initializer, InitSlot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
 
         if IsStrict and HasRealInitializer then
           if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
             EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
               UInt8(Ord(TypeHint)), 0));
-
-        if (Info.Initializer is TGocciaArrowFunctionExpression) or
-           (Info.Initializer is TGocciaFunctionExpression) then
-        begin
-          if ACtx.Template.FunctionCount > FuncCount then
-          begin
-            InferredTemplate := ACtx.Template.GetFunction(
-              ACtx.Template.FunctionCount - 1);
-            if (InferredTemplate.Name = '<arrow>') or
-               (InferredTemplate.Name = '<function>') or
-               (InferredTemplate.Name = '<method>') then
-              InferredTemplate.Name := Info.Name;
-          end;
-        end;
 
         TargetMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
           TargetObjReg, GOCCIA_NULLISH_MATCH_HOLE);
@@ -1011,19 +1113,11 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      FuncCount := ACtx.Template.FunctionCount;
-
       if not AStmt.IsVar then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
-          if (Info.Initializer is TGocciaClassExpression) and
-             (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-            CompileClassExpression(ACtx,
-              TGocciaClassExpression(Info.Initializer).ClassDefinition,
-              InitSlot, Info.Name)
-          else
-            ACtx.CompileExpression(Info.Initializer, InitSlot);
+          CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
           // Keep the lexical binding in its hole state until the entire
           // initializer has completed. Initializers that reference or assign
           // the binding must therefore observe the TDZ.
@@ -1032,32 +1126,13 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end
-      else if (Info.Initializer is TGocciaClassExpression) and
-              (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-        CompileClassExpression(ACtx,
-          TGocciaClassExpression(Info.Initializer).ClassDefinition, Slot,
-          Info.Name)
       else
-        ACtx.CompileExpression(Info.Initializer, Slot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, Slot);
 
       if IsStrict and HasRealInitializer then
         if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
             UInt8(Ord(TypeHint)), 0));
-
-      if (Info.Initializer is TGocciaArrowFunctionExpression) or
-         (Info.Initializer is TGocciaFunctionExpression) then
-      begin
-        if ACtx.Template.FunctionCount > FuncCount then
-        begin
-          InferredTemplate := ACtx.Template.GetFunction(
-            ACtx.Template.FunctionCount - 1);
-          if (InferredTemplate.Name = '<arrow>') or
-             (InferredTemplate.Name = '<function>') or
-             (InferredTemplate.Name = '<method>') then
-            InferredTemplate.Name := Info.Name;
-        end;
-      end;
     end
     else if not (AStmt.IsVar and IsVarRedeclaration) then
       // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
@@ -1212,6 +1287,12 @@ begin
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True, True);
 end;
 
+// ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList) and
+// §16.1.7 GlobalDeclarationInstantiation(script, env), web-compat steps: when
+// a block-level function declaration has a var binding, evaluating it stores
+// the block's binding of the function into the var binding. A declaration
+// whose name a parameter or a lexical declaration has gets no var binding
+// (Goccia.Compiler.BlockFunctions) and evaluates to nothing here.
 procedure CompileCompatBlockFunctionActivation(
   const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
 var
@@ -1222,7 +1303,7 @@ begin
      (not ACtx.CompatibilityNonStrictMode) or
      (ACtx.Scope.Depth = 0) then
     Exit;
-  if AStmt.FunctionExpression.IsAsync or AStmt.FunctionExpression.IsGenerator then
+  if not BlockFunctionHasVarBinding(ACtx.BlockFunctionVarBindings, AStmt) then
     Exit;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
@@ -2241,6 +2322,33 @@ begin
   end;
 end;
 
+// ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
+// function declaration that is the whole body of an if or else clause, which
+// the parser accepts only in non-strict code, behaves as the only statement of
+// a block. Its binding is the block's, and the web-compat step decides whether
+// it reaches a var binding (CompileCompatBlockFunctionActivation).
+function CompileIfClause(const ACtx: TGocciaCompilationContext;
+  const AClause: TGocciaStatement): Boolean;
+var
+  Declaration: TGocciaFunctionDeclaration;
+  ClosedLocals: TArray<UInt16>;
+  ClosedCount, I: Integer;
+begin
+  if not (AClause is TGocciaFunctionDeclaration) then
+    Exit(ACtx.CompileStatement(AClause));
+
+  Declaration := TGocciaFunctionDeclaration(AClause);
+  ACtx.Scope.BeginScope;
+  PredeclareBlockFunctionLocal(Declaration, ACtx.Scope);
+  ACtx.CompileStatement(Declaration);
+  CompileCompatBlockFunctionActivation(ACtx, Declaration);
+  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+      UInt16(ClosedLocals[I])));
+  Result := False;
+end;
+
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
@@ -2273,9 +2381,9 @@ begin
      TryEvaluateConstantExpression(ACtx, AStmt.Condition, ConditionValue) then
   begin
     if CompileTimeValueToBoolean(ConditionValue) then
-      Result := ACtx.CompileStatement(AStmt.Consequent)
+      Result := CompileIfClause(ACtx, AStmt.Consequent)
     else if Assigned(AStmt.Alternate) then
-      Result := ACtx.CompileStatement(AStmt.Alternate);
+      Result := CompileIfClause(ACtx, AStmt.Alternate);
     Exit;
   end;
 
@@ -2293,7 +2401,7 @@ begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
       ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
     end;
-    ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
+    ConsequentAbrupt := CompileIfClause(ACtx, AStmt.Consequent);
 
     if HasPatternBindings then
     begin
@@ -2307,7 +2415,7 @@ begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
       PatchPatternFailureTarget;
-      AlternateAbrupt := ACtx.CompileStatement(AStmt.Alternate);
+      AlternateAbrupt := CompileIfClause(ACtx, AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
       Result := ConsequentAbrupt and AlternateAbrupt;
     end
@@ -4341,9 +4449,9 @@ var
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt16;
   Captured: array of Boolean;
-  Names: array of string;
+  Names, LocalNames: array of string;
   EncodedPath: string;
-  HasNamespace, NamespaceCaptured: Boolean;
+  HasNamespace, NamespaceCaptured, InitializesGlobalBindings: Boolean;
   I, Count: Integer;
 
   function ImportSlot(const AName: string): UInt16;
@@ -4387,8 +4495,15 @@ begin
   SetLength(Slots, Count);
   SetLength(Captured, Count);
   SetLength(Names, Count);
+  SetLength(LocalNames, Count);
   EncodedPath := EncodeImportSpecifierAttribute(AStmt.ModulePath,
     AStmt.AttributeType);
+  // A linked module's environment already holds its import bindings. A
+  // global-backed script has no link step, so the declaration initializes the
+  // names predeclared in the global scope, where a later script against that
+  // scope (the next REPL input) resolves them.
+  InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
 
   if HasNamespace then
   begin
@@ -4402,6 +4517,7 @@ begin
   begin
     Slots[I] := ImportSlot(Pair.Key);
     Names[I] := Pair.Value;
+    LocalNames[I] := Pair.Key;
     if AStmt.Phase = icpEvaluation then
       MarkImportSlot(Pair.Key, Pair.Value)
     else
@@ -4423,6 +4539,8 @@ begin
   begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
     SyncCapturedImportSlot(NamespaceSlot, NamespaceCaptured);
+    if InitializesGlobalBindings then
+      EmitGlobalDefine(ACtx, NamespaceSlot, AStmt.NamespaceName, True);
   end;
 
   for I := 0 to Count - 1 do
@@ -4448,6 +4566,17 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;
+
+    if not InitializesGlobalBindings then
+      Continue;
+    if AStmt.Phase = icpEvaluation then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(LocalNames[I]);
+      EmitInstruction(ACtx, EncodeABC(OP_CREATE_GLOBAL_IMPORT_BINDING, ModReg,
+        NameIdx, ACtx.Template.AddConstantString(Names[I])));
+    end
+    else
+      EmitGlobalDefine(ACtx, Slots[I], LocalNames[I], True);
   end;
 
   ACtx.Scope.FreeRegister;
@@ -5260,6 +5389,7 @@ begin
       UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5430,6 +5560,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
   EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5603,6 +5734,7 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
   EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5707,6 +5839,7 @@ begin
     Length(AMethod.Parameters));
 
   EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);

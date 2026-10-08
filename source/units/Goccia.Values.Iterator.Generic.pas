@@ -42,7 +42,6 @@ type
     function ReturnValueWithoutValue: TGocciaObjectValue; override;
     function ThrowValue(const AValue: TGocciaValue): TGocciaObjectValue; override;
     procedure Close; override;
-    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -460,11 +459,6 @@ begin
   if FDone then
     Exit;
   ReturnInternal(nil, False);
-end;
-
-function TGocciaGenericIteratorValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaGenericIteratorValue.MarkReferences;

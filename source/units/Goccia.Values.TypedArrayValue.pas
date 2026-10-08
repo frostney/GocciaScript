@@ -93,6 +93,7 @@ type
     function HasProperty(const AName: string): Boolean; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyKeys: TArray<string>; override;
+    function GetEnumerablePropertyNames: TArray<string>; override;
     function GetAllPropertyNames: TArray<string>; override;
     function ToStringTag: string; override;
     function TryPreventExtensions: Boolean; override;
@@ -257,7 +258,6 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -1438,6 +1438,44 @@ begin
   SetLength(Result, Count);
 end;
 
+{ ES2026 §7.3.23 EnumerableOwnProperties over a typed array: [[OwnPropertyKeys]]
+  (§10.4.5.8) lists every valid integer index first, and [[GetOwnProperty]]
+  (§10.4.5.2) reports each of them as enumerable. The element store is not the
+  property map, so without this override JSON.stringify and the test runner's
+  deep equality saw only the named properties. Same order and the same
+  duplicate filter as GetOwnPropertyKeys. }
+function TGocciaTypedArrayValue.GetEnumerablePropertyNames: TArray<string>;
+var
+  Count, I, Len: Integer;
+  IsNegativeZero: Boolean;
+  Key: string;
+  NamedKeys: TArray<string>;
+  NumericIndex: Double;
+begin
+  Len := GetLength;
+  NamedKeys := inherited GetEnumerablePropertyNames;
+  SetLength(Result, Len + System.Length(NamedKeys));
+  Count := 0;
+
+  for I := 0 to Len - 1 do
+  begin
+    Result[Count] := IntegerToString(I);
+    Inc(Count);
+  end;
+
+  for Key in NamedKeys do
+  begin
+    if TryCanonicalNumericIndexString(Key, NumericIndex, IsNegativeZero) and
+       (not IsNegativeZero) and (NumericIndex >= 0) and
+       (NumericIndex < Len) and (Frac(NumericIndex) = 0.0) then
+      Continue;
+    Result[Count] := Key;
+    Inc(Count);
+  end;
+
+  SetLength(Result, Count);
+end;
+
 function TGocciaTypedArrayValue.GetAllPropertyNames: TArray<string>;
 begin
   Result := GetOwnPropertyKeys;
@@ -1721,11 +1759,6 @@ end;
 function TGocciaTypedArrayIteratorValue.ToStringTag: string;
 begin
   Result := 'Array Iterator';
-end;
-
-function TGocciaTypedArrayIteratorValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaTypedArrayIteratorValue.MarkReferences;

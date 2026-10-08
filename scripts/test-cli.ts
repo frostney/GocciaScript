@@ -17,8 +17,9 @@ import {
   mkdirSync,
   symlinkSync,
   linkSync,
+  realpathSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import {
   RUNNER,
   BARE,
@@ -102,6 +103,83 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`REPL (${mode}) top-level const across inputs expected 16,17,16, got: ${output}`);
   if (!output.includes("SyntaxError"))
     throw new Error(`REPL (${mode}) should reject redeclaring a top-level const, got: ${output}`);
+}
+
+console.log("REPL import bindings across inputs...");
+{
+  const tmp = mkdtemp("goccia-repl-import-");
+  try {
+    writeFileSync(
+      join(tmp, "dep.mjs"),
+      [
+        "export const answer = 42;",
+        "export let count = 0;",
+        "export const increment = () => { count = count + 1; };",
+        'export default "fallback";',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const repl = Bun.spawnSync([resolve(REPL), `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode(
+          [
+            'import { answer, count, increment } from "./dep.mjs";',
+            'import { answer as renamed } from "./dep.mjs";',
+            'import fallback from "./dep.mjs";',
+            'import * as ns from "./dep.mjs";',
+            '[answer, renamed, fallback, ns.answer].join(",");',
+            "increment();",
+            '["live", count, ns.count].join(":");',
+            "answer = 1;",
+            "const answer = 2;",
+            'import { count as renamed } from "./dep.mjs";',
+            '["kept", answer, renamed].join(":");',
+            "",
+          ].join("\n"),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+      if (repl.exitCode !== 0 || !output.includes("42,42,fallback,42"))
+        throw new Error(`REPL (${mode}) imports across inputs expected 42,42,fallback,42, got: ${output}`);
+      if (!output.includes("live:1:1"))
+        throw new Error(`REPL (${mode}) import binding should stay live across inputs, got: ${output}`);
+      if (!output.includes("TypeError: Assignment to constant variable 'answer'"))
+        throw new Error(`REPL (${mode}) should reject assigning to an import binding, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'answer' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject redeclaring an imported name, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'renamed' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject importing an already imported name again, got: ${output}`);
+      if (!output.includes("kept:42:42"))
+        throw new Error(`REPL (${mode}) import binding should survive the rejected inputs, got: ${output}`);
+    }
+
+    // Bytecode rejects a missing export before the input runs, so the name is
+    // never declared and a corrected import of it succeeds. The interpreter
+    // declares the name first and leaves it uninitialized (#1274).
+    const retry = Bun.spawnSync([resolve(REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { missing as answer } from "./dep.mjs";',
+          'import { answer } from "./dep.mjs";',
+          '["retried", answer].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const retryOutput = normalizeLineEndings(retry.stdout.toString() + retry.stderr.toString());
+    if (!retryOutput.includes('has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing export, got: ${retryOutput}`);
+    if (retry.exitCode !== 0 || !retryOutput.includes("retried:42"))
+      throw new Error(`REPL (bytecode) should accept a corrected import after a missing export, got: ${retryOutput}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -462,6 +540,54 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Test262 Runner ${mode} direct eval shadowing a top-level const expected 5,7,16,16, got: ${evalShadowOut}`);
     }
 
+    // An assignment resolves its target before the right-hand side runs
+    // (ES2026 §13.15.2), so a same-named var that a direct eval declares
+    // there does not redirect it: a const still in its dead zone throws the
+    // ReferenceError, an initialized one the TypeError (§9.1.1.1.5 step 3).
+    const evalConstTargetSource = [
+      "const outcome = function (run) {",
+      "  try { run(); return 'none'; } catch (e) { return e.constructor.name + ': ' + e.message; }",
+      "};",
+      "const results = [",
+      "  outcome(function () {",
+      '    const inner = function () { early = eval("var early = 5; 1"); };',
+      "    inner();",
+      "    const early = 0;",
+      "  }),",
+      "  outcome(function () {",
+      '    const inner = function () { TOP_LATE = eval("var TOP_LATE = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "  outcome(function () {",
+      "    const fixed = 0;",
+      '    const inner = function () { fixed = eval("var fixed = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "];",
+      "const TOP_LATE = 1;",
+      'print(results.join(" | "));',
+      "",
+    ].join("\n");
+    const evalConstTargetExpected = [
+      "ReferenceError: Cannot access 'early' before initialization",
+      "ReferenceError: Cannot access 'TOP_LATE' before initialization",
+      "TypeError: Assignment to constant variable 'fixed'",
+    ].join(" | ");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalConstTarget = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalConstTargetSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalConstTargetOut =
+        evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
+      if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
+        throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
       wideCapturedBlockSrc,
@@ -593,6 +719,52 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
   } finally {
     clean(tmp);
   }
+}
+
+// -- Block-level function var binding skipped on a collision (bytecode) --------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation and §16.1.7
+// GlobalDeclarationInstantiation, web-compat steps (Annex B.3.2.1 and B.3.2.2
+// up to ES2025): a non-strict block-level function declaration gets a var
+// binding only if no parameter has its name and `var` in its place would not
+// be an early error; B.3.3 puts an `if` clause's function declaration in a
+// block of its own. The JavaScript suite under tests/ covers the shapes both
+// modes get right; the interpreter still lets these block functions write the
+// outer binding, so only bytecode is checked here.
+
+console.log("Bytecode block-level function var binding skipped on a collision...");
+{
+  const cases: [string, string, string][] = [
+    ["parameter with a default", "(() => { function g(a, b = 2) { { function a() {} } return typeof a + ':' + a; } return g(1); })()", "number:1"],
+    ["parameter with a default, switch case", "(() => { function g(a, b = 2) { switch (1) { case 1: function a() {} } return a; } return g(1); })()", "1"],
+    ["parameter, if clause", "(() => { function h(a) { if (true) function a() {} return a; } return h(1); })()", "1"],
+    ["parameter, else clause", "(() => { function h(a) { if (false) ; else function a() {} return a; } return h(1); })()", "1"],
+    ["if clause without a collision", "(() => { function h() { const before = typeof q; if (true) function q() { return 7; } return before + ':' + q(); } return h(); })()", "undefined:7"],
+    ["let in an enclosing block", "(() => { function f() { { let a = 1; { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["let in an enclosing block, parameter with a default", "(() => { function f(x = 0) { { let a = 1; { function a() {} } } try { return a; } catch (e) { return e.name; } } return f(); })()", "ReferenceError"],
+    ["let loop head", "(() => { function f() { for (let a of [1]) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["destructured catch parameter", "(() => { function f() { try { throw {}; } catch ({ a }) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["two declarations in one block both keep it", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return a(); } return f(); })()", "2"],
+    ["same name in a nested block", "(() => { function f() { { function a() { return 1; } { function a() { return 2; } } } return a(); } return f(); })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const flags = ["--mode=bytecode", "--compat-var", "--compat-function", "--compat-non-strict-mode"];
+  const { exitCode, json } = runLoaderJson(source, flags);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode block function cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode block function (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  const scriptRun = runLoaderJson(
+    "const k = 1;\nif (true) function k() {}\nconsole.log(typeof k + ':' + k);\n",
+    flags,
+  );
+  if (scriptRun.exitCode !== 0 || scriptRun.json.output[0] !== "number:1")
+    throw new Error(`Bytecode script if-clause function named like a const expected number:1, got: ${JSON.stringify(scriptRun.json)}`);
 }
 
 // -- --compat-non-strict-mode (Loader + Bundler + TestRunner + Bare) -----------
@@ -739,6 +911,74 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     if (!existsSync(warningOut)) throw new Error("Bundler --warning-unsupported-features should preserve warning recovery mode");
   } finally {
     clean(tmp);
+  }
+}
+
+// -- Body var named like a parameter starts with its value (bytecode) ---------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30.e.i.4: with an
+// expression in the parameter list, a body var named like a parameter (or
+// `arguments`) is a binding of its own that starts with that binding's value.
+// The JavaScript suite under tests/ covers the separation in both modes; these
+// cases read the var before the body assigns it, which the interpreter still
+// answers with undefined, so only bytecode is checked here.
+
+console.log("Bytecode body var named like a parameter starts with its value...");
+{
+  const cases: [string, string, string][] = [
+    ["var without an initializer", "((a, f = () => a) => { var a; return [a, f()]; })(1)", "1,1"],
+    ["default closure writes the parameter", "((a, f = () => { a = 7; }) => { var a; f(); return a; })(1)", "1"],
+    ["defaulted parameter", "((a = 2, f = () => a) => { var a; return [a, f()]; })()", "2,2"],
+    ["destructured parameter with a default", "(({ a = 0 }) => { var a; return a; })({ a: 1 })", "1"],
+    ["function declaration", "(() => { function h(a, f = () => a) { var a; return a; } return h(1); })()", "1"],
+    ["method", "({ m(a, f = () => a) { var a; return [a, f()]; } }).m(3)", "3,3"],
+    ["var named arguments", "(() => { function g(a, f = () => arguments) { var arguments; return [arguments === f(), arguments.length]; } return g(1, undefined, 3); })()", "true,3"],
+    ["unmapped arguments object", "(() => { function g(a, b = 1) { arguments[0] = 9; var a; return [a, arguments[0]]; } return g(1); })()", "1,9"],
+    ["generator copies when called", "(() => { let w; function* g(a, f = (w = () => { a = 9; })) { var a; yield a; } const it = g(1); w(); return it.next().value; })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const { exitCode, json } = runLoaderJson(source, [
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-arguments-object",
+    "--compat-non-strict-mode",
+  ]);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode body var cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode body var (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  // A direct eval in the body reaches the body var; one in a default reaches
+  // the parameter. The interpreter agrees except where the var is read before
+  // it is assigned (the last case).
+  const evalSource = [
+    'function read(a, f = () => a) { var a = 5; return [eval("a"), f()]; }',
+    'function write(a, f = () => a) { var a = 5; eval("a = 6"); return [a, f()]; }',
+    'function inDefault(a, f = eval("() => a")) { var a = 5; return [a, f()]; }',
+    'function closureWrites(a, f = () => { a = 7; }) { var a = 3; f(); return [eval("a"), a]; }',
+    'function unassigned(a, f = () => a) { var a; return [eval("a"), f()]; }',
+    'const shared = [read(1), write(1), inDefault(1), closureWrites(1)].map((r) => r.join(":")).join(",");',
+    'print(shared);',
+    'print(unassigned(1).join(":"));',
+    "",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const evalRun = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode(evalSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const evalOut = normalizeLineEndings(evalRun.stdout.toString()).split("\n");
+    const evalAll = evalRun.stdout.toString() + evalRun.stderr.toString();
+    if (evalRun.exitCode !== 0 || evalOut[0] !== "5:1,6:1,5:1,3:3")
+      throw new Error(`Test262 Runner ${mode} direct eval with a body var expected 5:1,6:1,5:1,3:3, got: ${evalAll}`);
+    if (mode === "bytecode" && evalOut[1] !== "1:1")
+      throw new Error(`Test262 Runner bytecode direct eval of an unassigned body var expected 1:1, got: ${evalAll}`);
   }
 }
 
@@ -1045,6 +1285,71 @@ for (const mode of ["interpreted", "bytecode"]) {
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode} (${mode})`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
+}
+
+console.log("--max-memory (peak resident memory stays near the ceiling)...");
+if (process.platform === "linux") {
+  // BytesAllocated charges each value its InstanceSize, well under half of
+  // what the heap manager actually hands out, so a ceiling compared only
+  // against it let collectable garbage grow to about six times the ceiling
+  // before a collection ran (#1442). The collector now also triggers on the
+  // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
+  // churn garbage far past the ceiling: a flat loop of short-lived objects and
+  // arrays, and Promise jobs drained in batches. Linux only.
+  const ceiling = 64 * 1024 * 1024;
+  // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
+  // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
+  // two readings cannot be confused for these runs: the runner alone is
+  // resident for more than 8 MB, and neither script comes near 8 GB (8 million
+  // KiB) even with no collection at all.
+  const peakBytes = (maxRSS: number) => (maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS);
+  const scripts = {
+    flat: [
+      "let n = 0;",
+      "for (const _ of Array.from({ length: 250000 })) { n += Reflect.ownKeys({ x: 1 }).length; }",
+      "console.log('n', n);",
+      "",
+    ].join("\n"),
+    promise: [
+      "const N = 10000;",
+      "const noop = () => {};",
+      "const idx = Array.from({ length: N }, (_, i) => i);",
+      "const time = async (fn) => { for (const _ of [0, 1, 2, 3, 4]) { idx.forEach(fn); await null; } };",
+      "await time((i) => { Promise.resolve(i).then(noop); });",
+      "await time((i) => { Promise.reject(i).catch(noop); });",
+      "const thrower = async () => { throw 1; }; await time(() => { thrower().catch(noop); });",
+      "const ok = async () => 1; await time(() => { ok().then(noop); });",
+      "console.log('n', idx.length * 25);",
+      "",
+    ].join("\n"),
+  };
+  const expected = { flat: "n 250000", promise: "n 250000" };
+  const dir = mkdtemp("goccia-rss-");
+  try {
+    for (const [name, src] of Object.entries(scripts)) {
+      const path = join(dir, `${name}.js`);
+      writeFileSync(path, src);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync([RUNNER, path, `--mode=${mode}`, `--max-memory=${ceiling}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0 || !out.includes(expected[name as keyof typeof expected]))
+          throw new Error(`${name} (${mode}) at --max-memory=${ceiling} should complete, got exit ${proc.exitCode}: ${out}`);
+        const maxRSS = proc.resourceUsage?.maxRSS;
+        if (typeof maxRSS !== "number" || maxRSS <= 0)
+          throw new Error(`${name} (${mode}): Bun reported no peak RSS for the child`);
+        if (peakBytes(maxRSS) >= 2 * ceiling)
+          throw new Error(`${name} (${mode}) peaked at ${peakBytes(maxRSS)} bytes resident, at or above twice the ${ceiling}-byte ceiling`);
+      }
+    }
+  } finally {
+    clean(dir);
+  }
+} else {
+  console.log("  skipped: peak RSS is asserted on Linux only");
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
@@ -3155,11 +3460,51 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
 }
 
+console.log("--max-stack (imported module top level)...");
+// A module's top level is not a call, wherever it is imported from: each
+// module counts its nested calls before the RangeError and prints them.
+{
+  const tmp = mkdtemp("goccia-max-stack-import-");
+  try {
+    const count = (label: string) =>
+      `let n = 0; const f = () => { n++; f(); }; try { f(); } catch (e) { console.log("${label}", n, e.name); }\n`;
+    writeFileSync(join(tmp, "dep.js"), `${count("dep")}export const dep = 1;\n`);
+    writeFileSync(join(tmp, "inner.js"), `${count("inner")}export const inner = 1;\n`);
+    writeFileSync(join(tmp, "outer.js"), `import { inner } from "./inner.js";\n${count("outer")}export const outer = 1;\n`);
+    writeFileSync(join(tmp, "dynamic.js"), `${count("dynamic")}export const dynamic = 1;\n`);
+    writeFileSync(
+      join(tmp, "main.js"),
+      `import { dep } from "./dep.js";\nimport { outer } from "./outer.js";\n${count("main")}await import("./dynamic.js");\n`,
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const out = await $`${RUNNER} ${join(tmp, "main.js")} --max-stack=10 --mode=${mode}`.nothrow().text();
+      for (const label of ["dep", "inner", "outer", "main", "dynamic"]) {
+        if (!containsLine(out, `${label} 10 RangeError`))
+          throw new Error(`--max-stack=10 (${mode}): ${label}.js's top level should allow 10 nested calls, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("--max-stack (bytecode trampoline)...");
 {
   const src = "let n = 0; const f = () => { n++; if (n < 20000) f(); }; f(); console.log(n);";
   const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=0`.text();
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
+}
+
+console.log("--max-stack (deep RangeError trace keeps 100 frames)...");
+// A stack trace renders its innermost 100 frames and counts the rest, so the
+// RangeError of a 200,000-deep recursion is as short as one of 101 frames.
+// The frames are the 200,000 calls of f and the top level.
+{
+  const src =
+    'let d = 0; const f = () => { d++; f(); }; try { f(); } catch (e) { const lines = e.stack.split("\\n"); console.log(lines.length, d, lines[lines.length - 1].trim()); }';
+  const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=200000`.text();
+  if (!containsLine(out, "102 200000 ... 199901 more frames"))
+    throw new Error(`A 200,000-deep RangeError should keep 100 frames and count 199,901 more, got: ${out}`);
 }
 
 // -- Console observable behavior (Loader, interpreted + bytecode) ---------------
@@ -4248,10 +4593,16 @@ console.log("Entry module linking (bytecode)...");
 console.log("Entry module evaluated once...");
 {
   const tmp = mkdtemp("goccia-entry-once-");
+  // The runner names a relative entry by the working directory getcwd()
+  // reports, and on macOS that has the /var -> /private/var symlink resolved
+  // while tmpdir() keeps /var. abs.mjs must import itself by the spelling
+  // the runner gives it; one file reached through two spellings is #1498.
+  // Plain realpathSync keeps a Windows 8.3 name, as getcwd() does there.
+  const runnerTmp = realpathSync(tmp);
   try {
     const files: Record<string, string> = {
       "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
-      "abs.mjs": `import ${JSON.stringify(join(tmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "abs.mjs": `import ${JSON.stringify(join(runnerTmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
       "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
       "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
       "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',

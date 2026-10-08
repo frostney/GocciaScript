@@ -97,6 +97,7 @@ type
     procedure TestLoopThatCreatesClosureKeepsGetLocal;
     procedure TestSwitchClauseForgetsInitializedLets;
     procedure TestDefaultParameterValueKeepsGetLocal;
+    procedure TestParameterExpressionBodyVarEnvironment;
     procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
     procedure TestCountedForVariableOperandSkipsGetLocal;
     procedure TestCoverageKeepsLetAndParameterOperandCopies;
@@ -156,7 +157,10 @@ type
     procedure TestCoveragePreservesGlobalBackedConstantBranch;
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
+    procedure TestStrictTypesHintOnlyEnforcedLocals;
+    procedure TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
     procedure TestSwitchExitJumpsCloseUpvalues;
+    procedure TestBodyVarsStartUndefined;
   public
     procedure SetupTests; override;
   end;
@@ -204,6 +208,8 @@ begin
     TestSwitchClauseForgetsInitializedLets);
   Test('A default parameter value keeps OP_GET_LOCAL',
     TestDefaultParameterValueKeepsGetLocal);
+  Test('With parameter expressions the body vars get their own environment',
+    TestParameterExpressionBodyVarEnvironment);
   Test('An operand that is its own destination keeps OP_GET_LOCAL',
     TestOperandThatIsItsOwnDestinationKeepsGetLocal);
   Test('A counted for variable operand skips OP_GET_LOCAL',
@@ -300,7 +306,12 @@ begin
     TestCoveragePreservesGlobalBackedConstantBranch);
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
+  Test('Strict types hint only enforced locals', TestStrictTypesHintOnlyEnforcedLocals);
+  Test('Strict var redeclaration in a catch block keeps its type on the var',
+    TestStrictVarRedeclarationInCatchKeepsTypeOnVar);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
+  Test('Body vars start undefined; other bindings emit nothing',
+    TestBodyVarsStartUndefined);
 end;
 
 procedure TTestCompiler.TestASTSpansUseUTF16CodeUnitOffsets;
@@ -1186,6 +1197,69 @@ begin
   end;
 end;
 
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30: with an expression
+// in the parameter list the body's vars get an Environment Record of their own.
+procedure TTestCompiler.TestParameterExpressionBodyVarEnvironment;
+
+  function PreambleOps(const ASource: string; const AOp: TGocciaOpCode;
+    out AAllGetLocals: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := -1;
+    AAllGetLocals := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if not Assigned(Func) then
+        Exit;
+      Result := 0;
+      for I := 0 to Func.ParameterPreambleSize - 1 do
+        if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = AOp then
+          Inc(Result);
+      AAllGetLocals := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  AllGetLocals: Integer;
+begin
+  // No closure in the parameter list captured `a`, so its var keeps the
+  // parameter's register, and reads it in place like a parameter.
+  Expect<Integer>(PreambleOps(
+    'const f = (a, b = 1) => { var a; return a * b; };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+  Expect<Integer>(AllGetLocals).ToBe(0);
+
+  // `g` captured `a`: the var is a register of its own, which the preamble
+  // fills from the parameter's cell (step 30.e.i.4).
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { var a; return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+
+  // A var that names no parameter starts as undefined (step 30.e.i.3). Its
+  // register can hold a preamble temporary or a surplus argument, so the
+  // preamble clears it.
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = p.x * p.y) => { var t; return t * a; };',
+    OP_LOAD_UNDEFINED, AllGetLocals) - PreambleOps(
+    'const f = (p, a = p.x * p.y) => { return p * a; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = 1) => { var t; return t * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals) - PreambleOps(
+    'const f = (p, a = 1) => { return a * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
+end;
+
 procedure TTestCompiler.TestOperandThatIsItsOwnDestinationKeepsGetLocal;
 var
   Module: TGocciaBytecodeModule;
@@ -1678,6 +1752,8 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);
@@ -2691,6 +2767,78 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestStrictTypesHintOnlyEnforcedLocals;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A literal-initialized or annotated let is enforced, so it keeps its typed
+  // arithmetic and a guard on each incompatible assignment.
+  Module := CompileSource(
+    'let a = 1; let b: number = 2; a + b; a = "x"; b = "y";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // An expression-initialized let is not enforced, so neither its
+  // initializer nor a later assignment gives it a hint.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a; c = 3; c + a; c = "x";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A const cannot be reassigned, so it keeps the wider inference.
+  Module := CompileSource(
+    'let a = 1; const c = a + 2.5; c + a;',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // Without strict types nothing is enforced and inference is unchanged.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // `var x;` inside `catch (x)` redeclares the function's var binding, but
+  // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
+  // enforced Number type stays on the var: the read after the try statement
+  // is typed, the catch parameter read is not.
+  Module := CompileSource(
+    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    True, False, False, False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestSwitchExitJumpsCloseUpvalues;
 var
   Module: TGocciaBytecodeModule;
@@ -2732,6 +2880,41 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestBodyVarsStartUndefined;
+
+  function LoadUndefinedCount(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Every function body ends with an implicit `return undefined`: one
+  // OP_LOAD_UNDEFINED. Each var the body declares adds one, since its register
+  // may hold a surplus argument or a parameter-destructuring temporary.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var x, y; p.r = a * x; };')).ToBe(3);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = ({ a }, p) => { if (p) { var x; } p.r = a * x; };')).ToBe(2);
+  // A body without a var, and a var naming a parameter, add nothing.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { const x = a; p.r = a * x; };')).ToBe(1);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var a; p.r = a * a; };')).ToBe(1);
 end;
 
 begin

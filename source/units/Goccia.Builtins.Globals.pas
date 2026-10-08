@@ -1058,7 +1058,9 @@ var
   Keys: TArray<string>;
   ClonedValue: TGocciaValue;
 begin
-  Result := TGocciaObjectValue.Create;
+  // StructuredDeserialize: "a new Object in targetRealm", whose prototype is
+  // that realm's %Object.prototype%. The source's own prototype never survives.
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
   RegisterClone(AObj, Result, AMemory);
 
   Keys := AObj.GetOwnPropertyKeys;
