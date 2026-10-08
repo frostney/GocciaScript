@@ -8,6 +8,7 @@ uses
   Goccia.Arguments.Collection,
   Goccia.FFI.LibraryGuard,
   Goccia.FFI.Types,
+  Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives;
@@ -134,6 +135,13 @@ function CreateFFINullableType(const AElementValue: TGocciaValue): TGocciaValue;
 function CreateFFIVarArgs(const ATypesValue,
   AValuesValue: TGocciaValue): TGocciaValue;
 
+{ The prototype every FFI value of one kind shares in the current realm: an
+  ordinary object inheriting from Object.prototype whose only own property is
+  @@toStringTag = ATag, which is where Object.prototype.toString reads the
+  kind's tag from. Created on first use and kept in ASlot. }
+function FFITaggedPrototype(const ASlot: TGocciaRealmSlotId;
+  const ATag: string): TGocciaObjectValue;
+
 implementation
 
 uses
@@ -148,7 +156,9 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FFICallback,
   Goccia.Values.FFIPointer,
-  Goccia.Values.NativeFunction;
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 const
   // The scalar field types stored as a JavaScript number through
@@ -167,13 +177,37 @@ const
   PROP_BYTE_OFFSET = 'byteOffset';
   PROP_LENGTH = 'length';
 
+var
+  GFFITypeDescriptorPrototypeSlot: TGocciaRealmSlotId;
+  GFFIAggregatePrototypeSlot: TGocciaRealmSlotId;
+  GFFIVarArgsPrototypeSlot: TGocciaRealmSlotId;
+
+function FFITaggedPrototype(const ASlot: TGocciaRealmSlotId;
+  const ATag: string): TGocciaObjectValue;
+var
+  Existing: TObject;
+begin
+  if CurrentRealm = nil then
+    Exit(TGocciaObjectValue.SharedObjectPrototype);
+  Existing := CurrentRealm.GetSlot(ASlot);
+  if Existing is TGocciaObjectValue then
+    Exit(TGocciaObjectValue(Existing));
+  Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype);
+  // Pinned by the slot before the tag string is allocated.
+  CurrentRealm.SetSlot(ASlot, Result);
+  Result.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(ATag), [pfConfigurable]));
+end;
+
 constructor TGocciaFFIVarArgsValue.Create(
   const ATypes: array of TGocciaFFITypeDescriptor;
   const AValues: array of TGocciaValue);
 var
   I: Integer;
 begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  inherited Create(FFITaggedPrototype(GFFIVarArgsPrototypeSlot,
+    FFI_VARARGS_TAG));
   if Length(ATypes) <> Length(AValues) then
     raise EArgumentException.Create(
       'FFI variadic type and value counts do not match');
@@ -669,7 +703,8 @@ constructor TGocciaFFITypeDescriptorValue.Create(
 var
   CreateFunction: TGocciaNativeFunctionValue;
 begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  inherited Create(FFITaggedPrototype(GFFITypeDescriptorPrototypeSlot,
+    FFI_TYPE_DESCRIPTOR_TAG));
   FDescriptor := ADescriptor;
   if not AAdoptReference then
     FDescriptor.AddReference;
@@ -752,7 +787,8 @@ var
   GarbageCollector: TGarbageCollector;
   BufferPinned: Boolean;
 begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  inherited Create(FFITaggedPrototype(GFFIAggregatePrototypeSlot,
+    FFI_AGGREGATE_TAG));
   FDescriptor := ADescriptor;
   FDescriptor.AddReference;
   FBuffer := TGocciaArrayBufferValue.Create(FDescriptor.Size);
@@ -779,7 +815,8 @@ constructor TGocciaFFIAggregateValue.CreateView(
   const ABuffer: TGocciaArrayBufferValue; const AByteOffset: Integer;
   const APointerGuards: TGocciaFFIAggregatePointerGuards);
 begin
-  inherited Create(TGocciaObjectValue.SharedObjectPrototype);
+  inherited Create(FFITaggedPrototype(GFFIAggregatePrototypeSlot,
+    FFI_AGGREGATE_TAG));
   FDescriptor := ADescriptor;
   FDescriptor.AddReference;
   FBuffer := ABuffer;
@@ -1234,5 +1271,10 @@ begin
   Data := FBuffer.Data;
   AttachType(FDescriptor, FByteOffset);
 end;
+
+initialization
+  GFFITypeDescriptorPrototypeSlot := RegisterRealmSlot('%FFIType.prototype%');
+  GFFIAggregatePrototypeSlot := RegisterRealmSlot('%FFIAggregate.prototype%');
+  GFFIVarArgsPrototypeSlot := RegisterRealmSlot('%FFIVarArgs.prototype%');
 
 end.

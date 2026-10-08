@@ -116,6 +116,7 @@ type
     // FLoopMayCreateClosure as it was when each open loop was entered.
     FOuterLoopMayCreateClosure: array of Boolean;
     FDirectEvalSeen: Boolean;
+    FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
     procedure EnsureLocalIndex;
     procedure RecordDebugLocal(const AIndex: Integer);
@@ -165,6 +166,12 @@ type
     // name lookup from here on, including DeclareVarLocal, no longer finds it.
     procedure RenameLocal(const AIndex: Integer; const ANewName: string);
     procedure MarkLocalInitialized(const AIndex: Integer);
+    // ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList)
+    // step 5: parameterNames, the BoundNames of the function's formal
+    // parameters. Recorded while the parameter list is compiled; the
+    // function body reads them before it is compiled.
+    procedure AddParameterName(const AName: string);
+    function HasParameterName(const AName: string): Boolean;
     procedure ClearInitializedAtDepth(const ADepth: Integer);
     procedure EnterLoop(const AMayCreateClosure: Boolean);
     procedure LeaveLoop;
@@ -628,6 +635,24 @@ end;
 procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);
 begin
   FLocals[AIndex].IsInitialized := True;
+end;
+
+procedure TGocciaCompilerScope.AddParameterName(const AName: string);
+begin
+  if (AName = '') or HasParameterName(AName) then
+    Exit;
+  SetLength(FParameterNames, Length(FParameterNames) + 1);
+  FParameterNames[High(FParameterNames)] := AName;
+end;
+
+function TGocciaCompilerScope.HasParameterName(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FParameterNames) do
+    if FParameterNames[I] = AName then
+      Exit(True);
+  Result := False;
 end;
 
 procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);

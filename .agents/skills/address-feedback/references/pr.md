@@ -137,8 +137,15 @@ errored, missing, or head-ambiguous verdict is pending rather than passed.
    unsafe or divergent PR, unavailable terminal external dependency, or
    unresolved required finding. Report the exact blocker.
 11. In `automatic-merge` mode, squash-merge through `git-workflow` only when the
-    ordinary PR is `ready` under the exact final-head contract. Sync the local
-    default branch, remove only clean worktrees owned by this run, and report
-    the merged PR, final head, validation, reviews, and cleanup. For a native
+    ordinary PR is `ready` under the exact final-head contract and
+    `git-workflow`'s
+    [default-branch health](../../git-workflow/SKILL.md#default-branch-health)
+    gate passes. Await a pending default-branch run with `delivery-wait`'s
+    foreground `workflow-terminal` wait, then recheck. If the branch is still
+    not green or the host cannot wait, return `ready` and unmerged with the
+    default branch's state as the blocker. After the merge, sync the local
+    default branch, remove only
+    clean worktrees owned by this run, and report the merged PR, final head,
+    validation, reviews, and cleanup. For a native
     stack member, return `ready` without merging so the stack owner can recheck
     it.

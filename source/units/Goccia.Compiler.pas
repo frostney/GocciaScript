@@ -27,6 +27,7 @@ type
     FFormalParameterCounts: TFormalParameterCountMap;
     FNumericParameterProofs: TNumericParameterProofMap;
     FNumberBindingProofs: TNumberBindingProofMap;
+    FBlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     FGlobalBackedTopLevel: Boolean;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -48,6 +49,7 @@ type
     procedure DoSetNonStrictMode(const AEnabled: Boolean);
     function BuildContext: TGocciaCompilationContext;
     function NonStrictBlockFunctionVarBindingsEnabled: Boolean;
+    function HoistedBlockFunctionVarBindings: TBlockFunctionVarBindingSet;
   public
     constructor Create(const ASourcePath: string);
     destructor Destroy; override;
@@ -83,6 +85,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.Expressions,
   Goccia.Compiler.NumericBindings,
@@ -102,6 +105,7 @@ begin
   FFormalParameterCounts := TFormalParameterCountMap.Create;
   FNumericParameterProofs := TNumericParameterProofMap.Create;
   FNumberBindingProofs := TNumberBindingProofMap.Create;
+  FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
   FTemplateDerivedConstructorThisGuards :=
     TDictionary<TGocciaFunctionTemplate, Boolean>.Create;
   FDerivedConstructorThisGuard := False;
@@ -114,6 +118,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FBlockFunctionVarBindings.Free;
   FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
   FTemplateDerivedConstructorThisGuards.Free;
@@ -129,6 +134,7 @@ begin
   Result.FormalParameterCounts := FFormalParameterCounts;
   Result.NumericParameterProofs := FNumericParameterProofs;
   Result.NumberBindingProofs := FNumberBindingProofs;
+  Result.BlockFunctionVarBindings := FBlockFunctionVarBindings;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
@@ -151,6 +157,17 @@ function TGocciaCompiler.NonStrictBlockFunctionVarBindingsEnabled: Boolean;
 begin
   Result := FNonStrictMode and Assigned(FCurrentTemplate) and
     not FCurrentTemplate.StrictCode;
+end;
+
+// The block-level function declarations whose var binding the body being
+// compiled hoists, or nil when its code is strict.
+function TGocciaCompiler.HoistedBlockFunctionVarBindings:
+  TBlockFunctionVarBindingSet;
+begin
+  if NonStrictBlockFunctionVarBindingsEnabled then
+    Result := FBlockFunctionVarBindings
+  else
+    Result := nil;
 end;
 
 procedure TGocciaCompiler.DoSetDerivedConstructorThisGuard(
@@ -444,7 +461,7 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
+  const ABlockFunctionVarBindings: TBlockFunctionVarBindingSet;
   const AAtVarScopedLevel: Boolean;
   const ASkipUninitializedVars: Boolean = False); forward;
 
@@ -810,12 +827,15 @@ begin
       DiscoverClosedCallNumericProof(Block, FNumericParameterProofs);
       DiscoverNumberBindings(Block, FCurrentScope,
         NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
+      if NonStrictBlockFunctionVarBindingsEnabled then
+        DiscoverBlockFunctionVarBindings(Block, FCurrentScope,
+          FBlockFunctionVarBindings);
 
       // Hoist var declarations to function scope
       HoistedVarStart := FCurrentScope.LocalCount;
       for I := 0 to Block.Nodes.Count - 1 do
         HoistVarLocals(Block.Nodes[I], FCurrentScope,
-          NonStrictBlockFunctionVarBindingsEnabled, True);
+          HoistedBlockFunctionVarBindings, True);
       EmitHoistedVarInitialization(BuildContext, Block, HoistedVarStart);
 
       // Check if there are function declarations to hoist
@@ -915,7 +935,7 @@ end;
 
 procedure HoistVarLocals(const ANode: TGocciaASTNode;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
+  const ABlockFunctionVarBindings: TBlockFunctionVarBindingSet;
   const AAtVarScopedLevel: Boolean;
   const ASkipUninitializedVars: Boolean = False);
 var
@@ -954,9 +974,8 @@ begin
   end
   else if (ANode is TGocciaFunctionDeclaration) and
           (AAtVarScopedLevel or
-          (AIncludeNonStrictBlockFunctionVarBindings and
-          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsAsync and
-          not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsGenerator)) then
+          BlockFunctionHasVarBinding(ABlockFunctionVarBindings,
+            TGocciaFunctionDeclaration(ANode))) then
     AScope.DeclareVarLocal(TGocciaFunctionDeclaration(ANode).Name)
   else if ANode is TGocciaExportVariableDeclaration then
   begin
@@ -976,11 +995,7 @@ begin
           end;
         end;
   end
-  else if (ANode is TGocciaExportFunctionDeclaration) and
-          (AAtVarScopedLevel or
-          (AIncludeNonStrictBlockFunctionVarBindings and
-          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsAsync and
-          not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsGenerator)) then
+  else if (ANode is TGocciaExportFunctionDeclaration) and AAtVarScopedLevel then
     AScope.DeclareVarLocal(
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name)
   else if ANode is TGocciaDestructuringDeclaration then
@@ -1000,16 +1015,16 @@ begin
     Block := TGocciaBlockStatement(ANode);
     for I := 0 to Block.Nodes.Count - 1 do
       HoistVarLocals(Block.Nodes[I], AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+        ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaIfStatement then
   begin
     IfStmt := TGocciaIfStatement(ANode);
     HoistVarLocals(IfStmt.Consequent, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(IfStmt.Alternate) then
       HoistVarLocals(IfStmt.Alternate, AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+        ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForOfStatement then
   begin
@@ -1024,7 +1039,7 @@ begin
         AScope.DeclareVarLocal(ForOf.BindingName);
     end;
     HoistVarLocals(ForOf.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForInStatement then
   begin
@@ -1037,48 +1052,48 @@ begin
         AScope.DeclareVarLocal(ForIn.BindingName);
     end;
     HoistVarLocals(ForIn.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaForStatement then
   begin
     ForStmt := TGocciaForStatement(ANode);
     if Assigned(ForStmt.Init) then
       HoistVarLocals(ForStmt.Init, AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, AAtVarScopedLevel,
+        ABlockFunctionVarBindings, AAtVarScopedLevel,
         ASkipUninitializedVars);
     HoistVarLocals(ForStmt.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWhileStatement then
   begin
     WhileStmt := TGocciaWhileStatement(ANode);
     HoistVarLocals(WhileStmt.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaDoWhileStatement then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(ANode);
     HoistVarLocals(DoWhileStmt.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaWithStatement then
   begin
     WithStmt := TGocciaWithStatement(ANode);
     HoistVarLocals(WithStmt.Body, AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaTryStatement then
   begin
     TryStmt := TGocciaTryStatement(ANode);
     if Assigned(TryStmt.Block) then
       HoistVarLocals(TryStmt.Block, AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+        ABlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(TryStmt.CatchBlock) then
       HoistVarLocals(TryStmt.CatchBlock, AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+        ABlockFunctionVarBindings, False, ASkipUninitializedVars);
     if Assigned(TryStmt.FinallyBlock) then
       HoistVarLocals(TryStmt.FinallyBlock, AScope,
-        AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+        ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end
   else if ANode is TGocciaSwitchStatement then
   begin
@@ -1086,20 +1101,20 @@ begin
     for I := 0 to SwitchStmt.Cases.Count - 1 do
       for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
         HoistVarLocals(SwitchStmt.Cases[I].Consequent[J], AScope,
-          AIncludeNonStrictBlockFunctionVarBindings, False, ASkipUninitializedVars);
+          ABlockFunctionVarBindings, False, ASkipUninitializedVars);
   end;
 end;
 
 procedure HoistVarLocalsFromStatements(const AStatements: TObjectList<TGocciaStatement>;
   const AScope: TGocciaCompilerScope;
-  const AIncludeNonStrictBlockFunctionVarBindings: Boolean;
+  const ABlockFunctionVarBindings: TBlockFunctionVarBindingSet;
   const ASkipUninitializedVars: Boolean = False);
 var
   I: Integer;
 begin
   for I := 0 to AStatements.Count - 1 do
     HoistVarLocals(AStatements[I], AScope,
-      AIncludeNonStrictBlockFunctionVarBindings, True, ASkipUninitializedVars);
+      ABlockFunctionVarBindings, True, ASkipUninitializedVars);
 end;
 
 procedure AddUniqueVarName(const ANames: TUnicodeStringList;
@@ -1442,6 +1457,7 @@ var
 begin
   FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
+  FBlockFunctionVarBindings.Clear;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
@@ -1457,11 +1473,13 @@ begin
   try
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
       NonStrictBlockFunctionVarBindingsEnabled, FNumberBindingProofs);
+    if NonStrictBlockFunctionVarBindingsEnabled then
+      DiscoverProgramBlockFunctionVarBindings(AProgram.Body,
+        FBlockFunctionVarBindings);
 
     // Hoist var declarations to module scope.
     HoistVarLocalsFromStatements(AProgram.Body, FCurrentScope,
-      NonStrictBlockFunctionVarBindingsEnabled,
-      FGlobalBackedTopLevel);
+      HoistedBlockFunctionVarBindings, FGlobalBackedTopLevel);
     if FGlobalBackedTopLevel then
     begin
       MarkHoistedVarsGlobalBacked(FCurrentScope);

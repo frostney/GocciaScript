@@ -466,11 +466,19 @@
             Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_PUSH_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
+      end;
 
       OP_PUSH_FINALLY_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth,
           bhkFinally);
+      end;
 
       OP_POP_HANDLER:
         if not FHandlerStack.IsEmpty then

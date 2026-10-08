@@ -43,14 +43,14 @@ class OracleTest(unittest.TestCase):
         decision = {"state": "trigger-incremental"}
         self.assertEqual(history.violations(duetto, sha, REPLAY.at("2026-08-09T12:29:52Z"), decision), [])
 
-    def test_completion_evidence_from_before_a_ready_event_is_superseded(self) -> None:
+    def test_completion_evidence_from_before_a_ready_event_stands(self) -> None:
         # duetto#55: clean pass of 1ca17f50 at 19:47:10. Synthetic: marked ready at 19:49:00.
         pull = recorded("duetto#55")
         sha, now = head(pull, "1ca17f50"), REPLAY.at("2026-09-25T19:50:00Z")
         decision = {"state": "clean-complete"}
         self.assertEqual(REPLAY.History([pull]).violations(pull, sha, now, decision), [])
         pull["events"].append({"type": "ready", "at": "2026-09-25T19:49:00Z"})
-        self.assertEqual(REPLAY.History([pull]).violations(pull, sha, now, decision), ["completion"])
+        self.assertEqual(REPLAY.History([pull]).violations(pull, sha, now, decision), [])
 
     def test_completion_evidence_from_before_a_trigger_line_is_superseded(self) -> None:
         # duetto#55: a full review was requested at 22:34:56 above an explanation.

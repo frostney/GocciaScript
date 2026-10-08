@@ -154,6 +154,7 @@ uses
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.OperandSafety,
   Goccia.Compiler.Statements,
@@ -2880,7 +2881,34 @@ begin
   end;
 end;
 
-// Compiles the parameter preamble. ES2026 §10.2.11 FunctionDeclarationInstantiation
+// ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList)
+// step 5: parameterNames is the BoundNames of the formals, every name a
+// parameter or a parameter pattern binds. The function body reads them when it
+// decides which block-level function declarations get a var binding.
+procedure RecordParameterNames(const AScope: TGocciaCompilerScope;
+  const AParams: TGocciaParameterArray);
+var
+  I, J: Integer;
+  Names: TUnicodeStringList;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsPattern then
+    begin
+      Names := TUnicodeStringList.Create;
+      try
+        CollectPatternBindingNames(AParams[I].Pattern, Names);
+        for J := 0 to Names.Count - 1 do
+          AScope.AddParameterName(Names[J]);
+      finally
+        Names.Free;
+      end;
+    end
+    else
+      AScope.AddParameterName(AParams[I].Name);
+end;
+
+// Compiles the parameter preamble, after recording the parameter names on the
+// scope (RecordParameterNames). ES2026 §10.2.11 FunctionDeclarationInstantiation
 // creates every binding of the formal parameters uninitialized and then runs
 // IteratorBindingInitialization of the formals (§8.6.3): one parameter at a
 // time, left to right, each taking its argument and running its initializer
@@ -2928,6 +2956,8 @@ var
   end;
 
 begin
+  RecordParameterNames(ACtx.Scope, AParams);
+
   // Every initializer and computed key is a TGocciaExpression, so this asks
   // whether the list contains one at all.
   if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then
@@ -3023,9 +3053,12 @@ end;
 // unless a body function declaration has the name too; step 37 stores the
 // function object into it before the body runs.
 //
-// In non-strict code, Annex B.3.2.1 adds the name of a function declared in a
-// block to varEnv as well, starting as undefined, unless a parameter or a var
-// already has the name or it is `arguments`.
+// In non-strict code, the web-compat step after step 30 (Annex B.3.2.1 up to
+// ES2025) adds the name of a function declared in a block to varEnv as well,
+// starting as undefined, unless a var already has the name or it is
+// `arguments`, and only for the declarations Goccia.Compiler.BlockFunctions
+// gives a var binding: none whose name a parameter has or whose `var` would be
+// an early error, such as one under a `let` of the name in an enclosing block.
 //
 // Closures in the parameter list were compiled before this point and keep the
 // parameter's slot. When one of them captured the parameter, its local leaves
@@ -3107,14 +3140,13 @@ begin
 
     if ACtx.NonStrictMode then
     begin
-      CollectVarBindingNamesFromNodes(Block.Nodes, BlockFunctionNames,
-        vbnNonStrictScriptCompatibility);
+      DiscoverBlockFunctionVarBindings(Block, ACtx.Scope,
+        ACtx.BlockFunctionVarBindings, BlockFunctionNames);
       for I := 0 to BlockFunctionNames.Count - 1 do
       begin
         Name := BlockFunctionNames[I];
         if (VarNames.IndexOf(Name) >= 0) or
-           (Name = IDENTIFIER_ARGUMENTS) or
-           ParameterListBindsName(AParams, Name) then
+           (Name = IDENTIFIER_ARGUMENTS) then
           Continue;
         LocalCount := ACtx.Scope.LocalCount;
         VarSlot := ACtx.Scope.DeclareVarLocal(Name);
