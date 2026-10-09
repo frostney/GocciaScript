@@ -506,6 +506,17 @@ type
     OP_CHECK_BINDING_INITIALIZED = 235
   );
 
+const
+  // Runtime-only opcode, reserved at the top of the opcode range and never
+  // valid in a file: it is deliberately not a TGocciaOpCode member, so
+  // IsValidGocciaOpCode (bounded by High(TGocciaOpCode)) rejects it at load.
+  // File opcodes must stay below it. A = destination, B = first contiguous
+  // argument register, C = argument count: calls the running closure through
+  // an ordinary frame. The bytecode loader turns a loaded OP_CALL_SELF_NUM into
+  // it, because the proof that makes a closed numeric frame safe is not
+  // serialized (ADR 0127).
+  OP_CALL_SELF = 255;
+
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;

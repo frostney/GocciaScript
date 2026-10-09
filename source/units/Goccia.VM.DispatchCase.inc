@@ -2295,7 +2295,7 @@
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
-          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+          ProfileEntryTimestamp);
         goto LDispatchNext;
       end;
 
@@ -4105,5 +4105,20 @@
         goto LDispatchNext;
       end;
         else
-          raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+          // OP_CALL_SELF is a reserved runtime-only opcode outside
+          // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
+          // arguments are read straight out of the caller's registers, as in
+          // OP_CALL: SetupNewFrame copies them before it acquires registers.
+          if Op = OP_CALL_SELF then
+          begin
+            if FThreadPolls^.TimeoutArmed then
+              CheckExecutionTimeout;
+            PushFrame(A, Frame.IP, Template, PrevCovLine,
+              ProfileEntryTimestamp);
+            SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
+              C, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            goto LDispatchNext;
+          end
+          else
+            raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;

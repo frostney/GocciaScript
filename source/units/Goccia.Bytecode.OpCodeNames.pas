@@ -229,7 +229,10 @@ begin
     OP_CREATE_GLOBAL_IMPORT_BINDING:   Result := 'OP_CREATE_GLOBAL_IMPORT_BINDING';
     OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
   else
-    Result := Format('OP_UNKNOWN_%d', [AOp]);
+    if AOp = OP_CALL_SELF then
+      Result := 'OP_CALL_SELF'
+    else
+      Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;
 end;
 

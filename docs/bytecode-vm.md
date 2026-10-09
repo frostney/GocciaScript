@@ -195,6 +195,17 @@ unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
 proper-tail-call path. The optimization does not turn the function into a
 generally typed function or change generic `+` semantics.
 
+A scalar frame takes its register window without clearing it, so the window
+can still hold references that an earlier frame left there, to objects that
+may since have been freed. The collector therefore does not mark scalar
+frames: when any is live, the bytecode stack root marks the register arena only
+up to the first scalar frame's window. That loses nothing, because a scalar
+frame writes each register before reading it and stores only scalars and the
+pinned NaN, infinity and -0 values. It relies on scalar frames being the
+innermost frames whenever one is live, which holds because they call only
+themselves; development builds assert that no frame is set up while a scalar
+frame is live (see [ADR 0127](adr/0127-collector-skips-closed-numeric-frames.md)).
+
 ## Profiling
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
@@ -355,6 +366,19 @@ execute, the verifier checks opcodes, register destinations, constant and
 function references, control-flow targets, and exception-handler metadata.
 The VM retains bounds checks on instruction, constant, and function access as
 defense in depth.
+
+A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
+memory-safe on its own. The closed numeric frame it would enter is sound only
+under the compiler's numeric-only proof, which is not serialized (ADR 0101),
+and the collector does not mark that frame's registers (ADR 0127), so a crafted
+file could otherwise park an object in the unmarked window and have the
+collector reclaim it. The verifier rewrites a loaded `OP_CALL_SELF_NUM` in a
+synchronous arrow to `OP_CALL_SELF`, the ordinary self-call whose frame the
+collector marks, and rejects the opcode in any other template kind. Code
+compiled in process keeps the fast path; only loaded templates are rewritten.
+`OP_CALL_SELF` is runtime-only: it is reserved at 255, the top of the opcode
+range, outside `TGocciaOpCode`, so the loader rejects it in a file, and file
+opcodes must stay below it.
 
 ## Current Status
 
