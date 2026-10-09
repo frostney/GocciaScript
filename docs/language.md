@@ -478,6 +478,8 @@ class C {
 // Equivalent to a private #name field with get name() / set name(v)
 ```
 
+The storage is a private name of its own, so it is not an own property, and the getter and setter throw `TypeError` on an object without it. Instance auto-accessors are initialized together with fields, in source order; a `static accessor` is initialized once, on the class, in order with static fields and blocks. Following the proposal text in [tc39/ecma262#2417](https://github.com/tc39/ecma262/pull/2417), the generated `name` property is enumerable, unlike a class getter or setter.
+
 **`addInitializer`:** Decorators can register initialization callbacks via `context.addInitializer()`. Timing depends on decorator kind:
 
 - Class decorators: after the class is fully defined and static fields are assigned.

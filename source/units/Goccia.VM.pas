@@ -451,8 +451,9 @@ type
       const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AFlags: Integer;
       const AClassValue: TGocciaValue = nil);
-    procedure SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-      const ABackingName: string; const AFlags: Integer);
+    procedure DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+      const AName: string; const AKey: TGocciaValue;
+      const AFunction: TGocciaValue; const AFlags: Integer);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue;
       const APreserveExistingPrivateSlots: Boolean = False);
@@ -12370,14 +12371,18 @@ begin
   Result := TargetInstance;
 end;
 
+// A private auto-accessor (`accessor #x`) is a private field in both modes:
+// declaring its name on the class is all its setup needs. A public one is
+// compiled to a private storage field and a getter/setter pair (see
+// DefineAutoAccessorHalf), so nothing reaches here for it.
 procedure TGocciaVM.SetupAutoAccessorValue(const AName: string;
   const AFlags: Integer; const AClassValue: TGocciaValue);
 var
   ClassVal: TGocciaClassValue;
-  IsStatic: Boolean;
-  IsPrivate: Boolean;
   SourceName: string;
 begin
+  if (AFlags and 2) = 0 then
+    Exit;
   if Assigned(FActiveDecoratorSession) then
   begin
     if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
@@ -12389,33 +12394,59 @@ begin
     ClassVal := TGocciaClassValue(AClassValue)
   else
     Exit;
-  IsStatic := (AFlags and 1) <> 0;
-  IsPrivate := (AFlags and 2) <> 0;
-  if IsPrivate then
-  begin
-    SourceName := BytecodePrivateSourceName(AName);
-    if SourceName <> '' then
-      ClassVal.DeclarePrivateName(SourceName, AName);
-    Exit;
-  end;
-  ClassVal.AddAutoAccessor(AName, '__accessor_' + AName, IsStatic);
+  SourceName := BytecodePrivateSourceName(AName);
+  if SourceName <> '' then
+    ClassVal.DeclarePrivateName(SourceName, AName);
 end;
 
-procedure TGocciaVM.SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-  const ABackingName: string; const AFlags: Integer);
+// TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+// `accessor`: the getter and setter are defined together with
+// DefinePropertyOrThrow and { [[Enumerable]]: true, [[Configurable]]: true },
+// replacing whatever a member declared earlier under the same key defined.
+// The compiler emits the getter half (ACCESSOR_FLAG_AUTO), which starts the
+// property afresh, immediately followed by the setter half, which joins it.
+// AClassValue is the class; AKey is a symbol key, or nil when AName names it.
+procedure TGocciaVM.DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+  const AName: string; const AKey: TGocciaValue;
+  const AFunction: TGocciaValue; const AFlags: Integer);
 var
-  ClassVal: TGocciaClassValue;
   IsStatic: Boolean;
+  Target: TGocciaObjectValue;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Getter, Setter: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptorAccessor;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (AClassValue is TGocciaClassValue) then
     Exit;
-  if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
-    Exit;
+  IsStatic := (AFlags and ACCESSOR_FLAG_STATIC) <> 0;
+  SetBytecodeHomeObject(AFunction, AClassValue, IsStatic);
+  if IsStatic then
+    Target := TGocciaClassValue(AClassValue)
+  else
+    Target := TGocciaClassValue(AClassValue).Prototype;
 
-  ClassVal := TGocciaClassValue(
-    TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue);
-  IsStatic := (AFlags and 1) <> 0;
-  ClassVal.AddAutoAccessorWithKey('', AKey, ABackingName, IsStatic);
+  Getter := nil;
+  Setter := nil;
+  if (AFlags and ACCESSOR_FLAG_SETTER) <> 0 then
+  begin
+    if AKey is TGocciaSymbolValue then
+      ExistingDescriptor := Target.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(AKey))
+    else
+      ExistingDescriptor := Target.GetOwnPropertyDescriptor(AName);
+    if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
+      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    Setter := AFunction;
+  end
+  else
+    Getter := AFunction;
+
+  Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
+    [pfEnumerable, pfConfigurable]);
+  if AKey is TGocciaSymbolValue then
+    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+  else
+    Target.DefineProperty(AName, Descriptor);
 end;
 
 procedure TGocciaVM.BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
