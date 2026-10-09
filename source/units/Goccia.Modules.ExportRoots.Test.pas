@@ -47,6 +47,7 @@ type
     procedure TestExportsTableValueSurvivesCollection;
     procedure TestReplacedLocalSnapshotSurvivesCollection;
     procedure TestValueExportReleasedWithModule;
+    procedure TestModuleCreatedBeforeCollectorRootsItsExports;
   end;
 
 var
@@ -70,6 +71,9 @@ begin
     TestReplacedLocalSnapshotSurvivesCollection);
   Test('a value-bound export is released once its module is freed',
     TestValueExportReleasedWithModule);
+  // Last: it replaces the thread's collector.
+  Test('a module created before the thread has a collector still roots its exports',
+    TestModuleCreatedBeforeCollectorRootsItsExports);
 end;
 
 procedure TModuleExportRootsTests.TestValueExportSurvivesCollection;
@@ -173,6 +177,26 @@ begin
   Module := TGocciaModule.Create('memory:/released-module');
   Module.AddExportValue('default', TProbeObjectValue.Create(nil));
   Module.Free;
+  TGarbageCollector.Instance.Collect;
+  Expect<Integer>(GProbeDestroyed).ToBe(1);
+end;
+
+procedure TModuleExportRootsTests.TestModuleCreatedBeforeCollectorRootsItsExports;
+var
+  Module: TGocciaModule;
+begin
+  // An embedder that builds a host module before creating its engine.
+  TGarbageCollector.Shutdown;
+  Module := TGocciaModule.Create('memory:/early-module');
+  try
+    Expect<Boolean>(Assigned(TGarbageCollector.Instance)).ToBe(True);
+    GProbeDestroyed := 0;
+    Module.ExportsTable.AddOrSetValue('default', TProbeObjectValue.Create(nil));
+    TGarbageCollector.Instance.Collect;
+    Expect<Integer>(GProbeDestroyed).ToBe(0);
+  finally
+    Module.Free;
+  end;
   TGarbageCollector.Instance.Collect;
   Expect<Integer>(GProbeDestroyed).ToBe(1);
 end;

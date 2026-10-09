@@ -559,6 +559,11 @@ end;
 
 constructor TGocciaModule.Create(const APath: string);
 begin
+  // An embedder may build a host module before any engine has started the
+  // thread's collector; the root source registers only with a live one.
+  // Initialize is idempotent.
+  if not Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Initialize;
   FAmbiguousExports := TOrderedStringMap<Boolean>.Create;
   FPath := APath;
   FExportBindings := TGocciaModuleExportBindingMap.Create;

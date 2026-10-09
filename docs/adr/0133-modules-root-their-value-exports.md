@@ -39,6 +39,11 @@ export table and its evaluation promise. It deliberately does not read local
 bindings: their environment scope is a root of its own, and reading a binding in
 its temporal dead zone would raise inside the collector.
 
+A module created before the thread has a collector (an embedder building a
+host module before its engine) starts the collector in its constructor, as the
+engine would, so its root source registers; `TGarbageCollector.Initialize` is
+idempotent.
+
 The root is tied to the module rather than to each value. `AddRootObject` keeps
 a set, not a count, so rooting each exported value would let the first module
 freed unroot a value that another module still exports.
