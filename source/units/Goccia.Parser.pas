@@ -242,6 +242,14 @@ type
     function ParseGetterExpression: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
 
+    // Auto-accessor desugaring (TC39 proposal-decorators)
+    function AutoAccessorStorageName(const AMemberName: string;
+      const AIsComputed: Boolean; const AElementIndex: Integer): string;
+    function BuildAutoAccessorGetter(const AStorageName: string;
+      const ALine, AColumn: Integer): TGocciaGetterExpression;
+    function BuildAutoAccessorSetter(const AStorageName: string;
+      const ALine, AColumn: Integer): TGocciaSetterExpression;
+
     // Function body parsing: (params) { stmts } -> function expression
     function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
     function ParseFunctionBodyBlock: TGocciaBlockStatement;
@@ -4305,6 +4313,58 @@ begin
   end;
 end;
 
+// TC39 proposal-decorators, ClassFieldDefinitionEvaluation for
+// `accessor ClassElementName Initializer?`: the value lives in "a new Private
+// Name whose [[Description]] is" the name followed by " accessor storage". A
+// space keeps the name out of reach of any source text, and the element index
+// keeps two accessors of the same name apart. ':' and '$' delimit the parts of
+// a bytecode private key, so a name containing either is left out.
+function TGocciaParser.AutoAccessorStorageName(const AMemberName: string;
+  const AIsComputed: Boolean; const AElementIndex: Integer): string;
+begin
+  if AIsComputed or (AMemberName = '') or (Pos(':', AMemberName) > 0) or
+     (Pos('$', AMemberName) > 0) then
+    Result := IntToStr(AElementIndex) + ' accessor storage'
+  else
+    Result := AMemberName + ' accessor storage ' + IntToStr(AElementIndex);
+end;
+
+// MakeAutoAccessorGetter: `get name() { return this.#storage; }`. PrivateGet
+// throws TypeError on a receiver without the storage. The node has no source
+// text, so Function.prototype.toString gives the built-in form the proposal's
+// CreateBuiltinFunction calls for.
+function TGocciaParser.BuildAutoAccessorGetter(const AStorageName: string;
+  const ALine, AColumn: Integer): TGocciaGetterExpression;
+var
+  Span: TGocciaSourceSpan;
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  Span := SourceSpanAtPosition(ALine, AColumn);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Statements.Add(TGocciaReturnStatement.Create(
+    TGocciaPrivateMemberExpression.Create(TGocciaThisExpression.Create(Span),
+      AStorageName, Span), Span));
+  Result := TGocciaGetterExpression.Create(
+    TGocciaBlockStatement.Create(Statements, Span), Span);
+end;
+
+// MakeAutoAccessorSetter: `set name(value) { this.#storage = value; }`.
+function TGocciaParser.BuildAutoAccessorSetter(const AStorageName: string;
+  const ALine, AColumn: Integer): TGocciaSetterExpression;
+var
+  Span: TGocciaSourceSpan;
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  Span := SourceSpanAtPosition(ALine, AColumn);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Statements.Add(TGocciaExpressionStatement.Create(
+    TGocciaPrivatePropertyAssignmentExpression.Create(
+      TGocciaThisExpression.Create(Span), AStorageName,
+      TGocciaIdentifierExpression.Create('value', Span), Span), Span));
+  Result := TGocciaSetterExpression.Create('value',
+    TGocciaBlockStatement.Create(Statements, Span), Span);
+end;
+
 function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
 var
   Params: TGocciaParameterArray;
@@ -7888,6 +7948,41 @@ begin
         Elements[High(Elements)].Decorators := MemberDecorators;
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;
+        { The proposal README's desugaring: a public `accessor x = v` is a
+          private field holding v plus a getter and setter that read and write
+          it. A private auto-accessor keeps its value under its own name. }
+        if IsPrivate then
+          Elements[High(Elements)].AccessorStorageName := MemberName
+        else
+        begin
+          Elements[High(Elements)].AccessorStorageName :=
+            AutoAccessorStorageName(MemberName, IsComputed, High(Elements));
+          Elements[High(Elements)].GetterNode := BuildAutoAccessorGetter(
+            Elements[High(Elements)].AccessorStorageName, MemberStartLine,
+            MemberStartColumn);
+          Elements[High(Elements)].SetterNode := BuildAutoAccessorSetter(
+            Elements[High(Elements)].AccessorStorageName, MemberStartLine,
+            MemberStartColumn);
+        end;
+
+        { InitializeInstanceElements initializes fields and auto-accessors
+          together, in source order, so the instance storage joins the field
+          order as a private field. Static storage is initialized with the
+          other static elements. }
+        if not IsStatic then
+        begin
+          PrivateInstanceProperties.Add(
+            Elements[High(Elements)].AccessorStorageName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name :=
+            Elements[High(Elements)].AccessorStorageName;
+          FieldOrder[High(FieldOrder)].IsPrivate := True;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := High(Elements);
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
+          FieldOrder[High(FieldOrder)].IsAutoAccessorStorage := True;
+        end;
       end
       else if (not IsGetter) and (not IsSetter) and Check(gttAssign) then
       begin

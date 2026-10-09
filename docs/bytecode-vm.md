@@ -68,12 +68,12 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 214 opcodes, highest `235`):
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 213 opcodes, highest `235`):
 
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
-- the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_SETUP_AUTO_ACCESSOR_DYNAMIC` (`135`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `146..166` are unused
+- the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `135` and `146..166` are unused
 - the semantic range starts with module and async orchestration at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`), and later additions were appended after it, including hot-path instructions such as `OP_INC_NUMERIC` (`199`), `OP_GET_IMPORT_BINDING` (`213`), `OP_SUB_NUM_IMM` (`227`), `OP_CALL_SELF_NUM` (`229`), and `OP_JUMP_IF_NOT_LT` (`232`)
-- `IsValidGocciaOpCode` rejects the unused numbers `99` and `146..166`
+- `IsValidGocciaOpCode` rejects the unused numbers `99`, `135` and `146..166`
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
@@ -195,6 +195,17 @@ unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
 proper-tail-call path. The optimization does not turn the function into a
 generally typed function or change generic `+` semantics.
 
+A scalar frame takes its register window without clearing it, so the window
+can still hold references that an earlier frame left there, to objects that
+may since have been freed. The collector therefore does not mark scalar
+frames: when any is live, the bytecode stack root marks the register arena only
+up to the first scalar frame's window. That loses nothing, because a scalar
+frame writes each register before reading it and stores only scalars and the
+pinned NaN, infinity and -0 values. It relies on scalar frames being the
+innermost frames whenever one is live, which holds because they call only
+themselves; development builds assert that no frame is set up while a scalar
+frame is live (see [ADR 0127](adr/0127-collector-skips-closed-numeric-frames.md)).
+
 ## Profiling
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
@@ -259,6 +270,21 @@ keeps that true:
   for throw paths outside the dispatch loop through a pointer probe into the
   innermost loop's `Template`/`InstructionStartIP` locals, saved and restored
   once per native re-entry.
+- **Caller frame positions are worked out at capture.** A frame nothing has
+  stamped reports where it is executing now, worked out only when a trace is
+  captured ([ADR 0131](adr/0131-bytecode-frame-positions-at-capture.md)). Each
+  native entry into the dispatch loop records a `TGocciaVMActivation`: its
+  first call-stack frame, its first frame-stack and closed-numeric-frame
+  slots, and its probes. Each frame the entry runs pushed one call-stack
+  frame. For every frame but the executing one, the VM saved an instruction
+  pointer when that frame made its call, so the two sequences pair up in
+  order. `TGocciaVM.ResolveFrameLocations` steps back from each saved
+  pointer to the call instruction and looks it up in the call-site table,
+  falling back to the line map. The executing frame is located the same way
+  from its `Frame.IP` probe.
+  The VM installs this resolver on the thread's `TGocciaCallStack` for as
+  long as it runs. A call does no position work at all; a native entry
+  stores one activation record.
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it
   is created* — the top call frame's source location, plus a ±context excerpt of
@@ -355,6 +381,19 @@ execute, the verifier checks opcodes, register destinations, constant and
 function references, control-flow targets, and exception-handler metadata.
 The VM retains bounds checks on instruction, constant, and function access as
 defense in depth.
+
+A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
+memory-safe on its own. The closed numeric frame it would enter is sound only
+under the compiler's numeric-only proof, which is not serialized (ADR 0101),
+and the collector does not mark that frame's registers (ADR 0127), so a crafted
+file could otherwise park an object in the unmarked window and have the
+collector reclaim it. The verifier rewrites a loaded `OP_CALL_SELF_NUM` in a
+synchronous arrow to `OP_CALL_SELF`, the ordinary self-call whose frame the
+collector marks, and rejects the opcode in any other template kind. Code
+compiled in process keeps the fast path; only loaded templates are rewritten.
+`OP_CALL_SELF` is runtime-only: it is reserved at 255, the top of the opcode
+range, outside `TGocciaOpCode`, so the loader rejects it in a file, and file
+opcodes must stay below it.
 
 ## Current Status
 
