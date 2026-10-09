@@ -1271,6 +1271,20 @@ begin
   Exit(nil);
 end;
 
+// Private names follow the class body the calling code is in, which an arrow
+// records in PrivateClass even when it has no home object, home class or
+// new.target of its own (an arrow nested in a static field's array literal,
+// for example). super and new.target keep using DirectEvalLexicalClosure.
+function DirectEvalPrivateClosure(const AVM: TGocciaVM): TGocciaBytecodeClosure;
+begin
+  Result := DirectEvalLexicalClosure(AVM);
+  if Assigned(Result) or not Assigned(AVM) then
+    Exit;
+  if Assigned(AVM.FCurrentClosure) and
+     Assigned(AVM.FCurrentClosure.PrivateClass) then
+    Result := AVM.FCurrentClosure;
+end;
+
 function CollectBytecodeDirectEvalPrivateNames(
   const AVM: TGocciaVM): TStringList;
 var
@@ -1285,7 +1299,7 @@ begin
   Result.Sorted := False;
   Result.Duplicates := dupIgnore;
 
-  Closure := DirectEvalLexicalClosure(AVM);
+  Closure := DirectEvalPrivateClosure(AVM);
   if not Assigned(Closure) then
     Exit;
 
@@ -14782,7 +14796,7 @@ begin
       else
         CallerParentScope := EnsureCurrentDynamicVarScope;
       CallerParentScope := WrapInBytecodePrivateEnvironment(
-        CallerParentScope, CallerClosure);
+        CallerParentScope, DirectEvalPrivateClosure(Self));
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
         ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,
