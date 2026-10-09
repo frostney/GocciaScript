@@ -47,6 +47,7 @@ type
     procedure TestExportsTableValueSurvivesCollection;
     procedure TestReplacedLocalSnapshotSurvivesCollection;
     procedure TestValueExportReleasedWithModule;
+    procedure TestModuleRootsFollowAReplacedCollector;
     procedure TestModuleCreatedBeforeCollectorRootsItsExports;
   end;
 
@@ -71,7 +72,9 @@ begin
     TestReplacedLocalSnapshotSurvivesCollection);
   Test('a value-bound export is released once its module is freed',
     TestValueExportReleasedWithModule);
-  // Last: it replaces the thread's collector.
+  // Last two: they replace the thread's collector.
+  Test('a module kept across a collector replacement roots values added afterwards',
+    TestModuleRootsFollowAReplacedCollector);
   Test('a module created before the thread has a collector still roots its exports',
     TestModuleCreatedBeforeCollectorRootsItsExports);
 end;
@@ -179,6 +182,28 @@ begin
   Module.Free;
   TGarbageCollector.Instance.Collect;
   Expect<Integer>(GProbeDestroyed).ToBe(1);
+end;
+
+procedure TModuleExportRootsTests.TestModuleRootsFollowAReplacedCollector;
+var
+  Module: TGocciaModule;
+begin
+  // A thread pool that resets its runtime between work items while the host
+  // keeps the module.
+  Module := TGocciaModule.Create('memory:/kept-module');
+  try
+    TGarbageCollector.Shutdown;
+    TGarbageCollector.Initialize;
+    GProbeDestroyed := 0;
+    Module.ExportsTable.AddOrSetValue('default', TProbeObjectValue.Create(nil));
+    Module.UpdateExportValue('updated', TProbeObjectValue.Create(nil));
+    TGarbageCollector.Instance.Collect;
+    Expect<Integer>(GProbeDestroyed).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  TGarbageCollector.Instance.Collect;
+  Expect<Integer>(GProbeDestroyed).ToBe(2);
 end;
 
 procedure TModuleExportRootsTests.TestModuleCreatedBeforeCollectorRootsItsExports;

@@ -112,6 +112,8 @@ type
     FStarExportNames: TOrderedStringMap<Boolean>;
     FExportResolutionVersion: Cardinal;
     procedure InvalidateExportResolutions;
+    procedure EnsureRoots;
+    function GetExportsTable: TGocciaValueMap;
     procedure MarkHeldValues;
     procedure SetExportBinding(const AExportName: string;
       const ABinding: TGocciaModuleExportBinding);
@@ -159,7 +161,7 @@ type
     function TryGetExportValue(const AExportName: string;
       out AValue: TGocciaValue): Boolean;
     property Path: string read FPath;
-    property ExportsTable: TGocciaValueMap read FExportsTable;
+    property ExportsTable: TGocciaValueMap read GetExportsTable;
     property EvaluationPromise: TGocciaValue read FEvaluationPromise write FEvaluationPromise;
     property AsyncCycleRoot: TGocciaModule read FAsyncCycleRoot
       write FAsyncCycleRoot;
@@ -569,7 +571,31 @@ begin
   FExportBindings := TGocciaModuleExportBindingMap.Create;
   FExportsTable := TGocciaValueMap.Create;
   FStarExportNames := TOrderedStringMap<Boolean>.Create;
-  FRoots := TGocciaModuleRoots.Create(Self);
+  EnsureRoots;
+end;
+
+// A host can keep a module across a collector replacement (a thread pool that
+// resets its runtime between work items), and a root source marks only for
+// the collector it registered with. Re-register before the module takes a
+// value the current collector manages, as TGocciaTimerQueue.EnsureRoots does.
+procedure TGocciaModule.EnsureRoots;
+var
+  Collector: TGarbageCollector;
+begin
+  Collector := TGarbageCollector.Instance;
+  if Assigned(FRoots) and Assigned(Collector) and
+     (FRoots.RegisteredCollector = Collector) then
+    Exit;
+  FreeAndNil(FRoots);
+  if Assigned(Collector) then
+    FRoots := TGocciaModuleRoots.Create(Self);
+end;
+
+// Host modules publish by writing this table directly.
+function TGocciaModule.GetExportsTable: TGocciaValueMap;
+begin
+  EnsureRoots;
+  Result := FExportsTable;
 end;
 
 procedure TGocciaModule.MarkHeldValues;
@@ -622,6 +648,7 @@ var
   ExistingBinding: TGocciaModuleExportBinding;
   Value: TGocciaValue;
 begin
+  EnsureRoots;
   InvalidateNamespaceObject;
 
   if FExportBindings.TryGetValue(AExportName, ExistingBinding) then
@@ -779,6 +806,7 @@ procedure TGocciaModule.UpdateExportValue(const AExportName: string;
 var
   Binding: TGocciaModuleExportBinding;
 begin
+  EnsureRoots;
   if FExportBindings.TryGetValue(AExportName, Binding) then
   begin
     if Assigned(Binding.FEnvironment) then
@@ -1085,8 +1113,7 @@ destructor TGocciaModule.Destroy;
 var
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
 begin
-  FRoots.Free;
-  FRoots := nil;
+  FreeAndNil(FRoots);
   InvalidateNamespaceObject(True);
   SetEnvironment(nil);
   for BindingPair in FExportBindings do

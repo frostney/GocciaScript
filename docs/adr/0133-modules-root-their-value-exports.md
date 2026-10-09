@@ -42,7 +42,12 @@ its temporal dead zone would raise inside the collector.
 A module created before the thread has a collector (an embedder building a
 host module before its engine) starts the collector in its constructor, as the
 engine would, so its root source registers; `TGarbageCollector.Initialize` is
-idempotent.
+idempotent. A root source marks only for the collector it registered with, and
+a host can keep a module across a collector replacement (a thread pool that
+resets its runtime between work items), so the module re-registers whenever it
+takes a value: in `SetExportBinding`, `UpdateExportValue` and the
+`ExportsTable` accessor host modules write through, the pattern
+`TGocciaTimerQueue.EnsureRoots` already uses.
 
 The root is tied to the module rather than to each value. `AddRootObject` keeps
 a set, not a count, so rooting each exported value would let the first module
