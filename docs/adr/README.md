@@ -139,4 +139,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0127 — The collector does not mark the registers of closed numeric frames](0127-collector-skips-closed-numeric-frames.md)
 - [0129 — The collector also triggers on the heap manager's in-use total, and refusal stays on tracked bytes](0129-heap-triggered-collection.md)
 - [0130 — The bytecode VM's stacks are charged to the memory budget, and a refusal is a catchable RangeError at the next instruction boundary](0130-vm-stacks-are-charged-to-the-memory-budget.md)
+- [0131 — A bytecode caller frame's position is worked out when a stack is captured, from the instruction pointers the VM already saves](0131-bytecode-frame-positions-at-capture.md)
 - [0132 — The call-stack records and the copy a stack growth makes are charged with the VM stacks](0132-call-stack-records-and-stack-copies-are-charged.md)

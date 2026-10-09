@@ -4734,6 +4734,8 @@ begin
     for I := 1 to ArgCount - 1 do
       ACtx.CompileExpression(AExpr.Arguments[I],
         ACtx.Scope.AllocateRegister);
+    // Locates a recursion's frames at the call in a stack trace (ADR 0131).
+    RecordCallSite(ACtx, AExpr, AExpr.Callee);
     EmitInstruction(ACtx, EncodeABC(OP_CALL_SELF_NUM, ADest, FirstArgReg,
       UInt16(ArgCount)));
     for I := 0 to ArgCount - 1 do

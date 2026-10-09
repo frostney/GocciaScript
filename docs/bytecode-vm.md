@@ -270,6 +270,21 @@ keeps that true:
   for throw paths outside the dispatch loop through a pointer probe into the
   innermost loop's `Template`/`InstructionStartIP` locals, saved and restored
   once per native re-entry.
+- **Caller frame positions are worked out at capture.** A frame nothing has
+  stamped reports where it is executing now, worked out only when a trace is
+  captured ([ADR 0131](adr/0131-bytecode-frame-positions-at-capture.md)). Each
+  native entry into the dispatch loop records a `TGocciaVMActivation`: its
+  first call-stack frame, its first frame-stack and closed-numeric-frame
+  slots, and its probes. Each frame the entry runs pushed one call-stack
+  frame. For every frame but the executing one, the VM saved an instruction
+  pointer when that frame made its call, so the two sequences pair up in
+  order. `TGocciaVM.ResolveFrameLocations` steps back from each saved
+  pointer to the call instruction and looks it up in the call-site table,
+  falling back to the line map. The executing frame is located the same way
+  from its `Frame.IP` probe.
+  The VM installs this resolver on the thread's `TGocciaCallStack` for as
+  long as it runs. A call does no position work at all; a native entry
+  stores one activation record.
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it
   is created* — the top call frame's source location, plus a ±context excerpt of
