@@ -80,8 +80,25 @@ type
     function TryGetValue(out AValue: TGocciaValue): Boolean;
   end;
 
+  { Roots the values a module holds directly for as long as the module lives:
+    its value-bound exports, the export snapshot table and the evaluation
+    promise. A local export is rooted through the module's environment scope
+    (SetEnvironment) and a forwarded one belongs to its source module, but a
+    value binding has neither. The namespace object marks these values too,
+    yet it exists only once something asks for it, so without this a host
+    module's exports, or a JSON module's parsed value, were collectable while
+    the module still handed them out. See ADR 0133. }
+  TGocciaModuleRoots = class(TGCRootSource)
+  private
+    FModule: TGocciaModule;
+  public
+    constructor Create(const AModule: TGocciaModule);
+    procedure MarkRootReferences; override;
+  end;
+
   TGocciaModule = class
   private
+    FRoots: TGocciaModuleRoots;
     FAmbiguousExports: TOrderedStringMap<Boolean>;
     FPath: string;
     FEnvironment: TGCManagedObject;
@@ -95,6 +112,7 @@ type
     FStarExportNames: TOrderedStringMap<Boolean>;
     FExportResolutionVersion: Cardinal;
     procedure InvalidateExportResolutions;
+    procedure MarkHeldValues;
     procedure SetExportBinding(const AExportName: string;
       const ABinding: TGocciaModuleExportBinding);
     function TryResolveExportIdentity(const AExportName: string;
@@ -524,6 +542,21 @@ end;
 
 { TGocciaModule }
 
+{ TGocciaModuleRoots }
+
+constructor TGocciaModuleRoots.Create(const AModule: TGocciaModule);
+begin
+  inherited Create;
+  FModule := AModule;
+end;
+
+procedure TGocciaModuleRoots.MarkRootReferences;
+begin
+  FModule.MarkHeldValues;
+end;
+
+{ TGocciaModule }
+
 constructor TGocciaModule.Create(const APath: string);
 begin
   FAmbiguousExports := TOrderedStringMap<Boolean>.Create;
@@ -531,6 +564,32 @@ begin
   FExportBindings := TGocciaModuleExportBindingMap.Create;
   FExportsTable := TGocciaValueMap.Create;
   FStarExportNames := TOrderedStringMap<Boolean>.Create;
+  FRoots := TGocciaModuleRoots.Create(Self);
+end;
+
+procedure TGocciaModule.MarkHeldValues;
+var
+  Binding: TGocciaModuleExportBinding;
+  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  // Only value bindings: reading a local binding could raise in its temporal
+  // dead zone, and its environment scope is a root of its own. The export
+  // table is marked as well: data modules (YAML, TOML, JSON5) write it without
+  // a binding, and it keeps the snapshot a local export took when it was
+  // linked, which a namespace object built later marks.
+  for BindingPair in FExportBindings do
+  begin
+    Binding := BindingPair.Value;
+    if Assigned(Binding.FValue) and not Assigned(Binding.FSourceModule) and
+       not Assigned(Binding.FEnvironment) then
+      Binding.FValue.MarkReferences;
+  end;
+  for ExportPair in FExportsTable do
+    if Assigned(ExportPair.Value) then
+      ExportPair.Value.MarkReferences;
+  if Assigned(FEvaluationPromise) then
+    FEvaluationPromise.MarkReferences;
 end;
 
 procedure TGocciaModule.InvalidateExportResolutions;
@@ -1021,6 +1080,8 @@ destructor TGocciaModule.Destroy;
 var
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
 begin
+  FRoots.Free;
+  FRoots := nil;
   InvalidateNamespaceObject(True);
   SetEnvironment(nil);
   for BindingPair in FExportBindings do
