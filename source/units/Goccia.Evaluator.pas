@@ -2739,20 +2739,22 @@ begin
           if AVarScope.HasLexicalDeclaration(VarNames[I]) then
             RaiseAlreadyDeclared(VarNames[I]);
 
+      // Step 3.d. A catch clause's scope is exempt (its web-compat branch),
+      // and in the variable environment a parameter is what the var names
+      // (TGocciaScope.EvalVarDeclarationConflicts).
       ScopeCursor := ALexicalScope;
       while Assigned(ScopeCursor) and (ScopeCursor <> AVarScope) do
       begin
         if not (ScopeCursor is TGocciaWithScope) then
           for I := 0 to VarNames.Count - 1 do
-            if ScopeCursor.ContainsOwnLexicalBinding(VarNames[I]) or
-               ScopeCursor.ContainsOwnVarBinding(VarNames[I]) then
+            if ScopeCursor.EvalVarDeclarationConflicts(VarNames[I], False) then
               RaiseAlreadyDeclared(VarNames[I]);
         ScopeCursor := ScopeCursor.Parent;
       end;
 
       if AVarScope.ScopeKind <> skGlobal then
         for I := 0 to VarNames.Count - 1 do
-          if AVarScope.ContainsOwnLexicalBinding(VarNames[I]) then
+          if AVarScope.EvalVarDeclarationConflicts(VarNames[I], True) then
             RaiseAlreadyDeclared(VarNames[I]);
     end;
 
@@ -7689,7 +7691,7 @@ begin
   end
   else if Assigned(ATryStatement.CatchBindingPattern) then
   begin
-    CatchScope := AContext.Scope.CreateChild(skBlock, 'CatchBlock');
+    CatchScope := TGocciaCatchScope.Create(AContext.Scope, '');
     if Assigned(GC) then
       GC.AddTempRoot(CatchScope);
     try

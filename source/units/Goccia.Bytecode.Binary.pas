@@ -501,6 +501,7 @@ begin
     EvalEnv := AProto.GetDirectEvalEnvironment(I);
     WriteUInt32(EvalEnv.PC);
     WriteBoolean(EvalEnv.RejectArgumentsReference);
+    WriteBoolean(EvalEnv.StrictCaller);
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -511,6 +512,7 @@ begin
       WriteBoolean(EvalBinding.IsConst);
       WriteBoolean(EvalBinding.IsVarEnvironmentBinding);
       WriteBoolean(EvalBinding.IsEvalSyntheticArguments);
+      WriteBoolean(EvalBinding.IsCatchParameter);
     end;
   end;
 
@@ -710,6 +712,7 @@ var
   ConstKind: UInt8;
   EvalPC: UInt32;
   EvalRejectArgumentsReference: Boolean;
+  EvalStrictCaller: Boolean;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
@@ -809,6 +812,7 @@ begin
   begin
     EvalPC := ReadUInt32;
     EvalRejectArgumentsReference := ReadBoolean;
+    EvalStrictCaller := ReadBoolean;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -823,10 +827,11 @@ begin
       EvalBinding.IsConst := ReadBoolean;
       EvalBinding.IsVarEnvironmentBinding := ReadBoolean;
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
+      EvalBinding.IsCatchParameter := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
-      EvalBindings);
+      EvalStrictCaller, EvalBindings);
   end;
 
   HandlerCount := ReadUInt16;

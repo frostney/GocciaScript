@@ -38,6 +38,7 @@ type
     procedure TestLoadedClosedNumericSelfCallSavesAndReloads;
     procedure TestRejectsClosedNumericSelfCallInNonArrowTemplate;
     procedure TestRoundTripsDebugLocals;
+    procedure TestRoundTripsDirectEvalSiteRecord;
   public
     procedure SetupTests; override;
   end;
@@ -60,6 +61,8 @@ begin
     TestRejectsClosedNumericSelfCallInNonArrowTemplate);
   Test('Round-trips debug locals field by field',
     TestRoundTripsDebugLocals);
+  Test('Round-trips a direct eval site record field by field',
+    TestRoundTripsDirectEvalSiteRecord);
 end;
 
 // Serialises a one-instruction module and reads it back through the ordinary
@@ -369,6 +372,90 @@ begin
         Expect<string>(Name).ToBe(TEST_LOCAL_NAME);
         Expect<Boolean>(Loaded.TopLevel.DebugInfo.TryGetLocalName(
           TEST_LOCAL_SLOT, TEST_LOCAL_END_PC, Name)).ToBe(False);
+      finally
+        Loaded.Free;
+      end;
+    finally
+      Reader.Free;
+    end;
+  finally
+    Stream.Free;
+  end;
+end;
+
+// The loader rebuilds a direct eval site record from the module, and the VM
+// reads the call's strictness and each binding's flags from it.
+procedure TBytecodeBinaryTests.TestRoundTripsDirectEvalSiteRecord;
+const
+  EVAL_PC = 5;
+var
+  Loaded, Module: TGocciaBytecodeModule;
+  Reader: TGocciaBytecodeReader;
+  Stream: TMemoryStream;
+  Template: TGocciaFunctionTemplate;
+  Writer: TGocciaBytecodeWriter;
+  Bindings: TGocciaDirectEvalBindingArray;
+  Env: TGocciaDirectEvalEnvironment;
+begin
+  SetLength(Bindings, 2);
+  Bindings[0] := Default(TGocciaDirectEvalBindingInfo);
+  Bindings[0].Name := 'caught';
+  Bindings[0].Kind := debLocal;
+  Bindings[0].Index := 2;
+  Bindings[0].IsCatchParameter := True;
+  Bindings[1] := Default(TGocciaDirectEvalBindingInfo);
+  Bindings[1].Name := 'outer';
+  Bindings[1].Kind := debUpvalue;
+  Bindings[1].Index := 1;
+  Bindings[1].IsConst := True;
+  Bindings[1].IsVarEnvironmentBinding := True;
+  Stream := TMemoryStream.Create;
+  try
+    Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+    try
+      Template := TGocciaFunctionTemplate.Create('main');
+      Template.MaxRegisters := TEST_MAX_REGISTERS;
+      Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      Template.AddDirectEvalEnvironment(EVAL_PC, False, True, Bindings);
+      Template.AddDirectEvalEnvironment(EVAL_PC + 1, True, False, nil);
+      Module.TopLevel := Template;
+      Module.HasDebugInfo := False;
+
+      Writer := TGocciaBytecodeWriter.Create(Stream);
+      try
+        Writer.WriteModule(Module);
+      finally
+        Writer.Free;
+      end;
+    finally
+      Module.Free;
+    end;
+
+    Stream.Position := 0;
+    Reader := TGocciaBytecodeReader.Create(Stream);
+    try
+      Loaded := Reader.ReadModule;
+      try
+        Expect<Integer>(Loaded.TopLevel.DirectEvalEnvironmentCount).ToBe(2);
+        Env := Loaded.TopLevel.GetDirectEvalEnvironment(0);
+        Expect<Integer>(Env.PC).ToBe(EVAL_PC);
+        Expect<Boolean>(Env.RejectArgumentsReference).ToBe(False);
+        Expect<Boolean>(Env.StrictCaller).ToBe(True);
+        Expect<Integer>(Length(Env.Bindings)).ToBe(2);
+        Expect<string>(Env.Bindings[0].Name).ToBe('caught');
+        Expect<Integer>(Ord(Env.Bindings[0].Kind)).ToBe(Ord(debLocal));
+        Expect<Integer>(Env.Bindings[0].Index).ToBe(2);
+        Expect<Boolean>(Env.Bindings[0].IsCatchParameter).ToBe(True);
+        Expect<Boolean>(Env.Bindings[0].IsVarEnvironmentBinding).ToBe(False);
+        Expect<string>(Env.Bindings[1].Name).ToBe('outer');
+        Expect<Integer>(Ord(Env.Bindings[1].Kind)).ToBe(Ord(debUpvalue));
+        Expect<Boolean>(Env.Bindings[1].IsConst).ToBe(True);
+        Expect<Boolean>(Env.Bindings[1].IsVarEnvironmentBinding).ToBe(True);
+        Expect<Boolean>(Env.Bindings[1].IsCatchParameter).ToBe(False);
+        Env := Loaded.TopLevel.GetDirectEvalEnvironment(1);
+        Expect<Boolean>(Env.RejectArgumentsReference).ToBe(True);
+        Expect<Boolean>(Env.StrictCaller).ToBe(False);
+        Expect<Integer>(Length(Env.Bindings)).ToBe(0);
       finally
         Loaded.Free;
       end;
