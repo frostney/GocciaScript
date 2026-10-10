@@ -198,10 +198,10 @@ const
   //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
   //               declares private auto-accessor names, and
   //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
-  //   v86 -> v89: a direct-eval site record stores the strictness of its call
+  //   v86 -> v90: a direct-eval site record stores the strictness of its call
   //               expression, and each of its bindings whether it is a catch
-  //               parameter. v87 and v88 are reserved for another change.
-  GOCCIA_FORMAT_VERSION = 89;
+  //               parameter. v87 to v89 are reserved for other changes.
+  GOCCIA_FORMAT_VERSION = 90;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
