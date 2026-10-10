@@ -62,6 +62,9 @@ type
     StartCheck: TRegExpStartCheck;
     NamedGroups: TGocciaRegExpNamedGroups;
     StringSets: TRegExpStringSetArray;
+    // The program reads a capture with RX_BACKREF, so whether a path fails at
+    // an instruction and position also depends on the captures it carries.
+    HasBackreferences: Boolean;
   end;
 
 implementation
