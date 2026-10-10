@@ -972,6 +972,59 @@ begin
   end;
 end;
 
+{ Builds the receiver of a built-in that super() or an implicit constructor
+  reaches, with newTarget as the constructor (ES2026 §10.1.13
+  OrdinaryCreateFromConstructor). The receiver takes its final [[Prototype]]
+  before the built-in's own steps run, because those steps read from it: Map
+  (§24.1.1.1 step 5), Set, WeakMap and WeakSet look up their `set`/`add` adder
+  on it. When newTarget.prototype is not an object, §10.1.14
+  GetPrototypeFromConstructor step 3 falls back to the built-in's own intrinsic
+  in newTarget's realm, never to %Object.prototype%. The families that validate
+  their arguments before reading newTarget.prototype keep that read after
+  initialization. The receiver is rooted throughout: both the prototype read
+  and the initialization can run user code. }
+function CreateNativeReceiverFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANativeDefaultPrototype: TGocciaObjectValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  const AInstanceClass: TGocciaClassValue): TGocciaObjectValue;
+var
+  NativeInstance: TGocciaInstanceValue;
+  DelayPrototype: Boolean;
+  Roots: TGocciaActiveRootFrame;
+begin
+  Result := ANativeClass.CreateNativeInstance(AArguments);
+  if not Assigned(Result) then
+    ThrowTypeError(
+      'Superclass constructor did not return an object',
+      SSuggestNotConstructorType);
+  if Result is TGocciaInstanceValue then
+    NativeInstance := TGocciaInstanceValue(Result)
+  else
+    NativeInstance := nil;
+  DelayPrototype := ShouldDelayNativePrototypeLookup(ANativeClass, AArguments);
+  Roots.Initialize;
+  Roots.Add(Result);
+  try
+    if not DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+    begin
+      NativeInstance.ClassValue := AInstanceClass;
+      NativeInstance.InitializeNativeFromArguments(AArguments);
+    end;
+    if DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+      NativeInstance.FinalizeNativeFromArguments(AArguments);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
 function HasBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
@@ -6554,7 +6607,7 @@ var
   WasSuperAlreadyCalled: Boolean;
   PreviousSuperClassSuperCalled: Boolean;
   SuperClassCalledItsOwnSuper: Boolean;
-  ReceiverPrototype: TGocciaObjectValue;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -6772,22 +6825,14 @@ begin
     Exit(AThisValue);
   end;
 
-  if SuperClass.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := SuperClass.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    NewThis := SuperClass.CreateNativeInstance(AArguments);
-    if not (NewThis is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
-    if NewThis is TGocciaInstanceValue then
-    begin
-      TGocciaInstanceValue(NewThis).ClassValue := FCurrentCtorClass;
-      TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
-    end;
-    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
-    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
-    if NewThis is TGocciaInstanceValue then
-      TGocciaInstanceValue(NewThis).FinalizeNativeFromArguments(AArguments);
+    { §13.3.7.1 step 6 Construct(func, argList, newTarget): the built-in
+      allocates from newTarget before its own steps run, so a subclass's `set`
+      or `add` is the adder Map, Set, WeakMap and WeakSet use. }
+    NewThis := CreateNativeReceiverFromConstructor(SuperClass,
+      NativeDefaultPrototype, AArguments, FNewTarget, FCurrentCtorClass);
     MarkCurrentConstructorSuperCalled;
     InitializeCurrentCtorReceiver(NewThis);
     Exit(NewThis);
@@ -6815,8 +6860,12 @@ begin
         SuperClass, AThisValue, AArguments);
       if not Assigned(NewThis) then
         NewThis := AThisValue;
+      ImplicitSuperInitialized := True;
     end;
-    if NewThis is TGocciaInstanceValue then
+    { The implicit super() recursion already ran the built-in's own steps on
+      the receiver it allocated; running them again here appended an Array
+      subclass's elements twice and called a Set subclass's `add` twice. }
+    if (not ImplicitSuperInitialized) and (NewThis is TGocciaInstanceValue) then
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
     begin
@@ -7271,9 +7320,17 @@ begin
     ShouldDelayNativePrototypeLookup(NativeClass, AArguments) or
     ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructorForPrototype);
 
-  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget).
+  // A built-in receiver falls back to that built-in's own intrinsic (§10.1.14
+  // step 3), not %Object.prototype%.
   if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
-    InstancePrototype := GetProtoFromConstructor(ANewTarget)
+  begin
+    if Assigned(NativeClass) then
+      InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+        ANewTarget, NativeIntrinsicPrototype)
+    else
+      InstancePrototype := GetProtoFromConstructor(ANewTarget);
+  end
   else
     InstancePrototype := Prototype;
 
@@ -11931,13 +11988,12 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -12005,41 +12061,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    TargetInstance := AClassValue.CreateNativeInstance(AArguments);
-    if not (TargetInstance is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
     { ES2026 §10.2.2 steps 5-6 put newTarget's prototype on the receiver before
       the built-in's own steps run, and §24.1.1.1 Map reads its `set` adder off
       that receiver — so a foreign newTarget whose prototype has no adder has
-      to throw here rather than quietly populating through Map.prototype.
-      The families that validate their arguments before newTarget.prototype may
-      be observed (§10.1.13 ordering) keep the lookup after initialization. }
-    DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-      AArguments);
-    if not DelayReceiverPrototype then
-      TGocciaObjectValue(TargetInstance).Prototype :=
-        GetProtoFromConstructor(EffectiveNewTarget);
-    if TargetInstance is TGocciaInstanceValue then
-    begin
-      if AInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).ClassValue :=
-          TGocciaInstanceValue(AInstance).ClassValue
-      else
-        TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
-    end;
-    if DelayReceiverPrototype then
-    begin
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-    end;
-    if TargetInstance is TGocciaInstanceValue then
-      TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(AArguments);
-    Exit(TargetInstance);
+      to throw here rather than quietly populating through Map.prototype. }
+    if AInstance is TGocciaInstanceValue then
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, AArguments, EffectiveNewTarget,
+        TGocciaInstanceValue(AInstance).ClassValue));
+    Exit(CreateNativeReceiverFromConstructor(AClassValue,
+      NativeDefaultPrototype, AArguments, EffectiveNewTarget, AClassValue));
   end;
 
   if (AClassValue is TGocciaVMClassValue) and
@@ -12141,14 +12175,13 @@ var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -12231,39 +12264,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
-      TargetInstance := AClassValue.CreateNativeInstance(BoxedArgs);
-      if not (TargetInstance is TGocciaObjectValue) then
-        ThrowTypeError(
-          'Superclass constructor did not return an object',
-          SSuggestNotConstructorType);
       { §10.2.2 steps 5-6 before the built-in's own steps — see the same
         ordering in InvokeImplicitSuperInitialization. }
-      DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-        BoxedArgs);
-      if not DelayReceiverPrototype then
-        TGocciaObjectValue(TargetInstance).Prototype :=
-          GetProtoFromConstructor(EffectiveNewTarget);
-      if TargetInstance is TGocciaInstanceValue then
-      begin
-        if AInstance is TGocciaInstanceValue then
-          TGocciaInstanceValue(TargetInstance).ClassValue :=
-            TGocciaInstanceValue(AInstance).ClassValue
-        else
-          TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-        TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
-      end;
-      if DelayReceiverPrototype then
-      begin
-        ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-        TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-      end;
-      if TargetInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(BoxedArgs);
-      Exit(TargetInstance);
+      if AInstance is TGocciaInstanceValue then
+        Exit(CreateNativeReceiverFromConstructor(AClassValue,
+          NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget,
+          TGocciaInstanceValue(AInstance).ClassValue));
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget, AClassValue));
     finally
       ReleaseArguments(BoxedArgs);
     end;
