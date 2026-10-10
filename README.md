@@ -407,7 +407,8 @@ See [Core patterns](docs/core-patterns.md) and [Interpreter](docs/interpreter.md
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
 | [Async Context](docs/built-ins-async-context.md) | `node:async_hooks`: `AsyncLocalStorage`, `AsyncResource`, and what propagates |
-| [Errors](docs/errors.md) | Error types, parser/runtime display, JSON output, `Error.cause`, `try`/`catch`/`finally` |
+| [Errors](docs/errors.md) | Error types, parser/runtime display, `Error.cause`, `try`/`catch`/`finally` |
+| [JSON Output](docs/json-output.md) | The `--output=json` and `--output=compact-json` envelopes, including errors and timeouts |
 | [Architecture](docs/architecture.md) | Pipelines, main layers, design direction, duplication boundaries |
 | [Interpreter](docs/interpreter.md) · [Bytecode VM](docs/bytecode-vm.md) | Tree-walk and bytecode execution modes |
 | [Core patterns](docs/core-patterns.md) | Recurring implementation patterns |
