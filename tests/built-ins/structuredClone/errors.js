@@ -97,3 +97,10 @@ test("one DOMException cloned twice is one clone", () => {
   const [first, second] = structuredClone([exception, exception]);
   expect(first).toBe(second);
 });
+
+test("a DOMException clone keeps the original's stack", () => {
+  const exception = new DOMException("x", "AbortError");
+  const clone = structuredClone(exception);
+  expect(typeof clone.stack).toBe("string");
+  expect(clone.stack).toBe(exception.stack);
+});

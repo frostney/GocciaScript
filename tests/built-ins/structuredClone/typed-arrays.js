@@ -142,6 +142,24 @@ describe("DataView cloning", () => {
     expect(clone[0].buffer).toBe(clone[1].buffer);
   });
 
+  test("one DataView cloned twice is one clone", () => {
+    const view = new DataView(new ArrayBuffer(4));
+    const [first, second] = structuredClone([view, view]);
+    expect(first).toBe(second);
+  });
+
+  test("views over a SharedArrayBuffer keep their offset and length", () => {
+    const buffer = new SharedArrayBuffer(8);
+    const [bytes, view] = structuredClone([
+      new Uint8Array(buffer, 2, 3),
+      new DataView(buffer, 2, 3),
+    ]);
+    expect(bytes.byteOffset).toBe(2);
+    expect(bytes.length).toBe(3);
+    expect(view.byteOffset).toBe(2);
+    expect(view.byteLength).toBe(3);
+  });
+
   test("a length-tracking DataView keeps tracking its cloned buffer", () => {
     const buffer = new ArrayBuffer(2, { maxByteLength: 8 });
     const clone = structuredClone(new DataView(buffer));

@@ -1348,23 +1348,16 @@ begin
       [CONSTRUCTOR_DATA_VIEW]), SSuggestStructuredClone);
 
   ClonedBuffer := StructuredCloneValue(AView.BufferValue, AMemory);
+  // ByteLengthSlot is AUTO_BYTE_LENGTH for a length-tracking view, which the
+  // constructors read the same way, so the clone tracks too.
   if ClonedBuffer is TGocciaSharedArrayBufferValue then
-  begin
-    if AView.IsLengthTracking then
-      Result := TGocciaDataViewValue.Create(
-        TGocciaSharedArrayBufferValue(ClonedBuffer), AView.ByteOffset)
-    else
-      Result := TGocciaDataViewValue.Create(
-        TGocciaSharedArrayBufferValue(ClonedBuffer), AView.ByteOffset,
-        AView.FixedByteLength);
-  end
-  else if AView.IsLengthTracking then
     Result := TGocciaDataViewValue.Create(
-      TGocciaArrayBufferValue(ClonedBuffer), AView.ByteOffset)
+      TGocciaSharedArrayBufferValue(ClonedBuffer), AView.ByteOffset,
+      AView.ByteLengthSlot)
   else
     Result := TGocciaDataViewValue.Create(
       TGocciaArrayBufferValue(ClonedBuffer), AView.ByteOffset,
-      AView.FixedByteLength);
+      AView.ByteLengthSlot);
   RegisterClone(AView, Result, AMemory);
 end;
 
@@ -1427,6 +1420,9 @@ begin
   Result := CreateDOMExceptionObject(
     OwnStringData(AException, PROP_NAME, ERROR_NAME),
     OwnStringData(AException, PROP_MESSAGE, ''));
+  // As for an Error, the clone keeps the original's stack, not one captured
+  // at the structuredClone call.
+  Result.ErrorStack := AException.ErrorStack;
   RegisterClone(AException, Result, AMemory);
 end;
 
@@ -1502,7 +1498,9 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_REF]), SSuggestStructuredClone)
   else if AValue is TGocciaFinalizationRegistryValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
-  // An exotic object that is not a platform object is not serializable.
+  // A Proxy is not serializable. The spec's IsArray step would see through
+  // one wrapping an array, but V8 and SpiderMonkey throw for every Proxy, and
+  // this follows them.
   else if AValue is TGocciaProxyValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable,
       [CONSTRUCTOR_PROXY]), SSuggestStructuredClone)

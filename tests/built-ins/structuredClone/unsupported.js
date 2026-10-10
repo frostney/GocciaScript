@@ -3,9 +3,11 @@ description: structuredClone throws DataCloneError for objects it has no seriali
 features: [structuredClone]
 ---*/
 
-// StructuredSerializeInternal throws for a Proxy, for an object with an
-// internal slot it has no branch for, and for a platform object that is not
-// serializable, instead of copying its properties into a plain object.
+// StructuredSerializeInternal throws for an object with an internal slot it
+// has no branch for and for a platform object that is not serializable,
+// instead of copying its properties into a plain object. A Proxy throws too,
+// even around an array, which the spec's IsArray step would see through: this
+// follows V8 and SpiderMonkey.
 const expectDataCloneError = (value) => {
   let error;
   try {
