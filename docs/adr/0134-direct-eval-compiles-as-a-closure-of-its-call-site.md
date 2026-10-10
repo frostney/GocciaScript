@@ -614,8 +614,11 @@ bytecode mode, on the pinned test262 commit, over the tests that reference
 
   Tests:
   - One eval-host section per row, in bytecode mode, with Node.js-checked
-    expectations, including `catch (X) { eval("var X = 2") }` returning `2`
-    and the outlived closure both reading and writing.
+    expectations, including the outlived closure both reading and writing,
+    and `catch (X) { eval("var X = 2") }` checked on both sides of the
+    `catch`: `X` is `2` inside it (the assignment goes to the catch
+    parameter) and `undefined` after it (the `var` the eval created in the
+    function, never assigned), as Node.js gives.
   - The invariant check over the corpus.
   - The #1310 and #1303 sections stay green.
   - The test262 gate.
