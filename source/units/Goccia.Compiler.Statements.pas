@@ -3577,6 +3577,7 @@ var
   UseIntCompare: Boolean;
   UseFusedLessThanExit: Boolean;
   ExitOpcode, ExitJumpOp, StepOpcode: TGocciaOpCode;
+  SlotLocalIdx: Integer;
 begin
   Result := False;
 
@@ -3706,14 +3707,22 @@ begin
     SetLabeledContinueCleanupBase(AStmt);
     Slot := ACtx.Scope.DeclareLocal(LoopName, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, OuterSlot, 0));
-    ACtx.Scope.MarkLocalInitialized(ACtx.Scope.ResolveLocal(LoopName));
+    SlotLocalIdx := ACtx.Scope.ResolveLocal(LoopName);
+    ACtx.Scope.MarkLocalInitialized(SlotLocalIdx);
 
     ACtx.CompileStatement(AStmt.Body);
 
     PatchJumpList(ACtx, LoopControl.ContinueJumps);
     PatchLabeledContinueJumps(ACtx, AStmt);
 
-    EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
+    // ES2026 §14.7.4.4 copies the iteration binding's last value into the
+    // next iteration. A closure that captured the binding writes its cell and
+    // leaves the register stale, so read the cell then; OP_MOVE keeps a loop
+    // without such a closure as it was.
+    if ACtx.Scope.LocalAt(SlotLocalIdx)^.IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, OuterSlot, Slot))
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, OuterSlot, Slot, 0));
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
@@ -4104,7 +4113,9 @@ var
   PerIterNames: TUnicodeStringList;
   PerIterIsConst: Boolean;
   OuterSlots, CarrierSlots, BodySlots, UpdateSlots: array of UInt16;
-  OuterLocalIdxs: array of Integer;
+  OuterLocalIdxs, BodyLocalIdxs, UpdateLocalIdxs: array of Integer;
+  UpdateMayCapture: Boolean;
+  BodyMayHoldCell: array of Boolean;
   Name: string;
   VarDecl: TGocciaVariableDeclaration;
   DestructDecl: TGocciaDestructuringDeclaration;
@@ -4200,6 +4211,18 @@ begin
         SetLength(BodySlots, PerIterNames.Count);
         SetLength(UpdateSlots, PerIterNames.Count);
         SetLength(OuterLocalIdxs, PerIterNames.Count);
+        SetLength(BodyLocalIdxs, PerIterNames.Count);
+        SetLength(UpdateLocalIdxs, PerIterNames.Count);
+        SetLength(BodyMayHoldCell, PerIterNames.Count);
+        // ES2026 §14.7.4.4 copies each binding's last value into the next
+        // environment. A closure that captured a binding writes its cell and
+        // leaves the register stale, so each copy reads the cell (OP_GET_LOCAL)
+        // when a closure may have captured the binding, and the register
+        // (OP_MOVE) otherwise. Only OP_CLOSURE opens a cell on these slots.
+        // A closure created in the update captures the binding that the next
+        // test and body use, and the update is compiled after that body's
+        // copy is emitted, so ask the update up front.
+        UpdateMayCapture := ExpressionCreatesClosureBoundary(AStmt.Update);
         for I := 0 to PerIterNames.Count - 1 do
         begin
           Name := PerIterNames[I];
@@ -4208,8 +4231,13 @@ begin
           CarrierSlots[I] := ACtx.Scope.DeclareLocal(
             '#for-carrier:' + IntToStr(CurrentCodePosition(ACtx)) + ':' +
             Name, False);
-          EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, CarrierSlots[I], OuterSlots[I], 0));
+          // A closure created in the initializer may have written the binding.
+          if ACtx.Scope.LocalAt(OuterLocalIdxs[I])^.IsCaptured then
+            EmitInstruction(ACtx,
+              EncodeABx(OP_GET_LOCAL, CarrierSlots[I], OuterSlots[I]))
+          else
+            EmitInstruction(ACtx,
+              EncodeABC(OP_MOVE, CarrierSlots[I], OuterSlots[I], 0));
         end;
 
         LoopStart := CurrentCodePosition(ACtx);
@@ -4225,6 +4253,7 @@ begin
           Name := PerIterNames[I];
           BodySlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
           LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          BodyLocalIdxs[I] := LocalIdx;
           CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
           EmitInstruction(ACtx,
             EncodeABC(OP_MOVE, BodySlots[I], CarrierSlots[I], 0));
@@ -4237,6 +4266,18 @@ begin
 
         PatchJumpList(ACtx, LoopControl.ContinueJumps);
         PatchLabeledContinueJumps(ACtx, AStmt);
+
+        // A closure from the test, the body, or the previous update may have
+        // written the binding's cell. Reload the register from it before the
+        // close below drops the cell.
+        for I := 0 to PerIterNames.Count - 1 do
+        begin
+          BodyMayHoldCell[I] := UpdateMayCapture or
+            ACtx.Scope.LocalAt(BodyLocalIdxs[I])^.IsCaptured;
+          if BodyMayHoldCell[I] then
+            EmitInstruction(ACtx,
+              EncodeABx(OP_GET_LOCAL, BodySlots[I], BodySlots[I]));
+        end;
 
         // BodySlots are no longer visible to name resolution after EndScope,
         // but their registers still hold the body iteration values for the
@@ -4259,17 +4300,26 @@ begin
           Name := PerIterNames[I];
           UpdateSlots[I] := ACtx.Scope.DeclareLocal(Name, PerIterIsConst);
           LocalIdx := ACtx.Scope.ResolveLocal(Name);
+          UpdateLocalIdxs[I] := LocalIdx;
           CopyLocalTypeMetadata(ACtx, OuterLocalIdxs[I], LocalIdx);
-          EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, UpdateSlots[I], BodySlots[I], 0));
+          // The update scope reuses the body's register, which the reload
+          // above already holds.
+          if not BodyMayHoldCell[I] or (UpdateSlots[I] <> BodySlots[I]) then
+            EmitInstruction(ACtx,
+              EncodeABC(OP_MOVE, UpdateSlots[I], BodySlots[I], 0));
         end;
 
         if Assigned(AStmt.Update) then
           CompileDiscardedExpression(ACtx, AStmt.Update);
 
+        // A closure created in the update may already have written the cell.
         for I := 0 to PerIterNames.Count - 1 do
-          EmitInstruction(ACtx,
-            EncodeABC(OP_MOVE, CarrierSlots[I], UpdateSlots[I], 0));
+          if ACtx.Scope.LocalAt(UpdateLocalIdxs[I])^.IsCaptured then
+            EmitInstruction(ACtx,
+              EncodeABx(OP_GET_LOCAL, CarrierSlots[I], UpdateSlots[I]))
+          else
+            EmitInstruction(ACtx,
+              EncodeABC(OP_MOVE, CarrierSlots[I], UpdateSlots[I], 0));
 
         ACtx.Scope.EndScope(UpdateClosedLocals, UpdateClosedCount);
         // Keep update-created upvalues open across the jump. The update
