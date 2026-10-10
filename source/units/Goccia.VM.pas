@@ -322,6 +322,7 @@ type
     procedure ShrinkThreadStacks(var AFreed: Int64);
     function LargestStackBytes: Int64;
     procedure SettleStackGrowth;
+    procedure LocateUnstartedFrameAtItsCall;
     procedure ShrinkIdleStacks;
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
@@ -8889,6 +8890,7 @@ begin
       Exit;
     end;
   FMemoryPressureCheckCountdown := 0;
+  LocateUnstartedFrameAtItsCall;
   ThrowVMMemoryLimitExceeded(GC, SErrorMaxCallStackExceeded,
     SSuggestStackMemoryLimitExceeded);
 end;
@@ -14286,7 +14288,8 @@ begin
   if not BindingObject.HasProperty(KeyStr) then
   begin
     if AStrict then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -14317,7 +14320,8 @@ begin
     StillExists := BindingObject.HasProperty(KeyStr);
 
     if AStrict and not StillExists then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
 
     if AStrict then
       SetPropertyValue(BindingObject, KeyStr, AValue)
@@ -15199,6 +15203,51 @@ begin
      (DecodeOp(ATemplate.GetInstructionUnchecked(PC - 1)) = Ord(OP_WIDE)) then
     Dec(PC);
   LocateFrameAt(ATemplate, PC, ALocation);
+end;
+
+{ SettleStackGrowth refuses a growth at an instruction boundary after the
+  instruction that needed it. When that was a call, the boundary falls in the
+  callee's prologue, after its first instruction or before it, where the frame
+  has no source position yet, so the resolver leaves it unlocated (ADR 0131)
+  and the RangeError would read file:0:0. Stamps that frame with the position
+  of the call that entered it, which is where an ordinary stack overflow is
+  located. The caller is the innermost suspended frame of the running entry:
+  a numeric self-call's closed frame when there is one, since those are pushed
+  inside the frame stack's, else the frame stack's top. }
+procedure TGocciaVM.LocateUnstartedFrameAtItsCall;
+var
+  Activation: PGocciaVMActivation;
+  CallerTemplate: TGocciaFunctionTemplate;
+  CallerIP: Integer;
+  Location: TGocciaFrameLocation;
+begin
+  if (FActivationCount = 0) or not Assigned(FCallStack) then
+    Exit;
+  Activation := @FActivations[FActivationCount - 1];
+  Location.Line := 0;
+  Location.Column := 0;
+  LocateFrameAfterCall(TGocciaFunctionTemplate(Activation^.TemplateProbe^),
+    Activation^.FrameIPProbe^, Location);
+  if Location.Line <> 0 then
+    Exit;
+  if FClosedNumericFrameStackCount > Activation^.FirstClosedNumericFrame then
+  begin
+    CallerTemplate := TGocciaFunctionTemplate(Activation^.TemplateProbe^);
+    CallerIP := FClosedNumericFrameStack[
+      FClosedNumericFrameStackCount - 1].IP;
+  end
+  else if FFrameStackCount > Activation^.FirstSavedFrame then
+  begin
+    CallerTemplate := FFrameStack[FFrameStackCount - 1].Template;
+    CallerIP := FFrameStack[FFrameStackCount - 1].IP;
+  end
+  else
+    Exit;
+  LocateFrameAfterCall(CallerTemplate, CallerIP, Location);
+  if (Location.Line = 0) or not Assigned(CallerTemplate.DebugInfo) then
+    Exit;
+  FCallStack.SetTopFrameLocation(CallerTemplate.DebugInfo.SourceFile,
+    Location.Line, Location.Column);
 end;
 
 { The call stack's location resolver while this VM runs (ADR 0074 keeps

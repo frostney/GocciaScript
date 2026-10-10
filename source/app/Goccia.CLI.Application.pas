@@ -1825,16 +1825,18 @@ type
 
 { Evaluates the JavaScript or TypeScript module at APath in an engine of its
   own with AEngine's capability set, the config's directory as its project,
-  and AEngine's language settings: its imports are guest reads, judged like
-  the script's, and whatever it leaves on its global object stays in that
-  engine. Returns the requested exports as JSON, so only data reaches the
-  script. AModulePath receives the module's canonical path. }
+  and AEngine's language settings and execution mode: its imports are guest
+  reads, judged like the script's, and whatever it leaves on its global object
+  stays in that engine. Running it on AEngine's kind of executor means a throw
+  from it is located exactly as the same module passed with --globals is.
+  Returns the requested exports as JSON, so only data reaches the script.
+  AModulePath receives the module's canonical path. }
 function EvaluateIsolatedConfigModule(const AEngine: TGocciaEngine;
   const APath, AConfigPath: string; const AResult: TIsolatedModuleResult;
   out AModulePath: string): string;
 var
   Isolated: TGocciaEngine;
-  Executor: TGocciaInterpreterExecutor;
+  Executor: TGocciaExecutor;
   Source: TStringList;
   Module: TGocciaModule;
   ExportValue, ExportedValue: TGocciaValue;
@@ -1844,7 +1846,10 @@ var
   Stringifier: TGocciaJSONStringifier;
 begin
   Source := TStringList.Create;
-  Executor := TGocciaInterpreterExecutor.Create;
+  if AEngine.Executor is TGocciaBytecodeExecutor then
+    Executor := TGocciaBytecodeExecutor.Create
+  else
+    Executor := TGocciaInterpreterExecutor.Create;
   try
     Isolated := TGocciaEngine.Create(APath, Source, Executor,
       AEngine.Capabilities);

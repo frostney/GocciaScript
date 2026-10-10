@@ -1941,4 +1941,50 @@ console.log("Virtual modules win filesystem collisions with a warning...");
   }
 }
 
+console.log("Config globals module that throws is located as --globals locates it...");
+{
+  // A globals module a config names runs in an engine of its own. That engine
+  // runs it on the script's kind of executor, so its throw reports the same
+  // diagnostic as the same module passed with --globals (#1494 item 8).
+  const tmp = makeTmp();
+  try {
+    // Sibling directories, so the --globals run discovers no config.
+    const cfgDir = join(tmp, "cfg");
+    const cliDir = join(tmp, "cli");
+    mkdirSync(cfgDir);
+    mkdirSync(cliDir);
+    const globalsPath = join(cfgDir, "g.js");
+    writeFileSync(globalsPath, "const a = 1;\nnull.y;\n");
+    writeFileSync(join(cfgDir, "main.js"), 'console.log("ran");\n');
+    writeFileSync(join(cliDir, "main.js"), 'console.log("ran");\n');
+    writeFileSync(join(cfgDir, "goccia.json"), JSON.stringify({ globals: "./g.js" }));
+    const header = "TypeError: Cannot read properties of null (reading 'y')";
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const fromConfig = runCwd(RUNNER, ["main.js", `--mode=${mode}`], cfgDir, {
+        expectFail: true,
+      });
+      const fromCli = runCwd(
+        RUNNER,
+        ["main.js", `--mode=${mode}`, `--globals=${globalsPath}`],
+        cliDir,
+        { expectFail: true },
+      );
+      if (!fromConfig.combined.includes(header))
+        throw new Error(`Config globals throw should report ${header} (${mode}): ${fromConfig.combined}`);
+      if (fromConfig.combined.includes("ran") || fromCli.combined.includes("ran"))
+        throw new Error(`A throwing globals module must stop the run (${mode}): ${fromConfig.combined}${fromCli.combined}`);
+      if (fromConfig.stderr !== fromCli.stderr || fromConfig.stdout !== fromCli.stdout)
+        throw new Error(
+          `Config globals throw should match the --globals form (${mode}).\nconfig:\n${fromConfig.combined}\n--globals:\n${fromCli.combined}`,
+        );
+      // Bytecode locates a top-level throw; the interpreter does not yet
+      // (#1273), in either form.
+      if (mode === "bytecode" && !fromConfig.combined.includes(`--> ${globalsPath}:2:1`))
+        throw new Error(`Config globals throw should be located at g.js:2:1 (${mode}): ${fromConfig.combined}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("\nAll test-cli-config.ts tests passed.");

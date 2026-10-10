@@ -198,7 +198,12 @@ const
   //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
   //               declares private auto-accessor names, and
   //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
-  GOCCIA_FORMAT_VERSION = 86;
+  //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
+  //               the intrinsic ReferenceError for an unresolvable reference,
+  //               with its suggestion, in place of the four-instruction
+  //               `new ReferenceError(...)` sequence that read the global
+  //               `ReferenceError` binding.
+  GOCCIA_FORMAT_VERSION = 89;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -503,7 +508,13 @@ type
     // OP_GET_UPVALUE and OP_GET_GLOBAL it never consults a direct eval's var
     // scope, so it checks the binding an assignment resolved before its
     // right-hand side ran (ES2026 §9.1.1.1.5 SetMutableBinding step 3).
-    OP_CHECK_BINDING_INITIALIZED = 235
+    OP_CHECK_BINDING_INITIALIZED = 235,
+    // Bx = name-constant index; A is unused. Throws the ReferenceError
+    // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
+    // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
+    // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
+    // holds, and carrying the evaluator's suggestion.
+    OP_THROW_UNDEFINED_VARIABLE = 236
   );
 
 const
@@ -554,7 +565,7 @@ function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
     OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER,
-    OP_CHECK_BINDING_INITIALIZED]);
+    OP_CHECK_BINDING_INITIALIZED, OP_THROW_UNDEFINED_VARIABLE]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;

@@ -823,7 +823,7 @@ var
   Local: TGocciaCompilerLocal;
   Slot: UInt16;
   NameIdx: UInt16;
-  CondReg, ArgReg: UInt16;
+  CondReg: UInt16;
   OkJump: Integer;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
@@ -880,23 +880,14 @@ begin
   end;
 
   CondReg := ACtx.Scope.AllocateRegister;
-  ArgReg := ACtx.Scope.AllocateRegister;
 
   EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
   OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
-
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
-    ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
-
+  EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
   PatchJumpTarget(ACtx, OkJump);
 
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
 
-  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -2604,7 +2595,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
-  Slot, GlobalExistsReg, ErrorReg, MessageReg: UInt16;
+  Slot, GlobalExistsReg, ErrorReg: UInt16;
   ObjReg, KeyReg, CondReg: UInt16;
   TargetReg: Integer;
   NameIdx: UInt16;
@@ -2780,17 +2771,7 @@ begin
   end;
 
   GlobalExistsJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, GlobalExistsReg);
-
-  ErrorReg := GlobalExistsReg;
-  MessageReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ErrorReg,
-    ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, MessageReg,
-    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ErrorReg, ErrorReg, 1));
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
-  ACtx.Scope.FreeRegister;
-
+  EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
   PatchJumpTarget(ACtx, GlobalExistsJump);
   EmitSetGlobalByIndex(ACtx, ADest, NameIdx);
   ACtx.Scope.FreeRegister;
@@ -6416,7 +6397,7 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ArgReg, ObjReg,
+  Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ObjReg,
     KeyReg: UInt16;
   ReferenceReg: Integer;
   NameIdx: UInt16;
@@ -6559,17 +6540,10 @@ begin
 
     NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
     CondReg := ACtx.Scope.AllocateRegister;
-    ArgReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
     OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
-    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
-      ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-      ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
-    EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
     PatchJumpTarget(ACtx, OkJump);
-    ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
 
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
