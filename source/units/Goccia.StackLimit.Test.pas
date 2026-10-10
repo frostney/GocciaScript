@@ -17,6 +17,10 @@ const
   // Bigger than the RTL's own stack check margin, so that the guard is what
   // stops the recursion below in a development build too.
   FRAME_BYTES = 2048;
+  // A thread can get a little more stack than it asks for. On arm64 Darwin,
+  // libpthread adds PTHREAD_T_OFFSET (12 KiB) to the requested size, and
+  // pthread_get_stacksize_np reports the sum, which the thread may use.
+  STACK_SIZE_SLACK = 64 * 1024;
 
 type
   TStackLimitTests = class(TTestSuite)
@@ -26,6 +30,8 @@ type
     procedure TestSmallStackKeepsAQuarterFree;
     procedure TestShallowEntriesAreNotChecked;
     procedure TestRecursionStopsBeforeTheStackEnds;
+    procedure Check(const ACondition: Boolean; const AWhat: string;
+      const AProbe: TObject);
   public
     procedure SetupTests; override;
   end;
@@ -44,14 +50,29 @@ type
     Depth: Integer;
     Stopped: Boolean;
     StoppedBy: string;
+    // What the system reports for the thread's stack, where the test can ask
+    // for it (Darwin), for the failure message.
+    SystemTop: NativeUInt;
+    SystemSize: NativeUInt;
+    RequestedSize: SizeUInt;
     constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean);
     procedure Execute; override;
+    function Describe: string;
   end;
+
+{$IFDEF DARWIN}
+function pthread_self: Pointer; cdecl; external 'c' name 'pthread_self';
+function Pthread_get_stackaddr_np(AThread: Pointer): Pointer; cdecl;
+  external 'c' name 'pthread_get_stackaddr_np';
+function Pthread_get_stacksize_np(AThread: Pointer): NativeUInt; cdecl;
+  external 'c' name 'pthread_get_stacksize_np';
+{$ENDIF}
 
 constructor TProbeThread.Create(const AStackSize: SizeUInt;
   const ARecurse: Boolean);
 begin
   FRecurse := ARecurse;
+  RequestedSize := AStackSize;
   inherited Create(True, AStackSize);
 end;
 
@@ -71,6 +92,10 @@ procedure TProbeThread.Execute;
 begin
   Limit := NativeStackLimit;
   Position := NativeStackPosition;
+  {$IFDEF DARWIN}
+  SystemTop := NativeUInt(Pthread_get_stackaddr_np(pthread_self));
+  SystemSize := Pthread_get_stacksize_np(pthread_self);
+  {$ENDIF}
   CachedLimit := NATIVE_STACK_LIMIT_UNSET;
   if not FRecurse then
     Exit;
@@ -83,6 +108,29 @@ begin
       StoppedBy := E.ClassName;
     end;
   end;
+end;
+
+function TProbeThread.Describe: string;
+var
+  Used: Int64;
+begin
+  Used := 0;
+  if SystemTop <> 0 then
+    Used := Int64(SystemTop) - Int64(Position);
+  Result := Format('requested %d, limit $%x, position $%x, room %d, ' +
+    'system top $%x, system size %d, used before the probe %d, depth %d',
+    [Int64(RequestedSize), Int64(Limit), Int64(Position),
+     Int64(Position) - Int64(Limit), Int64(SystemTop), Int64(SystemSize),
+     Used, Depth]);
+end;
+
+procedure TStackLimitTests.Check(const ACondition: Boolean;
+  const AWhat: string; const AProbe: TObject);
+begin
+  if not ACondition then
+    Fail(AWhat + ' (' + TProbeThread(AProbe).Describe + ')');
+  // Counts the assertion.
+  Expect<Boolean>(ACondition).ToBe(True);
 end;
 
 procedure TStackLimitTests.SetupTests;
@@ -122,16 +170,17 @@ begin
   try
     Probe.Start;
     Probe.WaitFor;
-    Expect<Boolean>(Probe.Limit <> 0).ToBe(True);
-    Expect<Boolean>(Probe.Limit <> NativeStackLimit).ToBe(True);
-    Expect<Boolean>(Probe.Limit < Probe.Position).ToBe(True);
+    Check(Probe.Limit <> 0, 'limit found', Probe);
+    Check(Probe.Limit <> NativeStackLimit, 'limit differs from the main thread''s', Probe);
+    Check(Probe.Limit < Probe.Position, 'limit below the position', Probe);
     Room := Probe.Position - Probe.Limit;
-    Expect<Boolean>(Room > 3 * MEBIBYTE).ToBe(True);
+    Check(Room > 3 * MEBIBYTE, 'room above 3 MiB', Probe);
     {$IFNDEF MSWINDOWS}
     // A 4 MiB stack less the reserve, less what the thread has used. Windows
     // takes a thread's stack size as the memory to commit, and reserves the
     // executable's default stack size if that is larger.
-    Expect<Boolean>(Room <= 4 * MEBIBYTE - NATIVE_STACK_RESERVE).ToBe(True);
+    Check(Room <= 4 * MEBIBYTE - NATIVE_STACK_RESERVE + STACK_SIZE_SLACK,
+      'room within 4 MiB less the reserve', Probe);
     {$ENDIF}
   finally
     Probe.Free;
@@ -147,12 +196,14 @@ begin
   try
     Probe.Start;
     Probe.WaitFor;
-    Expect<Boolean>(Probe.Limit <> 0).ToBe(True);
+    Check(Probe.Limit <> 0, 'limit found', Probe);
     Room := Probe.Position - Probe.Limit;
-    Expect<Boolean>(Room > 256 * 1024).ToBe(True);
+    // More than a full reserve would leave.
+    Check(Room > 256 * 1024, 'room above 256 KiB', Probe);
     {$IFNDEF MSWINDOWS}
     // Windows reserves at least the executable's default stack size.
-    Expect<Boolean>(Room <= 384 * 1024).ToBe(True);
+    Check(Room <= 384 * 1024 + STACK_SIZE_SLACK,
+      'room within three quarters of 512 KiB', Probe);
     {$ENDIF}
   finally
     Probe.Free;
@@ -195,14 +246,15 @@ begin
   try
     Probe.Start;
     Probe.WaitFor;
-    Expect<Boolean>(Probe.Stopped).ToBe(True);
+    Check(Probe.Stopped, 'recursion stopped', Probe);
     Expect<string>(Probe.StoppedBy).ToBe('TGocciaThrowValue');
     // It ran until a reserve's worth of stack was left, not earlier.
-    Expect<Boolean>(Probe.Depth > (MEBIBYTE - NATIVE_STACK_RESERVE) div
-      FRAME_BYTES div 2).ToBe(True);
+    Check(Probe.Depth > (MEBIBYTE - NATIVE_STACK_RESERVE) div
+      FRAME_BYTES div 2, 'recursion used most of the stack', Probe);
     {$IFNDEF MSWINDOWS}
     // Windows reserves at least the executable's default stack size.
-    Expect<Boolean>(Probe.Depth < MEBIBYTE div FRAME_BYTES).ToBe(True);
+    Check(Probe.Depth < MEBIBYTE div FRAME_BYTES,
+      'recursion stopped within 1 MiB', Probe);
     {$ENDIF}
   finally
     Probe.Free;
