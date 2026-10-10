@@ -5778,8 +5778,7 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  FnReg, TargetReg: UInt16;
-  ProtoNameIdx: UInt16;
+  FnReg: UInt16;
   FormalCount, I: Integer;
   ArgumentsSlot: Integer;
 begin
@@ -5864,19 +5863,14 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, FnReg, AKeyReg,
     FUNCTION_NAME_PREFIX_NONE));
 
+  // The instance form takes the class, not its prototype, so the method's
+  // private names resolve through the class (ES2026 §15.7.14).
   if AIsStatic then
     EmitInstruction(ACtx, EncodeABC(OP_DEFINE_CLASS_METHOD_DYNAMIC,
       AClassReg, AKeyReg, FnReg))
   else
-  begin
-    TargetReg := ACtx.Scope.AllocateRegister;
-    ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
-    EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-      AClassReg, UInt16(ProtoNameIdx)));
-    EmitInstruction(ACtx, EncodeABC(OP_DEFINE_CLASS_METHOD_DYNAMIC,
-      TargetReg, AKeyReg, FnReg));
-    ACtx.Scope.FreeRegister;
-  end;
+    EmitInstruction(ACtx, EncodeABC(OP_CLASS_ADD_METHOD_DYNAMIC,
+      AClassReg, AKeyReg, FnReg));
   ACtx.Scope.FreeRegister;
 end;
 
@@ -5994,8 +5988,7 @@ var
   MethodPair: TGocciaClassMethodMap.TKeyValuePair;
   GetterPair: TGocciaGetterExpressionMap.TKeyValuePair;
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
-  KeyReg, TargetReg: UInt16;
-  ProtoNameIdx: UInt16;
+  KeyReg: UInt16;
   ComputedKeyName: string;
   ClassKeyPrefix: string;
   NeedsKeyLocal: Boolean;
@@ -6158,20 +6151,16 @@ begin
       cekGetter:
         if Elem.IsComputed then
         begin
+          // A non-static accessor defined on the class lands on its
+          // prototype, as a non-enumerable property whose private names
+          // resolve through the class.
           if Elem.IsStatic then
             CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
               Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
               ACCESSOR_FLAG_STATIC)
           else
-          begin
-            TargetReg := ACtx.Scope.AllocateRegister;
-            ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
-            EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-              ATargetReg, UInt16(ProtoNameIdx)));
-            CompileComputedGetterBody(ACtx, TargetReg, KeyReg,
+            CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
               Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, 0);
-            ACtx.Scope.FreeRegister;
-          end;
         end
         else if Elem.IsPrivate then
         begin
@@ -6196,16 +6185,9 @@ begin
               Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
               ACCESSOR_FLAG_STATIC or ACCESSOR_FLAG_SETTER)
           else
-          begin
-            TargetReg := ACtx.Scope.AllocateRegister;
-            ProtoNameIdx := ACtx.Template.AddConstantString(PROP_PROTOTYPE);
-            EmitInstruction(ACtx, EncodeABC(OP_GET_PROP_CONST, TargetReg,
-              ATargetReg, UInt16(ProtoNameIdx)));
-            CompileComputedSetterBody(ACtx, TargetReg, KeyReg,
+            CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
               Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
               ACCESSOR_FLAG_SETTER);
-            ACtx.Scope.FreeRegister;
-          end;
         end
         else if Elem.IsPrivate then
         begin
@@ -6998,6 +6980,7 @@ var
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
   OldPrivatePrefix: string;
+  OldPrivateClassReg: Integer;
 begin
   ClassDef := AStmt.ClassDefinition;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -7070,6 +7053,10 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ClassReg, SuperReg, 0));
   end;
 
+  // The class heritage is evaluated in the outer private environment; the
+  // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
+  ACtx.Scope.PrivateClassReg := ClassReg;
   ACtx.Scope.BeginScope;
   ComputedCtx := ACtx;
   ComputedCtx.NonStrictMode := False;
@@ -7205,6 +7192,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
+  ACtx.Scope.PrivateClassReg := OldPrivateClassReg;
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
   ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;
@@ -7230,6 +7218,7 @@ var
   HeritageCtx: TGocciaCompilationContext;
   ComputedCtx: TGocciaCompilationContext;
   OldPrivatePrefix: string;
+  OldPrivateClassReg: Integer;
 begin
   ClassDef := AClassDef;
   HasSuper := Assigned(ClassDef.SuperClassExpression) or
@@ -7299,6 +7288,10 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_CLASS_SET_SUPER, ADest, SuperReg, 0));
   end;
 
+  // The class heritage is evaluated in the outer private environment; the
+  // rest of the body in the class's own (ES2026 §15.7.14 steps 8 and 12).
+  OldPrivateClassReg := ACtx.Scope.PrivateClassReg;
+  ACtx.Scope.PrivateClassReg := ADest;
   ACtx.Scope.BeginScope;
   ComputedCtx := ACtx;
   ComputedCtx.NonStrictMode := False;
@@ -7434,6 +7427,7 @@ begin
       EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0, UInt16(ClosedLocals[I])));
   end;
 
+  ACtx.Scope.PrivateClassReg := OldPrivateClassReg;
   ACtx.Scope.PrivatePrefix := OldPrivatePrefix;
   ACtx.Scope.RestorePrivateNameMark(PrivateNameMark);
 end;
