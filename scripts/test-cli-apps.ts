@@ -3866,6 +3866,74 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
 
+    console.log("Loader: branch coverage of conditional and logical expressions a constant decides...");
+    // The compiler can decide these from a const local or a literal, and with
+    // strict types can read `flag && true` as `flag`. Under coverage each keeps
+    // its taken and its untaken branch record, and the report matches the one
+    // for a form the compiler cannot decide.
+    const branchRecords = (lcov: string) =>
+      [...lcov.matchAll(/^BRDA:(\d+),\d+,(\d+),(\S+)$/gm)].map((m) => `${m[1]}:${m[2]}:${m[3]}`).sort();
+    const constantBranchCases = [
+      {
+        name: "constant-branch",
+        lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        decided: { args: [] as string[], decl: "const" },
+        undecided: { args: [] as string[], decl: "let" },
+        source: (decl: string) => [
+          "const pick = (value) => {",
+          `  ${decl} verbose = false;`,
+          `  ${decl} missing = null;`,
+          '  const label = verbose ? "long" : "short";',
+          "  const shown = verbose && value;",
+          "  const fallback = verbose || value;",
+          '  const chosen = missing ?? "none";',
+          "  const size = (verbose ? 1 : 2) + 1;",
+          "  if (verbose && value) { return label; }",
+          "  const negated = !(verbose || false);",
+          '  const literal = true ? "yes" : "no";',
+          "  return [label, shown, fallback, chosen, size, negated, literal].join();",
+          "};",
+          "console.log(pick(1));",
+          "",
+        ],
+      },
+      {
+        name: "strict-type-branch",
+        lines: [3, 4],
+        decided: { args: ["--strict-types"], decl: "const" },
+        undecided: { args: [] as string[], decl: "const" },
+        source: (decl: string) => [
+          "const check = (value) => {",
+          `  ${decl} flag = value > 0;`,
+          "  const both = flag && true;",
+          "  const either = flag || false;",
+          "  return [both, either].join();",
+          "};",
+          "console.log(check(1));",
+          "",
+        ],
+      },
+    ];
+    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+      const reports: Record<string, string> = {};
+      for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
+        const sourcePath = join(tmp, `${name}-${kind}.js`);
+        const lcovPath = join(tmp, `${name}-${kind}.lcov`);
+        writeFileSync(sourcePath, source(decl).join("\n"));
+        await $`${RUNNER} ${args} --coverage --coverage-format=lcov --coverage-output=${lcovPath} ${sourcePath}`.quiet();
+        reports[kind] = readFileSync(lcovPath, "utf-8");
+      }
+      for (const line of lines) {
+        if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
+            !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
+          throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {
+        throw new Error(`${name}: a decided and an undecided form should report the same branches, got:\n${reports.decided}\nand:\n${reports.undecided}`);
+      }
+    }
+
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(
@@ -6532,6 +6600,73 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
     clean(tmp);
   }
 }
+
+await section("Bundler: constants folding to Infinity, NaN and -0 compile + roundtrip...", async () => {
+  const tmp = makeTmp();
+  try {
+    // [constant expression, the value it folds to]. String(-0) is "0", so the
+    // program names -0 through Object.is.
+    const folds: [string, string][] = [
+      ["1 / 0", "Infinity"],
+      ["1e308 * 10", "Infinity"],
+      ["2 ** 1024", "Infinity"],
+      ["-1 / 0", "-Infinity"],
+      ["-1e308 * 10", "-Infinity"],
+      ["0 / 0", "NaN"],
+      ["Infinity - Infinity", "NaN"],
+      ["0 * -1", "-0"],
+      ["0 / -1", "-0"],
+    ];
+    const expected = folds.map(([expression, value]) => `fold ${expression} = ${value}`).join("\n");
+    const foldLines = (output: string): string =>
+      normalizeLineEndings(output)
+        .split("\n")
+        .filter((line) => line.startsWith("fold "))
+        .join("\n");
+    const run = (...args: string[]): string =>
+      foldLines(Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" }).stdout.toString());
+
+    const src = join(tmp, "folded.js");
+    const gbc = join(tmp, "folded.gbc");
+    writeFileSync(
+      src,
+      [
+        'const show = (value) => (Object.is(value, -0) ? "-0" : String(value));',
+        ...folds.map(
+          ([expression], i) => `const c${i} = ${expression};\nconsole.log("fold ${expression} =", show(c${i}));`,
+        ),
+        "",
+      ].join("\n"),
+    );
+    const compile = Bun.spawnSync([BUNDLER, src, `--output=${gbc}`], { stdout: "pipe", stderr: "pipe" });
+    if (compile.exitCode !== 0 || !existsSync(gbc))
+      throw new Error(
+        `Folded non-finite constants should compile to .gbc, got exit ${compile.exitCode}: ${compile.stdout.toString()}${compile.stderr.toString()}`,
+      );
+    const fromSource = run(src, "--mode=bytecode");
+    if (fromSource !== expected)
+      throw new Error(`Folded constants run from source in bytecode mode should print:\n${expected}\ngot:\n${fromSource}`);
+    const fromGbc = run(gbc);
+    if (fromGbc !== expected)
+      throw new Error(`Folded constants roundtrip should print:\n${expected}\ngot:\n${fromGbc}`);
+
+    // Each worker thread has its own floating-point state.
+    const dir = join(tmp, "workers");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "a.js"), 'console.log("fold a =", 1 / 0);\n');
+    writeFileSync(join(dir, "b.js"), 'console.log("fold b =", 0 / 0);\n');
+    const parallel = Bun.spawnSync([BUNDLER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    if (parallel.exitCode !== 0)
+      throw new Error(
+        `Folded non-finite constants should compile on worker threads, got exit ${parallel.exitCode}: ${parallel.stdout.toString()}${parallel.stderr.toString()}`,
+      );
+    const fromWorkers = `${run(join(dir, "a.gbc"))}\n${run(join(dir, "b.gbc"))}`;
+    if (fromWorkers !== "fold a = Infinity\nfold b = NaN")
+      throw new Error(`Worker-compiled folded constants should print Infinity and NaN, got:\n${fromWorkers}`);
+  } finally {
+    clean(tmp);
+  }
+});
 
 // ============================================================================
 // GocciaBenchmarkRunner
@@ -11695,6 +11830,172 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
       // fallback undershooting a spike cannot fail it.
       assertPeakRssAbove(run, `distributed property growth (${label})`, 32 * 1024 * 1024);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// With --max-stack=0 nothing bounds a bytecode recursion but the memory
+// ceiling, so the VM stacks are charged to it (ADR 0130). They were neither
+// charged nor gated before, and this script grew until the kernel's OOM
+// killer stopped it (#1472). The refusal must be a catchable RangeError, and
+// the charge must be given back once the recursion has unwound: the 24 MiB
+// ArrayBuffer after it does not fit beside the ~44 MiB the stacks hold at the
+// refusal. --max-instructions is only the backstop that keeps a regression
+// from taking the CI host with it: the refusal needs about 1M instructions
+// here, while 4M without one reach ~800k frames and ~340 MiB resident, which
+// fails the RSS ceiling below.
+//
+// The ceiling must also bound what the process holds when the RangeError
+// fires (ADR 0132): the thread's call-stack and
+// execution-context records are charged with the stacks, every stack is
+// charged for its capacity, and a growth leaves room under the ceiling to copy
+// the largest stack. Peak RSS is compared with an idle run of the same binary,
+// so that the bound does not depend on how much a platform's runtime and
+// libraries take before the script starts.
+await section("Memory budget: unbounded bytecode recursion is refused at the ceiling...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "recursion.js");
+    writeFileSync(
+      file,
+      "let d = 0;\n" +
+        "const f = () => { d++; f(); };\n" +
+        'try { f(); } catch (e) { console.log(e.constructor.name + ": " + e.message + " at " + d); }\n' +
+        "const buffer = new ArrayBuffer(24 * 1024 * 1024);\n" +
+        'console.log("after " + buffer.byteLength);\n',
+    );
+
+    const run = await runWithPeakRss([
+      RUNNER,
+      "--mode=bytecode",
+      "--max-stack=0",
+      "--max-memory=64MiB",
+      "--max-instructions=4000000",
+      file,
+    ]);
+    if (run.exitCode !== 0)
+      throw new Error(`Unbounded recursion did not end in a caught RangeError (exit ${run.exitCode}):\n${run.output}`);
+    const refused = run.output.match(/RangeError: Maximum call stack size exceeded at (\d+)/);
+    if (!refused)
+      throw new Error(`Expected a caught "Maximum call stack size exceeded" RangeError:\n${run.output}`);
+    // Measured at 177,478 frames. A refusal far earlier would come from
+    // something other than the ceiling.
+    if (Number(refused[1]) < 100000)
+      throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
+    if (!run.output.includes(`after ${24 * 1024 * 1024}`))
+      throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
+    const idle = join(tmp, "idle.js");
+    writeFileSync(idle, 'console.log("idle");\n');
+    const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    // Measured 69.4 to 70.3 MiB above an idle run's 11.0 to 11.3 MiB over 12
+    // runs on Linux x64, 1.09 times the ceiling. Before the call-stack records
+    // and the stack copies were charged, the same run held 132 MiB above it,
+    // 2.07 times the ceiling. The bound leaves 13 MiB for other platforms'
+    // allocators and page sizes.
+    if (idleRun.peakRssBytes !== null)
+      assertPeakRssBelow(
+        run,
+        "unbounded bytecode recursion, above an idle run",
+        idleRun.peakRssBytes + 1.3 * 64 * 1024 * 1024,
+      );
+
+    // A heap that fills most of the ceiling must not turn an ordinary
+    // recursion into a stack overflow: small stacks may still grow into the
+    // memory-pressure reserve that a deep recursion is kept out of.
+    const heavy = join(tmp, "heavy-heap.js");
+    writeFileSync(
+      heavy,
+      "const big = new ArrayBuffer(56 * 1024 * 1024);\n" +
+        "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1));\n" +
+        'console.log("depth " + f(1000) + " " + big.byteLength);\n',
+    );
+    const heavyRun = Bun.spawnSync([RUNNER, "--mode=bytecode", "--max-memory=64MiB", heavy], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const heavyOut = heavyRun.stdout.toString() + heavyRun.stderr.toString();
+    if (heavyRun.exitCode !== 0 || !heavyOut.includes(`depth 1000 ${56 * 1024 * 1024}`))
+      throw new Error(`A 1000-deep recursion beside a 56 MiB heap was refused under a 64 MiB ceiling:\n${heavyOut}`);
+
+    // A generator is charged for the frame it suspends, and gives the charge
+    // back when it finishes rather than when the collector frees it.
+    const generators = join(tmp, "generators.js");
+    writeFileSync(
+      generators,
+      "const source = { *make(seed) { const a = seed + 1; const b = a * 2; yield a + b; yield b; } };\n" +
+        "const all = Array.from({ length: 2000 }, (_, i) => source.make(i));\n" +
+        "for (const g of all) g.next();\n" +
+        "Goccia.gc();\n" +
+        "const suspended = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of all) { g.next(); g.next(); }\n" +
+        "Goccia.gc();\n" +
+        'console.log("released " + (suspended - Goccia.gc.bytesAllocated));\n' +
+        // Default parameters give a generator a frame before its first
+        // resume; return() before that start must give it back too.
+        "const preset = { *make(seed = 1, other = seed * 2) { yield seed + other; } };\n" +
+        "const fresh = Array.from({ length: 2000 }, (_, i) => preset.make(i));\n" +
+        "Goccia.gc();\n" +
+        "const created = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of fresh) g.return(0);\n" +
+        "Goccia.gc();\n" +
+        'console.log("unstarted " + (created - Goccia.gc.bytesAllocated));\n',
+    );
+    const generatorRun = Bun.spawnSync([RUNNER, "--mode=bytecode", generators], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const generatorOut = generatorRun.stdout.toString() + generatorRun.stderr.toString();
+    const released = generatorOut.match(/released (-?\d+)/);
+    // Each suspended frame holds at least its receiver, its argument and two
+    // locals, 64 bytes; measured 128 bytes a generator.
+    if (generatorRun.exitCode !== 0 || !released || Number(released[1]) < 2000 * 64)
+      throw new Error(`Finished generators kept the charge for their suspended frames:\n${generatorOut}`);
+    const unstarted = generatorOut.match(/unstarted (-?\d+)/);
+    // Measured 96 bytes a generator.
+    if (!unstarted || Number(unstarted[1]) < 2000 * 48)
+      throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
+
+    // A frame inside a try block also holds an exception handler, which is
+    // charged with the stacks (ADR 0132) and given back once the recursion
+    // has returned. Each recursion runs in its own process, so that both
+    // start from the same stack capacities; what a try block adds at 1,000
+    // levels is then measured at 21,840 bytes, and 6,000 before the handlers
+    // were charged.
+    const recursionCharge = (name: string, body: string): { charged: number; kept: number } => {
+      const file = join(tmp, `${name}.js`);
+      writeFileSync(
+        file,
+        "const step = (x) => x + 1;\n" +
+          "const runAWhile = () => [...Array(4096).keys()].map(step).length;\n" +
+          "let peak = 0;\n" +
+          "const atBottom = () => { runAWhile(); peak = Goccia.gc.bytesAllocated; return 0; };\n" +
+          `const recurse = (n) => { ${body} };\n` +
+          "runAWhile(); Goccia.gc();\n" +
+          "const before = Goccia.gc.bytesAllocated;\n" +
+          "recurse(1000);\n" +
+          "runAWhile(); Goccia.gc();\n" +
+          'console.log("charged " + (peak - before) + " kept " + (Goccia.gc.bytesAllocated - before));\n',
+      );
+      const result = Bun.spawnSync([RUNNER, "--mode=bytecode", file], { stdout: "pipe", stderr: "pipe" });
+      const out = result.stdout.toString() + result.stderr.toString();
+      const match = out.match(/charged (-?\d+) kept (-?\d+)/);
+      if (result.exitCode !== 0 || !match) throw new Error(`The ${name} recursion did not run:\n${out}`);
+      return { charged: Number(match[1]), kept: Number(match[2]) };
+    };
+    const plainCharge = recursionCharge("plain", "if (n === 0) return atBottom(); return 1 + recurse(n - 1);");
+    const guardedCharge = recursionCharge(
+      "guarded",
+      "try { if (n === 0) return atBottom(); return 1 + recurse(n - 1); } catch (e) { throw e; }",
+    );
+    if (guardedCharge.charged - plainCharge.charged < 1000 * 12)
+      throw new Error(
+        `A recursion through try blocks was not charged for its handlers: ` +
+          `${guardedCharge.charged} bytes against ${plainCharge.charged} without them`,
+      );
+    if (guardedCharge.kept >= 8 * 1024)
+      throw new Error(`A recursion through try blocks kept ${guardedCharge.kept} bytes of charge after it returned`);
   } finally {
     clean(tmp);
   }

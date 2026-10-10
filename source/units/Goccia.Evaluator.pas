@@ -61,8 +61,11 @@ function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: T
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateClassMethod(const AClassMethod: TGocciaClassMethod; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
+function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext; const AInferredName: string = ''): TGocciaValue;
+function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer; const AInferredName: string = ''): TGocciaClassValue;
+function IsAnonymousClassExpression(const AExpression: TGocciaExpression): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function EvaluateNamedExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
 function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext): TGocciaValue; overload;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext; out AObjectValue: TGocciaValue): TGocciaValue; overload;
@@ -4819,9 +4822,50 @@ begin
     Exit;
 
   if AValue is TGocciaFunctionValue then
-    TGocciaFunctionValue(AValue).SetInferredName(AName)
-  else if AValue is TGocciaClassValue then
-    TGocciaClassValue(AValue).SetInferredName(AName);
+    TGocciaFunctionValue(AValue).SetInferredName(AName);
+end;
+
+function IsAnonymousClassExpression(const AExpression: TGocciaExpression): Boolean;
+begin
+  Result := (AExpression is TGocciaClassExpression) and
+    (TGocciaClassExpression(AExpression).ClassDefinition.Name = '');
+end;
+
+{ ES2026 §8.4.5 NamedEvaluation. An anonymous class takes the name inside
+  §15.7.14 ClassDefinitionEvaluation, which calls SetFunctionName before any
+  static field or static block runs, so the name goes into the class
+  evaluation instead of onto the finished value. A function's body cannot run
+  before it is named, so a function is named after it is created. The class
+  path repeats EvaluateExpression's generator-resume and coverage bookkeeping,
+  so a class whose value a resumed generator already completed is not
+  evaluated a second time. }
+function EvaluateNamedExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
+var
+  Continuation: TGocciaGeneratorContinuation;
+begin
+  if not IsAnonymousClassExpression(AExpression) then
+  begin
+    Result := EvaluateExpression(AExpression, AContext);
+    ApplyInferredNameForExpression(AExpression, Result, AName);
+    Exit;
+  end;
+
+  Continuation := CurrentGeneratorContinuation;
+  if Assigned(Continuation) and
+     Continuation.TakeCompletedExpressionValue(AExpression, Result) then
+  begin
+    CollectInterpreterMemoryPressure(Result);
+    Exit;
+  end;
+  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      AContext.CurrentFilePath, AExpression.Line);
+  Result := EvaluateClassExpression(TGocciaClassExpression(AExpression),
+    AContext, AName);
+  if Assigned(Continuation) then
+    Continuation.SaveCompletedExpressionValue(AExpression, Result);
+  CollectInterpreterMemoryPressure(Result);
 end;
 
 function EvaluateArray(const AArrayExpression: TGocciaArrayExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -4966,17 +5010,17 @@ begin
 
             if Assigned(PropertyExpression) then
             begin
+              IsProtoSetter := (PropertyName = PROP_PROTO) and
+                AObjectExpression.PropertySourceOrder[I].UsesColonSyntax;
               if PropertyExpression is TGocciaObjectMethodDefinition then
                 PropertyValue := EvaluateObjectMethodDefinition(
                   TGocciaObjectMethodDefinition(PropertyExpression), AContext,
                   Obj, PropertyName)
+              else if IsProtoSetter then
+                PropertyValue := EvaluateExpression(PropertyExpression, AContext)
               else
-                PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-              IsProtoSetter := (PropertyName = PROP_PROTO) and
-                AObjectExpression.PropertySourceOrder[I].UsesColonSyntax;
-              if not IsProtoSetter then
-                ApplyInferredNameForExpression(PropertyExpression,
-                  PropertyValue, PropertyName);
+                PropertyValue := EvaluateNamedExpression(PropertyExpression,
+                  AContext, PropertyName);
 
               if IsProtoSetter then
               begin
@@ -5024,11 +5068,8 @@ begin
                     TGocciaObjectMethodDefinition(PropertyExpression), AContext,
                     Obj, FunctionNameFromPropertyKey(PropertyKey))
                 else
-                begin
-                  PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-                  ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
-                    FunctionNameFromPropertyKey(PropertyKey));
-                end;
+                  PropertyValue := EvaluateNamedExpression(PropertyExpression,
+                    AContext, FunctionNameFromPropertyKey(PropertyKey));
                 if PropertyKey is TGocciaSymbolValue then
                   Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
                 else
@@ -7514,13 +7555,11 @@ begin
   for I := 0 to Length(AUsingDeclaration.Variables) - 1 do
   begin
     // TC39 Explicit Resource Management §3.4 CreateDisposableResource
-    Value := EvaluateExpression(AUsingDeclaration.Variables[I].Initializer, AContext);
+    Value := EvaluateNamedExpression(AUsingDeclaration.Variables[I].Initializer,
+      AContext, AUsingDeclaration.Variables[I].Name);
     if (Value is TGocciaFunctionValue) and
        (TGocciaFunctionValue(Value).Name = '') then
       TGocciaFunctionValue(Value).SetInferredName(
-        AUsingDeclaration.Variables[I].Name)
-    else if Value is TGocciaClassValue then
-      TGocciaClassValue(Value).SetInferredName(
         AUsingDeclaration.Variables[I].Name);
 
     // null and undefined are silently skipped (no error, no disposal)
@@ -8089,7 +8128,6 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8155,16 +8193,6 @@ begin
         end;
       end;
     end;
-  end
-  else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
   end;
 end;
 
@@ -8175,7 +8203,6 @@ procedure InitializeRawPrivateInstanceProperty(
 procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8238,16 +8265,7 @@ begin
     end;
   end
   else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
     InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
-  end;
 end;
 
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -8826,7 +8844,7 @@ begin
   end;
 end;
 
-function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext; const AInferredName: string): TGocciaValue;
 var
   ClassDef: TGocciaClassDefinition;
   InnerContext: TGocciaEvaluationContext;
@@ -8849,7 +8867,7 @@ begin
   end
   else
     Result := EvaluateClassDefinition(ClassDef, AContext,
-      AClassExpression.Line, AClassExpression.Column);
+      AClassExpression.Line, AClassExpression.Column, AInferredName);
 end;
 
 // ES2022 §15.7.14 ClassStaticBlockDefinition: execute static block body
@@ -8967,7 +8985,7 @@ begin
   Result := 0;
 end;
 
-function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
+function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer; const AInferredName: string): TGocciaClassValue;
 var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
@@ -9009,7 +9027,6 @@ var
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   InitializerResults: TArray<TGocciaValue>;
-  AccessorBackingName: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   StaticFieldContext: TGocciaEvaluationContext;
   StaticFieldScope: TGocciaScope;
@@ -9136,6 +9153,50 @@ var
       ClassValue.Prototype.DefineProperty(AName,
         TGocciaPropertyDescriptorAccessor.Create(
           AGetter, ASetter, [pfConfigurable, pfWritable]));
+  end;
+
+  { TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+    `accessor`: the getter and setter are defined together, in element order,
+    with DefinePropertyOrThrow as an enumerable, configurable accessor, so
+    the pair replaces whatever a member declared earlier under the same key
+    defined. AKey is nil for a literal name. }
+  procedure DefineAutoAccessorProperty(const AElem: TGocciaClassElement;
+    const AKey: TGocciaValue);
+  var
+    AccessorGetter, AccessorSetter: TGocciaFunctionValue;
+    Target: TGocciaObjectValue;
+    Descriptor: TGocciaPropertyDescriptorAccessor;
+  begin
+    AccessorGetter := BuildClassGetter(AElem.GetterNode);
+    { Nothing holds the getter until the descriptor is stored. }
+    TGarbageCollector.Instance.AddTempRoot(AccessorGetter);
+    try
+      AccessorSetter := BuildClassSetter(AElem.SetterNode);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(AccessorGetter);
+    end;
+    if Assigned(AKey) then
+    begin
+      AccessorGetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'get'));
+      AccessorSetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'set'));
+    end
+    else
+    begin
+      AccessorGetter.SetInferredName('get ' + AElem.Name);
+      AccessorSetter.SetInferredName('set ' + AElem.Name);
+    end;
+    if AElem.IsStatic then
+      Target := ClassValue
+    else
+      Target := ClassValue.Prototype;
+    Descriptor := TGocciaPropertyDescriptorAccessor.Create(AccessorGetter,
+      AccessorSetter, [pfEnumerable, pfConfigurable]);
+    if AKey is TGocciaSymbolValue then
+      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+    else if Assigned(AKey) then
+      Target.DefineProperty(AKey.ToStringLiteral.Value, Descriptor)
+    else
+      Target.DefineProperty(AElem.Name, Descriptor);
   end;
 
   procedure EvaluateClassCallableElements;
@@ -9302,6 +9363,9 @@ var
             else
               ClassValue.AddSetter(Elem.Name, SetterFunction);
           end;
+          cekAccessor:
+            if not Elem.IsPrivate then
+              DefineAutoAccessorProperty(Elem, nil);
         end;
         Continue;
       end;
@@ -9336,7 +9400,7 @@ var
         cekField:
           ;
         cekAccessor:
-          ;
+          DefineAutoAccessorProperty(Elem, ComputedKey);
         cekMethod:
         begin
           Method := TGocciaMethodValue(EvaluateClassMethod(
@@ -9490,9 +9554,13 @@ begin
       MethodSuperClass := SuperClassValue;
   end;
 
-  // Use the class name if provided, otherwise create an anonymous class
+  // ES2026 §15.7.14 ClassDefinitionEvaluation names the class before any
+  // element is evaluated: the binding name of a named class, else the name
+  // NamedEvaluation passed in, else an anonymous class.
   if AClassDef.Name <> '' then
     ClassName := AClassDef.Name
+  else if AInferredName <> '' then
+    ClassName := AInferredName
   else
     ClassName := '<anonymous>';
 
@@ -9660,53 +9728,13 @@ begin
     ClassValue.SetFieldOrder(FieldOrderEntries);
   end;
 
-  // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    if AClassDef.FElements[I].Kind = cekAccessor then
-    begin
-      Elem := AClassDef.FElements[I];
-      ComputedKey := nil;
-      AccessorBackingName := '__accessor_' + Elem.Name;
-      if Elem.IsComputed then
-      begin
-        if I <= High(ResolvedComputedElementKeys) then
-          ComputedKey := ResolvedComputedElementKeys[I];
-        if not Assigned(ComputedKey) then
-          ComputedKey := ToPropertyKey(EvaluateExpression(
-            Elem.ComputedKeyExpression, ClassStrictContext));
-        AccessorBackingName := '__accessor_computed_' + IntToStr(I);
-      end;
-
-      if Elem.IsPrivate then
-      begin
-        if not Elem.IsStatic then
-          ClassValue.AddPrivateInstanceProperty(Elem.Name,
-            Elem.FieldInitializer);
-        Continue;
-      end;
-
-      if Assigned(Elem.FieldInitializer) then
-        ClassValue.AddInstanceProperty(AccessorBackingName,
-          Elem.FieldInitializer);
-
-      if Elem.IsComputed then
-        ClassValue.AddAutoAccessorWithKey(
-          Elem.Name, ComputedKey, AccessorBackingName, Elem.IsStatic)
-      else
-        ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
-    end;
-  end;
-
   // ES2022 §15.7.14: evaluate static fields and static blocks in source order
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
       ExecuteStaticBlock(Elem.StaticBlockBody, ClassStrictContext, ClassValue)
-    else if ((Elem.Kind = cekField) or
-             ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
-            Elem.IsStatic then
+    else if (Elem.Kind in [cekField, cekAccessor]) and Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
@@ -9727,7 +9755,13 @@ begin
       end
       else
         PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Elem.IsPrivate then
+      { An auto-accessor's value goes to its storage, a private name for a
+        public accessor as well (proposal-decorators InitializeFieldOrAccessor
+        on F with the element's [[BackingStorageKey]]). }
+      if Elem.Kind = cekAccessor then
+        ClassValue.AddPrivateStaticProperty(Elem.AccessorStorageName,
+          PropertyValue)
+      else if Elem.IsPrivate then
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
@@ -10153,8 +10187,12 @@ begin
 
       ContextObject := TGocciaObjectValue.Create;
       ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('class'));
+      // The decorator context's name is the class's name, including one an
+      // anonymous class took from its context, as bytecode mode reports.
       if AClassDef.Name <> '' then
         ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AClassDef.Name))
+      else if AInferredName <> '' then
+        ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AInferredName))
       else
         ContextObject.AssignProperty(PROP_NAME, TGocciaUndefinedLiteralValue.UndefinedValue);
       ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
@@ -12224,21 +12262,22 @@ begin
   Result := '';
 end;
 
-procedure ApplyInferredNameForDefaultInitializer(
+// A default initializer whose target is a single identifier is evaluated with
+// ES2026 §8.4.5 NamedEvaluation (SingleNameBinding, AssignmentProperty and
+// AssignmentElement all do this when the initializer is an anonymous function
+// or class definition).
+function EvaluateDefaultInitializer(
   const APattern: TGocciaDestructuringPattern;
-  const AInitializer: TGocciaExpression; const AValue: TGocciaValue);
+  const AInitializer: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Name: string;
 begin
-  if not IsAnonymousFunctionNameExpression(AInitializer) then
-    Exit;
   Name := SingleIdentifierPatternName(APattern);
   if Name = '' then
-    Exit;
-  if AValue is TGocciaFunctionValue then
-    TGocciaFunctionValue(AValue).SetInferredName(Name)
-  else if AValue is TGocciaClassValue then
-    TGocciaClassValue(AValue).SetInferredName(Name);
+    Result := EvaluateExpression(AInitializer, AContext)
+  else
+    Result := EvaluateNamedExpression(AInitializer, AContext, Name);
 end;
 
 procedure InitPreparedDestructuringReference(
@@ -12489,9 +12528,8 @@ begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(AssignPat.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(AssignPat.Left, AssignPat.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(AssignPat.Left,
+        AssignPat.Right, AContext);
     end
     else
       DefaultValue := AValue;
@@ -12770,9 +12808,8 @@ begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(AssignPat.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(AssignPat.Left, AssignPat.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(AssignPat.Left,
+        AssignPat.Right, AContext);
     end
     else
       DefaultValue := AValue;
@@ -13174,9 +13211,8 @@ begin
 
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(APattern.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(APattern.Left, APattern.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(APattern.Left,
+        APattern.Right, AContext);
     end
     else
       DefaultValue := AValue;

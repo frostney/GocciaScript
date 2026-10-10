@@ -87,7 +87,9 @@ procedure CompileClassDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaClassDeclaration);
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AInferredNameKeyReg: Integer = -1);
+procedure CompileValueWithComputedName(const ACtx: TGocciaCompilationContext;
+  const AExpression: TGocciaExpression; const ADest, AKeyReg: UInt16);
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
@@ -117,6 +119,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
   Goccia.Bytecode.Debug,
+  Goccia.Compiler.BlockFunctions,
   Goccia.Compiler.ConstantFolding,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Expressions,
@@ -758,14 +761,105 @@ begin
     ((Mask and (UInt64(1) shl AIndex)) <> 0);
 end;
 
+// True when AName, at the current point, resolves to a block-level binding
+// rather than to the var binding, which has scope depth 0. ES2026 B.3.4 lets a
+// var redeclare one such name, a catch parameter. Every other block-level
+// binding a var redeclares is an early SyntaxError that the parser does not
+// report yet; there, too, the initializer assigns the inner binding.
+function VarNameResolvesToBlockBinding(const AScope: TGocciaCompilerScope;
+  const AName: string): Boolean;
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := AScope.ResolveLocal(AName);
+  Result := (LocalIdx >= 0) and (AScope.GetLocal(LocalIdx).Depth > 0);
+end;
+
+// Compiles a declaration's initializer into ADestReg. An anonymous function or
+// class initializer takes the binding's name (ES2026 §8.4.5 NamedEvaluation).
+procedure CompileNamedInitializer(const ACtx: TGocciaCompilationContext;
+  const AInitializer: TGocciaExpression; const AName: string;
+  const ADestReg: UInt16);
+var
+  FuncCount: Integer;
+  InferredTemplate: TGocciaFunctionTemplate;
+begin
+  FuncCount := ACtx.Template.FunctionCount;
+  if (AInitializer is TGocciaClassExpression) and
+     (TGocciaClassExpression(AInitializer).ClassDefinition.Name = '') then
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AInitializer).ClassDefinition, ADestReg, AName)
+  else
+    ACtx.CompileExpression(AInitializer, ADestReg);
+
+  if ((AInitializer is TGocciaArrowFunctionExpression) or
+      (AInitializer is TGocciaFunctionExpression)) and
+     (ACtx.Template.FunctionCount > FuncCount) then
+  begin
+    InferredTemplate := ACtx.Template.GetFunction(
+      ACtx.Template.FunctionCount - 1);
+    if (InferredTemplate.Name = '<arrow>') or
+       (InferredTemplate.Name = '<function>') or
+       (InferredTemplate.Name = '<method>') then
+      InferredTemplate.Name := AName;
+  end;
+end;
+
+// ES2026 §14.3.2.1: `var x = value` evaluates ResolveBinding("x") and assigns
+// value to it. Inside `catch (x)` that binding is the catch parameter, not the
+// hoisted var (B.3.4), so the initializer is an assignment to the catch
+// parameter, typed as the catch parameter is. The hoisted var binding only has
+// to exist: at a global-backed top level it is created here without a value.
+procedure CompileBlockBindingVarInitializer(
+  const ACtx: TGocciaCompilationContext; const AInfo: TGocciaVariableInfo;
+  const AVarSlot: UInt16);
+var
+  LocalIdx: Integer;
+  ValueReg: UInt16;
+  AnnotationType: TGocciaLocalType;
+begin
+  if ACtx.GlobalBackedTopLevel then
+  begin
+    LocalIdx := FindLocalBySlot(ACtx.Scope, AInfo.Name, AVarSlot);
+    if LocalIdx >= 0 then
+      ACtx.Scope.MarkGlobalBacked(LocalIdx);
+    EmitGlobalDefine(ACtx, AVarSlot, AInfo.Name, False, True, False);
+  end;
+
+  ValueReg := ACtx.Scope.AllocateRegister;
+  try
+    CompileNamedInitializer(ACtx, AInfo.Initializer, AInfo.Name, ValueReg);
+
+    // The declaration's own annotation still constrains its initializer, as
+    // it does for a var that receives the value.
+    AnnotationType := TypeAnnotationToLocalType(AInfo.TypeAnnotation);
+    if ACtx.StrictTypes and (AnnotationType <> sltUntyped) and
+       not IsUndefinedInitializer(AInfo.Initializer) and
+       not TypesAreCompatible(InferLocalType(AInfo.Initializer),
+         AnnotationType) then
+      EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, ValueReg,
+        UInt8(Ord(AnnotationType)), 0));
+
+    EmitBindingAssignmentFromRegister(ACtx, AInfo.Name, ValueReg, True);
+  finally
+    ACtx.Scope.FreeRegister;
+  end;
+end;
+
+function VarInitializerUsesWithBinding(
+  const ACtx: TGocciaCompilationContext): Boolean;
+begin
+  Result := (ACtx.Scope.WithBindingCount > 0) and
+    (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+end;
+
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 var
-  I, FuncCount, LocalIdx: Integer;
+  I, LocalIdx, DeclaredIdx: Integer;
   Info: TGocciaVariableInfo;
   Slot: UInt16;
   TargetObjReg, ProbeObjReg, KeyReg, CondReg: UInt16;
-  InferredTemplate: TGocciaFunctionTemplate;
   TypeHint, AnnotationType: TGocciaLocalType;
   ConstantValue: TGocciaCompileTimeValue;
   ConstantType: TGocciaLocalType;
@@ -822,6 +916,13 @@ begin
       LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
       IsVarRedeclaration := LocalIdx >= 0;
       Slot := ACtx.Scope.DeclareVarLocal(Info.Name);
+      if Info.HasInitializer and Assigned(Info.Initializer) and
+         not VarInitializerUsesWithBinding(ACtx) and
+         VarNameResolvesToBlockBinding(ACtx.Scope, Info.Name) then
+      begin
+        CompileBlockBindingVarInitializer(ACtx, Info, Slot);
+        Continue;
+      end;
     end
     else
     begin
@@ -850,17 +951,34 @@ begin
     HasRealInitializer := Assigned(Info.Initializer) and
                           not IsUndefinedInitializer(Info.Initializer);
     UseWithVarInitializer := AStmt.IsVar and HasInitializer and
-      (ACtx.Scope.WithBindingCount > 0) and
-      (ACtx.Scope.GetWithBindingDepth(ACtx.Scope.WithBindingCount - 1) >= 0);
+      VarInitializerUsesWithBinding(ACtx);
 
     AnnotationType := TypeAnnotationToLocalType(Info.TypeAnnotation);
 
+    // Under strict types a hint is enforced on every assignment, so a
+    // reassignable binding takes one only from the initializer forms
+    // InferLocalType names, the rule the interpreter applies. The wider
+    // inference is not kept as an unenforced hint there: typed opcodes do not
+    // check their operands, and the binding may hold another type by then.
     if (AnnotationType <> sltUntyped) and ACtx.StrictTypes then
       TypeHint := AnnotationType
-    else if (Info.TypeAnnotation = '') and HasRealInitializer then
-      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer)
+    else if (Info.TypeAnnotation <> '') or not HasRealInitializer then
+      TypeHint := sltUntyped
+    else if ACtx.StrictTypes and not AStmt.IsConst then
+      TypeHint := InferLocalType(Info.Initializer)
     else
-      TypeHint := sltUntyped;
+      TypeHint := InferredExpressionType(ACtx.Scope, Info.Initializer);
+
+    // A var redeclaration stores into the existing var binding, so an
+    // initializer that brings no type of its own is checked against the type
+    // enforced on that binding. ResolveLocal could pick a same-named catch
+    // parameter instead (ES2026 B.3.4), which is not the slot written here.
+    if (TypeHint = sltUntyped) and IsVarRedeclaration then
+    begin
+      LocalIdx := FindVarLocalIndex(ACtx.Scope, Info.Name);
+      if (LocalIdx >= 0) and ACtx.Scope.GetLocal(LocalIdx).IsStrictlyTyped then
+        TypeHint := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
+    end;
 
     { Strict-types enforcement is opt-in via --strict-types / config.
       When disabled, type annotations are parsed but not enforced. }
@@ -881,9 +999,17 @@ begin
         TypeHint := sltUntyped;
     end;
 
+    // The type belongs to the declared binding. For a var that is the
+    // depth-0 var local; ResolveLocal could find a same-named catch parameter
+    // (ES2026 B.3.4), which would then be typed from a binding it is not.
+    if AStmt.IsVar then
+      DeclaredIdx := FindVarLocalIndex(ACtx.Scope, Info.Name)
+    else
+      DeclaredIdx := ACtx.Scope.ResolveLocal(Info.Name);
+
     if TypeHint <> sltUntyped then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeHint(LocalIdx, TypeHint);
@@ -899,7 +1025,7 @@ begin
 
     if Info.TypeAnnotation <> '' then
     begin
-      LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
+      LocalIdx := DeclaredIdx;
       if LocalIdx >= 0 then
       begin
         ACtx.Scope.SetLocalTypeAnnotation(LocalIdx, Info.TypeAnnotation);
@@ -957,34 +1083,12 @@ begin
         for LocalIdx := 0 to ProbeEndCount - 1 do
           PatchJumpTarget(ACtx, ProbeEndJumps[LocalIdx]);
 
-        FuncCount := ACtx.Template.FunctionCount;
-
-        if (Info.Initializer is TGocciaClassExpression) and
-           (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-          CompileClassExpression(ACtx,
-            TGocciaClassExpression(Info.Initializer).ClassDefinition,
-            InitSlot, Info.Name)
-        else
-          ACtx.CompileExpression(Info.Initializer, InitSlot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
 
         if IsStrict and HasRealInitializer then
           if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
             EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, InitSlot,
               UInt8(Ord(TypeHint)), 0));
-
-        if (Info.Initializer is TGocciaArrowFunctionExpression) or
-           (Info.Initializer is TGocciaFunctionExpression) then
-        begin
-          if ACtx.Template.FunctionCount > FuncCount then
-          begin
-            InferredTemplate := ACtx.Template.GetFunction(
-              ACtx.Template.FunctionCount - 1);
-            if (InferredTemplate.Name = '<arrow>') or
-               (InferredTemplate.Name = '<function>') or
-               (InferredTemplate.Name = '<method>') then
-              InferredTemplate.Name := Info.Name;
-          end;
-        end;
 
         TargetMissJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
           TargetObjReg, GOCCIA_NULLISH_MATCH_HOLE);
@@ -1009,19 +1113,11 @@ begin
     else if Assigned(Info.Initializer) and
        not (AStmt.IsVar and (not HasInitializer) and IsVarRedeclaration) then
     begin
-      FuncCount := ACtx.Template.FunctionCount;
-
       if not AStmt.IsVar then
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
-          if (Info.Initializer is TGocciaClassExpression) and
-             (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-            CompileClassExpression(ACtx,
-              TGocciaClassExpression(Info.Initializer).ClassDefinition,
-              InitSlot, Info.Name)
-          else
-            ACtx.CompileExpression(Info.Initializer, InitSlot);
+          CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
           // Keep the lexical binding in its hole state until the entire
           // initializer has completed. Initializers that reference or assign
           // the binding must therefore observe the TDZ.
@@ -1030,32 +1126,13 @@ begin
           ACtx.Scope.FreeRegister;
         end;
       end
-      else if (Info.Initializer is TGocciaClassExpression) and
-              (TGocciaClassExpression(Info.Initializer).ClassDefinition.Name = '') then
-        CompileClassExpression(ACtx,
-          TGocciaClassExpression(Info.Initializer).ClassDefinition, Slot,
-          Info.Name)
       else
-        ACtx.CompileExpression(Info.Initializer, Slot);
+        CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, Slot);
 
       if IsStrict and HasRealInitializer then
         if not TypesAreCompatible(InferLocalType(Info.Initializer), TypeHint) then
           EmitInstruction(ACtx, EncodeABC(OP_CHECK_TYPE, Slot,
             UInt8(Ord(TypeHint)), 0));
-
-      if (Info.Initializer is TGocciaArrowFunctionExpression) or
-         (Info.Initializer is TGocciaFunctionExpression) then
-      begin
-        if ACtx.Template.FunctionCount > FuncCount then
-        begin
-          InferredTemplate := ACtx.Template.GetFunction(
-            ACtx.Template.FunctionCount - 1);
-          if (InferredTemplate.Name = '<arrow>') or
-             (InferredTemplate.Name = '<function>') or
-             (InferredTemplate.Name = '<method>') then
-            InferredTemplate.Name := Info.Name;
-        end;
-      end;
     end
     else if not (AStmt.IsVar and IsVarRedeclaration) then
       // Only emit OP_LOAD_UNDEFINED if not a var redeclaration (preserve prior value)
@@ -1210,6 +1287,12 @@ begin
     EmitGlobalDefine(ACtx, Slot, AStmt.Name, False, True, True, True);
 end;
 
+// ES2026 §10.2.11 FunctionDeclarationInstantiation(func, argumentsList) and
+// §16.1.7 GlobalDeclarationInstantiation(script, env), web-compat steps: when
+// a block-level function declaration has a var binding, evaluating it stores
+// the block's binding of the function into the var binding. A declaration
+// whose name a parameter or a lexical declaration has gets no var binding
+// (Goccia.Compiler.BlockFunctions) and evaluates to nothing here.
 procedure CompileCompatBlockFunctionActivation(
   const ACtx: TGocciaCompilationContext; const AStmt: TGocciaFunctionDeclaration);
 var
@@ -1220,7 +1303,7 @@ begin
      (not ACtx.CompatibilityNonStrictMode) or
      (ACtx.Scope.Depth = 0) then
     Exit;
-  if AStmt.FunctionExpression.IsAsync or AStmt.FunctionExpression.IsGenerator then
+  if not BlockFunctionHasVarBinding(ACtx.BlockFunctionVarBindings, AStmt) then
     Exit;
 
   LocalIdx := ACtx.Scope.ResolveLocal(AStmt.Name);
@@ -2239,6 +2322,33 @@ begin
   end;
 end;
 
+// ES2026 §B.3.3 FunctionDeclarations in IfStatement Statement Clauses: a
+// function declaration that is the whole body of an if or else clause, which
+// the parser accepts only in non-strict code, behaves as the only statement of
+// a block. Its binding is the block's, and the web-compat step decides whether
+// it reaches a var binding (CompileCompatBlockFunctionActivation).
+function CompileIfClause(const ACtx: TGocciaCompilationContext;
+  const AClause: TGocciaStatement): Boolean;
+var
+  Declaration: TGocciaFunctionDeclaration;
+  ClosedLocals: TArray<UInt16>;
+  ClosedCount, I: Integer;
+begin
+  if not (AClause is TGocciaFunctionDeclaration) then
+    Exit(ACtx.CompileStatement(AClause));
+
+  Declaration := TGocciaFunctionDeclaration(AClause);
+  ACtx.Scope.BeginScope;
+  PredeclareBlockFunctionLocal(Declaration, ACtx.Scope);
+  ACtx.CompileStatement(Declaration);
+  CompileCompatBlockFunctionActivation(ACtx, Declaration);
+  ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
+  for I := 0 to ClosedCount - 1 do
+    EmitInstruction(ACtx, EncodeABx(OP_CLOSE_UPVALUE, 0,
+      UInt16(ClosedLocals[I])));
+  Result := False;
+end;
+
 function CompileIfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaIfStatement): Boolean;
 var
@@ -2271,9 +2381,9 @@ begin
      TryEvaluateConstantExpression(ACtx, AStmt.Condition, ConditionValue) then
   begin
     if CompileTimeValueToBoolean(ConditionValue) then
-      Result := ACtx.CompileStatement(AStmt.Consequent)
+      Result := CompileIfClause(ACtx, AStmt.Consequent)
     else if Assigned(AStmt.Alternate) then
-      Result := ACtx.CompileStatement(AStmt.Alternate);
+      Result := CompileIfClause(ACtx, AStmt.Alternate);
     Exit;
   end;
 
@@ -2291,7 +2401,7 @@ begin
       ACtx.CompileExpression(AStmt.Condition, CondReg);
       ElseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, CondReg);
     end;
-    ConsequentAbrupt := ACtx.CompileStatement(AStmt.Consequent);
+    ConsequentAbrupt := CompileIfClause(ACtx, AStmt.Consequent);
 
     if HasPatternBindings then
     begin
@@ -2305,7 +2415,7 @@ begin
       EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
       PatchJumpTarget(ACtx, ElseJump);
       PatchPatternFailureTarget;
-      AlternateAbrupt := ACtx.CompileStatement(AStmt.Alternate);
+      AlternateAbrupt := CompileIfClause(ACtx, AStmt.Alternate);
       PatchJumpTarget(ACtx, EndJump);
       Result := ConsequentAbrupt and AlternateAbrupt;
     end
@@ -4339,9 +4449,9 @@ var
   Pair: TStringStringMap.TKeyValuePair;
   Slots: array of UInt16;
   Captured: array of Boolean;
-  Names: array of string;
+  Names, LocalNames: array of string;
   EncodedPath: string;
-  HasNamespace, NamespaceCaptured: Boolean;
+  HasNamespace, NamespaceCaptured, InitializesGlobalBindings: Boolean;
   I, Count: Integer;
 
   function ImportSlot(const AName: string): UInt16;
@@ -4385,8 +4495,15 @@ begin
   SetLength(Slots, Count);
   SetLength(Captured, Count);
   SetLength(Names, Count);
+  SetLength(LocalNames, Count);
   EncodedPath := EncodeImportSpecifierAttribute(AStmt.ModulePath,
     AStmt.AttributeType);
+  // A linked module's environment already holds its import bindings. A
+  // global-backed script has no link step, so the declaration initializes the
+  // names predeclared in the global scope, where a later script against that
+  // scope (the next REPL input) resolves them.
+  InitializesGlobalBindings := ACtx.GlobalBackedTopLevel and
+    (ACtx.Scope.Depth = 0) and not ACtx.PreinitializedTopLevelFunctions;
 
   if HasNamespace then
   begin
@@ -4400,6 +4517,7 @@ begin
   begin
     Slots[I] := ImportSlot(Pair.Key);
     Names[I] := Pair.Value;
+    LocalNames[I] := Pair.Key;
     if AStmt.Phase = icpEvaluation then
       MarkImportSlot(Pair.Key, Pair.Value)
     else
@@ -4421,6 +4539,8 @@ begin
   begin
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, NamespaceSlot, ModReg, 0));
     SyncCapturedImportSlot(NamespaceSlot, NamespaceCaptured);
+    if InitializesGlobalBindings then
+      EmitGlobalDefine(ACtx, NamespaceSlot, AStmt.NamespaceName, True);
   end;
 
   for I := 0 to Count - 1 do
@@ -4446,6 +4566,17 @@ begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slots[I], ModReg, 0));
       SyncCapturedImportSlot(Slots[I], Captured[I]);
     end;
+
+    if not InitializesGlobalBindings then
+      Continue;
+    if AStmt.Phase = icpEvaluation then
+    begin
+      NameIdx := ACtx.Template.AddConstantString(LocalNames[I]);
+      EmitInstruction(ACtx, EncodeABC(OP_CREATE_GLOBAL_IMPORT_BINDING, ModReg,
+        NameIdx, ACtx.Template.AddConstantString(Names[I])));
+    end
+    else
+      EmitGlobalDefine(ACtx, Slots[I], LocalNames[I], True);
   end;
 
   ACtx.Scope.FreeRegister;
@@ -5186,7 +5317,7 @@ var
   FuncIdx: UInt16;
   MethodReg: UInt16;
   MethodNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
   DisplayName: string;
   OldDerivedGuard: Boolean;
@@ -5210,7 +5341,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5218,8 +5348,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5260,15 +5388,8 @@ begin
     EmitInstruction(ChildCtx, EncodeABC(OP_LOAD_FALSE,
       UInt16(ChildScope.ResolveLocal(DERIVED_THIS_INITIALIZED_LOCAL)), 0, 0));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5438,8 +5559,8 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5612,8 +5733,8 @@ begin
   EmitCreateArgumentsObject(ChildCtx, ArgumentsSlot,
     ChildCtx.NonStrictMode and ParameterListIsSimple(SetterParams),
     Length(SetterParams));
-  EmitDefaultParameters(ChildCtx, SetterParams);
-  EmitDestructuringParameters(ChildCtx, SetterParams);
+  EmitParameterInitialization(ChildCtx, SetterParams);
+  EmitBodyVarEnvironment(ChildCtx, SetterParams, ASetter.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -5659,7 +5780,7 @@ var
   FuncIdx: UInt16;
   FnReg, TargetReg: UInt16;
   ProtoNameIdx: UInt16;
-  FormalCount, RestParamIndex, I: Integer;
+  FormalCount, I: Integer;
   ArgumentsSlot: Integer;
 begin
   OldTemplate := ACtx.Template;
@@ -5679,7 +5800,6 @@ begin
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
 
   FormalCount := -1;
-  RestParamIndex := -1;
   for I := 0 to High(AMethod.Parameters) do
   begin
     if AMethod.Parameters[I].IsRest or
@@ -5687,8 +5807,6 @@ begin
     begin
       if FormalCount < 0 then
         FormalCount := I;
-      if AMethod.Parameters[I].IsRest then
-        RestParamIndex := I;
     end;
     if AMethod.Parameters[I].IsPattern then
       ChildScope.DeclareLocal(SyntheticParamLocalName(I), False)
@@ -5720,15 +5838,8 @@ begin
     ChildCtx.NonStrictMode and ParameterListIsSimple(AMethod.Parameters),
     Length(AMethod.Parameters));
 
-  if (RestParamIndex >= 0) and
-     not ParameterListHasDefaultValues(AMethod.Parameters) then
-    EmitInstruction(ChildCtx, EncodeABC(OP_PACK_ARGS,
-      UInt16(ChildScope.ResolveLocal(
-        AMethod.Parameters[RestParamIndex].Name)),
-      UInt16(RestParamIndex), 0));
-
-  EmitDefaultParameters(ChildCtx, AMethod.Parameters);
-  EmitDestructuringParameters(ChildCtx, AMethod.Parameters);
+  EmitParameterInitialization(ChildCtx, AMethod.Parameters);
+  EmitBodyVarEnvironment(ChildCtx, AMethod.Parameters, AMethod.Body);
   if ChildTemplate.CodeCount > High(UInt16) then
     raise Exception.Create('Parameter preamble is too large to encode');
   ChildTemplate.ParameterPreambleSize := UInt16(ChildTemplate.CodeCount);
@@ -6135,25 +6246,37 @@ begin
             Elem.MethodNode, OP_CLASS_ADD_METHOD_CONST,
             AHasSuper and (Elem.Name = PROP_CONSTRUCTOR));
       cekAccessor:
-        ; // Auto-accessor installation consumes the captured property key later.
+        { proposal-decorators ClassFieldDefinitionEvaluation: a public
+          auto-accessor's getter and setter are defined here, in element
+          order. Both halves name the class; the VM puts the instance pair on
+          its prototype (ACCESSOR_FLAG_AUTO). A private one is a private field
+          whose name CompilePrivateAutoAccessorDeclarations declares. }
+        if not Elem.IsPrivate then
+        begin
+          AccessorFlags := ACCESSOR_FLAG_AUTO;
+          if Elem.IsStatic then
+            AccessorFlags := AccessorFlags or ACCESSOR_FLAG_STATIC;
+          if Elem.IsComputed then
+          begin
+            CompileComputedGetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.GetterNode, OP_DEFINE_ACCESSOR_DYNAMIC, AccessorFlags);
+            CompileComputedSetterBody(ACtx, ATargetReg, KeyReg,
+              Elem.SetterNode, OP_DEFINE_ACCESSOR_DYNAMIC,
+              AccessorFlags or ACCESSOR_FLAG_SETTER);
+          end
+          else
+          begin
+            CompileGetterBody(ACtx, ATargetReg, Elem.Name, Elem.GetterNode,
+              OP_DEFINE_ACCESSOR_CONST, AccessorFlags);
+            CompileSetterBody(ACtx, ATargetReg, Elem.Name, Elem.SetterNode,
+              OP_DEFINE_ACCESSOR_CONST, AccessorFlags or ACCESSOR_FLAG_SETTER);
+          end;
+        end;
     end;
 
     if Elem.IsComputed and not KeyIsLocal then
       ACtx.Scope.FreeRegister;
   end;
-end;
-
-function HasAccessorInitializers(
-  const AClassDef: TGocciaClassDefinition): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(AClassDef.FElements) do
-    if (AClassDef.FElements[I].Kind = cekAccessor) and
-       (AClassDef.FElements[I].IsPrivate or
-        Assigned(AClassDef.FElements[I].FieldInitializer)) then
-      Exit(True);
-  Result := False;
 end;
 
 function HasComputedInstanceFields(
@@ -6200,6 +6323,37 @@ begin
     ACtx, AExpression, ADest, AInferredName);
 end;
 
+// The value of a property or field whose key is computed: an anonymous
+// function or class is named from the key in AKeyReg (ES2026 §8.4.5
+// NamedEvaluation). A class takes the name during its own evaluation; a
+// function, whose body cannot run first, once it exists.
+procedure CompileValueWithComputedName(const ACtx: TGocciaCompilationContext;
+  const AExpression: TGocciaExpression; const ADest, AKeyReg: UInt16);
+begin
+  if not Assigned(AExpression) then
+  begin
+    EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ADest, 0));
+    Exit;
+  end;
+
+  if (AExpression is TGocciaClassExpression) and
+     (TGocciaClassExpression(AExpression).ClassDefinition.Name = '') then
+  begin
+    // CompileExpression maps the line before it dispatches; this path
+    // bypasses it, so coverage still sees the class's line.
+    EmitLineMapping(ACtx, AExpression.Line, AExpression.Column);
+    CompileClassExpression(ACtx,
+      TGocciaClassExpression(AExpression).ClassDefinition, ADest, '',
+      AKeyReg);
+    Exit;
+  end;
+
+  ACtx.CompileExpression(AExpression, ADest);
+  if IsAnonymousFunctionNameInitializer(AExpression) then
+    EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest, AKeyReg,
+      FUNCTION_NAME_PREFIX_NONE));
+end;
+
 { An initializer containing `yield` or `await` is an early error in
   ECMAScript, but the parser accepts it inside a generator or async function.
   Such an initializer is compiled inline into the enclosing function, as all
@@ -6208,7 +6362,7 @@ end;
 procedure CompileInlineStaticFieldInitializer(
   const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
   const AExpression: TGocciaExpression; const ADest: UInt16;
-  const AInferredName: string);
+  const AInferredName: string; const AInferredNameKeyReg: Integer);
 var
   ClosedLocals: TArray<UInt16>;
   ClosedCount, I: Integer;
@@ -6235,8 +6389,12 @@ begin
   try
     ThisReg := ACtx.Scope.DeclareLocal(KEYWORD_THIS, False);
     EmitInstruction(ACtx, EncodeABC(OP_MOVE, ThisReg, AClassReg, 0));
-    CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
-      AInferredName);
+    if AInferredNameKeyReg >= 0 then
+      CompileValueWithComputedName(StrictCtx, AExpression, ADest,
+        UInt16(AInferredNameKeyReg))
+    else
+      CompileFieldValueWithInferredName(StrictCtx, AExpression, ADest,
+        AInferredName);
     ACtx.Scope.EndScope(ClosedLocals, ClosedCount);
     for I := 0 to ClosedCount - 1 do
       EmitInstruction(ACtx,
@@ -6263,7 +6421,7 @@ end;
 procedure CompileStaticFieldInitializerExpression(
   const ACtx: TGocciaCompilationContext; const AClassReg: UInt16;
   const AExpression: TGocciaExpression; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AComputedKeyLocal: string = '');
 var
   OldTemplate: TGocciaFunctionTemplate;
   OldScope: TGocciaCompilerScope;
@@ -6271,8 +6429,8 @@ var
   ChildScope: TGocciaCompilerScope;
   ChildCtx: TGocciaCompilationContext;
   FuncIdx: UInt16;
-  ValReg: UInt16;
-  I: Integer;
+  ValReg, KeyReg: UInt16;
+  I, KeyLocalIdx, UpvalueIdx: Integer;
 begin
   if not Assigned(AExpression) then
   begin
@@ -6281,8 +6439,17 @@ begin
   end;
   if Goccia.Compiler.Expressions.ExpressionContainsSuspension(AExpression) then
   begin
-    CompileInlineStaticFieldInitializer(ACtx, AClassReg, AExpression, ADest,
-      AInferredName);
+    if AComputedKeyLocal <> '' then
+    begin
+      KeyLocalIdx := ACtx.Scope.ResolveLocal(AComputedKeyLocal);
+      if KeyLocalIdx < 0 then
+        raise Exception.Create('Compiler error: computed static field key was not captured');
+      CompileInlineStaticFieldInitializer(ACtx, AClassReg, AExpression, ADest,
+        '', ACtx.Scope.GetLocal(KeyLocalIdx).Slot);
+    end
+    else
+      CompileInlineStaticFieldInitializer(ACtx, AClassReg, AExpression, ADest,
+        AInferredName, -1);
     Exit;
   end;
 
@@ -6311,8 +6478,21 @@ begin
     ACtx.SetNonStrictMode(False);
   try
     ValReg := ChildScope.AllocateRegister;
-    CompileFieldValueWithInferredName(ChildCtx, AExpression, ValReg,
-      AInferredName);
+    if AComputedKeyLocal <> '' then
+    begin
+      { The key was evaluated with the class's other computed keys; the
+        initializer names an anonymous function or class from it. }
+      KeyReg := ChildScope.AllocateRegister;
+      UpvalueIdx := ChildScope.ResolveUpvalue(AComputedKeyLocal);
+      if UpvalueIdx < 0 then
+        raise Exception.Create('Compiler error: computed static field key was not captured');
+      EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+        UInt16(UpvalueIdx)));
+      CompileValueWithComputedName(ChildCtx, AExpression, ValReg, KeyReg);
+    end
+    else
+      CompileFieldValueWithInferredName(ChildCtx, AExpression, ValReg,
+        AInferredName);
     EmitInstruction(ChildCtx, EncodeABC(OP_RETURN, ValReg, 0, 0));
   finally
     if Assigned(ACtx.SetNonStrictMode) then
@@ -6357,8 +6537,13 @@ var
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
 begin
   for I := 0 to High(AClassDef.FElements) do
+  begin
     if AClassDef.FElements[I].IsPrivate then
       RegisterPrivateName(AScope, AClassDef.FElements[I].Name, APrefix);
+    if AClassDef.FElements[I].Kind = cekAccessor then
+      RegisterPrivateName(AScope, AClassDef.FElements[I].AccessorStorageName,
+        APrefix);
+  end;
   for I := 0 to High(AClassDef.FFieldOrder) do
     if AClassDef.FFieldOrder[I].IsPrivate then
       RegisterPrivateName(AScope, AClassDef.FFieldOrder[I].Name, APrefix);
@@ -6395,12 +6580,10 @@ var
   FuncIdx: UInt16;
   FnReg: UInt16;
   ValReg, ThisReg, KeyReg: UInt16;
-  KeyIdx: UInt16;
   I, UpvalueIdx: Integer;
   Entry: TGocciaExpressionMap.TKeyValuePair;
   Elem: TGocciaClassElement;
   ComputedKeyName: string;
-  AccessorBackingName: string;
 begin
   OldTemplate := ACtx.Template;
   OldScope := ACtx.Scope;
@@ -6430,8 +6613,6 @@ begin
       ValReg := ChildScope.AllocateRegister;
       if AClassDef.FFieldOrder[I].IsComputed then
       begin
-        CompileFieldValueWithInferredName(ChildCtx,
-          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, '');
         KeyReg := ChildScope.AllocateRegister;
         ComputedKeyName := FindComputedFieldKeyLocalName(
           AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
@@ -6440,15 +6621,40 @@ begin
           raise Exception.Create('Compiler error: computed class field key was not captured');
         EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
           UInt16(UpvalueIdx)));
-        if IsAnonymousFunctionNameInitializer(
-           AClassDef.FFieldOrder[I].FieldInitializer) then
-          EmitInstruction(ChildCtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-            KeyReg, 0));
+        CompileValueWithComputedName(ChildCtx,
+          AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
         EmitInstruction(ChildCtx, EncodeABC(OP_DEFINE_PROP_DYNAMIC, ThisReg,
           KeyReg, ValReg));
         ChildScope.FreeRegister;
         ChildScope.FreeRegister;
         Continue;
+      end
+      else if AClassDef.FFieldOrder[I].IsAutoAccessorStorage then
+      begin
+        { An auto-accessor's initializer is named after the accessor
+          ([[ClassFieldInitializerName]]), not after its storage. }
+        Elem := AClassDef.FElements[AClassDef.FFieldOrder[I].ElementIndex];
+        if Elem.IsComputed then
+        begin
+          KeyReg := ChildScope.AllocateRegister;
+          ComputedKeyName := FindComputedFieldKeyLocalName(
+            AComputedFieldKeyLocals, AClassDef.FFieldOrder[I].ElementIndex);
+          UpvalueIdx := ChildScope.ResolveUpvalue(ComputedKeyName);
+          if UpvalueIdx < 0 then
+            raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
+          EmitInstruction(ChildCtx, EncodeABx(OP_GET_UPVALUE, KeyReg,
+            UInt16(UpvalueIdx)));
+          CompileValueWithComputedName(ChildCtx,
+            AClassDef.FFieldOrder[I].FieldInitializer, ValReg, KeyReg);
+          ChildScope.FreeRegister;
+        end
+        else
+          CompileFieldValueWithInferredName(ChildCtx,
+            AClassDef.FFieldOrder[I].FieldInitializer, ValReg,
+            ClassFieldInferredName(Elem));
+        EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
+          '#slot:' + ChildScope.ResolvePrivatePrefix +
+          AClassDef.FFieldOrder[I].Name);
       end
       else if AClassDef.FFieldOrder[I].IsPrivate then
       begin
@@ -6488,47 +6694,6 @@ begin
         '#slot:' + ChildScope.ResolvePrivatePrefix + Entry.Key);
       ChildScope.FreeRegister;
     end;
-  end;
-
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    if Elem.IsStatic or
-       (Elem.Kind <> cekAccessor) or
-       ((not Elem.IsPrivate) and not Assigned(Elem.FieldInitializer)) then
-      Continue;
-    ValReg := ChildScope.AllocateRegister;
-    if Assigned(Elem.FieldInitializer) then
-      ACtx.CompileExpression(Elem.FieldInitializer, ValReg)
-    else
-      EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-    if Elem.IsPrivate then
-      AccessorBackingName := '#slot:' + ChildScope.ResolvePrivatePrefix +
-        Elem.Name
-    else if Elem.IsComputed then
-      AccessorBackingName := '__accessor_computed_' + IntToStr(I)
-    else
-      AccessorBackingName := '__accessor_' + Elem.Name;
-    if Elem.IsPrivate then
-    begin
-      EmitDefineStaticPropertyByName(ChildCtx, ThisReg, ValReg,
-        AccessorBackingName);
-      ChildScope.FreeRegister;
-      Continue;
-    end;
-    KeyIdx := ChildTemplate.AddConstantString(AccessorBackingName);
-    if KeyIdx <= High(UInt8) then
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_PROP_CONST, ThisReg,
-        UInt16(KeyIdx), ValReg))
-    else
-    begin
-      KeyReg := ChildScope.AllocateRegister;
-      EmitInstruction(ChildCtx, EncodeABx(OP_LOAD_CONST, KeyReg, KeyIdx));
-      EmitInstruction(ChildCtx, EncodeABC(OP_SET_INDEX, ThisReg, KeyReg,
-        ValReg));
-      ChildScope.FreeRegister;
-    end;
-    ChildScope.FreeRegister;
   end;
 
   ChildTemplate.MaxRegisters := ChildScope.MaxSlot;
@@ -6646,55 +6811,6 @@ begin
       Exit(True);
   end;
   Result := False;
-end;
-
-procedure CompileAutoAccessors(const ACtx: TGocciaCompilationContext;
-  const AClassReg: UInt16; const AClassDef: TGocciaClassDefinition;
-  const AComputedFieldKeyLocals: TComputedFieldKeyLocals);
-var
-  I: Integer;
-  Elem: TGocciaClassElement;
-  NameIdx: UInt16;
-  KeyReg: UInt16;
-  LocalIdx: Integer;
-  ComputedKeyName: string;
-  BackingName: string;
-  Flags: Integer;
-begin
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    if Elem.Kind <> cekAccessor then
-      Continue;
-    if Elem.IsPrivate then
-      Continue;
-
-    if Elem.IsComputed then
-      BackingName := '__accessor_computed_' + IntToStr(I)
-    else
-      BackingName := Elem.Name;
-
-    NameIdx := ACtx.Template.AddConstantString(BackingName);
-
-    Flags := 0;
-    if Elem.IsStatic then
-      Flags := Flags or 1;
-
-    if Elem.IsComputed then
-    begin
-      ComputedKeyName := FindComputedFieldKeyLocalName(
-        AComputedFieldKeyLocals, I);
-      LocalIdx := ACtx.Scope.ResolveLocal(ComputedKeyName);
-      if LocalIdx < 0 then
-        raise Exception.Create('Compiler error: computed auto-accessor key was not captured');
-      KeyReg := ACtx.Scope.GetLocal(LocalIdx).Slot;
-      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_DYNAMIC,
-        KeyReg, Flags, UInt16(NameIdx)));
-    end
-    else
-      EmitInstruction(ACtx, EncodeABC(OP_SETUP_AUTO_ACCESSOR_CONST,
-        0, Flags, UInt16(NameIdx)));
-  end;
 end;
 
 procedure CompilePrivateAutoAccessorDeclarations(
@@ -6848,8 +6964,6 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 
-  CompileAutoAccessors(ACtx, AClassReg, AClassDef,
-    AComputedFieldKeyLocals);
   CompileDecoratorOrchestration(ACtx, AClassReg, AClassDef,
     AComputedFieldKeyLocals);
 
@@ -6969,8 +7083,7 @@ begin
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
-     HasComputedInstanceFields(ClassDef) or
-     HasAccessorInitializers(ClassDef) then
+     HasComputedInstanceFields(ClassDef) then
     CompileFieldInitializer(ACtx, ClassReg, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
@@ -7007,9 +7120,7 @@ begin
   begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
       CompileStaticBlock(ACtx, ClassReg, ClassDef.FElements[I].StaticBlockBody)
-    else if ((ClassDef.FElements[I].Kind = cekField) or
-             ((ClassDef.FElements[I].Kind = cekAccessor) and
-              ClassDef.FElements[I].IsPrivate)) and
+    else if (ClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
             ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
@@ -7024,18 +7135,28 @@ begin
       end
       else
         KeyReg := 0;
-      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+      if not Assigned(ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0))
+      else if ClassDef.FElements[I].IsComputed then
+        CompileStaticFieldInitializerExpression(
+          ACtx, ClassReg, ClassDef.FElements[I].FieldInitializer, ValReg, '',
+          ComputedKeyName)
+      else
         CompileStaticFieldInitializerExpression(
           ACtx, ClassReg, ClassDef.FElements[I].FieldInitializer, ValReg,
-          ClassFieldInferredName(ClassDef.FElements[I]))
-      else
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-      if ClassDef.FElements[I].IsComputed and
-         IsAnonymousFunctionNameInitializer(
-           ClassDef.FElements[I].FieldInitializer) then
-        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-          KeyReg, 0));
-      if ClassDef.FElements[I].IsPrivate then
+          ClassFieldInferredName(ClassDef.FElements[I]));
+      { An auto-accessor's value goes to its private storage, which for a
+        private auto-accessor is its own name. }
+      if ClassDef.FElements[I].Kind = cekAccessor then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
+          ClassDef.FElements[I].AccessorStorageName);
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ClassReg, UInt16(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ClassReg,
+          UInt16(KeyIdx), ValReg));
+      end
+      else if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);
@@ -7090,7 +7211,7 @@ end;
 
 procedure CompileClassExpression(const ACtx: TGocciaCompilationContext;
   const AClassDef: TGocciaClassDefinition; const ADest: UInt16;
-  const AInferredName: string = '');
+  const AInferredName: string = ''; const AInferredNameKeyReg: Integer = -1);
 var
   ClassDef: TGocciaClassDefinition;
   SuperReg, ValReg, KeyReg: UInt16;
@@ -7128,6 +7249,13 @@ begin
   else
     NameIdx := ACtx.Template.AddConstantString('<anonymous>');
   EmitInstruction(ACtx, EncodeABx(OP_NEW_CLASS, ADest, NameIdx));
+  { ES2026 §15.7.14 ClassDefinitionEvaluation calls SetFunctionName before it
+    evaluates any class element. A name that NamedEvaluation takes from a
+    computed key exists only at run time, so it is applied here, before the
+    first static field or static block can read or freeze the class. }
+  if (not HasNameBinding) and (AInferredNameKeyReg >= 0) then
+    EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ADest,
+      UInt16(AInferredNameKeyReg), FUNCTION_NAME_PREFIX_NONE));
   KeyIdx := ACtx.Template.AddConstantString(ClassDef.SourceText);
   EmitInstruction(ACtx, EncodeABx(OP_SET_CLASS_SOURCE_CONST, ADest, KeyIdx));
 
@@ -7184,8 +7312,7 @@ begin
 
   if (ClassDef.InstanceProperties.Count > 0) or
      (ClassDef.PrivateInstanceProperties.Count > 0) or
-     HasComputedInstanceFields(ClassDef) or
-     HasAccessorInitializers(ClassDef) then
+     HasComputedInstanceFields(ClassDef) then
     CompileFieldInitializer(ACtx, ADest, ClassDef, ComputedFieldKeyLocals);
 
   // Static fields without FElements entries (legacy / no static blocks)
@@ -7222,9 +7349,7 @@ begin
   begin
     if ClassDef.FElements[I].Kind = cekStaticBlock then
       CompileStaticBlock(ACtx, ADest, ClassDef.FElements[I].StaticBlockBody)
-    else if ((ClassDef.FElements[I].Kind = cekField) or
-             ((ClassDef.FElements[I].Kind = cekAccessor) and
-              ClassDef.FElements[I].IsPrivate)) and
+    else if (ClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
             ClassDef.FElements[I].IsStatic then
     begin
       ValReg := ACtx.Scope.AllocateRegister;
@@ -7239,18 +7364,28 @@ begin
       end
       else
         KeyReg := 0;
-      if Assigned(ClassDef.FElements[I].FieldInitializer) then
+      if not Assigned(ClassDef.FElements[I].FieldInitializer) then
+        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0))
+      else if ClassDef.FElements[I].IsComputed then
+        CompileStaticFieldInitializerExpression(
+          ACtx, ADest, ClassDef.FElements[I].FieldInitializer, ValReg, '',
+          ComputedKeyName)
+      else
         CompileStaticFieldInitializerExpression(
           ACtx, ADest, ClassDef.FElements[I].FieldInitializer, ValReg,
-          ClassFieldInferredName(ClassDef.FElements[I]))
-      else
-        EmitInstruction(ACtx, EncodeABx(OP_LOAD_UNDEFINED, ValReg, 0));
-      if ClassDef.FElements[I].IsComputed and
-         IsAnonymousFunctionNameInitializer(
-           ClassDef.FElements[I].FieldInitializer) then
-        EmitInstruction(ACtx, EncodeABC(OP_SET_FUNCTION_NAME, ValReg,
-          KeyReg, 0));
-      if ClassDef.FElements[I].IsPrivate then
+          ClassFieldInferredName(ClassDef.FElements[I]));
+      { An auto-accessor's value goes to its private storage, which for a
+        private auto-accessor is its own name. }
+      if ClassDef.FElements[I].Kind = cekAccessor then
+      begin
+        KeyIdx := ACtx.Template.AddConstantString('#slot:' + PrivPrefix +
+          ClassDef.FElements[I].AccessorStorageName);
+        EmitInstruction(ACtx, EncodeABC(OP_CLASS_DECLARE_PRIVATE_STATIC_CONST,
+          ADest, UInt16(KeyIdx), 0));
+        EmitInstruction(ACtx, EncodeABC(OP_DEFINE_STATIC_PROP_CONST, ADest,
+          UInt16(KeyIdx), ValReg));
+      end
+      else if ClassDef.FElements[I].IsPrivate then
       begin
         KeyIdx := ACtx.Template.AddConstantString(
           '#slot:' + PrivPrefix + ClassDef.FElements[I].Name);

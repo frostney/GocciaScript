@@ -26,6 +26,7 @@ type
     function MaterializeOwnLazyProperty(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor): TGocciaPropertyDescriptor;
     procedure MaterializeAllLazyStringProperties;
+    procedure EnsureSymbolStorage; {$IFDEF FPC}inline;{$ENDIF}
     function StoreLazyPropertyDescriptor(const AName: string;
       const ADescriptor: TGocciaPropertyDescriptor;
       out ABlockedByExtensibility: Boolean): Boolean;
@@ -42,7 +43,6 @@ type
     FErrorStack: string;
     FHasRegExpData: Boolean;
     FRegExpData: TObject;
-    function BuiltinTagFallback: Boolean; virtual;
     procedure NoteIndexedOwnProperty(const AName: string);
     // ES2026 §10.1.8.1 OrdinaryGet step 2: the lookup once this object has no
     // own property AName. For a subclass that reads its own properties itself.
@@ -67,7 +67,6 @@ type
     function TypeName: string; override;
     function TypeOf: string; override;
     function ToStringTag: string; virtual;
-    property HasBuiltinTagFallback: Boolean read BuiltinTagFallback;
 
     function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -284,6 +283,7 @@ uses
   Goccia.Values.ArrayValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
+  Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.FunctionValue,
@@ -947,6 +947,16 @@ begin
     CurrentRealm.SetSlot(GObjectPrototypeSlot, AValue);
 end;
 
+procedure TGocciaObjectValue.EnsureSymbolStorage;
+begin
+  // Each field is tested on its own, so a failure between the two creations
+  // leaves a state the next call completes rather than one it overwrites.
+  if not Assigned(FSymbolInsertionOrder) then
+    FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
+  if not Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors := TSymbolDescriptorMap.Create;
+end;
+
 constructor TGocciaObjectValue.Create(const APrototype: TGocciaObjectValue = nil;
   const APropertyCapacity: Integer = 0);
 begin
@@ -959,8 +969,10 @@ begin
   // passes through. The map needs a way back to the value that holds it so the
   // properties already stored stay reachable across a collection taken there.
   TGocciaShapedPropertyMap(FProperties).Owner := Self;
-  FSymbolDescriptors := TSymbolDescriptorMap.Create;
-  FSymbolInsertionOrder := TList<TGocciaSymbolValue>.Create;
+  // Symbol-keyed storage is created by EnsureSymbolStorage on the first
+  // symbol key. Created here it cost every object about 512 heap bytes (a
+  // 16-slot hash table and an insertion-order list) that most objects never
+  // use and that BytesAllocated does not see (ADR 0129).
   FPrototype := APrototype;
   FFrozen := False;
   FSealed := False;
@@ -1001,22 +1013,6 @@ var
     Result := False;
   end;
 
-  function LegacyBuiltinTagForObject(const AObject: TGocciaObjectValue): string;
-  begin
-    if AObject is TGocciaStringObjectValue then
-      Result := CONSTRUCTOR_STRING
-    else if AObject is TGocciaNumberObjectValue then
-      Result := CONSTRUCTOR_NUMBER
-    else if AObject is TGocciaBooleanObjectValue then
-      Result := CONSTRUCTOR_BOOLEAN
-    else
-    begin
-      Result := AObject.ToStringTag;
-      if AObject.HasBuiltinTagFallback then
-        Result := CONSTRUCTOR_OBJECT;
-    end;
-  end;
-
 begin
   if AThisValue is TGocciaUndefinedLiteralValue then
     Exit(TGocciaStringLiteralValue.Create('[object Undefined]'));
@@ -1027,20 +1023,30 @@ begin
   if (TGarbageCollector.Instance <> nil) and not (AThisValue is TGocciaObjectValue) then
     TGarbageCollector.Instance.AddTempRoot(Obj);
   try
+    // Steps 4-14: builtinTag comes only from the internal slots listed here.
+    // Every other tag (Map, Uint8Array, Temporal.Instant, ...) is read from
+    // @@toStringTag below, so it goes away with the prototype that holds it.
+    // A Proxy has none of these slots; IsArray and IsCallable see through it.
     if IsArrayObject(Obj) then
       Tag := CONSTRUCTOR_ARRAY
+    else if IsArgumentsObjectValue(Obj) then
+      Tag := 'Arguments'
     else if Obj.IsCallable then
       Tag := 'Function'
     else if Obj.HasErrorData then
       Tag := 'Error'
+    else if Obj is TGocciaBooleanObjectValue then
+      Tag := CONSTRUCTOR_BOOLEAN
+    else if Obj is TGocciaNumberObjectValue then
+      Tag := CONSTRUCTOR_NUMBER
+    else if Obj is TGocciaStringObjectValue then
+      Tag := CONSTRUCTOR_STRING
+    else if HasDateValue(Obj) then
+      Tag := 'Date'
     else if Obj.HasRegExpData then
       Tag := 'RegExp'
-    else if IsArgumentsObjectValue(Obj) then
-      Tag := 'Arguments'
-    else if Obj is TGocciaProxyValue then
-      Tag := CONSTRUCTOR_OBJECT
     else
-      Tag := LegacyBuiltinTagForObject(Obj);
+      Tag := CONSTRUCTOR_OBJECT;
 
     SymbolTag := Obj.GetSymbolPropertyWithReceiver(
       TGocciaSymbolValue.WellKnownToStringTag, AThisValue);
@@ -1243,13 +1249,21 @@ var
   Pair: TGocciaPropertyMap.TKeyValuePair;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
 begin
-  for Pair in FProperties do
-    Pair.Value.Free;
+  // A constructor that raises frees the object it was building, so the maps
+  // may not exist yet. The development build's stack check can raise inside
+  // any constructor, for example when a deep nest of Proxies with native
+  // traps reaches the end of the native stack.
+  if Assigned(FProperties) then
+    for Pair in FProperties do
+      Pair.Value.Free;
   FProperties.Free;
 
-  for SymPair in FSymbolDescriptors do
-    SymPair.Value.Free;
-  FSymbolDescriptors.Free;
+  if Assigned(FSymbolDescriptors) then
+  begin
+    for SymPair in FSymbolDescriptors do
+      SymPair.Value.Free;
+    FSymbolDescriptors.Free;
+  end;
 
   FSymbolInsertionOrder.Free;
   FRegExpData.Free;
@@ -1284,11 +1298,12 @@ begin
   for Pair in FProperties do
     Pair.Value.MarkValues;
 
-  for SymPair in FSymbolDescriptors do
-  begin
-    SymPair.Key.MarkReferences;
-    SymPair.Value.MarkValues;
-  end;
+  if Assigned(FSymbolDescriptors) then
+    for SymPair in FSymbolDescriptors do
+    begin
+      SymPair.Key.MarkReferences;
+      SymPair.Value.MarkValues;
+    end;
 end;
 
 function TGocciaObjectValue.TypeName: string;
@@ -1304,11 +1319,6 @@ end;
 function TGocciaObjectValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_OBJECT;
-end;
-
-function TGocciaObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := False;
 end;
 
 // ES2026 §7.1.17 ToString. For an object: ToPrimitive(O, string) → ToString
@@ -2140,7 +2150,8 @@ var
   Applied: TGocciaPropertyDescriptor;
 begin
   Current := nil;
-  FSymbolDescriptors.TryGetValue(ASymbol, Current);
+  if Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors.TryGetValue(ASymbol, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -2149,6 +2160,7 @@ begin
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [ASymbol.ToDisplayString.Value]), SSuggestCannotDeleteNonConfigurable);
   end;
 
+  EnsureSymbolStorage;
   if Assigned(Current) then
     Current.Free
   else
@@ -2166,7 +2178,8 @@ var
   Applied: TGocciaPropertyDescriptor;
 begin
   Current := nil;
-  FSymbolDescriptors.TryGetValue(ASymbol, Current);
+  if Assigned(FSymbolDescriptors) then
+    FSymbolDescriptors.TryGetValue(ASymbol, Current);
   if not ValidateAndCreatePropertyDescriptor(Current, ADescriptor,
     FExtensible, Applied) then
   begin
@@ -2174,6 +2187,7 @@ begin
     Exit(False);
   end;
 
+  EnsureSymbolStorage;
   if Assigned(Current) then
     Current.Free
   else
@@ -2200,7 +2214,8 @@ begin
     Exit;
   end;
 
-  if FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  if Assigned(FSymbolDescriptors) and
+     FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     if Descriptor is TGocciaPropertyDescriptorAccessor then
     begin
@@ -2241,7 +2256,8 @@ begin
           SSuggestCannotDeleteNonConfigurable);
       Exit;
     end;
-    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    if Assigned(Current.FSymbolDescriptors) and
+       Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
@@ -2385,7 +2401,8 @@ var
 begin
   Current := Self;
   repeat
-    if Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+    if Assigned(Current.FSymbolDescriptors) and
+       Current.FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
       Exit(PropertyValueFromDescriptor(Descriptor, AReceiver));
 
     Parent := Current.FPrototype;
@@ -2399,13 +2416,15 @@ end;
 
 function TGocciaObjectValue.GetOwnSymbolPropertyDescriptor(const ASymbol: TGocciaSymbolValue): TGocciaPropertyDescriptor;
 begin
-  if not FSymbolDescriptors.TryGetValue(ASymbol, Result) then
+  if not Assigned(FSymbolDescriptors) or
+     not FSymbolDescriptors.TryGetValue(ASymbol, Result) then
     Result := nil;
 end;
 
 function TGocciaObjectValue.HasSymbolProperty(const ASymbol: TGocciaSymbolValue): Boolean;
 begin
-  Result := FSymbolDescriptors.ContainsKey(ASymbol);
+  Result := Assigned(FSymbolDescriptors) and
+    FSymbolDescriptors.ContainsKey(ASymbol);
 end;
 
 function TGocciaObjectValue.HasSymbolPropertyInChain(
@@ -2443,7 +2462,8 @@ var
   Descriptor: TGocciaPropertyDescriptor;
   I: Integer;
 begin
-  if not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
+  if not Assigned(FSymbolDescriptors) or
+     not FSymbolDescriptors.TryGetValue(ASymbol, Descriptor) then
   begin
     Result := True;
     Exit;
@@ -2473,6 +2493,8 @@ var
   Symbol: TGocciaSymbolValue;
   Descriptor: TGocciaPropertyDescriptor;
 begin
+  if not Assigned(FSymbolInsertionOrder) then
+    Exit(nil);
   SetLength(Entries, FSymbolInsertionOrder.Count);
   Count := 0;
 
@@ -2501,6 +2523,8 @@ var
   Symbols: TArray<TGocciaSymbolValue>;
   I: Integer;
 begin
+  if not Assigned(FSymbolInsertionOrder) then
+    Exit(nil);
   SetLength(Symbols, FSymbolInsertionOrder.Count);
   for I := 0 to FSymbolInsertionOrder.Count - 1 do
     Symbols[I] := FSymbolInsertionOrder[I];
