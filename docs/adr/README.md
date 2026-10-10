@@ -142,3 +142,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0131 — A bytecode caller frame's position is worked out when a stack is captured, from the instruction pointers the VM already saves](0131-bytecode-frame-positions-at-capture.md)
 - [0132 — The call-stack records and the copy a stack growth makes are charged with the VM stacks](0132-call-stack-records-and-stack-copies-are-charged.md)
 - [0133 — A module roots the values it holds directly](0133-modules-root-their-value-exports.md)
+- [0135 — A call and a failed property read are located where V8 locates them](0135-calls-and-property-reads-are-located-where-v8-locates-them.md)

@@ -5371,7 +5371,8 @@ begin
     begin
       if IsEngineIntegrityFault(E) then
         raise;
-      FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+      FPromise.Reject(CreateImportCallErrorObject(ERROR_NAME, E.Message,
+        FReferrer, FSiteLine, FSiteColumn));
     end;
   end;
 end;

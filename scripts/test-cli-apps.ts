@@ -10240,8 +10240,9 @@ await section("Loader: a fetch() denial is located alike in both modes...", asyn
         throw new Error(`fetch denial (${mode}) should be located: ${text}`);
       locations.push(location.trim());
     }
-    // ADR 0014: the call expression's own position, as import() uses.
-    if (locations[0] !== `--> ${file}:2:28` || locations[1] !== locations[0])
+    // ADR 0014: the call expression's own position, as import() uses: the
+    // callee's name, where V8 locates the call (ADR 0135).
+    if (locations[0] !== `--> ${file}:2:23` || locations[1] !== locations[0])
       throw new Error(`fetch denial location differs between modes: ${JSON.stringify(locations)}`);
   } finally {
     clean(tmp);

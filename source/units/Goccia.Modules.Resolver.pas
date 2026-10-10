@@ -116,6 +116,7 @@ implementation
 uses
   FileUtils,
 
+  Goccia.Execution.CallSite,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
   Goccia.JSON,
@@ -130,10 +131,21 @@ const
   PARENT_DIRECTORY_PREFIX = '../';
   RESOLVED_CANDIDATE_DIAGNOSTIC_FORMAT = '  Resolved to: %s';
 
+{ A failure is located at the import that asked for the module — a static
+  import declaration or an import() call — which both executors enter as the
+  call site while the load runs, as they do for a PermissionDenied. A load
+  with no call site in the importing file (an entry module, a preload) has no
+  position. }
 constructor TGocciaModuleResolutionError.CreateResolutionFailure(
   const AMessage, AResolvedCandidatePath, AFileName: string);
+var
+  CallSite: TGocciaCallSite;
 begin
-  inherited Create(AMessage, 0, 0, AFileName, nil);
+  if CurrentGocciaCallSite(CallSite) and (CallSite.Line > 0) and
+     (CallSite.FilePath = AFileName) then
+    inherited Create(AMessage, CallSite.Line, CallSite.Column, AFileName, nil)
+  else
+    inherited Create(AMessage, 0, 0, AFileName, nil);
   FResolvedCandidatePath := AResolvedCandidatePath;
 end;
 

@@ -106,6 +106,15 @@ end;
 procedure TGocciaDebugInfo.AddLineMapping(const APC: UInt32;
   const ALine: UInt32; const AColumn: UInt16);
 begin
+  { An entry at the same PC as the one before it supersedes that one, which
+    GetLineForPC can then never reach, so it takes its place rather than
+    growing the map. The first entry always stays: CoverageLine reads it. }
+  if (FLineMapCount > 1) and (FLineMap[FLineMapCount - 1].PC = APC) then
+  begin
+    FLineMap[FLineMapCount - 1].Line := ALine;
+    FLineMap[FLineMapCount - 1].Column := AColumn;
+    Exit;
+  end;
   if FLineMapCount >= Length(FLineMap) then
     SetLength(FLineMap, FLineMapCount * 2 + 8);
   FLineMap[FLineMapCount].PC := APC;

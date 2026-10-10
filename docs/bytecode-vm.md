@@ -285,6 +285,17 @@ keeps that true:
   The VM installs this resolver on the thread's `TGocciaCallStack` for as
   long as it runs. A call does no position work at all; a native entry
   stores one activation record.
+- **Property reads have their own line-map entry.** An expression's line-map
+  entry precedes the code of its operands, so the load of `a.b.c` would be
+  located at whatever operand the compiler emitted last. `EmitLoadMemberProperty`
+  gives the load instruction the member's position (its property name, or the
+  `[` of a computed read) and hands the instructions after it back to the
+  entry they had, through `BeginInstructionLocation`/`EndInstructionLocation`.
+  Only the line map changes; the instructions are the same. An entry at the
+  same PC as the entry before it replaces that entry, which a lookup could
+  never reach (`TGocciaDebugInfo.AddLineMapping`); the first entry always
+  stays. Where each position points is in
+  [Errors — Stack Traces](errors.md#stack-traces).
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it
   is created* — the top call frame's source location, plus a ±context excerpt of

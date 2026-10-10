@@ -409,6 +409,24 @@ begin
   end;
 end;
 
+{ Loads AMember's property from AObjReg into ADest; a computed member's key
+  is already in AKeyReg. The load is located at the member — its property
+  name, or the `[` of a computed member — so that reading a property of null
+  reports where V8 does, not wherever the object's own code ended. }
+procedure EmitLoadMemberProperty(const ACtx: TGocciaCompilationContext;
+  const AMember: TGocciaMemberExpression; const ADest, AObjReg,
+  AKeyReg: UInt16);
+var
+  Location: TGocciaInstructionLocation;
+begin
+  Location := BeginInstructionLocation(ACtx, AMember.Line, AMember.Column);
+  if AMember.Computed then
+    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, AObjReg, AKeyReg))
+  else
+    EmitLoadPropertyByName(ACtx, ADest, AObjReg, AMember.PropertyName);
+  EndInstructionLocation(ACtx, Location);
+end;
+
 procedure EmitStorePropertyByName(const ACtx: TGocciaCompilationContext;
   const AObjReg: UInt16; const APropertyName: string; const AValueReg: UInt16);
 var
@@ -4488,14 +4506,13 @@ begin
         KeyReg := ACtx.Scope.AllocateRegister;
         try
           ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
-          EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg,
-            KeyReg));
+          EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, KeyReg);
         finally
           ACtx.Scope.FreeRegister;
         end;
       end
       else
-        EmitLoadPropertyByName(ACtx, BaseReg, ObjReg, MemberExpr.PropertyName);
+        EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, 0);
 
       EmitArgumentsAndCall(True);
 
@@ -4570,15 +4587,13 @@ begin
           KeyReg := ACtx.Scope.AllocateRegister;
           try
             ACtx.CompileExpression(MemberExpr.PropertyExpression, KeyReg);
-            EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg,
-              KeyReg));
+            EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, KeyReg);
           finally
             ACtx.Scope.FreeRegister;
           end;
         end
         else
-          EmitLoadPropertyByName(ACtx, BaseReg, ObjReg,
-            MemberExpr.PropertyName);
+          EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, 0);
 
         if LocalJumpCount > 0 then
         begin
@@ -5001,10 +5016,10 @@ begin
       if MemberExpr.Computed then
       begin
         ACtx.CompileExpression(MemberExpr.PropertyExpression, BaseReg);
-        EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, BaseReg, ObjReg, BaseReg));
+        EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, BaseReg);
       end
       else
-        EmitLoadPropertyByName(ACtx, BaseReg, ObjReg, MemberExpr.PropertyName);
+        EmitLoadMemberProperty(ACtx, MemberExpr, BaseReg, ObjReg, 0);
 
       if AExpr.Optional then
         CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
@@ -5215,12 +5230,12 @@ begin
   begin
     OwnsIdxReg := CompileOperand(ACtx, AExpr.PropertyExpression, IdxReg, nil,
       nil, ADest);
-    EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+    EmitLoadMemberProperty(ACtx, AExpr, ADest, ObjReg, IdxReg);
     if OwnsIdxReg then
       ACtx.Scope.FreeRegister;
   end
   else
-    EmitLoadPropertyByName(ACtx, ADest, ObjReg, AExpr.PropertyName);
+    EmitLoadMemberProperty(ACtx, AExpr, ADest, ObjReg, 0);
 
   if NullishJumpCount > 0 then
   begin
@@ -5988,11 +6003,10 @@ begin
     if MemberExpr.Computed then
     begin
       ACtx.CompileExpression(MemberExpr.PropertyExpression, ABaseReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ABaseReg, AObjReg, ABaseReg));
+      EmitLoadMemberProperty(ACtx, MemberExpr, ABaseReg, AObjReg, ABaseReg);
     end
     else
-      EmitLoadPropertyByName(ACtx, ABaseReg, AObjReg,
-        MemberExpr.PropertyName);
+      EmitLoadMemberProperty(ACtx, MemberExpr, ABaseReg, AObjReg, 0);
   end
   else if (ATagExpr is TGocciaIdentifierExpression) and
           ShouldTryWithBinding(ACtx.Scope,
@@ -7394,11 +7408,11 @@ begin
     begin
       IdxReg := ACtx.Scope.AllocateRegister;
       ACtx.CompileExpression(MemberExpr.PropertyExpression, IdxReg);
-      EmitInstruction(ACtx, EncodeABC(OP_ARRAY_GET, ADest, ObjReg, IdxReg));
+      EmitLoadMemberProperty(ACtx, MemberExpr, ADest, ObjReg, IdxReg);
       ACtx.Scope.FreeRegister;
     end
     else
-      EmitLoadPropertyByName(ACtx, ADest, ObjReg, MemberExpr.PropertyName);
+      EmitLoadMemberProperty(ACtx, MemberExpr, ADest, ObjReg, 0);
     ACtx.Scope.FreeRegister;
     Exit;
   end;

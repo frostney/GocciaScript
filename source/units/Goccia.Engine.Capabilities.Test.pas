@@ -1621,7 +1621,8 @@ end;
 
 
 { ADR 0014: a denial raised by a native call is located at the call
-  expression's own position in both executors, as import() is. }
+  expression's own position in both executors, as import() is: the callee's
+  name, where V8 locates the call (ADR 0135). }
 procedure TEngineCapabilitiesTests.TestCallDenialSitesMatchAcrossExecutors;
 const
   FETCH_SOURCE = 'const x = 1;' + sLineBreak +
@@ -1638,7 +1639,7 @@ begin
   Bytecode := Run(FETCH_SOURCE, Grant, True);
   Expect<string>(Interpreted.ErrorName).ToBe('PermissionDenied');
   Expect<string>(Bytecode.ErrorName).ToBe('PermissionDenied');
-  Expect<string>(Interpreted.Location).ToBe('app.mjs:2:28');
+  Expect<string>(Interpreted.Location).ToBe('app.mjs:2:23');
   Expect<string>(Bytecode.Location).ToBe(Interpreted.Location);
   { The throw marks the denial's suggestion host-only in both executors,
     through the VM unwind too, so guest-bound output can drop it. }
