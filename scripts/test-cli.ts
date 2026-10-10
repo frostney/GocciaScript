@@ -143,7 +143,7 @@ console.log("Bytecode names a computed static field's initializer from its key..
     stdout: "pipe",
     stderr: "pipe",
   });
-  const out = proc.stdout.toString().trim().split("\n").slice(0, 3).join("|");
+  const out = proc.stdout.toString().trim().split(/\r?\n/).slice(0, 3).join("|");
   const expected = "arrow,base,[sym],klass,klass|arrow,base,[sym],klass,klass|yk,1";
   if (proc.exitCode !== 0 || out !== expected)
     throw new Error(`Bytecode computed static field names expected ${expected}, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
