@@ -11840,7 +11840,15 @@ begin
       begin
         PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
           Names[I]);
-        if Assigned(PrototypeDescriptor) then
+        // A private data element on the prototype is a method. Its copy is
+        // not writable, so SetPropertyValue rejects assigning to it instead
+        // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
+        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+              PrototypeDescriptor.Flags - [pfWritable]))
+        else if Assigned(PrototypeDescriptor) then
           DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
@@ -13959,7 +13967,21 @@ begin
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
+        begin
+          // Only the private methods StampBytecodePrivateBrands copies onto
+          // a receiver that is not a class instance are not writable.
+          if not Descriptor.Writable then
+          begin
+            if TryGetRawPrivateValue(AObject,
+               BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+               ExistingValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateMethodNotWritable);
+            ThrowBytecodePrivateTypeError(AKey,
+              SErrorPrivateFieldInaccessible);
+          end;
           Break;
+        end;
         if Descriptor is TGocciaPropertyDescriptorAccessor then
           ThrowBytecodePrivateTypeError(AKey,
             SErrorPrivateSetterMissing);
