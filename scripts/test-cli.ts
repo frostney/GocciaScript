@@ -110,6 +110,33 @@ console.log("Bytecode stack frames locate each caller at the call it is making..
   }
 }
 
+console.log("Bytecode names a computed static field's initializer from its key...");
+{
+  // A static field initializer runs as its own method (ES2026 §15.7.10), and
+  // an anonymous function or class in it still takes its name from the
+  // computed key (§8.4.5 NamedEvaluation). The interpreter does not name these
+  // yet; it is being removed (#825), so this runs in bytecode only.
+  const source = [
+    "const key = Symbol('sym');",
+    "class Base { static greet() { return 'base'; } }",
+    "class C extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "}",
+    "console.log([C.arrow.name, C.arrow(), C[key].name, C.klass.name, C.klass.ownName].join(','));",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString().trim().split("\n")[0];
+  if (proc.exitCode !== 0 || out !== "arrow,base,[sym],klass,klass")
+    throw new Error(`Bytecode computed static field names expected arrow,base,[sym],klass,klass, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
+}
+
 console.log("--output=json reports where a thrown error was created...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(

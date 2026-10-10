@@ -29,6 +29,23 @@ describe("static initializer home object", () => {
     expect(C[key]()).toBe(Function.prototype.call);
   });
 
+  test("a computed static field's arrow or class keeps the class as home object", () => {
+    const key = Symbol("sym");
+    class Base {
+      static greet() { return "base"; }
+    }
+    class C extends Base {
+      static ["arrow"] = () => super.greet();
+      static [key] = () => super.greet();
+      static ["klass"] = class {
+        static ownName = this.name;
+      };
+    }
+    expect(C.arrow()).toBe("base");
+    expect(C[key]()).toBe("base");
+    expect(C.klass.ownName).toBe(C.klass.name);
+  });
+
   test("super in a static block of a base class reads Function.prototype", () => {
     let direct;
     let arrow;
