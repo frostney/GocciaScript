@@ -263,11 +263,8 @@
         if Assigned(FGlobalScope) and
            not FGlobalScope.TryAssignExistingBinding(GlobalName,
              RegisterToValue(FRegisters[A])) then
-        begin
-          StampCurrentInstructionLocation;
           ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]),
             SSuggestDeclareBeforeUse);
-        end;
       end;
 
       OP_CLOSE_UPVALUE:
@@ -3227,7 +3224,6 @@
                 DebugLine, DebugColumn,
                 '', nil, SSuggestUseLetNotConst);
             end;
-            StampCurrentInstructionLocation;
             ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]),
               SSuggestDeclareBeforeUse);
           end;
@@ -3954,12 +3950,9 @@
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue);
 
       OP_THROW_UNDEFINED_VARIABLE:
-      begin
-        StampCurrentInstructionLocation;
         ThrowReferenceError(Format(SErrorUndefinedVariable,
           [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
           SSuggestDeclareBeforeUse);
-      end;
 
       OP_DEFINE_GLOBAL_VAR_DECL_LONG:
       begin

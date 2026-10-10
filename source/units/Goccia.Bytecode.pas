@@ -199,10 +199,10 @@ const
   //               declares private auto-accessor names, and
   //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
   //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
-  //               the intrinsic ReferenceError for an unresolvable reference
-  //               with its source position and suggestion, in place of the
-  //               four-instruction `new ReferenceError(...)` sequence that
-  //               read the global `ReferenceError` binding.
+  //               the intrinsic ReferenceError for an unresolvable reference,
+  //               with its suggestion, in place of the four-instruction
+  //               `new ReferenceError(...)` sequence that read the global
+  //               `ReferenceError` binding.
   GOCCIA_FORMAT_VERSION = 89;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
@@ -511,10 +511,9 @@ type
     OP_CHECK_BINDING_INITIALIZED = 235,
     // Bx = name-constant index; A is unused. Throws the ReferenceError
     // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
-    // GetValue step 3.a, §6.2.5.6 PutValue step 3.a), created from the
+    // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
     // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
-    // holds, located at this instruction and carrying the same suggestion as
-    // the evaluator's.
+    // holds, and carrying the evaluator's suggestion.
     OP_THROW_UNDEFINED_VARIABLE = 236
   );
 

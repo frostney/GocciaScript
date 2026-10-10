@@ -132,6 +132,8 @@ TypeError: Cannot read properties of undefined (reading 'x')
    4 | getX({});
 ```
 
+Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use` in both modes, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` in bytecode mode is located at the call that needed the larger stack, as an ordinary stack overflow is.
+
 Locations are not yet consistent between the two modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)):
 
 - The same error can report a different column: for `return obj.x;` the interpreter points at `obj` and bytecode mode at `.x`.
