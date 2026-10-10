@@ -206,7 +206,12 @@ const
   //               OP_SET_PRIVATE_CLASS (opcode 145), which follows each
   //               OP_CLOSURE and OP_NEW_CLASS in a class body and hands the
   //               new function or class the class's private environment.
-  GOCCIA_FORMAT_VERSION = 87;
+  //   v87 -> v88: a static field initializer compiles to its own function,
+  //               run by OP_CLASS_EXEC_STATIC_BLOCK with the class as its
+  //               home object; OP_DEFINE_STATIC_PROP_CONST and
+  //               OP_DEFINE_STATIC_PROP_DYNAMIC no longer give the stored
+  //               value one, so inline initializers from v87 lose it.
+  GOCCIA_FORMAT_VERSION = 88;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;

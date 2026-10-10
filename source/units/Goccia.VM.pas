@@ -6048,10 +6048,11 @@ begin
   TGocciaCoverageTracker.Instance.RecordLineHit(
     Template.DebugInfo.SourceFile,
     Template.DebugInfo.GetLineMapEntry(0).Line);
-  TGocciaCoverageTracker.Instance.RecordFunctionHit(
-    Template.DebugInfo.SourceFile, Template.Name,
-    Template.DebugInfo.CoverageLine,
-    Template.DebugInfo.CoverageColumn);
+  if Template.Name <> STATIC_FIELD_TEMPLATE_NAME then
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(
+      Template.DebugInfo.SourceFile, Template.Name,
+      Template.DebugInfo.CoverageLine,
+      Template.DebugInfo.CoverageColumn);
 end;
 
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
@@ -15119,7 +15120,8 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
@@ -15524,7 +15526,8 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
