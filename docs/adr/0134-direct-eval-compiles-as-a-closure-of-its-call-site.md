@@ -1,6 +1,6 @@
 # 0134 - Direct eval compiles to a closure of its call site, and a sloppy eval's new vars live in a hidden variable object of the calling function
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-10
 **Area:** `bytecode runtime`, `compiler`, `eval`, `ShadowRealm`
 **Related:** [#872](https://github.com/frostney/GocciaScript/issues/872), epic [#825](https://github.com/frostney/GocciaScript/issues/825), [#875](https://github.com/frostney/GocciaScript/issues/875), [#874](https://github.com/frostney/GocciaScript/issues/874), [#1342](https://github.com/frostney/GocciaScript/issues/1342), [#1433](https://github.com/frostney/GocciaScript/pull/1433), [ADR 0005](0005-register-based-bytecode.md), [ADR 0048](0048-opt-in-non-strict-compatibility.md), [ADR 0085](0085-defer-annex-b-before-1-0.md), [ADR 0131](0131-bytecode-frame-positions-at-capture.md)
@@ -335,8 +335,9 @@ functions of the realm are unaffected.
 
 Every direct-eval call compiles to a new instruction, `OP_DIRECT_EVAL`, and
 `CALL_FLAG_DIRECT_EVAL` leaves `OP_CALL`. One operand indexes a per-template
-eval site record. The record extends today's `TGocciaDirectEvalEnvironment`
-and is serialized in `.gbc` under a format-version bump. It holds:
+eval site record. The record is today's `TGocciaDirectEvalEnvironment`,
+completed and checked by Phase 0 while the bridge still consumes it, then
+serialized in `.gbc` under a format-version bump by Phase 1. It holds:
 
 - **Visible bindings.** Every binding visible at the call: name, kind (caller
   slot, caller upvalue index, global-backed, or `with` object), `const`, and
@@ -344,14 +345,16 @@ and is serialized in `.gbc` under a format-version bump. It holds:
   the call and it. Block bindings still in their TDZ are included, since the
   compiler already hoists them at block entry. The `this` binding, the
   derived-constructor `this` flag and the `arguments` slot are listed as
-  bindings, as they are today.
+  bindings, as they are today. A `catch` parameter is marked as one, for the
+  web-compat exemption below.
 - **Caller strictness.** The strictness of this call expression.
 - **Early-error flags.** `inFunction`, `inMethod`, `inDerivedConstructor`,
   `inClassFieldInitializer`, plus today's rejection of `arguments` in
   parameter lists.
 - **Private names.** The private-name environment: each visible private
   identifier and the compiled key it resolves to, plus where the run-time
-  private class comes from (see below).
+  private class comes from: the caller's closure, or the register holding the
+  class being defined (see below).
 - **Variable-environment shape.** One of:
   - global;
   - function, with the slot of the hidden variable object;
@@ -409,6 +412,15 @@ value lands in the instruction's destination register. As a result:
     hidden variable object. This is a null-prototype ordinary object, created
     by the first eval that needs it and stored in the hidden local. Being
     configurable, it is deletable, matching `CreateMutableBinding(name, true)`.
+  - A var named like an enclosing `catch` parameter is accepted, as
+    `catch (e) { var e }` already is outside eval. The parameter does not count
+    as a conflicting declaration for step 3.d. This takes the spec's
+    normative-optional web-compat branch of §19.2.1.3 step 3.d
+    (`step-evaldeclarationinstantiation-throw-duplicate-binding`), which
+    exempts a `Catch` clause's environment, together with B.3.4 VariableStatements
+    in Catch Blocks (`sec-variablestatements-in-catch-blocks`). Every other
+    declarative scope between the call and the variable environment is still a
+    `SyntaxError`.
 
   Lexical declarations are template locals.
 - **Global variable environment.** This covers indirect eval,
@@ -516,12 +528,14 @@ the VM's link graph.
 - A missing or wrong entry in the eval site record shows up as a resolution
   error at eval compile time. There is one place to check, and test262 plus
   the eval-host sections cover it.
-- The defects in the measured table become bytecode tests that should pass on
-  the new path. The interpreter keeps its own eval until #875, and #825 has
+- The defects in the measured table are fixed in the bridge by Phase 0, and
+  their bytecode tests stay green through every later phase. The interpreter keeps its own eval until #875, and #825 has
   dropped mode parity as an oracle.
-- Compiled eval templates are retained like `Function`-constructor modules
-  (`TGocciaEngine.RetainModule`) until the open retention question below is
-  settled.
+- Compiled eval code lives as long as the engine, the same as the `Function`
+  constructor's code (`TGocciaEngine.RetainModule`). Phase 4's per-call-site
+  cache bounds the growth from repeated sources. Many distinct eval strings
+  still grow it. If that becomes a problem under `--max-memory`, it gets its
+  own issue; this decision does not make eval code collectable.
 
 ### The strongest counter-argument
 
@@ -529,44 +543,97 @@ Option 1 or 2 would resolve every name by name, so nothing could go missing.
 In this design, eval correctness depends on the eval site record mirroring
 every binding the compiler can see at the site, including hidden ones: `this`,
 the derived-constructor `this` flag, `with` objects, `arguments`, private
-names, the class under construction. Any entry left out compiles to a global
-lookup without complaint.
+names, the class under construction. Any entry left out would compile to a
+global lookup without complaint.
 
-The answer:
+The answer is that the compile-time design never starts from an unverified
+record:
 
-- That completeness requirement exists today. The bridge reads the same
-  record at run time, so its gaps already show up as wrong results (the
-  measured table).
-- Moving consumption to compile time puts every gap through one resolver,
-  the nested-function one, which every closure already exercises.
-- Every engine surveyed does the same: V8 compiles against `ScopeInfo`,
-  SpiderMonkey against the environment chain, QuickJS against `vardefs`.
+- **Phase 0 proves the record complete before anything consumes it at compile
+  time.** It completes `TGocciaDirectEvalEnvironment` in today's bridge and
+  adds an invariant check. At every direct-eval site in the test corpus, the
+  check compares the record against the compiler's scope chain, private-name
+  environment and call-site facts. A binding the record misses fails that
+  check loudly instead of becoming a global lookup.
+- **Phase 1 only serializes what Phase 0 made complete.** Phases 3-strict and
+  3-sloppy then consume the same verified record through one resolver, the
+  nested-function one that every closure already exercises. The invariant
+  stays in place, so a compiler change that adds a hidden binding without
+  recording it fails the same check.
+- Every engine surveyed resolves eval code against such a description of the
+  caller: V8 against `ScopeInfo`, SpiderMonkey against the environment chain,
+  QuickJS against `vardefs`.
 - The named alternatives are not free. They charge a hash lookup to every
   access in an eval-calling function and its enclosing functions, and they
   keep an environment model alive that #825 is removing.
 
 ## Implementation plan
 
-Each phase is one pull request. Phase 3 may be a two-PR native stack. Every
+Phase 0 is one or more pull requests. Phases 1, 2 and 4 are one pull request
+each. Phase 3 is a two-PR native GitHub stack. Every
 phase has the same gate: no regression, test by test, against `main`, in
 bytecode mode, on the pinned test262 commit, over the tests that reference
 `eval(` or `ShadowRealm`.
 
-- **Phase 1 - static facts.**
-  - Parser flags for direct eval and sloppy direct eval.
-  - `OP_DIRECT_EVAL` with the eval site record index, plus caller strictness,
-    early-error flags and the private-name map in the record. Bytecode format
-    bump.
-  - `DirectEvalMayShadow` narrowed to sloppy-eval functions.
-  - The bridge still runs eval, now with per-site strictness.
+- **Phase 0 - complete the record and fix the bridge.** Implemented by
+  another worker, before Phase 1, in the bridge that runs eval today. Nothing
+  is compiled differently yet.
+  - **Complete `TGocciaDirectEvalEnvironment`.** It mirrors every binding the
+    compiler can see at the site:
+    - `let`, `const` and `class` bindings still in their TDZ;
+    - `this` and the derived-constructor `this` flag;
+    - `arguments`;
+    - `with` objects;
+    - private names, with their compiled keys;
+    - the class being defined, at sites that run inline in a class body;
+    - the call site's own strictness;
+    - whether each binding is in the variable environment, including simple
+      parameters, and whether it is a `catch` parameter.
+
+    The new fields stay in memory in Phase 0. Phase 1 serializes them. Until
+    then no `.gbc` file can reach a direct eval, because a global `eval` exists
+    only under the Test262 host and its ShadowRealm children, which compile
+    from source.
+  - **Add the invariant check.** A compiler test helper compares the record
+    with the compiler's scope chain at every direct-eval site, including
+    locals, upvalues, hidden bindings, `with` objects and private names. It
+    runs over every direct-eval site in `tests/` and in the test262 files that
+    reference `eval(`. A missing or misclassified binding fails it.
+  - **Fix each bridge defect in the measured table.** No row has to move to
+    Phase 3; each one has a bridge-local cause:
+
+    | Row | Phase 0 fix in the bridge |
+    |---|---|
+    | Second eval reads the first eval's var | `TGocciaVMDirectEvalScope.TryGetBinding` asks the frame's dynamic var scope for a var an earlier eval created, before it answers from a `debUpvalue` or `debGlobal` entry of the record. |
+    | Static field initializer's eval is strict | The VM takes strictness from the record, not from `Template.StrictCode`. |
+    | `{ eval("var X"); let X; }` | The conflict check also counts lexical record entries still in their TDZ, which `TGocciaVMDirectEvalScope.Create` skips today. |
+    | `function g(X) { eval("var X = 2") }` | A simple parameter is recorded as a variable-environment binding, so the eval's `var` reuses it (§10.2.11: without parameter expressions the parameters and the body's vars share one environment). |
+    | `catch (X) { eval("var X = 2") }` | The `catch` flag exempts the parameter from the conflict check, per decision 2. |
+    | A closure from eval, after its frame returned (read and write) | When the adapter is created, it binds each local entry to that slot's cell (`GetLocalCell`) and each upvalue entry to the caller closure's cell. It reads and writes those cells instead of the current frame's slots, and the GC marks them. Copying lexical values into the adapter at creation goes away. |
+    | `eval("#x in o")` | The evaluator tests its own raw brand key (`HasRawPrivateInstanceBrand`). That key is evidently missing on a VM-constructed instance: `o.#x` succeeds in the same eval while the brand test fails. For a class the VM declared, the test goes to the VM's brand check. This is coordinated with the #1433 and #1574 work on direct-eval private names. |
 
   Tests:
-  - An eval-host section where a static field initializer, a computed key and
-    an `extends` expression get a strict eval.
+  - One eval-host section per row, in bytecode mode, with Node.js-checked
+    expectations, including `catch (X) { eval("var X = 2") }` returning `2`
+    and the outlived closure both reading and writing.
+  - The invariant check over the corpus.
+  - The #1310 and #1303 sections stay green.
+  - The test262 gate.
+- **Phase 1 - static facts.**
+  - Parser flags for direct eval and sloppy direct eval.
+  - `OP_DIRECT_EVAL` with the eval site record index. The record Phase 0
+    completed is serialized in `.gbc`, with the hidden-object slots added, under
+    a bytecode format bump. Phase 1 adds no new binding facts.
+  - `DirectEvalMayShadow` narrowed to sloppy-eval functions.
+  - The bridge still runs eval, reading the record through the new
+    instruction.
+
+  Tests:
   - `Goccia.Compiler.Test` cases: a sloppy function without eval folds an
     enclosing `const`, and one with eval does not.
-  - A `Goccia.Bytecode.Binary.Test` round trip of the record.
-  - The #1310 section stays green.
+  - A `Goccia.Bytecode.Binary.Test` round trip of every record field.
+  - The invariant check, the Phase 0 sections and the #1310 section stay
+    green.
   - Callgrind on the probes shows no regression.
 - **Phase 2 - global-environment eval compiled.**
   - A compiler mode for eval code whose variable environment is global, with
@@ -590,17 +657,18 @@ bytecode mode, on the pinned test262 commit, over the tests that reference
       one with a throwing body gives `TypeError`.
   - Neither unit uses the evaluator in bytecode mode.
 - **Phase 3 - direct eval compiled; bridge deleted.** Everything under
-  [Decision](#decision). If it is stacked:
-  - **3a** compiles direct eval for strict call sites, where no injection is
-    possible.
-  - **3b** adds the hidden variable object and the probes, moves sloppy call
-    sites over, and deletes the bridge.
+  [Decision](#decision), as a native GitHub stack of two PRs:
+  - **Phase 3-strict** compiles direct eval at strict call sites, where no var can be
+    injected. Sloppy call sites stay on the bridge, so each call site uses one
+    environment model.
+  - **Phase 3-sloppy**, stacked on 3-strict, adds the hidden variable object and the probes,
+    compiles sloppy call sites, and deletes the bridge.
+    `docs/bytecode-vm.md` and `docs/architecture.md` lose the eval coupling
+    in 3-sloppy.
 
-  `docs/bytecode-vm.md` and `docs/architecture.md` lose the eval coupling in
-  the same PR.
-
-  Tests: one eval-host section per row of the measured table, in bytecode
-  mode, plus:
+  Tests: Phase 0's section for each row of the measured table stays green on
+  the compiled path. 3-strict carries the rows a strict call site can show;
+  3-sloppy carries the rest. Also:
   - an eval closure called after its frame returned, reading and writing;
   - eval in a generator across `yield`, and in an async function after
     `await`;
@@ -612,8 +680,9 @@ bytecode mode, on the pinned test262 commit, over the tests that reference
 - **Phase 4 - cache and retention.** Each eval site gets a code cache keyed on
   the source string and the site, like JSC's `DirectEvalCodeCache` and
   SpiderMonkey's `EvalCache`. The site already fixes strictness and the
-  environment. The retention policy is applied. The phase is measured with a
-  repeated-eval workload.
+  environment. The phase is measured with a repeated-eval workload, which
+  shows the engine-lifetime retention no longer grows once a site's source
+  repeats.
 
 **Interactions.**
 
@@ -627,17 +696,22 @@ bytecode mode, on the pinned test262 commit, over the tests that reference
   nothing in bytecode mode uses the `TGocciaScope` subclasses the bridge
   needed.
 
-## Open questions
+## Decisions taken on review
 
-1. **Retention of compiled eval code.** Phase 2 retains each compiled eval
-   module for the engine's life, as the `Function` constructor already does.
-   With the Phase 4 cache, repeated sources stop growing it, but distinct
-   sources still do. The alternative is to make eval templates collectable
-   once no closure references them.
-2. **A sloppy eval `var` named like a `catch` parameter.** §19.2.1.3 step 3.d
-   exempts the catch environment only under the normative-optional web-compat
-   branch. GocciaScript already accepts `catch (e) { var e }` outside eval.
-   ADR 0085 defers broad Annex B support. The question is whether eval should
-   follow the existing non-eval behaviour or the strict reading.
-3. **Is the 3a/3b split worth it?** It keeps every intermediate state on one
-   environment model per call site, but costs a second review cycle.
+Johannes accepted the three points the proposal left open, and added a
+fourth:
+
+1. **Lifetime of compiled eval code.** It lives as long as the engine, the
+   same as the `Function` constructor's code. Phase 4's per-call-site cache
+   bounds repeated sources. Growth from many distinct eval strings under
+   `--max-memory` is a separate future issue if it becomes a problem.
+2. **`catch (X) { eval("var X") }`.** Accepted, matching
+   `catch (e) { var e }` outside eval, under the web-compat branch of
+   §19.2.1.3 step 3.d and B.3.4 (see
+   [Where eval declarations go](#where-eval-declarations-go)).
+3. **Phase 3.** A native GitHub stack: strict call sites first (3-strict),
+   then sloppy call sites and the bridge deletion (3-sloppy).
+4. **Phase 0.** The compile-time design is not built on a record with known
+   gaps. Phase 0 completes the record in today's bridge, enforces it with an
+   invariant check over the corpus, and fixes every bridge defect in the
+   measured table, before Phase 1 starts.
