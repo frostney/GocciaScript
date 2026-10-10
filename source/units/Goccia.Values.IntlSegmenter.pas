@@ -83,7 +83,6 @@ uses
   Goccia.GarbageCollector,
   Goccia.ObjectModel.Types,
   Goccia.Realm,
-  Goccia.ThreadCleanupRegistry,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -94,18 +93,6 @@ var
   GIntlSegmenterSharedSlot: TGocciaRealmOwnedSlotId;
   GIntlSegmentsSharedSlot: TGocciaRealmOwnedSlotId;
   GIntlSegmentIteratorSharedSlot: TGocciaRealmOwnedSlotId;
-
-threadvar
-  FSegmenterPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FSegmentsPrototypeMembers: TArray<TGocciaMemberDefinition>;
-  FSegmentIteratorPrototypeMembers: TArray<TGocciaMemberDefinition>;
-
-procedure ClearThreadvarMembers;
-begin
-  SetLength(FSegmenterPrototypeMembers, 0);
-  SetLength(FSegmentsPrototypeMembers, 0);
-  SetLength(FSegmentIteratorPrototypeMembers, 0);
-end;
 
 function GetIntlSegmenterShared: TGocciaSharedPrototype; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -243,30 +230,31 @@ procedure TGocciaIntlSegmenterValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if (CurrentRealm = nil) then Exit;
   if (GetIntlSegmenterShared <> nil) then Exit;
 
+  // Built per realm, never cached across realms (ADR 0084): the callbacks bind
+  // to this realm's host, and the [Symbol.toStringTag] string is a GC value
+  // that only this realm's prototype keeps alive.
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmenterSharedSlot, Shared);
-  if Length(FSegmenterPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('segment', IntlSegmenterSegment, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddNamedMethod('resolvedOptions', IntlSegmenterResolvedOptions, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolDataProperty(
-        TGocciaSymbolValue.WellKnownToStringTag,
-        TGocciaStringLiteralValue.Create('Intl.Segmenter'),
-        [pfConfigurable]);
-      FSegmenterPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('segment', IntlSegmenterSegment, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddNamedMethod('resolvedOptions', IntlSegmenterResolvedOptions, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create('Intl.Segmenter'),
+      [pfConfigurable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FSegmenterPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 class procedure TGocciaIntlSegmenterValue.ExposePrototype(const AConstructor: TGocciaObjectValue);
@@ -340,30 +328,28 @@ procedure TGocciaIntlSegmentsValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if (CurrentRealm = nil) then Exit;
   if (GetIntlSegmentsShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmentsSharedSlot, Shared);
-  if Length(FSegmentsPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('containing', IntlSegmentsContaining, 1,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        IntlSegmentsSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FSegmentsPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('containing', IntlSegmentsContaining, 1,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      IntlSegmentsSymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FSegmentsPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
 end;
 
 function TGocciaIntlSegmentsValue.IntlSegmentsContaining(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -610,30 +596,33 @@ procedure TGocciaIntlSegmentIteratorValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
+  PrototypeMembers: TArray<TGocciaMemberDefinition>;
 begin
   if (CurrentRealm = nil) then Exit;
   if (GetIntlSegmentIteratorShared <> nil) then Exit;
 
   Shared := TGocciaSharedPrototype.Create(Self);
   CurrentRealm.SetOwnedSlot(GIntlSegmentIteratorSharedSlot, Shared);
-  if Length(FSegmentIteratorPrototypeMembers) = 0 then
-  begin
-    Members := TGocciaMemberCollection.Create;
-    try
-      Members.AddNamedMethod('next', IntlSegmentIteratorNext, 0,
-        gmkPrototypeMethod, [gmfNoFunctionPrototype]);
-      Members.AddSymbolMethod(
-        TGocciaSymbolValue.WellKnownIterator,
-        '[Symbol.iterator]',
-        IntlSegmentIteratorSymbolIterator,
-        0,
-        [pfConfigurable, pfWritable]);
-      FSegmentIteratorPrototypeMembers := Members.ToDefinitions;
-    finally
-      Members.Free;
-    end;
+  Members := TGocciaMemberCollection.Create;
+  try
+    Members.AddNamedMethod('next', IntlSegmentIteratorNext, 0,
+      gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    Members.AddSymbolMethod(
+      TGocciaSymbolValue.WellKnownIterator,
+      '[Symbol.iterator]',
+      IntlSegmentIteratorSymbolIterator,
+      0,
+      [pfConfigurable, pfWritable]);
+    PrototypeMembers := Members.ToDefinitions;
+  finally
+    Members.Free;
   end;
-  RegisterMemberDefinitions(Shared.Prototype, FSegmentIteratorPrototypeMembers);
+  RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
+  // ECMA-402 %IntlSegmentIteratorPrototype% [ %Symbol.toStringTag% ].
+  Shared.Prototype.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create('Segmenter String Iterator'),
+      [pfConfigurable]));
 end;
 
 function TGocciaIntlSegmentIteratorValue.IntlSegmentIteratorNext(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -679,7 +668,6 @@ begin
 end;
 
 initialization
-  RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GIntlSegmenterSharedSlot := RegisterRealmOwnedSlot('Intl.Segmenter.shared');
   GIntlSegmentsSharedSlot := RegisterRealmOwnedSlot('Intl.Segments.shared');
   GIntlSegmentIteratorSharedSlot := RegisterRealmOwnedSlot('Intl.SegmentIterator.shared');

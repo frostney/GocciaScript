@@ -43,6 +43,11 @@ type
 
 function DefaultCompilerOptimizationOptions: TGocciaCompilerOptimizationOptions; {$IFDEF FPC}inline;{$ENDIF}
 
+// Sets AValue to a value of AKind with every payload field cleared, in place.
+// The XxxCompileTimeValue functions below return the same values, but their
+// function result is a temporary copy of this managed record.
+procedure ResetCompileTimeValue(var AValue: TGocciaCompileTimeValue;
+  const AKind: TGocciaCompileTimeValueKind);
 function UnknownCompileTimeValue: TGocciaCompileTimeValue;
 function UndefinedCompileTimeValue: TGocciaCompileTimeValue;
 function NullCompileTimeValue: TGocciaCompileTimeValue;
@@ -84,81 +89,99 @@ begin
   Result.DirectEvalAvailable := False;
 end;
 
+procedure ResetBigIntValue(var AValue: TBigInteger);
+begin
+  AValue := TBigInteger.Zero;
+end;
+
+procedure ResetCompileTimeValue(var AValue: TGocciaCompileTimeValue;
+  const AKind: TGocciaCompileTimeValueKind);
+begin
+  AValue.Kind := AKind;
+  AValue.BooleanValue := False;
+  AValue.NumberValue := 0.0;
+  AValue.StringValue := '';
+  // In its own routine, so the temporary TBigInteger.Zero needs is not
+  // initialized and finalized by every caller.
+  ResetBigIntValue(AValue.BigIntValue);
+end;
+
 function UnknownCompileTimeValue: TGocciaCompileTimeValue;
 begin
-  Result.Kind := ctvkUnknown;
-  Result.BooleanValue := False;
-  Result.NumberValue := 0.0;
-  Result.StringValue := '';
-  Result.BigIntValue := TBigInteger.Zero;
+  ResetCompileTimeValue(Result, ctvkUnknown);
 end;
 
 function UndefinedCompileTimeValue: TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkUndefined;
+  ResetCompileTimeValue(Result, ctvkUndefined);
 end;
 
 function NullCompileTimeValue: TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkNull;
+  ResetCompileTimeValue(Result, ctvkNull);
 end;
 
 function BooleanCompileTimeValue(
   const AValue: Boolean): TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkBoolean;
+  ResetCompileTimeValue(Result, ctvkBoolean);
   Result.BooleanValue := AValue;
 end;
 
 function NumberCompileTimeValue(const AValue: Double): TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkNumber;
+  ResetCompileTimeValue(Result, ctvkNumber);
   Result.NumberValue := AValue;
 end;
 
 function StringCompileTimeValue(
   const AValue: string): TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkString;
+  ResetCompileTimeValue(Result, ctvkString);
   Result.StringValue := AValue;
 end;
 
 function BigIntCompileTimeValue(
   const AValue: TBigInteger): TGocciaCompileTimeValue;
 begin
-  Result := UnknownCompileTimeValue;
-  Result.Kind := ctvkBigInt;
+  ResetCompileTimeValue(Result, ctvkBigInt);
   Result.BigIntValue := AValue;
 end;
 
 function TryCompileTimeValueFromLiteral(const AValue: TGocciaValue;
   out AConstant: TGocciaCompileTimeValue): Boolean;
 begin
+  // Fill AConstant in place: assigning the XxxCompileTimeValue results would
+  // initialize and finalize a temporary record for every branch on each call.
   Result := True;
 
   if AValue is TGocciaUndefinedLiteralValue then
-    AConstant := UndefinedCompileTimeValue
+    ResetCompileTimeValue(AConstant, ctvkUndefined)
   else if AValue is TGocciaNullLiteralValue then
-    AConstant := NullCompileTimeValue
+    ResetCompileTimeValue(AConstant, ctvkNull)
   else if AValue is TGocciaBooleanLiteralValue then
-    AConstant := BooleanCompileTimeValue(
-      TGocciaBooleanLiteralValue(AValue).Value)
+  begin
+    ResetCompileTimeValue(AConstant, ctvkBoolean);
+    AConstant.BooleanValue := TGocciaBooleanLiteralValue(AValue).Value;
+  end
   else if AValue is TGocciaNumberLiteralValue then
-    AConstant := NumberCompileTimeValue(
-      TGocciaNumberLiteralValue(AValue).Value)
+  begin
+    ResetCompileTimeValue(AConstant, ctvkNumber);
+    AConstant.NumberValue := TGocciaNumberLiteralValue(AValue).Value;
+  end
   else if AValue is TGocciaStringLiteralValue then
-    AConstant := StringCompileTimeValue(
-      TGocciaStringLiteralValue(AValue).Value)
+  begin
+    ResetCompileTimeValue(AConstant, ctvkString);
+    AConstant.StringValue := TGocciaStringLiteralValue(AValue).Value;
+  end
   else if AValue is TGocciaBigIntValue then
-    AConstant := BigIntCompileTimeValue(TGocciaBigIntValue(AValue).Value)
+  begin
+    ResetCompileTimeValue(AConstant, ctvkBigInt);
+    AConstant.BigIntValue := TGocciaBigIntValue(AValue).Value;
+  end
   else
   begin
-    AConstant := UnknownCompileTimeValue;
+    ResetCompileTimeValue(AConstant, ctvkUnknown);
     Result := False;
   end;
 end;

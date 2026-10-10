@@ -47,8 +47,19 @@ const
   // instructions address each other with 24-bit operands, so a count above
   // 2^24 - 1 cannot be compiled.
   REGEXP_MAX_QUANTIFIER_BOUND = $FFFFFF;
+  // An instruction is an 8-bit opcode and a 24-bit operand. Jump and split
+  // targets are instruction indices, so a program holds at most this many
+  // instructions; a lookaround target has one bit less (LOOK_TARGET_MASK).
+  REGEXP_MAX_OPERAND = $FFFFFF;
+  REGEXP_MAX_PROGRAM_LENGTH = REGEXP_MAX_OPERAND;
+  SErrorRegExpTooLarge = 'Invalid regular expression: regular expression too large';
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+{ An instruction word for AOp with operand AOperand. Raises EConvertError
+  (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
+  operand, instead of losing its high bits. }
+function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
+  const AOperand: Integer): UInt32; inline;
 
 implementation
 
@@ -114,6 +125,7 @@ type
     function CurrentPC: Integer;
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
+    procedure AddCapture;
     function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
     function AddStringSet(const AContents: TRegExpClassContents): Integer;
     procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
@@ -385,8 +397,27 @@ begin
     Result := False;
 end;
 
+// The raise lives here so that EncodeRegExpInstruction, which runs once per
+// emitted instruction, can be inlined: in FPC 3.2.2 a function that raises
+// gets a full frame and is not inlined (docs/core-patterns.md, "Managed
+// Locals on Hot Paths").
+procedure RaiseRegExpTooLarge;
+begin
+  raise EConvertError.Create(SErrorRegExpTooLarge);
+end;
+
+function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
+  const AOperand: Integer): UInt32;
+begin
+  if (AOperand < 0) or (AOperand > REGEXP_MAX_OPERAND) then
+    RaiseRegExpTooLarge;
+  Result := UInt32(Ord(AOp)) or (UInt32(AOperand) shl 8);
+end;
+
 procedure TRegExpCompiler.Emit(AInstr: UInt32);
 begin
+  if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
+    RaiseRegExpTooLarge;
   if FCodeLen >= Length(FCode) then
     SetLength(FCode, FCodeLen * 2 + 16);
   FCode[FCodeLen] := AInstr;
@@ -404,7 +435,7 @@ var
   Op: TRegExpOpCode;
 begin
   Op := TRegExpOpCode(FCode[AIndex] and $FF);
-  FCode[AIndex] := UInt32(Ord(Op)) or (UInt32(ATarget) shl 8);
+  FCode[AIndex] := EncodeRegExpInstruction(Op, ATarget);
 end;
 
 function TRegExpCompiler.CurrentPC: Integer;
@@ -417,9 +448,30 @@ begin
   Result := UInt32(Ord(AOp));
 end;
 
+// A lookaround's operand holds its end target in the low 23 bits and the
+// negation flag in the top bit.
+function EncodeLookaroundInstruction(const AOp: TRegExpOpCode;
+  const ATarget: Integer; const ANegated: Boolean): UInt32;
+begin
+  if (ATarget < 0) or (ATarget > LOOK_TARGET_MASK) then
+    RaiseRegExpTooLarge;
+  if ANegated then
+    Result := EncodeRegExpInstruction(AOp, ATarget or LOOK_NEGATED_FLAG)
+  else
+    Result := EncodeRegExpInstruction(AOp, ATarget);
+end;
+
+// A back reference's operand holds the group index in BACKREF_INDEX_MASK.
+procedure TRegExpCompiler.AddCapture;
+begin
+  if FCaptureCount >= BACKREF_INDEX_MASK then
+    RaiseRegExpTooLarge;
+  Inc(FCaptureCount);
+end;
+
 function TRegExpCompiler.EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
 begin
-  Result := UInt32(Ord(AOp)) or (UInt32(ABx) shl 8);
+  Result := EncodeRegExpInstruction(AOp, ABx);
 end;
 
 function TRegExpCompiler.AddCharClass(
@@ -2230,10 +2282,22 @@ begin
       begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
+        begin
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
+          // Saturate one past the largest index, so many digits neither
+          // overflow nor wrap to a small group number.
+          if BackrefIdx > BACKREF_INDEX_MASK then
+            BackrefIdx := BACKREF_INDEX_MASK + 1;
+        end;
         if FUnicode and (BackrefIdx > FPreScanCaptureCount) then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
+        // The index shares its operand with three flag bits. (Without the u
+        // flag, Annex B reads a number above the group count as an escape;
+        // this engine treats it as a back reference, so a number past the
+        // index bits is reported as too large.)
+        if BackrefIdx > BACKREF_INDEX_MASK then
+          RaiseRegExpTooLarge;
         Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
@@ -2609,7 +2673,7 @@ begin
         raise EConvertError.Create('Unterminated lookahead');
       Emit(EncodeOp(RX_MATCH));
       PatchHole(SplitHole, CurrentPC);
-      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC);
+      FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKAHEAD, CurrentPC, False);
     end
     else if Match('!') then
     begin
@@ -2623,7 +2687,7 @@ begin
         raise EConvertError.Create('Unterminated negative lookahead');
       Emit(EncodeOp(RX_MATCH));
       PatchHole(SplitHole, CurrentPC);
-      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC or LOOK_NEGATED_FLAG);
+      FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKAHEAD, CurrentPC, True);
     end
     else if Match('<') then
     begin
@@ -2639,7 +2703,7 @@ begin
           raise EConvertError.Create('Unterminated lookbehind');
         Emit(EncodeOp(RX_MATCH));
         PatchHole(SplitHole, CurrentPC);
-        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC);
+        FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKBEHIND, CurrentPC, False);
       end
       else if Match('!') then
       begin
@@ -2653,12 +2717,12 @@ begin
           raise EConvertError.Create('Unterminated negative lookbehind');
         Emit(EncodeOp(RX_MATCH));
         PatchHole(SplitHole, CurrentPC);
-        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC or LOOK_NEGATED_FLAG);
+        FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKBEHIND, CurrentPC, True);
       end
       else
       begin
         GroupName := ParseGroupName;
-        Inc(FCaptureCount);
+        AddCapture;
         CaptureIdx := FCaptureCount;
         // Backward capture groups still store source-order [start, end] slots.
         if FBackward then
@@ -2683,7 +2747,7 @@ begin
   end
   else
   begin
-    Inc(FCaptureCount);
+    AddCapture;
     CaptureIdx := FCaptureCount;
     // Backward capture groups still store source-order [start, end] slots.
     if FBackward then
@@ -2766,6 +2830,8 @@ end;
 
 procedure TRegExpCompiler.EnsureCodeCapacity(ANeeded: Integer);
 begin
+  if Int64(FCodeLen) + ANeeded > REGEXP_MAX_PROGRAM_LENGTH then
+    RaiseRegExpTooLarge;
   if FCodeLen + ANeeded >= Length(FCode) then
     SetLength(FCode, (FCodeLen + ANeeded) * 2 + 16);
 end;
@@ -2807,7 +2873,7 @@ begin
             Bx := Integer(FCode[J] shr 8);
             NegFlag := Bx and LOOK_NEGATED_FLAG;
             Bx := (Bx and LOOK_TARGET_MASK) + Delta;
-            FCode[J] := EncodeOpBx(Op, Bx or NegFlag);
+            FCode[J] := EncodeLookaroundInstruction(Op, Bx, NegFlag <> 0);
           end;
       end;
     end;
@@ -3198,12 +3264,7 @@ begin
           Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
           Bx := Bx and LOOK_TARGET_MASK;
           if Bx >= APos then
-          begin
-            Inc(Bx);
-            if Negated then
-              Bx := Bx or LOOK_NEGATED_FLAG;
-            FCode[I] := EncodeOpBx(Op, Bx);
-          end;
+            FCode[I] := EncodeLookaroundInstruction(Op, Bx + 1, Negated);
         end;
     end;
   end;

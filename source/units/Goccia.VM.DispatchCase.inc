@@ -126,7 +126,8 @@
       begin
         FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP,
+            DecodeBx(Instruction));
       end;
 
       OP_SET_LOCAL:
@@ -157,7 +158,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             SetRegisterRaw(A, Upvalue.Cell.Value)
           end
           else
@@ -175,7 +176,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
@@ -195,12 +196,28 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
       end;
+
+      OP_CHECK_BINDING_INITIALIZED:
+        if A = CHECK_BINDING_GLOBAL then
+        begin
+          // The global scope's own lookup raises the binding's named
+          // ReferenceError while it is uninitialized.
+          if Assigned(FGlobalScope) then
+            FGlobalScope.TryGetBindingValue(Template.GetConstantUnchecked(
+              DecodeBx(Instruction)).StringValue, GlobalBindingValue);
+        end
+        else if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
+             (Upvalue.Cell.Value.Kind = grkHole) then
+            ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
+        end;
 
       OP_RESOLVE_UPVALUE_REF:
       begin
@@ -233,8 +250,7 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, C);
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
@@ -446,11 +462,19 @@
             Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_PUSH_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
+      end;
 
       OP_PUSH_FINALLY_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth,
           bhkFinally);
+      end;
 
       OP_POP_HANDLER:
         if not FHandlerStack.IsEmpty then
@@ -500,7 +524,7 @@
 
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue)
         else
           FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
@@ -842,7 +866,7 @@
       begin
         FRegisters[A] := GetLocalRegister(B);
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP, B);
         B := A;
         goto LGetPropConstShared;
       end;
@@ -1513,7 +1537,7 @@
           // a local's own register as B, where a hole is a lexical binding
           // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1540,7 +1564,7 @@
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1607,7 +1631,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1681,7 +1705,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1703,7 +1727,7 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue);
         end
         else if RegisterIsNumericScalar(FRegisters[B]) and
@@ -2271,7 +2295,7 @@
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
-          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+          ProfileEntryTimestamp);
         goto LDispatchNext;
       end;
 
@@ -2796,7 +2820,8 @@
             frame, stamp it at the construct site so a trace captured during
             construction locates the `new`, then restore it on success so the
             stamp does not leak onto a later throw in the same function
-            (`new Map(); JSON.parse('{')`). On a throw the frame unwinds. }
+            (`new Map(); JSON.parse('{')`). On a throw, the handler that
+            catches it in this frame clears the stamp (HandleExceptionUnwind). }
           if FCallStack <> nil then
             SavedConstructFrameOk :=
               FCallStack.TryGetTopFrame(SavedConstructFrame)
@@ -3061,10 +3086,6 @@
       OP_SETUP_AUTO_ACCESSOR_CONST:
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue,
           B, RegisterToValue(FRegisters[A]));
-
-      OP_SETUP_AUTO_ACCESSOR_DYNAMIC:
-        SetupAutoAccessorValueByKey(RegisterToValue(FRegisters[A]),
-          Template.GetConstantUnchecked(C).StringValue, B);
 
       OP_BEGIN_DECORATORS:
         BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
@@ -3371,6 +3392,24 @@
           end
           else
             SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
+        end;
+
+      // ES2026 §9.1.1.5.5 CreateImportBinding(envRec, N, M, N2): the global
+      // scope keeps an immutable indirect binding to the module's export, so
+      // a later script against that scope reads the export's current value.
+      // An export the module cannot resolve leaves the predeclared name
+      // uninitialized.
+      OP_CREATE_GLOBAL_IMPORT_BINDING:
+        begin
+          GlobalName := Template.GetConstantUnchecked(C).StringValue;
+          if Assigned(FGlobalScope) and (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
+             TGocciaModuleNamespaceObject(
+               FRegisters[A].ObjectValue).CanResolveExport(GlobalName) then
+            FGlobalScope.CreateImportBinding(
+              Template.GetConstantUnchecked(B).StringValue,
+              TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module,
+              GlobalName);
         end;
 
       OP_EXPORT:
@@ -3758,7 +3797,10 @@
       OP_DEFINE_ACCESSOR_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+          DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), GlobalName,
+            nil, RegisterToValue(FRegisters[A + 1]), B)
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if IsBytecodePrivateKey(GlobalName) then
             DeclareBytecodePrivateNameForClass(
@@ -3786,7 +3828,18 @@
 
       OP_DEFINE_ACCESSOR_DYNAMIC:
       begin
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+        begin
+          RightValue := RegisterToValue(FRegisters[C]);
+          if RightValue is TGocciaSymbolValue then
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), '',
+              RightValue, RegisterToValue(FRegisters[A + 1]), B)
+          else
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]),
+              RightValue.ToStringLiteral.Value, nil,
+              RegisterToValue(FRegisters[A + 1]), B);
+        end
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineStaticSetterPropertyByKey(RegisterToValue(FRegisters[A]),
@@ -4052,5 +4105,20 @@
         goto LDispatchNext;
       end;
         else
-          raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+          // OP_CALL_SELF is a reserved runtime-only opcode outside
+          // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
+          // arguments are read straight out of the caller's registers, as in
+          // OP_CALL: SetupNewFrame copies them before it acquires registers.
+          if Op = OP_CALL_SELF then
+          begin
+            if FThreadPolls^.TimeoutArmed then
+              CheckExecutionTimeout;
+            PushFrame(A, Frame.IP, Template, PrevCovLine,
+              ProfileEntryTimestamp);
+            SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
+              C, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            goto LDispatchNext;
+          end
+          else
+            raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;

@@ -23,7 +23,7 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) | Generic errors; base class for all error types | [Error](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) |
 | [`TypeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) | Property access on `null`/`undefined`, calling a non-function, reassigning `const`, calling a constructor without `new` | [TypeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) |
 | [`ReferenceError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) | Accessing an undeclared variable, using a variable before initialization (TDZ) | [ReferenceError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) |
-| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
+| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`, or in bytecode mode the call stack reaching `--max-memory`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
 | [`SyntaxError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) | Invalid syntax detected by the parser or lexer; also throwable at runtime via `new SyntaxError(...)` | [SyntaxError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) |
 | [`URIError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) | Malformed URI passed to `encodeURI`, `decodeURI`, `encodeURIComponent`, or `decodeURIComponent` | [URIError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) |
 | [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) | Multiple errors wrapped together; used by `Promise.any` when all promises reject | [AggregateError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) |
@@ -260,10 +260,8 @@ RuntimeError: Module not found: "./missing.js"
   Resolved to: /home/user/project/missing.js
 ```
 
-The `-->` line shows the entry path as it was passed on the command line. This
-is interpreter-mode output; bytecode mode currently prints the same failure as
-`Error: Module not found: "./missing.js"` with no `Resolved to:` line
-([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+The `-->` line shows the entry path as it was passed on the command line. Both
+modes print this output.
 
 `--output=json` and `--output=compact-json` do **not** carry it. The JSON
 envelope's `error` object is the documented set of `type`, `message`, `line`,
@@ -365,16 +363,19 @@ try {
 }
 ```
 
-In interpreter mode this prints:
+In bytecode mode this prints:
 
 ```text
 TypeError: Cannot read properties of null (reading 'x')
-    at inner (script.js:2:10)
-    at middle (script.js:8:9)
-    at outer (script.js:11:8)
+    at inner (script.js:2:13)
+    at middle (script.js:5:8)
+    at outer (script.js:8:9)
+    at <module> (script.js:11:8)
 ```
 
-Frame positions after the first are currently wrong in both modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)). In interpreter mode each outer frame shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame (`5:3`). In bytecode mode the first frame is `inner (script.js:2:13)`, every outer frame shows `0:0`, and a final `at <module> (script.js:0:0)` frame is added.
+The first frame is where the error happened. Every other frame is at the call that frame is making: `middle` at its call to `inner` on line 5, and `<module>`, the script's top level, at its call to `outer`. A call is located at its opening parenthesis, where V8 points at the start of the callee (`5:3`). [#1494](https://github.com/frostney/GocciaScript/issues/1494) tracks that column and the other remaining bytecode location differences. Interpreter mode lists no `<module>` frame, and each frame there shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame ([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+
+A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as bytecode mode works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack, in both modes, and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
 
 ## Error.cause
 
@@ -617,8 +618,8 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
   "error": {
     "type": "TypeError",
     "message": "Cannot read properties of null (reading 'x')",
-    "line": null,
-    "column": null,
+    "line": 2,
+    "column": 13,
     "fileName": "script.js"
   },
   "timing": {
@@ -640,8 +641,8 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
       "error": {
         "type": "TypeError",
         "message": "Cannot read properties of null (reading 'x')",
-        "line": null,
-        "column": null,
+        "line": 2,
+        "column": 13,
         "fileName": "script.js"
       },
       "timing": {
@@ -668,9 +669,9 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
 | `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
 | `error.message` | `string` | Error message text |
-| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. Only parse errors carry it today; thrown runtime values report `null` ([#1273](https://github.com/frostney/GocciaScript/issues/1273)) |
-| `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable. Only parse errors carry it today, as for `error.line` |
-| `error.fileName` | `string \| null` | Source file path, or `null` if unavailable |
+| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. For a parse error, where parsing failed. For a thrown error, where the engine recorded the error was created, the location the human-readable `-->` line shows. A thrown value that is not an engine-created error has no location, and neither does an error the interpreter raises at the top level ([#1273](https://github.com/frostney/GocciaScript/issues/1273)) |
+| `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable, as for `error.line` |
+| `error.fileName` | `string \| null` | Source file path, or `null` if unavailable. For a thrown error with a recorded location, the file that location is in, which can be a module the input imported |
 | `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |
 | `memory` | `object \| null` | GC and application heap measurements for the run |
 | `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |

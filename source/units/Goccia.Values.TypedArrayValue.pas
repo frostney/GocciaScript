@@ -82,6 +82,8 @@ type
       const AByteOffset: Integer = 0; const ALength: Integer = -1); overload;
 
     function GetProperty(const AName: string): TGocciaValue; override;
+    function GetPropertyWithContext(const AName: string;
+      const AThisContext: TGocciaValue): TGocciaValue; override;
     procedure DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor); override;
     function TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean; override;
     procedure AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True); override;
@@ -91,6 +93,7 @@ type
     function HasProperty(const AName: string): Boolean; override;
     function HasOwnProperty(const AName: string): Boolean; override;
     function GetOwnPropertyKeys: TArray<string>; override;
+    function GetEnumerablePropertyNames: TArray<string>; override;
     function GetAllPropertyNames: TArray<string>; override;
     function ToStringTag: string; override;
     function TryPreventExtensions: Boolean; override;
@@ -255,7 +258,6 @@ type
     function AdvanceNext: TGocciaObjectValue; override;
     function DirectNext(out ADone: Boolean): TGocciaValue; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
     procedure MarkReferences; override;
   end;
 
@@ -964,31 +966,6 @@ end;
 
 { Prototype initialization }
 
-// Stamp the identity TryGetNamedPropertyWithoutCall matches on, so it
-// recognises the built-in getter itself rather than whatever function a
-// program later defines under the same name.
-procedure MarkSlotGetter(const APrototype: TGocciaObjectValue;
-  const AName: string; const AKind: TGocciaNativeIntrinsicKind);
-var
-  Descriptor: TGocciaPropertyDescriptor;
-  Getter: TGocciaValue;
-begin
-  Descriptor := APrototype.GetOwnPropertyDescriptor(AName);
-  if Descriptor is TGocciaPropertyDescriptorAccessor then
-    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter
-  else
-    Getter := nil;
-  // A miss here would silently send every read of AName through the getter
-  // call: still correct, so no behaviour test could notice.
-  Assert(Getter is TGocciaNativeFunctionValue,
-    '%TypedArray%.prototype.' + AName + ' must have a native getter to ' +
-    'carry its intrinsic kind');
-  // Production builds compile assertions out (source/shared/Shared.inc), so
-  // the type test has to stand on its own before the cast.
-  if Getter is TGocciaNativeFunctionValue then
-    TGocciaNativeFunctionValue(Getter).IntrinsicKind := AKind;
-end;
-
 procedure TGocciaTypedArrayValue.InitializePrototype;
 var
   Members: TGocciaMemberCollection;
@@ -1052,10 +1029,10 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
-  MarkSlotGetter(Shared.Prototype, PROP_BUFFER, nikTypedArrayBuffer);
-  MarkSlotGetter(Shared.Prototype, PROP_BYTE_LENGTH, nikTypedArrayByteLength);
-  MarkSlotGetter(Shared.Prototype, PROP_BYTE_OFFSET, nikTypedArrayByteOffset);
-  MarkSlotGetter(Shared.Prototype, PROP_LENGTH, nikTypedArrayLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BUFFER, nikTypedArrayBuffer);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_LENGTH, nikTypedArrayByteLength);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_BYTE_OFFSET, nikTypedArrayByteOffset);
+  MarkIntrinsicGetter(Shared.Prototype, PROP_LENGTH, nikTypedArrayLength);
   ValuesMethod := Shared.Prototype.GetProperty('values');
   Shared.Prototype.DefineSymbolProperty(
     TGocciaSymbolValue.WellKnownIterator,
@@ -1136,7 +1113,8 @@ end;
 // program defines are all found by the same walk, which then declines and
 // leaves the read to the full lookup. No managed locals: this runs on every
 // named read of a typed array (docs/core-patterns.md, "Managed Locals on Hot
-// Paths").
+// Paths"). The walk is ResolvePropertyWithoutCall's, written out here because
+// the extra call costs about 0.9% of the instructions of a loop of named reads.
 function TGocciaTypedArrayValue.TryGetNamedPropertyWithoutCall(
   const AName: string; out AValue: TGocciaValue): Boolean;
 var
@@ -1181,8 +1159,9 @@ begin
   until (not Assigned(Holder)) or (Holder.ClassType <> TGocciaObjectValue);
 end;
 
-// ES2026 §10.4.5.5 [[Get]](P, Receiver): only a canonical numeric string is
-// answered from the elements; every other key is OrdinaryGet.
+// ES2026 §10.4.5.5 [[Get]](P, Receiver) with this typed array as the receiver:
+// GetPropertyWithContext below, written out so a plain read, the hot case,
+// pays no second virtual call.
 function TGocciaTypedArrayValue.GetProperty(const AName: string): TGocciaValue;
 var
   IsNegativeZero: Boolean;
@@ -1198,7 +1177,36 @@ begin
     Exit;
   end;
   if not TryGetNamedPropertyWithoutCall(AName, Result) then
-    Result := inherited GetProperty(AName);
+    Result := inherited GetPropertyWithContext(AName, Self);
+end;
+
+// ES2026 §10.4.5.5 [[Get]](P, Receiver): Reflect.get, a Proxy without a get
+// trap and a prototype walk from an exotic object reach a typed array here.
+// Every key that is not a canonical numeric string is OrdinaryGet, which calls
+// an accessor with the receiver: TryGetNamedPropertyWithoutCall computes the
+// built-in getters from this typed array's slots, so it stands in for them
+// only when this typed array is the receiver.
+function TGocciaTypedArrayValue.GetPropertyWithContext(const AName: string;
+  const AThisContext: TGocciaValue): TGocciaValue;
+var
+  IsNegativeZero: Boolean;
+  Index: Integer;
+  NumericIndex: Double;
+begin
+  // ES2026 §10.4.5.5 step 1: a canonical numeric string reads this typed
+  // array's element, or undefined for an invalid index, and never the
+  // receiver or the prototype.
+  if TryCanonicalNumericIndexString(AName, NumericIndex, IsNegativeZero) then
+  begin
+    if IsValidIntegerIndexedElement(NumericIndex, IsNegativeZero, Index) then
+      Result := GetElementAsValue(Index)
+    else
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Exit;
+  end;
+  if (AThisContext <> Self) or
+     not TryGetNamedPropertyWithoutCall(AName, Result) then
+    Result := inherited GetPropertyWithContext(AName, AThisContext);
 end;
 
 procedure TGocciaTypedArrayValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean);
@@ -1394,6 +1402,44 @@ begin
   end;
 
   for Key in OwnKeys do
+  begin
+    if TryCanonicalNumericIndexString(Key, NumericIndex, IsNegativeZero) and
+       (not IsNegativeZero) and (NumericIndex >= 0) and
+       (NumericIndex < Len) and (Frac(NumericIndex) = 0.0) then
+      Continue;
+    Result[Count] := Key;
+    Inc(Count);
+  end;
+
+  SetLength(Result, Count);
+end;
+
+{ ES2026 §7.3.23 EnumerableOwnProperties over a typed array: [[OwnPropertyKeys]]
+  (§10.4.5.8) lists every valid integer index first, and [[GetOwnProperty]]
+  (§10.4.5.2) reports each of them as enumerable. The element store is not the
+  property map, so without this override JSON.stringify and the test runner's
+  deep equality saw only the named properties. Same order and the same
+  duplicate filter as GetOwnPropertyKeys. }
+function TGocciaTypedArrayValue.GetEnumerablePropertyNames: TArray<string>;
+var
+  Count, I, Len: Integer;
+  IsNegativeZero: Boolean;
+  Key: string;
+  NamedKeys: TArray<string>;
+  NumericIndex: Double;
+begin
+  Len := GetLength;
+  NamedKeys := inherited GetEnumerablePropertyNames;
+  SetLength(Result, Len + System.Length(NamedKeys));
+  Count := 0;
+
+  for I := 0 to Len - 1 do
+  begin
+    Result[Count] := IntegerToString(I);
+    Inc(Count);
+  end;
+
+  for Key in NamedKeys do
   begin
     if TryCanonicalNumericIndexString(Key, NumericIndex, IsNegativeZero) and
        (not IsNegativeZero) and (NumericIndex >= 0) and
@@ -1689,11 +1735,6 @@ end;
 function TGocciaTypedArrayIteratorValue.ToStringTag: string;
 begin
   Result := 'Array Iterator';
-end;
-
-function TGocciaTypedArrayIteratorValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaTypedArrayIteratorValue.MarkReferences;

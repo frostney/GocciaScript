@@ -69,6 +69,11 @@ type
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
+    // Set once the synthesized "name" or "length" has been deleted, and never
+    // cleared. A property of that key defined later is an ordinary entry in
+    // FProperties, listed where it was created (ES2026 §10.1.11.1
+    // OrdinaryOwnPropertyKeys) rather than in the synthesized slot that
+    // GetAllPropertyNames gives the class's original name and length.
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
@@ -234,16 +239,25 @@ type
     procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
-    procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
-    procedure AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorStaticFieldInitializers;
   end;
 
+  // ES2026 §20.1.1.1 Object ( [ value ] ): a call, or a construction with no
+  // NewTarget other than Object itself, returns ToObject(value) for a value
+  // that is not undefined or null.
+  TGocciaObjectClassValue = class(TGocciaClassValue)
+    function Instantiate(const AArguments: TGocciaArgumentsCollection;
+      const ANewTarget: TGocciaValue = nil): TGocciaValue; override;
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
+  end;
+
   TGocciaArrayClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ES2026 §23.1.1.1 Array ( ...values ): a call constructs like new.
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     // ECMAScript 23.1.1.1: Array constructor length is 1.
     function GetClassLength: Integer; override;
   end;
@@ -294,6 +308,8 @@ type
 
   TGocciaStringClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ES2026 §22.1.1.1 String ( value ): a call converts to a string primitive.
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
       const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 22.1.1.1: String constructor length is 1.
@@ -302,6 +318,8 @@ type
 
   TGocciaNumberClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ES2026 §21.1.1.1 Number ( value ): a call converts to a number primitive.
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
       const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 21.1.1.1: Number constructor length is 1.
@@ -310,6 +328,8 @@ type
 
   TGocciaBooleanClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+    // ES2026 §20.3.1.1 Boolean ( value ): a call converts to a boolean primitive.
+    function Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue; override;
     function DefaultPrototypeForNewTarget(const ANewTarget: TGocciaValue;
       const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
     // ECMAScript 20.3.1.1: Boolean constructor length is 1.
@@ -358,8 +378,6 @@ type
 
   TGocciaResponseClassValue = class(TGocciaClassValue)
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
-    // Fetch spec: Response constructor reports length 1 in WPT/V8.
-    function GetClassLength: Integer; override;
   end;
 
   TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
@@ -543,7 +561,6 @@ uses
   Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.AutoAccessor,
   Goccia.Values.BigIntValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
@@ -1508,45 +1525,6 @@ begin
     FFieldInitializers[OldLen + Idx] := AInitializers[Idx];
 end;
 
-// TC39 proposal-decorators: auto-accessor creates backing getter/setter
-procedure TGocciaClassValue.AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
-begin
-  AddAutoAccessorWithKey(AName, nil, ABackingName, AIsStatic);
-end;
-
-procedure TGocciaClassValue.AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
-var
-  GetterHelper: TGocciaAutoAccessorGetter;
-  SetterHelper: TGocciaAutoAccessorSetter;
-  GetterFn, SetterFn: TGocciaNativeFunctionValue;
-  Target: TGocciaObjectValue;
-  PropertyName: string;
-begin
-  GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
-  SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
-
-  if Assigned(AKey) and not (AKey is TGocciaSymbolValue) then
-    PropertyName := AKey.ToStringLiteral.Value
-  else
-    PropertyName := AName;
-
-  GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + PropertyName, 0);
-  SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + PropertyName, 1);
-
-  // Static auto-accessors go on the constructor; instance ones on the prototype
-  if AIsStatic then
-    Target := Self
-  else
-    Target := FClassPrototype;
-  if AKey is TGocciaSymbolValue then
-    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey),
-      TGocciaPropertyDescriptorAccessor.Create(
-        GetterFn, SetterFn, [pfConfigurable, pfWritable]))
-  else
-    Target.DefineProperty(PropertyName, TGocciaPropertyDescriptorAccessor.Create(
-      GetterFn, SetterFn, [pfConfigurable, pfWritable]));
-end;
-
 procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
 var
   Idx: Integer;
@@ -1959,7 +1937,6 @@ var
   FinalThis: TGocciaValue;
   ConstructResult: TGocciaValue;
   EffectiveNewTarget: TGocciaValue;
-  PreviousRealm: TGocciaRealm;
   DelayNativePrototypeLookup: Boolean;
   NativeInstanceInitialized: Boolean;
   NativeInstanceConstructedByNativeSuper: Boolean;
@@ -1992,30 +1969,6 @@ begin
     EffectiveNewTarget := ANewTarget
   else
     EffectiveNewTarget := Self;
-
-  // ES2026 §20.1.1.1 Object(value): direct Object construction boxes
-  // primitive inputs and returns object inputs unchanged.  Derived Object
-  // subclasses still allocate through NewTarget below.
-  if (FName = CONSTRUCTOR_OBJECT) and (EffectiveNewTarget = Self) and
-     (AArguments.Length > 0) and
-     not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
-     not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
-  begin
-    if AArguments.GetElement(0).IsPrimitive then
-    begin
-      PreviousRealm := CurrentRealm;
-      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-        SetCurrentRealm(FCreationRealm);
-      try
-        Exit(TGocciaObjectValue(AArguments.GetElement(0).Box));
-      finally
-        if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-          SetCurrentRealm(PreviousRealm);
-      end;
-    end;
-    if AArguments.GetElement(0) is TGocciaObjectValue then
-      Exit(TGocciaObjectValue(AArguments.GetElement(0)));
-  end;
 
   NativeClass := nil;
   NativeInstance := nil;
@@ -2358,10 +2311,6 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   inherited DefineProperty(AName, ADescriptor);
-  if AName = PROP_NAME then
-    FNameDeleted := False
-  else if AName = PROP_LENGTH then
-    FLengthDeleted := False;
 end;
 
 function TGocciaClassValue.TryDefineProperty(const AName: string;
@@ -2380,35 +2329,20 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   Result := inherited TryDefineProperty(AName, ADescriptor);
-  if Result then
-  begin
-    if AName = PROP_NAME then
-      FNameDeleted := False
-    else if AName = PROP_LENGTH then
-      FLengthDeleted := False;
-  end;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
   // An assignment to "name" or "length" is checked against the class's own
   // non-writable property, so store the synthesized one first. Once deleted,
   // the class has no own property and the assignment follows the prototype
-  // chain like any other missing key; DefineProperty clears the deleted
-  // marker only if that adds the property.
+  // chain like any other missing key. An assigned name changes only the
+  // property: FName keeps the name the class was created with, which error
+  // messages use, as Object.defineProperty already left it.
   if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
   begin
     MaterializeIntrinsicProperty(AName);
     inherited SetProperty(AName, AValue);
-    if AName = PROP_NAME then
-    begin
-      Descriptor := inherited GetOwnPropertyDescriptor(AName);
-      if (Descriptor is TGocciaPropertyDescriptorData) and
-         (TGocciaPropertyDescriptorData(Descriptor).Value is TGocciaStringLiteralValue) then
-        FName := TGocciaStringLiteralValue(TGocciaPropertyDescriptorData(Descriptor).Value).Value;
-    end;
     Exit;
   end;
 
@@ -2422,12 +2356,9 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
   else if AName = PROP_NAME then
   begin
-    if FNameDeleted then
-      Exit(nil);
-
     // Check if .name was explicitly set (e.g. static name = 'Custom')
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FNameDeleted then
     begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
@@ -2440,14 +2371,11 @@ begin
   end
   else if AName = PROP_LENGTH then
   begin
-    if FLengthDeleted then
-      Exit(nil);
-
     // Honour explicit own-property redefinitions (length is configurable, so
     // userland may override via Object.defineProperty); fall back to a
     // synthesized descriptor only when no own descriptor exists.
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
         TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
   end
@@ -2528,10 +2456,10 @@ function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
   if AName = PROP_PROTOTYPE then
     Result := True
-  else if AName = PROP_NAME then
-    Result := not FNameDeleted
-  else if AName = PROP_LENGTH then
-    Result := not FLengthDeleted
+  else if (AName = PROP_NAME) and not FNameDeleted then
+    Result := True
+  else if (AName = PROP_LENGTH) and not FLengthDeleted then
+    Result := True
   else
     Result := inherited HasOwnProperty(AName);
 end;
@@ -2577,74 +2505,76 @@ begin
   Result := inherited GetOwnSymbolPropertyDescriptor(ASymbol);
 end;
 
-// ES2026 §10.2.2 [[Call]] — class constructors are not callable without new
+// ES2026 §10.2.1 [[Call]] step 4: a class constructor throws when called
+// without new. The built-ins that convert or construct on a call (String,
+// Number, Boolean, Array, Object) override this in their own class value, so
+// the behaviour is fixed when the constructor is created and the class's
+// name plays no part in it.
 function TGocciaClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   PreviousRealm: TGocciaRealm;
 begin
-  // String/Number/Boolean act as type conversion functions when called without new
-  // ES2026 §22.1.1.1 String(value) — Symbol returns SymbolDescriptiveString
-  if FName = CONSTRUCTOR_STRING then
-  begin
-    if AArguments.Length = 0 then
-      Result := TGocciaStringLiteralValue.Create('')
-    else
-      Result := ToStringConstructorValue(AArguments.GetElement(0), True);
-  end
-  else if FName = CONSTRUCTOR_NUMBER then
-  begin
-    if AArguments.Length = 0 then
-      Result := TGocciaNumberLiteralValue.ZeroValue
-    else
-      Result := ToNumberConstructorValue(AArguments.GetElement(0));
-  end
-  else if FName = CONSTRUCTOR_BOOLEAN then
-  begin
-    if AArguments.Length = 0 then
-      Result := TGocciaBooleanLiteralValue.FalseValue
-    else
-      Result := AArguments.GetElement(0).ToBooleanLiteral;
-  end
-  else if FName = CONSTRUCTOR_ARRAY then
-    Result := Instantiate(AArguments)
-  // ES2026 §20.1.1.1 Object(value): ToObject for primitives, new empty object otherwise
-  else if FName = CONSTRUCTOR_OBJECT then
-  begin
-    if (AArguments.Length > 0) and
-       not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
-       not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
-    begin
-      if AArguments.GetElement(0).IsPrimitive then
-      begin
-        PreviousRealm := CurrentRealm;
-        if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-          SetCurrentRealm(FCreationRealm);
-        try
-          Result := AArguments.GetElement(0).Box;
-        finally
-          if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-            SetCurrentRealm(PreviousRealm);
-        end;
-      end
-      else
-        Result := AArguments.GetElement(0);
-    end
-    else
-      Result := Instantiate(AArguments);
-  end
-  else
-  begin
-    PreviousRealm := CurrentRealm;
+  Result := nil;
+  PreviousRealm := CurrentRealm;
+  if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
+    SetCurrentRealm(FCreationRealm);
+  try
+    ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]),
+      SSuggestRequiresNew);
+  finally
     if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-      SetCurrentRealm(FCreationRealm);
-    try
-      ThrowTypeError(Format(SErrorClassConstructorRequiresNew, [FName]),
-        SSuggestRequiresNew);
-    finally
-      if Assigned(FCreationRealm) and (FCreationRealm <> PreviousRealm) then
-        SetCurrentRealm(PreviousRealm);
+      SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+{ TGocciaObjectClassValue }
+
+// Boxes a primitive in the realm that created Object, so the wrapper's
+// prototype comes from that realm.
+function BoxInCreationRealm(const AValue: TGocciaValue;
+  const ACreationRealm: TGocciaRealm): TGocciaValue;
+var
+  PreviousRealm: TGocciaRealm;
+begin
+  PreviousRealm := CurrentRealm;
+  if Assigned(ACreationRealm) and (ACreationRealm <> PreviousRealm) then
+    SetCurrentRealm(ACreationRealm);
+  try
+    Result := AValue.Box;
+  finally
+    if Assigned(ACreationRealm) and (ACreationRealm <> PreviousRealm) then
+      SetCurrentRealm(PreviousRealm);
+  end;
+end;
+
+// ES2026 §20.1.1.1 Object ( [ value ] ): direct Object construction boxes
+// primitive inputs and returns object inputs unchanged. A construction with
+// another NewTarget (a subclass of Object) allocates through it.
+function TGocciaObjectClassValue.Instantiate(
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue): TGocciaValue;
+var
+  Value: TGocciaValue;
+begin
+  if (not Assigned(ANewTarget) or (ANewTarget = Self)) and
+     (AArguments.Length > 0) then
+  begin
+    Value := AArguments.GetElement(0);
+    if not (Value is TGocciaUndefinedLiteralValue) and
+       not (Value is TGocciaNullLiteralValue) then
+    begin
+      if Value.IsPrimitive then
+        Exit(BoxInCreationRealm(Value, FCreationRealm));
+      if Value is TGocciaObjectValue then
+        Exit(Value);
     end;
   end;
+  Result := inherited Instantiate(AArguments, ANewTarget);
+end;
+
+function TGocciaObjectClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := Instantiate(AArguments);
 end;
 
 { TGocciaArrayClassValue }
@@ -2652,6 +2582,11 @@ end;
 function TGocciaArrayClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaArrayValue.Create;
+end;
+
+function TGocciaArrayClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := Instantiate(AArguments);
 end;
 
 function TGocciaArrayClassValue.GetClassLength: Integer;
@@ -2860,11 +2795,6 @@ begin
   Result := TGocciaResponseValue.Create;
 end;
 
-function TGocciaResponseClassValue.GetClassLength: Integer;
-begin
-  Result := 1;
-end;
-
 { TGocciaStringClassValue }
 
 function TGocciaStringClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
@@ -2876,6 +2806,15 @@ begin
   else
     Prim := ToStringConstructorValue(AArguments.GetElement(0), False);
   Result := Prim.Box;
+end;
+
+// Symbol returns SymbolDescriptiveString here, unlike new String(symbol).
+function TGocciaStringClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArguments.Length = 0 then
+    Result := TGocciaStringLiteralValue.Create('')
+  else
+    Result := ToStringConstructorValue(AArguments.GetElement(0), True);
 end;
 
 function TGocciaStringClassValue.DefaultPrototypeForNewTarget(
@@ -2904,6 +2843,14 @@ begin
   Result := Prim.Box;
 end;
 
+function TGocciaNumberClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArguments.Length = 0 then
+    Result := TGocciaNumberLiteralValue.ZeroValue
+  else
+    Result := ToNumberConstructorValue(AArguments.GetElement(0));
+end;
+
 function TGocciaNumberClassValue.DefaultPrototypeForNewTarget(
   const ANewTarget: TGocciaValue;
   const ACurrentRealmDefault: TGocciaObjectValue): TGocciaObjectValue;
@@ -2928,6 +2875,14 @@ begin
   else
     Prim := AArguments.GetElement(0).ToBooleanLiteral;
   Result := Prim.Box;
+end;
+
+function TGocciaBooleanClassValue.Call(const AArguments: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AArguments.Length = 0 then
+    Result := TGocciaBooleanLiteralValue.FalseValue
+  else
+    Result := AArguments.GetElement(0).ToBooleanLiteral;
 end;
 
 function TGocciaBooleanClassValue.DefaultPrototypeForNewTarget(

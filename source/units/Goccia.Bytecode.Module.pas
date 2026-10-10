@@ -14,14 +14,35 @@ type
     LocalSlot: UInt16;
   end;
 
+  { One static module request of the compiled program, in source order: an
+    evaluation-phase import or a re-export. ModulePath is the request as
+    EncodeImportSpecifierAttribute writes it; Bindings name what the program
+    imports or re-exports from it. Line and Column locate the declaration
+    and are not serialized, so a module read from a .gbc file reports 0. }
   TGocciaModuleImport = record
     ModulePath: string;
     Bindings: array of TGocciaModuleBinding;
+    Line: Integer;
+    Column: Integer;
   end;
+
+  { How an export of a module-source entry is bound (ES2026 §16.2.1.7
+    ExportEntry Records). A local export names a binding of the program's
+    own, which its OP_EXPORTs initialize and update. Every other kind names
+    the module request it comes from: an indirect export forwards ImportName
+    of that module, a namespace export is that module's namespace object, a
+    star export forwards every name the module exports but default, and a
+    source or deferred namespace export is that phase's value of the
+    module. }
+  TGocciaModuleExportKind = (mekLocal, mekIndirect, mekNamespace, mekStar,
+    mekSource, mekDeferredNamespace);
 
   TGocciaModuleExport = record
     Name: string;
     LocalSlot: UInt16;
+    Kind: TGocciaModuleExportKind;
+    ModuleRequest: string;
+    ImportName: string;
   end;
 
   TGocciaBytecodeModule = class(TGocciaCompiledModule)
@@ -40,8 +61,11 @@ type
     destructor Destroy; override;
 
     procedure AddImport(const AModulePath: string;
-      const ABindings: array of TGocciaModuleBinding);
-    procedure AddExport(const AName: string; const ALocalSlot: UInt16);
+      const ABindings: array of TGocciaModuleBinding;
+      const ALine: Integer = 0; const AColumn: Integer = 0);
+    procedure AddExport(const AName: string; const ALocalSlot: UInt16;
+      const AKind: TGocciaModuleExportKind = mekLocal;
+      const AModuleRequest: string = ''; const AImportName: string = '');
 
     function GetImport(const AIndex: Integer): TGocciaModuleImport;
     function GetExport(const AIndex: Integer): TGocciaModuleExport;
@@ -79,7 +103,8 @@ begin
 end;
 
 procedure TGocciaBytecodeModule.AddImport(const AModulePath: string;
-  const ABindings: array of TGocciaModuleBinding);
+  const ABindings: array of TGocciaModuleBinding; const ALine,
+  AColumn: Integer);
 var
   I: Integer;
 begin
@@ -89,16 +114,22 @@ begin
   SetLength(FImports[FImportCount].Bindings, Length(ABindings));
   for I := 0 to High(ABindings) do
     FImports[FImportCount].Bindings[I] := ABindings[I];
+  FImports[FImportCount].Line := ALine;
+  FImports[FImportCount].Column := AColumn;
   Inc(FImportCount);
 end;
 
 procedure TGocciaBytecodeModule.AddExport(const AName: string;
-  const ALocalSlot: UInt16);
+  const ALocalSlot: UInt16; const AKind: TGocciaModuleExportKind;
+  const AModuleRequest, AImportName: string);
 begin
   if FExportCount >= Length(FExports) then
     SetLength(FExports, FExportCount * 2 + 4);
   FExports[FExportCount].Name := AName;
   FExports[FExportCount].LocalSlot := ALocalSlot;
+  FExports[FExportCount].Kind := AKind;
+  FExports[FExportCount].ModuleRequest := AModuleRequest;
+  FExports[FExportCount].ImportName := AImportName;
   Inc(FExportCount);
 end;
 

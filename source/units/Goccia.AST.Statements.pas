@@ -337,6 +337,10 @@ type
     FieldInitializer: TGocciaExpression;
     StaticBlockBody: TGocciaBlockStatement;
     TypeAnnotation: string;
+    { cekAccessor only: the private name that holds the value. A private
+      auto-accessor stores it under its own name; a public one under a name
+      no source text can spell (see TGocciaParser.AutoAccessorStorageName). }
+    AccessorStorageName: string;
   end;
 
   TGocciaFieldOrderEntry = record
@@ -346,6 +350,9 @@ type
     ElementIndex: Integer;
     ComputedKeyExpression: TGocciaExpression;
     FieldInitializer: TGocciaExpression;
+    { The entry stores an auto-accessor's value; ElementIndex names the
+      accessor, whose own name is the one its initializer is named after. }
+    IsAutoAccessorStorage: Boolean;
   end;
 
   TGocciaClassElementArray = array of TGocciaClassElement;
@@ -690,30 +697,6 @@ begin
   SourceText := LiteralExpression.SourceText;
   Result := (SourceText = #34 + USE_STRICT_DIRECTIVE + #34) or
     (SourceText = #39 + USE_STRICT_DIRECTIVE + #39);
-end;
-
-function IsAnonymousFunctionNameInitializer(
-  const AExpression: TGocciaExpression): Boolean;
-begin
-  Result := Assigned(AExpression) and
-    ((AExpression is TGocciaArrowFunctionExpression) or
-     ((AExpression is TGocciaFunctionExpression) and
-      (TGocciaFunctionExpression(AExpression).Name = '')) or
-     ((AExpression is TGocciaClassExpression) and
-      (TGocciaClassExpression(AExpression).ClassDefinition.Name = '')));
-end;
-
-procedure ApplyInferredNameForVariableInitializer(
-  const AInitializer: TGocciaExpression; const AValue: TGocciaValue;
-  const AName: string);
-begin
-  if not IsAnonymousFunctionNameInitializer(AInitializer) then
-    Exit;
-
-  if AValue is TGocciaFunctionValue then
-    TGocciaFunctionValue(AValue).SetInferredName(AName)
-  else if AValue is TGocciaClassValue then
-    TGocciaClassValue(AValue).SetInferredName(AName);
 end;
 
 // ES2026 §11.2.2 Directive Prologues and the Use Strict Directive
@@ -1299,7 +1282,8 @@ end;
           ResolvedObjectBinding, ResolvedScopeBinding);
       end;
       try
-        Value := EvaluateExpression(Variables[I].Initializer, AContext);
+        Value := EvaluateNamedExpression(Variables[I].Initializer, AContext,
+          Variables[I].Name);
       except
         on E: EGocciaGeneratorYield do
         begin
@@ -1314,8 +1298,6 @@ end;
           raise;
         end;
       end;
-      ApplyInferredNameForVariableInitializer(Variables[I].Initializer,
-        Value, Variables[I].Name);
 
       { Strict-types enforcement: when --strict-types is enabled, an
         explicit type annotation (e.g. `let x: number = ...`) is
@@ -1667,16 +1649,7 @@ end;
        AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
       Exit(TGocciaControlFlow.Empty);
 
-    Value := EvaluateExpression(Expression, AContext);
-    if ((Expression is TGocciaArrowFunctionExpression) or
-       ((Expression is TGocciaFunctionExpression) and
-       (TGocciaFunctionExpression(Expression).Name = ''))) and
-       (Value is TGocciaFunctionValue) then
-      TGocciaFunctionValue(Value).SetInferredName(KEYWORD_DEFAULT)
-    else if (Expression is TGocciaClassExpression) and
-            (TGocciaClassExpression(Expression).ClassDefinition.Name = '') and
-            (Value is TGocciaClassValue) then
-      TGocciaClassValue(Value).SetInferredName(KEYWORD_DEFAULT);
+    Value := EvaluateNamedExpression(Expression, AContext, KEYWORD_DEFAULT);
 
     if AContext.Scope.ContainsOwnLexicalBinding(LocalName) then
       AContext.Scope.ForceUpdateBinding(LocalName, Value)
