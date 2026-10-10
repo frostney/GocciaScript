@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-10
 **Area:** `bytecode runtime`, `compiler`, `eval`, `ShadowRealm`
-**Related:** [#872](https://github.com/frostney/GocciaScript/issues/872), epic [#825](https://github.com/frostney/GocciaScript/issues/825), [#875](https://github.com/frostney/GocciaScript/issues/875), [#874](https://github.com/frostney/GocciaScript/issues/874), [#1342](https://github.com/frostney/GocciaScript/issues/1342), [#1433](https://github.com/frostney/GocciaScript/pull/1433), [ADR 0005](0005-register-based-bytecode.md), [ADR 0048](0048-opt-in-non-strict-compatibility.md), [ADR 0085](0085-defer-annex-b-before-1-0.md), [ADR 0131](0131-bytecode-frame-positions-at-capture.md)
+**Related:** [#872](https://github.com/frostney/GocciaScript/issues/872), epic [#825](https://github.com/frostney/GocciaScript/issues/825), [#871](https://github.com/frostney/GocciaScript/issues/871), [#875](https://github.com/frostney/GocciaScript/issues/875), [#874](https://github.com/frostney/GocciaScript/issues/874), [#1342](https://github.com/frostney/GocciaScript/issues/1342), [#1433](https://github.com/frostney/GocciaScript/pull/1433), [ADR 0005](0005-register-based-bytecode.md), [ADR 0048](0048-opt-in-non-strict-compatibility.md), [ADR 0085](0085-defer-annex-b-before-1-0.md), [ADR 0131](0131-bytecode-frame-positions-at-capture.md)
 
 ## Context
 
@@ -702,7 +702,7 @@ bytecode mode, on the pinned test262 commit, over the tests that reference
 ## Decisions taken on review
 
 Johannes accepted the three points the proposal left open, and added a
-fourth:
+fourth and a fifth:
 
 1. **Lifetime of compiled eval code.** It lives as long as the engine, the
    same as the `Function` constructor's code. Phase 4's per-call-site cache
@@ -718,3 +718,11 @@ fourth:
    gaps. Phase 0 completes the record in today's bridge, enforces it with an
    invariant check over the corpus, and fixes every bridge defect in the
    measured table, before Phase 1 starts.
+5. **Phases 0 to 3 land before #871.** Bytecode becomes the default only
+   once direct eval is compiled. Phase 0 leaves one bytecode-only defect
+   that the bridge cannot fix without a silently wrong result: a sloppy
+   function with parameter expressions whose body evals a `var` named like
+   a parameter (`function g(X, y = 0) { eval("var X = 2"); return X }`
+   throws `SyntaxError` instead of giving `2`). Its fix is the hidden
+   variable object of Phase 3-sloppy, and every bytecode-only defect gates
+   #871, so #871 waits for Phase 3. Phase 4 does not gate it.
