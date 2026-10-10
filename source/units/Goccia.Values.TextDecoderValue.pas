@@ -62,6 +62,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TypedArrayValue;
 
 var
@@ -179,6 +180,11 @@ begin
     Members.AddAccessor(PROP_IGNORE_BOM, IgnoreBOMGetter, nil, [pfConfigurable]);
     Members.AddNamedMethod(PROP_DECODE, Decode, 1, gmkPrototypeMethod,
       [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_TEXT_DECODER),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

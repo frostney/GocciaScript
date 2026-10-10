@@ -102,7 +102,9 @@ uses
   Goccia.Realm,
   Goccia.Utils,
   Goccia.Values.Error,
-  Goccia.Values.ErrorHelper;
+  Goccia.Values.ErrorHelper,
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 const
   ALREADY_DISPATCHING_MESSAGE =
@@ -199,6 +201,11 @@ begin
       [gmfNoFunctionPrototype]);
     Members.AddNamedMethod(PROP_DISPATCH_EVENT, DispatchEventMethod, 1,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_EVENT_TARGET),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

@@ -537,6 +537,19 @@ begin
   if Assigned(MessageValue) and not (MessageValue is TGocciaUndefinedLiteralValue) then
     AErrorInfo.Message := MessageValue.ToStringLiteral.Value;
 
+  // Where the engine recorded the error was created: the same location the
+  // human-readable output's `-->` line shows. The guest-writable `stack`
+  // string is never read for it.
+  if (ErrorObject is TGocciaErrorObjectValue) and ErrorObject.HasErrorData and
+     TGocciaErrorObjectValue(ErrorObject).HasErrorSourceLocation and
+     (TGocciaErrorObjectValue(ErrorObject).ErrorSourceLine > 0) then
+  begin
+    if TGocciaErrorObjectValue(ErrorObject).ErrorSourcePath <> '' then
+      AErrorInfo.FileName := TGocciaErrorObjectValue(ErrorObject).ErrorSourcePath;
+    AErrorInfo.Line := TGocciaErrorObjectValue(ErrorObject).ErrorSourceLine;
+    AErrorInfo.Column := TGocciaErrorObjectValue(ErrorObject).ErrorSourceColumn;
+  end;
+
   Result := (AErrorInfo.ErrorType <> '') or (AErrorInfo.Message <> '');
 end;
 

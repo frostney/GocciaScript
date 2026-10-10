@@ -8128,7 +8128,6 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8194,16 +8193,6 @@ begin
         end;
       end;
     end;
-  end
-  else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
   end;
 end;
 
@@ -8214,7 +8203,6 @@ procedure InitializeRawPrivateInstanceProperty(
 procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8277,16 +8265,7 @@ begin
     end;
   end
   else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
     InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
-  end;
 end;
 
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -9048,7 +9027,6 @@ var
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   InitializerResults: TArray<TGocciaValue>;
-  AccessorBackingName: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   StaticFieldContext: TGocciaEvaluationContext;
   StaticFieldScope: TGocciaScope;
@@ -9175,6 +9153,50 @@ var
       ClassValue.Prototype.DefineProperty(AName,
         TGocciaPropertyDescriptorAccessor.Create(
           AGetter, ASetter, [pfConfigurable, pfWritable]));
+  end;
+
+  { TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+    `accessor`: the getter and setter are defined together, in element order,
+    with DefinePropertyOrThrow as an enumerable, configurable accessor, so
+    the pair replaces whatever a member declared earlier under the same key
+    defined. AKey is nil for a literal name. }
+  procedure DefineAutoAccessorProperty(const AElem: TGocciaClassElement;
+    const AKey: TGocciaValue);
+  var
+    AccessorGetter, AccessorSetter: TGocciaFunctionValue;
+    Target: TGocciaObjectValue;
+    Descriptor: TGocciaPropertyDescriptorAccessor;
+  begin
+    AccessorGetter := BuildClassGetter(AElem.GetterNode);
+    { Nothing holds the getter until the descriptor is stored. }
+    TGarbageCollector.Instance.AddTempRoot(AccessorGetter);
+    try
+      AccessorSetter := BuildClassSetter(AElem.SetterNode);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(AccessorGetter);
+    end;
+    if Assigned(AKey) then
+    begin
+      AccessorGetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'get'));
+      AccessorSetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'set'));
+    end
+    else
+    begin
+      AccessorGetter.SetInferredName('get ' + AElem.Name);
+      AccessorSetter.SetInferredName('set ' + AElem.Name);
+    end;
+    if AElem.IsStatic then
+      Target := ClassValue
+    else
+      Target := ClassValue.Prototype;
+    Descriptor := TGocciaPropertyDescriptorAccessor.Create(AccessorGetter,
+      AccessorSetter, [pfEnumerable, pfConfigurable]);
+    if AKey is TGocciaSymbolValue then
+      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+    else if Assigned(AKey) then
+      Target.DefineProperty(AKey.ToStringLiteral.Value, Descriptor)
+    else
+      Target.DefineProperty(AElem.Name, Descriptor);
   end;
 
   procedure EvaluateClassCallableElements;
@@ -9341,6 +9363,9 @@ var
             else
               ClassValue.AddSetter(Elem.Name, SetterFunction);
           end;
+          cekAccessor:
+            if not Elem.IsPrivate then
+              DefineAutoAccessorProperty(Elem, nil);
         end;
         Continue;
       end;
@@ -9375,7 +9400,7 @@ var
         cekField:
           ;
         cekAccessor:
-          ;
+          DefineAutoAccessorProperty(Elem, ComputedKey);
         cekMethod:
         begin
           Method := TGocciaMethodValue(EvaluateClassMethod(
@@ -9703,53 +9728,13 @@ begin
     ClassValue.SetFieldOrder(FieldOrderEntries);
   end;
 
-  // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    if AClassDef.FElements[I].Kind = cekAccessor then
-    begin
-      Elem := AClassDef.FElements[I];
-      ComputedKey := nil;
-      AccessorBackingName := '__accessor_' + Elem.Name;
-      if Elem.IsComputed then
-      begin
-        if I <= High(ResolvedComputedElementKeys) then
-          ComputedKey := ResolvedComputedElementKeys[I];
-        if not Assigned(ComputedKey) then
-          ComputedKey := ToPropertyKey(EvaluateExpression(
-            Elem.ComputedKeyExpression, ClassStrictContext));
-        AccessorBackingName := '__accessor_computed_' + IntToStr(I);
-      end;
-
-      if Elem.IsPrivate then
-      begin
-        if not Elem.IsStatic then
-          ClassValue.AddPrivateInstanceProperty(Elem.Name,
-            Elem.FieldInitializer);
-        Continue;
-      end;
-
-      if Assigned(Elem.FieldInitializer) then
-        ClassValue.AddInstanceProperty(AccessorBackingName,
-          Elem.FieldInitializer);
-
-      if Elem.IsComputed then
-        ClassValue.AddAutoAccessorWithKey(
-          Elem.Name, ComputedKey, AccessorBackingName, Elem.IsStatic)
-      else
-        ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
-    end;
-  end;
-
   // ES2022 §15.7.14: evaluate static fields and static blocks in source order
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
       ExecuteStaticBlock(Elem.StaticBlockBody, ClassStrictContext, ClassValue)
-    else if ((Elem.Kind = cekField) or
-             ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
-            Elem.IsStatic then
+    else if (Elem.Kind in [cekField, cekAccessor]) and Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
@@ -9770,7 +9755,13 @@ begin
       end
       else
         PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Elem.IsPrivate then
+      { An auto-accessor's value goes to its storage, a private name for a
+        public accessor as well (proposal-decorators InitializeFieldOrAccessor
+        on F with the element's [[BackingStorageKey]]). }
+      if Elem.Kind = cekAccessor then
+        ClassValue.AddPrivateStaticProperty(Elem.AccessorStorageName,
+          PropertyValue)
+      else if Elem.IsPrivate then
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
