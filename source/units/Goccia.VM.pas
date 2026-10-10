@@ -201,11 +201,16 @@ type
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
-    // Depth of native VM re-entries (ExecuteClosureRegistersInternal invocations
-    // nested via generator resume, host eval, or native callbacks). Bounded
-    // separately from FFrameDepth because each native re-entry costs a real
-    // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
+    // Depth of native VM re-entries (ExecuteClosureRegistersInternal
+    // invocations: constructors, async functions, generator resume, accessors,
+    // Proxy traps, host eval and native callbacks). Each one costs a real
+    // native stack frame, so besides counting against --max-stack through
+    // FFrameDepth it is refused once the native stack runs low (see
+    // CheckNativeStackHeadroom in Goccia.StackLimit).
     FNativeExecutionDepth: Integer;
+    // NativeStackLimit of the thread the VM is bound to, looked up by the
+    // first check that needs it after BindToCurrentThread.
+    FNativeStackLimit: NativeUInt;
     FMemoryPressureCheckCountdown: Integer;
     // The register, local-cell, argument, frame and closed-numeric-frame
     // stacks are charged to the collector for everything they grow past their
@@ -592,6 +597,11 @@ type
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
       const ASuggestion: string = '';
       const ASuggestionIsHostOnly: Boolean = False);
+    function TryUnwindToHandler(const AErrorValue: TGocciaValue;
+      const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+      ASavedHandlerCount: Integer;
+      var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
@@ -6855,6 +6865,7 @@ constructor TGocciaVM.Create;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
   // that SetupNewFrame pushes on the hot path. This is class-level, so it is
@@ -15100,6 +15111,7 @@ begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
     FExecutionSourcePath := '';
@@ -15453,6 +15465,25 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
   const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
+begin
+  // Outermost frame: let the finally block handle teardown. The suggestion
+  // travels with the throw so a host runner can render the same
+  // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
+  if not TryUnwindToHandler(AErrorValue, AInitialFrameStackCount,
+     AInitialClosedNumericFrameCount, ASavedHandlerCount, AFrame, ATemplate,
+     APrevCovLine, AProfileTimestamp) then
+    raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
+      ASuggestionIsHostOnly);
+end;
+
+// Pops trampoline frames until one of this native entry's handlers catches
+// AErrorValue, and points AFrame at it. False once the entry's outermost
+// frame has no handler for it, which the caller raises.
+function TGocciaVM.TryUnwindToHandler(const AErrorValue: TGocciaValue;
+  const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+  ASavedHandlerCount: Integer;
+  var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -15493,14 +15524,10 @@ begin
       if Assigned(FCallStack) then
         FCallStack.ClearTopFrameLocation;
       SetRegister(Handler.CatchRegister, AErrorValue);
-      Exit;
+      Exit(True);
     end;
-    // Outermost frame: let the finally block handle teardown. The suggestion
-    // travels with the throw so a host runner can render the same
-    // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
-        ASuggestionIsHostOnly);
+      Exit(False);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -15530,6 +15557,20 @@ begin
     Generator.FClosure.Template.ParameterPreambleSize,
     Generator);
 end;
+
+{ A typed arithmetic or comparison opcode's operands, when one of them is not
+  a number. Out of line, so that the conversion's call to ToNumber is not
+  inlined into the dispatch loop: an inlined call there makes the compiler
+  keep a stack slot for the left operand, which it holds across the call, in
+  every native re-entry's frame, one slot per opcode. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure RegistersToDoubles(const ALeft, ARight: TGocciaRegister;
+  out ALeftNumber, ARightNumber: Double);
+begin
+  ALeftNumber := RegisterToDouble(ALeft);
+  ARightNumber := RegisterToDouble(ARight);
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
 
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
@@ -15601,6 +15642,14 @@ var
   ChildTemplate: TGocciaFunctionTemplate;
   LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
   NumericValue: Double;
+  // The operands of a typed arithmetic or comparison opcode when one is not a
+  // number, converted out of line by RegistersToDoubles.
+  LeftDouble, RightDouble: Double;
+  // A throw that no handler of this entry catches, and the error value a
+  // Pascal error was converted to, kept from the except block that caught it
+  // to the raise after it.
+  EscapingThrow: EGocciaBytecodeThrow;
+  CaughtValue: TGocciaValue;
   PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
@@ -15846,13 +15895,19 @@ var
 
 begin
   // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
-  // frame. Bound the native re-entry depth before any state is saved so the
-  // throw unwinds cleanly (the matching Inc/Dec are paired with the try/finally
-  // below). Without this, generator resume / eval / native-callback recursion
-  // overflows the native stack (SIGSEGV) instead of throwing RangeError.
-  CheckNativeReentryDepth(FNativeExecutionDepth + 1);
+  // frame. Both checks run before any state is saved, so their throw unwinds
+  // cleanly (the matching Inc/Dec are paired with the try/finally below).
+  //
+  // The frame SetupNewFrame pushes is a function call, and counts against
+  // --max-stack like one PushFrame pushes: FFrameDepth includes the outermost
+  // frame, which is not a nested call, so this is the FFrameDepth-th.
+  CheckStackDepth(FFrameDepth);
   if FNativeExecutionDepth = 0 then
     BindToCurrentThread;
+  // Each entry also costs kilobytes of native stack. Without this, recursion
+  // through constructors, generators or callbacks overflows the native stack
+  // (SIGSEGV) once --max-stack allows more entries than the stack holds.
+  CheckNativeStackHeadroom(FNativeExecutionDepth + 1, FNativeStackLimit);
   // Grown before any state is saved, so that EnterActivation cannot fail.
   if FActivationCount >= Length(FActivations) then
     SetLength(FActivations, FActivationCount * 2 + 8);
@@ -16010,6 +16065,7 @@ begin
     end;
     Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
+    EscapingThrow := nil;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
@@ -16123,42 +16179,67 @@ LDispatchNext:
 LInnerLoopsDone:
       except
         on E: EGocciaBytecodeThrow do
-          HandleExceptionUnwind(E.ThrownValue,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.ThrownValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.ThrownValue,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaThrowValue do
-          HandleExceptionUnwind(E.Value,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.Value,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.Value,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaTypeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(TYPE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaReferenceError do
-          HandleExceptionUnwind(
-            CreateErrorObject(REFERENCE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaSyntaxError do
-          HandleExceptionUnwind(
-            CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaRuntimeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
       end;
+      // Raised only once the except block is done. On i386-win32, FPC runs an
+      // except block on top of the stack the exception was raised on, and
+      // only gives that stack back when the block ends, so a throw raised
+      // inside it would keep every native entry it passes through on the
+      // stack until the throw is caught: from deep recursion, megabytes.
+      if Assigned(EscapingThrow) then
+        raise EscapingThrow;
     end;
     Result := RegisterUndefined;
     finally

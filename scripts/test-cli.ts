@@ -3546,6 +3546,102 @@ console.log("--max-stack (bytecode trampoline)...");
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
 }
 
+// Constructors, async functions, generators, accessors, Proxy traps,
+// ToPrimitive methods and callbacks from built-ins are entered by a native
+// re-entry of the bytecode VM. Each is a nested call, and --max-stack counts
+// it. Every script counts the calls that started in n and prints
+// "RangeError <n>" once the limit stops it.
+const nativeReentryShapes: Record<string, string> = {
+  constructor: "class A { constructor() { n++; new A(); } } try { new A(); } catch (e) { console.log(e.name, n); }",
+  "async function": "const f = async () => { n++; await f(); }; f().catch((e) => console.log(e.name, n));",
+  "generator next()": "const o = { *g() { n++; o.g().next(); yield; } }; try { o.g().next(); } catch (e) { console.log(e.name, n); }",
+  getter: "const o = { get x() { n++; return o.x; } }; try { o.x; } catch (e) { console.log(e.name, n); }",
+  setter: "const o = { set x(v) { n++; o.x = v; } }; try { o.x = 1; } catch (e) { console.log(e.name, n); }",
+  "Proxy trap": "const p = new Proxy({}, { get() { n++; return p.x; } }); try { p.x; } catch (e) { console.log(e.name, n); }",
+  toString: "const o = { toString() { n++; return `${o}`; } }; try { `${o}`; } catch (e) { console.log(e.name, n); }",
+  valueOf: "const o = { valueOf() { n++; return +o; } }; try { +o; } catch (e) { console.log(e.name, n); }",
+  "iterator next()": "const it = { [Symbol.iterator]() { return { next() { n++; for (const x of it) {} return { done: true }; } }; } }; try { for (const x of it) {} } catch (e) { console.log(e.name, n); }",
+  toJSON: "const o = { toJSON() { n++; return JSON.stringify(o); } }; try { JSON.stringify(o); } catch (e) { console.log(e.name, n); }",
+  "sort comparator": "const c = () => { n++; [2, 1].sort(c); return 0; }; try { [2, 1].sort(c); } catch (e) { console.log(e.name, n); }",
+  "Reflect.construct": "class A { constructor() { n++; Reflect.construct(A, []); } } try { new A(); } catch (e) { console.log(e.name, n); }",
+  "yield*": "const o = { *g() { n++; yield* o.g(); } }; try { o.g().next(); } catch (e) { console.log(e.name, n); }",
+  "map callback": "const f = () => { n++; [0].map(() => f()); }; try { f(); } catch (e) { console.log(e.name, n); }",
+};
+// The interpreter does not count accessors, Proxy traps, ToPrimitive or
+// iterator methods, and overflows the native stack on some of them; only
+// bytecode is checked for those.
+const interpreterCountsShape = new Set(["constructor", "async function", "generator next()", "map callback"]);
+const runNativeReentry = (shape: string, args: string[]) => {
+  const run = Bun.spawnSync([RUNNER, "--max-memory=256MiB", ...args], {
+    stdin: new TextEncoder().encode(`let n = 0; ${nativeReentryShapes[shape]}\n`),
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 60_000,
+  });
+  return { exitCode: run.exitCode, out: run.stdout.toString() + run.stderr.toString() };
+};
+
+console.log("--max-stack (native re-entry counts as a call)...");
+for (const shape of Object.keys(nativeReentryShapes)) {
+  // Two calls per level, f and the callback map makes.
+  const expected = shape === "map callback" ? "RangeError 5" : "RangeError 10";
+  const modes = interpreterCountsShape.has(shape) ? ["interpreted", "bytecode"] : ["bytecode"];
+  for (const mode of modes) {
+    const { exitCode, out } = runNativeReentry(shape, ["--max-stack=10", `--mode=${mode}`]);
+    if (exitCode !== 0 || !containsLine(out, expected))
+      throw new Error(`--max-stack=10 (${mode}) should stop ${shape} recursion at "${expected}", got exit ${exitCode}: ${out}`);
+  }
+}
+
+console.log("--max-stack (native re-entry at the default limit)...");
+{
+  // 1,000 constructor calls fit in the default 2,200; a fixed cap of 512
+  // native re-entries refused them.
+  const src = 'let d = 0; class A { constructor(k) { d++; if (k) new A(k - 1); } } new A(999); console.log("ok", d);';
+  for (const mode of ["interpreted", "bytecode"]) {
+    const out = await $`echo ${src} | ${RUNNER} --mode=${mode}`.text();
+    if (!containsLine(out, "ok 1000"))
+      throw new Error(`1,000 nested constructor calls (${mode}) should fit the default limit, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (native re-entry never overflows the native stack)...");
+{
+  // A limit far above what the native stack holds ends every shape in a
+  // RangeError once the stack runs low, not in a crash.
+  for (const shape of Object.keys(nativeReentryShapes)) {
+    const { exitCode, out } = runNativeReentry(shape, ["--max-stack=100000", "--mode=bytecode"]);
+    const count = /^RangeError (\d+)$/m.exec(out);
+    if (exitCode !== 0 || !count || Number(count[1]) < 1000)
+      throw new Error(`--max-stack=100000 should end ${shape} recursion in a RangeError, got exit ${exitCode}: ${out}`);
+  }
+
+  // The test runner runs files on worker threads, whose stacks it sizes
+  // itself.
+  const tmp = mkdtemp("goccia-native-reentry-");
+  try {
+    const endless: Record<string, string> = {
+      "constructors.test.js": "class A { constructor() { new A(); } }\ntest('constructor', () => { expect(() => new A()).toThrow(RangeError); });\n",
+      "async.test.js": "const f = async () => { await f(); };\ntest('async function', async () => { let caught; try { await f(); } catch (e) { caught = e; } expect(caught instanceof RangeError).toBe(true); });\n",
+      "accessors.test.js": [
+        "const o = { get x() { return o.x; }, set y(v) { o.y = v; } };",
+        "const s = { *g() { s.g().next(); yield; } };",
+        "test('getter', () => { expect(() => o.x).toThrow(RangeError); });",
+        "test('setter', () => { expect(() => { o.y = 1; }).toThrow(RangeError); });",
+        "test('generator next()', () => { expect(() => s.g().next()).toThrow(RangeError); });",
+        "test('sort comparator', () => { const c = () => { [2, 1].sort(c); return 0; }; expect(() => [2, 1].sort(c)).toThrow(RangeError); });",
+      ].join("\n") + "\n",
+    };
+    for (const [name, src] of Object.entries(endless)) writeFileSync(join(tmp, name), src);
+    const res = await $`${TESTRUNNER} ${tmp} --max-stack=100000 --max-memory=256MiB --mode=bytecode --jobs=2 --no-progress`.nothrow().quiet();
+    const out = res.text();
+    if (res.exitCode !== 0 || !out.includes("Passed: 6"))
+      throw new Error(`TestRunner --max-stack=100000 should end native re-entry recursion in a RangeError on worker threads, got exit ${res.exitCode}: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("--max-stack (deep RangeError trace keeps 100 frames)...");
 // A stack trace renders its innermost 100 frames and counts the rest, so the
 // RangeError of a 200,000-deep recursion is as short as one of 101 frames.
