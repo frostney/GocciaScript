@@ -1,4 +1,4 @@
-# 0134 - A call and a failed property read are located where V8 locates them
+# 0135 - A call and a failed property read are located where V8 locates them
 
 **Date:** 2026-10-10
 **Area:** `parser`, `bytecode compiler`, `diagnostics`

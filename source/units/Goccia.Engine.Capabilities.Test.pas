@@ -1622,7 +1622,7 @@ end;
 
 { ADR 0014: a denial raised by a native call is located at the call
   expression's own position in both executors, as import() is: the callee's
-  name, where V8 locates the call (ADR 0134). }
+  name, where V8 locates the call (ADR 0135). }
 procedure TEngineCapabilitiesTests.TestCallDenialSitesMatchAcrossExecutors;
 const
   FETCH_SOURCE = 'const x = 1;' + sLineBreak +
