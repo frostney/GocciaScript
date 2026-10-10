@@ -125,6 +125,17 @@ console.log("Bytecode names a computed static field's initializer from its key..
     "  static ['klass'] = class { static ownName = this.name; };",
     "}",
     "console.log([C.arrow.name, C.arrow(), C[key].name, C.klass.name, C.klass.ownName].join(','));",
+    "const E = class extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "};",
+    "console.log([E.arrow.name, E.arrow(), E[key].name, E.klass.name, E.klass.ownName].join(','));",
+    // A static initializer whose class suspends stays inline in the generator
+    // and still names its value from the computed key.
+    "class H { static *g() { const k = 'yk'; return class { static [k] = class { static [yield 1] = 1; }; }; } }",
+    "const it = H.g(); it.next(); const Y = it.next('p').value;",
+    "console.log([Y.yk.name, Y.yk.p].join(','));",
     "",
   ].join("\n");
   const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
@@ -132,9 +143,10 @@ console.log("Bytecode names a computed static field's initializer from its key..
     stdout: "pipe",
     stderr: "pipe",
   });
-  const out = proc.stdout.toString().trim().split("\n")[0];
-  if (proc.exitCode !== 0 || out !== "arrow,base,[sym],klass,klass")
-    throw new Error(`Bytecode computed static field names expected arrow,base,[sym],klass,klass, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
+  const out = proc.stdout.toString().trim().split("\n").slice(0, 3).join("|");
+  const expected = "arrow,base,[sym],klass,klass|arrow,base,[sym],klass,klass|yk,1";
+  if (proc.exitCode !== 0 || out !== expected)
+    throw new Error(`Bytecode computed static field names expected ${expected}, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
 }
 
 console.log("--output=json reports where a thrown error was created...");

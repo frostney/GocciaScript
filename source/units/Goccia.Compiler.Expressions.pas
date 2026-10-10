@@ -1368,6 +1368,39 @@ begin
   Result := False;
 end;
 
+{ A class definition runs its heritage, decorators and computed keys in the
+  enclosing function, and a static field initializer that suspends is compiled
+  inline there too (CompileStaticFieldInitializerExpression), so a `yield` or
+  `await` in any of them suspends the enclosing function. Method bodies, static
+  blocks and other field initializers run in functions of their own. }
+function ClassDefinitionContainsSuspension(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I, J: Integer;
+begin
+  Result := True;
+  if ExpressionContainsSuspension(AClassDef.SuperClassExpression) then
+    Exit;
+  for I := 0 to High(AClassDef.Decorators) do
+    if ExpressionContainsSuspension(AClassDef.Decorators[I]) then
+      Exit;
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    for J := 0 to High(AClassDef.FElements[I].Decorators) do
+      if ExpressionContainsSuspension(AClassDef.FElements[I].Decorators[J]) then
+        Exit;
+    if AClassDef.FElements[I].IsComputed and
+       ExpressionContainsSuspension(
+         AClassDef.FElements[I].ComputedKeyExpression) then
+      Exit;
+    if AClassDef.FElements[I].IsStatic and
+       (AClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
+       ExpressionContainsSuspension(AClassDef.FElements[I].FieldInitializer) then
+      Exit;
+  end;
+  Result := False;
+end;
+
 function ExpressionContainsSuspension(const AExpr: TGocciaExpression): Boolean;
 var
   CallExpr: TGocciaCallExpression;
@@ -1537,7 +1570,10 @@ begin
     Exit(ExpressionContainsSuspension(
       TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
       ExpressionContainsSuspension(
-        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
+        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaClassExpression then
+    Exit(ClassDefinitionContainsSuspension(
+      TGocciaClassExpression(AExpr).ClassDefinition));
 
   Result := False;
 end;

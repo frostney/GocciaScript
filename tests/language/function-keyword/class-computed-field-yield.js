@@ -71,3 +71,28 @@ test("computed field initializers from yield remain callable", () => {
   expect(iter.next(9)).toEqual({ value: 9, done: false });
   expect(iter.next(9)).toEqual({ value: [9, 10, 9, 10], done: true });
 });
+
+test("yield in a class expression inside a static field initializer suspends the generator", () => {
+  // The class's heritage and computed keys run in the enclosing generator, so
+  // the static initializer that holds the class stays in the generator's
+  // frame instead of becoming a function of its own.
+  class Base {
+    static v = "base";
+  }
+  function* makeClass() {
+    return class {
+      static keyed = class {
+        static [yield "key"] = 1;
+      };
+      static derived = class extends (yield "heritage") {};
+    };
+  }
+
+  const iter = makeClass();
+  expect(iter.next()).toEqual({ value: "key", done: false });
+  expect(iter.next("k")).toEqual({ value: "heritage", done: false });
+  const result = iter.next(Base);
+  expect(result.done).toBe(true);
+  expect(result.value.keyed.k).toBe(1);
+  expect(result.value.derived.v).toBe("base");
+});
