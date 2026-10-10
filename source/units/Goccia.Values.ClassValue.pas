@@ -69,6 +69,11 @@ type
     FFieldInitializers: array of TGocciaValue;
     FDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
     FStaticDecoratorFieldInitializers: array of TGocciaDecoratorFieldInitializerEntry;
+    // Set once the synthesized "name" or "length" has been deleted, and never
+    // cleared. A property of that key defined later is an ordinary entry in
+    // FProperties, listed where it was created (ES2026 §10.1.11.1
+    // OrdinaryOwnPropertyKeys) rather than in the synthesized slot that
+    // GetAllPropertyNames gives the class's original name and length.
     FNameDeleted: Boolean;
     FLengthDeleted: Boolean;
     FSourceText: string;
@@ -234,8 +239,6 @@ type
     procedure SetFieldInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendMethodInitializers(const AInitializers: array of TGocciaValue);
     procedure AppendFieldInitializers(const AInitializers: array of TGocciaValue);
-    procedure AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
-    procedure AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
     procedure RunMethodInitializers(const AInstance: TGocciaValue);
     procedure RunFieldInitializers(const AInstance: TGocciaValue);
     procedure RunDecoratorFieldInitializers(const AInstance: TGocciaValue);
@@ -558,7 +561,6 @@ uses
   Goccia.Timeout,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
-  Goccia.Values.AutoAccessor,
   Goccia.Values.BigIntValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
@@ -1523,45 +1525,6 @@ begin
     FFieldInitializers[OldLen + Idx] := AInitializers[Idx];
 end;
 
-// TC39 proposal-decorators: auto-accessor creates backing getter/setter
-procedure TGocciaClassValue.AddAutoAccessor(const AName, ABackingName: string; const AIsStatic: Boolean);
-begin
-  AddAutoAccessorWithKey(AName, nil, ABackingName, AIsStatic);
-end;
-
-procedure TGocciaClassValue.AddAutoAccessorWithKey(const AName: string; const AKey: TGocciaValue; const ABackingName: string; const AIsStatic: Boolean);
-var
-  GetterHelper: TGocciaAutoAccessorGetter;
-  SetterHelper: TGocciaAutoAccessorSetter;
-  GetterFn, SetterFn: TGocciaNativeFunctionValue;
-  Target: TGocciaObjectValue;
-  PropertyName: string;
-begin
-  GetterHelper := TGocciaAutoAccessorGetter.Create(ABackingName);
-  SetterHelper := TGocciaAutoAccessorSetter.Create(ABackingName);
-
-  if Assigned(AKey) and not (AKey is TGocciaSymbolValue) then
-    PropertyName := AKey.ToStringLiteral.Value
-  else
-    PropertyName := AName;
-
-  GetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(GetterHelper.Get, 'get ' + PropertyName, 0);
-  SetterFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(SetterHelper.SetValue, 'set ' + PropertyName, 1);
-
-  // Static auto-accessors go on the constructor; instance ones on the prototype
-  if AIsStatic then
-    Target := Self
-  else
-    Target := FClassPrototype;
-  if AKey is TGocciaSymbolValue then
-    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey),
-      TGocciaPropertyDescriptorAccessor.Create(
-        GetterFn, SetterFn, [pfConfigurable, pfWritable]))
-  else
-    Target.DefineProperty(PropertyName, TGocciaPropertyDescriptorAccessor.Create(
-      GetterFn, SetterFn, [pfConfigurable, pfWritable]));
-end;
-
 procedure TGocciaClassValue.RunMethodInitializers(const AInstance: TGocciaValue);
 var
   Idx: Integer;
@@ -2348,10 +2311,6 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   inherited DefineProperty(AName, ADescriptor);
-  if AName = PROP_NAME then
-    FNameDeleted := False
-  else if AName = PROP_LENGTH then
-    FLengthDeleted := False;
 end;
 
 function TGocciaClassValue.TryDefineProperty(const AName: string;
@@ -2370,13 +2329,6 @@ begin
 
   MaterializeIntrinsicProperty(AName);
   Result := inherited TryDefineProperty(AName, ADescriptor);
-  if Result then
-  begin
-    if AName = PROP_NAME then
-      FNameDeleted := False
-    else if AName = PROP_LENGTH then
-      FLengthDeleted := False;
-  end;
 end;
 
 procedure TGocciaClassValue.SetProperty(const AName: string; const AValue: TGocciaValue);
@@ -2384,8 +2336,7 @@ begin
   // An assignment to "name" or "length" is checked against the class's own
   // non-writable property, so store the synthesized one first. Once deleted,
   // the class has no own property and the assignment follows the prototype
-  // chain like any other missing key; DefineProperty clears the deleted
-  // marker only if that adds the property. An assigned name changes only the
+  // chain like any other missing key. An assigned name changes only the
   // property: FName keeps the name the class was created with, which error
   // messages use, as Object.defineProperty already left it.
   if (AName = PROP_NAME) or (AName = PROP_LENGTH) then
@@ -2405,12 +2356,9 @@ begin
     Result := TGocciaPropertyDescriptorData.Create(FClassPrototype, [])
   else if AName = PROP_NAME then
   begin
-    if FNameDeleted then
-      Exit(nil);
-
     // Check if .name was explicitly set (e.g. static name = 'Custom')
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FNameDeleted then
     begin
       // Synthesize from FName: { writable: false, enumerable: false, configurable: true }
       if (FName = '') or (FName = '<anonymous>') then
@@ -2423,14 +2371,11 @@ begin
   end
   else if AName = PROP_LENGTH then
   begin
-    if FLengthDeleted then
-      Exit(nil);
-
     // Honour explicit own-property redefinitions (length is configurable, so
     // userland may override via Object.defineProperty); fall back to a
     // synthesized descriptor only when no own descriptor exists.
     Result := inherited GetOwnPropertyDescriptor(AName);
-    if not Assigned(Result) then
+    if not Assigned(Result) and not FLengthDeleted then
       Result := TGocciaPropertyDescriptorData.Create(
         TGocciaNumberLiteralValue.Create(GetClassLength), [pfConfigurable]);
   end
@@ -2511,10 +2456,10 @@ function TGocciaClassValue.HasOwnProperty(const AName: string): Boolean;
 begin
   if AName = PROP_PROTOTYPE then
     Result := True
-  else if AName = PROP_NAME then
-    Result := not FNameDeleted
-  else if AName = PROP_LENGTH then
-    Result := not FLengthDeleted
+  else if (AName = PROP_NAME) and not FNameDeleted then
+    Result := True
+  else if (AName = PROP_LENGTH) and not FLengthDeleted then
+    Result := True
   else
     Result := inherited HasOwnProperty(AName);
 end;

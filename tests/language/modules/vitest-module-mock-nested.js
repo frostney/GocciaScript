@@ -16,6 +16,8 @@ import { label as calleeMockedLabel } from "./helpers/mock-nested-callee-target.
 import { label as classMockedLabel } from "./helpers/mock-nested-class-target.js";
 import { label as computedKeyMockedLabel } from "./helpers/mock-nested-computed-key-target.js";
 import { label as computedBodyMockedLabel } from "./helpers/mock-nested-computed-body-target.js";
+import { label as accessorMockedLabel } from "./helpers/mock-nested-accessor-target.js";
+import { label as staticAccessorMockedLabel } from "./helpers/mock-nested-static-accessor-target.js";
 
 if (true) {
   vi.mock("./helpers/mock-nested-block-target.js", () => ({
@@ -67,6 +69,19 @@ class ComputedMockDeclarations {
   }
 }
 
+// Inside auto-accessor initializers. An instance accessor's initializer is
+// reached through the class's private field map, where its storage lives; a
+// static one only through the class element list.
+class AccessorMockDeclarations {
+  accessor instanceValue = vi.mock("./helpers/mock-nested-accessor-target.js", () => ({
+    label: "MOCKED-FROM-AN-ACCESSOR-INITIALIZER",
+  }));
+
+  static accessor staticValue = vi.mock("./helpers/mock-nested-static-accessor-target.js", () => ({
+    label: "MOCKED-FROM-A-STATIC-ACCESSOR-INITIALIZER",
+  }));
+}
+
 describe("nested vi.mock", () => {
   test("a vi.mock inside a block is hoisted and applies", () => {
     expect(blockMockedLabel).toBe("MOCKED-FROM-A-BLOCK");
@@ -99,5 +114,11 @@ describe("nested vi.mock", () => {
 
   test("a vi.mock inside a computed-key method body is hoisted and applies", () => {
     expect(computedBodyMockedLabel).toBe("MOCKED-FROM-A-COMPUTED-METHOD-BODY");
+  });
+
+  test("a vi.mock inside an auto-accessor initializer is hoisted and applies", () => {
+    expect(accessorMockedLabel).toBe("MOCKED-FROM-AN-ACCESSOR-INITIALIZER");
+    expect(staticAccessorMockedLabel).toBe("MOCKED-FROM-A-STATIC-ACCESSOR-INITIALIZER");
+    expect(typeof AccessorMockDeclarations).toBe("function");
   });
 });

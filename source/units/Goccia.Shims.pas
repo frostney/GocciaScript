@@ -92,10 +92,12 @@ uses
   Goccia.Realm,
   Goccia.Scope,
   Goccia.SourcePipeline,
-  Goccia.ThreadCleanupRegistry;
+  Goccia.ThreadCleanupRegistry,
+  Goccia.Values.DateData;
 
 const
   DATE_SHIM_NAME = 'Date';
+  DATE_VALUE_STORE_NAME = '__GocciaDateSlots';
   DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
       Name: 'btoa';
@@ -556,19 +558,6 @@ const
         '  return value;'#10 +
         '};'#10 +
         'const __GocciaDateClass = class Date {'#10 +
-        '  static {'#10 +
-        '    Object.defineProperty(this.prototype, Symbol.toStringTag, {'#10 +
-        '      get(): any { return __GocciaDateSlots.get(this) === undefined ? undefined : "Date"; },'#10 +
-        '      set(value: any): void {'#10 +
-        '        Object.defineProperty(this, Symbol.toStringTag, {'#10 +
-        '          value,'#10 +
-        '          writable: true,'#10 +
-        '          configurable: true'#10 +
-        '        });'#10 +
-        '      },'#10 +
-        '      configurable: true'#10 +
-        '    });'#10 +
-        '  }'#10 +
         '  static now(): number { return Temporal.Now.instant().epochMilliseconds; }'#10 +
         '  static parse(str: string): number { return parseDateStringToEpoch(str); }'#10 +
         '  static UTC(...args: any[]): number {'#10 +
@@ -1135,7 +1124,13 @@ begin
     EvaluateStatement(ProgramNode.Body[I], Context);
   Result := Context.Scope.GetValue(DEFAULT_SHIMS[AShimIndex].Name);
   if DEFAULT_SHIMS[AShimIndex].Name = DATE_SHIM_NAME then
+  begin
     CurrentRealm.SetSlot(GDateIntrinsicSlot, Result);
+    // The slot WeakMap is the [[DateValue]] internal slot native code tests
+    // for (Goccia.Values.DateData). Each evaluation of the shared program
+    // creates its own WeakMap in this realm's module scope.
+    RegisterDateValueStore(Context.Scope.GetValue(DATE_VALUE_STORE_NAME));
+  end;
 end;
 
 function GetDateIntrinsic(

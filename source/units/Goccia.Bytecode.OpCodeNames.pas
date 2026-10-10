@@ -155,7 +155,6 @@ begin
     OP_DIV:                            Result := 'OP_DIV';
     OP_MOD:                            Result := 'OP_MOD';
     OP_POW:                            Result := 'OP_POW';
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC:    Result := 'OP_SETUP_AUTO_ACCESSOR_DYNAMIC';
     OP_BAND:                           Result := 'OP_BAND';
     OP_BOR:                            Result := 'OP_BOR';
     OP_BXOR:                           Result := 'OP_BXOR';
@@ -227,8 +226,13 @@ begin
     OP_GET_LOCAL_PROP_CONST:           Result := 'OP_GET_LOCAL_PROP_CONST';
     OP_JUMP_IF_NOT_LT:                 Result := 'OP_JUMP_IF_NOT_LT';
     OP_COMPUTED_IMPORT_SPECIFIER:      Result := 'OP_COMPUTED_IMPORT_SPECIFIER';
+    OP_CREATE_GLOBAL_IMPORT_BINDING:   Result := 'OP_CREATE_GLOBAL_IMPORT_BINDING';
+    OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
   else
-    Result := Format('OP_UNKNOWN_%d', [AOp]);
+    if AOp = OP_CALL_SELF then
+      Result := 'OP_CALL_SELF'
+    else
+      Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;
 end;
 
