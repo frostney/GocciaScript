@@ -24,6 +24,14 @@ procedure AttachErrorSourceProvenance(const AError: TGocciaObjectValue;
   ASkipTop controls how many frames to skip from the top of the call stack. }
 function CreateErrorObject(const AName, AMessage: string; const ASkipTop: Integer = 0): TGocciaObjectValue;
 
+{ The error that import() rejects with when loading its module raised a host
+  exception rather than a guest throw — a module that cannot be found, say.
+  It is located at the import() call (AFilePath, ALine, AColumn), the call
+  site both executors enter while the load runs, as a PermissionDenied from
+  the same load is. Without a position it is a plain CreateErrorObject. }
+function CreateImportCallErrorObject(const AName, AMessage, AFilePath: string;
+  const ALine, AColumn: Integer): TGocciaObjectValue;
+
 { True when AValue carries [[ErrorData]] — the slot every error constructor
   installs, including through a `class MyError extends Error` subclass. Merely
   inheriting from Error.prototype does not make an object an error.
@@ -327,6 +335,26 @@ begin
       Result.ErrorStack :=
         TGocciaCallStack.Instance.CaptureStackTrace(AName, AMessage, ASkipTop);
     AttachErrorSourceProvenance(Result, ASkipTop);
+  finally
+    RemoveTempRootIfNeeded(ResultRoot);
+  end;
+end;
+
+function CreateImportCallErrorObject(const AName, AMessage, AFilePath: string;
+  const ALine, AColumn: Integer): TGocciaObjectValue;
+var
+  ResultRoot: TGocciaTempRoot;
+begin
+  Result := CreateErrorObject(AName, AMessage);
+  if (AFilePath = '') or (ALine <= 0) or
+     not (Result is TGocciaErrorObjectValue) then
+    Exit;
+  { Reserving the excerpt is a GC safe point; nothing else roots the error. }
+  InitializeTempRoot(ResultRoot);
+  try
+    AddTempRootIfNeeded(ResultRoot, Result);
+    AttachErrorSourceLocation(TGocciaErrorObjectValue(Result), AFilePath,
+      ALine, AColumn);
   finally
     RemoveTempRootIfNeeded(ResultRoot);
   end;

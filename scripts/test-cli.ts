@@ -76,6 +76,8 @@ console.log("Bytecode stack frames locate each caller at the call it is making..
 {
   // The docs/errors.md § Stack Traces sample. Each caller frame is located at
   // its own call to the next frame, and the top level at its call to outer.
+  // Every position is the one V8 (Node) prints: a call at its callee's name,
+  // and the failed read at the property name.
   const source = [
     "const inner = (obj) => {",
     "  return obj.x;",
@@ -100,10 +102,10 @@ console.log("Bytecode stack frames locate each caller at the call it is making..
   });
   const out = proc.stdout.toString();
   for (const frame of [
-    "    at inner (<stdin>:2:13)",
-    "    at middle (<stdin>:5:8)",
-    "    at outer (<stdin>:8:9)",
-    "    at <module> (<stdin>:11:8)",
+    "    at inner (<stdin>:2:14)",
+    "    at middle (<stdin>:5:3)",
+    "    at outer (<stdin>:8:3)",
+    "    at <module> (<stdin>:11:3)",
   ]) {
     if (!containsLine(out, frame))
       throw new Error(`Bytecode stack should contain "${frame}", got: ${out}`);
@@ -121,6 +123,139 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(
       `JSON error should be located at 2:9 (${mode}), got ${json.error?.line}:${json.error?.column}`,
     );
+}
+
+// The `-->` header of a diagnostic, and the column of the caret in the code
+// frame under it, counted from the first character after the gutter's "| ".
+const codeFrameLocation = (out: string): { header: string; caretColumn: number } => {
+  const lines = normalizeLineEndings(out).split("\n");
+  const at = lines.findIndex((line) => line.trimStart().startsWith("--> "));
+  if (at < 0) return { header: "", caretColumn: 0 };
+  const caretLine = lines.slice(at + 1).find((line) => /^\s*\|\s*\^/.test(line));
+  const caretColumn = caretLine
+    ? caretLine.indexOf("^") - caretLine.indexOf("|") - 1
+    : 0;
+  return { header: lines[at].trim(), caretColumn };
+};
+
+console.log("An uncaught failed property read is located at its property name...");
+{
+  const tmp = mkdtemp("goccia-member-read-");
+  try {
+    const file = join(tmp, "member.js");
+    // Node reports `obj.x` at `x`, `holder.a.b` at `b`, the property whose read
+    // failed, and a computed read at its `[`.
+    const cases = [
+      ["const inner = (obj) => {\n  return obj.x;\n};\ninner(null);\n", 2, 14],
+      ["const holder = { a: null };\nconst read = () => holder.a.b;\nread();\n", 2, 29],
+      ['const holder = { a: null };\nconst read = () => holder.a["b"];\nread();\n', 2, 28],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [source, line, column] of cases) {
+        writeFileSync(file, source);
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header, caretColumn } = codeFrameLocation(out);
+        if (proc.exitCode === 0 || header !== `--> ${file}:${line}:${column}` || caretColumn !== column)
+          throw new Error(
+            `Failed read (${mode}) should be located at ${line}:${column} with the caret under it, got header "${header}", caret ${caretColumn}: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A failed import() is located at the import() call...");
+{
+  const tmp = mkdtemp("goccia-dynamic-import-missing-");
+  try {
+    const topLevel = join(tmp, "dyn.js");
+    writeFileSync(topLevel, 'const x = 1;\nimport("./nope.js");\n');
+    const inAsync = join(tmp, "dyn-async.js");
+    writeFileSync(
+      inAsync,
+      'const load = async () => {\n  await import("./nope.js");\n};\nload();\n',
+    );
+    const cases = [
+      [topLevel, 2, 1, '2 | import("./nope.js");'],
+      [inAsync, 2, 9, '2 |   await import("./nope.js");'],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [file, line, column, excerpt] of cases) {
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header, caretColumn } = codeFrameLocation(out);
+        if (
+          proc.exitCode === 0 ||
+          !out.includes('Module not found: "./nope.js"') ||
+          header !== `--> ${file}:${line}:${column}` ||
+          caretColumn !== column ||
+          !out.includes(excerpt)
+        )
+          throw new Error(
+            `A failed import() (${mode}) should be located at ${line}:${column} with a code frame, got: ${out}`,
+          );
+        const json = Bun.spawnSync([RUNNER, file, `--mode=${mode}`, "--output=json"], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const error = JSON.parse(json.stdout.toString()).error;
+        if (error?.line !== line || error?.column !== column)
+          throw new Error(
+            `A failed import() (${mode}) should report ${line}:${column} in JSON, got ${error?.line}:${error?.column}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A static import of a missing module is located at its declaration...");
+{
+  const tmp = mkdtemp("goccia-static-import-missing-");
+  try {
+    const entry = join(tmp, "entry.js");
+    writeFileSync(entry, 'const y = 2;\nimport { a } from "./missing.js";\nconsole.log(a);\n');
+    // A module the entry imports fails the same way, located in its own file.
+    const viaDep = join(tmp, "via-dep.js");
+    writeFileSync(viaDep, 'import { b } from "./dep.js";\nconsole.log(b);\n');
+    const dep = join(tmp, "dep.js");
+    writeFileSync(dep, '// dep\nexport { a as b } from "./missing.js";\n');
+    const cases = [
+      [entry, `--> ${entry}:2:1`],
+      [viaDep, `--> ${dep}:2:1`],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [file, expected] of cases) {
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header } = codeFrameLocation(out);
+        if (
+          proc.exitCode === 0 ||
+          !out.includes('Module not found: "./missing.js"') ||
+          !out.includes("Resolved to: ") ||
+          header !== expected
+        )
+          throw new Error(
+            `A missing static import (${mode}) should be located at "${expected}", got: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("Top-level const with a mismatched strict type...");
@@ -3967,7 +4102,8 @@ console.log("Runtime diagnostic parity...");
       for (const expected of [
         "TypeError: obj.missingMethod is not a function",
         "Suggestion: 'obj' is of type 'object' which does not have method 'missingMethod'",
-        "callee.test.js:2:18",
+        // The call is located at the method's name, where Node puts it.
+        "callee.test.js:2:5",
         "2 | obj.missingMethod();",
       ]) {
         if (!out.includes(expected))

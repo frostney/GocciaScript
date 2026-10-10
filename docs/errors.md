@@ -124,17 +124,18 @@ When an uncaught runtime error reaches the top level, GocciaScript displays the 
 ```text
 TypeError: Cannot read properties of undefined (reading 'x')
   Suggestion: check that the value is not null or undefined before accessing properties
-  --> script.js:2:10
+  --> script.js:2:21
    1 | const getX = (obj) => {
    2 |   return obj.nested.x;
-     |          ^
+     |                     ^
    3 | };
    4 | getX({});
 ```
 
+A failed property read is located at the property whose read failed, where V8 reports it (see [Stack Traces](#stack-traces)).
+
 Locations are not yet consistent between the two modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)):
 
-- The same error can report a different column: for `return obj.x;` the interpreter points at `obj` and bytecode mode at `.x`.
 - In interpreter mode, some top-level runtime errors lack a location. A top-level `ReferenceError` prints `--> :0:0` with no file name or source excerpt, and a top-level `TypeError` such as `const a = null; a.x;` prints no `-->` line at all. Bytecode mode shows the file, line, and excerpt for both.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
@@ -256,12 +257,30 @@ reporters render it through `FormatHostErrorDiagnostic` as its own line:
 
 ```text
 RuntimeError: Module not found: "./missing.js"
-  --> entry.js:0:0
+  --> entry.js:2:1
   Resolved to: /home/user/project/missing.js
 ```
 
-The `-->` line shows the entry path as it was passed on the command line. Both
-modes print this output.
+The `-->` line names the importing file, as its path was passed on the command
+line, at the import declaration that asked for the module. Both modes print
+this output.
+
+A failed `import()` that nothing catches is located at the `import()` call, with
+a code frame:
+
+```text
+Error: Module not found: "./nope.js"
+  --> main.js:2:9
+   1 | const load = async () => {
+   2 |   await import("./nope.js");
+     |         ^
+   3 | };
+   4 | load();
+```
+
+Both locations come from the call site that both modes enter while the load
+runs, the one a `PermissionDenied` from the same load reports. `--output=json`
+reports the same `line` and `column`.
 
 `--output=json` and `--output=compact-json` do **not** carry it. The JSON
 envelope's `error` object is the documented set of `type`, `message`, `line`,
@@ -367,13 +386,25 @@ In bytecode mode this prints:
 
 ```text
 TypeError: Cannot read properties of null (reading 'x')
-    at inner (script.js:2:13)
-    at middle (script.js:5:8)
-    at outer (script.js:8:9)
-    at <module> (script.js:11:8)
+    at inner (script.js:2:14)
+    at middle (script.js:5:3)
+    at outer (script.js:8:3)
+    at <module> (script.js:11:3)
 ```
 
-The first frame is where the error happened. Every other frame is at the call that frame is making: `middle` at its call to `inner` on line 5, and `<module>`, the script's top level, at its call to `outer`. A call is located at its opening parenthesis, where V8 points at the start of the callee (`5:3`). [#1494](https://github.com/frostney/GocciaScript/issues/1494) tracks that column and the other remaining bytecode location differences. Interpreter mode lists no `<module>` frame, and each frame there shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame ([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+The first frame is where the error happened. Every other frame is at the call that frame is making: `middle` at its call to `inner` on line 5, and `<module>`, the script's top level, at its call to `outer`. Node prints the same positions; it names the top-level frame `Object.<anonymous>`.
+
+Positions follow V8's rules, in both modes:
+
+| Construct | Located at | Example |
+|-----------|-----------|---------|
+| A call whose `(` follows an identifier | That identifier: the callee, or the property name of a member callee | `inner(obj)` at `inner`, `list.map(f)` at `map`, `super()` at `super` |
+| Any other call | Its `(` | `obj["m"]()`, `(f)()`, `f()()`, `f?.()`, `promise.catch(f)`, `this.#m()` |
+| `new` | The `new` keyword | `new ns.Widget()` at `new` |
+| A tagged template | The template | ``tag`text` `` at the backtick |
+| A failed property read | The property name, or the `[` of a computed read | `obj.x` at `x`, `obj["x"]` at `[` |
+
+V8 decides a call's position by the token before its `(`, so a reserved-word property name such as `catch`, `default` or `delete`, and a private name, leave the call at its `(`. The same position is what an audit event and a `PermissionDenied` error report for the call. Interpreter mode lists no `<module>` frame, and each frame there shows the site where that function was called (`middle` at `8:3`, inside `outer`) rather than its own call to the next frame ([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
 
 A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as bytecode mode works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack, in both modes, and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
 

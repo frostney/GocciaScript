@@ -44,6 +44,14 @@ type
   // when it gets one; the value is unused.
   TBlockFunctionVarBindingSet = THashMap<TGocciaStatement, Boolean>;
 
+  { The line-map position that BeginInstructionLocation displaced, so that
+    EndInstructionLocation can hand it back. }
+  TGocciaInstructionLocation = record
+    Restore: Boolean;
+    Line: UInt32;
+    Column: UInt16;
+  end;
+
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;
     Scope: TGocciaCompilerScope;
@@ -74,6 +82,10 @@ procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
   const ADest: UInt16; const AValue: string);
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
+function BeginInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALine, AColumn: Integer): TGocciaInstructionLocation;
+procedure EndInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALocation: TGocciaInstructionLocation);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
   const AOp: TGocciaOpCode; const AReg: UInt16): Integer; overload;
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
@@ -133,6 +145,45 @@ begin
   if Assigned(ACtx.Template.DebugInfo) then
     ACtx.Template.DebugInfo.AddLineMapping(
       UInt32(ACtx.Template.CodeCount), UInt32(ALine), UInt16(AColumn));
+end;
+
+{ Locates the instructions emitted until EndInstructionLocation at ALine and
+  AColumn, and every instruction after them where it would have been without
+  the pair. An expression's own line mapping precedes the code of its
+  operands, so an instruction emitted after an operand — the property load of
+  `a.b.c` — would otherwise be located at that operand. Only the line map
+  changes: the instructions are the same either way. }
+function BeginInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALine, AColumn: Integer): TGocciaInstructionLocation;
+var
+  DebugInfo: TGocciaDebugInfo;
+  Last: TGocciaLineMapEntry;
+begin
+  Result.Restore := False;
+  Result.Line := 0;
+  Result.Column := 0;
+  DebugInfo := ACtx.Template.DebugInfo;
+  if not Assigned(DebugInfo) or (ALine <= 0) then
+    Exit;
+  if DebugInfo.LineMapCount > 0 then
+  begin
+    Last := DebugInfo.GetLineMapEntry(DebugInfo.LineMapCount - 1);
+    if (Last.Line = UInt32(ALine)) and (Last.Column = UInt16(AColumn)) then
+      Exit;
+    Result.Restore := True;
+    Result.Line := Last.Line;
+    Result.Column := Last.Column;
+  end;
+  DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), UInt32(ALine),
+    UInt16(AColumn));
+end;
+
+procedure EndInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALocation: TGocciaInstructionLocation);
+begin
+  if ALocation.Restore then
+    ACtx.Template.DebugInfo.AddLineMapping(
+      UInt32(ACtx.Template.CodeCount), ALocation.Line, ALocation.Column);
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;

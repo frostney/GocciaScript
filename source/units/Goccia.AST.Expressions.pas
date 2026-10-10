@@ -2723,7 +2723,8 @@ begin
       begin
         if IsEngineIntegrityFault(E) then
           raise;
-        Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+        Promise.Reject(CreateImportCallErrorObject(ERROR_NAME, E.Message,
+          AContext.CurrentFilePath, Line, Column));
       end;
     end;
     Result := Promise;

@@ -754,3 +754,96 @@ test("every frame has a position when the chain passes through another module", 
     "callingImported",
   ]);
 });
+
+// The stack of the error a call throws. Each call below sits in a block body,
+// so it is not in tail position and its frame stays on the stack.
+const stackOfFailingCall = (call) => {
+  try {
+    call();
+  } catch (e) {
+    return e.stack;
+  }
+  return "";
+};
+
+// True when a frame of the stack is located at the line and column. The frame
+// that names a call's position differs between the executors (#1273), but
+// each lists it on some frame.
+const listsPosition = (stack, line, column) =>
+  stack.includes(`:${line}:${column})`);
+
+// A Set method on an object that is not a Set, so that calling it throws.
+const notASet = { delete: Set.prototype.delete };
+
+// A built-in that throws is located at the call that reached it, in both
+// modes: the call site an audit event and a PermissionDenied also report.
+test("a call is located at the name it follows, or at its opening parenthesis, as V8 locates it", () => {
+  // The calls below start five lines after this one, one to a line.
+  let line = 0;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    line = positionOf(e.stack.split("\n")[1]).line;
+  }
+  const stacks = [
+    stackOfFailingCall(() => { BigInt(1.5); }),
+    stackOfFailingCall(() => { JSON.parse("{"); }),
+    stackOfFailingCall(() => { JSON?.parse("{"); }),
+    stackOfFailingCall(() => { JSON["parse"]("{"); }),
+    stackOfFailingCall(() => { JSON.parse?.("{"); }),
+    stackOfFailingCall(() => { (JSON.parse)("{"); }),
+    stackOfFailingCall(() => { notASet.delete(1); }),
+    stackOfFailingCall(() => { new ArrayBuffer(-1); }),
+  ];
+  const columns = [
+    32, // BigInt(1.5): the callee
+    37, // JSON.parse: the property name
+    38, // JSON?.parse: the property name
+    45, // JSON["parse"](: the "(" after a computed callee
+    44, // JSON.parse?.(: the "(" of an optional call
+    44, // (JSON.parse)(: the "(" after a parenthesized callee
+    46, // notASet.delete(: the "(" after a reserved-word property name
+    32, // new ArrayBuffer: the "new"
+  ];
+
+  columns.forEach((column, index) => {
+    expect(listsPosition(stacks[index], line + 5 + index, column)).toBe(true);
+  });
+});
+
+const absentTarget = null;
+const nestedTargets = { inner: null };
+
+test("a failed property read is located at its property name, or at the [ of a computed read, as V8 locates it", () => {
+  // A built-in's error is located at the call that reached it, in both modes;
+  // the reads below start five lines after it, one to a line.
+  let line = 0;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    line = positionOf(e.stack.split("\n")[1]).line;
+  }
+  const stacks = [
+    stackOfFailingCall(() => { absentTarget.value; }),
+    stackOfFailingCall(() => { absentTarget . value; }),
+    stackOfFailingCall(() => { absentTarget["value"]; }),
+    stackOfFailingCall(() => { nestedTargets.inner.value; }),
+    stackOfFailingCall(() => { nestedTargets.inner.value(); }),
+  ];
+  const columns = [
+    45, // absentTarget.value: the property name
+    47, // absentTarget . value: the property name
+    44, // absentTarget["value"]: the "["
+    52, // nestedTargets.inner.value: the property that failed
+    52, // nestedTargets.inner.value(): the method that failed to load
+  ];
+
+  stacks.forEach((stack) => {
+    expect(stack.startsWith("TypeError: Cannot read properties of null")).toBe(
+      true,
+    );
+  });
+  columns.forEach((column, index) => {
+    expect(listsPosition(stacks[index], line + 5 + index, column)).toBe(true);
+  });
+});

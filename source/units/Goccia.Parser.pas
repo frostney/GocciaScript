@@ -158,6 +158,7 @@ type
       const ALexicalGoal: TGocciaLexicalGoal);
     function SourceSpanAtPosition(const ALine,
       AColumn: Integer): TGocciaSourceSpan;
+    function SourceSpanFromToken(const AToken: TGocciaToken): TGocciaSourceSpan;
 
     function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function Peek: TGocciaToken; {$IFDEF FPC}inline;{$ENDIF}
@@ -232,8 +233,9 @@ type
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
     function ParseMemberAccessSegment(const AReceiver: TGocciaExpression;
-      const AUsePropertyNameLocation, AAllowOptionalCall: Boolean;
-      out ASegmentLine, ASegmentColumn: Integer): TGocciaExpression;
+      const AAllowOptionalCall: Boolean): TGocciaExpression;
+    function CallPositionToken(const ACallee: TGocciaExpression;
+      const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
     function ParseParameterList: TGocciaParameterArray;
@@ -649,6 +651,21 @@ begin
   if EndOffset < Offset then
     EndOffset := Offset;
   Result := Previous.Span.InSameSource(Offset, EndOffset);
+end;
+
+{ The span from AToken's start to the end of the last token consumed. For a
+  token on one line it is SourceSpanAtPosition(AToken.Line, AToken.Column),
+  without working out a line and column only to turn them back into an
+  offset. }
+function TGocciaParser.SourceSpanFromToken(
+  const AToken: TGocciaToken): TGocciaSourceSpan;
+var
+  EndOffset: Integer;
+begin
+  EndOffset := Previous.Span.EndOffset;
+  if EndOffset < AToken.Span.StartOffset then
+    EndOffset := AToken.Span.StartOffset;
+  Result := Previous.Span.InSameSource(AToken.Span.StartOffset, EndOffset);
 end;
 
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
@@ -2061,29 +2078,28 @@ function ExpressionContainsOptionalChain(
 function ExpressionIsOptionalChainTag(
   const AExpr: TGocciaExpression): Boolean; forward;
 
+{ A dotted member is located at its property name, where V8 reports a failed
+  read (`obj.x` at `x`); a computed or private member stays at its `[` or `.`. }
 function TGocciaParser.ParseMemberAccessSegment(
-  const AReceiver: TGocciaExpression; const AUsePropertyNameLocation,
-  AAllowOptionalCall: Boolean; out ASegmentLine,
-  ASegmentColumn: Integer): TGocciaExpression;
+  const AReceiver: TGocciaExpression;
+  const AAllowOptionalCall: Boolean): TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Argument: TGocciaExpression;
   PropertyName: string;
-  Token: TGocciaToken;
-  PropertyLine, PropertyColumn: Integer;
+  Token, SegmentToken, OpenParen: TGocciaToken;
   IsOptionalChain: Boolean;
   CurrentType: TGocciaTokenType;
 begin
   CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
-  Token := Advance;
-  ASegmentLine := Token.Line;
-  ASegmentColumn := Token.Column;
+  SegmentToken := Advance;
+  Token := SegmentToken;
   IsOptionalChain := CurrentType = gttOptionalChaining;
 
   if IsOptionalChain and (AReceiver is TGocciaSuperExpression) then
     raise TGocciaSyntaxError.Create(
       'Optional chaining is not allowed directly on super',
-      ASegmentLine, ASegmentColumn, FFileName, FSourceLines);
+      SegmentToken.Line, SegmentToken.Column, FFileName, FSourceLines);
 
   case CurrentType of
     gttDot, gttOptionalChaining:
@@ -2096,7 +2112,7 @@ begin
           PropertyName := Token.Lexeme;
           RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
           Result := TGocciaPrivateMemberExpression.Create(
-            AReceiver, PropertyName, SourceSpanAtPosition(ASegmentLine, ASegmentColumn),
+            AReceiver, PropertyName, SourceSpanFromToken(SegmentToken),
             IsOptionalChain);
         end
         else if Check(gttLeftBracket) and IsOptionalChain then
@@ -2106,11 +2122,13 @@ begin
           Consume(gttRightBracket, 'Expected "]" after computed member expression',
             SSuggestCloseBracketComputedProperty);
           Result := TGocciaMemberExpression.Create(AReceiver, Argument,
-            SourceSpanAtPosition(ASegmentLine, ASegmentColumn), True);
+            SourceSpanFromToken(SegmentToken), True);
         end
         else if Check(gttLeftParen) and IsOptionalChain and AAllowOptionalCall then
         begin
-          Advance;
+          { An optional call follows `?.`, never a name, so it is located at
+            its `(`, as V8 locates it. }
+          OpenParen := Advance;
           Arguments := TObjectList<TGocciaExpression>.Create(True);
           try
             if not Check(gttRightParen) then
@@ -2127,7 +2145,7 @@ begin
             Consume(gttRightParen, 'Expected ")" after arguments',
               SSuggestCloseParenArguments);
             Result := TGocciaCallExpression.Create(AReceiver, Arguments,
-              SourceSpanAtPosition(ASegmentLine, ASegmentColumn), True);
+              SourceSpanFromToken(OpenParen), True);
           except
             Arguments.Free;
             raise;
@@ -2139,16 +2157,6 @@ begin
           begin
             Token := Advance;
             PropertyName := Token.Lexeme;
-            if AUsePropertyNameLocation then
-            begin
-              PropertyLine := Token.Line;
-              PropertyColumn := Token.Column;
-            end
-            else
-            begin
-              PropertyLine := ASegmentLine;
-              PropertyColumn := ASegmentColumn;
-            end;
           end
           else
             raise TGocciaSyntaxError.Create('Expected property name after "."',
@@ -2156,7 +2164,7 @@ begin
               SSuggestPropertyNameIdentifier);
 
           Result := TGocciaMemberExpression.Create(AReceiver, PropertyName,
-            False, SourceSpanAtPosition(PropertyLine, PropertyColumn), IsOptionalChain);
+            False, SourceSpanFromToken(Token), IsOptionalChain);
         end;
       end;
     gttHash:
@@ -2166,7 +2174,7 @@ begin
         PropertyName := Token.Lexeme;
         RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
         Result := TGocciaPrivateMemberExpression.Create(AReceiver, PropertyName,
-          SourceSpanAtPosition(ASegmentLine, ASegmentColumn));
+          SourceSpanFromToken(SegmentToken));
       end;
     gttLeftBracket:
       begin
@@ -2174,11 +2182,31 @@ begin
         Consume(gttRightBracket, 'Expected "]" after computed member expression',
           SSuggestCloseBracketComputedProperty);
         Result := TGocciaMemberExpression.Create(AReceiver, Argument,
-          SourceSpanAtPosition(ASegmentLine, ASegmentColumn));
+          SourceSpanFromToken(SegmentToken));
       end;
   else
     raise TGocciaSyntaxError.Create('Expected member access',
       Token.Line, Token.Column, FFileName, FSourceLines);
+  end;
+end;
+
+{ ECMA-262 does not say where a call is. A call is located where V8 locates
+  it, so that a stack trace, an audit event and a PermissionDenied name the
+  column V8 does: at the name the `(` follows when that name is an
+  identifier — the callee `f` of `f()`, `super` of `super()`, or the property
+  `b` of `a.b()` — and at the `(` otherwise. V8 keys this on the token, not on
+  the callee: a reserved-word property (`p.catch()`), a private name
+  (`this.#m()`), a parenthesized callee (`(f)()`) and type arguments
+  (`f<T>()`) all put the call at its `(`. }
+function TGocciaParser.CallPositionToken(const ACallee: TGocciaExpression;
+  const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
+begin
+  Result := AOpenParen;
+  if ACallee is TGocciaPrivateMemberExpression then
+    Exit;
+  case ACalleeEnd.TokenType of
+    gttIdentifier, gttLet, gttStatic, gttFrom, gttAs, gttSuper:
+      Result := ACalleeEnd;
   end;
 end;
 
@@ -2198,9 +2226,10 @@ begin
     case CurrentType of
       gttLeftParen:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
+          { The token before the `(`, read before Advance consumes the `(`:
+            Pascal does not fix the order a call's arguments are evaluated. }
+          Token := Previous;
+          Token := CallPositionToken(Result, Token, Advance);
           Arguments := TObjectList<TGocciaExpression>.Create(True);
           try
             if not Check(gttRightParen) then
@@ -2217,7 +2246,8 @@ begin
 
             Consume(gttRightParen, 'Expected ")" after arguments',
               SSuggestCloseParenArguments);
-            Result := TGocciaCallExpression.Create(Result, Arguments, SourceSpanAtPosition(Line, Column));
+            Result := TGocciaCallExpression.Create(Result, Arguments,
+              SourceSpanFromToken(Token));
           except
             Arguments.Free;
             raise;
@@ -2225,15 +2255,15 @@ begin
         end;
       gttDot, gttOptionalChaining:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttHash:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttLeftBracket:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttNot:
         begin
@@ -2809,7 +2839,7 @@ begin
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;
         while Check(gttDot) or Check(gttLeftBracket) do
-          Expr := ParseMemberAccessSegment(Expr, True, False, Line, Column);
+          Expr := ParseMemberAccessSegment(Expr, False);
         TryCollectNewExpressionTypeArguments;
         if Check(gttOptionalChaining) then
           raise TGocciaSyntaxError.Create(
@@ -6858,6 +6888,7 @@ var
   Arg: TGocciaExpression;
   PropertyName: string;
   Line, Column: Integer;
+  CalleeEnd: TGocciaToken;
 begin
   if Match(gttLeftParen) then
   begin
@@ -6871,10 +6902,11 @@ begin
 
   while True do
   begin
-    if Match(gttLeftParen) then
+    if Check(gttLeftParen) then
     begin
-      Line := Previous.Line;
-      Column := Previous.Column;
+      { Read before Advance consumes the `(`, as in Call. }
+      CalleeEnd := Previous;
+      CalleeEnd := CallPositionToken(Result, CalleeEnd, Advance);
       Arguments := TObjectList<TGocciaExpression>.Create(True);
       try
         if not Check(gttRightParen) then
@@ -6889,7 +6921,8 @@ begin
         end;
         Consume(gttRightParen, 'Expected ")" after arguments',
           SSuggestCloseParenArguments);
-        Result := TGocciaCallExpression.Create(Result, Arguments, SourceSpanAtPosition(Line, Column));
+        Result := TGocciaCallExpression.Create(Result, Arguments,
+          SourceSpanFromToken(CalleeEnd));
       except
         Arguments.Free;
         raise;
@@ -6918,7 +6951,7 @@ begin
             Peek.Line, Peek.Column, FFileName, FSourceLines,
             SSuggestPropertyNameIdentifier);
         Result := TGocciaMemberExpression.Create(
-          Result, PropertyName, False, SourceSpanAtPosition(Line, Column));
+          Result, PropertyName, False, SourceSpanFromToken(Previous));
       end;
     end
     else
