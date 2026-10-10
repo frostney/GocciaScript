@@ -193,12 +193,17 @@ const
   //   v84 -> v85: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
   //               publishes a global-backed script's named import to the
   //               global scope so a later script against it reads the binding.
-  //   v85 -> v86: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
+  //   v85 -> v86: a public auto-accessor compiles to a private storage field
+  //               and a getter/setter pair defined with OP_DEFINE_ACCESSOR_*
+  //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
+  //               declares private auto-accessor names, and
+  //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
+  //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
   //               the intrinsic ReferenceError for an unresolvable reference
   //               with its source position and suggestion, in place of the
   //               four-instruction `new ReferenceError(...)` sequence that
   //               read the global `ReferenceError` binding.
-  GOCCIA_FORMAT_VERSION = 86;
+  GOCCIA_FORMAT_VERSION = 89;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -206,6 +211,9 @@ const
   GOCCIA_NULLISH_MATCH_ANY = 255;
   ACCESSOR_FLAG_SETTER = 1;
   ACCESSOR_FLAG_STATIC = 2;
+  { A half of a public auto-accessor's getter/setter pair. A is the class, not
+    its prototype, for both the instance and the static case. }
+  ACCESSOR_FLAG_AUTO = 4;
   FUNCTION_NAME_PREFIX_NONE = 0;
   FUNCTION_NAME_PREFIX_GET  = 1;
   FUNCTION_NAME_PREFIX_SET  = 2;
@@ -394,7 +402,6 @@ type
     OP_DIV           = 132,
     OP_MOD           = 133,
     OP_POW           = 134,
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 135,
     OP_BAND          = 136,
     OP_BOR           = 137,
     OP_BXOR          = 138,
@@ -511,6 +518,17 @@ type
     OP_THROW_UNDEFINED_VARIABLE = 236
   );
 
+const
+  // Runtime-only opcode, reserved at the top of the opcode range and never
+  // valid in a file: it is deliberately not a TGocciaOpCode member, so
+  // IsValidGocciaOpCode (bounded by High(TGocciaOpCode)) rejects it at load.
+  // File opcodes must stay below it. A = destination, B = first contiguous
+  // argument register, C = argument count: calls the running closure through
+  // an ordinary frame. The bytecode loader turns a loaded OP_CALL_SELF_NUM into
+  // it, because the proof that makes a closed numeric frame safe is not
+  // serialized (ADR 0127).
+  OP_CALL_SELF = 255;
+
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
@@ -541,7 +559,7 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 144..166]);
+    not (AOp in [99, 135, 144..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;

@@ -2299,7 +2299,7 @@
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
-          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+          ProfileEntryTimestamp);
         goto LDispatchNext;
       end;
 
@@ -3091,10 +3091,6 @@
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue,
           B, RegisterToValue(FRegisters[A]));
 
-      OP_SETUP_AUTO_ACCESSOR_DYNAMIC:
-        SetupAutoAccessorValueByKey(RegisterToValue(FRegisters[A]),
-          Template.GetConstantUnchecked(C).StringValue, B);
-
       OP_BEGIN_DECORATORS:
         BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
 
@@ -3807,7 +3803,10 @@
       OP_DEFINE_ACCESSOR_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+          DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), GlobalName,
+            nil, RegisterToValue(FRegisters[A + 1]), B)
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if IsBytecodePrivateKey(GlobalName) then
             DeclareBytecodePrivateNameForClass(
@@ -3835,7 +3834,18 @@
 
       OP_DEFINE_ACCESSOR_DYNAMIC:
       begin
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+        begin
+          RightValue := RegisterToValue(FRegisters[C]);
+          if RightValue is TGocciaSymbolValue then
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), '',
+              RightValue, RegisterToValue(FRegisters[A + 1]), B)
+          else
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]),
+              RightValue.ToStringLiteral.Value, nil,
+              RegisterToValue(FRegisters[A + 1]), B);
+        end
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineStaticSetterPropertyByKey(RegisterToValue(FRegisters[A]),
@@ -4109,5 +4119,20 @@
         goto LDispatchNext;
       end;
         else
-          raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+          // OP_CALL_SELF is a reserved runtime-only opcode outside
+          // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
+          // arguments are read straight out of the caller's registers, as in
+          // OP_CALL: SetupNewFrame copies them before it acquires registers.
+          if Op = OP_CALL_SELF then
+          begin
+            if FThreadPolls^.TimeoutArmed then
+              CheckExecutionTimeout;
+            PushFrame(A, Frame.IP, Template, PrevCovLine,
+              ProfileEntryTimestamp);
+            SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
+              C, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            goto LDispatchNext;
+          end
+          else
+            raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;

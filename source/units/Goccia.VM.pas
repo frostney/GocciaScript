@@ -133,6 +133,26 @@ type
     ProfileEntryTimestamp: Int64;
   end;
 
+  { One native entry into the dispatch loop (ExecuteClosureRegistersInternal).
+    The call-stack frames it pushed start at FirstCallFrame. For each one
+    except its executing frame, the instruction pointer is saved in the frame
+    stack from FirstSavedFrame, followed by the closed numeric frame stack
+    from FirstClosedNumericFrame. The executing frame's template and
+    instruction pointer are the entry's own locals, which the probes point
+    at. FrameIPProbe points past the instruction being executed, and stays
+    right between a call or return and the next instruction, while the start
+    the instruction probe holds is refreshed only at the next instruction. }
+  TGocciaVMActivation = record
+    TemplateProbe: PPointer;
+    InstructionIPProbe: PInteger;
+    FrameIPProbe: PInteger;
+    FirstCallFrame: Integer;
+    FirstSavedFrame: Integer;
+    FirstClosedNumericFrame: Integer;
+  end;
+
+  PGocciaVMActivation = ^TGocciaVMActivation;
+
   // What a VM has accounted for one of its thread's stacks, the call stack or
   // the execution-context stack. Those belong to the thread, so the account
   // records which thread's stack the bytes are for (ADR 0132).
@@ -234,6 +254,14 @@ type
     // Read only on throw paths (StampThrowLocation).
     FActiveTemplateProbe: PPointer;
     FActiveInstructionIPProbe: PInteger;
+    // The native entries running now, innermost last. Pushed and popped once
+    // per native entry, never per call; read only when a stack trace is
+    // captured (ResolveFrameLocations).
+    FActivations: array of TGocciaVMActivation;
+    FActivationCount: Integer;
+    // The call stack's location resolver from before the outermost entry
+    // installed this VM's own, restored when that entry returns.
+    FPreviousLocationResolver: TGocciaFrameLocationResolver;
     FStackRoot: TGocciaVMStackRoot;
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
@@ -451,8 +479,9 @@ type
       const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AFlags: Integer;
       const AClassValue: TGocciaValue = nil);
-    procedure SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-      const ABackingName: string; const AFlags: Integer);
+    procedure DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+      const AName: string; const AKey: TGocciaValue;
+      const AFunction: TGocciaValue; const AFlags: Integer);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue;
       const APreserveExistingPrivateSlots: Boolean = False);
@@ -529,7 +558,7 @@ type
     procedure PushClosedNumericFrame(const AResultRegister, AArgumentBase,
       AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-      var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+      var AProfileTimestamp: Int64);
     function PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
       var AProfileTimestamp: Int64): Integer;
@@ -544,6 +573,12 @@ type
       const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
     procedure BindToCurrentThread;
+    procedure EnterActivation(const ATemplateProbe: PPointer;
+      const AInstructionIPProbe, AFrameIPProbe: PInteger;
+      const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
+    procedure LeaveActivation;
+    procedure ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
+      const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
     procedure InternExecutionSourcePath(const ASourcePath: string);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
@@ -3307,7 +3342,15 @@ begin
   // below are redundant with this but kept for parity with the register stack.
   MarkArgumentRange(0, FVM.FArgumentBase + FVM.FArgCount);
 
+  // Closed numeric frames (ADR 0101) are the innermost frames whenever any is
+  // live: they call only themselves, and no other frame is set up above them.
+  // Their windows are not cleared, so they can still hold references an
+  // earlier frame left behind, and what the frames store themselves is
+  // scalars and pinned numbers. Mark only the registers below the first one.
   Limit := FVM.FRegisterBase + FVM.FRegisterCount;
+  if FVM.FClosedNumericFrameStackCount > 0 then
+    Limit := FVM.FClosedNumericFrameStack[0].RegisterBase +
+      FVM.FRegisterCount;
   if Limit > Length(FVM.FRegisterStack) then
     Limit := Length(FVM.FRegisterStack);
   for I := 0 to Limit - 1 do
@@ -6856,6 +6899,10 @@ var
   I: Integer;
   Freed: Int64;
 begin
+  // Never leave the call stack holding a resolver into a freed VM.
+  if (FActivationCount > 0) and Assigned(FCallStack) then
+    FCallStack.LocationResolver := FPreviousLocationResolver;
+  FActivationCount := 0;
   if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
@@ -12370,14 +12417,18 @@ begin
   Result := TargetInstance;
 end;
 
+// A private auto-accessor (`accessor #x`) is a private field in both modes:
+// declaring its name on the class is all its setup needs. A public one is
+// compiled to a private storage field and a getter/setter pair (see
+// DefineAutoAccessorHalf), so nothing reaches here for it.
 procedure TGocciaVM.SetupAutoAccessorValue(const AName: string;
   const AFlags: Integer; const AClassValue: TGocciaValue);
 var
   ClassVal: TGocciaClassValue;
-  IsStatic: Boolean;
-  IsPrivate: Boolean;
   SourceName: string;
 begin
+  if (AFlags and 2) = 0 then
+    Exit;
   if Assigned(FActiveDecoratorSession) then
   begin
     if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
@@ -12389,33 +12440,59 @@ begin
     ClassVal := TGocciaClassValue(AClassValue)
   else
     Exit;
-  IsStatic := (AFlags and 1) <> 0;
-  IsPrivate := (AFlags and 2) <> 0;
-  if IsPrivate then
-  begin
-    SourceName := BytecodePrivateSourceName(AName);
-    if SourceName <> '' then
-      ClassVal.DeclarePrivateName(SourceName, AName);
-    Exit;
-  end;
-  ClassVal.AddAutoAccessor(AName, '__accessor_' + AName, IsStatic);
+  SourceName := BytecodePrivateSourceName(AName);
+  if SourceName <> '' then
+    ClassVal.DeclarePrivateName(SourceName, AName);
 end;
 
-procedure TGocciaVM.SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-  const ABackingName: string; const AFlags: Integer);
+// TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+// `accessor`: the getter and setter are defined together with
+// DefinePropertyOrThrow and { [[Enumerable]]: true, [[Configurable]]: true },
+// replacing whatever a member declared earlier under the same key defined.
+// The compiler emits the getter half (ACCESSOR_FLAG_AUTO), which starts the
+// property afresh, immediately followed by the setter half, which joins it.
+// AClassValue is the class; AKey is a symbol key, or nil when AName names it.
+procedure TGocciaVM.DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+  const AName: string; const AKey: TGocciaValue;
+  const AFunction: TGocciaValue; const AFlags: Integer);
 var
-  ClassVal: TGocciaClassValue;
   IsStatic: Boolean;
+  Target: TGocciaObjectValue;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Getter, Setter: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptorAccessor;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (AClassValue is TGocciaClassValue) then
     Exit;
-  if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
-    Exit;
+  IsStatic := (AFlags and ACCESSOR_FLAG_STATIC) <> 0;
+  SetBytecodeHomeObject(AFunction, AClassValue, IsStatic);
+  if IsStatic then
+    Target := TGocciaClassValue(AClassValue)
+  else
+    Target := TGocciaClassValue(AClassValue).Prototype;
 
-  ClassVal := TGocciaClassValue(
-    TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue);
-  IsStatic := (AFlags and 1) <> 0;
-  ClassVal.AddAutoAccessorWithKey('', AKey, ABackingName, IsStatic);
+  Getter := nil;
+  Setter := nil;
+  if (AFlags and ACCESSOR_FLAG_SETTER) <> 0 then
+  begin
+    if AKey is TGocciaSymbolValue then
+      ExistingDescriptor := Target.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(AKey))
+    else
+      ExistingDescriptor := Target.GetOwnPropertyDescriptor(AName);
+    if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
+      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    Setter := AFunction;
+  end
+  else
+    Getter := AFunction;
+
+  Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
+    [pfEnumerable, pfConfigurable]);
+  if AKey is TGocciaSymbolValue then
+    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+  else
+    Target.DefineProperty(AName, Descriptor);
 end;
 
 procedure TGocciaVM.BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
@@ -14823,11 +14900,11 @@ end;
 procedure TGocciaVM.PushClosedNumericFrame(const AResultRegister,
   AArgumentBase, AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
   const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-  var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+  var AProfileTimestamp: Int64);
 var
   Arguments: array[0..2] of TGocciaRegister;
   I: Integer;
-  NewBase, Required, ClearStart: Integer;
+  NewBase, Required: Integer;
 begin
   if (AArgumentCount < 1) or (AArgumentCount > 3) or
      (AArgumentCount <> ATemplate.ParameterCount) then
@@ -14860,20 +14937,14 @@ begin
   Required := NewBase + FRegisterCount;
   if Required > Length(FRegisterStack) then
     GrowRegisterStack(Required);
-  if Required > AInitializedRegisterTop then
-  begin
-    ClearStart := Max(NewBase, AInitializedRegisterTop);
-    if Required > ClearStart then
-      FillChar(FRegisterStack[ClearStart],
-        (Required - ClearStart) * SizeOf(TGocciaRegister), 0);
-    AInitializedRegisterTop := Required;
-  end;
   FRegisterBase := NewBase;
   FRegisters := @FRegisterStack[FRegisterBase];
-  // Each depth is cleared on first use in this outer invocation. The proof
-  // then admits only scalar-number expressions, numeric predicates, and direct
-  // self-calls, so sibling reuse can contain only non-reference scalars or
-  // undefined and no stale object pointer can reach the GC.
+  // The window is not cleared, so it can still hold references that an
+  // earlier frame left there; the collector does not mark closed numeric
+  // windows (TGocciaVMStackRoot.MarkReferences). The proof admits only
+  // scalar-number expressions, numeric predicates, and direct self-calls, so
+  // the frame writes each register before reading it and stores only scalars
+  // and the pinned NaN, infinity and -0 values.
   FRegisters[0] := RegisterUndefined;
   for I := 0 to AArgumentCount - 1 do
     FRegisters[I + 1] := Arguments[I];
@@ -15037,6 +15108,172 @@ begin
   FExecutionSourcePathRef := nil;
 end;
 
+{ Records a native entry into the dispatch loop, so a stack trace captured
+  while it runs can find the position of each frame it pushes. The caller has
+  already made room in FActivations. The outermost entry also installs this
+  VM as the call stack's location resolver. }
+procedure TGocciaVM.EnterActivation(const ATemplateProbe: PPointer;
+  const AInstructionIPProbe, AFrameIPProbe: PInteger;
+  const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
+var
+  Activation: PGocciaVMActivation;
+begin
+  Activation := @FActivations[FActivationCount];
+  Activation^.TemplateProbe := ATemplateProbe;
+  Activation^.InstructionIPProbe := AInstructionIPProbe;
+  Activation^.FrameIPProbe := AFrameIPProbe;
+  if Assigned(FCallStack) then
+    Activation^.FirstCallFrame := FCallStack.Count
+  else
+    Activation^.FirstCallFrame := 0;
+  Activation^.FirstSavedFrame := AFirstSavedFrame;
+  Activation^.FirstClosedNumericFrame := AFirstClosedNumericFrame;
+  if (FActivationCount = 0) and Assigned(FCallStack) then
+  begin
+    FPreviousLocationResolver := FCallStack.LocationResolver;
+    FCallStack.LocationResolver := ResolveFrameLocations;
+  end;
+  Inc(FActivationCount);
+  FActiveTemplateProbe := ATemplateProbe;
+  FActiveInstructionIPProbe := AInstructionIPProbe;
+end;
+
+procedure TGocciaVM.LeaveActivation;
+begin
+  if FActivationCount <= 0 then
+    Exit;
+  Dec(FActivationCount);
+  if FActivationCount > 0 then
+  begin
+    FActiveTemplateProbe := FActivations[FActivationCount - 1].TemplateProbe;
+    FActiveInstructionIPProbe :=
+      FActivations[FActivationCount - 1].InstructionIPProbe;
+  end
+  else
+  begin
+    FActiveTemplateProbe := nil;
+    FActiveInstructionIPProbe := nil;
+    if Assigned(FCallStack) then
+      FCallStack.LocationResolver := FPreviousLocationResolver;
+    FPreviousLocationResolver := nil;
+  end;
+end;
+
+{ The position a frame of ATemplate reports while it executes the instruction
+  starting at APC: the call expression the compiler recorded for it, or the
+  instruction's own line and column. }
+procedure LocateFrameAt(const ATemplate: TGocciaFunctionTemplate;
+  const APC: Integer; var ALocation: TGocciaFrameLocation);
+var
+  Line, Column: Integer;
+begin
+  if (not Assigned(ATemplate)) or (APC < 0) or
+     (APC >= ATemplate.CodeCount) then
+    Exit;
+  if ATemplate.TryGetCallSitePosition(UInt32(APC), Line, Column) then
+  begin
+    ALocation.Line := Line;
+    ALocation.Column := Column;
+  end
+  else if Assigned(ATemplate.DebugInfo) then
+  begin
+    ALocation.Line := Integer(ATemplate.DebugInfo.GetLineForPC(UInt32(APC)));
+    ALocation.Column :=
+      Integer(ATemplate.DebugInfo.GetColumnForPC(UInt32(APC)));
+  end;
+end;
+
+{ A suspended frame's saved instruction pointer is the instruction after the
+  call it is making, and so is an executing frame's, which the dispatch loop
+  advances past an instruction before running it. That instruction is one
+  word, or two behind an OP_WIDE prefix. A frame that has not started (IP 0)
+  is left unlocated. }
+procedure LocateFrameAfterCall(const ATemplate: TGocciaFunctionTemplate;
+  const AReturnIP: Integer; var ALocation: TGocciaFrameLocation);
+var
+  PC: Integer;
+begin
+  if (not Assigned(ATemplate)) or (AReturnIP < 1) or
+     (AReturnIP > ATemplate.CodeCount) then
+    Exit;
+  PC := AReturnIP - 1;
+  if (PC >= 1) and
+     (DecodeOp(ATemplate.GetInstructionUnchecked(PC - 1)) = Ord(OP_WIDE)) then
+    Dec(PC);
+  LocateFrameAt(ATemplate, PC, ALocation);
+end;
+
+{ The call stack's location resolver while this VM runs (ADR 0074 keeps
+  positions off the call path). Each native entry pushed one call-stack frame
+  per frame it runs, in order, and saved the instruction pointer of every one
+  but the executing frame when that frame made its call: first in the frame
+  stack, then, for numeric self-calls, in the closed numeric frame stack. The
+  two sequences are paired up per entry, innermost first. An entry whose
+  frames do not pair up, such as one throwing while it sets up a call, keeps
+  the frames that cannot be matched unlocated rather than guessing. Frames
+  below the outermost entry belong to whoever ran before this VM. }
+procedure TGocciaVM.ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
+  const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
+var
+  ActivationIndex, UpperCallFrame, UpperSavedFrame, UpperClosedFrame: Integer;
+  Activation: PGocciaVMActivation;
+  DeferredCount, SavedCount, ClosedCount, Ordinal, I: Integer;
+  Saved: PGocciaVMCallFrame;
+begin
+  UpperCallFrame := ACount;
+  UpperSavedFrame := FFrameStackCount;
+  UpperClosedFrame := FClosedNumericFrameStackCount;
+  for ActivationIndex := FActivationCount - 1 downto 0 do
+  begin
+    Activation := @FActivations[ActivationIndex];
+    if UpperCallFrame > ACount then
+      UpperCallFrame := ACount;
+    DeferredCount := 0;
+    for I := Activation^.FirstCallFrame to UpperCallFrame - 1 do
+      if Assigned(AFrames[I].Template) then
+        Inc(DeferredCount);
+    SavedCount := UpperSavedFrame - Activation^.FirstSavedFrame;
+    ClosedCount := UpperClosedFrame - Activation^.FirstClosedNumericFrame;
+    if (SavedCount >= 0) and (ClosedCount >= 0) and
+       ((DeferredCount = SavedCount + ClosedCount + 1) or
+        (DeferredCount = SavedCount + ClosedCount)) then
+    begin
+      // The Ordinal-th deferred frame of this entry is paired with the
+      // Ordinal-th saved instruction pointer, or with the probe after them.
+      Ordinal := 0;
+      for I := Activation^.FirstCallFrame to UpperCallFrame - 1 do
+      begin
+        if not Assigned(AFrames[I].Template) then
+          Continue;
+        if IsUnlocatedFrame(AFrames[I]) then
+        begin
+          if Ordinal < SavedCount then
+          begin
+            Saved := @FFrameStack[Activation^.FirstSavedFrame + Ordinal];
+            if Pointer(Saved^.Template) = AFrames[I].Template then
+              LocateFrameAfterCall(Saved^.Template, Saved^.IP, ALocations[I]);
+          end
+          else if Ordinal < SavedCount + ClosedCount then
+            LocateFrameAfterCall(TGocciaFunctionTemplate(AFrames[I].Template),
+              FClosedNumericFrameStack[Activation^.FirstClosedNumericFrame +
+                Ordinal - SavedCount].IP, ALocations[I])
+          else if Activation^.TemplateProbe^ = AFrames[I].Template then
+            LocateFrameAfterCall(
+              TGocciaFunctionTemplate(AFrames[I].Template),
+              Activation^.FrameIPProbe^, ALocations[I]);
+        end;
+        Inc(Ordinal);
+      end;
+    end;
+    UpperCallFrame := Activation^.FirstCallFrame;
+    UpperSavedFrame := Activation^.FirstSavedFrame;
+    UpperClosedFrame := Activation^.FirstClosedNumericFrame;
+  end;
+  if Assigned(FPreviousLocationResolver) and (FActivationCount > 0) and
+     (UpperCallFrame > 0) then
+    FPreviousLocationResolver(AFrames, UpperCallFrame, ALocations);
+end;
+
 { SetupNewFrame's slow path: the callee's source path is not the one the last
   call interned. Kept out of line so that SetupNewFrame itself holds no
   managed local or temporary and needs no implicit exception frame. Automatic
@@ -15067,6 +15304,10 @@ var
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
 begin
+  // The collector does not mark the registers of closed numeric frames, which
+  // relies on no other frame running above them.
+  Assert(FClosedNumericFrameStackCount = 0,
+    'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
   // The frame's source path is the template's own source file, or the running
@@ -15393,7 +15634,6 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
   PreviousCallSite: TGocciaCallSite;
-  ClosedNumericInitializedRegisterTop: Integer;
   InstructionLimitState: PGocciaInstructionLimitState;
   UseProdDispatch: Boolean;
   GC: TGarbageCollector;
@@ -15403,8 +15643,6 @@ var
   // and then re-enter guest code (key coercion / custom-matcher lookup) before
   // consuming it. Re-Initialized per use, so sharing one record is safe.
   OperandRoots: TGocciaActiveRootFrame;
-  SavedActiveTemplateProbe: PPointer;
-  SavedActiveInstructionIPProbe: PInteger;
   SavedConstructFrame: TGocciaCallFrame;
   SavedConstructFrameOk: Boolean;
 
@@ -15617,6 +15855,9 @@ begin
   CheckNativeReentryDepth(FNativeExecutionDepth + 1);
   if FNativeExecutionDepth = 0 then
     BindToCurrentThread;
+  // Grown before any state is saved, so that EnterActivation cannot fail.
+  if FActivationCount >= Length(FActivations) then
+    SetLength(FActivations, FActivationCount * 2 + 8);
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
@@ -15660,14 +15901,11 @@ begin
       // Template makes the stamp a no-op until the loop sets a real one.
       Template := nil;
       InstructionStartIP := 0;
-      SavedActiveTemplateProbe := FActiveTemplateProbe;
-      SavedActiveInstructionIPProbe := FActiveInstructionIPProbe;
-      FActiveTemplateProbe := PPointer(@Template);
-      FActiveInstructionIPProbe := @InstructionStartIP;
+      EnterActivation(PPointer(@Template), @InstructionStartIP, @Frame.IP,
+        InitialFrameStackCount, InitialClosedNumericFrameCount);
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-    ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then
@@ -15927,8 +16165,7 @@ LInnerLoopsDone:
     Result := RegisterUndefined;
     finally
       Dec(FNativeExecutionDepth);
-      FActiveTemplateProbe := SavedActiveTemplateProbe;
-      FActiveInstructionIPProbe := SavedActiveInstructionIPProbe;
+      LeaveActivation;
       try
       UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
         Template, PrevCovLine, ProfileEntryTimestamp);
