@@ -119,11 +119,14 @@ type
   TMemoTable = record
     Entries: TMemoEntries;
     Count: Integer;
+    // Nothing is recorded, so every lookup misses without allocating.
+    Disabled: Boolean;
   end;
 
-procedure MemoInit(var AMemo: TMemoTable);
+procedure MemoInit(var AMemo: TMemoTable; const ADisabled: Boolean);
 begin
   AMemo.Count := 0;
+  AMemo.Disabled := ADisabled;
 end;
 
 procedure MemoEnsureAllocated(var AMemo: TMemoTable); {$IFDEF FPC}inline;{$ENDIF}
@@ -222,6 +225,8 @@ procedure MemoAdd(var AMemo: TMemoTable; APC, APos: Integer);
 var
   Capacity: Integer;
 begin
+  if AMemo.Disabled then
+    Exit;
   MemoEnsureAllocated(AMemo);
   while True do
   begin
@@ -856,7 +861,11 @@ begin
   StepLimit := RegExpStepLimit(AInput.Length);
   StackTop := -1;
   RepeatDepth := 0;
-  MemoInit(Memo);
+  // The memo records that a path failed at an instruction and position, and
+  // a later path with other captures can still succeed there when a back
+  // reference reads them: /(a+){1,3}\1/ on "aaa" must try every count of
+  // (a+). Such a program runs without the memo; the step limit still bounds it.
+  MemoInit(Memo, AProgram.HasBackreferences);
 
   while PC < Length(AProgram.Code) do
   begin

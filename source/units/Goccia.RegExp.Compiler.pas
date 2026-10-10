@@ -2902,7 +2902,8 @@ var
   // match empty. Conservative: an instruction it does not model counts as
   // reaching the end. A string set consumes, because AddStringSet keeps
   // only strings of two or more code points beside its single-character
-  // class.
+  // class. It also drops an empty \q{} string, which should match empty
+  // (#1589); keeping it must make such a set count as matching empty here.
   function BodyAlwaysConsumes: Boolean;
   var
     Visited: array of Boolean;
@@ -3440,6 +3441,8 @@ begin
 end;
 
 function TRegExpCompiler.Compile: TRegExpProgram;
+var
+  I: Integer;
 begin
   PreScanNamedGroups;
   ValidateNamedGroups;
@@ -3452,6 +3455,13 @@ begin
   BuildStartCheck(FCode, FCodeLen, FCharClasses, Result.StartCheck);
   Result.NamedGroups := FNamedGroups;
   Result.StringSets := FStringSets;
+  Result.HasBackreferences := False;
+  for I := 0 to FCodeLen - 1 do
+    if TRegExpOpCode(FCode[I] and $FF) = RX_BACKREF then
+    begin
+      Result.HasBackreferences := True;
+      Break;
+    end;
 end;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;

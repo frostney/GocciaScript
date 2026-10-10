@@ -95,3 +95,22 @@ test.runIf(is64Bit)("a failed optional iteration does not walk the remaining cop
   expect(/^a{0,5000000}$/.test("aaa")).toBe(true);
   expect(/x{1,5000000}y/.test("xxz xy")).toBe(true);
 });
+
+test("a lazy bounded quantifier takes as few iterations as it can", () => {
+  expect(/a{1,3}?/.exec("aaa")[0]).toBe("a");
+  expect(/x{2,5}?/.exec("xxxxx")[0]).toBe("xx");
+  expect(/(?:ab){0,2}?/.exec("abab")[0]).toBe("");
+});
+
+// A failed path at one instruction and position says nothing about a path
+// with other captures when a back reference reads them, so every iteration
+// count of the group is tried.
+test("a back reference after a bounded repeat sees every iteration count", () => {
+  expect([.../(a+){1,3}\1/.exec("aaa")]).toEqual(["aaa", "a"]);
+  expect([.../(.*){0,3}\1/.exec("abb")]).toEqual(["abb", "b"]);
+  const anchored = /(a*){0,4}\1$/.exec("aaa");
+  expect(anchored.index).toBe(0);
+  expect(anchored[0]).toBe("aaa");
+  expect(/(a*){1,3}(?=\1)/.exec("aaaba")[0]).toBe("aa");
+  expect([.../(.*)?(.*)?(.*)?\1/.exec("abb")]).toEqual(["abb", undefined, "abb", undefined]);
+});
