@@ -639,6 +639,33 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
     }
 
+    // A direct eval in an arrow sees the private names of the class body the
+    // arrow is in, even when the arrow has no home object of its own, as in a
+    // static field's array literal (ES2026 §19.2.1.1 PerformEval step 6.b).
+    const evalPrivateArrowSource = [
+      "const outcome = (run) => { try { return String(run()); } catch (e) { return e.name; } };",
+      "class C { #x = 1; static read = () => eval('(new C()).#x'); }",
+      "class I { static #u = 8; static arr = [() => eval('I.#u')]; }",
+      "class K { static #k = 1; static arr = [() => eval('K.#missing')]; }",
+      "const outside = [() => eval('({}).#a')];",
+      "print([outcome(C.read), outcome(I.arr[0]), outcome(K.arr[0]), outcome(outside[0])].join(','));",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalPrivateArrow = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalPrivateArrowSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalPrivateArrowOut =
+        evalPrivateArrow.stdout.toString() + evalPrivateArrow.stderr.toString();
+      if (evalPrivateArrow.exitCode !== 0 || evalPrivateArrow.stdout.toString().trim() !== "1,8,SyntaxError,SyntaxError")
+        throw new Error(`Test262 Runner ${mode} direct eval of a private name in a class-body arrow expected 1,8,SyntaxError,SyntaxError, got: ${evalPrivateArrowOut}`);
+    }
+
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
       wideCapturedBlockSrc,

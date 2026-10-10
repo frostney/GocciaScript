@@ -38,6 +38,40 @@ describe("class method enumerability", () => {
     expect(Object.keys(Foo).includes("bar")).toBe(false);
   });
 
+  test("computed accessors and methods are non-enumerable", () => {
+    const key = "value";
+    const symbol = Symbol("value");
+    class Foo {
+      get [key]() { return 1; }
+      set [key](v) {}
+      get [symbol]() { return 2; }
+      [key + "Method"]() { return 3; }
+      [symbol.description + "Static"]() { return 4; }
+    }
+
+    const accessor = Object.getOwnPropertyDescriptor(Foo.prototype, key);
+    expect(accessor.enumerable).toBe(false);
+    expect(accessor.configurable).toBe(true);
+    expect(typeof accessor.get).toBe("function");
+    expect(typeof accessor.set).toBe("function");
+    expect(Object.getOwnPropertyDescriptor(Foo.prototype, symbol).enumerable).toBe(false);
+    const method = Object.getOwnPropertyDescriptor(Foo.prototype, "valueMethod");
+    expect(method.enumerable).toBe(false);
+    expect(method.writable).toBe(true);
+    expect(Object.keys(Foo.prototype)).toEqual([]);
+  });
+
+  test("a computed constructor method is an ordinary prototype method", () => {
+    const key = "constructor";
+    class C {
+      [key]() { return "method"; }
+    }
+
+    expect(C.prototype.constructor === C).toBe(false);
+    expect(new C().constructor()).toBe("method");
+    expect(Object.getOwnPropertyDescriptor(C.prototype, "constructor").enumerable).toBe(false);
+  });
+
   test("constructor property is also non-enumerable", () => {
     class C {}
     const desc = Object.getOwnPropertyDescriptor(C.prototype, "constructor");
