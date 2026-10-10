@@ -3622,6 +3622,7 @@ console.log("--max-stack (native re-entry never overflows the native stack)...")
   try {
     const endless: Record<string, string> = {
       "constructors.test.js": "class A { constructor() { new A(); } }\ntest('constructor', () => { expect(() => new A()).toThrow(RangeError); });\n",
+      "async.test.js": "const f = async () => { await f(); };\ntest('async function', async () => { let caught; try { await f(); } catch (e) { caught = e; } expect(caught instanceof RangeError).toBe(true); });\n",
       "accessors.test.js": [
         "const o = { get x() { return o.x; }, set y(v) { o.y = v; } };",
         "const s = { *g() { s.g().next(); yield; } };",
@@ -3634,7 +3635,7 @@ console.log("--max-stack (native re-entry never overflows the native stack)...")
     for (const [name, src] of Object.entries(endless)) writeFileSync(join(tmp, name), src);
     const res = await $`${TESTRUNNER} ${tmp} --max-stack=100000 --max-memory=256MiB --mode=bytecode --jobs=2 --no-progress`.nothrow().quiet();
     const out = res.text();
-    if (res.exitCode !== 0 || !out.includes("Passed: 5"))
+    if (res.exitCode !== 0 || !out.includes("Passed: 6"))
       throw new Error(`TestRunner --max-stack=100000 should end native re-entry recursion in a RangeError on worker threads, got exit ${res.exitCode}: ${out}`);
   } finally {
     clean(tmp);

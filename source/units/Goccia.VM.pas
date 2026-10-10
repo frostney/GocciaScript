@@ -597,6 +597,11 @@ type
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
       const ASuggestion: string = '';
       const ASuggestionIsHostOnly: Boolean = False);
+    function TryUnwindToHandler(const AErrorValue: TGocciaValue;
+      const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+      ASavedHandlerCount: Integer;
+      var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
@@ -15460,6 +15465,25 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
   const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
+begin
+  // Outermost frame: let the finally block handle teardown. The suggestion
+  // travels with the throw so a host runner can render the same
+  // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
+  if not TryUnwindToHandler(AErrorValue, AInitialFrameStackCount,
+     AInitialClosedNumericFrameCount, ASavedHandlerCount, AFrame, ATemplate,
+     APrevCovLine, AProfileTimestamp) then
+    raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
+      ASuggestionIsHostOnly);
+end;
+
+// Pops trampoline frames until one of this native entry's handlers catches
+// AErrorValue, and points AFrame at it. False once the entry's outermost
+// frame has no handler for it, which the caller raises.
+function TGocciaVM.TryUnwindToHandler(const AErrorValue: TGocciaValue;
+  const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+  ASavedHandlerCount: Integer;
+  var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -15500,14 +15524,10 @@ begin
       if Assigned(FCallStack) then
         FCallStack.ClearTopFrameLocation;
       SetRegister(Handler.CatchRegister, AErrorValue);
-      Exit;
+      Exit(True);
     end;
-    // Outermost frame: let the finally block handle teardown. The suggestion
-    // travels with the throw so a host runner can render the same
-    // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
-        ASuggestionIsHostOnly);
+      Exit(False);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -15625,6 +15645,11 @@ var
   // The operands of a typed arithmetic or comparison opcode when one is not a
   // number, converted out of line by RegistersToDoubles.
   LeftDouble, RightDouble: Double;
+  // A throw that no handler of this entry catches, and the error value a
+  // Pascal error was converted to, kept from the except block that caught it
+  // to the raise after it.
+  EscapingThrow: EGocciaBytecodeThrow;
+  CaughtValue: TGocciaValue;
   PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
@@ -16040,6 +16065,7 @@ begin
     end;
     Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
+    EscapingThrow := nil;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
@@ -16153,42 +16179,67 @@ LDispatchNext:
 LInnerLoopsDone:
       except
         on E: EGocciaBytecodeThrow do
-          HandleExceptionUnwind(E.ThrownValue,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.ThrownValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.ThrownValue,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaThrowValue do
-          HandleExceptionUnwind(E.Value,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.Value,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.Value,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaTypeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(TYPE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaReferenceError do
-          HandleExceptionUnwind(
-            CreateErrorObject(REFERENCE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaSyntaxError do
-          HandleExceptionUnwind(
-            CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaRuntimeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
       end;
+      // Raised only once the except block is done. On i386-win32, FPC runs an
+      // except block on top of the stack the exception was raised on, and
+      // only gives that stack back when the block ends, so a throw raised
+      // inside it would keep every native entry it passes through on the
+      // stack until the throw is caught: from deep recursion, megabytes.
+      if Assigned(EscapingThrow) then
+        raise EscapingThrow;
     end;
     Result := RegisterUndefined;
     finally

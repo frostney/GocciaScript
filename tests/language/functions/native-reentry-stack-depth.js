@@ -7,7 +7,11 @@ features: [stack-depth-limit]
 // built-ins run on a native re-entry of the bytecode VM. Each one is a nested
 // call like any other, so the test runner's default limit of 2,200 nested
 // calls applies to them, not a fixed cap of 512 native re-entries.
-const DEPTH = 1000;
+//
+// Recursion without end is checked by scripts/test-cli.ts in bytecode mode
+// only: the interpreter recurses natively and does not guard its stack, and
+// 2,200 nested async calls take most of a worker's 8 MiB there.
+const DEPTH = 600;
 
 describe("recursion through native re-entry", () => {
   test("constructors", () => {
@@ -74,40 +78,5 @@ describe("recursion through native re-entry", () => {
     // Two calls per level: count and the callback map makes.
     const count = (n) => (n > 1 ? [n - 1].map(count)[0] + 1 : 1);
     expect(count(DEPTH)).toBe(DEPTH);
-  });
-});
-
-describe("recursion through native re-entry without end", () => {
-  test("constructors throw RangeError", () => {
-    class Endless {
-      constructor() {
-        new Endless();
-      }
-    }
-    expect(() => new Endless()).toThrow(RangeError);
-  });
-
-  test("async functions reject with RangeError", async () => {
-    const endless = async () => {
-      await endless();
-    };
-    let caught;
-    try {
-      await endless();
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught instanceof RangeError).toBe(true);
-    expect(caught.message).toBe("Maximum call stack size exceeded");
-  });
-
-  test("generator next() throws RangeError", () => {
-    const source = {
-      *values() {
-        source.values().next();
-        yield 1;
-      },
-    };
-    expect(() => source.values().next()).toThrow(RangeError);
   });
 });

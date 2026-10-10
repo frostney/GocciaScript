@@ -125,10 +125,14 @@ begin
     Expect<Boolean>(Probe.Limit <> 0).ToBe(True);
     Expect<Boolean>(Probe.Limit <> NativeStackLimit).ToBe(True);
     Expect<Boolean>(Probe.Limit < Probe.Position).ToBe(True);
-    // A 4 MiB stack less the reserve, less what the thread has used.
     Room := Probe.Position - Probe.Limit;
-    Expect<Boolean>(Room <= 4 * MEBIBYTE - NATIVE_STACK_RESERVE).ToBe(True);
     Expect<Boolean>(Room > 3 * MEBIBYTE).ToBe(True);
+    {$IFNDEF MSWINDOWS}
+    // A 4 MiB stack less the reserve, less what the thread has used. Windows
+    // takes a thread's stack size as the memory to commit, and reserves the
+    // executable's default stack size if that is larger.
+    Expect<Boolean>(Room <= 4 * MEBIBYTE - NATIVE_STACK_RESERVE).ToBe(True);
+    {$ENDIF}
   finally
     Probe.Free;
   end;
@@ -145,8 +149,11 @@ begin
     Probe.WaitFor;
     Expect<Boolean>(Probe.Limit <> 0).ToBe(True);
     Room := Probe.Position - Probe.Limit;
-    Expect<Boolean>(Room <= 384 * 1024).ToBe(True);
     Expect<Boolean>(Room > 256 * 1024).ToBe(True);
+    {$IFNDEF MSWINDOWS}
+    // Windows reserves at least the executable's default stack size.
+    Expect<Boolean>(Room <= 384 * 1024).ToBe(True);
+    {$ENDIF}
   finally
     Probe.Free;
   end;
@@ -193,7 +200,10 @@ begin
     // It ran until a reserve's worth of stack was left, not earlier.
     Expect<Boolean>(Probe.Depth > (MEBIBYTE - NATIVE_STACK_RESERVE) div
       FRAME_BYTES div 2).ToBe(True);
+    {$IFNDEF MSWINDOWS}
+    // Windows reserves at least the executable's default stack size.
     Expect<Boolean>(Probe.Depth < MEBIBYTE div FRAME_BYTES).ToBe(True);
+    {$ENDIF}
   finally
     Probe.Free;
   end;

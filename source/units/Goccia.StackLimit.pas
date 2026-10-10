@@ -102,7 +102,7 @@ implementation
 
 uses
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
-  {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, UnixType,{$IFEND}
+  {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, Syscall, UnixType,{$IFEND}
 
   Goccia.Error.Messages,
   Goccia.Values.ErrorHelper;
@@ -253,12 +253,20 @@ begin
   Result := InEnd and (AEnd > AStart);
 end;
 
+// The main thread's id is the process id. Asked through the system call, so
+// that it needs no libpthread either.
+function IsMainThread: Boolean;
+begin
+  Result := Do_SysCall(syscall_nr_gettid) = TSysResult(FpGetPid);
+end;
+
 // Reads the mapping that holds the running frame from /proc/self/maps, and
 // so needs neither libc nor libpthread: glibc before 2.34 keeps
 // pthread_getattr_np in libpthread, which not every program links. A thread
-// stack is a mapping of its own. The main thread's is marked [stack] and
-// grows down to RLIMIT_STACK below its top, but not into the guard gap above
-// the mapping beneath it.
+// stack is a mapping of its own. The main thread's grows down to RLIMIT_STACK
+// below its top, but not into the guard gap above the mapping beneath it. The
+// kernel marks it [stack]; Valgrind gives its program a main stack of its
+// own, which is not marked and starts a few pages long.
 function TryGetSystemStackBounds(out ALow, ASize: NativeUInt): Boolean;
 var
   Maps: TextFile;
@@ -285,7 +293,7 @@ begin
         Continue;
       if (Position >= MapStart) and (Position < MapEnd) then
       begin
-        if Pos('[stack]', Line) > 0 then
+        if (Pos('[stack]', Line) > 0) or IsMainThread then
         begin
           if (FpGetRLimit(RLIMIT_STACK, @Limits) = 0) and
              (Limits.rlim_cur <> High(rlim_t)) then
