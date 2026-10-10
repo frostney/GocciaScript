@@ -1421,8 +1421,15 @@ begin
     OwnStringData(AException, PROP_NAME, ERROR_NAME),
     OwnStringData(AException, PROP_MESSAGE, ''));
   // As for an Error, the clone keeps the original's stack, not one captured
-  // at the structuredClone call.
+  // at the structuredClone call. A DOMException carries it as an own `stack`
+  // data property, which CreateDOMExceptionObject defined from the new
+  // capture, so that property is replaced too.
   Result.ErrorStack := AException.ErrorStack;
+  if Result.ErrorStack <> '' then
+    Result.DefineProperty(PROP_STACK,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(Result.ErrorStack),
+        [pfConfigurable, pfWritable]));
   RegisterClone(AException, Result, AMemory);
 end;
 
