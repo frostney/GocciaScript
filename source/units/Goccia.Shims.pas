@@ -1130,6 +1130,7 @@ begin
     // for (Goccia.Values.DateData). Each evaluation of the shared program
     // creates its own WeakMap in this realm's module scope.
     RegisterDateValueStore(Context.Scope.GetValue(DATE_VALUE_STORE_NAME));
+    RegisterDateConstructor(Result);
   end;
 end;
 

@@ -89,4 +89,8 @@ begin
   end;
 end;
 
+initialization
+  // The enum proposal makes an enum object an ordinary object.
+  RegisterOrdinaryObjectClass(TGocciaEnumValue);
+
 end.

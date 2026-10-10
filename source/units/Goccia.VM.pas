@@ -16401,5 +16401,6 @@ end;
 
 initialization
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
+  RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
 
 end.

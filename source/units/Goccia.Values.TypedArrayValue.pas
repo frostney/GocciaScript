@@ -109,12 +109,21 @@ type
     class function GetSharedPrototypeObject: TGocciaObjectValue; static;
     class function GetSharedPrototypeObjectForRealm(const ARealm: TGocciaRealm): TGocciaObjectValue; static;
     class procedure SetUint8Prototype(const APrototype: TGocciaObjectValue);
+    { %<Kind>Array.prototype% of the current realm, recorded by the engine
+      when it registers each constructor; nil before that. }
+    class procedure SetKindPrototype(const AKind: TGocciaTypedArrayKind;
+      const APrototype: TGocciaObjectValue);
+    class function GetKindPrototype(
+      const AKind: TGocciaTypedArrayKind): TGocciaObjectValue;
 
     property BufferValue: TGocciaValue read FBufferValue;
     property BufferData: TBytes read FBufferData;
     property ByteOffset: Integer read FByteOffset;
     property Length: Integer read GetLength;
     property Kind: TGocciaTypedArrayKind read FKind;
+    // True for a view created without a length over a resizable buffer: its
+    // [[ArrayLength]] is AUTO and it tracks the buffer's length.
+    property IsLengthTracking: Boolean read FAutoLength;
 
     // Boxing-free element fast paths for the bytecode VM computed-access cores.
     // TryReadIndexedScalar yields the element as a raw Double for non-BigInt kinds
@@ -231,6 +240,7 @@ uses
 var
   GTypedArraySharedSlot: TGocciaRealmOwnedSlotId;
   GUint8PrototypeSlot: TGocciaRealmSlotId;
+  GKindPrototypeSlots: array[TGocciaTypedArrayKind] of TGocciaRealmSlotId;
 
 threadvar
   FPrototypeMembers: TArray<TGocciaMemberDefinition>;
@@ -1097,6 +1107,26 @@ class procedure TGocciaTypedArrayValue.SetUint8Prototype(const APrototype: TGocc
 begin
   if (CurrentRealm <> nil) then
     CurrentRealm.SetSlot(GUint8PrototypeSlot, APrototype);
+end;
+
+class procedure TGocciaTypedArrayValue.SetKindPrototype(
+  const AKind: TGocciaTypedArrayKind; const APrototype: TGocciaObjectValue);
+begin
+  if (CurrentRealm <> nil) then
+    CurrentRealm.SetSlot(GKindPrototypeSlots[AKind], APrototype);
+end;
+
+class function TGocciaTypedArrayValue.GetKindPrototype(
+  const AKind: TGocciaTypedArrayKind): TGocciaObjectValue;
+var
+  Slot: TObject;
+begin
+  Result := nil;
+  if (CurrentRealm = nil) then
+    Exit;
+  Slot := CurrentRealm.GetSlot(GKindPrototypeSlots[AKind]);
+  if Slot is TGocciaObjectValue then
+    Result := TGocciaObjectValue(Slot);
 end;
 
 { Property access — indexed elements }
@@ -3765,9 +3795,19 @@ begin
   end;
 end;
 
+procedure RegisterKindPrototypeSlots;
+var
+  Kind: TGocciaTypedArrayKind;
+begin
+  for Kind := Low(TGocciaTypedArrayKind) to High(TGocciaTypedArrayKind) do
+    GKindPrototypeSlots[Kind] := RegisterRealmSlot(
+      '%' + TGocciaTypedArrayValue.KindName(Kind) + '.prototype%');
+end;
+
 initialization
   RegisterThreadvarCleanup(@ClearThreadvarMembers);
   GTypedArraySharedSlot := RegisterRealmOwnedSlot('TypedArray.shared');
   GUint8PrototypeSlot := RegisterRealmSlot('Uint8Array.prototype');
+  RegisterKindPrototypeSlots;
 
 end.
