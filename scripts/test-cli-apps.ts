@@ -1770,6 +1770,123 @@ await section("Test262 Runner: eval var declarations conflict only with the call
   }
 });
 
+// The bytecode direct-eval bridge: each probe runs in both modes against the
+// result Node.js gives, ES2026 §19.2.1.1 PerformEval and §19.2.1.3
+// EvalDeclarationInstantiation (#872, ADR 0134 Phase 0).
+function expectEvalHostProbe(label: string, lines: string[], expected: string[]) {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode([...lines, ""].join("\n")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} ${label} probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (actual !== expected.join("\n"))
+      throw new Error(`Test262 Runner ${mode} ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
+  }
+}
+
+await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
+  expectEvalHostProbe("second eval", [
+    "var s = 'outer';",
+    "function global() { eval(\"var s = 'inner'\"); return eval('s'); }",
+    "function outer() { var t = 'outer'; function inner() { eval(\"var t = 'inner'\"); return eval('t'); } return inner(); }",
+    "function arrow() { var u = 'outer'; return (() => { eval(\"var u = 'inner'\"); return eval('u'); })(); }",
+    "function nested() { eval(\"var n = 'outer eval'\"); function inner() { let n = 'let'; return eval('n'); } return inner(); }",
+    "print([global(), outer(), arrow(), nested(), s].join());",
+  ], ["inner,inner,inner,let,outer"]);
+});
+
+await section("Test262 Runner: an eval in a class body that runs inline in sloppy code is strict...", async () => {
+  expectEvalHostProbe("class-body eval strictness", [
+    "const isStrict = '(function () { return this === undefined; })()';",
+    "class StaticField { static f = eval(isStrict); }",
+    "class ComputedKey { static [String(eval(isStrict))] = 1; }",
+    "class Heritage extends (eval(isStrict) ? Object : Array) {}",
+    "class InstanceField { f = eval(isStrict); }",
+    "function sloppy() { return eval(isStrict); }",
+    "print([StaticField.f, Object.keys(ComputedKey)[0], Object.getPrototypeOf(Heritage) === Object, new InstanceField().f, sloppy()].join());",
+  ], ["true,true,true,true,false"]);
+});
+
+await section("Test262 Runner: an eval var conflicts with a let, const or class still in its temporal dead zone...", async () => {
+  expectEvalHostProbe("TDZ conflict", [
+    "function attempt(source) { try { return eval(source); } catch (error) { return error.name; } }",
+    "function blockLet() { try { { eval('var x'); let x; } return 'none'; } catch (error) { return error.name; } }",
+    "function blockConst() { try { { eval('var x'); const x = 1; } return 'none'; } catch (error) { return error.name; } }",
+    "function blockClass() { try { { eval('var x'); class x {} } return 'none'; } catch (error) { return error.name; } }",
+    "function bodyLet() { try { eval('var x'); let x; return 'none'; } catch (error) { return error.name; } }",
+    "let top;",
+    "try { { eval('var y'); let y; } top = 'none'; } catch (error) { top = error.name; }",
+    "function tdzRead() { try { eval('later'); } catch (error) { return error.name; } let later = 1; }",
+    "print([blockLet(), blockConst(), blockClass(), bodyLet(), top, tdzRead()].join());",
+  ], ["SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,ReferenceError"]);
+});
+
+// #1368: the function eval creates captures the caller's bindings, not slot
+// numbers of whichever frame is running when it is called.
+await section("Test262 Runner: a function eval creates keeps its caller's bindings after the call returns...", async () => {
+  expectEvalHostProbe("outlived eval closure", [
+    "function reader() { var v = 1; return eval('(function () { return v; })'); }",
+    "var read = reader();",
+    "function other() { var a = function () { return 'other'; }; var b = 2; return read(); }",
+    "function writer() { var v = 1; var set = eval('(function (n) { v = n; return v; })'); return [set, function () { return v; }]; }",
+    "var pair = writer();",
+    "function victim(x, y) { pair[0](7); return x + ',' + y; }",
+    "function live() { let x = 1; const set = eval('(function (n) { x = n; return x; })'); function helper(f) { let p = 0, q = 0; return f(5); } return helper(set) + ':' + x; }",
+    "function shared() { var n = 0; return [eval('(function () { return ++n; })'), eval('(function () { return n; })')]; }",
+    "var counter = shared(); counter[0](); counter[0]();",
+    "function noise() { var n = 100, m = 200; return counter[1](); }",
+    "function loop() { var fs = []; for (let i = 0; i < 3; i++) fs.push(eval('(function () { return i; })')); return fs.map(function (f) { return f(); }).join('/'); }",
+    "function later() { var y = 1; var g = eval('(function () { return y; })'); y = 2; return g; }",
+    "function* gen() { let k = 1; const r = eval('(function () { return k; })'); yield r(); k = 2; yield r(); }",
+    "var it = gen();",
+    "function letAfter() { var g = eval('(function () { return t; })'); let t = 'set'; return g(); }",
+    "function incLoop() { var c = 0; for (var i = 0; i < 3; i++) { c = c + 1; eval('c += 10'); } return c; }",
+    "print([other(), victim(7, 8), pair[1](), live(), noise(), loop(), later()(), it.next().value, it.next().value, letAfter(), incLoop()].join());",
+  ], ["1,7,8,7,5:5,2,0/1/2,2,1,2,set,33"]);
+});
+
+await section("Test262 Runner: an eval var named like a parameter is the parameter...", async () => {
+  expectEvalHostProbe("parameter var", [
+    "function simple(x) { eval('var x = 2'); return x; }",
+    "const arrow = (x) => { eval('var x = 3'); return x; };",
+    "function rest(...x) { eval('var x = 4'); return x; }",
+    "function inParams(x, y = eval('var x = 5')) { return x; }",
+    "let defaults;",
+    "try { inParams(1); defaults = 'none'; } catch (error) { defaults = error.name; }",
+    "print([simple(1), arrow(1), rest(1), defaults].join());",
+  ], ["2,3,4,SyntaxError"]);
+});
+
+// ES2026 §19.2.1.3 step 3.d, normative-optional web-compat branch: as for
+// `catch (e) { var e; }` outside eval (B.3.4). The step exempts the
+// environment of any Catch clause, a destructured parameter's included; V8
+// exempts only a single-name parameter.
+await section("Test262 Runner: an eval var may be named like a catch parameter...", async () => {
+  expectEvalHostProbe("catch parameter var", [
+    "function simple() { try { throw 1; } catch (x) { eval('var x = 2'); return x; } }",
+    "function after() { try { throw 1; } catch (x) { eval('var x = 2'); } return typeof x; }",
+    "function pattern() { try { throw { x: 1 }; } catch ({ x }) { eval('var x = 3'); return x; } }",
+    "function blockLet() { try { throw 1; } catch (e) { try { { let x; eval('var x'); } return 'none'; } catch (error) { return error.name; } } }",
+    // The initializer assigns the catch parameter; the var is created in the
+    // function, never assigned, and deletable like any eval var.
+    "function bothSides() { var inside; try { throw 1; } catch (X) { eval('var X = 2'); inside = X; } return [inside, typeof X, X === undefined, delete X].join('/'); }",
+    "print([simple(), after(), pattern(), blockLet(), bothSides()].join());",
+  ], ["2,undefined,3,SyntaxError,2/undefined/true/true"]);
+});
+
+await section("Test262 Runner: an eval resolves a with object between the bindings around it...", async () => {
+  expectEvalHostProbe("with order", [
+    "function withOuter() { var v = 'var'; with ({ v: 'with' }) { return eval('v'); } }",
+    "function letInside() { with ({ b: 'with' }) { let b = 'let'; return eval('b'); } }",
+    "function missing() { var m = 'var'; with ({}) { return eval('m'); } }",
+    "print([withOuter(), letInside(), missing()].join());",
+  ], ["with,let,var"]);
+});
+
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,

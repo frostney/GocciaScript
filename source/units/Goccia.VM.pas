@@ -778,27 +778,59 @@ type
     procedure MarkReferences; override;
   end;
 
+  // What a name in eval code resolves to (TGocciaVMDirectEvalScope.ResolveName):
+  // a binding beyond this scope, a `with` object, a binding of the eval site
+  // record, a var the eval declared, or one it declared and then deleted.
+  TGocciaDirectEvalResolution = (derOuter, derWithObject, derBinding,
+    derOwnVar, derDeletedVar);
+
+  // The caller's bindings as the tree-walk evaluator sees them while it runs
+  // a direct eval for bytecode code. Each binding of the eval site record is
+  // reached through the cell the caller's own code and closures share: a
+  // local's cell is taken from the caller's frame when the eval starts, an
+  // upvalue's from the caller's closure. Functions the eval creates keep this
+  // scope, so they go on reading and writing the caller's bindings, not
+  // whichever frame is current, after the eval call has returned.
   TGocciaVMDirectEvalScope = class(TGocciaScope)
   private
     FVM: TGocciaVM;
     FTemplate: TGocciaFunctionTemplate;
     FEnvironmentIndex: Integer;
+    FBindings: TGocciaDirectEvalBindingArray;
+    // Per binding: the cell it lives in, nil for a global-backed one.
+    FCells: array of TGocciaBytecodeCell;
+    // Per binding: an upvalue the caller closure lets an enclosing function's
+    // eval-created var shadow (TGocciaBytecodeClosure.IsDynamicVarUpvalue).
+    FDynamicVarUpvalues: array of Boolean;
+    // The caller's variable environment is the global one: no dynamic var
+    // scope sits between this scope and the global scope.
+    FUseGlobalVarEnvironment: Boolean;
+    FCallerGlobalScope: TGocciaScope;
     FHomeObject: TGocciaValue;
     FHomeClass: TGocciaValue;
     FNewTarget: TGocciaValue;
     FDeletedVarBindings: TStringList;
+    function FindBindingIndex(const AName: string): Integer;
     function TryFindBinding(const AName: string;
       out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
+    function IsCallerLexicalBinding(const AIndex: Integer): Boolean;
+    function IsShadowedByDynamicVar(const AIndex: Integer): Boolean;
+    function ResolveName(const AName: string; out AIndex: Integer;
+      out AWithObject: TGocciaObjectValue): TGocciaDirectEvalResolution;
     function IsDeletedVarBinding(const AName: string): Boolean;
     procedure MarkDeletedVarBinding(const AName: string);
-    function BindingValue(
-      const ABinding: TGocciaDirectEvalBindingInfo): TGocciaValue;
+    function BindingValue(const AIndex: Integer): TGocciaValue;
     function HasWithObjectBinding(const AObject: TGocciaObjectValue;
       const AName: string): Boolean;
     function TryFindWithObjectBinding(const AName: string;
       out AObject: TGocciaObjectValue): Boolean;
-    procedure SetBindingValue(const ABinding: TGocciaDirectEvalBindingInfo;
+    procedure SetBindingValue(const AIndex: Integer;
       const AValue: TGocciaValue);
+    function ReadBinding(const AIndex: Integer; const AName: string;
+      out ABinding: TLexicalBinding; const ALine, AColumn: Integer): Boolean;
+    procedure WriteBinding(const AIndex: Integer; const AName: string;
+      const AValue: TGocciaValue; const ANonStrictMode: Boolean;
+      const ALine, AColumn: Integer);
   protected
     function GetOwningClass: TGocciaValue; override;
     function GetSuperClass: TGocciaValue; override;
@@ -995,6 +1027,33 @@ begin
   Result := Char(ACodeUnit);
 end;
 
+// True when AScope, a dynamic var scope, declares AName itself.
+function DynamicVarScopeDeclares(const AScope: TGocciaScope;
+  const AName: string): Boolean;
+begin
+  Result := Assigned(AScope) and (AScope.ScopeKind <> skGlobal) and
+    (AScope.ContainsOwnVarBinding(AName) or
+     AScope.ContainsOwnLexicalBinding(AName));
+end;
+
+// True when a dynamic var scope from AScope outwards, short of the global
+// scope, declares AName.
+function DynamicVarScopeChainDeclares(const AScope: TGocciaScope;
+  const AName: string): Boolean;
+var
+  ScopeCursor: TGocciaScope;
+begin
+  ScopeCursor := AScope;
+  while Assigned(ScopeCursor) and (ScopeCursor.ScopeKind <> skGlobal) do
+  begin
+    if ScopeCursor.ContainsOwnVarBinding(AName) or
+       ScopeCursor.ContainsOwnLexicalBinding(AName) then
+      Exit(True);
+    ScopeCursor := ScopeCursor.Parent;
+  end;
+  Result := False;
+end;
+
 { TGocciaVMDirectEvalScope }
 
 constructor TGocciaVMDirectEvalScope.Create(const AParent: TGocciaScope;
@@ -1003,10 +1062,10 @@ constructor TGocciaVMDirectEvalScope.Create(const AParent: TGocciaScope;
   const ALexicalClosure: TGocciaBytecodeClosure;
   const ANewTarget: TGocciaValue);
 var
-  Env: TGocciaDirectEvalEnvironment;
   Binding: TGocciaDirectEvalBindingInfo;
   BindingRuntimeValue: TGocciaValue;
   ThisBindingValue: TGocciaValue;
+  Upvalue: TGocciaBytecodeUpvalue;
   I: Integer;
 begin
   if AUseGlobalVarEnvironment then
@@ -1016,49 +1075,78 @@ begin
   FVM := AVM;
   FTemplate := ATemplate;
   FEnvironmentIndex := AEnvironmentIndex;
+  FUseGlobalVarEnvironment := AUseGlobalVarEnvironment;
   FNewTarget := ANewTarget;
   if Assigned(ALexicalClosure) then
   begin
     FHomeObject := ALexicalClosure.HomeObject;
     FHomeClass := ALexicalClosure.HomeClass;
   end;
+  if Assigned(FVM) then
+    FCallerGlobalScope := FVM.FGlobalScope;
   if Assigned(FVM) and Assigned(FVM.FGlobalThisValue) then
     ThisValue := FVM.FGlobalThisValue;
   if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
     Exit;
 
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
+  FBindings := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex).Bindings;
+  SetLength(FCells, Length(FBindings));
+  SetLength(FDynamicVarUpvalues, Length(FBindings));
+  // The caller's frame is the current one while the eval call starts: take
+  // the cells of its locals now, creating them as OP_CLOSURE would.
+  for I := 0 to High(FBindings) do
   begin
-    Binding := Env.Bindings[I];
+    FCells[I] := nil;
+    FDynamicVarUpvalues[I] := False;
+    case FBindings[I].Kind of
+      debLocal, debWithLocal:
+        FCells[I] := FVM.GetLocalCell(FBindings[I].Index);
+      debUpvalue, debWithUpvalue:
+        if Assigned(FVM.FCurrentClosure) then
+        begin
+          Upvalue := FVM.FCurrentClosure.GetUpvalue(FBindings[I].Index);
+          if Assigned(Upvalue) then
+            FCells[I] := Upvalue.Cell;
+          FDynamicVarUpvalues[I] :=
+            FVM.FCurrentClosure.IsDynamicVarUpvalue(FBindings[I].Index);
+        end;
+    end;
+  end;
+
+  for I := 0 to High(FBindings) do
+  begin
+    Binding := FBindings[I];
     if Binding.Name = KEYWORD_THIS then
     begin
       if Binding.Kind <> debGlobal then
       begin
-        ThisBindingValue := BindingValue(Binding);
+        ThisBindingValue := BindingValue(I);
         if ThisBindingValue <> TGocciaHoleValue.HoleValue then
           ThisValue := ThisBindingValue;
       end;
       Continue;
     end;
-    if Binding.IsVarEnvironmentBinding then
-      Continue;
-    if Binding.Kind in [debWithLocal, debWithUpvalue] then
-      Continue;
-    if Binding.Kind = debGlobal then
+    if not IsCallerLexicalBinding(I) then
       Continue;
     // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3.d: a var declared
-    // by sloppy direct eval conflicts only with the declarations between the
-    // eval's lexical environment and the caller's variable environment.  An
-    // upvalue belongs to an enclosing function, beyond that range, so it is
-    // resolved through the binding table and never declared here, where it
-    // would read as a lexical declaration of the calling function.
-    if Binding.Kind = debUpvalue then
+    // by sloppy direct eval conflicts with a declaration between the eval's
+    // lexical environment and the caller's variable environment, a `let`,
+    // `const` or `class` still in its temporal dead zone included. Reads and
+    // writes of these names go to the binding's cell (TryGetBinding); the
+    // declarations here are what the conflict check sees. A catch parameter
+    // is exempt (the web-compat branch of that step), so it is not declared.
+    // An upvalue belongs to an enclosing function, beyond that range.
+    if Binding.IsCatchParameter then
       Continue;
-    BindingRuntimeValue := BindingValue(Binding);
+    BindingRuntimeValue := BindingValue(I);
     if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
-      Continue;
-    if Binding.IsConst then
+    begin
+      if Binding.IsConst then
+        PredeclareLexicalBinding(Binding.Name, dtConst)
+      else
+        PredeclareLexicalBinding(Binding.Name, dtLet);
+    end
+    else if Binding.IsConst then
       DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtConst)
     else
       DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtLet);
@@ -1072,6 +1160,8 @@ begin
 end;
 
 procedure TGocciaVMDirectEvalScope.MarkReferences;
+var
+  I: Integer;
 begin
   inherited;
   if Assigned(FHomeObject) then
@@ -1080,25 +1170,68 @@ begin
     FHomeClass.MarkReferences;
   if Assigned(FNewTarget) then
     FNewTarget.MarkReferences;
+  if Assigned(FCallerGlobalScope) then
+    FCallerGlobalScope.MarkReferences;
+  // The cells outlive the caller's frame when a function created by the eval
+  // does.
+  for I := 0 to High(FCells) do
+    if Assigned(FCells[I]) then
+      MarkRegisterReferences(FCells[I].Value);
+end;
+
+function TGocciaVMDirectEvalScope.FindBindingIndex(
+  const AName: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to High(FBindings) do
+    if not (FBindings[I].Kind in [debWithLocal, debWithUpvalue]) and
+       (FBindings[I].Name = AName) then
+      Exit(I);
+  Result := -1;
 end;
 
 function TGocciaVMDirectEvalScope.TryFindBinding(const AName: string;
   out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
 var
-  Env: TGocciaDirectEvalEnvironment;
-  I: Integer;
+  Index: Integer;
 begin
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit(False);
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-    if not (Env.Bindings[I].Kind in [debWithLocal, debWithUpvalue]) and
-       (Env.Bindings[I].Name = AName) then
-    begin
-      ABinding := Env.Bindings[I];
-      Exit(True);
-    end;
+  Index := FindBindingIndex(AName);
+  Result := Index >= 0;
+  if Result then
+    ABinding := FBindings[Index];
+end;
+
+// A binding of the calling function that is not in its variable environment:
+// a block-level or top-level `let`, `const` or `class`, or a catch parameter.
+// It is lexically nearer to the eval code than any var the eval declares.
+function TGocciaVMDirectEvalScope.IsCallerLexicalBinding(
+  const AIndex: Integer): Boolean;
+begin
+  Result := (FBindings[AIndex].Kind = debLocal) and
+    not FBindings[AIndex].IsVarEnvironmentBinding;
+end;
+
+// A sloppy direct eval's var lives in its caller's dynamic var scope, this
+// scope's parent (TGocciaVM.EnsureCurrentDynamicVarScope). It shadows every
+// binding outside the calling function: an upvalue, or a global. A var an
+// earlier eval of an enclosing function declared shadows such a binding only
+// when it lies beyond that function, which the caller closure records per
+// upvalue, as OP_GET_UPVALUE consults it (ResolveDynamicUpvalueScope).
+function TGocciaVMDirectEvalScope.IsShadowedByDynamicVar(
+  const AIndex: Integer): Boolean;
+begin
   Result := False;
+  if FUseGlobalVarEnvironment or not Assigned(Parent) then
+    Exit;
+  case FBindings[AIndex].Kind of
+    debUpvalue:
+      Result := DynamicVarScopeDeclares(Parent, FBindings[AIndex].Name) or
+        (FDynamicVarUpvalues[AIndex] and
+         DynamicVarScopeChainDeclares(Parent.Parent, FBindings[AIndex].Name));
+    debGlobal:
+      Result := DynamicVarScopeChainDeclares(Parent, FBindings[AIndex].Name);
+  end;
 end;
 
 function TGocciaVMDirectEvalScope.IsDeletedVarBinding(
@@ -1124,40 +1257,18 @@ begin
 end;
 
 function TGocciaVMDirectEvalScope.BindingValue(
-  const ABinding: TGocciaDirectEvalBindingInfo): TGocciaValue;
-var
-  Upvalue: TGocciaBytecodeUpvalue;
+  const AIndex: Integer): TGocciaValue;
 begin
-  case ABinding.Kind of
-    debLocal:
-      Result := FVM.GetLocal(ABinding.Index);
-    debWithLocal:
-      Result := FVM.GetLocal(ABinding.Index);
-    debUpvalue:
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Result := RegisterToValue(Upvalue.Cell.Value);
-      end;
-    end;
-    debWithUpvalue:
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Result := RegisterToValue(Upvalue.Cell.Value);
-      end;
-    end;
-    debGlobal:
-      Result := FVM.FGlobalScope.GetBinding(ABinding.Name).Value;
+  if FBindings[AIndex].Kind = debGlobal then
+  begin
+    if Assigned(FCallerGlobalScope) then
+      Exit(FCallerGlobalScope.GetBinding(FBindings[AIndex].Name).Value);
+    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
+  end;
+  if Assigned(FCells[AIndex]) then
+    Result := RegisterToValue(FCells[AIndex].Value)
   else
     Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
 end;
 
 function TGocciaVMDirectEvalScope.HasWithObjectBinding(
@@ -1183,23 +1294,16 @@ end;
 function TGocciaVMDirectEvalScope.TryFindWithObjectBinding(
   const AName: string; out AObject: TGocciaObjectValue): Boolean;
 var
-  Env: TGocciaDirectEvalEnvironment;
-  Binding: TGocciaDirectEvalBindingInfo;
   BindingObject: TGocciaValue;
   I: Integer;
 begin
   AObject := nil;
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit(False);
-
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
+  for I := 0 to High(FBindings) do
   begin
-    Binding := Env.Bindings[I];
-    if not (Binding.Kind in [debWithLocal, debWithUpvalue]) then
+    if not (FBindings[I].Kind in [debWithLocal, debWithUpvalue]) then
       Continue;
 
-    BindingObject := BindingValue(Binding);
+    BindingObject := BindingValue(I);
     if (BindingObject is TGocciaObjectValue) and
        HasWithObjectBinding(TGocciaObjectValue(BindingObject), AName) then
     begin
@@ -1211,28 +1315,86 @@ begin
   Result := False;
 end;
 
-procedure TGocciaVMDirectEvalScope.SetBindingValue(
-  const ABinding: TGocciaDirectEvalBindingInfo; const AValue: TGocciaValue);
+procedure TGocciaVMDirectEvalScope.SetBindingValue(const AIndex: Integer;
+  const AValue: TGocciaValue);
 var
-  Upvalue: TGocciaBytecodeUpvalue;
+  Cell: TGocciaBytecodeCell;
+  Slot: Integer;
 begin
-  case ABinding.Kind of
+  case FBindings[AIndex].Kind of
     debLocal:
-      FVM.SetLocal(ABinding.Index, AValue);
-    debWithLocal:
-      ; // with-object bindings are object environment metadata, not variables.
+    begin
+      Cell := FCells[AIndex];
+      if not Assigned(Cell) then
+        Exit;
+      // While the caller's frame is the current one, write its register as
+      // well, as the frame's own writes do; otherwise only the cell, as a
+      // closure over the binding would.
+      Slot := FBindings[AIndex].Index;
+      if (Slot < FVM.FLocalCellCount) and (FVM.FLocalCells[Slot] = Cell) then
+        FVM.SetLocal(Slot, AValue)
+      else
+        Cell.Value := ValueToRegister(AValue);
+    end;
     debUpvalue:
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Upvalue.Cell.Value := ValueToRegister(AValue);
-      end;
-    debWithUpvalue:
+      if Assigned(FCells[AIndex]) then
+        FCells[AIndex].Value := ValueToRegister(AValue);
+    debWithLocal, debWithUpvalue:
       ; // with-object bindings are object environment metadata, not variables.
     debGlobal:
-      FVM.FGlobalScope.AssignBinding(ABinding.Name, AValue);
+      if Assigned(FCallerGlobalScope) then
+        FCallerGlobalScope.AssignBinding(FBindings[AIndex].Name, AValue);
   end;
+end;
+
+// Answers a read of the record binding at AIndex, which TDZ makes throw.
+function TGocciaVMDirectEvalScope.ReadBinding(const AIndex: Integer;
+  const AName: string; out ABinding: TLexicalBinding;
+  const ALine, AColumn: Integer): Boolean;
+var
+  BindingRuntimeValue: TGocciaValue;
+begin
+  BindingRuntimeValue := BindingValue(AIndex);
+  if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
+    raise TGocciaReferenceError.Create(
+      Format(SErrorCannotAccessBeforeInit, [AName]),
+      ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
+  ABinding.Value := BindingRuntimeValue;
+  if FBindings[AIndex].IsConst then
+    ABinding.DeclarationType := dtConst
+  else
+    ABinding.DeclarationType := dtVar;
+  ABinding.Initialized := True;
+  ABinding.BuiltIn := False;
+  ABinding.GlobalObjectBacked := False;
+  ABinding.CanDelete := False;
+  ABinding.TypeHint := sltUntyped;
+  Result := True;
+end;
+
+// Assigns the record binding at AIndex: a binding in its temporal dead zone
+// throws ReferenceError, a const TypeError.
+procedure TGocciaVMDirectEvalScope.WriteBinding(const AIndex: Integer;
+  const AName: string; const AValue: TGocciaValue;
+  const ANonStrictMode: Boolean; const ALine, AColumn: Integer);
+begin
+  if BindingValue(AIndex) = TGocciaHoleValue.HoleValue then
+    raise TGocciaReferenceError.Create(
+      Format(SErrorCannotAccessBeforeInit, [AName]),
+      ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
+  if FBindings[AIndex].IsConst then
+  begin
+    if ANonStrictMode and
+       DirectEvalBindingIsNonStrictImmutable(FBindings[AIndex], FTemplate) then
+      Exit;
+    raise TGocciaTypeError.Create(
+      Format(SErrorAssignToConstant, [AName]),
+      ALine, AColumn, '', nil, SSuggestUseLetNotConst);
+  end;
+  // ES2026 §19.2.1.1 PerformEval step 18: direct eval's lexical environment
+  // has the caller lexical environment as its outer environment, so an
+  // assignment updates the caller's binding, not a var shadow in this scope.
+  SetBindingValue(AIndex, AValue);
 end;
 
 function TemplateUsesGlobalEvalEnvironment(
@@ -1460,15 +1622,16 @@ end;
 
 function TGocciaVMDirectEvalScope.MarkSuperConstructorCalled: Boolean;
 var
-  Binding: TGocciaDirectEvalBindingInfo;
+  Index: Integer;
 begin
   Result := Assigned(FVM);
   if not Result then
     Exit;
 
   FVM.FCurrentConstructorSuperCalled := True;
-  if TryFindBinding(DERIVED_THIS_INITIALIZED_LOCAL, Binding) then
-    SetBindingValue(Binding, TGocciaBooleanLiteralValue.TrueValue);
+  Index := FindBindingIndex(DERIVED_THIS_INITIALIZED_LOCAL);
+  if Index >= 0 then
+    SetBindingValue(Index, TGocciaBooleanLiteralValue.TrueValue);
   if FVM.FLocalCellCount > 0 then
     FVM.SetLocal(0, ThisValue);
   FVM.FLastClosureThisValue := ValueToRegister(ThisValue);
@@ -1484,151 +1647,191 @@ end;
 // bindings and the captured binding table first and only then fall through
 // to the inherited resolution.  GetBinding/AssignBinding need no overrides:
 // the base wrappers over these Try* methods reproduce them exactly.
+//
+// A name resolves, nearest first, to: a with object; a caller binding outside
+// the caller's variable environment (IsCallerLexicalBinding); a var this eval
+// declared, held in this scope until the eval returns; a caller binding the
+// record lists, unless a var an eval declared shadows it
+// (IsShadowedByDynamicVar); and then the dynamic var scopes and the globals
+// beyond this scope.
+// Resolves AName the way the caller's own code would at the call, nearest
+// binding first. The record lists the bindings innermost first, a `with`
+// object at the point its statement opened, so it is walked in order:
+//
+// 1. The calling function's locals and the `with` objects inside it. A
+//    binding outside the variable environment answers here; one inside it is
+//    remembered, because a var this eval declared in that environment is the
+//    same binding and is held in this scope until the eval returns.
+// 2. A var this eval declared.
+// 3. Bindings of enclosing functions, the `with` objects around the calling
+//    function, and globals. A var an eval of the calling function declared
+//    earlier lives in the dynamic var scope, this scope's parent, and shadows
+//    them all; one an eval of an enclosing function declared shadows those
+//    the caller closure marks (IsShadowedByDynamicVar).
+function TGocciaVMDirectEvalScope.ResolveName(const AName: string;
+  out AIndex: Integer;
+  out AWithObject: TGocciaObjectValue): TGocciaDirectEvalResolution;
+var
+  BindingObject: TGocciaValue;
+  I: Integer;
+begin
+  AIndex := -1;
+  AWithObject := nil;
+  for I := 0 to High(FBindings) do
+    case FBindings[I].Kind of
+      debWithLocal:
+      begin
+        BindingObject := BindingValue(I);
+        if (BindingObject is TGocciaObjectValue) and
+           HasWithObjectBinding(TGocciaObjectValue(BindingObject), AName) then
+        begin
+          AWithObject := TGocciaObjectValue(BindingObject);
+          Exit(derWithObject);
+        end;
+      end;
+      debLocal:
+        if FBindings[I].Name = AName then
+        begin
+          AIndex := I;
+          if IsCallerLexicalBinding(I) then
+            Exit(derBinding);
+          Break;
+        end;
+    end;
+
+  if IsDeletedVarBinding(AName) then
+    Exit(derDeletedVar);
+  if ContainsOwnVarBinding(AName) then
+    Exit(derOwnVar);
+  if AIndex >= 0 then
+    Exit(derBinding);
+
+  if (not FUseGlobalVarEnvironment) and
+     DynamicVarScopeDeclares(Parent, AName) then
+    Exit(derOuter);
+  for I := 0 to High(FBindings) do
+    case FBindings[I].Kind of
+      debWithUpvalue:
+      begin
+        BindingObject := BindingValue(I);
+        if (BindingObject is TGocciaObjectValue) and
+           HasWithObjectBinding(TGocciaObjectValue(BindingObject), AName) then
+        begin
+          AWithObject := TGocciaObjectValue(BindingObject);
+          Exit(derWithObject);
+        end;
+      end;
+      debUpvalue, debGlobal:
+        if FBindings[I].Name = AName then
+        begin
+          if IsShadowedByDynamicVar(I) then
+            Exit(derOuter);
+          AIndex := I;
+          Exit(derBinding);
+        end;
+    end;
+  Result := derOuter;
+end;
+
 function TGocciaVMDirectEvalScope.TryGetBinding(const AName: string;
   out ABinding: TLexicalBinding; const ALine: Integer = 0;
   const AColumn: Integer = 0): Boolean;
 var
-  Binding: TGocciaDirectEvalBindingInfo;
-  BindingRuntimeValue: TGocciaValue;
+  Index: Integer;
   WithObject: TGocciaObjectValue;
 begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    ABinding.Value := WithObject.GetProperty(AName);
-    ABinding.DeclarationType := dtVar;
-    ABinding.Initialized := True;
-    ABinding.BuiltIn := False;
-    ABinding.GlobalObjectBacked := False;
-    ABinding.CanDelete := False;
-    ABinding.TypeHint := sltUntyped;
-    Exit(True);
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Exit(Parent.TryGetBinding(AName, ABinding, ALine, AColumn));
-    ABinding := Default(TLexicalBinding);
-    Exit(False);
-  end;
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    // A var declared by this eval shadows an enclosing function's binding of
-    // the same name, const or not; a const of the calling function itself
-    // never coexists with one.
-    if ((not Binding.IsConst) or (Binding.Kind = debUpvalue)) and
-       ContainsOwnVarBinding(AName) then
-      Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
-    BindingRuntimeValue := BindingValue(Binding);
-    if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
-    ABinding.Value := BindingRuntimeValue;
-    if Binding.IsConst then
-      ABinding.DeclarationType := dtConst
-    else
+  case ResolveName(AName, Index, WithObject) of
+    derWithObject:
+    begin
+      ABinding.Value := WithObject.GetProperty(AName);
       ABinding.DeclarationType := dtVar;
-    ABinding.Initialized := True;
-    ABinding.BuiltIn := False;
-    ABinding.GlobalObjectBacked := False;
-    ABinding.CanDelete := False;
-    ABinding.TypeHint := sltUntyped;
-    Exit(True);
+      ABinding.Initialized := True;
+      ABinding.BuiltIn := False;
+      ABinding.GlobalObjectBacked := False;
+      ABinding.CanDelete := False;
+      ABinding.TypeHint := sltUntyped;
+      Result := True;
+    end;
+    derBinding:
+      Result := ReadBinding(Index, AName, ABinding, ALine, AColumn);
+    derDeletedVar:
+      if Assigned(Parent) then
+        Result := Parent.TryGetBinding(AName, ABinding, ALine, AColumn)
+      else
+      begin
+        ABinding := Default(TLexicalBinding);
+        Result := False;
+      end;
+  else
+    Result := inherited TryGetBinding(AName, ABinding, ALine, AColumn);
   end;
-
-  Result := inherited TryGetBinding(AName, ABinding, ALine, AColumn);
 end;
 
 function TGocciaVMDirectEvalScope.TryAssignExistingBinding(const AName: string;
   const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
   const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
 var
-  Binding: TGocciaDirectEvalBindingInfo;
+  Index: Integer;
   WithObject: TGocciaObjectValue;
 begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    if ANonStrictMode then
-      WithObject.AssignPropertyWithReceiver(AName, AValue, WithObject)
-    else
-      WithObject.AssignProperty(AName, AValue);
-    Exit(True);
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Exit(Parent.TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-        ALine, AColumn));
-    Exit(False);
-  end;
-
-  if ContainsOwnVarBinding(AName) then
-    Exit(inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-      ALine, AColumn));
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    // TDZ: a captured lexical binding still holding the hole sentinel has
-    // not been initialized yet; assignment through direct eval must raise
-    // the same ReferenceError the ordinary local/upvalue paths produce.
-    if BindingValue(Binding) = TGocciaHoleValue.HoleValue then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
-    if Binding.IsConst then
+  case ResolveName(AName, Index, WithObject) of
+    derWithObject:
     begin
-      if ANonStrictMode and
-         DirectEvalBindingIsNonStrictImmutable(Binding, FTemplate) then
-        Exit(True);
-      raise TGocciaTypeError.Create(
-        Format(SErrorAssignToConstant, [AName]),
-        ALine, AColumn, '', nil, SSuggestUseLetNotConst);
+      if ANonStrictMode then
+        WithObject.AssignPropertyWithReceiver(AName, AValue, WithObject)
+      else
+        WithObject.AssignProperty(AName, AValue);
+      Result := True;
     end;
-    // ES2026 §19.2.1.1 PerformEval step 18: direct eval's lexical
-    // environment has the caller lexical environment as its outer
-    // environment.  Captured bytecode locals are aliases for that caller
-    // environment, so assignments update the captured slot/upvalue directly
-    // instead of creating a local var shadow in this adapter scope.
-    SetBindingValue(Binding, AValue);
-    Exit(True);
+    derBinding:
+    begin
+      WriteBinding(Index, AName, AValue, ANonStrictMode, ALine, AColumn);
+      Result := True;
+    end;
+    derDeletedVar:
+      Result := Assigned(Parent) and
+        Parent.TryAssignExistingBinding(AName, AValue, ANonStrictMode,
+          ALine, AColumn);
+  else
+    Result := inherited TryAssignExistingBinding(AName, AValue,
+      ANonStrictMode, ALine, AColumn);
   end;
-
-  Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-    ALine, AColumn);
 end;
 
 function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
 var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WasOwnVarBinding: Boolean;
+  Index: Integer;
   WithObject: TGocciaObjectValue;
 begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-    Exit(WithObject.DeleteProperty(AName));
-
-  WasOwnVarBinding := ContainsOwnVarBinding(AName);
-  // An enclosing function's lexical binding is not declared in this scope, so
-  // the inherited walk would not find it: it stays undeletable unless a var
-  // declared by an earlier eval of the calling function shadows it.
-  if (not WasOwnVarBinding) and TryFindBinding(AName, Binding) and
-     (Binding.Kind = debUpvalue) and (not Binding.IsVarEnvironmentBinding) and
-     not Assigned(FVM.ResolveDynamicUpvalueScope(Binding.Index, AName)) then
-    Exit(False);
+  case ResolveName(AName, Index, WithObject) of
+    derWithObject:
+      Exit(WithObject.DeleteProperty(AName));
+    derOwnVar:
+    begin
+      Result := inherited DeleteBinding(AName);
+      if Result then
+        MarkDeletedVarBinding(AName);
+      Exit;
+    end;
+    derBinding:
+      // An enclosing function's lexical binding is not declared in this
+      // scope, so the inherited walk would not find it: it stays
+      // undeletable.
+      if (FBindings[Index].Kind = debUpvalue) and
+         not FBindings[Index].IsVarEnvironmentBinding then
+        Exit(False);
+  end;
   Result := inherited DeleteBinding(AName);
-  if Result and WasOwnVarBinding then
-    MarkDeletedVarBinding(AName);
 end;
 
 procedure TGocciaVMDirectEvalScope.ResolveIdentifierReference(
   const AName: string; out AValue, AThisValue: TGocciaValue;
   const ALine: Integer; const AColumn: Integer);
 var
+  Index: Integer;
   WithObject: TGocciaObjectValue;
 begin
-  if TryFindWithObjectBinding(AName, WithObject) then
+  if ResolveName(AName, Index, WithObject) = derWithObject then
   begin
     AValue := WithObject.GetProperty(AName);
     AThisValue := WithObject;
@@ -1642,42 +1845,31 @@ end;
 procedure TGocciaVMDirectEvalScope.ResolveAssignmentTarget(const AName: string;
   out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope);
 var
-  Binding: TGocciaDirectEvalBindingInfo;
+  Index: Integer;
   WithObject: TGocciaObjectValue;
 begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    AObjectBinding := WithObject;
-    AScopeBinding := nil;
-    Exit;
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Parent.ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding)
-    else
+  case ResolveName(AName, Index, WithObject) of
+    derWithObject:
+    begin
+      AObjectBinding := WithObject;
+      AScopeBinding := nil;
+    end;
+    derDeletedVar:
+      if Assigned(Parent) then
+        Parent.ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding)
+      else
+      begin
+        AObjectBinding := nil;
+        AScopeBinding := Self;
+      end;
+    derBinding, derOwnVar:
     begin
       AObjectBinding := nil;
       AScopeBinding := Self;
     end;
-    Exit;
+  else
+    inherited ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding);
   end;
-
-  if ContainsOwnVarBinding(AName) then
-  begin
-    AObjectBinding := nil;
-    AScopeBinding := Self;
-    Exit;
-  end;
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    AObjectBinding := nil;
-    AScopeBinding := Self;
-    Exit;
-  end;
-  inherited ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding);
 end;
 
 function TGocciaVMDirectEvalScope.Contains(const AName: string): Boolean;
@@ -1709,32 +1901,30 @@ begin
     (Binding.Kind = debLocal) and Binding.IsVarEnvironmentBinding;
 end;
 
+// Moves the value of a var this eval declared over a caller binding of its
+// variable environment into that binding.
 procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
 var
-  Env: TGocciaDirectEvalEnvironment;
   Binding: TGocciaDirectEvalBindingInfo;
   LexicalBinding: TLexicalBinding;
   I: Integer;
 begin
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit;
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
+  for I := 0 to High(FBindings) do
   begin
-    Binding := Env.Bindings[I];
+    Binding := FBindings[I];
     if IsDeletedVarBinding(Binding.Name) then
       Continue;
-    if Binding.IsConst or (Binding.Kind in [debGlobal, debWithLocal,
-       debWithUpvalue]) then
+    if Binding.IsConst or (Binding.Kind <> debLocal) or
+       not Binding.IsVarEnvironmentBinding then
       Continue;
-    if ContainsOwnVarBinding(Binding.Name) and (Binding.Kind <> debUpvalue) then
+    if ContainsOwnVarBinding(Binding.Name) then
     begin
       // Read this scope's own var environment directly: GetBinding would
       // dispatch back through this scope's TryGetBinding override, whose
       // with-object head shadows the var binding being copied back
       // (compat block function hoisting inside `with`).
       if TryGetOwnBinding(Binding.Name, LexicalBinding) then
-        SetBindingValue(Binding, LexicalBinding.Value);
+        SetBindingValue(I, LexicalBinding.Value);
     end;
   end;
 end;
@@ -14603,6 +14793,7 @@ var
   AllowSuperProperty: Boolean;
   AllowSuperCall: Boolean;
   UseGlobalVarEnvironment: Boolean;
+  CallerStrict: Boolean;
 begin
   if not (ASourceValue is TGocciaStringLiteralValue) then
     Exit(ASourceValue);
@@ -14612,12 +14803,21 @@ begin
     SourceName := FCurrentModuleSourcePath
   else
     SourceName := '<bytecode-direct-eval>';
+  // ES2026 §13.3.6.1 step 6.a: the eval is strict when its call expression
+  // is, which the site record knows; the template's StrictCode describes the
+  // whole function, and class-body code runs inline in a sloppy one.
+  if not ATemplate.FindDirectEvalEnvironment(APC, EnvIndex) then
+    EnvIndex := -1;
+  if EnvIndex >= 0 then
+    CallerStrict := ATemplate.GetDirectEvalEnvironment(EnvIndex).StrictCaller
+  else
+    CallerStrict := ACallerStrict;
   EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
     EvalOptions.SourceType := stScript;
-    EvalOptions.InheritedStrictMode := ACallerStrict;
-    if ACallerStrict then
+    EvalOptions.InheritedStrictMode := CallerStrict;
+    if CallerStrict then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
     DeclaredPrivateNames := CollectBytecodeDirectEvalPrivateNames(Self);
     try
@@ -14631,9 +14831,8 @@ begin
         ThrowSyntaxError(
           'Using declarations are not allowed at the top level of eval');
 
-      if not ATemplate.FindDirectEvalEnvironment(APC, EnvIndex) then
-        EnvIndex := -1;
-      StrictEval := ACallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
+      StrictEval := CallerStrict or
+        HasUseStrictDirective(PipelineResult.ProgramNode);
       UseGlobalVarEnvironment := TemplateUsesGlobalEvalEnvironment(ATemplate);
       CallerClosure := DirectEvalLexicalClosure(Self);
       if Assigned(CallerClosure) and Assigned(CallerClosure.Template) and

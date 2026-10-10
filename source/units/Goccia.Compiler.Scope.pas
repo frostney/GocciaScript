@@ -35,6 +35,8 @@ type
     SuspendCount: Integer;
     IsNonStrictImmutable: Boolean;
     IsVar: Boolean;
+    // A binding of a catch clause's parameter.
+    IsCatchParameter: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
@@ -116,6 +118,7 @@ type
     // FLoopMayCreateClosure as it was when each open loop was entered.
     FOuterLoopMayCreateClosure: array of Boolean;
     FDirectEvalSeen: Boolean;
+    FParametersInVarEnvironment: Boolean;
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
     procedure EnsureLocalIndex;
@@ -229,6 +232,11 @@ type
     property LoopDepth: Integer read FLoopDepth;
     property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
     property DirectEvalSeen: Boolean read FDirectEvalSeen;
+    // ES2026 §10.2.11 step 28: the parameter list has no expressions, so the
+    // parameters are bindings of the function's variable environment, which a
+    // sloppy direct eval in the body declares its vars in.
+    property ParametersInVarEnvironment: Boolean
+      read FParametersInVarEnvironment write FParametersInVarEnvironment;
   end;
 
 function NextClassPrivatePrefix: string;
@@ -297,6 +305,7 @@ begin
   FLoopDepth := 0;
   FLoopMayCreateClosure := False;
   FDirectEvalSeen := False;
+  FParametersInVarEnvironment := False;
   FTemplate := nil;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
@@ -333,6 +342,7 @@ begin
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := False;
+  FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -389,6 +399,7 @@ begin
   FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
   FLocals[FLocalCount].IsVar := True;
+  FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;

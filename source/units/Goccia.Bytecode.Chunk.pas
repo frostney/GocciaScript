@@ -65,13 +65,25 @@ type
     debWithUpvalue
   );
 
+  // One binding visible at a direct eval call site. Every binding the compiler
+  // can resolve there has an entry, including those still in their temporal
+  // dead zone (CaptureDirectEvalEnvironment checks this when it builds the
+  // record), so a name eval code cannot find here is not a binding of the
+  // caller.
   TGocciaDirectEvalBindingInfo = record
     Name: string;
     Kind: TGocciaDirectEvalBindingKind;
     Index: UInt16;
     IsConst: Boolean;
+    // In the caller's variable environment: a var, a function declaration,
+    // `arguments`, or a parameter of a function whose parameter list has no
+    // expressions. A sloppy eval's var of the same name is this binding.
     IsVarEnvironmentBinding: Boolean;
     IsEvalSyntheticArguments: Boolean;
+    // A parameter of an enclosing `catch` clause. ES2026 §19.2.1.3 step 3.d
+    // (normative-optional web-compat branch) lets a sloppy eval's var have its
+    // name.
+    IsCatchParameter: Boolean;
   end;
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
@@ -79,6 +91,11 @@ type
   TGocciaDirectEvalEnvironment = record
     PC: UInt32;
     RejectArgumentsReference: Boolean;
+    // IsStrict of the call expression (ES2026 §13.3.6.1 step 6.a), which is
+    // not the template's StrictCode when the call is in a class body that runs
+    // inline in a sloppy function: a computed key, a static field initializer
+    // or an `extends` expression.
+    StrictCaller: Boolean;
     Bindings: TGocciaDirectEvalBindingArray;
   end;
 
@@ -321,7 +338,7 @@ type
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
     procedure AddDirectEvalEnvironment(const APC: UInt32;
-      const ARejectArgumentsReference: Boolean;
+      const ARejectArgumentsReference, AStrictCaller: Boolean;
       const ABindings: TGocciaDirectEvalBindingArray);
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
@@ -957,7 +974,7 @@ begin
 end;
 
 procedure TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
-  const ARejectArgumentsReference: Boolean;
+  const ARejectArgumentsReference, AStrictCaller: Boolean;
   const ABindings: TGocciaDirectEvalBindingArray);
 var
   I: Integer;
@@ -969,6 +986,8 @@ begin
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].RejectArgumentsReference :=
     ARejectArgumentsReference;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].StrictCaller :=
+    AStrictCaller;
   SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
     Length(ABindings));
   for I := 0 to High(ABindings) do

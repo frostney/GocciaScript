@@ -14,6 +14,17 @@ uses
   Goccia.Compiler.Scope,
   Goccia.SourceSpan;
 
+// Compares a direct eval site record with the compiler's scope chain at its
+// call, AScope with the call's ANonStrictMode: every binding the compiler
+// resolves there, including one still in its temporal dead zone, has an entry
+// of the kind and index an identifier reference at the call compiles to; the
+// record names nothing else; and its strictness is the call's. False, with
+// the binding's name and the problem, at the first mismatch.
+function DirectEvalSiteRecordMatchesScope(const AScope: TGocciaCompilerScope;
+  const ANonStrictMode: Boolean;
+  const ABindings: TGocciaDirectEvalBindingArray;
+  const AStrictCaller: Boolean; out AName, AProblem: string): Boolean;
+
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt16);
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
@@ -1749,14 +1760,19 @@ begin
   Result := ANames.IndexOf(AName) >= 0;
 end;
 
-procedure AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
+// Adds the binding AName to a direct eval site record unless the record has
+// that name already or it is a compiler-internal name eval code cannot spell.
+// True when it was added.
+function AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
   const ANames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
-  const AIsEvalSyntheticArguments: Boolean = False);
+  const AIsEvalSyntheticArguments: Boolean = False;
+  const AIsCatchParameter: Boolean = False): Boolean;
 var
   BindingIndex: Integer;
 begin
+  Result := False;
   if (AName <> DERIVED_THIS_INITIALIZED_LOCAL) and
      (AKind <> debWithLocal) and (AKind <> debWithUpvalue) and
      (AName <> KEYWORD_THIS) and
@@ -1776,6 +1792,8 @@ begin
     AIsVarEnvironmentBinding;
   ABindings[BindingIndex].IsEvalSyntheticArguments :=
     AIsEvalSyntheticArguments;
+  ABindings[BindingIndex].IsCatchParameter := AIsCatchParameter;
+  Result := True;
 end;
 
 procedure EmitDerivedThisInitializedCheck(
@@ -1858,8 +1876,203 @@ begin
   end;
 end;
 
+function FindDirectEvalRecordBinding(
+  const ABindings: TGocciaDirectEvalBindingArray; const AName: string;
+  out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ABindings) do
+    if ABindings[I].Name = AName then
+    begin
+      ABinding := ABindings[I];
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+// The names a direct eval site record covers: those eval code can spell, plus
+// the hidden bindings the bridge reads for `this`, the derived-constructor
+// `this` flag and `with` objects.
+function DirectEvalRecordCoversName(const AName: string): Boolean;
+begin
+  Result := (AName = KEYWORD_THIS) or
+    (AName = DERIVED_THIS_INITIALIZED_LOCAL) or
+    HiddenWithBindingName(AName) or
+    IsDirectEvalVisibleCompilerName(AName);
+end;
+
+// How an identifier reference to AName compiled in AScope resolves, as
+// CompileIdentifierAccess resolves it: a local of the function, else the
+// binding of the nearest enclosing function that declares the name, reached
+// through an upvalue. drsNone when no binding of the name is in scope;
+// drsNoUpvalue when an enclosing function declares it but the function cannot
+// capture it.
+type
+  TDirectEvalSiteResolution = (drsNone, drsResolved, drsNoUpvalue);
+
+function ResolveDirectEvalSiteName(const AScope: TGocciaCompilerScope;
+  const AName: string; out AKind: TGocciaDirectEvalBindingKind;
+  out AIndex: Integer): TDirectEvalSiteResolution;
+var
+  Scope: TGocciaCompilerScope;
+  Local: TGocciaCompilerLocal;
+  LocalIdx: Integer;
+begin
+  AKind := debGlobal;
+  AIndex := 0;
+  LocalIdx := AScope.ResolveLocal(AName);
+  if LocalIdx >= 0 then
+  begin
+    Local := AScope.GetLocal(LocalIdx);
+    AIndex := Local.Slot;
+    if HiddenWithBindingName(AName) then
+      AKind := debWithLocal
+    else if Local.IsGlobalBacked then
+      AKind := debGlobal
+    else
+      AKind := debLocal;
+    Exit(drsResolved);
+  end;
+
+  Scope := AScope.Parent;
+  LocalIdx := -1;
+  while Assigned(Scope) do
+  begin
+    LocalIdx := Scope.ResolveLocal(AName);
+    if LocalIdx >= 0 then
+      Break;
+    Scope := Scope.Parent;
+  end;
+  if LocalIdx < 0 then
+    Exit(drsNone);
+
+  if Scope.GetLocal(LocalIdx).IsGlobalBacked and
+     not HiddenWithBindingName(AName) then
+    Exit(drsResolved);
+  // The record is built first, so this finds the upvalue it made.
+  AIndex := AScope.ResolveUpvalue(AName);
+  if AIndex < 0 then
+    Exit(drsNoUpvalue);
+  if HiddenWithBindingName(AName) then
+    AKind := debWithUpvalue
+  else
+    AKind := debUpvalue;
+  Result := drsResolved;
+end;
+
+function DirectEvalSiteRecordMatchesScope(const AScope: TGocciaCompilerScope;
+  const ANonStrictMode: Boolean;
+  const ABindings: TGocciaDirectEvalBindingArray;
+  const AStrictCaller: Boolean; out AName, AProblem: string): Boolean;
+var
+  Names: TUnicodeStringList;
+  Scope: TGocciaCompilerScope;
+  Binding: TGocciaDirectEvalBindingInfo;
+  ExpectedKind: TGocciaDirectEvalBindingKind;
+  ExpectedIndex: Integer;
+  HasEntry: Boolean;
+  LocalIdx, I: Integer;
+begin
+  AName := '';
+  AProblem := '';
+  if AStrictCaller = ANonStrictMode then
+  begin
+    AName := 'eval';
+    AProblem := 'the record''s caller strictness is not the call''s';
+    Exit(False);
+  end;
+
+  Names := TUnicodeStringList.Create;
+  try
+    Scope := AScope;
+    while Assigned(Scope) do
+    begin
+      for LocalIdx := 0 to Scope.LocalCount - 1 do
+      begin
+        AName := Scope.GetLocal(LocalIdx).Name;
+        if DirectEvalRecordCoversName(AName) and (Names.IndexOf(AName) < 0) then
+          Names.Add(AName);
+      end;
+      Scope := Scope.Parent;
+    end;
+
+    for I := 0 to Names.Count - 1 do
+    begin
+      AName := Names[I];
+      HasEntry := FindDirectEvalRecordBinding(ABindings, AName, Binding);
+      case ResolveDirectEvalSiteName(AScope, AName, ExpectedKind,
+        ExpectedIndex) of
+        drsNone:
+        begin
+          if HasEntry then
+          begin
+            AProblem := 'the record lists it, but no binding of it is in scope';
+            Exit(False);
+          end;
+          Continue;
+        end;
+        drsNoUpvalue:
+        begin
+          AProblem := 'an enclosing function declares it, but the calling ' +
+            'function cannot capture it';
+          Exit(False);
+        end;
+      end;
+      if not HasEntry then
+      begin
+        AProblem := 'the record has no entry for it';
+        Exit(False);
+      end;
+      if Binding.Kind <> ExpectedKind then
+      begin
+        AProblem := Format('the record has binding kind %d, the compiler ' +
+          'resolves kind %d', [Ord(Binding.Kind), Ord(ExpectedKind)]);
+        Exit(False);
+      end;
+      if (ExpectedKind <> debGlobal) and (Binding.Index <> ExpectedIndex) then
+      begin
+        AProblem := Format('the record has index %d, the compiler resolves %d',
+          [Binding.Index, ExpectedIndex]);
+        Exit(False);
+      end;
+    end;
+
+    for I := 0 to High(ABindings) do
+      if Names.IndexOf(ABindings[I].Name) < 0 then
+      begin
+        AName := ABindings[I].Name;
+        AProblem := 'the record lists a name no scope at the call declares';
+        Exit(False);
+      end;
+  finally
+    Names.Free;
+  end;
+  AName := '';
+  Result := True;
+end;
+
+// Raises when a direct eval site record does not mirror the compiler's scope
+// chain at the call (DirectEvalSiteRecordMatchesScope). Eval code finds a
+// caller binding only through this record, so a missing entry would otherwise
+// read as a global lookup without notice (ADR 0134, "The eval site record").
+procedure VerifyDirectEvalSiteRecord(const ACtx: TGocciaCompilationContext;
+  const ACall: TGocciaCallExpression;
+  const ABindings: TGocciaDirectEvalBindingArray;
+  const AStrictCaller: Boolean);
+var
+  Name, Problem: string;
+begin
+  if not DirectEvalSiteRecordMatchesScope(ACtx.Scope, ACtx.NonStrictMode,
+     ABindings, AStrictCaller, Name, Problem) then
+    raise Exception.CreateFmt(
+      'Compiler error: the direct eval site record at %s:%d:%d does not ' +
+      'mirror the binding ''%s'' the compiler resolves there: %s',
+      [ACtx.SourcePath, ACall.Line, ACall.Column, Name, Problem]);
+end;
+
 procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
-  const APC: UInt32);
+  const ACall: TGocciaCallExpression; const APC: UInt32);
 var
   Bindings: TGocciaDirectEvalBindingArray;
   Names: TUnicodeStringList;
@@ -1868,6 +2081,8 @@ var
   UV: TGocciaCompilerUpvalue;
   LocalIdx, UpvalueIdx: Integer;
   IsEvalSensitiveArguments: Boolean;
+  IsVarEnvironmentParameter: Boolean;
+  StrictCaller: Boolean;
 begin
   Names := TUnicodeStringList.Create;
   try
@@ -1876,9 +2091,17 @@ begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
       if Local.SuspendCount > 0 then
         Continue;
+      // A binding of the calling function is reached through its cell, as a
+      // closure created at this call would reach it, so that eval code goes
+      // on reading and writing it after the call has returned. Marking it
+      // captured makes the code compiled from here on keep the register and
+      // the cell in step.
       if HiddenWithBindingName(Local.Name) then
-        AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
-          Local.Slot, False)
+      begin
+        if AddDirectEvalBinding(Bindings, Names, Local.Name, debWithLocal,
+           Local.Slot, False) then
+          ACtx.Scope.MarkCaptured(LocalIdx);
+      end
       else if Local.IsGlobalBacked then
         AddDirectEvalBinding(Bindings, Names, Local.Name, debGlobal, 0,
           Local.IsConst, Local.IsVar)
@@ -1887,10 +2110,18 @@ begin
         IsEvalSensitiveArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
           ((ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot) or
            (not ACtx.Template.IsArrow));
-        AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
-          Local.Slot, Local.IsConst, Local.IsVar or IsEvalSensitiveArguments,
-          IsEvalSensitiveArguments or (Local.IsConst and
-          Local.IsNonStrictImmutable));
+        // A parameter is declared at depth 0; a block's binding of the same
+        // name is deeper, and a body `var` of it is the parameter's local.
+        IsVarEnvironmentParameter := ACtx.Scope.ParametersInVarEnvironment and
+          (Local.Depth = 0) and ACtx.Scope.HasParameterName(Local.Name);
+        if AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
+           Local.Slot, Local.IsConst,
+           Local.IsVar or IsVarEnvironmentParameter or
+             IsEvalSensitiveArguments,
+           IsEvalSensitiveArguments or (Local.IsConst and
+             Local.IsNonStrictImmutable),
+           Local.IsCatchParameter) then
+          ACtx.Scope.MarkCaptured(LocalIdx);
       end;
     end;
 
@@ -1900,6 +2131,8 @@ begin
       for LocalIdx := ScopeCursor.LocalCount - 1 downto 0 do
       begin
         Local := ScopeCursor.GetLocal(LocalIdx);
+        if Local.SuspendCount > 0 then
+          Continue;
         if DirectEvalBindingNameSeen(Names, Local.Name) then
           Continue;
         if Local.Name = DERIVED_THIS_INITIALIZED_LOCAL then
@@ -1943,8 +2176,10 @@ begin
       ScopeCursor := ScopeCursor.Parent;
     end;
 
+    StrictCaller := not ACtx.NonStrictMode;
+    VerifyDirectEvalSiteRecord(ACtx, ACall, Bindings, StrictCaller);
     ACtx.Template.AddDirectEvalEnvironment(APC,
-      ACtx.Template.RejectArgumentsInDirectEval, Bindings);
+      ACtx.Template.RejectArgumentsInDirectEval, StrictCaller, Bindings);
     ACtx.Scope.MarkDirectEvalSeen;
   finally
     Names.Free;
@@ -1957,7 +2192,7 @@ begin
   Result := CallTrustedFlag(ACtx, AExpr);
   if IsDirectEvalCall(AExpr) then
   begin
-    CaptureDirectEvalEnvironment(ACtx, ACallPC);
+    CaptureDirectEvalEnvironment(ACtx, AExpr, ACallPC);
     Result := Result or CALL_FLAG_DIRECT_EVAL;
   end;
 end;
@@ -1968,7 +2203,7 @@ begin
   Result := CALL_FLAG_SPREAD;
   if IsDirectEvalCall(AExpr) then
   begin
-    CaptureDirectEvalEnvironment(ACtx, ACallPC);
+    CaptureDirectEvalEnvironment(ACtx, AExpr, ACallPC);
     Result := Result or CALL_FLAG_DIRECT_EVAL;
   end;
 end;
@@ -3101,9 +3336,14 @@ var
   ParameterLocal: TGocciaCompilerLocal;
   VarSlot: UInt16;
 begin
-  if not (ABody is TGocciaBlockStatement) then
-    Exit;
   if not ParameterListContainsExpressionClass(AParams, TGocciaExpression) then
+  begin
+    // Step 28: the parameters are bindings of the variable environment
+    // (CaptureDirectEvalEnvironment reads this).
+    ACtx.Scope.ParametersInVarEnvironment := True;
+    Exit;
+  end;
+  if not (ABody is TGocciaBlockStatement) then
     Exit;
   Block := TGocciaBlockStatement(ABody);
 

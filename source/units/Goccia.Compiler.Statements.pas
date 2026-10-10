@@ -2541,6 +2541,7 @@ var
   HasCatch, HasFinally: Boolean;
   HasCatchInitHandler: Boolean;
   I: Integer;
+  CatchLocalStart: Integer;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
@@ -2619,14 +2620,18 @@ begin
     if (AStmt.CatchParam <> '') or Assigned(AStmt.CatchBindingPattern) then
     begin
       ACtx.Scope.BeginScope;
+      CatchLocalStart := ACtx.Scope.LocalCount;
       if AStmt.CatchParam <> '' then
       begin
         ACtx.Scope.DeclareLocal(AStmt.CatchParam, False);
+        ACtx.Scope.LocalAt(CatchLocalStart)^.IsCatchParameter := True;
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ACtx.Scope.NextSlot - 1, CatchReg, 0));
       end
       else
       begin
         CollectDestructuringBindings(AStmt.CatchBindingPattern, ACtx.Scope);
+        for I := CatchLocalStart to ACtx.Scope.LocalCount - 1 do
+          ACtx.Scope.LocalAt(I)^.IsCatchParameter := True;
         EmitBlockPatternHoleInitializers(ACtx, AStmt.CatchBindingPattern);
         if HasCatchInitHandler then
           CatchInitHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
@@ -6931,9 +6936,19 @@ begin
 
     if Assigned(ClassDef.SuperClassExpression) then
     begin
+      // ES2026 §15.7.1: a ClassHeritage is strict-mode code. CompileExpression
+      // compiles from the compiler-wide flag, not from this context's copy,
+      // so both are cleared, as for a computed element key.
       HeritageCtx := ACtx;
       HeritageCtx.NonStrictMode := False;
-      HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+      if Assigned(ACtx.SetNonStrictMode) then
+        ACtx.SetNonStrictMode(False);
+      try
+        HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+      finally
+        if Assigned(ACtx.SetNonStrictMode) then
+          ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+      end;
     end
     else
     begin
@@ -7160,9 +7175,19 @@ begin
 
     if Assigned(ClassDef.SuperClassExpression) then
     begin
+      // ES2026 §15.7.1: a ClassHeritage is strict-mode code. CompileExpression
+      // compiles from the compiler-wide flag, not from this context's copy,
+      // so both are cleared, as for a computed element key.
       HeritageCtx := ACtx;
       HeritageCtx.NonStrictMode := False;
-      HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+      if Assigned(ACtx.SetNonStrictMode) then
+        ACtx.SetNonStrictMode(False);
+      try
+        HeritageCtx.CompileExpression(ClassDef.SuperClassExpression, SuperReg);
+      finally
+        if Assigned(ACtx.SetNonStrictMode) then
+          ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
+      end;
     end
     else
     begin
