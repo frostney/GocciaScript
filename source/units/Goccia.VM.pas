@@ -517,7 +517,7 @@ type
     function CurrentBytecodePrivateAccessClass(
       const AKey: string): TGocciaClassValue;
     procedure ThrowBytecodePrivateTypeError(const AKey,
-      AMessage: string);
+      AMessageFormat: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
@@ -693,6 +693,7 @@ uses
   Goccia.NumberExponentiation,
   Goccia.NumberRemainder,
   Goccia.PatternMatching,
+  Goccia.PrivateNames,
   Goccia.Profiler,
   Goccia.RegExp.Runtime,
   Goccia.SourcePipeline,
@@ -11637,17 +11638,21 @@ begin
   Result := nil;
 end;
 
+// AMessageFormat takes the private name without its '#', as the interpreter
+// formats it, so both modes name the member as written in the source.
 procedure TGocciaVM.ThrowBytecodePrivateTypeError(const AKey,
-  AMessage: string);
+  AMessageFormat: string);
 var
   AccessClass: TGocciaClassValue;
+  Message: string;
 begin
+  Message := Format(AMessageFormat, [PrivateStorageSourceName(AKey)]);
   AccessClass := CurrentBytecodePrivateAccessClass(AKey);
   if Assigned(AccessClass) then
-    ThrowTypeErrorInRealm(AMessage, SSuggestPrivateFieldAccess,
+    ThrowTypeErrorInRealm(Message, SSuggestPrivateFieldAccess,
       AccessClass.CreationRealm)
   else
-    ThrowTypeError(AMessage, SSuggestPrivateFieldAccess);
+    ThrowTypeError(Message, SSuggestPrivateFieldAccess);
 end;
 
 function BytecodePrivateInitializedKey(
@@ -11835,7 +11840,15 @@ begin
       begin
         PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
           Names[I]);
-        if Assigned(PrototypeDescriptor) then
+        // A private data element on the prototype is a method. Its copy is
+        // not writable, so SetPropertyValue rejects assigning to it instead
+        // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
+        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+              PrototypeDescriptor.Flags - [pfWritable]))
+        else if Assigned(PrototypeDescriptor) then
           DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
@@ -13627,10 +13640,12 @@ begin
      (AObject is TGocciaUndefinedLiteralValue) then
     StampThrowLocation;
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -13655,14 +13670,14 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoGetter, [AKey]));
+          SErrorPrivateGetterMissing);
       if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
         PrivateName, Result) then
         Exit;
       if TryGetRawPrivateValue(AObject, AKey, Result) then
         Exit;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -13678,7 +13693,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
           begin
             EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -13691,7 +13706,7 @@ begin
             end;
           end;
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoGetter, [AKey]));
+            SErrorPrivateGetterMissing);
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
@@ -13699,7 +13714,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
         end;
         Current := Current.Prototype;
@@ -13709,7 +13724,7 @@ begin
     if TryGetRawPrivateValue(AObject, AKey, Result) then
       Exit;
     ThrowBytecodePrivateTypeError(AKey,
-      Format(SErrorPrivateFieldNotAccessible, [AKey]));
+      SErrorPrivateFieldInaccessible);
   end
   else if TryGetRawPrivateValue(AObject, AKey, Result) then
     Exit;
@@ -13882,10 +13897,12 @@ var
   ExistingValue: TGocciaValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
@@ -13910,10 +13927,10 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoSetter, [AKey]));
+          SErrorPrivateSetterMissing);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format('Private method %s is not writable', [AKey]));
+          SErrorPrivateMethodNotWritable);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(PrivateName) then
       begin
         TGocciaClassValue(AObject).AddPrivateStaticProperty(
@@ -13921,7 +13938,7 @@ begin
         Exit;
       end;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -13938,7 +13955,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             ExistingValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
           try
             InvokeFunctionValue(
@@ -13950,10 +13967,24 @@ begin
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
+        begin
+          // Only the private methods StampBytecodePrivateBrands copies onto
+          // a receiver that is not a class instance are not writable.
+          if not Descriptor.Writable then
+          begin
+            if TryGetRawPrivateValue(AObject,
+               BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+               ExistingValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateMethodNotWritable);
+            ThrowBytecodePrivateTypeError(AKey,
+              SErrorPrivateFieldInaccessible);
+          end;
           Break;
+        end;
         if Descriptor is TGocciaPropertyDescriptorAccessor then
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoSetter, [AKey]));
+            SErrorPrivateSetterMissing);
         Current := Current.Prototype;
       end;
     end;
@@ -13964,8 +13995,18 @@ begin
         Exit;
     end
     else
+    begin
+      // The walk stopped at a private data element the receiver does not hold
+      // as a field: a private method, which cannot be assigned once the
+      // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
+      if (AObject is TGocciaObjectValue) and
+         (Descriptor is TGocciaPropertyDescriptorData) and
+         TryGetRawPrivateValue(AObject,
+           BytecodePrivateBrandKey(AKey, PrivateBrandToken), ExistingValue) then
+        ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
+    end;
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
@@ -14004,10 +14045,12 @@ var
   BoxedValue: TGocciaObjectValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -14162,7 +14205,7 @@ begin
   end;
 
   ThrowBytecodePrivateTypeError(AKey,
-    Format(SErrorPrivateFieldNotAccessible, [AKey]));
+    SErrorPrivateFieldInaccessible);
 end;
 
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
@@ -14180,7 +14223,7 @@ begin
     if AKey is TGocciaSymbolValue then
       KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
     else
-      KeyStr := AKey.ToStringLiteral.Value;
+      KeyStr := DisplayClassElementName(AKey.ToStringLiteral.Value);
     if AObject is TGocciaSymbolValue then
       ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
         TGocciaSymbolValue(AObject).ToDisplayString.Value]),

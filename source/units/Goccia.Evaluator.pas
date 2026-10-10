@@ -10810,7 +10810,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.HasOwnPrivateStaticMethod(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if not AccessClass.HasOwnPrivateStaticProperty(PrivateName) then
@@ -10854,7 +10854,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if (PrivateName <> APrivateName) and Assigned(AccessClass.Prototype) then
@@ -10880,7 +10880,7 @@ begin
       ThrowPrivateSetterMissingError(APrivateName);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
-      ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
         SSuggestPrivateFieldAccess);
   end;
 
@@ -10950,7 +10950,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if PrivateName <> APrivateName then
