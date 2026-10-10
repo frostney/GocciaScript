@@ -162,6 +162,7 @@ type
 
     procedure CopyModuleContents(const ASourceModule,
       ATargetModule: TGocciaModule);
+    function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
     procedure EvaluateLinkedModule(const AModule: TGocciaModule);
@@ -238,6 +239,10 @@ type
     function IsEvaluatingModulePath(const APath: string): Boolean;
     procedure ValidateStaticNamedImports(const AProgram: TGocciaProgram;
       const AModule: TGocciaModule);
+    function LinkModuleRequest(const AModuleRequest,
+      AImportingFilePath: string; const AImportNames: array of string;
+      const ALine, AColumn: Integer): TGocciaModule;
+    function EvaluateModule(const AModule: TGocciaModule): TGocciaModule;
     function LoadModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
     { Host enrollment entry point. Ownership is stamped on the resolved root and
@@ -261,6 +266,9 @@ type
       AImportingFilePath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
+    { Settles an entry module whose run raised AError. See the body. }
+    procedure FailEntryModule(const AModule: TGocciaModule;
+      const AError: Exception);
     procedure RegisterGlobalModuleProvider(const AModulePath: string;
       const AProvider: TGocciaGlobalModuleProvider);
     procedure UnregisterGlobalModuleProvider(const AModulePath: string);
@@ -1571,23 +1579,35 @@ begin
 end;
 
 procedure TGocciaModuleLoader.BeginEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.AddOrSetValue(APath, True);
-  FEvaluatingModules.AddOrSetValue(ExpandFileName(APath), True);
   FLoadingModules.AddOrSetValue(APath, True);
-  FLoadingModules.AddOrSetValue(ExpandFileName(APath), True);
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.AddOrSetValue(ExpandedPath, True);
+    FLoadingModules.AddOrSetValue(ExpandedPath, True);
+  end;
 end;
 
 procedure TGocciaModuleLoader.EndEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.Remove(APath);
-  FEvaluatingModules.Remove(ExpandFileName(APath));
   FLoadingModules.Remove(APath);
-  FLoadingModules.Remove(ExpandFileName(APath));
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.Remove(ExpandedPath);
+    FLoadingModules.Remove(ExpandedPath);
+  end;
 end;
 
 function TGocciaModuleLoader.IsEvaluatingModulePath(
@@ -1648,16 +1668,71 @@ procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
   const AModule: TGocciaModule);
 var
   CacheKey: string;
+
+  { The loader owns every module it caches. A module this registration
+    replaces (an entry run again under the same path, as each REPL input
+    is) is retired, so the loader still frees it, rather than leaked. }
+  procedure CacheUnder(const AKey: string);
+  var
+    Existing: TGocciaModule;
+  begin
+    if FModules.TryGetValue(AKey, Existing) and (Existing <> AModule) then
+      RetireModule(Existing);
+    FModules.AddOrSetValue(AKey, AModule);
+  end;
+
 begin
   if (AResolvedPath = '') or not Assigned(AModule) then
     Exit;
 
   CacheKey := ExpandFileName(AResolvedPath);
-  FModules.AddOrSetValue(CacheKey, AModule);
+  CacheUnder(CacheKey);
   if CacheKey <> AResolvedPath then
-    FModules.AddOrSetValue(AResolvedPath, AModule);
+    CacheUnder(AResolvedPath);
   if AModule.IsHostOwned then
     MarkHostOwnedAddress(AResolvedPath);
+end;
+
+{ ES2026 §16.2.1.6.1.3 Evaluate: a module whose evaluation threw keeps that
+  error as its [[EvaluationError]], and every later import of it throws the
+  same value (§16.2.1.6.1.3.1 InnerModuleEvaluation step 2), as a module this
+  loader evaluated does through its failed-module record. An entry that
+  failed before it evaluated (a link error) is not a linked record: it leaves
+  the cache, so a later import links and evaluates its file again. Either
+  way a later import never gets the record of an incomplete run. }
+procedure TGocciaModuleLoader.FailEntryModule(const AModule: TGocciaModule;
+  const AError: Exception);
+var
+  CacheKey: string;
+  Cached: TGocciaModule;
+  ThrownValue: TGocciaValue;
+
+  procedure Evict(const AKey: string);
+  begin
+    if FModules.TryGetValue(AKey, Cached) and (Cached = AModule) then
+      FModules.Remove(AKey);
+  end;
+
+begin
+  if not Assigned(AModule) then
+    Exit;
+
+  ThrownValue := nil;
+  if AError is EGocciaBytecodeThrow then
+    ThrownValue := EGocciaBytecodeThrow(AError).ThrownValue
+  else if AError is TGocciaThrowValue then
+    ThrownValue := TGocciaThrowValue(AError).Value;
+
+  CacheKey := ExpandFileName(AModule.Path);
+  if Assigned(ThrownValue) then
+  begin
+    RecordFailedModuleError(CacheKey, ThrownValue, AModule.LastModified);
+    Exit;
+  end;
+
+  Evict(CacheKey);
+  Evict(AModule.Path);
+  RetireModule(AModule);
 end;
 
 procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,
@@ -1670,6 +1745,15 @@ procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
 begin
   if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
     FRetiredModules.Add(AModule);
+end;
+
+function TGocciaModuleLoader.CaptureLoadStates: TList<TObject>;
+var
+  LoadStateObject: TObject;
+begin
+  Result := TList<TObject>.Create;
+  for LoadStateObject in FModuleLoadStates.Values do
+    Result.Add(LoadStateObject);
 end;
 
 procedure TGocciaModuleLoader.DiscardLinkedModules(
@@ -1706,17 +1790,12 @@ function TGocciaModuleLoader.LoadModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 var
   IsOutermostLink: Boolean;
-  LoadStateObject: TObject;
   PreservedStates: TList<TObject>;
 begin
   IsOutermostLink := FLinkingDepth = 0;
   PreservedStates := nil;
   if IsOutermostLink then
-  begin
-    PreservedStates := TList<TObject>.Create;
-    for LoadStateObject in FModuleLoadStates.Values do
-      PreservedStates.Add(LoadStateObject);
-  end;
+    PreservedStates := CaptureLoadStates;
   try
     try
       Inc(FLinkingDepth);
@@ -1736,6 +1815,73 @@ begin
   finally
     PreservedStates.Free;
   end;
+end;
+
+// ES2026 §16.2.1.6.1.2 Link() and §16.2.1.7.3.1 InitializeEnvironment for a
+// static request of a program no loader linked: the bytecode entry and each
+// bytecode REPL input. Links the requested module's graph without evaluating
+// it, then rejects an imported or re-exported name its ResolveExport returns
+// null or ambiguous for with a SyntaxError, so a bad name fails before any
+// module of the graph evaluates. The program's own OP_IMPORT of the same
+// request then evaluates the linked module through EvaluateModule.
+function TGocciaModuleLoader.LinkModuleRequest(const AModuleRequest,
+  AImportingFilePath: string; const AImportNames: array of string;
+  const ALine, AColumn: Integer): TGocciaModule;
+var
+  AttributeType, Specifier: string;
+  I: Integer;
+  IsOutermostLink: Boolean;
+  PreservedStates: TList<TObject>;
+  PreviousCallSite: TGocciaCallSite;
+begin
+  IsOutermostLink := FLinkingDepth = 0;
+  PreservedStates := nil;
+  if IsOutermostLink then
+    PreservedStates := CaptureLoadStates;
+  { The declaration is the call site of what linking it decides or refuses,
+    as OP_IMPORT makes it when the program runs. }
+  EnterGocciaCallSite(AImportingFilePath, ALine, AColumn, PreviousCallSite);
+  try
+    try
+      Inc(FLinkingDepth);
+      try
+        Result := InstantiateModule(AModuleRequest, AImportingFilePath);
+      finally
+        Dec(FLinkingDepth);
+      end;
+
+      for I := 0 to High(AImportNames) do
+        if (not Result.CanResolveExport(AImportNames[I])) and
+           (not IsEvaluatingModulePath(Result.Path)) then
+        begin
+          DecodeImportSpecifierAttribute(AModuleRequest, Specifier,
+            AttributeType);
+          raise TGocciaSyntaxError.Create(
+            Format('Module "%s" has no export named "%s"',
+              [Specifier, AImportNames[I]]),
+            ALine, AColumn, AImportingFilePath, nil);
+        end;
+    except
+      if IsOutermostLink then
+        DiscardLinkedModules(PreservedStates);
+      raise;
+    end;
+  finally
+    LeaveGocciaCallSite(PreviousCallSite);
+    PreservedStates.Free;
+  end;
+end;
+
+// ES2026 §16.2.1.6.1.3 Evaluate() of a module LinkModuleRequest linked, for
+// the request that linked it: LoadModule without resolving the request again.
+// The graph is already linked, so an evaluation that fails leaves the rest of
+// it linked for a later request, as Evaluate() does, rather than discarding it.
+function TGocciaModuleLoader.EvaluateModule(
+  const AModule: TGocciaModule): TGocciaModule;
+begin
+  Result := AModule;
+  if FLinkingDepth = 0 then
+    EvaluateLinkedModule(AModule);
 end;
 
 function TGocciaModuleLoader.LoadHostModule(const AModulePath,

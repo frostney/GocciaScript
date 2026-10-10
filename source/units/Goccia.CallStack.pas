@@ -4,6 +4,13 @@ unit Goccia.CallStack;
 
 interface
 
+const
+  { The most frames CaptureStackTrace renders. A deeper stack keeps its
+    innermost frames and ends with a `    ... N more frames` line, so building
+    an error costs the same at any depth. JavaScriptCore's default
+    Error.stackTraceLimit is also 100 (SpiderMonkey keeps 128, V8 10). }
+  STACK_TRACE_FRAME_LIMIT = 100;
+
 type
   // Resolves a deferred call frame's function template (stored as an opaque
   // pointer so this low-level unit stays decoupled from the bytecode units)
@@ -33,6 +40,22 @@ type
   PGocciaCallFrame = ^TGocciaCallFrame;
   TGocciaCallFrameArray = array of TGocciaCallFrame;
 
+  TGocciaFrameLocation = record
+    Line: Integer;
+    Column: Integer;
+  end;
+
+  TGocciaFrameLocationArray = array of TGocciaFrameLocation;
+
+  { Fills in, for a stack trace being captured, the position of each deferred
+    frame among the first ACount that carries none (see IsUnlocatedFrame):
+    the bytecode VM reads where each of its frames is from the instruction
+    pointers it already keeps, so a call never records its own position
+    (ADR 0074). ALocations arrives holding every frame's own Line and Column;
+    entries the resolver cannot place are left as they are. }
+  TGocciaFrameLocationResolver = procedure(const AFrames: TGocciaCallFrameArray;
+    const ACount: Integer; var ALocations: TGocciaFrameLocationArray) of object;
+
   TGocciaCallStack = class
   private
     // The resolver is stateless and identical for every engine, so it is held
@@ -40,10 +63,14 @@ type
     // construction-order or cross-thread timing dependence on a live instance.
     class var FTemplateResolver: TGocciaTemplateTraceResolver;
   private
-    FFrames: array of TGocciaCallFrame;
+    FFrames: TGocciaCallFrameArray;
     FCount: Integer;
     FCapacity: Integer;
+    FLocationResolver: TGocciaFrameLocationResolver;
     procedure Grow;
+    { Every frame's position, with the unlocated deferred frames placed by the
+      location resolver. Capture paths only. }
+    function ResolveLocations: TGocciaFrameLocationArray;
   public
     class function Instance: TGocciaCallStack;
     class procedure Initialize;
@@ -54,17 +81,27 @@ type
     procedure Push(const AFunctionName, AFilePath: string; const ALine, AColumn: Integer);
     // Hot-path push for the bytecode VM: stores the template pointer plus a
     // module-path fallback, deferring all string work to CaptureStackTrace.
+    // The caller makes room first (Count < Capacity): the VM grows this
+    // stack itself, through SetCapacity, so that the growth is charged to
+    // --max-memory with its own stacks (ADR 0132).
     procedure PushTemplate(const ATemplate: Pointer; const AFallbackPath: string); {$IFDEF FPC}inline;{$ENDIF}
+    // Resizes the frame records to ACapacity entries, which must be at least
+    // Count. Used to grow ahead of PushTemplate and to shrink an idle stack.
+    procedure SetCapacity(const ACapacity: Integer);
     { Stamps the currently executing frame with a source position.
 
       A deferred bytecode frame is pushed without one (ADR 0074 keeps the hot
-      call path free of debug-map lookups), so its trace reads `file:0:0` and
-      the diagnostic renderer has no line to show a code frame for. The VM
-      calls this on its throw paths only — where a debug-map lookup is already
-      paid for — so a runtime TypeError carries the same file:line:column the
-      tree-walk evaluator's per-call frame would have carried. }
+      call path free of debug-map lookups); the location resolver works out
+      where an unstamped frame is when a trace is captured (ADR 0131). The VM
+      still stamps a frame on its throw paths and around native calls and
+      `new`, and a stamp wins over the resolver. }
     procedure SetTopFrameLocation(const AFilePath: string;
       const ALine, AColumn: Integer);
+    { Returns the currently executing deferred frame to the unlocated state
+      PushTemplate leaves it in. The VM calls this when a throw lands in a handler of that frame:
+      a stamp made for the throw, or for a call the throw abandoned, would
+      otherwise stay on the frame and locate a later error at it. }
+    procedure ClearTopFrameLocation;
     { Snapshot / restore the whole top frame, for a caller that stamps the
       executing frame's location for the duration of a nested operation (an
       interpreter `new` whose native constructor captures a trace) and must
@@ -80,7 +117,10 @@ type
 
     { Captures the current call stack as a formatted string.
       AErrorName and AMessage form the first line: "ErrorName: message".
-      ASkipTop omits the topmost N frames (e.g. 1 to skip the Error constructor). }
+      ASkipTop omits the topmost N frames (e.g. 1 to skip the Error constructor).
+      At most STACK_TRACE_FRAME_LIMIT frames are rendered, innermost first; a
+      deeper stack ends with one `    ... N more frames` line instead of the
+      rest, which are neither resolved nor formatted. }
     function CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
 
     { The resolved source location of the frame CaptureStackTrace would render
@@ -92,7 +132,18 @@ type
       out AFilePath: string; out ALine, AColumn: Integer): Boolean;
 
     property Count: Integer read FCount;
+    { Set by the bytecode VM while it runs on this thread, and restored to
+      the previous resolver when it stops. Read only when a trace is
+      captured. }
+    property LocationResolver: TGocciaFrameLocationResolver
+      read FLocationResolver write FLocationResolver;
+    property Capacity: Integer read FCapacity;
   end;
+
+{ A deferred frame with no position stamped on it: the VM has made no call
+  or throw from it that stamps the frame (SetTopFrameLocation), so its
+  position is wherever it is executing now. }
+function IsUnlocatedFrame(const AFrame: TGocciaCallFrame): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -104,6 +155,12 @@ const
 
 threadvar
   CallStackThreadInstance: TGocciaCallStack;
+
+function IsUnlocatedFrame(const AFrame: TGocciaCallFrame): Boolean;
+begin
+  Result := Assigned(AFrame.Template) and (AFrame.Line = 0) and
+    (AFrame.Column = 0) and not AFrame.HasExplicitLocation;
+end;
 
 { TGocciaCallStack }
 
@@ -132,7 +189,13 @@ end;
 
 procedure TGocciaCallStack.Grow;
 begin
-  FCapacity := FCapacity * 2;
+  SetCapacity(FCapacity * 2);
+end;
+
+procedure TGocciaCallStack.SetCapacity(const ACapacity: Integer);
+begin
+  Assert(ACapacity >= FCount, 'Call stack capacity below its frame count');
+  FCapacity := ACapacity;
   SetLength(FFrames, FCapacity);
 end;
 
@@ -157,8 +220,7 @@ procedure TGocciaCallStack.PushTemplate(const ATemplate: Pointer; const AFallbac
 var
   Frame: PGocciaCallFrame;
 begin
-  if FCount >= FCapacity then
-    Grow;
+  Assert(FCount < FCapacity, 'PushTemplate without room on the call stack');
   Frame := @FFrames[FCount];
   Frame^.Template := ATemplate;
   if Pointer(Frame^.FunctionName) <> nil then
@@ -183,6 +245,18 @@ begin
     FFrames[FCount - 1].FilePath := AFilePath;
     FFrames[FCount - 1].HasExplicitLocation := True;
   end;
+end;
+
+{ The VM stamps its executing frame with that frame's own template source, and
+  a deferred frame reads the stamped path only while HasExplicitLocation is
+  set, so clearing the flag resolves the path as it was when pushed. }
+procedure TGocciaCallStack.ClearTopFrameLocation;
+begin
+  if FCount = 0 then
+    Exit;
+  FFrames[FCount - 1].Line := 0;
+  FFrames[FCount - 1].Column := 0;
+  FFrames[FCount - 1].HasExplicitLocation := False;
 end;
 
 { The snapshot and its restore bracket every native call the bytecode VM
@@ -234,12 +308,31 @@ begin
   FTemplateResolver := AResolver;
 end;
 
+function TGocciaCallStack.ResolveLocations: TGocciaFrameLocationArray;
+var
+  I: Integer;
+  HasUnlocated: Boolean;
+begin
+  SetLength(Result, FCount);
+  HasUnlocated := False;
+  for I := 0 to FCount - 1 do
+  begin
+    Result[I].Line := FFrames[I].Line;
+    Result[I].Column := FFrames[I].Column;
+    if IsUnlocatedFrame(FFrames[I]) then
+      HasUnlocated := True;
+  end;
+  if HasUnlocated and Assigned(FLocationResolver) then
+    FLocationResolver(FFrames, FCount, Result);
+end;
+
 function TGocciaCallStack.TryGetTopThrowLocation(const ASkipTop: Integer;
   out AFilePath: string; out ALine, AColumn: Integer): Boolean;
 var
   TopIndex: Integer;
   Frame: TGocciaCallFrame;
   ResolvedName, ResolvedPath: string;
+  Locations: TGocciaFrameLocationArray;
 begin
   AFilePath := '';
   ALine := 0;
@@ -252,6 +345,12 @@ begin
   if (TopIndex < 0) or (TopIndex >= FCount) then
     Exit;
   Frame := FFrames[TopIndex];
+  if IsUnlocatedFrame(Frame) then
+  begin
+    Locations := ResolveLocations;
+    Frame.Line := Locations[TopIndex].Line;
+    Frame.Column := Locations[TopIndex].Column;
+  end;
   // Same resolution CaptureStackTrace uses for a rendered frame.
   if Assigned(Frame.Template) and Assigned(FTemplateResolver) then
   begin
@@ -269,9 +368,10 @@ end;
 
 function TGocciaCallStack.CaptureStackTrace(const AErrorName, AMessage: string; const ASkipTop: Integer = 0): string;
 var
-  I, EffectiveCount: Integer;
+  I, EffectiveCount, LowestRendered: Integer;
   Frame: TGocciaCallFrame;
   FuncName, Location, ResolvedName, ResolvedPath: string;
+  Locations: TGocciaFrameLocationArray;
 begin
   if AMessage <> '' then
     Result := AErrorName + ': ' + AMessage
@@ -284,8 +384,17 @@ begin
     EffectiveCount := FCount;
   if EffectiveCount < 0 then
     EffectiveCount := 0;
+  Locations := ResolveLocations;
 
-  for I := EffectiveCount - 1 downto 0 do
+  // A deep stack (a stack-overflow RangeError has --max-stack frames) renders
+  // only its innermost frames: the frames below the limit are skipped without
+  // their names being resolved or their lines formatted; ResolveLocations
+  // still works out every frame's line and column.
+  LowestRendered := EffectiveCount - STACK_TRACE_FRAME_LIMIT;
+  if LowestRendered < 0 then
+    LowestRendered := 0;
+
+  for I := EffectiveCount - 1 downto LowestRendered do
   begin
     Frame := FFrames[I];
     // Deferred bytecode VM frames carry only a template pointer; materialise
@@ -312,12 +421,19 @@ begin
       FuncName := '<anonymous>';
 
     if ResolvedPath <> '' then
-      Location := Format('%s:%d:%d', [ResolvedPath, Frame.Line, Frame.Column])
+      Location := Format('%s:%d:%d', [ResolvedPath, Locations[I].Line,
+        Locations[I].Column])
     else
-      Location := Format('<unknown>:%d:%d', [Frame.Line, Frame.Column]);
+      Location := Format('<unknown>:%d:%d', [Locations[I].Line,
+        Locations[I].Column]);
 
     Result := Result + #10 + '    at ' + FuncName + ' (' + Location + ')';
   end;
+
+  if LowestRendered = 1 then
+    Result := Result + #10 + '    ... 1 more frame'
+  else if LowestRendered > 1 then
+    Result := Result + #10 + '    ... ' + IntToStr(LowestRendered) + ' more frames';
 end;
 
 end.

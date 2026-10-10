@@ -41,6 +41,10 @@ type
   TGocciaExecutionContextThreadState = record
     Entries: array of TGocciaExecutionContextStackEntry;
     Count: Integer;
+    // Length(Entries), kept beside Count so that the call path's capacity
+    // check is two loads. Entries is resized only through
+    // SetFunctionContextCapacity, which keeps the two equal.
+    Capacity: Integer;
     // Goccia.Realm's current-realm variable for this thread, resolved by
     // ThreadState so the call-path push and pop switch realms through it.
     RealmSlot: PGocciaRealm;
@@ -67,12 +71,26 @@ type
       what Push and Pop do for a context built by CreateExecutionContext with
       no ScriptOrModule, but through that handle: neither performs a
       thread-local lookup, copies a context record, or looks a source path up.
-      ASourcePathRef comes from InternSourcePath on the same thread. }
+      ASourcePathRef comes from InternSourcePath on the same thread.
+
+      PushFunctionContext does not grow the stack: when FunctionContextsFull,
+      the caller makes room first through SetFunctionContextCapacity. The VM
+      grows it that way so that the growth is charged to --max-memory with
+      its own stacks (ADR 0132). }
     class function ThreadState: Pointer; static;
     class procedure PushFunctionContext(const AThreadState: Pointer;
       const ARealm: TGocciaRealm; const AScope: TGocciaScope;
       const AFunctionValue: TGocciaValue; const ASourcePathRef: Pointer);
       static; {$IFDEF FPC}inline;{$ENDIF}
+    class function FunctionContextsFull(const AThreadState: Pointer): Boolean;
+      static; {$IFDEF FPC}inline;{$ENDIF}
+    class function FunctionContextCount(const AThreadState: Pointer): Integer;
+      static; {$IFDEF FPC}inline;{$ENDIF}
+    class function FunctionContextCapacity(
+      const AThreadState: Pointer): Integer; static; {$IFDEF FPC}inline;{$ENDIF}
+    // Resizes the stack to ACapacity entries, at least its count.
+    class procedure SetFunctionContextCapacity(const AThreadState: Pointer;
+      const ACapacity: Integer); static;
     class procedure PopFunctionContext(const AThreadState: Pointer);
       static; {$IFDEF FPC}inline;{$ENDIF}
   end;
@@ -230,8 +248,8 @@ begin
     raise Exception.Create('Execution context requires a realm.');
 
   State := @GExecutionContextState;
-  if State^.Count >= Length(State^.Entries) then
-    SetLength(State^.Entries, State^.Count * 2 + 8);
+  if State^.Count >= State^.Capacity then
+    SetFunctionContextCapacity(State, State^.Count * 2 + 8);
 
   Entry := @State^.Entries[State^.Count];
   Entry^.Context := AContext;
@@ -297,8 +315,8 @@ begin
     RaiseRealmRequired;
 
   State := PGocciaExecutionContextThreadState(AThreadState);
-  if State^.Count >= Length(State^.Entries) then
-    SetLength(State^.Entries, State^.Count * 2 + 8);
+  Assert(State^.Count < State^.Capacity,
+    'PushFunctionContext without room on the context stack');
 
   Entry := @State^.Entries[State^.Count];
   Entry^.Context.Realm := ARealm;
@@ -334,6 +352,39 @@ begin
   Entry^.Context.FSourcePathRef := nil;
   Entry^.PreviousRealm := nil;
   State^.RealmSlot^ := PreviousRealm;
+end;
+
+class function TGocciaExecutionContextStack.FunctionContextsFull(
+  const AThreadState: Pointer): Boolean;
+var
+  State: PGocciaExecutionContextThreadState;
+begin
+  State := PGocciaExecutionContextThreadState(AThreadState);
+  Result := State^.Count >= State^.Capacity;
+end;
+
+class function TGocciaExecutionContextStack.FunctionContextCount(
+  const AThreadState: Pointer): Integer;
+begin
+  Result := PGocciaExecutionContextThreadState(AThreadState)^.Count;
+end;
+
+class function TGocciaExecutionContextStack.FunctionContextCapacity(
+  const AThreadState: Pointer): Integer;
+begin
+  Result := PGocciaExecutionContextThreadState(AThreadState)^.Capacity;
+end;
+
+class procedure TGocciaExecutionContextStack.SetFunctionContextCapacity(
+  const AThreadState: Pointer; const ACapacity: Integer);
+var
+  State: PGocciaExecutionContextThreadState;
+begin
+  State := PGocciaExecutionContextThreadState(AThreadState);
+  Assert(ACapacity >= State^.Count,
+    'Context stack capacity below its count');
+  SetLength(State^.Entries, ACapacity);
+  State^.Capacity := ACapacity;
 end;
 
 class function TGocciaExecutionContextStack.Running: TGocciaExecutionContext;
@@ -414,6 +465,7 @@ initialization
 
 finalization
   SetLength(GExecutionContextState.Entries, 0);
+  GExecutionContextState.Capacity := 0;
   GExecutionContextState.Count := 0;
 
 end.

@@ -474,3 +474,46 @@ describe.runIf(typeof Goccia !== "undefined")("toEqual under explicit GC", () =>
     expect({ k: { x: 2, arr: [1, 2, 3] } }).not.toEqual(freshExpected());
   });
 });
+
+describe("toEqual with typed arrays", () => {
+  test("compares the elements", () => {
+    expect(new Uint8Array([1, 2])).toEqual(new Uint8Array([1, 2]));
+    expect(new Uint8Array([1, 2])).not.toEqual(new Uint8Array([3, 4]));
+    expect(new BigInt64Array([1n])).not.toEqual(new BigInt64Array([2n]));
+  });
+
+  test("compares the lengths", () => {
+    expect(new Uint8Array([1])).not.toEqual(new Uint8Array([1, 2]));
+    expect(new Uint8Array([1, 2])).not.toEqual(new Uint8Array([1]));
+  });
+
+  test("compares elements with Object.is semantics", () => {
+    expect(new Float64Array([NaN])).toEqual(new Float64Array([NaN]));
+    expect(new Float64Array([-0])).not.toEqual(new Float64Array([0]));
+  });
+
+  test("never equals a typed array of another kind", () => {
+    expect(new Uint8Array([1])).not.toEqual(new Int8Array([1]));
+    expect(new Float32Array([1])).not.toEqual(new Float64Array([1]));
+  });
+
+  test("never equals an array or a plain object with the same entries", () => {
+    expect(new Uint8Array([1])).not.toEqual([1]);
+    expect([1]).not.toEqual(new Uint8Array([1]));
+    expect(new Uint8Array([1])).not.toEqual({ 0: 1 });
+    expect({ 0: 1 }).not.toEqual(new Uint8Array([1]));
+  });
+
+  test("compares typed arrays nested in objects", () => {
+    expect({ data: new Uint8Array([1]) }).toEqual({ data: new Uint8Array([1]) });
+    expect({ data: new Uint8Array([1]) }).not.toEqual({
+      data: new Uint8Array([2]),
+    });
+  });
+
+  test("compares named own properties", () => {
+    const withExtra = new Uint8Array([1]);
+    withExtra.extra = 1;
+    expect(withExtra).not.toEqual(new Uint8Array([1]));
+  });
+});

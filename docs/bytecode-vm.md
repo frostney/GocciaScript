@@ -21,6 +21,10 @@ Both execution modes are implementations of `TGocciaExecutor` (see [Architecture
 
 An imported module adds a second such coupling. Its environment is initialized while linking (ES2026 §16.2.1.7.3.1 InitializeEnvironment), and the module loader creates the top-level function declarations there with the tree-walk evaluator (`HoistFunctionDeclarations`). Bytecode compilation of that module therefore reuses those preinitialized bindings for exported declarations instead of compiling them (`PreinitializedTopLevelFunctions`), and their bodies keep running under the evaluator in bytecode mode. Everything an evaluator path can be handed from such a body — including a compiled `TGocciaVMClassValue` reached by `new`, `super()`, or a bound wrapper — must therefore work in both directions; `TGocciaClassValue.UsesOwnInstantiation` and `TryConstructOnReceiver` are what route construction of a compiled class back to the VM. `scripts/differential/l-modulefndecl.test.js` gates this split.
 
+The program the executor runs itself — the entry file or a REPL input — is linked by no module loader. The compiler therefore records its static imports and re-exports, in source order, in the bytecode module's request table, and `TGocciaBytecodeExecutor` links each one through `TGocciaModuleLoader.LinkModuleRequest` before the program runs (ES2026 §16.2.1.6.1.2 Link()). A name that does not resolve is a `SyntaxError` before any module of the graph evaluates; the program's own `OP_IMPORT`s then evaluate the linked modules, re-exported ones included.
+
+A module-source entry is also a Module Record of its own. Before its requests are linked, `TGocciaEngine.RunModuleForSourceType` registers it with the module loader under its resolved path, stamped with its file's modification time, and marks it evaluating, as `Execute` does for the interpreter. An import that resolves to the entry's own file — directly or through a cycle — therefore gets the entry back instead of evaluating the file a second time (ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation). The compiler records the entry's exports in the bytecode module's export table, and `TGocciaBytecodeExecutor.InitializeEntryExports` binds them after linking and before any import evaluates, as InitializeEnvironment (§16.2.1.7.3.1) does: a `let`, `const`, `class` or default-expression export is in its temporal dead zone until its declaration runs, a `var` export is `undefined`, and a function declaration — an anonymous `export default function` included — is hoisted and callable. Re-exports and exported imports bind to their linked modules. The program's `OP_EXPORT`s initialize and update the local bindings, so a module in a cycle with the entry reads them live. If the entry's run fails, the loader keeps its thrown value as the entry's evaluation error, so a later import throws it again (§16.2.1.6.1.3 Evaluate); an entry that fails before evaluating leaves the cache. A script-source entry is a Script, not a Module Record, so an import of its own file loads that file as a separate module.
+
 ## Pipeline
 
 ```text
@@ -41,7 +45,7 @@ Public bytecode artifacts use the `.gbc` extension.
 | VM execution | `Goccia.VM.pas` |
 | Frames / closures / upvalues | `Goccia.VM.CallFrame.pas`, `Goccia.VM.Closure.pas`, `Goccia.VM.Upvalue.pas` |
 | Bytecode executor | `Goccia.Executor.Bytecode.pas` (`TGocciaBytecodeExecutor`) |
-| Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.Expressions.pas` |
+| Numeric proof / lowering | `Goccia.Compiler.NumericProof.pas`, `Goccia.Compiler.NumericBindings.pas`, `Goccia.Compiler.Expressions.pas` |
 | Opcode name lookup | `Goccia.Bytecode.OpCodeNames.pas` |
 | Profiler | `Goccia.Profiler.pas`, `Goccia.Profiler.Report.pas` |
 
@@ -52,8 +56,9 @@ Public bytecode artifacts use the `.gbc` extension.
 - `undefined`, `null`, booleans, and hole values use shared singleton objects.
 - Sparse arrays use `TGocciaHoleValue.HoleValue`, not raw `nil`.
 - The VM is integrated with the shared garbage collector and shared call stack.
-- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit (CLI default 2 200 frames, `--max-stack=N`). Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
-- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)). See [Type Annotations](type-annotations.md).
+- Call stack depth is tracked per frame (`FFrameDepth`) and enforced against a configurable limit of nested calls (CLI default 2 200, `--max-stack=N`). The outermost frame, the program's top level or a function the host calls while no script runs (a promise job, a test), is not a nested call and does not count. Exceeding the limit throws a `RangeError: Maximum call stack size exceeded`. Pass `--max-stack=0` to disable the limit. The memory ceiling then bounds the recursion: the VM's stacks and the call records it pushes are charged to `--max-memory` and shrink back once idle, and a growth that does not fit is settled or refused with the same `RangeError` at the next instruction boundary. [Garbage Collector § Memory Ceiling](garbage-collector.md#memory-ceiling) lists what is charged. Bytecode-to-bytecode calls use a trampoline (`FFrameStack`) so the Pascal call stack stays flat regardless of JS call depth.
+- Type enforcement is opt-in in both execution modes. With `--strict-types`, the bytecode compiler marks annotated locals and parameters as strictly typed and emits `OP_CHECK_TYPE` wherever it cannot prove a value matches the annotation; without the flag, annotations are not checked. Return-type annotations are not enforced in either mode ([#1276](https://github.com/frostney/GocciaScript/issues/1276)), so the compiler never takes a call's result type from one: arithmetic on the call uses the generic opcodes, and a binding initialized from it gets no inferred type. See [Type Annotations](type-annotations.md).
+- Like the outermost frame, an imported module's top level is not a nested call. It runs above the frame of whatever evaluates it (the importer's top level, or a call that read a deferred namespace), and `TGocciaVM.ExecuteImportedModule` gives its frame that frame's depth instead of one more, so `--max-stack` counts only the calls live below it. Because the frame below can hold exception handlers at the same depth, an exception unwinding in a native VM entry matches only the handlers that entry installed.
 
 ## Opcode Layout
 
@@ -63,12 +68,12 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 210 opcodes, highest `233`):
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 211 opcodes, highest `235`):
 
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
-- the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_SETUP_AUTO_ACCESSOR_DYNAMIC` (`135`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), and `OP_SET_CLASS_SOURCE_CONST` (`143`); `144..166` are unused
+- the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), and `OP_SET_CLASS_SOURCE_CONST` (`143`); `135` and `144..166` are unused
 - the semantic range starts with module and async orchestration at `167` (`IMPORT`, `EXPORT`, `AWAIT`, `IMPORT_META`), and later additions were appended after it, including hot-path instructions such as `OP_INC_NUMERIC` (`199`), `OP_GET_IMPORT_BINDING` (`213`), `OP_SUB_NUM_IMM` (`227`), `OP_CALL_SELF_NUM` (`229`), and `OP_JUMP_IF_NOT_LT` (`232`)
-- `IsValidGocciaOpCode` rejects the unused numbers `99` and `144..166`
+- `IsValidGocciaOpCode` rejects the unused numbers `99`, `135` and `144..166`
 
 The current encoding helpers are defined in `Goccia.Bytecode.pas`:
 
@@ -130,7 +135,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch
 - fuse for/if/conditional `A < B` as `OP_JUMP_IF_NOT_LT` so the compare and `JUMP_IF_FALSE` share one dispatch; the opcode keeps generic `<` semantics (Number, BigInt, ToPrimitive/valueOf) and is not a Number-only shortcut
 - fuse `local.ident` as `OP_GET_LOCAL_PROP_CONST`: one instruction that reads the local slot (including the `OP_GET_LOCAL` TDZ hole check) and then the existing `OP_GET_PROP_CONST` shape-lite IC; computed keys, optional chaining, `with` lookups, import bindings, and global-backed identifiers keep the unfused path
-- retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup
+- retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup. A global-backed script, whose environment no link step fills, also predeclares each imported name in the global scope and binds it there (`OP_CREATE_GLOBAL_IMPORT_BINDING` for a named import, a `const` define for a namespace, source-phase or deferred binding), so a later script against the same scope, such as the next REPL input, reads the live binding
 - read an initialized local straight from its register when it is an operand of a binary operator, a comparison jump, a compound assignment, an element access or a store, instead of copying it into a temporary with `OP_GET_LOCAL` first. The copy does three things, and the compiler takes the direct read only where it can show that none is needed (`TryResolveSettledLocalName` in `Goccia.Compiler.Expressions.pas`):
   - *The TDZ check.* A local is marked once the code that initializes it has been compiled: its declaration, a `for...of` or counted-loop binding, or the parameter preamble. The mark is forgotten at each `switch` clause, because a clause can be entered without running an earlier clause's declarations. An assignment to a marked local also drops its TDZ probe.
   - *Reading the cell of a captured binding.* A closure writes a captured local through its cell and leaves the register stale. A `const` cannot be written. A `let` binding or a parameter is read directly only while no closure compiled so far has captured it and the read is not inside a loop that creates a closure anywhere in its body (`StatementCreatesNoClosure` in `Goccia.Compiler.OperandSafety.pas` examines a loop before it is compiled, because a closure created later in a loop runs before an earlier read on the next iteration; a loop nested in a flagged one inherits the answer, and every other loop is examined itself, since a `finally` block inlined at a `return` or `break` is compiled inside a loop it does not belong to). Parameters of a function with an `arguments` object keep the copy, because a mapped `arguments` object writes parameter cells; so does a function from its first direct `eval` onwards. A host that offers direct `eval` at all (the Test262 host, and a ShadowRealm created from such a realm) marks its realm with `HostsDirectEval` when it installs the function, and the executor passes that to the compiler as `DirectEvalAvailable`, which keeps the copy for every `let` binding and parameter: a closure created by direct `eval` writes registers by slot in whichever function calls it.
@@ -190,6 +195,17 @@ unsupported shapes retain ordinary `OP_CALL`, and tail calls retain the generic
 proper-tail-call path. The optimization does not turn the function into a
 generally typed function or change generic `+` semantics.
 
+A scalar frame takes its register window without clearing it, so the window
+can still hold references that an earlier frame left there, to objects that
+may since have been freed. The collector therefore does not mark scalar
+frames: when any is live, the bytecode stack root marks the register arena only
+up to the first scalar frame's window. That loses nothing, because a scalar
+frame writes each register before reading it and stores only scalars and the
+pinned NaN, infinity and -0 values. It relies on scalar frames being the
+innermost frames whenever one is live, which holds because they call only
+themselves; development builds assert that no frame is set up while a scalar
+frame is live (see [ADR 0127](adr/0127-collector-skips-closed-numeric-frames.md)).
+
 ## Profiling
 
 The `--profile` option on GocciaRunner enables language-level profiling of the bytecode VM. See [profiling.md](profiling.md) for the full guide.
@@ -203,8 +219,8 @@ The profiler follows the same singleton-tracker pattern as coverage (`Goccia.Cov
 
 ## Runtime Error Diagnostics
 
-A runtime fault must read identically in both execution modes. Three pieces of
-machinery keep that true:
+A runtime fault must read identically in both execution modes. This machinery
+keeps that true:
 
 - **Call-site descriptors.** `TGocciaFunctionTemplate` carries a runtime-only
   table mapping a call/construct instruction's start PC to the callee as the
@@ -221,6 +237,24 @@ machinery keep that true:
   through the same functions. The table is **not** serialised to `.gbc`: a
   module loaded from binary bytecode falls back to the runtime-type-name form of
   the message (see the note below).
+- **Binding names.** A temporal-dead-zone `ReferenceError` reads
+  `Cannot access 'x' before initialization` and a const assignment reads
+  `Assignment to constant variable 'x'`, as in the evaluator. The compiler
+  records each local's name, slot and live PC range in the template's debug
+  locals (`TGocciaCompilerScope.AttachTemplate`, closed at `EndScope`), and
+  upvalue descriptors already carry names; the VM's hole checks look the name up
+  only once they are about to throw (`ThrowUninitializedLocal`,
+  `ThrowUninitializedUpvalue`), so a read of an initialized binding does no
+  extra work. The const-assignment message is a constant compiled into the
+  throwing instruction. An assignment to a const first checks the binding
+  with `OP_CHECK_BINDING_INITIALIZED`, so a const still in its dead zone
+  throws the `ReferenceError` rather than the `TypeError` (ES2026 §9.1.1.1.5
+  step 3). That opcode checks the captured cell or global binding the
+  assignment resolved before its right-hand side ran, never a same-named var
+  a direct eval in the right-hand side declared. Debug locals are serialised to `.gbc` in the
+  section the format already had; bytecode without them, such as a `.gbc` from
+  an earlier build, falls back to the unnamed
+  `Cannot access lexical binding before initialization`.
 - **Throw-path source positions.** Deferred call frames carry no position
   ([ADR 0074](adr/0074-deferred-bytecode-call-stack-frames.md)), which left
   every bytecode-mode stack frame at `file:0:0` and the runner with no line to
@@ -236,6 +270,21 @@ machinery keep that true:
   for throw paths outside the dispatch loop through a pointer probe into the
   innermost loop's `Template`/`InstructionStartIP` locals, saved and restored
   once per native re-entry.
+- **Caller frame positions are worked out at capture.** A frame nothing has
+  stamped reports where it is executing now, worked out only when a trace is
+  captured ([ADR 0131](adr/0131-bytecode-frame-positions-at-capture.md)). Each
+  native entry into the dispatch loop records a `TGocciaVMActivation`: its
+  first call-stack frame, its first frame-stack and closed-numeric-frame
+  slots, and its probes. Each frame the entry runs pushed one call-stack
+  frame. For every frame but the executing one, the VM saved an instruction
+  pointer when that frame made its call, so the two sequences pair up in
+  order. `TGocciaVM.ResolveFrameLocations` steps back from each saved
+  pointer to the call instruction and looks it up in the call-site table,
+  falling back to the line map. The executing frame is located the same way
+  from its `Frame.IP` probe.
+  The VM installs this resolver on the thread's `TGocciaCallStack` for as
+  long as it runs. A call does no position work at all; a native entry
+  stores one activation record.
 - **Frame source is provenance-bound, not `stack`-selected.** A code frame is
   rendered only from provenance the engine records on a genuine error *when it
   is created* — the top call frame's source location, plus a ±context excerpt of
@@ -293,7 +342,12 @@ machinery keep that true:
   `ConstructValue`, so a constructor's position does not leak onto a later throw
   (`new Map(); JSON.parse("{")` reports the JSON fault at its own line, not the
   `new`). Native calls stamp the call site around the invoke, likewise restored,
-  so a native callee's error carries a location rather than `0:0`.
+  so a native callee's error carries a location rather than `0:0`. A throw
+  skips those restores, so `HandleExceptionUnwind` clears the position of the
+  frame whose handler it lands in (`TGocciaCallStack.ClearTopFrameLocation`):
+  the stamp of the call the throw abandoned, or of the fault that raised it,
+  does not locate a later error in that frame. The work stays on the throw
+  path, so a call that returns pays nothing for it.
 
 ### `.gbc` parity note
 
@@ -327,6 +381,19 @@ execute, the verifier checks opcodes, register destinations, constant and
 function references, control-flow targets, and exception-handler metadata.
 The VM retains bounds checks on instruction, constant, and function access as
 defense in depth.
+
+A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
+memory-safe on its own. The closed numeric frame it would enter is sound only
+under the compiler's numeric-only proof, which is not serialized (ADR 0101),
+and the collector does not mark that frame's registers (ADR 0127), so a crafted
+file could otherwise park an object in the unmarked window and have the
+collector reclaim it. The verifier rewrites a loaded `OP_CALL_SELF_NUM` in a
+synchronous arrow to `OP_CALL_SELF`, the ordinary self-call whose frame the
+collector marks, and rejects the opcode in any other template kind. Code
+compiled in process keeps the fast path; only loaded templates are rewritten.
+`OP_CALL_SELF` is runtime-only: it is reserved at 255, the top of the opcode
+range, outside `TGocciaOpCode`, so the loader rejects it in a file, and file
+opcodes must stay below it.
 
 ## Current Status
 
@@ -377,7 +444,7 @@ Language features are compiled into compact bytecode instruction sequences rathe
 - **Template literals** — The compiler parses interpolations at compile time, emits string constants and `OP_TO_STRING` for expression parts, then chains `OP_CONCAT` instructions.
 - **Object literals** — Data properties compile to `OP_DEFINE_DATA_PROP` so object initializers create or overwrite own enumerable data properties. Concise methods use `OP_DEFINE_METHOD_PROP` to attach `[[HomeObject]]` without changing plain data-property function or arrow values. Ordinary property assignment still uses the `OP_SET_*` family and keeps `[[Set]]` prototype-chain semantics.
 - **Object spread** — The compiler emits dedicated Goccia bytecode rather than routing through a generic extension dispatcher.
-- **Increment/decrement (`++`/`--`)** — The compiler emits fused numeric update opcodes for increment/decrement sites. Prefix or discarded-result sites use `OP_INC_NUMERIC`/`OP_DEC_NUMERIC`; postfix sites with distinct result and storage registers use `OP_POST_INC_NUMERIC`/`OP_POST_DEC_NUMERIC` so the old numeric value is produced while the binding/property value is updated. All variants preserve BigInt, convert other inputs through `ToNumeric`, and keep the read/convert/write side effects required by ES2026 §13.4.4.1. They operate on a local's own register without a preceding `OP_GET_LOCAL`, so they perform its TDZ check themselves: a register still holding the hole throws `ReferenceError`. That check sits on the non-numeric path, so an update of a number costs nothing extra. An update of a `const` reads and converts its operand in the same way, on a temporary register, and throws the assignment `TypeError` where the store would be.
+- **Increment/decrement (`++`/`--`)** — The compiler emits fused numeric update opcodes for increment/decrement sites. Prefix or discarded-result sites use `OP_INC_NUMERIC`/`OP_DEC_NUMERIC`; postfix sites with distinct result and storage registers use `OP_POST_INC_NUMERIC`/`OP_POST_DEC_NUMERIC` so the old numeric value is produced while the binding/property value is updated. A postfix update whose result belongs in the updated local's own register, as in `(a = a++) => a` or `var x = x++`, produces it in a temporary and moves it into the local after the store. All variants preserve BigInt, convert other inputs through `ToNumeric`, and keep the read/convert/write side effects required by ES2026 §13.4.4.1. They operate on a local's own register without a preceding `OP_GET_LOCAL`, so they perform its TDZ check themselves: a register still holding the hole throws `ReferenceError`. That check sits on the non-numeric path, so an update of a number costs nothing extra. An update of a `const` reads and converts its operand in the same way, on a temporary register, and throws the assignment `TypeError` where the store would be.
 - **Traditional `for` lexical bindings** — `let`/`const` loop initializers keep the full per-iteration environment path whenever closures, direct eval, suspension, destructuring, pattern matching, `with`, `using`, or nested declaration boundaries can observe binding identity. Plain generated/counting loops share the loop lexical scope and avoid the otherwise redundant copy-in/copy-out sequence.
 
 This keeps the emitted bytecode compact and makes opcode additions deliberate instead of reactive.
@@ -387,6 +454,7 @@ This keeps the emitted bytecode compact and makes opcode additions deliberate in
 Compatibility features that alter identifier lookup still compile to explicit VM state instead of falling back to interpreter behavior.
 
 - **`arguments` object** — With `--compat-arguments-object` enabled, function templates snapshot the current call arguments in the frame. `--compat-non-strict-mode` does not enable this helper by itself. `OP_CREATE_ARGUMENTS` materializes the object into the declared local slot before parameter defaults and body execution, so default initializers can observe `arguments.length` and generators see the original call list after suspension/resume. Operand `B` selects mapped semantics for sloppy simple parameter lists and operand `C` carries the formal parameter count; the VM forces those parameter locals into cells so indexed properties alias parameter bindings even if the object escapes. Strict functions, modules, and non-simple parameter lists use unmapped arguments objects.
+- **Function-level `var` bindings** — With `--compat-var`, the compiler hoists a function body's vars (and, in non-strict code, a block function's Annex B var binding) into registers, and the body starts with one `OP_LOAD_UNDEFINED` per hoisted var (ES2026 §10.2.11 step 29.c.i.3). A new register window is cleared, but the call copies every argument into the registers after `this`, so arguments past the last parameter land in the first vars' registers, and destructuring a parameter uses the registers above the parameters as temporaries. A var named like a parameter keeps the parameter's value, and the name of a body function declaration is skipped because its function object is stored there before the body runs. A body without a var emits nothing extra.
 - **Non-strict `this` binding** — Function templates serialize their strict-this mode. With `--compat-non-strict-mode` enabled for script source, ordinary function templates clear it so VM call paths coerce nullish `this` to `globalThis`; arrows and class methods keep their existing lexical or strict receiver behavior. Module source ignores the compatibility flag for this decision.
 - **Non-strict assignment** — Failed object/global writes throw by default. In script source non-strict compatibility mode, the compiler emits `OP_SET_PROP_CONST_LOOSE`, `OP_SET_INDEX_LOOSE`, and `OP_SET_GLOBAL_LOOSE` for ordinary writes so failed `[[Set]]` results are ignored while null/undefined property access and throwing setters still raise errors.
 - **`with` statement** — With `--compat-non-strict-mode` enabled for script source, the compiler lowers `with (expr) body` to `OP_TO_OBJECT`, stores the object in a hidden local, and records that hidden binding in the compiler scope. Identifier reads, writes, updates, and identifier calls inside the dynamic extent emit `OP_HAS_WITH_BINDING` probes from innermost to outermost hidden object before falling back to normal local/upvalue/global resolution. Writes that resolve to a with object use the loose set opcodes in non-strict mode. Nested functions inherit the hidden binding as an upvalue when captured, preserving closures created inside `with`.
@@ -406,7 +474,9 @@ A top-level `const` of a script or an imported module lives in the global or mod
 
 What the compiler knows about a binding of an enclosing function, the constant value of a `const` or a trusted type, reaches a nested function only when no non-strict function lies between the read and the declaration. A sloppy direct `eval` in such a function can declare a `var` of the same name, which shadows the enclosing binding at run time. Strict code, the default, is unaffected.
 
-When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report.
+Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
+
+When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report. An `if` statement or a loop keeps its conditional jump, and so does a ternary or a `&&`, `||` or `??` expression that a constant decides: the compiler does not fold it, nor reduce `flag && true` or `flag || false` to `flag` under `--strict-types`. Its operands are still folded and propagated.
 
 ### How Opcode Additions Work
 

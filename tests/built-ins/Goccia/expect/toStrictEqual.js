@@ -214,3 +214,15 @@ describe.runIf(typeof Goccia !== "undefined")("toStrictEqual under explicit GC",
     expect({ k: { x: 1, arr: [1, 2, 3] } }).toStrictEqual(freshExpected());
   });
 });
+
+describe("toStrictEqual with typed arrays", () => {
+  test("compares the elements and the lengths", () => {
+    expect(new Uint8Array([1, 2])).toStrictEqual(new Uint8Array([1, 2]));
+    expect(new Uint8Array([1, 2])).not.toStrictEqual(new Uint8Array([2, 1]));
+    expect(new Uint8Array([1])).not.toStrictEqual(new Uint8Array([1, 2]));
+  });
+
+  test("never equals a typed array of another kind", () => {
+    expect(new Uint8Array([1])).not.toStrictEqual(new Int8Array([1]));
+  });
+});
