@@ -129,6 +129,7 @@ uses
   Goccia.Error,
   Goccia.Keywords.Reserved,
   Goccia.Modules,
+  Goccia.PrivateNames,
   Goccia.ThreadCleanupRegistry,
   Goccia.Token,
   Goccia.Types.Enforcement,
@@ -5258,25 +5259,6 @@ begin
 
   EmitLoopControlCleanup(ACtx, GContinueFinallyBase, GContinueScopeDepth, False);
   GContinueJumps.Add(EmitJumpInstruction(ACtx, OP_JUMP, 0));
-end;
-
-function DisplayClassElementName(const AStorageName: string): string;
-var
-  I, SeparatorIndex: Integer;
-begin
-  if Pos('#slot:', AStorageName) = 1 then
-  begin
-    SeparatorIndex := 0;
-    for I := Length('#slot:') + 1 to Length(AStorageName) do
-      if AStorageName[I] = '$' then
-      begin
-        SeparatorIndex := I;
-        Break;
-      end;
-    if SeparatorIndex > 0 then
-      Exit('#' + Copy(AStorageName, SeparatorIndex + 1, MaxInt));
-  end;
-  Result := AStorageName;
 end;
 
 procedure EmitDefineStaticPropertyByName(const ACtx: TGocciaCompilationContext;

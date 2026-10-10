@@ -123,6 +123,29 @@ for (const mode of ["interpreted", "bytecode"]) {
     );
 }
 
+console.log("--output=json names an uncaught private-member error's member as written...");
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const [label, source, message] of [
+    [
+      "field",
+      "class C {\n  #p = 1;\n  static read(o) { return o.#p; }\n}\nC.read({});\n",
+      "Private field #p is not accessible",
+    ],
+    [
+      "method",
+      "class C {\n  #m() {}\n  static write(o) { o.#m = 1; }\n}\nC.write(new C());\n",
+      "Private method #m is not writable",
+    ],
+  ] as const) {
+    const { exitCode, json } = runLoaderJson(source, [`--mode=${mode}`]);
+    if (exitCode === 0) throw new Error(`An uncaught private ${label} error should fail the run (${mode})`);
+    if (json.error?.type !== "TypeError" || json.error?.message !== message)
+      throw new Error(
+        `JSON private ${label} error should be TypeError "${message}" (${mode}), got ${json.error?.type} "${json.error?.message}"`,
+      );
+  }
+}
+
 console.log("Top-level const with a mismatched strict type...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(
