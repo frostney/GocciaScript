@@ -104,6 +104,9 @@ type
     FNextSlot: Integer;
     FMaxSlot: UInt16;
     FPrivatePrefix: string;
+    // Register of the class whose body this function's code is evaluating,
+    // or -1 outside a class body.
+    FPrivateClassReg: Integer;
     FPrivateNames: array of string;
     FPrivatePrefixes: array of string;
     FPrivateNameCount: Integer;
@@ -225,6 +228,8 @@ type
     function GetWithBindingName(const AIndex: Integer): string;
     function GetWithBindingDepth(const AIndex: Integer): Integer;
     property PrivatePrefix: string read FPrivatePrefix write FPrivatePrefix;
+    property PrivateClassReg: Integer read FPrivateClassReg
+      write FPrivateClassReg;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
     property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
@@ -300,6 +305,7 @@ begin
   FNextSlot := 0;
   FMaxSlot := 0;
   FPrivateNameCount := 0;
+  FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
   FWithBindingCount := 0;
   FLoopDepth := 0;

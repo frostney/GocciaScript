@@ -10284,13 +10284,18 @@ begin
   Result := nil;
   LastOwningClass := nil;
   repeat
-    OwningClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
-    if not (OwningClassValue is TGocciaClassValue) then
+    OwningClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
+    if not Assigned(OwningClassValue) then
       Exit;
 
-    CandidateClass := TGocciaClassValue(OwningClassValue);
-    if CandidateClass.HasOwnPrivateName(APrivateName) then
-      Exit(CandidateClass);
+    // An object-literal method's owner is its literal, not a class; the
+    // class body around the literal still supplies its private names.
+    if OwningClassValue is TGocciaClassValue then
+    begin
+      CandidateClass := TGocciaClassValue(OwningClassValue);
+      if CandidateClass.HasOwnPrivateName(APrivateName) then
+        Exit(CandidateClass);
+    end;
 
     LastOwningClass := OwningClassValue;
   until False;
@@ -10333,11 +10338,14 @@ begin
 
   LastOwningClass := nil;
   repeat
-    CandidateClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
-    if not (CandidateClassValue is TGocciaClassValue) then
+    CandidateClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
+    if not Assigned(CandidateClassValue) then
       Exit;
-    OwningClassValue := TGocciaClassValue(CandidateClassValue);
-    OwningClassValue.AppendOwnPrivateNames(Result);
+    if CandidateClassValue is TGocciaClassValue then
+    begin
+      OwningClassValue := TGocciaClassValue(CandidateClassValue);
+      OwningClassValue.AppendOwnPrivateNames(Result);
+    end;
     LastOwningClass := CandidateClassValue;
   until False;
 end;
@@ -10812,7 +10820,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.HasOwnPrivateStaticMethod(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if not AccessClass.HasOwnPrivateStaticProperty(PrivateName) then
@@ -10856,7 +10864,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if (PrivateName <> APrivateName) and Assigned(AccessClass.Prototype) then
@@ -10882,7 +10890,7 @@ begin
       ThrowPrivateSetterMissingError(APrivateName);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
-      ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
         SSuggestPrivateFieldAccess);
   end;
 
@@ -10952,7 +10960,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if PrivateName <> APrivateName then

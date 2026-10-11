@@ -80,6 +80,7 @@ resourcestring
   SErrorPrivateGetterMissing = 'Private accessor #%s was defined without a getter';
   SErrorPrivateSetterMissing = 'Private accessor #%s was defined without a setter';
   SErrorPrivateFieldInaccessible = 'Private field #%s is not accessible';
+  SErrorPrivateMethodNotWritable = 'Private method #%s is not writable';
   SErrorEnumInitializer = 'Enum member initializer must evaluate to a Number, String, or Symbol value';
 
   // Type errors — async, disposal, tagged templates
@@ -544,9 +545,6 @@ resourcestring
   SErrorCannotReadPropertiesOfUndefined = 'Cannot read properties of undefined (reading ''%s'')';
   SErrorCannotSetPropertiesOfNull = 'Cannot set properties of null (setting ''%s'')';
   SErrorCannotSetPropertiesOfUndefined = 'Cannot set properties of undefined (setting ''%s'')';
-  SErrorPrivateAccessorNoGetter = 'Private accessor %s was defined without a getter';
-  SErrorPrivateAccessorNoSetter = 'Private accessor %s was defined without a setter';
-  SErrorPrivateFieldNotAccessible = 'Private field %s is not accessible';
   SErrorCannotUseInOperator = 'Cannot use ''in'' operator to search for ''%s'' in %s';
   SErrorCannotDestructureNotObject = 'Cannot destructure %s as it is not an object';
   SErrorMaxCallStackExceeded = 'Maximum call stack size exceeded';

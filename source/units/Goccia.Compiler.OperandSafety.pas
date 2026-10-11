@@ -3,9 +3,11 @@ unit Goccia.Compiler.OperandSafety;
 {$I Goccia.inc}
 
 // Syntactic proofs behind reading a let binding or a parameter straight from
-// its register (see TryResolveSettledLocalName in Goccia.Compiler.Expressions).
+// its register (see TryResolveSettledLocalName in Goccia.Compiler.Expressions),
+// and behind evaluating a parameter's initializer straight into the
+// parameter's register (see EmitParameterInitialization).
 //
-// Both proofs are allowlists. A node is accepted only when its class is listed
+// The proofs are allowlists. A node is accepted only when its class is listed
 // here and every child that can hold code has been accepted too; a class that
 // is not listed, including one added to the AST later, is rejected. Rejecting
 // costs a register copy. Accepting wrongly would read a stale value, so the
@@ -20,6 +22,7 @@ unit Goccia.Compiler.OperandSafety;
 interface
 
 uses
+  Goccia.AST.Expressions,
   Goccia.AST.Node;
 
 // True when running ANode cannot create a closure and cannot call direct eval.
@@ -36,12 +39,26 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 // accepted.
 function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 
+// True when nothing evaluated up to the end of the initializer of the simple
+// parameter AParams[AIndex] can read or write that parameter's binding: no
+// expression in the parameters up to and including it names the parameter,
+// as an identifier, an assignment target or a destructuring target, none calls
+// direct eval, and every arrow or function expression there has source text
+// in which the name, `eval` and a `\u` escape do not occur. Other function,
+// method, accessor and class forms are rejected. Only then may the
+// initializer use the parameter's register as its destination, where it
+// writes intermediate values before it completes; otherwise one of them
+// replaces the TDZ hole a read or a write of the binding has to find.
+// Parameters before AIndex count because a closure created in their
+// initializers reaches the binding when the initializer calls it.
+function ParameterInitializerAvoidsOwnBinding(
+  const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
+
 implementation
 
 uses
   Generics.Collections,
 
-  Goccia.AST.Expressions,
   Goccia.AST.Statements;
 
 const
@@ -56,7 +73,55 @@ type
     RejectLocalWrites: Boolean;
     // Nodes left to visit; negative means unlimited.
     Budget: Integer;
+    // Empty for the loop and operand proofs. For the parameter initializer
+    // proof, the binding name no node may reach; an arrow or function
+    // expression is then accepted when its source text cannot name the
+    // binding.
+    AvoidName: string;
   end;
+
+function IsAsciiIdentifierPart(const AChar: Char): Boolean;
+begin
+  Result := AChar in ['A'..'Z', 'a'..'z', '0'..'9', '_', '$'];
+end;
+
+// Over-approximates whether code with the source text ASourceText can reach
+// the binding AName. Any occurrence of AName that does not continue an ASCII
+// identifier counts, including one in a comment, a string or after a dot. A
+// direct eval can name the binding at run time, and an IdentifierName may
+// spell it with \u escapes. Empty source text is answered conservatively.
+function SourceTextMayReachName(const ASourceText, AName: string): Boolean;
+var
+  Index, NameLength, SourceLength: Integer;
+begin
+  if (ASourceText = '') or (AName = '') or
+     (Pos('eval', ASourceText) > 0) or (Pos('\u', ASourceText) > 0) then
+    Exit(True);
+  NameLength := Length(AName);
+  SourceLength := Length(ASourceText);
+  Index := Pos(AName, ASourceText);
+  while Index > 0 do
+  begin
+    if ((Index = 1) or not IsAsciiIdentifierPart(ASourceText[Index - 1])) and
+       ((Index + NameLength > SourceLength) or
+        not IsAsciiIdentifierPart(ASourceText[Index + NameLength])) then
+      Exit(True);
+    Index := Pos(AName, ASourceText, Index + 1);
+  end;
+  Result := False;
+end;
+
+function ScanReachesName(const AScan: TScan; const AName: string): Boolean;
+begin
+  Result := (AScan.AvoidName <> '') and (AName = AScan.AvoidName);
+end;
+
+function ScanAcceptsFunctionSource(const AScan: TScan;
+  const ASourceText: string): Boolean;
+begin
+  Result := (AScan.AvoidName <> '') and
+    not SourceTextMayReachName(ASourceText, AScan.AvoidName);
+end;
 
 function ScanNode(var AScan: TScan; const ANode: TGocciaASTNode): Boolean;
   forward;
@@ -87,7 +152,8 @@ begin
 
   Kind := APattern.ClassType;
   if Kind = TGocciaIdentifierDestructuringPattern then
-    Result := True
+    Result := not ScanReachesName(AScan,
+      TGocciaIdentifierDestructuringPattern(APattern).Name)
   else if Kind = TGocciaArrayDestructuringPattern then
   begin
     ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
@@ -177,8 +243,9 @@ var
 begin
   Kind := AExpr.ClassType;
 
-  if (Kind = TGocciaIdentifierExpression) or
-     (Kind = TGocciaLiteralExpression) or
+  if Kind = TGocciaIdentifierExpression then
+    Result := not ScanReachesName(AScan, TGocciaIdentifierExpression(AExpr).Name)
+  else if (Kind = TGocciaLiteralExpression) or
      (Kind = TGocciaThisExpression) or
      (Kind = TGocciaTemplateLiteralExpression) or
      (Kind = TGocciaRegexLiteralExpression) or
@@ -217,9 +284,12 @@ begin
   end
   else if Kind = TGocciaAssignmentExpression then
     Result := not AScan.RejectLocalWrites and
+      not ScanReachesName(AScan, TGocciaAssignmentExpression(AExpr).Name) and
       ScanNode(AScan, TGocciaAssignmentExpression(AExpr).Value)
   else if Kind = TGocciaCompoundAssignmentExpression then
     Result := not AScan.RejectLocalWrites and
+      not ScanReachesName(AScan,
+        TGocciaCompoundAssignmentExpression(AExpr).Name) and
       ScanNode(AScan, TGocciaCompoundAssignmentExpression(AExpr).Value)
   else if Kind = TGocciaIncrementExpression then
     Result := not (AScan.RejectLocalWrites and
@@ -290,6 +360,12 @@ begin
     Result := not AScan.RejectLocalWrites and
       ScanPattern(AScan, TGocciaDestructuringAssignmentExpression(AExpr).Left) and
       ScanNode(AScan, TGocciaDestructuringAssignmentExpression(AExpr).Right)
+  else if Kind = TGocciaArrowFunctionExpression then
+    Result := ScanAcceptsFunctionSource(AScan,
+      TGocciaArrowFunctionExpression(AExpr).SourceText)
+  else if Kind = TGocciaFunctionExpression then
+    Result := ScanAcceptsFunctionSource(AScan,
+      TGocciaFunctionExpression(AExpr).SourceText)
   else
     Result := False;
 end;
@@ -423,6 +499,7 @@ var
 begin
   Scan.RejectLocalWrites := False;
   Scan.Budget := -1;
+  Scan.AvoidName := '';
   Result := ScanNode(Scan, ANode);
 end;
 
@@ -432,7 +509,29 @@ var
 begin
   Scan.RejectLocalWrites := True;
   Scan.Budget := OPERAND_NODE_BUDGET;
+  Scan.AvoidName := '';
   Result := ScanNode(Scan, AExpr);
+end;
+
+function ParameterInitializerAvoidsOwnBinding(
+  const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
+var
+  Scan: TScan;
+  I: Integer;
+begin
+  Scan.RejectLocalWrites := False;
+  Scan.Budget := -1;
+  Scan.AvoidName := AParams[AIndex].Name;
+  if Scan.AvoidName = '' then
+    Exit(False);
+  for I := 0 to AIndex do
+  begin
+    if AParams[I].IsPattern and not ScanPattern(Scan, AParams[I].Pattern) then
+      Exit(False);
+    if not ScanNode(Scan, AParams[I].DefaultValue) then
+      Exit(False);
+  end;
+  Result := True;
 end;
 
 end.
