@@ -14,8 +14,12 @@ const
   // fit depends on the thread's stack size and on the build. The VM keeps
   // NATIVE_STACK_RESERVE bytes of the stack free and throws the RangeError of
   // --max-stack instead of entering once less than that remains, so no
-  // --max-stack value, including 0, can overflow the native stack. Native
-  // re-entries are function calls, and count against --max-stack as well.
+  // --max-stack value, including 0, lets these re-entries overflow the native
+  // stack. The check runs only where the bytecode loop is entered: a chain of
+  // native calls (Proxies forwarding to their targets, bound functions calling
+  // theirs) is not checked in between, and the delegation caps below bound
+  // only some of those chains. Native re-entries are function calls, and count
+  // against --max-stack as well.
   NATIVE_STACK_RESERVE = 256 * 1024;
 
   // Where the bounds of the running thread's stack cannot be found, a native
