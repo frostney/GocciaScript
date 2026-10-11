@@ -163,6 +163,8 @@ begin
       Expect<Integer>(Integer(Code[I] shr 8)).ToBe(LastChar + 1);
     end;
   Expect<Integer>(Splits).ToBe(3);
+end;
+
 procedure TRegExpVMTests.TestGreedyLoopKeepsOneBacktrackEntry;
 var
   Matcher: TRegExpMatcher;
