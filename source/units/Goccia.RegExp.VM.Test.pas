@@ -7,6 +7,7 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.RegExp.&Program,
   Goccia.RegExp.Compiler,
   Goccia.RegExp.VM;
 
@@ -20,6 +21,7 @@ type
     procedure TestMatcherReleasesLargeBacktrackStack;
     procedure TestMatcherMatchesRepeatedly;
     procedure TestMatcherReleasesStackWhenLimitRaises;
+    procedure TestOptionalCopiesSkipToTheEnd;
     procedure TestGreedyLoopKeepsOneBacktrackEntry;
     procedure TestGreedyLoopScanCountsTowardStepLimit;
   public
@@ -41,6 +43,8 @@ begin
     TestMatcherMatchesRepeatedly);
   Test('a matcher releases its buffers after a VM limit',
     TestMatcherReleasesStackWhenLimitRaises);
+  Test('each optional copy of a{0,3} skips to the end of the repetition',
+    TestOptionalCopiesSkipToTheEnd);
   Test('a greedy single-character loop does not keep an entry per iteration',
     TestGreedyLoopKeepsOneBacktrackEntry);
   Test('a greedy loop rescanned by backtracking costs the steps its iterations did',
@@ -136,6 +140,29 @@ begin
   finally
     Matcher.Free;
   end;
+end;
+
+procedure TRegExpVMTests.TestOptionalCopiesSkipToTheEnd;
+var
+  Code: TRegExpCodeArray;
+  I, LastChar, Splits: Integer;
+begin
+  // A skipped iteration of a{0,3} must continue after the last copy, not
+  // try the remaining copies one by one, which made a failed match walk
+  // millions of copies for a{0,5000000}.
+  Code := CompileRegExp('a{0,3}', '').Code;
+  LastChar := -1;
+  for I := 0 to High(Code) do
+    if TRegExpOpCode(Code[I] and $FF) = RX_CHAR then
+      LastChar := I;
+  Splits := 0;
+  for I := 0 to High(Code) do
+    if TRegExpOpCode(Code[I] and $FF) = RX_SPLIT then
+    begin
+      Inc(Splits);
+      Expect<Integer>(Integer(Code[I] shr 8)).ToBe(LastChar + 1);
+    end;
+  Expect<Integer>(Splits).ToBe(3);
 end;
 
 procedure TRegExpVMTests.TestGreedyLoopKeepsOneBacktrackEntry;
