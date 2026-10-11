@@ -69,7 +69,7 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 213 opcodes, highest `235`):
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 214 opcodes, highest `236`):
 
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
 - the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `135` and `146..166` are unused

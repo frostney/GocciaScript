@@ -114,19 +114,27 @@ begin
   AScope.DefineLexicalBinding(AName, FBuiltinObject, dtLet, True);
 end;
 
+{ ALine starts with the group indentation; inside a group, every further line
+  of it, such as an Error's stack, is indented the same way. }
 procedure TGocciaConsole.EmitLine(const AMethod, ALine: string);
+var
+  Line: string;
 begin
+  if FGroupDepth > 0 then
+    Line := StringReplace(ALine, #10, #10 + GroupPrefix, [rfReplaceAll])
+  else
+    Line := ALine;
   if FEnabled then
   begin
     if Assigned(FOutputCallback) then
-      FOutputCallback(AMethod, ALine)
+      FOutputCallback(AMethod, Line)
     else if Assigned(FOutputLines) then
-      FOutputLines.Add(ALine)
+      FOutputLines.Add(Line)
     else
-      WriteLn(ALine);
+      WriteLn(Line);
   end;
   if Assigned(FLogCallback) then
-    FLogCallback(AMethod, ALine);
+    FLogCallback(AMethod, Line);
 end;
 
 function TGocciaConsole.GetEnabled: Boolean;
@@ -178,7 +186,7 @@ begin
   begin
     if I > 0 then
       Result := Result + ' ';
-    Result := Result + FormatForDisplay(AArgs.GetElement(I));
+    Result := Result + FormatForConsole(AArgs.GetElement(I));
   end;
 end;
 
@@ -228,7 +236,7 @@ begin
   if AArgs.Length >= 1 then
   begin
     Value := AArgs.GetElement(0);
-    EmitLine('dir', GroupPrefix + FormatForDisplay(Value));
+    EmitLine('dir', GroupPrefix + FormatForConsole(Value));
   end;
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
@@ -248,7 +256,7 @@ begin
       if AArgs.Length >= 2 then
       begin
         for I := 1 to AArgs.Length - 1 do
-          Msg := Msg + ' ' + FormatForDisplay(AArgs.GetElement(I));
+          Msg := Msg + ' ' + FormatForConsole(AArgs.GetElement(I));
       end;
       EmitLine('assert', GroupPrefix + Msg);
     end;
@@ -383,7 +391,7 @@ end;
 function TGocciaConsole.ConsoleTable(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 begin
   if AArgs.Length >= 1 then
-    EmitLine('table', GroupPrefix + FormatForDisplay(AArgs.GetElement(0)));
+    EmitLine('table', GroupPrefix + FormatForConsole(AArgs.GetElement(0)));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
