@@ -1439,6 +1439,28 @@ jobs:
         if: runner.os != 'Windows'
         run: chmod +x build/*
 
+      # test-cli-ffi-callback-slots.ts calls into the FFI fixture library, the
+      # same one the test job builds.
+      - name: Build FFI fixture library
+        if: runner.os != 'Windows'
+        run: ./fixtures/ffi/build.sh
+
+      - name: Set up MSYS2 (MINGW32)
+        if: matrix.target == 'i386-win32'
+        uses: msys2/setup-msys2@e9898307ac31d1a803454791be09ab9973336e1c # v2
+        with:
+          msystem: MINGW32
+          install: mingw-w64-i686-gcc
+
+      - name: Build FFI fixture library (Windows 32-bit)
+        if: matrix.target == 'i386-win32'
+        shell: msys2 {0}
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
+      - name: Build FFI fixture library (Windows 64-bit)
+        if: runner.os == 'Windows' && matrix.target != 'i386-win32'
+        run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
+
       - name: Check shared CLI test assertions
         run: bun run scripts/test-cli-assertions.ts
 
@@ -1465,6 +1487,9 @@ jobs:
 
       - name: Check Intl taint robustness under lazy materialization
         run: bun run scripts/test-cli-intl-taint.ts
+
+      - name: Check FFI callback slot exhaustion in its own process
+        run: bun run scripts/test-cli-ffi-callback-slots.ts
 
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts
