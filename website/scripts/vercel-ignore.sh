@@ -4,8 +4,10 @@
 #   exit 1 → build
 #
 # Two reasons to build:
-#   1. Something under website/ changed between the last built commit and this
-#      one — the ordinary source-change case.
+#   1. A file the site is built from changed between the last built commit and
+#      this one: anything under website/, or the repository Markdown that
+#      website/source.config.ts compiles into the docs (README.md and docs/).
+#      Checking website/ alone left docs-only merges off the live site.
 #   2. The newest published stable release is not among the tags the *live*
 #      site vendored. Release commits touch only CHANGELOG.md, so reason 1
 #      never fires for them, and the playground kept serving whatever engine
@@ -30,15 +32,14 @@ set -u
 
 target="${VERCEL_GIT_COMMIT_SHA:-HEAD}"
 base="${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
-website_path="./"
+# Pathspecs relative to the repository root, so they hold whether Vercel runs
+# this from website/ (its Root Directory) or from the root. Keep them in step
+# with what website/source.config.ts reads.
+site_paths=(":(top)website" ":(top)README.md" ":(top)docs")
 
 repo="${GOCCIA_REPO:-frostney/GocciaScript}"
 latest_release_url="${GOCCIA_LATEST_RELEASE_URL:-https://api.github.com/repos/${repo}/releases/latest}"
 site_versions_url="${GOCCIA_SITE_VERSIONS_URL:-https://www.gocciascript.dev/api/versions}"
-
-if [ -d "website" ] && [ -f "website/package.json" ]; then
-  website_path="website/"
-fi
 
 ensure_commit() {
   git cat-file -e "$1^{commit}" 2>/dev/null && return 0
@@ -125,12 +126,12 @@ if ! ensure_commit "$target"; then
   exit 1
 fi
 
-if ! git diff --quiet "$base" "$target" -- "$website_path"; then
-  echo "Website changes detected; building."
+if ! git diff --quiet "$base" "$target" -- "${site_paths[@]}"; then
+  echo "Website or docs changes detected; building."
   exit 1
 fi
 
-echo "No website changes detected; checking release freshness."
+echo "No website or docs changes detected; checking release freshness."
 if release_is_missing_from_site; then
   exit 1
 fi
