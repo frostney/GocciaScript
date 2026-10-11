@@ -44,3 +44,40 @@ describe("Set subclassing", () => {
     expect(MySet[Symbol.species]).toBe(MySet);
   });
 });
+
+// ES2026 §24.2.2.1 Set step 2 creates the set from NewTarget before step 5
+// reads its `add` adder, so a subclass's super(iterable) adds every value
+// through the subclass's own `add`. Expected values from Node.js v24.
+describe("Set subclass super(iterable) adds through the subclass's add", () => {
+  test("an overriding add runs once per value", () => {
+    const log = [];
+    class LoggingSet extends Set {
+      constructor() {
+        super([1, 2]);
+      }
+      add(value) {
+        log.push(`add:${value}`);
+        return super.add(value);
+      }
+    }
+    const s = new LoggingSet();
+    expect(log).toEqual(["add:1", "add:2"]);
+    expect(s.size).toBe(2);
+  });
+
+  test("an add reached through a Proxy new.target runs", () => {
+    const log = [];
+    class LoggingSet extends Set {
+      constructor(values) {
+        super(values);
+      }
+      add(value) {
+        log.push(`add:${value}`);
+        return super.add(value);
+      }
+    }
+    const s = Reflect.construct(LoggingSet, [[7]], new Proxy(LoggingSet, {}));
+    expect(log).toEqual(["add:7"]);
+    expect(Object.getPrototypeOf(s)).toBe(LoggingSet.prototype);
+  });
+});
