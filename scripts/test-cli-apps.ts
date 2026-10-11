@@ -1887,6 +1887,41 @@ await section("Test262 Runner: an eval resolves a with object between the bindin
   ], ["with,let,var"]);
 });
 
+// ES2026 §13.5.1.2 delete UnaryExpression step 5.c and §9.1.1.1.7
+// DeleteBinding: a binding of the caller or an enclosing function is created
+// undeletable, so `delete` in eval code returns false and leaves it, and a
+// same-named global, alone. Only a var the eval declared is deletable.
+await section("Test262 Runner: delete in an eval leaves its caller's bindings...", async () => {
+  expectEvalHostProbe("delete caller binding", [
+    "globalThis.g = 5;",
+    "function local() { var v = 1; return [eval('delete v'), v]; }",
+    "function param(p) { return [eval('delete p'), p]; }",
+    "function fn() { function h() {} return [eval('delete h'), typeof h]; }",
+    "function args() { return [eval('delete arguments'), typeof arguments]; }",
+    "function shadowsGlobal() { var g = 1; return [eval('delete g'), g, globalThis.g]; }",
+    "function catchParam() { try { throw 1; } catch (e) { return [eval('delete e'), e]; } }",
+    "function lexical() { let l = 1; return [eval('delete l'), l]; }",
+    "function upvalue() { var u = 1; return function () { return [eval('delete u'), u]; }; }",
+    "function upvalueShadowsGlobal() { var g = 1; return function () { return [eval('delete g'), g, globalThis.g]; }; }",
+    "function evalVar() { eval('var ev = 1'); return [eval('delete ev'), typeof ev]; }",
+    "print([local(), param(1), fn(), args(), shadowsGlobal(), catchParam(), lexical(), upvalue()(), upvalueShadowsGlobal()(), evalVar()].join(' '));",
+  ], ["false,1 false,1 false,function false,object false,1,5 false,1 false,1 false,1 false,1,5 true,undefined"]);
+});
+
+// #1569: ES2026 §13.10.1 with §7.3.26 PrivateElementFind. A direct eval in a
+// class method resolves `#x` through the method's PrivateEnvironment
+// (§19.2.1.1 PerformEval), so the brand check agrees with one outside eval.
+await section("Test262 Runner: a private brand check in an eval finds the class's instance elements...", async () => {
+  expectEvalHostProbe("private in", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class C { #x = 1; #m() {} get #a() { return 1; } set #w(v) {} static ev(src, o) { return eval(src); } }",
+    "class D extends C {}",
+    "const targets = [new C(), new D(), {}, Object.freeze({})];",
+    "print(['#x', '#m', '#a', '#w'].map((n) => targets.map((o) => out(() => C.ev(n + ' in o', o))).join('/')).join(' '));",
+    "print([out(() => C.ev('#x in o', 1)), out(() => C.ev('o.#x', new C()))].join());",
+  ], ["true/true/false/false true/true/false/false true/true/false/false true/true/false/false", "TypeError,1"]);
+});
+
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,

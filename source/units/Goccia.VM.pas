@@ -1920,11 +1920,13 @@ begin
       Exit;
     end;
     derBinding:
-      // An enclosing function's lexical binding is not declared in this
-      // scope, so the inherited walk would not find it: it stays
-      // undeletable.
-      if (FBindings[Index].Kind = debUpvalue) and
-         not FBindings[Index].IsVarEnvironmentBinding then
+      // ES2026 §9.1.1.1.7 DeleteBinding: a binding of the caller or of an
+      // enclosing function lives in a function's declarative environment,
+      // created undeletable (a var, a parameter, a function declaration,
+      // `arguments`, a `let`, `const` or `class`, a catch parameter). Most
+      // are not declared in this scope, so the inherited walk would miss
+      // them and fall through to a same-named global, or answer true.
+      if FBindings[Index].Kind in [debLocal, debUpvalue] then
         Exit(False);
   end;
   Result := inherited DeleteBinding(AName);

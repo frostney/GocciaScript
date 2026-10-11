@@ -10410,9 +10410,12 @@ begin
     Result := '#brand:' + BrandToken + ':' + APrivateLookupName;
 end;
 
-procedure EnsureBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
-  const APrivateName, APrivateLookupName: string;
-  const AAccessClass: TGocciaClassValue);
+// Whether AReceiver carries the brand the bytecode VM stamps for the private
+// name APrivateLookupName of a class it declared (the key
+// ResolveDeclaredPrivateKey gives).
+function HasBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
+  const APrivateLookupName: string;
+  const AAccessClass: TGocciaClassValue): Boolean;
 var
   BrandKey: string;
   BrandValue: TGocciaValue;
@@ -10421,18 +10424,22 @@ begin
   BrandKey := BytecodePrivateBrandKeyForLookup(APrivateLookupName,
     AAccessClass);
   if BrandKey = '' then
-    ThrowPrivateBrandError(APrivateName, AAccessClass);
+    Exit(False);
 
   if AReceiver is TGocciaInstanceValue then
-  begin
-    if not TGocciaInstanceValue(AReceiver).TryGetRawPrivateProperty(
-      BrandKey, BrandValue) then
-      ThrowPrivateBrandError(APrivateName, AAccessClass);
-    Exit;
-  end;
+    Exit(TGocciaInstanceValue(AReceiver).TryGetRawPrivateProperty(
+      BrandKey, BrandValue));
 
-  if not (AReceiver.Properties.TryGetValue(BrandKey, Descriptor) and
-     (Descriptor is TGocciaPropertyDescriptorData)) then
+  Result := AReceiver.Properties.TryGetValue(BrandKey, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+end;
+
+procedure EnsureBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
+  const APrivateName, APrivateLookupName: string;
+  const AAccessClass: TGocciaClassValue);
+begin
+  if not HasBytecodePrivateBrand(AReceiver, APrivateLookupName,
+     AAccessClass) then
     ThrowPrivateBrandError(APrivateName, AAccessClass);
 end;
 
@@ -10493,6 +10500,21 @@ begin
   Result := Descriptor is TGocciaPropertyDescriptorData;
 end;
 
+// Whether the bytecode VM keeps the private element APrivateLookupName on the
+// class object rather than behind an instance brand: a static field or
+// method, or an accessor in the class's private getter and setter maps (a
+// static accessor, or a decorated one). The VM stamps an instance brand for
+// these names as well, so that brand does not tell whether an object has them.
+function IsBytecodeClassHeldPrivateElement(
+  const AAccessClass: TGocciaClassValue;
+  const APrivateLookupName: string): Boolean;
+begin
+  Result := AAccessClass.HasOwnPrivateStaticProperty(APrivateLookupName) or
+    AAccessClass.HasOwnPrivateStaticMethod(APrivateLookupName) or
+    AAccessClass.HasPrivateGetter(APrivateLookupName) or
+    AAccessClass.HasPrivateSetter(APrivateLookupName);
+end;
+
 function EvaluatePrivateInOperator(
   const APrivateMemberExpression: TGocciaPrivateMemberExpression;
   const ARightExpression: TGocciaExpression;
@@ -10500,6 +10522,7 @@ function EvaluatePrivateInOperator(
 var
   RightValue: TGocciaValue;
   AccessClass: TGocciaClassValue;
+  PrivateName: string;
 begin
   RightValue := EvaluateExpression(ARightExpression, AContext);
   if RightValue.IsPrimitive then
@@ -10516,8 +10539,22 @@ begin
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateMemberExpression.PrivateName);
 
-  Result := TGocciaBooleanLiteralValue.FromBoolean(
-    HasRawPrivateInstanceBrand(TGocciaObjectValue(RightValue), AccessClass));
+  // A class the bytecode VM declared brands its instances under the
+  // compiled private key, not the evaluator's raw brand key: test the brand
+  // the VM stamps, as a private read in the same eval does (#1569). Only an
+  // instance element is tested this way; a check against a class, or of an
+  // element the class holds itself, keeps the raw test (#1574).
+  PrivateName := PrivateLookupName(AccessClass,
+    APrivateMemberExpression.PrivateName);
+  if (PrivateName <> APrivateMemberExpression.PrivateName) and
+     not (RightValue is TGocciaClassValue) and
+     not IsBytecodeClassHeldPrivateElement(AccessClass, PrivateName) then
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      HasBytecodePrivateBrand(TGocciaObjectValue(RightValue), PrivateName,
+        AccessClass))
+  else
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      HasRawPrivateInstanceBrand(TGocciaObjectValue(RightValue), AccessClass));
 end;
 
 procedure EnsureRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;

@@ -1077,7 +1077,7 @@ const
     'class D extends (eval("Object")) {}';
 var
   Module: TGocciaBytecodeModule;
-  StrictSites, SloppySites, I: Integer;
+  StrictSites, SloppySites: Integer;
 
   procedure CountSites(const ATemplate: TGocciaFunctionTemplate);
   var
@@ -1090,26 +1090,37 @@ var
         Inc(SloppySites);
   end;
 
+  procedure CountNestedSites(const ATemplate: TGocciaFunctionTemplate);
+  var
+    J: Integer;
+  begin
+    for J := 0 to ATemplate.FunctionCount - 1 do
+    begin
+      CountSites(ATemplate.GetFunction(J));
+      CountNestedSites(ATemplate.GetFunction(J));
+    end;
+  end;
+
 begin
   Module := CompileSource(SOURCE, False, False, False, True, True, True,
     False, True, True);
   try
-    // The class body runs inline in the sloppy script, and its three calls
-    // are strict; the script's StrictCode is not.
+    // The computed key and the heritage run inline in the sloppy script,
+    // and their calls are strict; the script's StrictCode is not.
     StrictSites := 0;
     SloppySites := 0;
     CountSites(Module.TopLevel);
     Expect<Boolean>(Module.TopLevel.StrictCode).ToBe(False);
-    Expect<Integer>(StrictSites).ToBe(3);
+    Expect<Integer>(StrictSites).ToBe(2);
     Expect<Integer>(SloppySites).ToBe(0);
 
-    // g is sloppy, h strict.
+    // g is sloppy; h and the static field initializer, which compiles to
+    // its own function, are strict.
     StrictSites := 0;
     SloppySites := 0;
-    for I := 0 to Module.TopLevel.FunctionCount - 1 do
-      CountSites(Module.TopLevel.GetFunction(I));
+    CountNestedSites(Module.TopLevel);
     Expect<Integer>(SloppySites).ToBe(1);
-    Expect<Integer>(StrictSites).ToBe(1);
+    Expect<Integer>(StrictSites).ToBe(2);
   finally
     Module.Free;
   end;
