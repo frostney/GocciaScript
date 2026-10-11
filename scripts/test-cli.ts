@@ -110,6 +110,45 @@ console.log("Bytecode stack frames locate each caller at the call it is making..
   }
 }
 
+console.log("Bytecode names a computed static field's initializer from its key...");
+{
+  // A static field initializer runs as its own method (ES2026 §15.7.10), and
+  // an anonymous function or class in it still takes its name from the
+  // computed key (§8.4.5 NamedEvaluation). The interpreter does not name these
+  // yet; it is being removed (#825), so this runs in bytecode only.
+  const source = [
+    "const key = Symbol('sym');",
+    "class Base { static greet() { return 'base'; } }",
+    "class C extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "}",
+    "console.log([C.arrow.name, C.arrow(), C[key].name, C.klass.name, C.klass.ownName].join(','));",
+    "const E = class extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "};",
+    "console.log([E.arrow.name, E.arrow(), E[key].name, E.klass.name, E.klass.ownName].join(','));",
+    // A static initializer whose class suspends stays inline in the generator
+    // and still names its value from the computed key.
+    "class H { static *g() { const k = 'yk'; return class { static [k] = class { static [yield 1] = 1; }; }; } }",
+    "const it = H.g(); it.next(); const Y = it.next('p').value;",
+    "console.log([Y.yk.name, Y.yk.p].join(','));",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString().trim().split(/\r?\n/).slice(0, 3).join("|");
+  const expected = "arrow,base,[sym],klass,klass|arrow,base,[sym],klass,klass|yk,1";
+  if (proc.exitCode !== 0 || out !== expected)
+    throw new Error(`Bytecode computed static field names expected ${expected}, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
+}
+
 console.log("--output=json reports where a thrown error was created...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(
@@ -637,6 +676,33 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
       if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
         throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
+    // A direct eval in an arrow sees the private names of the class body the
+    // arrow is in, even when the arrow has no home object of its own, as in a
+    // static field's array literal (ES2026 §19.2.1.1 PerformEval step 6.b).
+    const evalPrivateArrowSource = [
+      "const outcome = (run) => { try { return String(run()); } catch (e) { return e.name; } };",
+      "class C { #x = 1; static read = () => eval('(new C()).#x'); }",
+      "class I { static #u = 8; static arr = [() => eval('I.#u')]; }",
+      "class K { static #k = 1; static arr = [() => eval('K.#missing')]; }",
+      "const outside = [() => eval('({}).#a')];",
+      "print([outcome(C.read), outcome(I.arr[0]), outcome(K.arr[0]), outcome(outside[0])].join(','));",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalPrivateArrow = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalPrivateArrowSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalPrivateArrowOut =
+        evalPrivateArrow.stdout.toString() + evalPrivateArrow.stderr.toString();
+      if (evalPrivateArrow.exitCode !== 0 || evalPrivateArrow.stdout.toString().trim() !== "1,8,SyntaxError,SyntaxError")
+        throw new Error(`Test262 Runner ${mode} direct eval of a private name in a class-body arrow expected 1,8,SyntaxError,SyntaxError, got: ${evalPrivateArrowOut}`);
     }
 
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
