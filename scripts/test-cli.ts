@@ -3702,10 +3702,26 @@ console.log("--max-stack (a refused generator resume leaves the generator suspen
   // is already executing. The work is inline in the catch block: calling a
   // helper there would itself be refused. The interpreter does not refuse a
   // resume, so this runs in bytecode only.
-  const atLimit = 'if (!asyncRefused) { for (const it of [fresh, started]) { try { it.next(); refused.push("ran"); } catch (e) { refused.push(e.name); } } asyncRefused = asyncFresh.next(); }';
+  const resumeSync = 'try { fresh.next(); refused.push("ran"); } catch (x) { refused.push(x.name); } try { started.next(); refused.push("ran"); } catch (x) { refused.push(x.name); }';
+  const atLimit = `if (!asyncRefused) { ${resumeSync} asyncRefused = asyncFresh.next(); }`;
+  // How much native stack a call uses before the VM checks the headroom
+  // depends on the native calls that lead to the check, and differs between
+  // platforms. So the native-stack case descends through the same kind of
+  // resume it then makes, from the same frame: a refused sync resume throws,
+  // and a refused async generator request runs none of the callee's code.
+  const nativeDescent = [
+    "let entered = 0;",
+    "const d = {",
+    `  *sync() { try { d.sync().next(); } catch (e) { if (!refused.length) { ${resumeSync} } } },`,
+    "  async *async() { entered++; const before = entered; const p = d.async().next();",
+    "    if (entered === before && !asyncRefused) { p.catch(() => {}); asyncRefused = asyncFresh.next(); } },",
+    "};",
+    "d.sync().next();",
+    "d.async().next();",
+  ].join("\n");
   const descents: Record<string, [string, string]> = {
     "call limit": [`const descend = () => { try { descend(); } catch (e) { ${atLimit} } }; descend();`, "--max-stack=50"],
-    "native stack": [`class A { constructor() { try { new A(); } catch (e) { ${atLimit} } } } new A();`, "--max-stack=100000"],
+    "native stack": [nativeDescent, "--max-stack=100000"],
   };
   for (const [label, [descend, limit]] of Object.entries(descents)) {
     const src = [
