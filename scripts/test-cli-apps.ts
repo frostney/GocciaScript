@@ -1908,6 +1908,25 @@ await section("Test262 Runner: delete in an eval leaves its caller's bindings...
   ], ["false,1 false,1 false,function false,object false,1,5 false,1 false,1 false,1 false,1,5 true,undefined"]);
 });
 
+// ES2026 §9.1.1.4.1 HasBinding: a global var redeclaring a configurable
+// property keeps it configurable (§9.1.1.4.17 CreateGlobalVarBinding), so it
+// can be deleted after the call site was compiled. The name is then
+// unresolvable: a read throws, a sloppy assignment creates the property again
+// and a strict one throws.
+await section("Test262 Runner: an eval treats a deleted global its call site recorded as unresolvable...", async () => {
+  expectEvalHostProbe("deleted global", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "var JSON = globalThis.JSON;",
+    "function k(src) { return eval(src); }",
+    "var r = [delete globalThis.JSON];",
+    "r.push(out(() => k('JSON')), out(() => k('JSON = 1; globalThis.JSON')));",
+    "delete globalThis.JSON;",
+    "r.push(out(() => k('\"use strict\"; JSON = 2')), out(() => k('JSON += 1')), out(() => k('delete JSON')));",
+    "r.push(out(() => eval('JSON = 3; globalThis.JSON')), out(() => k('JSON')));",
+    "print(r.join());",
+  ], ["true,ReferenceError,1,ReferenceError,ReferenceError,true,3,3"]);
+});
+
 // #1569: ES2026 §13.10.1 with §7.3.26 PrivateElementFind. A direct eval in a
 // class method resolves `#x` through the method's PrivateEnvironment
 // (§19.2.1.1 PerformEval), so the brand check agrees with one outside eval.

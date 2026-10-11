@@ -822,6 +822,7 @@ type
       out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
     function IsCallerLexicalBinding(const AIndex: Integer): Boolean;
     function IsShadowedByDynamicVar(const AIndex: Integer): Boolean;
+    function CallerGlobalHasBinding(const AName: string): Boolean;
     function ResolveName(const AName: string; out AIndex: Integer;
       out AWithObject: TGocciaObjectValue): TGocciaDirectEvalResolution;
     function IsDeletedVarBinding(const AName: string): Boolean;
@@ -1294,6 +1295,23 @@ begin
     debGlobal:
       Result := DynamicVarScopeChainDeclares(Parent, FBindings[AIndex].Name);
   end;
+end;
+
+// ES2026 §9.1.1.4.1 HasBinding of the caller's global Environment Record:
+// its declarative part (a top-level `let`, `const` or `class`, in its TDZ
+// included) or its object part, the global object's property. A debGlobal
+// entry of the record names a binding that existed when the call was
+// compiled; one whose configurable property has since been deleted is
+// unresolvable, and is answered as if the record had no entry for it. The
+// global var names list is not consulted: it outlives such a delete.
+function TGocciaVMDirectEvalScope.CallerGlobalHasBinding(
+  const AName: string): Boolean;
+begin
+  if not Assigned(FCallerGlobalScope) then
+    Exit(False);
+  Result := FCallerGlobalScope.ContainsOwnLexicalBinding(AName) or
+    ((FCallerGlobalScope.ThisValue is TGocciaObjectValue) and
+     TGocciaObjectValue(FCallerGlobalScope.ThisValue).HasProperty(AName));
 end;
 
 function TGocciaVMDirectEvalScope.IsDeletedVarBinding(
@@ -1837,6 +1855,9 @@ begin
         begin
           if IsShadowedByDynamicVar(I) then
             Exit(derOuter);
+          if (FBindings[I].Kind = debGlobal) and
+             not CallerGlobalHasBinding(AName) then
+            Exit(derOuter);
           AIndex := I;
           Exit(derBinding);
         end;
@@ -2000,7 +2021,8 @@ begin
   if TryFindWithObjectBinding(AName, WithObject) or inherited Contains(AName) then
     Exit(True);
   Result := TryFindBinding(AName, Binding) and
-    (Binding.Kind in [debLocal, debGlobal]);
+    ((Binding.Kind = debLocal) or
+     ((Binding.Kind = debGlobal) and CallerGlobalHasBinding(AName)));
 end;
 
 function TGocciaVMDirectEvalScope.ContainsVarEnvironmentBinding(
