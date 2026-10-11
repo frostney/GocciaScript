@@ -211,9 +211,14 @@ const
   //               home object; OP_DEFINE_STATIC_PROP_CONST and
   //               OP_DEFINE_STATIC_PROP_DYNAMIC no longer give the stored
   //               value one, so inline initializers from v87 lose it.
-  //   v88 -> v90: a direct-eval site record stores the strictness of its call
+  //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
+  //               the intrinsic ReferenceError for an unresolvable reference,
+  //               with its suggestion, in place of the four-instruction
+  //               `new ReferenceError(...)` sequence that read the global
+  //               `ReferenceError` binding.
+  //   v89 -> v90: a direct-eval site record stores the strictness of its call
   //               expression, and each of its bindings whether it is a catch
-  //               parameter. v89 is reserved for another change.
+  //               parameter.
   GOCCIA_FORMAT_VERSION = 90;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
@@ -521,7 +526,13 @@ type
     // OP_GET_UPVALUE and OP_GET_GLOBAL it never consults a direct eval's var
     // scope, so it checks the binding an assignment resolved before its
     // right-hand side ran (ES2026 §9.1.1.1.5 SetMutableBinding step 3).
-    OP_CHECK_BINDING_INITIALIZED = 235
+    OP_CHECK_BINDING_INITIALIZED = 235,
+    // Bx = name-constant index; A is unused. Throws the ReferenceError
+    // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
+    // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
+    // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
+    // holds, and carrying the evaluator's suggestion.
+    OP_THROW_UNDEFINED_VARIABLE = 236
   );
 
 const
@@ -572,7 +583,7 @@ function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
     OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER,
-    OP_CHECK_BINDING_INITIALIZED]);
+    OP_CHECK_BINDING_INITIALIZED, OP_THROW_UNDEFINED_VARIABLE]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;

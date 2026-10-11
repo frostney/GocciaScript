@@ -107,9 +107,15 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.NativeLimits,
   Goccia.Realm,
+  Goccia.RegExp.Runtime,
   Goccia.URI,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
+  Goccia.Values.BigIntObjectValue,
+  Goccia.Values.BooleanObjectValue,
+  Goccia.Values.ClassHelper,
+  Goccia.Values.DataViewValue,
+  Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FinalizationRegistryValue,
   Goccia.Values.FunctionBase,
@@ -118,10 +124,15 @@ uses
   Goccia.Values.IteratorValue,
   Goccia.Values.MapValue,
   Goccia.Values.NativeFunction,
+  Goccia.Values.NumberObjectValue,
   Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.ProxyValue,
   Goccia.Values.SetValue,
   Goccia.Values.SharedArrayBufferValue,
+  Goccia.Values.StringObjectValue,
+  Goccia.Values.SymbolObjectValue,
   Goccia.Values.SymbolValue,
+  Goccia.Values.TypedArrayValue,
   Goccia.Values.WeakMapValue,
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue;
@@ -1104,7 +1115,7 @@ end;
 
   DOMException is excluded by construction: it is a platform object with its own
   serialization steps, and GocciaScript models that by leaving HasErrorData
-  False on it, so it keeps taking the ordinary-object path. }
+  False on it. CloneDOMException implements those steps. }
 function CloneError(const AError: TGocciaObjectValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
 var
@@ -1237,13 +1248,31 @@ begin
   end;
 end;
 
+{ A new ArrayBuffer of the same length, and of the same maximum length when the
+  source is resizable (the serialized form records [[ArrayBufferMaxByteLength]]
+  for a resizable buffer), with no bytes in it yet. }
+function CreateArrayBufferLike(
+  const ABuf: TGocciaArrayBufferValue): TGocciaArrayBufferValue;
+begin
+  if ABuf.MaxByteLength >= 0 then
+    Result := TGocciaArrayBufferValue.Create(Length(ABuf.Data),
+      ABuf.MaxByteLength)
+  else
+    Result := TGocciaArrayBufferValue.Create(Length(ABuf.Data));
+end;
+
 function CloneArrayBuffer(const ABuf: TGocciaArrayBufferValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaArrayBufferValue;
 var
   Len: Integer;
 begin
+  // StructuredSerializeInternal: IsDetachedBuffer(value) throws DataCloneError.
+  if ABuf.Detached then
+    ThrowDataCloneError(SErrorStructuredCloneDetachedBuffer,
+      SSuggestStructuredClone);
+
   Len := Length(ABuf.Data);
-  Result := TGocciaArrayBufferValue.Create(Len);
+  Result := CreateArrayBufferLike(ABuf);
   RegisterClone(ABuf, Result, AMemory);
 
   if Len > 0 then
@@ -1263,10 +1292,178 @@ begin
     Move(ABuf.Data[0], Result.Data[0], Len);
 end;
 
+{ A typed array serializes as its buffer — cloned through the memory map, so
+  views over one buffer stay views over one cloned buffer — plus its kind, byte
+  offset and length. A view that tracks a resizable buffer's length keeps
+  tracking the clone's. Named own properties are not part of the serialized
+  form. The clone gets the realm's %<Kind>Array.prototype%, not the source's
+  prototype. }
+function CloneTypedArray(const AView: TGocciaTypedArrayValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaTypedArrayValue;
+var
+  ClonedBuffer: TGocciaValue;
+  Len: Integer;
+  Prototype: TGocciaObjectValue;
+begin
+  // IsArrayBufferViewOutOfBounds, which a detached buffer also is.
+  if (AView.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(AView.BufferValue).Detached then
+    ThrowDataCloneError(SErrorStructuredCloneDetachedBuffer,
+      SSuggestStructuredClone);
+  if IsTypedArrayOutOfBounds(AView) then
+    ThrowDataCloneError(Format(SErrorStructuredCloneOutOfBoundsView,
+      [TGocciaTypedArrayValue.KindName(AView.Kind)]), SSuggestStructuredClone);
+
+  if AView.IsLengthTracking then
+    Len := -1
+  else
+    Len := AView.Length;
+
+  ClonedBuffer := StructuredCloneValue(AView.BufferValue, AMemory);
+  if ClonedBuffer is TGocciaSharedArrayBufferValue then
+    Result := TGocciaTypedArrayValue.Create(AView.Kind,
+      TGocciaSharedArrayBufferValue(ClonedBuffer), AView.ByteOffset, Len)
+  else
+    Result := TGocciaTypedArrayValue.Create(AView.Kind,
+      TGocciaArrayBufferValue(ClonedBuffer), AView.ByteOffset, Len);
+  Prototype := TGocciaTypedArrayValue.GetKindPrototype(AView.Kind);
+  if Assigned(Prototype) then
+    Result.Prototype := Prototype;
+  RegisterClone(AView, Result, AMemory);
+end;
+
+{ A DataView serializes the same way as a typed array: its buffer through the
+  memory map, its byte offset and its byte length (or AUTO). }
+function CloneDataView(const AView: TGocciaDataViewValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaDataViewValue;
+var
+  ClonedBuffer: TGocciaValue;
+begin
+  if (AView.BufferValue is TGocciaArrayBufferValue) and
+     TGocciaArrayBufferValue(AView.BufferValue).Detached then
+    ThrowDataCloneError(SErrorStructuredCloneDetachedBuffer,
+      SSuggestStructuredClone);
+  if AView.IsOutOfBounds then
+    ThrowDataCloneError(Format(SErrorStructuredCloneOutOfBoundsView,
+      [CONSTRUCTOR_DATA_VIEW]), SSuggestStructuredClone);
+
+  ClonedBuffer := StructuredCloneValue(AView.BufferValue, AMemory);
+  // ByteLengthSlot is AUTO_BYTE_LENGTH for a length-tracking view, which the
+  // constructors read the same way, so the clone tracks too.
+  if ClonedBuffer is TGocciaSharedArrayBufferValue then
+    Result := TGocciaDataViewValue.Create(
+      TGocciaSharedArrayBufferValue(ClonedBuffer), AView.ByteOffset,
+      AView.ByteLengthSlot)
+  else
+    Result := TGocciaDataViewValue.Create(
+      TGocciaArrayBufferValue(ClonedBuffer), AView.ByteOffset,
+      AView.ByteLengthSlot);
+  RegisterClone(AView, Result, AMemory);
+end;
+
+{ [[BooleanData]], [[NumberData]], [[BigIntData]] and [[StringData]] each
+  deserialize as a new wrapper of the same primitive in the current realm.
+  Boxing the primitive builds exactly that. }
+function ClonePrimitiveWrapper(const AWrapper: TGocciaObjectValue;
+  const APrimitive: TGocciaValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+begin
+  Result := APrimitive.Box;
+  RegisterClone(AWrapper, Result, AMemory);
+end;
+
+{ [[DateValue]] deserializes as a new Date holding the same time value. }
+function CloneDate(const ADate: TGocciaObjectValue; const ATimeValue: Double;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+begin
+  Result := CreateDateObject(ATimeValue);
+  if not Assigned(Result) then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, ['Date']),
+      SSuggestStructuredClone);
+  RegisterClone(ADate, Result, AMemory);
+end;
+
+{ [[RegExpMatcher]] serializes as [[OriginalSource]] and [[OriginalFlags]]
+  only, so the clone is a fresh RegExp: lastIndex 0, no own properties. }
+function CloneRegExp(const ARegExp: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue(CreateRegExpObject(
+    GetRegExpInternalSource(ARegExp), GetRegExpInternalFlags(ARegExp)));
+  RegisterClone(ARegExp, Result, AMemory);
+end;
+
+{ The value of AObject's own data property AName when it is a string, else
+  ADefault. Reads no getter. }
+function OwnStringData(const AObject: TGocciaObjectValue;
+  const AName, ADefault: string): string;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+begin
+  Descriptor := AObject.GetOwnPropertyDescriptor(AName);
+  if (Descriptor is TGocciaPropertyDescriptorData) and
+     (TGocciaPropertyDescriptorData(Descriptor).Value is
+       TGocciaStringLiteralValue) then
+    Result := TGocciaStringLiteralValue(
+      TGocciaPropertyDescriptorData(Descriptor).Value).Value
+  else
+    Result := ADefault;
+end;
+
+{ DOMException is a serializable platform object (WebIDL §3.14.1): its
+  serialization steps record its name and message, and deserialization makes a
+  new DOMException in the current realm from them, with the matching code. Own
+  properties are not part of it. }
+function CloneDOMException(const AException: TGocciaObjectValue;
+  const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaObjectValue;
+begin
+  Result := CreateDOMExceptionObject(
+    OwnStringData(AException, PROP_NAME, ERROR_NAME),
+    OwnStringData(AException, PROP_MESSAGE, ''));
+  // As for an Error, the clone keeps the original's stack, not one captured
+  // at the structuredClone call. A DOMException carries it as an own `stack`
+  // data property, which CreateDOMExceptionObject defined from the new
+  // capture, so that property is replaced too.
+  Result.ErrorStack := AException.ErrorStack;
+  if Result.ErrorStack <> '' then
+    Result.DefineProperty(PROP_STACK,
+      TGocciaPropertyDescriptorData.Create(
+        TGocciaStringLiteralValue.Create(Result.ErrorStack),
+        [pfConfigurable, pfWritable]));
+  RegisterClone(AException, Result, AMemory);
+end;
+
+{ How a DataCloneError names an object that cannot be cloned: its class string
+  as Object.prototype.toString would print it, read without running a getter. }
+function CloneDescription(const AObject: TGocciaObjectValue): string;
+var
+  Tag: TGocciaPropertyDescriptor;
+  Current: TGocciaObjectValue;
+begin
+  Current := AObject;
+  while Assigned(Current) and not (Current is TGocciaProxyValue) do
+  begin
+    Tag := Current.GetOwnSymbolPropertyDescriptor(
+      TGocciaSymbolValue.WellKnownToStringTag);
+    if Tag is TGocciaPropertyDescriptorData then
+    begin
+      if TGocciaPropertyDescriptorData(Tag).Value is TGocciaStringLiteralValue then
+        Exit('[object ' + TGocciaStringLiteralValue(
+          TGocciaPropertyDescriptorData(Tag).Value).Value + ']');
+      Break;
+    end;
+    if Assigned(Tag) then
+      Break;
+    Current := Current.Prototype;
+  end;
+  Result := '[object Object]';
+end;
+
 function StructuredCloneValue(const AValue: TGocciaValue;
   const AMemory: THashMap<TGocciaValue, TGocciaValue>): TGocciaValue;
 var
   Existing: TGocciaValue;
+  TimeValue: Double;
 begin
   EnterNativeDataDepth('structured clone');
   try
@@ -1290,6 +1487,10 @@ begin
     Result := CloneSharedArrayBuffer(TGocciaSharedArrayBufferValue(AValue), AMemory)
   else if AValue is TGocciaArrayBufferValue then
     Result := CloneArrayBuffer(TGocciaArrayBufferValue(AValue), AMemory)
+  else if AValue is TGocciaTypedArrayValue then
+    Result := CloneTypedArray(TGocciaTypedArrayValue(AValue), AMemory)
+  else if AValue is TGocciaDataViewValue then
+    Result := CloneDataView(TGocciaDataViewValue(AValue), AMemory)
   else if AValue is TGocciaArrayValue then
     Result := CloneArray(TGocciaArrayValue(AValue), AMemory)
   else if AValue is TGocciaMapValue then
@@ -1304,10 +1505,51 @@ begin
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_WEAK_REF]), SSuggestStructuredClone)
   else if AValue is TGocciaFinalizationRegistryValue then
     ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable, [CONSTRUCTOR_FINALIZATION_REGISTRY]), SSuggestStructuredClone)
+  // A Proxy is not serializable. The spec's IsArray step would see through
+  // one wrapping an array, but V8 and SpiderMonkey throw for every Proxy, and
+  // this follows them.
+  else if AValue is TGocciaProxyValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable,
+      [CONSTRUCTOR_PROXY]), SSuggestStructuredClone)
   else if IsErrorObject(AValue) then
     Result := CloneError(TGocciaObjectValue(AValue), AMemory)
-  else if AValue is TGocciaObjectValue then
+  // An error object without [[ErrorData]] is a DOMException
+  // (CreateDOMExceptionObject).
+  else if AValue is TGocciaErrorObjectValue then
+    Result := CloneDOMException(TGocciaObjectValue(AValue), AMemory)
+  else if AValue is TGocciaBooleanObjectValue then
+    Result := ClonePrimitiveWrapper(TGocciaObjectValue(AValue),
+      TGocciaBooleanObjectValue(AValue).Primitive, AMemory)
+  else if AValue is TGocciaNumberObjectValue then
+    Result := ClonePrimitiveWrapper(TGocciaObjectValue(AValue),
+      TGocciaNumberObjectValue(AValue).Primitive, AMemory)
+  else if AValue is TGocciaBigIntObjectValue then
+    Result := ClonePrimitiveWrapper(TGocciaObjectValue(AValue),
+      TGocciaBigIntObjectValue(AValue).Primitive, AMemory)
+  else if AValue is TGocciaStringObjectValue then
+    Result := ClonePrimitiveWrapper(TGocciaObjectValue(AValue),
+      TGocciaStringObjectValue(AValue).Primitive, AMemory)
+  // [[SymbolData]] has no serialization: an object with an internal slot the
+  // algorithm does not list is not serializable.
+  else if AValue is TGocciaSymbolObjectValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable,
+      ['Symbol object']), SSuggestStructuredClone)
+  else if (AValue is TGocciaObjectValue) and
+          TGocciaObjectValue(AValue).HasRegExpData then
+    Result := CloneRegExp(TGocciaObjectValue(AValue), AMemory)
+  else if (AValue is TGocciaObjectValue) and
+          TryGetDateValue(TGocciaObjectValue(AValue), TimeValue) then
+    Result := CloneDate(TGocciaObjectValue(AValue), TimeValue, AMemory)
+  // An object literal or class instance takes the property walk. Anything
+  // else has an internal slot the algorithm has no branch for (a Promise, an
+  // iterator, an Intl or Temporal object, an arguments object) or is a
+  // platform object that is not serializable, and either way is not
+  // serializable.
+  else if IsOrdinaryObjectClass(AValue.ClassType) then
     Result := CloneObject(TGocciaObjectValue(AValue), AMemory)
+  else if AValue is TGocciaObjectValue then
+    ThrowDataCloneError(Format(SErrorStructuredCloneNotCloneable,
+      [CloneDescription(TGocciaObjectValue(AValue))]), SSuggestStructuredClone)
     else
       ThrowDataCloneError(SErrorStructuredCloneValueNotCloneable, SSuggestStructuredClone);
   finally
