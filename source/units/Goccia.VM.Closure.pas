@@ -21,6 +21,11 @@ type
     FDynamicVarUpvalues: array of Boolean;
     FHomeObject: TGocciaObjectValue;
     FHomeClass: TGocciaObjectValue;
+    // The class whose private names the closure's code resolves first: the
+    // innermost class body the function was created in (ES2026 §10.2.3
+    // OrdinaryFunctionCreate's PrivateEnvironment). Unlike HomeClass it does
+    // not depend on the function being a method, so super stays unaffected.
+    FPrivateClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
     FGlobalScope: TGocciaScope;
     FDynamicVarScope: TGocciaScope;
@@ -41,6 +46,7 @@ type
     property UpvalueCount: Integer read GetUpvalueCount;
     property HomeObject: TGocciaObjectValue read FHomeObject write FHomeObject;
     property HomeClass: TGocciaObjectValue read FHomeClass write FHomeClass;
+    property PrivateClass: TGocciaObjectValue read FPrivateClass write FPrivateClass;
     property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property DynamicVarScope: TGocciaScope read FDynamicVarScope write FDynamicVarScope;
@@ -57,6 +63,7 @@ begin
   FTemplate := ATemplate;
   FHomeObject := nil;
   FHomeClass := nil;
+  FPrivateClass := nil;
   FFunctionValue := nil;
   FGlobalScope := nil;
   FDynamicVarScope := nil;
@@ -80,6 +87,7 @@ begin
   Result := TGocciaBytecodeClosure.Create(FTemplate, Length(FUpvalues));
   Result.FHomeObject := FHomeObject;
   Result.FHomeClass := FHomeClass;
+  Result.FPrivateClass := FPrivateClass;
   Result.FFunctionValue := FFunctionValue;
   Result.FGlobalScope := FGlobalScope;
   Result.FDynamicVarScope := FDynamicVarScope;

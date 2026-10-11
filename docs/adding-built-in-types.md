@@ -248,7 +248,7 @@ end;
 
 `ToStringTag` names the value for the engine's own display (error details, snapshots). It does not decide what `Object.prototype.toString` returns: that tag comes only from the internal slots ECMA-262 lists, and otherwise from `Symbol.toStringTag` read through the prototype chain. Give the prototype a `Symbol.toStringTag` data property (`Members.AddSymbolDataProperty(TGocciaSymbolValue.WellKnownToStringTag, ..., [pfConfigurable])`), or the type prints as `[object Object]`.
 
-**InitializeNativeFromArguments** -- Called when `new YourType(args)` is used via the class constructor path:
+**InitializeNativeFromArguments** -- Called when `new YourType(args)` is used via the class constructor path, including a subclass's `super(args)`. It runs after the instance already has its final prototype (`new.target.prototype`, or your type's own prototype when that is not an object), so it may read methods off the instance, as `Map` reads its `set` adder. A type whose constructor validates its arguments before it reads `new.target.prototype` is listed in `ShouldDelayNativePrototypeLookup` instead: it gets its prototype after this call and before `FinalizeNativeFromArguments`.
 
 ```pascal
 procedure TGocciaYourValue.InitializeNativeFromArguments(
