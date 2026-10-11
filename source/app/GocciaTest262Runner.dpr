@@ -758,7 +758,7 @@ var
   Candidate: TTest262Case;
   Categories: TStringList;
   CategoryDirectory: string;
-  CategoryFiles: TStringList;
+  CategoryFiles, DiscoveredFiles: TStringList;
   I, J: Integer;
 begin
   Categories := TStringList.Create;
@@ -778,7 +778,12 @@ begin
         Continue;
       end;
       CategoryFiles.Clear;
-      CategoryFiles.AddStrings(FindAllFiles(CategoryDirectory, '.js'));
+      DiscoveredFiles := FindAllFiles(CategoryDirectory, '.js');
+      try
+        CategoryFiles.AddStrings(DiscoveredFiles);
+      finally
+        DiscoveredFiles.Free;
+      end;
       for J := 0 to CategoryFiles.Count - 1 do
       begin
         if EndsStr('_FIXTURE.js', CategoryFiles[J]) then
