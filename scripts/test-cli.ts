@@ -4845,11 +4845,14 @@ console.log("--max-memory stack refusal is located at the call (bytecode)...");
           "const keep = [];",
           "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
           ...body,
-          "console.log(r(5000));",
+          "console.log(r(1000000));",
           "",
         ].join("\n"),
       );
-      const run = await $`${resolve(RUNNER)} ${name} --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB 2>&1`.cwd(tmp).nothrow().quiet();
+      // The depth limit is raised past the recursion, so the memory limit is
+      // what stops it on every platform: a 32-bit build's smaller objects
+      // leave room for the default 2,200 frames inside 8 MiB.
+      const run = await $`${resolve(RUNNER)} ${name} --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB --max-stack=2000000 2>&1`.cwd(tmp).nothrow().quiet();
       const out = run.text();
       if (run.exitCode !== 1)
         throw new Error(`Stack memory refusal (${name}) should exit 1, got ${run.exitCode}: ${out}`);
