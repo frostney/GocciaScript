@@ -4807,40 +4807,61 @@ console.log("console.log renders functions, classes and errors as util.inspect d
 
 console.log("--max-memory stack refusal is located at the call (bytecode)...");
 {
-  // A refused stack growth is settled in the callee's prologue, which has no
-  // source position; the RangeError is located at the call that needed the
-  // stack, as an ordinary stack overflow is (#1494 item 11).
+  // A refused stack growth is settled at the first instruction boundary in
+  // the callee, since a call skips the boundary; the RangeError is located at
+  // the call that needed the stack, as an ordinary stack overflow is (#1494
+  // item 11), whether or not the callee's first instruction has a source
+  // position of its own.
   const tmp = mkdtemp("goccia-stack-memory-location-");
   try {
-    const path = join(tmp, "mm.js");
-    writeFileSync(
-      path,
-      [
-        "const keep = [];",
-        "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
-        "const r = (n) => {",
-        "  const o = { n };",
-        "  return n === 0 ? 0 : r(n - 1) + 1;",
-        "};",
-        "console.log(r(5000));",
-        "",
-      ].join("\n"),
-    );
-    const run = await $`${resolve(RUNNER)} mm.js --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB 2>&1`.cwd(tmp).nothrow().quiet();
-    const out = run.text();
-    if (run.exitCode !== 1)
-      throw new Error(`Stack memory refusal should exit 1, got ${run.exitCode}: ${out}`);
-    for (const expected of [
-      "RangeError: Maximum call stack size exceeded",
-      "Suggestion: the call stack reached the memory limit",
-      "--> mm.js:5:25",
-      "5 |   return n === 0 ? 0 : r(n - 1) + 1;",
-    ]) {
-      if (!out.includes(expected))
-        throw new Error(`Stack memory refusal should report "${expected}", got: ${out}`);
+    const cases: { name: string; body: string[]; expected: string[] }[] = [
+      {
+        // The callee's first instruction has no source position.
+        name: "block.js",
+        body: [
+          "const r = (n) => {",
+          "  const o = { n };",
+          "  return n === 0 ? 0 : r(n - 1) + 1;",
+          "};",
+        ],
+        expected: ["--> block.js:5:25", "5 |   return n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+      {
+        // The callee's first instruction is the located `n === 0`.
+        name: "expression.js",
+        body: [
+          "const r = (n) =>",
+          "  n === 0 ? 0 : r(n - 1) + 1;",
+        ],
+        expected: ["--> expression.js:4:18", "4 |   n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+    ];
+    for (const { name, body, expected: located } of cases) {
+      writeFileSync(
+        join(tmp, name),
+        [
+          "const keep = [];",
+          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          ...body,
+          "console.log(r(5000));",
+          "",
+        ].join("\n"),
+      );
+      const run = await $`${resolve(RUNNER)} ${name} --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB 2>&1`.cwd(tmp).nothrow().quiet();
+      const out = run.text();
+      if (run.exitCode !== 1)
+        throw new Error(`Stack memory refusal (${name}) should exit 1, got ${run.exitCode}: ${out}`);
+      for (const expected of [
+        "RangeError: Maximum call stack size exceeded",
+        "Suggestion: the call stack reached the memory limit",
+        ...located,
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(`Stack memory refusal (${name}) should report "${expected}", got: ${out}`);
+      }
+      if (out.includes(":0:0"))
+        throw new Error(`Stack memory refusal (${name}) must not be located at 0:0, got: ${out}`);
     }
-    if (out.includes(":0:0"))
-      throw new Error(`Stack memory refusal must not be located at 0:0, got: ${out}`);
   } finally {
     clean(tmp);
   }
