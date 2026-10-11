@@ -699,6 +699,10 @@
       begin
         FRegisters[A] := RegisterObject(TGocciaVMClassValue.Create(Self,
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
+        if Assigned(FCurrentClosure) and
+           (FCurrentClosure.PrivateClass is TGocciaClassValue) then
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+            TGocciaClassValue(FCurrentClosure.PrivateClass);
         TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
           PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(
             FRegisters[A].ObjectValue, [pfConfigurable, pfWritable]));
@@ -830,14 +834,17 @@
         end;
       end;
 
-      // ES2022 §15.7.14: execute static block closure with this = class
+      // Runs a static block (ES2026 §15.7.11) or a static field initializer
+      // (§15.7.10) with this = class and leaves its return value in B. Both
+      // are methods whose [[HomeObject]] is the class itself, not its
+      // prototype, so `super.x` there reads the class's [[Prototype]].
       OP_CLASS_EXEC_STATIC_BLOCK:
       begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
-            FRegisters[A].ObjectValue);
+            FRegisters[A].ObjectValue, True);
           // Copied out of the register window first: where a register is
           // passed by reference (Win64), SetupNewFrame would otherwise read
           // `this` through the window after acquiring registers moved it.
@@ -855,8 +862,8 @@
         begin
           CallArgs := AcquireArguments(0);
           try
-            InvokeFunctionValue(RegisterToValue(FRegisters[B]),
-              CallArgs, RegisterToValue(FRegisters[A]));
+            SetRegister(B, InvokeFunctionValue(RegisterToValue(FRegisters[B]),
+              CallArgs, RegisterToValue(FRegisters[A])));
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -1077,6 +1084,10 @@
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
+      // Defines a field: static fields on the class, `<fields>` instance
+      // fields on the receiver. ES2026 §7.3.33 DefineField never calls
+      // MakeMethod on the value, so neither definition opcode sets a home
+      // object; the initializer itself is the method (§15.7.10).
       OP_DEFINE_STATIC_PROP_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
@@ -1084,9 +1095,6 @@
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
-              True);
           if IsBytecodePrivateKey(GlobalName) then
           begin
             if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
@@ -1128,9 +1136,6 @@
         if TargetValue is TGocciaObjectValue then
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
-          if TargetValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, TargetValue, True);
-
           if PropKey.Kind = pkkSymbol then
             TGocciaObjectValue(TargetValue).DefineSymbolProperty(
               PropKey.Symbol,
@@ -1263,6 +1268,46 @@
           SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]), RightValue);
       end;
+
+      // A computed instance method: installed on the prototype, which is its
+      // home object, while the class in A supplies its private names.
+      OP_CLASS_ADD_METHOD_DYNAMIC:
+      begin
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+        begin
+          TargetValue := TGocciaVMClassValue(FRegisters[A].ObjectValue)
+            .Prototype;
+          PropKey := ClassifyPropertyKey(FRegisters[B], False);
+          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
+          if PropKey.Kind = pkkSymbol then
+            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
+              PropKey.Symbol,
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]))
+          else
+            TGocciaObjectValue(TargetValue).DefineProperty(
+              PropertyKeyName(PropKey),
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]));
+        end;
+      end;
+
+      // A function or class created in a class body joins the class's
+      // private environment; a class's own then links to it.
+      OP_SET_PRIVATE_CLASS:
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue then
+            TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue).FClosure
+              .PrivateClass := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          else if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+              TGocciaVMClassValue(FRegisters[B].ObjectValue);
+        end;
 
       OP_SET_OBJECT_PROTO:
         SetObjectLiteralPrototype(RegisterToValue(FRegisters[A]),
@@ -2240,7 +2285,8 @@
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
            Assigned(ChildTemplate.DebugInfo) and
-           (ChildTemplate.DebugInfo.LineMapCount > 0) then
+           (ChildTemplate.DebugInfo.LineMapCount > 0) and
+           (ChildTemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
           TGocciaCoverageTracker.Instance.RegisterFunction(
             ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
             ChildTemplate.DebugInfo.CoverageLine,
@@ -2249,6 +2295,11 @@
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
         ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
+        // ES2026 §10.2.3 OrdinaryFunctionCreate: every function captures the
+        // running PrivateEnvironment, whatever kind of function it is. Class
+        // element definitions then move a method into its own class body.
+        if Assigned(FCurrentClosure) then
+          ChildClosure.PrivateClass := FCurrentClosure.PrivateClass;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;

@@ -447,6 +447,7 @@ Current gaps from full ECMAScript RegExp semantics:
 
 - The `u` flag enables Unicode-aware matching with property escapes (`\p{Letter}`) and code point escapes (`\u{1F600}`), but does not yet cover the full ECMAScript Unicode specification.
 - The `v` flag (Unicode sets) supports set notation: nested classes, intersection (`&&`), subtraction (`--`), string literals (`\q{…}`), and properties of strings such as `\p{RGI_Emoji}`.
+- A match attempt stops with an `Error` at either of two engine limits: 100 steps per subject code unit, at least 10,000,000 (`Maximum regular expression step count exceeded`), or 10,000,000 backtrack entries (`Maximum regular expression backtrack stack size exceeded`). A greedy loop over one character, class or dot (`a*`, `.*`, `[a-z]+`) keeps one entry for its whole run; loops over wider bodies such as `(?:ab)*`, and any loop inside a lookbehind, keep one per iteration. See [ADR 0128](adr/0128-regexp-vm-resource-limits.md).
 
 ## TC39 Proposal Details
 

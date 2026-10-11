@@ -513,12 +513,13 @@ type
       AKey, AValue: TGocciaValue);
     procedure SetSuperPropertyBaseValueByKey(const ABaseValue, AThisValue,
       AKey, AValue: TGocciaValue);
+    function LexicalBytecodePrivateClass(const AKey: string): TGocciaClassValue;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
       const AKey: string): TGocciaClassValue;
     procedure ThrowBytecodePrivateTypeError(const AKey,
-      AMessage: string);
+      AMessageFormat: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
@@ -694,6 +695,7 @@ uses
   Goccia.NumberExponentiation,
   Goccia.NumberRemainder,
   Goccia.PatternMatching,
+  Goccia.PrivateNames,
   Goccia.Profiler,
   Goccia.RegExp.Runtime,
   Goccia.SourcePipeline,
@@ -973,6 +975,59 @@ begin
   end;
 end;
 
+{ Builds the receiver of a built-in that super() or an implicit constructor
+  reaches, with newTarget as the constructor (ES2026 §10.1.13
+  OrdinaryCreateFromConstructor). The receiver takes its final [[Prototype]]
+  before the built-in's own steps run, because those steps read from it: Map
+  (§24.1.1.1 step 5), Set, WeakMap and WeakSet look up their `set`/`add` adder
+  on it. When newTarget.prototype is not an object, §10.1.14
+  GetPrototypeFromConstructor step 3 falls back to the built-in's own intrinsic
+  in newTarget's realm, never to %Object.prototype%. The families that validate
+  their arguments before reading newTarget.prototype keep that read after
+  initialization. The receiver is rooted throughout: both the prototype read
+  and the initialization can run user code. }
+function CreateNativeReceiverFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANativeDefaultPrototype: TGocciaObjectValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  const AInstanceClass: TGocciaClassValue): TGocciaObjectValue;
+var
+  NativeInstance: TGocciaInstanceValue;
+  DelayPrototype: Boolean;
+  Roots: TGocciaActiveRootFrame;
+begin
+  Result := ANativeClass.CreateNativeInstance(AArguments);
+  if not Assigned(Result) then
+    ThrowTypeError(
+      'Superclass constructor did not return an object',
+      SSuggestNotConstructorType);
+  if Result is TGocciaInstanceValue then
+    NativeInstance := TGocciaInstanceValue(Result)
+  else
+    NativeInstance := nil;
+  DelayPrototype := ShouldDelayNativePrototypeLookup(ANativeClass, AArguments);
+  Roots.Initialize;
+  Roots.Add(Result);
+  try
+    if not DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+    begin
+      NativeInstance.ClassValue := AInstanceClass;
+      NativeInstance.InitializeNativeFromArguments(AArguments);
+    end;
+    if DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+      NativeInstance.FinalizeNativeFromArguments(AArguments);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
 function HasBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
@@ -990,6 +1045,8 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string; forward;
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue; forward;
 
 function UTF16CodeUnitImmediateToString(const ACodeUnit: UInt16): string;
 begin
@@ -1269,11 +1326,26 @@ begin
   Exit(nil);
 end;
 
+// Private names follow the class body the calling code is in, which an arrow
+// records in PrivateClass even when it has no home object, home class or
+// new.target of its own (an arrow nested in a static field's array literal,
+// for example). super and new.target keep using DirectEvalLexicalClosure.
+function DirectEvalPrivateClosure(const AVM: TGocciaVM): TGocciaBytecodeClosure;
+begin
+  Result := DirectEvalLexicalClosure(AVM);
+  if Assigned(Result) or not Assigned(AVM) then
+    Exit;
+  if Assigned(AVM.FCurrentClosure) and
+     Assigned(AVM.FCurrentClosure.PrivateClass) then
+    Result := AVM.FCurrentClosure;
+end;
+
 function CollectBytecodeDirectEvalPrivateNames(
   const AVM: TGocciaVM): TStringList;
 var
   Closure: TGocciaBytecodeClosure;
   RawNames: TStringList;
+  PrivateClass: TGocciaObjectValue;
   SourceName: string;
   I: Integer;
 begin
@@ -1282,8 +1354,8 @@ begin
   Result.Sorted := False;
   Result.Duplicates := dupIgnore;
 
-  Closure := DirectEvalLexicalClosure(AVM);
-  if not (Assigned(Closure) and (Closure.HomeClass is TGocciaClassValue)) then
+  Closure := DirectEvalPrivateClosure(AVM);
+  if not Assigned(Closure) then
     Exit;
 
   RawNames := TStringList.Create;
@@ -1291,7 +1363,16 @@ begin
     RawNames.CaseSensitive := True;
     RawNames.Sorted := False;
     RawNames.Duplicates := dupIgnore;
-    TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    if Closure.HomeClass is TGocciaClassValue then
+      TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
+    // Every class body around the calling code contributes its names
+    // (ES2026 §19.2.1.1 PerformEval step 6.b, through the PrivateEnvironment).
+    PrivateClass := Closure.PrivateClass;
+    while PrivateClass is TGocciaClassValue do
+    begin
+      TGocciaClassValue(PrivateClass).AppendOwnPrivateNames(RawNames);
+      PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+    end;
 
     for I := 0 to RawNames.Count - 1 do
     begin
@@ -1302,6 +1383,31 @@ begin
   finally
     RawNames.Free;
   end;
+end;
+
+// Direct eval code runs in the tree-walk evaluator, which finds private names
+// through the scope chain. Give it one scope per class body around the
+// calling code, innermost nearest, so it resolves a private name to the same
+// class evaluation the caller's own code would.
+function WrapInBytecodePrivateEnvironment(const AParent: TGocciaScope;
+  const AClosure: TGocciaBytecodeClosure): TGocciaScope;
+var
+  Classes: array of TGocciaObjectValue;
+  PrivateClass: TGocciaObjectValue;
+  I: Integer;
+begin
+  Result := AParent;
+  if not Assigned(AClosure) then
+    Exit;
+  PrivateClass := AClosure.PrivateClass;
+  while PrivateClass is TGocciaClassValue do
+  begin
+    SetLength(Classes, Length(Classes) + 1);
+    Classes[High(Classes)] := PrivateClass;
+    PrivateClass := BytecodeOuterPrivateClass(PrivateClass);
+  end;
+  for I := High(Classes) downto 0 do
+    Result := TGocciaPrivateEnvironmentScope.Create(Result, Classes[I]);
 end;
 
 function DirectEvalCapturedThisValue(const AVM: TGocciaVM;
@@ -3142,6 +3248,13 @@ type
     FVM: TGocciaVM;
     FConstructorValue: TGocciaValue;
     FNativeInstanceNewTarget: TGocciaValue;
+    // The class whose body encloses this class's definition, or nil at the
+    // outermost level: the outer link of the class's PrivateEnvironment
+    // (ES2026 §15.7.14 ClassDefinitionEvaluation step 6).
+    FOuterPrivateClass: TGocciaClassValue;
+    // Compiled keys of private static elements, which the class declares
+    // under a per-evaluation runtime key instead of the compiled one.
+    FRuntimeKeyedPrivateKeys: array of string;
     function CreateNativeInstanceWithNewTarget(
       const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue): TGocciaObjectValue;
@@ -3164,6 +3277,11 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
+    procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
+    function DeclaresCompiledPrivateKey(const ACompiledKey,
+      ASourceName: string): Boolean;
+    property OuterPrivateClass: TGocciaClassValue read FOuterPrivateClass
+      write FOuterPrivateClass;
   end;
 
 constructor TGocciaResolvedEnvironmentReferenceValue.Create(
@@ -3256,6 +3374,8 @@ begin
     AClosure.HomeObject.MarkReferences;
   if Assigned(AClosure.HomeClass) then
     AClosure.HomeClass.MarkReferences;
+  if Assigned(AClosure.PrivateClass) then
+    AClosure.PrivateClass.MarkReferences;
   if Assigned(AClosure.NewTarget) then
     AClosure.NewTarget.MarkReferences;
   if Assigned(AClosure.GlobalScope) then
@@ -3634,6 +3754,7 @@ begin
   FVM := AVM;
   FConstructorValue := nil;
   FNativeInstanceNewTarget := nil;
+  FOuterPrivateClass := nil;
 end;
 
 function TGocciaVMClassValue.GetClassLength: Integer;
@@ -5451,6 +5572,8 @@ begin
       FClosure.HomeObject.MarkReferences;
     if Assigned(FClosure.HomeClass) then
       FClosure.HomeClass.MarkReferences;
+    if Assigned(FClosure.PrivateClass) then
+      FClosure.PrivateClass.MarkReferences;
     if Assigned(FClosure.NewTarget) then
       FClosure.NewTarget.MarkReferences;
     if Assigned(FClosure.GlobalScope) then
@@ -5980,10 +6103,11 @@ begin
   TGocciaCoverageTracker.Instance.RecordLineHit(
     Template.DebugInfo.SourceFile,
     Template.DebugInfo.GetLineMapEntry(0).Line);
-  TGocciaCoverageTracker.Instance.RecordFunctionHit(
-    Template.DebugInfo.SourceFile, Template.Name,
-    Template.DebugInfo.CoverageLine,
-    Template.DebugInfo.CoverageColumn);
+  if Template.Name <> STATIC_FIELD_TEMPLATE_NAME then
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(
+      Template.DebugInfo.SourceFile, Template.Name,
+      Template.DebugInfo.CoverageLine,
+      Template.DebugInfo.CoverageColumn);
 end;
 
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
@@ -6555,7 +6679,7 @@ var
   WasSuperAlreadyCalled: Boolean;
   PreviousSuperClassSuperCalled: Boolean;
   SuperClassCalledItsOwnSuper: Boolean;
-  ReceiverPrototype: TGocciaObjectValue;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -6773,22 +6897,14 @@ begin
     Exit(AThisValue);
   end;
 
-  if SuperClass.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := SuperClass.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    NewThis := SuperClass.CreateNativeInstance(AArguments);
-    if not (NewThis is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
-    if NewThis is TGocciaInstanceValue then
-    begin
-      TGocciaInstanceValue(NewThis).ClassValue := FCurrentCtorClass;
-      TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
-    end;
-    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
-    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
-    if NewThis is TGocciaInstanceValue then
-      TGocciaInstanceValue(NewThis).FinalizeNativeFromArguments(AArguments);
+    { §13.3.7.1 step 6 Construct(func, argList, newTarget): the built-in
+      allocates from newTarget before its own steps run, so a subclass's `set`
+      or `add` is the adder Map, Set, WeakMap and WeakSet use. }
+    NewThis := CreateNativeReceiverFromConstructor(SuperClass,
+      NativeDefaultPrototype, AArguments, FNewTarget, FCurrentCtorClass);
     MarkCurrentConstructorSuperCalled;
     InitializeCurrentCtorReceiver(NewThis);
     Exit(NewThis);
@@ -6816,8 +6932,12 @@ begin
         SuperClass, AThisValue, AArguments);
       if not Assigned(NewThis) then
         NewThis := AThisValue;
+      ImplicitSuperInitialized := True;
     end;
-    if NewThis is TGocciaInstanceValue then
+    { The implicit super() recursion already ran the built-in's own steps on
+      the receiver it allocated; running them again here appended an Array
+      subclass's elements twice and called a Set subclass's `add` twice. }
+    if (not ImplicitSuperInitialized) and (NewThis is TGocciaInstanceValue) then
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
     begin
@@ -7272,9 +7392,17 @@ begin
     ShouldDelayNativePrototypeLookup(NativeClass, AArguments) or
     ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructorForPrototype);
 
-  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget).
+  // A built-in receiver falls back to that built-in's own intrinsic (§10.1.14
+  // step 3), not %Object.prototype%.
   if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
-    InstancePrototype := GetProtoFromConstructor(ANewTarget)
+  begin
+    if Assigned(NativeClass) then
+      InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+        ANewTarget, NativeIntrinsicPrototype)
+    else
+      InstancePrototype := GetProtoFromConstructor(ANewTarget);
+  end
   else
     InstancePrototype := Prototype;
 
@@ -8225,6 +8353,44 @@ begin
     TGocciaBytecodeFunctionValue(AValue).FConstructClassValue := Self;
 end;
 
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  if AClass is TGocciaVMClassValue then
+    Result := TGocciaVMClassValue(AClass).OuterPrivateClass
+  else
+    Result := nil;
+end;
+
+procedure TGocciaVMClassValue.AddRuntimeKeyedPrivateKey(
+  const ACompiledKey: string);
+var
+  Count: Integer;
+begin
+  Count := Length(FRuntimeKeyedPrivateKeys);
+  SetLength(FRuntimeKeyedPrivateKeys, Count + 1);
+  FRuntimeKeyedPrivateKeys[Count] := ACompiledKey;
+end;
+
+// Whether this class body declares the private name that ACompiledKey
+// names. The compiled key carries the class body's compile-time prefix, so a
+// same-named private name of another class body does not match.
+function TGocciaVMClassValue.DeclaresCompiledPrivateKey(const ACompiledKey,
+  ASourceName: string): Boolean;
+var
+  DeclaredKey: string;
+  I: Integer;
+begin
+  if not ResolveDeclaredPrivateKey(ASourceName, DeclaredKey) then
+    Exit(False);
+  if DeclaredKey = ACompiledKey then
+    Exit(True);
+  for I := 0 to High(FRuntimeKeyedPrivateKeys) do
+    if FRuntimeKeyedPrivateKeys[I] = ACompiledKey then
+      Exit(True);
+  Result := False;
+end;
+
 procedure TGocciaVMClassValue.MarkReferences;
 begin
   if GCMarked then Exit;
@@ -8233,6 +8399,8 @@ begin
     FConstructorValue.MarkReferences;
   if Assigned(FNativeInstanceNewTarget) then
     FNativeInstanceNewTarget.MarkReferences;
+  if Assigned(FOuterPrivateClass) then
+    FOuterPrivateClass.MarkReferences;
 end;
 
 procedure TGocciaVMSuperConstructorValue.MarkReferences;
@@ -8262,6 +8430,8 @@ begin
     FClosure.HomeObject.MarkReferences;
   if Assigned(FClosure.HomeClass) then
     FClosure.HomeClass.MarkReferences;
+  if Assigned(FClosure.PrivateClass) then
+    FClosure.PrivateClass.MarkReferences;
   if Assigned(FClosure.NewTarget) then
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
@@ -9220,8 +9390,12 @@ begin
   if SourceName <> '' then
   begin
     if AUseRuntimeKey then
+    begin
       InternalName := BytecodePrivateRuntimeKey(AName,
-        TGocciaClassValue(AClassValue).PrivateBrandToken)
+        TGocciaClassValue(AClassValue).PrivateBrandToken);
+      if (AClassValue is TGocciaVMClassValue) and IsBytecodePrivateKey(AName) then
+        TGocciaVMClassValue(AClassValue).AddRuntimeKeyedPrivateKey(AName);
+    end
     else
       InternalName := AName;
     TGocciaClassValue(AClassValue).DeclarePrivateName(SourceName,
@@ -11553,9 +11727,38 @@ begin
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
+// ES2026 §9.2.1.2 ResolvePrivateIdentifier: walk the running function's
+// private environments outward to the class body that declares AKey. The
+// compiled key names the class body, so only the matching evaluation of it
+// can answer.
+function TGocciaVM.LexicalBytecodePrivateClass(
+  const AKey: string): TGocciaClassValue;
+var
+  SourceName: string;
+  Candidate: TGocciaObjectValue;
+begin
+  Result := nil;
+  if not Assigned(FCurrentClosure) then
+    Exit;
+  Candidate := FCurrentClosure.PrivateClass;
+  if not Assigned(Candidate) then
+    Exit;
+  SourceName := BytecodePrivateSourceName(AKey);
+  if SourceName = '' then
+    Exit;
+  while Candidate is TGocciaVMClassValue do
+  begin
+    if TGocciaVMClassValue(Candidate).DeclaresCompiledPrivateKey(AKey,
+         SourceName) then
+      Exit(TGocciaVMClassValue(Candidate));
+    Candidate := TGocciaVMClassValue(Candidate).OuterPrivateClass;
+  end;
+end;
+
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
   const AObject: TGocciaValue): string;
 var
+  LexicalClass: TGocciaClassValue;
   HomeClass: TGocciaClassValue;
   CandidateClass: TGocciaClassValue;
   ExactReceiverClass: TGocciaClassValue;
@@ -11578,6 +11781,10 @@ var
     end;
   end;
 begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if Assigned(LexicalClass) then
+    Exit(LexicalClass.PrivateBrandToken);
+
   Result := BytecodePrivateTokenForKey(AKey,
     BytecodePrivateReceiverBrandToken(AObject));
 
@@ -11625,7 +11832,9 @@ var
   DeclaredKey: string;
   SourceName: string;
 begin
-  Result := nil;
+  Result := LexicalBytecodePrivateClass(AKey);
+  if Assigned(Result) then
+    Exit;
   if (not Assigned(FCurrentClosure)) or
      not (FCurrentClosure.HomeClass is TGocciaClassValue) then
     Exit;
@@ -11639,17 +11848,21 @@ begin
   Result := nil;
 end;
 
+// AMessageFormat takes the private name without its '#', as the interpreter
+// formats it, so both modes name the member as written in the source.
 procedure TGocciaVM.ThrowBytecodePrivateTypeError(const AKey,
-  AMessage: string);
+  AMessageFormat: string);
 var
   AccessClass: TGocciaClassValue;
+  Message: string;
 begin
+  Message := Format(AMessageFormat, [PrivateStorageSourceName(AKey)]);
   AccessClass := CurrentBytecodePrivateAccessClass(AKey);
   if Assigned(AccessClass) then
-    ThrowTypeErrorInRealm(AMessage, SSuggestPrivateFieldAccess,
+    ThrowTypeErrorInRealm(Message, SSuggestPrivateFieldAccess,
       AccessClass.CreationRealm)
   else
-    ThrowTypeError(AMessage, SSuggestPrivateFieldAccess);
+    ThrowTypeError(Message, SSuggestPrivateFieldAccess);
 end;
 
 function BytecodePrivateInitializedKey(
@@ -11837,7 +12050,15 @@ begin
       begin
         PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
           Names[I]);
-        if Assigned(PrototypeDescriptor) then
+        // A private data element on the prototype is a method. Its copy is
+        // not writable, so SetPropertyValue rejects assigning to it instead
+        // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
+        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+              PrototypeDescriptor.Flags - [pfWritable]))
+        else if Assigned(PrototypeDescriptor) then
           DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
@@ -11933,13 +12154,12 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -12007,41 +12227,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    TargetInstance := AClassValue.CreateNativeInstance(AArguments);
-    if not (TargetInstance is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
     { ES2026 §10.2.2 steps 5-6 put newTarget's prototype on the receiver before
       the built-in's own steps run, and §24.1.1.1 Map reads its `set` adder off
       that receiver — so a foreign newTarget whose prototype has no adder has
-      to throw here rather than quietly populating through Map.prototype.
-      The families that validate their arguments before newTarget.prototype may
-      be observed (§10.1.13 ordering) keep the lookup after initialization. }
-    DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-      AArguments);
-    if not DelayReceiverPrototype then
-      TGocciaObjectValue(TargetInstance).Prototype :=
-        GetProtoFromConstructor(EffectiveNewTarget);
-    if TargetInstance is TGocciaInstanceValue then
-    begin
-      if AInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).ClassValue :=
-          TGocciaInstanceValue(AInstance).ClassValue
-      else
-        TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
-    end;
-    if DelayReceiverPrototype then
-    begin
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-    end;
-    if TargetInstance is TGocciaInstanceValue then
-      TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(AArguments);
-    Exit(TargetInstance);
+      to throw here rather than quietly populating through Map.prototype. }
+    if AInstance is TGocciaInstanceValue then
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, AArguments, EffectiveNewTarget,
+        TGocciaInstanceValue(AInstance).ClassValue));
+    Exit(CreateNativeReceiverFromConstructor(AClassValue,
+      NativeDefaultPrototype, AArguments, EffectiveNewTarget, AClassValue));
   end;
 
   if (AClassValue is TGocciaVMClassValue) and
@@ -12143,14 +12341,13 @@ var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -12233,39 +12430,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
-      TargetInstance := AClassValue.CreateNativeInstance(BoxedArgs);
-      if not (TargetInstance is TGocciaObjectValue) then
-        ThrowTypeError(
-          'Superclass constructor did not return an object',
-          SSuggestNotConstructorType);
       { §10.2.2 steps 5-6 before the built-in's own steps — see the same
         ordering in InvokeImplicitSuperInitialization. }
-      DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-        BoxedArgs);
-      if not DelayReceiverPrototype then
-        TGocciaObjectValue(TargetInstance).Prototype :=
-          GetProtoFromConstructor(EffectiveNewTarget);
-      if TargetInstance is TGocciaInstanceValue then
-      begin
-        if AInstance is TGocciaInstanceValue then
-          TGocciaInstanceValue(TargetInstance).ClassValue :=
-            TGocciaInstanceValue(AInstance).ClassValue
-        else
-          TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-        TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
-      end;
-      if DelayReceiverPrototype then
-      begin
-        ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-        TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-      end;
-      if TargetInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(BoxedArgs);
-      Exit(TargetInstance);
+      if AInstance is TGocciaInstanceValue then
+        Exit(CreateNativeReceiverFromConstructor(AClassValue,
+          NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget,
+          TGocciaInstanceValue(AInstance).ClassValue));
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget, AClassValue));
     finally
       ReleaseArguments(BoxedArgs);
     end;
@@ -13629,10 +13806,12 @@ begin
      (AObject is TGocciaUndefinedLiteralValue) then
     StampThrowLocation;
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -13657,14 +13836,14 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoGetter, [AKey]));
+          SErrorPrivateGetterMissing);
       if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
         PrivateName, Result) then
         Exit;
       if TryGetRawPrivateValue(AObject, AKey, Result) then
         Exit;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -13680,7 +13859,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
           begin
             EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -13693,7 +13872,7 @@ begin
             end;
           end;
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoGetter, [AKey]));
+            SErrorPrivateGetterMissing);
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
@@ -13701,7 +13880,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
         end;
         Current := Current.Prototype;
@@ -13711,7 +13890,7 @@ begin
     if TryGetRawPrivateValue(AObject, AKey, Result) then
       Exit;
     ThrowBytecodePrivateTypeError(AKey,
-      Format(SErrorPrivateFieldNotAccessible, [AKey]));
+      SErrorPrivateFieldInaccessible);
   end
   else if TryGetRawPrivateValue(AObject, AKey, Result) then
     Exit;
@@ -13884,10 +14063,12 @@ var
   ExistingValue: TGocciaValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
@@ -13912,10 +14093,10 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoSetter, [AKey]));
+          SErrorPrivateSetterMissing);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format('Private method %s is not writable', [AKey]));
+          SErrorPrivateMethodNotWritable);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(PrivateName) then
       begin
         TGocciaClassValue(AObject).AddPrivateStaticProperty(
@@ -13923,7 +14104,7 @@ begin
         Exit;
       end;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -13940,7 +14121,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             ExistingValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
           try
             InvokeFunctionValue(
@@ -13952,10 +14133,24 @@ begin
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
+        begin
+          // Only the private methods StampBytecodePrivateBrands copies onto
+          // a receiver that is not a class instance are not writable.
+          if not Descriptor.Writable then
+          begin
+            if TryGetRawPrivateValue(AObject,
+               BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+               ExistingValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateMethodNotWritable);
+            ThrowBytecodePrivateTypeError(AKey,
+              SErrorPrivateFieldInaccessible);
+          end;
           Break;
+        end;
         if Descriptor is TGocciaPropertyDescriptorAccessor then
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoSetter, [AKey]));
+            SErrorPrivateSetterMissing);
         Current := Current.Prototype;
       end;
     end;
@@ -13966,8 +14161,18 @@ begin
         Exit;
     end
     else
+    begin
+      // The walk stopped at a private data element the receiver does not hold
+      // as a field: a private method, which cannot be assigned once the
+      // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
+      if (AObject is TGocciaObjectValue) and
+         (Descriptor is TGocciaPropertyDescriptorData) and
+         TryGetRawPrivateValue(AObject,
+           BytecodePrivateBrandKey(AKey, PrivateBrandToken), ExistingValue) then
+        ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
+    end;
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
@@ -14006,10 +14211,12 @@ var
   BoxedValue: TGocciaObjectValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -14164,7 +14371,7 @@ begin
   end;
 
   ThrowBytecodePrivateTypeError(AKey,
-    Format(SErrorPrivateFieldNotAccessible, [AKey]));
+    SErrorPrivateFieldInaccessible);
 end;
 
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
@@ -14182,7 +14389,7 @@ begin
     if AKey is TGocciaSymbolValue then
       KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
     else
-      KeyStr := AKey.ToStringLiteral.Value;
+      KeyStr := DisplayClassElementName(AKey.ToStringLiteral.Value);
     if AObject is TGocciaSymbolValue then
       ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
         TGocciaSymbolValue(AObject).ToDisplayString.Value]),
@@ -14649,6 +14856,8 @@ begin
         CallerParentScope := FGlobalScope
       else
         CallerParentScope := EnsureCurrentDynamicVarScope;
+      CallerParentScope := WrapInBytecodePrivateEnvironment(
+        CallerParentScope, DirectEvalPrivateClosure(Self));
 
       CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
         ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,
@@ -14971,7 +15180,8 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
@@ -15421,7 +15631,8 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
