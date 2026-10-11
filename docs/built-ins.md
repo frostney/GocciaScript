@@ -61,6 +61,8 @@ Implements the [WHATWG Console Standard](https://developer.mozilla.org/en-US/doc
 | `console.trace(...args)` | Print with "Trace:" prefix |
 | `console.table(data)` | Display data (formatted output) |
 
+**Value formatting:** Arguments are rendered the way Node's `util.inspect` renders them. Strings print as they are at the top level and quoted inside containers. A function prints as `[Function: name]`, or `[Function (anonymous)]` when its name is empty, with `AsyncFunction`, `GeneratorFunction` or `AsyncGeneratorFunction` in place of `Function` for those kinds. A class prints as `[class K]` or `[class K extends B]`. An `Error` prints its `stack`, or `[name: message]` when the stack lists no frames; `[cause]` and an `AggregateError`'s `[errors]` follow it. A function, class or error then lists its own enumerable properties in braces: `[Function: f] { a: 1 }`. A container or error holding a multi-line entry, such as another error's stack, puts each entry on its own line, indented by two spaces. Inside `console.group`, every line of a multi-line value is indented. Depth beyond `inspect-depth` reads `[Object]`, `[Array]`, `[Set]` or `[Map]`. Test-assertion messages keep the plain object rendering.
+
 **Output capture:** The console supports an `OutputCallback` hook for capturing output programmatically (see [Embedding — Console Output Capture](embedding.md#console-output-capture)).
 
 Separately, the `TGocciaCLIApplication`-based CLI hosts use `LogCallback` for `--log=<file>`, which writes every console call to the specified file in `[method] line` format while preserving normal stdout output.

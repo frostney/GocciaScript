@@ -218,6 +218,10 @@ type
     FStackUnchargedBytes: Int64;
     FStackChargeCollector: TGarbageCollector;
     FStackChargePending: Boolean;
+    // The call stack's depth when the pending growth began, less the frame
+    // whose setup made it. A frame above it was entered by the call that
+    // needed the growth (LocateUnstartedFrameAtItsCall).
+    FStackGrowthCallDepth: Integer;
     // The thread's call stack and execution-context stack are grown by the
     // VM too, and their growth is charged with its own stacks (ADR 0132). A
     // shrink gives back no more than the VM accounted for each of them.
@@ -322,6 +326,7 @@ type
     procedure ShrinkThreadStacks(var AFreed: Int64);
     function LargestStackBytes: Int64;
     procedure SettleStackGrowth;
+    procedure LocateUnstartedFrameAtItsCall;
     procedure ShrinkIdleStacks;
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
@@ -8819,6 +8824,11 @@ begin
   // again from doubling the stacks past the ceiling.
   Result := ARequiredLength;
   Inc(FStackUnchargedBytes, Int64(Result - ACurrentLength) * AEntrySize);
+  if not FStackChargePending then
+    if Assigned(FCallStack) then
+      FStackGrowthCallDepth := FCallStack.Count
+    else
+      FStackGrowthCallDepth := 0;
   FStackChargePending := True;
   FMemoryPressureCheckCountdown := 0;
 end;
@@ -8969,9 +8979,14 @@ begin
 end;
 
 // Makes room for one more context on the thread's execution-context stack
-// before SetupNewFrame pushes it.
+// before SetupNewFrame pushes it. SetupNewFrame has already pushed the frame's
+// call-stack record by then, so a growth this makes pending belongs to the
+// call entering that frame, not to the frame itself.
 procedure TGocciaVM.GrowExecutionContextStack;
+var
+  WasPending: Boolean;
 begin
+  WasPending := FStackChargePending;
   TGocciaExecutionContextStack.SetFunctionContextCapacity(
     FExecutionContextThread, ThreadStackGrowthLength(FContextStackAccount,
       FExecutionContextThread,
@@ -8980,6 +8995,8 @@ begin
       TGocciaExecutionContextStack.FunctionContextCount(
         FExecutionContextThread) + 1,
       SizeOf(TGocciaExecutionContextStackEntry)));
+  if FStackChargePending and not WasPending then
+    Dec(FStackGrowthCallDepth);
 end;
 
 procedure TGocciaVM.GrowHandlerStack(const ARequired: Integer);
@@ -9059,6 +9076,7 @@ begin
       Exit;
     end;
   FMemoryPressureCheckCountdown := 0;
+  LocateUnstartedFrameAtItsCall;
   ThrowVMMemoryLimitExceeded(GC, SErrorMaxCallStackExceeded,
     SSuggestStackMemoryLimitExceeded);
 end;
@@ -14493,7 +14511,8 @@ begin
   if not BindingObject.HasProperty(KeyStr) then
   begin
     if AStrict then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -14524,7 +14543,8 @@ begin
     StillExists := BindingObject.HasProperty(KeyStr);
 
     if AStrict and not StillExists then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
 
     if AStrict then
       SetPropertyValue(BindingObject, KeyStr, AValue)
@@ -15409,6 +15429,58 @@ begin
      (DecodeOp(ATemplate.GetInstructionUnchecked(PC - 1)) = Ord(OP_WIDE)) then
     Dec(PC);
   LocateFrameAt(ATemplate, PC, ALocation);
+end;
+
+{ SettleStackGrowth refuses a growth at an instruction boundary after the
+  instruction that needed it. When that was a call, the boundary falls in the
+  callee, after its first instruction: a call skips the boundary. The resolver
+  would locate that frame at the callee's first instruction, or leave it
+  unlocated (ADR 0131) and the RangeError would read file:0:0 when that
+  instruction has no source position. Stamps that frame with the position of
+  the call that entered it, which is where an ordinary stack overflow is
+  located. A growth is a call's when the call stack is deeper than when the
+  growth began (FStackGrowthCallDepth); any other growth keeps its frame's own
+  position and is stamped only when that frame has none. The caller is the
+  innermost suspended frame of the running entry: a numeric self-call's
+  closed frame when there is one, since those are pushed inside the frame
+  stack's, else the frame stack's top. }
+procedure TGocciaVM.LocateUnstartedFrameAtItsCall;
+var
+  Activation: PGocciaVMActivation;
+  CallerTemplate: TGocciaFunctionTemplate;
+  CallerIP: Integer;
+  Location: TGocciaFrameLocation;
+begin
+  if (FActivationCount = 0) or not Assigned(FCallStack) then
+    Exit;
+  Activation := @FActivations[FActivationCount - 1];
+  Location.Line := 0;
+  Location.Column := 0;
+  if FCallStack.Count <= FStackGrowthCallDepth then
+  begin
+    LocateFrameAfterCall(TGocciaFunctionTemplate(Activation^.TemplateProbe^),
+      Activation^.FrameIPProbe^, Location);
+    if Location.Line <> 0 then
+      Exit;
+  end;
+  if FClosedNumericFrameStackCount > Activation^.FirstClosedNumericFrame then
+  begin
+    CallerTemplate := TGocciaFunctionTemplate(Activation^.TemplateProbe^);
+    CallerIP := FClosedNumericFrameStack[
+      FClosedNumericFrameStackCount - 1].IP;
+  end
+  else if FFrameStackCount > Activation^.FirstSavedFrame then
+  begin
+    CallerTemplate := FFrameStack[FFrameStackCount - 1].Template;
+    CallerIP := FFrameStack[FFrameStackCount - 1].IP;
+  end
+  else
+    Exit;
+  LocateFrameAfterCall(CallerTemplate, CallerIP, Location);
+  if (Location.Line = 0) or not Assigned(CallerTemplate.DebugInfo) then
+    Exit;
+  FCallStack.SetTopFrameLocation(CallerTemplate.DebugInfo.SourceFile,
+    Location.Line, Location.Column);
 end;
 
 { The call stack's location resolver while this VM runs (ADR 0074 keeps
