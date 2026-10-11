@@ -868,6 +868,9 @@ type
       out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); override;
     function Contains(const AName: string): Boolean; override;
     function ContainsVarEnvironmentBinding(const AName: string): Boolean; override;
+    function TryDefineEvalVarInPlace(const AName: string;
+      const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
+      override;
     procedure CopyBackVariableBindings;
     procedure CopyNewVariableBindingsToParent;
   end;
@@ -2034,6 +2037,27 @@ begin
     Exit(True);
   Result := TryFindBinding(AName, Binding) and
     (Binding.Kind = debLocal) and Binding.IsVarEnvironmentBinding;
+end;
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation and B.3.2.3: a var or
+// block-level function the eval declares under the name of a binding of the
+// caller's variable environment (a var, a function, a simple parameter) is
+// that binding, since varEnv.HasBinding answers true; no binding is created,
+// and a value goes to the caller's cell. An own var of the same name here
+// would shadow the cell for functions the eval creates, and `delete` would
+// remove it.
+function TGocciaVMDirectEvalScope.TryDefineEvalVarInPlace(
+  const AName: string; const AValue: TGocciaValue;
+  const AHasInitializer: Boolean): Boolean;
+var
+  Index: Integer;
+begin
+  Index := FindBindingIndex(AName);
+  Result := (Index >= 0) and (FBindings[Index].Kind = debLocal) and
+    FBindings[Index].IsVarEnvironmentBinding and
+    not ContainsOwnVarBinding(AName);
+  if Result and AHasInitializer then
+    SetBindingValue(Index, AValue);
 end;
 
 // Moves the value of a var this eval declared over a caller binding of its

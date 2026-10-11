@@ -1908,6 +1908,21 @@ await section("Test262 Runner: delete in an eval leaves its caller's bindings...
   ], ["false,1 false,1 false,function false,object false,1,5 false,1 false,1 false,1 false,1,5 true,undefined"]);
 });
 
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation and B.3.2.3: a var or a
+// block-level function an eval declares under the name of a caller var is
+// that var, so it stays undeletable, takes the function, and functions the
+// eval creates keep reading and writing it after the call.
+await section("Test262 Runner: an eval var or block function named like a caller var is that var...", async () => {
+  expectEvalHostProbe("eval var over caller var", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function plainVar() { var x = 1; var d = eval('var x; delete x'); return [d, typeof x, eval('x')].join('/'); }",
+    "function blockFunction() { var x = 1; var d = eval(\"{ function x() { return 'fn'; } } delete x\"); return [d, typeof x, eval('typeof x')].join('/'); }",
+    "function escaped() { var x = 1; var fns = eval('{ function x() {} } [function () { return typeof x; }, function (v) { x = v; }]'); var before = fns[0](); x = 'after'; return [before, fns[0](), (fns[1](7), typeof x)].join('/'); }",
+    "function redeclared() { eval('var y = 1'); var d = eval('delete y'); eval('var y = 2'); return [d, y, eval('delete y'), typeof y].join('/'); }",
+    "print([out(plainVar), out(blockFunction), out(escaped), out(redeclared)].join(' '));",
+  ], ["false/number/1 false/function/function function/string/number true/2/true/undefined"]);
+});
+
 // ES2026 §9.1.1.4.1 HasBinding: a global var redeclaring a configurable
 // property keeps it configurable (§9.1.1.4.17 CreateGlobalVarBinding), so it
 // can be deleted after the call site was compiled. The name is then
