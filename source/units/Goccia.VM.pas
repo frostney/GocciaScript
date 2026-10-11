@@ -4807,7 +4807,9 @@ begin
   if not Result then
     Exit;
 
-  FHasContinuation := False;
+  // Growing the VM's stacks can throw the memory budget's RangeError (ADR
+  // 0130). The continuation is consumed only after the last of them, so a
+  // resume refused here leaves it whole and ResumeRaw can suspend it again.
   FVM.EnsureRegisterCapacity(Length(FContinuationRegisters));
   for I := 0 to High(FContinuationRegisters) do
     FVM.FRegisters[I] := FContinuationRegisters[I];
@@ -4824,6 +4826,7 @@ begin
       Length(FContinuationHandlers));
   FVM.FHandlerStack.RestoreFrom(FContinuationHandlers, FVM.FFrameDepth);
 
+  FHasContinuation := False;
   AFrame.IP := FContinuationIP;
   FVM.FCurrentDynamicVarScope := FContinuationDynamicVarScope;
   FContinuationDynamicVarScope := nil;
@@ -5206,6 +5209,8 @@ function TGocciaBytecodeGeneratorObjectValue.ResumeRaw(
   out ADone: Boolean): TGocciaValue;
 var
   PreviousGenerator: TGocciaBytecodeGeneratorObjectValue;
+  PreviousState: TGocciaBytecodeGeneratorState;
+  HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
 begin
   FLastResumeResultIsIteratorResult := False;
@@ -5244,6 +5249,8 @@ begin
   FReturnRequiresAwait := False;
   if AKind <> bgrkReturn then
     FReturnResumeValueAwaited := False;
+  PreviousState := FState;
+  HadContinuation := FHasContinuation;
   FState := bgsExecuting;
 
   PreviousGenerator := GActiveBytecodeGenerator;
@@ -5286,6 +5293,23 @@ begin
           ADone := True;
           raise;
         end;
+      end;
+      // The entry converts every throw from the generator's code into
+      // EGocciaBytecodeThrow, so a TGocciaThrowValue here comes from the VM
+      // setting the entry up: the call stack limit, the native stack or the
+      // memory budget refusing it. While the continuation is still whole the
+      // generator's code has not run, and it stays suspended where it was.
+      on E: TGocciaThrowValue do
+      begin
+        if HadContinuation and not FHasContinuation then
+        begin
+          FState := bgsCompleted;
+          ClearDelegateState;
+          ADone := True;
+        end
+        else
+          FState := PreviousState;
+        raise;
       end;
     end;
   finally

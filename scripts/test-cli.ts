@@ -3694,6 +3694,47 @@ console.log("--max-stack (native re-entry at the default limit)...");
   }
 }
 
+console.log("--max-stack (a refused generator resume leaves the generator suspended)...");
+{
+  // At the limit the VM refuses to enter a generator's code, by the call
+  // limit or by the native stack running low. The code has not run, so the
+  // generator stays suspended and resumes later, instead of reporting that it
+  // is already executing. The work is inline in the catch block: calling a
+  // helper there would itself be refused. The interpreter does not refuse a
+  // resume, so this runs in bytecode only.
+  const atLimit = 'if (!asyncRefused) { for (const it of [fresh, started]) { try { it.next(); refused.push("ran"); } catch (e) { refused.push(e.name); } } asyncRefused = asyncFresh.next(); }';
+  const descents: Record<string, [string, string]> = {
+    "call limit": [`const descend = () => { try { descend(); } catch (e) { ${atLimit} } }; descend();`, "--max-stack=50"],
+    "native stack": [`class A { constructor() { try { new A(); } catch (e) { ${atLimit} } } } new A();`, "--max-stack=100000"],
+  };
+  for (const [label, [descend, limit]] of Object.entries(descents)) {
+    const src = [
+      "const o = { *g() { yield 1; yield 2; }, async *ag() { yield 1; yield 2; } };",
+      "const fresh = o.g(), started = o.g(), asyncFresh = o.ag();",
+      "started.next();",
+      "const refused = [];",
+      "let asyncRefused;",
+      descend,
+      'const rest = (it) => { try { return [...it].join(" "); } catch (e) { return e.name; } };',
+      'asyncRefused.then(() => "ran", (e) => e.name).then(async (a) => {',
+      '  let ar = []; try { for await (const v of asyncFresh) ar.push(v); ar = ar.join(" "); } catch (e) { ar = e.name; }',
+      '  console.log(refused.join(","), "|", rest(fresh), "|", rest(started), "|", a, ar);',
+      "});",
+      "",
+    ].join("\n");
+    const run = Bun.spawnSync([RUNNER, "--mode=bytecode", limit, "--max-memory=256MiB"], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+    });
+    const out = run.stdout.toString() + run.stderr.toString();
+    const expected = "RangeError,RangeError | 1 2 | 2 | RangeError 1 2";
+    if (run.exitCode !== 0 || !containsLine(out, expected))
+      throw new Error(`A generator resume refused at the ${label} should leave the generator suspended ("${expected}"), got exit ${run.exitCode}: ${out}`);
+  }
+}
+
 console.log("--max-stack (native re-entry never overflows the native stack)...");
 {
   // A limit far above what the native stack holds ends every shape in a
