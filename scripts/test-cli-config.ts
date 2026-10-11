@@ -13,6 +13,7 @@ import {
   readFileSync,
   existsSync,
   mkdirSync,
+  realpathSync,
 } from "fs";
 import { join, resolve } from "path";
 import {
@@ -1946,7 +1947,9 @@ console.log("Config globals module that throws is located as --globals locates i
   // A globals module a config names runs in an engine of its own. That engine
   // runs it on the script's kind of executor, so its throw reports the same
   // diagnostic as the same module passed with --globals (#1494 item 8).
-  const tmp = makeTmp();
+  // Resolved, because config discovery reports the canonical path: on macOS
+  // the temp directory sits under the /var -> /private/var symlink.
+  const tmp = realpathSync.native(makeTmp());
   try {
     // Sibling directories, so the --globals run discovers no config.
     const cfgDir = join(tmp, "cfg");

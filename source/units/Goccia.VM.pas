@@ -9420,21 +9420,82 @@ begin
   end;
 end;
 
+// ES2026 §15.7.14 ClassDefinitionEvaluation step 6: a class's own private
+// environment holds only the PrivateBoundIdentifiers of its body. The
+// instance field initializer defines each private field and auto-accessor
+// storage of the class on its receiver, local slot 0 (CompileFieldInitializer
+// in Goccia.Compiler.Statements). Any other private key in the initializer
+// names a private name of an enclosing class body, resolved outward by
+// §9.2.1.2 ResolvePrivateIdentifier, or of a class created inside an
+// initializer, so declaring it here would make this class claim it.
 procedure DeclareBytecodePrivateNamesFromTemplate(
   const AClassValue: TGocciaValue; const ATemplate: TGocciaFunctionTemplate);
+const
+  FIELD_INITIALIZER_RECEIVER_SLOT = 0;
 var
-  ConstantValue: TGocciaBytecodeConstant;
-  I: Integer;
+  Instruction: UInt32;
+  WideA, WideB: UInt16;
+  A, B: UInt16;
+  Op: UInt8;
+  PC: Integer;
+  LoadedConstReg, LoadedConstIndex: Integer;
+  KeyIndex: Integer;
+  KeyConstant: TGocciaBytecodeConstant;
 begin
   if not (Assigned(ATemplate) and (AClassValue is TGocciaClassValue)) then
     Exit;
 
-  for I := 0 to ATemplate.ConstantCount - 1 do
+  // A key past the 8-bit constant operand is loaded into a register by the
+  // instruction just before OP_DEFINE_STATIC_PROP_DYNAMIC
+  // (EmitDefineStaticPropertyByName).
+  LoadedConstReg := -1;
+  LoadedConstIndex := -1;
+  PC := 0;
+  while PC < ATemplate.CodeCount do
   begin
-    ConstantValue := ATemplate.GetConstantUnchecked(I)^;
-    if (ConstantValue.Kind = bckString) and
-       IsBytecodePrivateKey(ConstantValue.StringValue) then
-      DeclareBytecodePrivateNameForClass(AClassValue, ConstantValue.StringValue);
+    Instruction := ATemplate.GetInstructionUnchecked(PC);
+    Inc(PC);
+    WideA := 0;
+    WideB := 0;
+    if DecodeOp(Instruction) = Ord(OP_WIDE) then
+    begin
+      if PC >= ATemplate.CodeCount then
+        Break;
+      WideA := UInt16(DecodeA(Instruction)) shl 8;
+      WideB := UInt16(DecodeB(Instruction)) shl 8;
+      Instruction := ATemplate.GetInstructionUnchecked(PC);
+      Inc(PC);
+    end;
+    Op := DecodeOp(Instruction);
+    A := WideA or DecodeA(Instruction);
+    B := WideB or DecodeB(Instruction);
+
+    KeyIndex := -1;
+    if (Op = Ord(OP_DEFINE_STATIC_PROP_CONST)) and
+       (A = FIELD_INITIALIZER_RECEIVER_SLOT) then
+      KeyIndex := B
+    else if (Op = Ord(OP_DEFINE_STATIC_PROP_DYNAMIC)) and
+            (A = FIELD_INITIALIZER_RECEIVER_SLOT) and
+            (Integer(B) = LoadedConstReg) then
+      KeyIndex := LoadedConstIndex;
+
+    if Op = Ord(OP_LOAD_CONST) then
+    begin
+      LoadedConstReg := A;
+      LoadedConstIndex := DecodeBx(Instruction);
+    end
+    else
+    begin
+      LoadedConstReg := -1;
+      LoadedConstIndex := -1;
+    end;
+
+    if (KeyIndex < 0) or (KeyIndex >= ATemplate.ConstantCount) then
+      Continue;
+    KeyConstant := ATemplate.GetConstantUnchecked(KeyIndex)^;
+    if (KeyConstant.Kind = bckString) and
+       IsBytecodePrivateKey(KeyConstant.StringValue) then
+      DeclareBytecodePrivateNameForClass(AClassValue, KeyConstant.StringValue);
   end;
 end;
 
