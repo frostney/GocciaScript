@@ -112,6 +112,11 @@ and manual dispatch. Before marking a pull request ready, run
 platform-sensitive change: file-system paths, processes, sockets or TLS, FFI,
 time zones, `Int64`/`Double` conversion or byte layout (see
 [Tooling: Platform-Specific Pitfalls](tooling.md#platform-specific-pitfalls)),
-or any `{$IFDEF}` platform branch. A dispatched run's checks do not appear on
+any `{$IFDEF}` platform branch, or a new or changed `scripts/test-cli*.ts` check
+that compares a program's output text or a path it reports. Windows ends lines
+with CRLF, and macOS reports temp directories under `/private/var` while
+`os.tmpdir()` gives `/var`; until the shared harness helpers handle both
+([#1595](https://github.com/frostney/GocciaScript/issues/1595)), only full CI
+catches these. A dispatched run's checks do not appear on
 the pull request, and it belongs to the commit it started from, so check the
 run for the branch's current head SHA rather than the newest run.
