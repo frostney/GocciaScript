@@ -101,6 +101,7 @@ type
     procedure TestLoopThatCreatesClosureKeepsGetLocal;
     procedure TestSwitchClauseForgetsInitializedLets;
     procedure TestDefaultParameterValueKeepsGetLocal;
+    procedure TestDefaultParameterValueReachingItsBindingUsesTemporary;
     procedure TestParameterExpressionBodyVarEnvironment;
     procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
     procedure TestCountedForVariableOperandSkipsGetLocal;
@@ -212,6 +213,8 @@ begin
     TestSwitchClauseForgetsInitializedLets);
   Test('A default parameter value keeps OP_GET_LOCAL',
     TestDefaultParameterValueKeepsGetLocal);
+  Test('A default parameter value that can reach its binding uses a temporary',
+    TestDefaultParameterValueReachingItsBindingUsesTemporary);
   Test('With parameter expressions the body vars get their own environment',
     TestParameterExpressionBodyVarEnvironment);
   Test('An operand that is its own destination keeps OP_GET_LOCAL',
@@ -1214,6 +1217,53 @@ begin
   end;
 end;
 
+// ES2026 §8.6.3 SingleNameBinding initializes the parameter only after its
+// Initializer completes. An initializer that can reach the binding is compiled
+// into a temporary and moved into the parameter's register once it completes,
+// so the TDZ hole stays in place for the read or write. One that cannot reach
+// it keeps the register as its destination and costs no move.
+procedure TTestCompiler.TestDefaultParameterValueReachingItsBindingUsesTemporary;
+
+  function PreambleMoves(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if not Assigned(Func) then
+        Exit;
+      Result := 0;
+      for I := 0 to Func.ParameterPreambleSize - 1 do
+        if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = OP_MOVE then
+          Inc(Result);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Each initializer is paired with one that has the same shape but reaches
+  // another binding instead of its own.
+  Expect<Integer>(PreambleMoves('const f = (p, a = [a, 1]) => a * p;') -
+    PreambleMoves('const f = (p, a = [p, 1]) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = { v: a }) => a * p;') -
+    PreambleMoves('const f = (p, a = { v: p }) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = 0 || a) => a * p;') -
+    PreambleMoves('const f = (p, a = 0 || p) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = (a = 7)) => a * p;') -
+    PreambleMoves('const f = (p, a = (p = 7)) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = ([a] = [7])) => a * p;') -
+    PreambleMoves('const f = (p, a = ([p] = [7])) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = () => a) => a * p;') -
+    PreambleMoves('const f = (p, a = () => p) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p = () => a, a = [1]) => a * p;') -
+    PreambleMoves('const f = (p = () => q, a = [1]) => a * p;')).ToBe(1);
+end;
+
 // ES2026 §10.2.11 FunctionDeclarationInstantiation step 30: with an expression
 // in the parameter list the body's vars get an Environment Record of their own.
 procedure TTestCompiler.TestParameterExpressionBodyVarEnvironment;
@@ -1771,13 +1821,20 @@ begin
 
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
-  Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(146)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_SET_PRIVATE_CLASS))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_SET_PRIVATE_CLASS)).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CLASS_ADD_METHOD_DYNAMIC))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_UNDEFINED_VARIABLE))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_THROW_UNDEFINED_VARIABLE)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);
@@ -1798,6 +1855,11 @@ begin
   Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-class-method-key-register');
+  Template.MaxRegisters := 2;
+  Template.EmitInstruction(EncodeABC(OP_CLASS_ADD_METHOD_DYNAMIC, 0, 2, 1));
   ExpectRejected(Template);
 
   Template := TGocciaFunctionTemplate.Create('invalid-data-property-register');

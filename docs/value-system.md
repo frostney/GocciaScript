@@ -785,7 +785,7 @@ The GC design rationale (why mark-and-sweep, why not reference counting, AST lit
 
 ## Error Values
 
-See [Errors](errors.md) for the complete list of error types, user-facing display format, and JSON output envelope.
+See [Errors](errors.md) for the complete list of error types and user-facing display format, and [JSON Output](json-output.md) for the JSON output envelope.
 
 JavaScript error objects are represented as `TGocciaObjectValue` instances with `name`, `message`, and `stack` string properties. Error constructors (`new TypeError(...)`, `new RangeError(...)`, etc.) create these objects via `CreateErrorObject` in `Goccia.Values.ErrorHelper.pas`.
 

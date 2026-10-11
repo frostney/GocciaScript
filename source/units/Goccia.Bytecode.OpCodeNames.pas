@@ -149,6 +149,8 @@ begin
     OP_DEFINE_PROP_DYNAMIC:            Result := 'OP_DEFINE_PROP_DYNAMIC';
     OP_DEFINE_CLASS_METHOD_DYNAMIC:    Result := 'OP_DEFINE_CLASS_METHOD_DYNAMIC';
     OP_SET_CLASS_SOURCE_CONST:         Result := 'OP_SET_CLASS_SOURCE_CONST';
+    OP_CLASS_ADD_METHOD_DYNAMIC:       Result := 'OP_CLASS_ADD_METHOD_DYNAMIC';
+    OP_SET_PRIVATE_CLASS:              Result := 'OP_SET_PRIVATE_CLASS';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
@@ -228,6 +230,7 @@ begin
     OP_COMPUTED_IMPORT_SPECIFIER:      Result := 'OP_COMPUTED_IMPORT_SPECIFIER';
     OP_CREATE_GLOBAL_IMPORT_BINDING:   Result := 'OP_CREATE_GLOBAL_IMPORT_BINDING';
     OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
+    OP_THROW_UNDEFINED_VARIABLE:       Result := 'OP_THROW_UNDEFINED_VARIABLE';
   else
     if AOp = OP_CALL_SELF then
       Result := 'OP_CALL_SELF'

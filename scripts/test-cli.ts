@@ -112,6 +112,45 @@ console.log("Bytecode stack frames locate each caller at the call it is making..
   }
 }
 
+console.log("Bytecode names a computed static field's initializer from its key...");
+{
+  // A static field initializer runs as its own method (ES2026 §15.7.10), and
+  // an anonymous function or class in it still takes its name from the
+  // computed key (§8.4.5 NamedEvaluation). The interpreter does not name these
+  // yet; it is being removed (#825), so this runs in bytecode only.
+  const source = [
+    "const key = Symbol('sym');",
+    "class Base { static greet() { return 'base'; } }",
+    "class C extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "}",
+    "console.log([C.arrow.name, C.arrow(), C[key].name, C.klass.name, C.klass.ownName].join(','));",
+    "const E = class extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "};",
+    "console.log([E.arrow.name, E.arrow(), E[key].name, E.klass.name, E.klass.ownName].join(','));",
+    // A static initializer whose class suspends stays inline in the generator
+    // and still names its value from the computed key.
+    "class H { static *g() { const k = 'yk'; return class { static [k] = class { static [yield 1] = 1; }; }; } }",
+    "const it = H.g(); it.next(); const Y = it.next('p').value;",
+    "console.log([Y.yk.name, Y.yk.p].join(','));",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString().trim().split(/\r?\n/).slice(0, 3).join("|");
+  const expected = "arrow,base,[sym],klass,klass|arrow,base,[sym],klass,klass|yk,1";
+  if (proc.exitCode !== 0 || out !== expected)
+    throw new Error(`Bytecode computed static field names expected ${expected}, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
+}
+
 console.log("--output=json reports where a thrown error was created...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(
@@ -255,6 +294,29 @@ console.log("A static import of a missing module is located at its declaration..
     }
   } finally {
     clean(tmp);
+  }
+}
+
+console.log("--output=json names an uncaught private-member error's member as written...");
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const [label, source, message] of [
+    [
+      "field",
+      "class C {\n  #p = 1;\n  static read(o) { return o.#p; }\n}\nC.read({});\n",
+      "Private field #p is not accessible",
+    ],
+    [
+      "method",
+      "class C {\n  #m() {}\n  static write(o) { o.#m = 1; }\n}\nC.write(new C());\n",
+      "Private method #m is not writable",
+    ],
+  ] as const) {
+    const { exitCode, json } = runLoaderJson(source, [`--mode=${mode}`]);
+    if (exitCode === 0) throw new Error(`An uncaught private ${label} error should fail the run (${mode})`);
+    if (json.error?.type !== "TypeError" || json.error?.message !== message)
+      throw new Error(
+        `JSON private ${label} error should be TypeError "${message}" (${mode}), got ${json.error?.type} "${json.error?.message}"`,
+      );
   }
 }
 
@@ -772,6 +834,33 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
       if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
         throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
+    // A direct eval in an arrow sees the private names of the class body the
+    // arrow is in, even when the arrow has no home object of its own, as in a
+    // static field's array literal (ES2026 §19.2.1.1 PerformEval step 6.b).
+    const evalPrivateArrowSource = [
+      "const outcome = (run) => { try { return String(run()); } catch (e) { return e.name; } };",
+      "class C { #x = 1; static read = () => eval('(new C()).#x'); }",
+      "class I { static #u = 8; static arr = [() => eval('I.#u')]; }",
+      "class K { static #k = 1; static arr = [() => eval('K.#missing')]; }",
+      "const outside = [() => eval('({}).#a')];",
+      "print([outcome(C.read), outcome(I.arr[0]), outcome(K.arr[0]), outcome(outside[0])].join(','));",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalPrivateArrow = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalPrivateArrowSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalPrivateArrowOut =
+        evalPrivateArrow.stdout.toString() + evalPrivateArrow.stderr.toString();
+      if (evalPrivateArrow.exitCode !== 0 || evalPrivateArrow.stdout.toString().trim() !== "1,8,SyntaxError,SyntaxError")
+        throw new Error(`Test262 Runner ${mode} direct eval of a private name in a class-body arrow expected 1,8,SyntaxError,SyntaxError, got: ${evalPrivateArrowOut}`);
     }
 
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
@@ -4698,6 +4787,222 @@ console.log("Runtime diagnostic parity...");
 // evaluates the entry's earlier imports before it links the later ones and
 // reports a script's missing import as a RuntimeError, and it is being removed
 // (#825), so #1274 fixes only the bytecode half.
+// Everything a script printed before the runner's timing lines.
+const scriptStdout = (out: string): string => {
+  const at = out.indexOf("Running script (");
+  return at < 0 ? out : out.slice(0, at);
+};
+
+console.log("Undeclared name: Suggestion line in both modes...");
+{
+  // A read of an undeclared name throws the intrinsic ReferenceError with
+  // the evaluator's suggestion in bytecode mode too (#1494 item 10).
+  const tmp = mkdtemp("goccia-undeclared-suggestion-");
+  try {
+    const sources: Record<string, string> = {
+      "read.js": "missingName;\n",
+      "assign.js": "let total = 0;\nmissingTarget = total;\n",
+      "compound.js": "let total = 0;\ntotal += 1;\nmissingCompound += 1;\n",
+    };
+    for (const [name, source] of Object.entries(sources)) {
+      const path = join(tmp, name);
+      writeFileSync(path, source);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const run = await $`${RUNNER} ${path} --mode=${mode} 2>&1`.nothrow().quiet();
+        const out = run.text();
+        if (run.exitCode !== 1)
+          throw new Error(`${name} (${mode}) should exit 1, got ${run.exitCode}: ${out}`);
+        if (!/ReferenceError: missing\w+ is not defined/.test(out))
+          throw new Error(`${name} (${mode}) should report a ReferenceError, got: ${out}`);
+        if (!out.includes("Suggestion: check the spelling or declare the variable with const, let, or var before use"))
+          throw new Error(`${name} (${mode}) should print the declare-before-use suggestion, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("console.log renders functions, classes and errors as util.inspect does...");
+{
+  // Functions, classes and errors printed as `{}` (#1494 item 9). The
+  // expected lines are Node's util.inspect output for the same script.
+  const tmp = mkdtemp("goccia-console-inspect-");
+  try {
+    const fns = join(tmp, "fns.js");
+    writeFileSync(
+      fns,
+      [
+        "const named = () => 1;",
+        "const obj = { method() {} };",
+        "class Base {}",
+        "class Derived extends Base {}",
+        "class WithStatic { static count = 2; }",
+        "const tagged = () => 1;",
+        'tagged.label = "t";',
+        "console.log(() => 1);",
+        "console.log(named);",
+        "console.log(obj.method);",
+        "console.log(Base);",
+        "console.log(Derived);",
+        "console.log(class {});",
+        "console.log(WithStatic);",
+        "console.log(tagged);",
+        "console.log(async () => {});",
+        "console.log(Math.max);",
+        "console.log([named, Base]);",
+        "console.log({ f: named });",
+        "",
+      ].join("\n"),
+    );
+    const expectedFns = [
+      "[Function (anonymous)]",
+      "[Function: named]",
+      "[Function: method]",
+      "[class Base]",
+      "[class Derived extends Base]",
+      "[class (anonymous)]",
+      "[class WithStatic] { count: 2 }",
+      "[Function: tagged] { label: 't' }",
+      "[AsyncFunction (anonymous)]",
+      "[Function: max]",
+      "[ [Function: named], [class Base] ]",
+      "{ f: [Function: named] }",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = await $`${RUNNER} ${fns} --mode=${mode}`.nothrow().quiet();
+      const out = scriptStdout(run.stdout.toString());
+      if (run.exitCode !== 0 || out !== expectedFns)
+        throw new Error(`Function and class rendering (${mode}) should be:\n${expectedFns}\ngot (exit ${run.exitCode}):\n${out}${run.stderr.toString()}`);
+    }
+
+    const errors = join(tmp, "errors.js");
+    writeFileSync(
+      errors,
+      [
+        'const error = new TypeError("boom");',
+        "error.code = 5;",
+        "console.log(error);",
+        "console.log({ error });",
+        'console.log(new Error("outer", { cause: new RangeError("inner") }));',
+        "",
+      ].join("\n"),
+    );
+    // An error prints its stack, then its own properties; nested, its stack
+    // lines are indented under the entry, and `cause` reads `[cause]`.
+    const expectedErrors = [
+      "TypeError: boom",
+      "    at <module> (errors.js:1:15) {",
+      "  code: 5",
+      "}",
+      "{",
+      "  error: TypeError: boom",
+      "      at <module> (errors.js:1:15) {",
+      "    code: 5",
+      "  }",
+      "}",
+      "Error: outer",
+      "    at <module> (errors.js:5:13) {",
+      "  [cause]: RangeError: inner",
+      "      at <module> (errors.js:5:41)",
+      "}",
+      "",
+    ].join("\n");
+    const bytecode = await $`${resolve(RUNNER)} errors.js --mode=bytecode`.cwd(tmp).nothrow().quiet();
+    const bytecodeOut = scriptStdout(bytecode.stdout.toString());
+    if (bytecode.exitCode !== 0 || bytecodeOut !== expectedErrors)
+      throw new Error(`Error rendering (bytecode) should be:\n${expectedErrors}\ngot (exit ${bytecode.exitCode}):\n${bytecodeOut}${bytecode.stderr.toString()}`);
+    // The interpreter records no frame for the top level (#1273), so its
+    // stack has no frames and util.inspect brackets it.
+    const interpreted = await $`${resolve(RUNNER)} errors.js --mode=interpreted`.cwd(tmp).nothrow().quiet();
+    const interpretedOut = scriptStdout(interpreted.stdout.toString());
+    const expectedInterpreted = [
+      "[TypeError: boom] { code: 5 }",
+      "{ error: [TypeError: boom] { code: 5 } }",
+      "[Error: outer] { [cause]: [RangeError: inner] }",
+      "",
+    ].join("\n");
+    if (interpreted.exitCode !== 0 || interpretedOut !== expectedInterpreted)
+      throw new Error(`Error rendering (interpreted) should be:\n${expectedInterpreted}\ngot (exit ${interpreted.exitCode}):\n${interpretedOut}${interpreted.stderr.toString()}`);
+
+    // Inside console.group every line of a multi-line value is indented.
+    const grouped = join(tmp, "grouped.js");
+    writeFileSync(
+      grouped,
+      'console.group("G");\nconsole.log(new Error("in group"));\nconsole.groupEnd();\n',
+    );
+    const groupRun = await $`${resolve(RUNNER)} grouped.js --mode=bytecode`.cwd(tmp).nothrow().quiet();
+    const expectedGroup = "G\n  Error: in group\n      at <module> (grouped.js:2:13)\n";
+    if (scriptStdout(groupRun.stdout.toString()) !== expectedGroup)
+      throw new Error(`Grouped error should be:\n${expectedGroup}\ngot:\n${groupRun.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--max-memory stack refusal is located at the call (bytecode)...");
+{
+  // A refused stack growth is settled at the first instruction boundary in
+  // the callee, since a call skips the boundary; the RangeError is located at
+  // the call that needed the stack, as an ordinary stack overflow is (#1494
+  // item 11), at the callee's name (ADR 0135), whether or not the callee's
+  // first instruction has a source position of its own.
+  const tmp = mkdtemp("goccia-stack-memory-location-");
+  try {
+    const cases: { name: string; body: string[]; expected: string[] }[] = [
+      {
+        // The callee's first instruction has no source position.
+        name: "block.js",
+        body: [
+          "const r = (n) => {",
+          "  const o = { n };",
+          "  return n === 0 ? 0 : r(n - 1) + 1;",
+          "};",
+        ],
+        expected: ["--> block.js:5:24", "5 |   return n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+      {
+        // The callee's first instruction is the located `n === 0`.
+        name: "expression.js",
+        body: [
+          "const r = (n) =>",
+          "  n === 0 ? 0 : r(n - 1) + 1;",
+        ],
+        expected: ["--> expression.js:4:17", "4 |   n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+    ];
+    for (const { name, body, expected: located } of cases) {
+      writeFileSync(
+        join(tmp, name),
+        [
+          "const keep = [];",
+          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          ...body,
+          "console.log(r(5000));",
+          "",
+        ].join("\n"),
+      );
+      const run = await $`${resolve(RUNNER)} ${name} --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB 2>&1`.cwd(tmp).nothrow().quiet();
+      const out = run.text();
+      if (run.exitCode !== 1)
+        throw new Error(`Stack memory refusal (${name}) should exit 1, got ${run.exitCode}: ${out}`);
+      for (const expected of [
+        "RangeError: Maximum call stack size exceeded",
+        "Suggestion: the call stack reached the memory limit",
+        ...located,
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(`Stack memory refusal (${name}) should report "${expected}", got: ${out}`);
+      }
+      if (out.includes(":0:0"))
+        throw new Error(`Stack memory refusal (${name}) must not be located at 0:0, got: ${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Entry module linking (bytecode)...");
 {
   const tmp = mkdtemp("goccia-entry-link-");

@@ -7,6 +7,7 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.RegExp.&Program,
   Goccia.RegExp.Compiler,
   Goccia.RegExp.VM;
 
@@ -20,6 +21,9 @@ type
     procedure TestMatcherReleasesLargeBacktrackStack;
     procedure TestMatcherMatchesRepeatedly;
     procedure TestMatcherReleasesStackWhenLimitRaises;
+    procedure TestOptionalCopiesSkipToTheEnd;
+    procedure TestGreedyLoopKeepsOneBacktrackEntry;
+    procedure TestGreedyLoopScanCountsTowardStepLimit;
   public
     procedure SetupTests; override;
   end;
@@ -39,6 +43,12 @@ begin
     TestMatcherMatchesRepeatedly);
   Test('a matcher releases its buffers after a VM limit',
     TestMatcherReleasesStackWhenLimitRaises);
+  Test('each optional copy of a{0,3} skips to the end of the repetition',
+    TestOptionalCopiesSkipToTheEnd);
+  Test('a greedy single-character loop does not keep an entry per iteration',
+    TestGreedyLoopKeepsOneBacktrackEntry);
+  Test('a greedy loop rescanned by backtracking costs the steps its iterations did',
+    TestGreedyLoopScanCountsTowardStepLimit);
 end;
 
 procedure TRegExpVMTests.TestShortSubjectGetsFloor;
@@ -130,6 +140,80 @@ begin
   finally
     Matcher.Free;
   end;
+end;
+
+procedure TRegExpVMTests.TestOptionalCopiesSkipToTheEnd;
+var
+  Code: TRegExpCodeArray;
+  I, LastChar, Splits: Integer;
+begin
+  // A skipped iteration of a{0,3} must continue after the last copy, not
+  // try the remaining copies one by one, which made a failed match walk
+  // millions of copies for a{0,5000000}.
+  Code := CompileRegExp('a{0,3}', '').Code;
+  LastChar := -1;
+  for I := 0 to High(Code) do
+    if TRegExpOpCode(Code[I] and $FF) = RX_CHAR then
+      LastChar := I;
+  Splits := 0;
+  for I := 0 to High(Code) do
+    if TRegExpOpCode(Code[I] and $FF) = RX_SPLIT then
+    begin
+      Inc(Splits);
+      Expect<Integer>(Integer(Code[I] shr 8)).ToBe(LastChar + 1);
+    end;
+  Expect<Integer>(Splits).ToBe(3);
+end;
+
+procedure TRegExpVMTests.TestGreedyLoopKeepsOneBacktrackEntry;
+var
+  Matcher: TRegExpMatcher;
+begin
+  // a* passes 500 positions before "b"; an entry per iteration would grow
+  // the stack past 500 entries.
+  Matcher := TRegExpMatcher.Create(CompileRegExp('a*b', ''),
+    StringOfChar('a', 500) + 'b');
+  try
+    Expect<Boolean>(Matcher.Exec(0, False)).ToBe(True);
+    Expect<Integer>(Matcher.Slot(1)).ToBe(501);
+    Expect<Boolean>(Matcher.RetainedBacktrackCapacity < 500).ToBe(True);
+  finally
+    Matcher.Free;
+  end;
+end;
+
+function GreedyRescanOutcome(const ALength: Integer): string;
+var
+  Matcher: TRegExpMatcher;
+begin
+  Matcher := TRegExpMatcher.Create(CompileRegExp('^a*a*b', ''),
+    StringOfChar('a', ALength));
+  try
+    try
+      if Matcher.Exec(0, False) then
+        Result := 'match'
+      else
+        Result := 'no match';
+    except
+      on E: ERegExpRuntimeError do
+        Result := E.Message;
+    end;
+  finally
+    Matcher.Free;
+  end;
+end;
+
+procedure TRegExpVMTests.TestGreedyLoopScanCountsTowardStepLimit;
+begin
+  // The second a* is rescanned for each count of the first, n * n / 2
+  // characters in all. At three steps per character, as when the loop
+  // iterated, 2,500 "a"s stay under the 10,000,000-step limit and 3,000
+  // exceed it, the same lengths at which iterating stopped. 2,500 is about
+  // 3% under the limit (main switched between 2,500 and 2,580), so any
+  // added cost per pop or memo hit in the rescan flips this test.
+  Expect<string>(GreedyRescanOutcome(2500)).ToBe('no match');
+  Expect<string>(GreedyRescanOutcome(3000)).ToBe(
+    'Maximum regular expression step count exceeded');
 end;
 
 begin

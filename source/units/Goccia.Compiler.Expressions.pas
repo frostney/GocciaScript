@@ -841,7 +841,7 @@ var
   Local: TGocciaCompilerLocal;
   Slot: UInt16;
   NameIdx: UInt16;
-  CondReg, ArgReg: UInt16;
+  CondReg: UInt16;
   OkJump: Integer;
 begin
   LocalIdx := ACtx.Scope.ResolveLocal(AExpr.Name);
@@ -898,23 +898,14 @@ begin
   end;
 
   CondReg := ACtx.Scope.AllocateRegister;
-  ArgReg := ACtx.Scope.AllocateRegister;
 
   EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
   OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
-
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
-    ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
-
+  EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
   PatchJumpTarget(ACtx, OkJump);
 
   EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
 
-  ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -1386,6 +1377,39 @@ begin
   Result := False;
 end;
 
+{ A class definition runs its heritage, decorators and computed keys in the
+  enclosing function, and a static field initializer that suspends is compiled
+  inline there too (CompileStaticFieldInitializerExpression), so a `yield` or
+  `await` in any of them suspends the enclosing function. Method bodies, static
+  blocks and other field initializers run in functions of their own. }
+function ClassDefinitionContainsSuspension(
+  const AClassDef: TGocciaClassDefinition): Boolean;
+var
+  I, J: Integer;
+begin
+  Result := True;
+  if ExpressionContainsSuspension(AClassDef.SuperClassExpression) then
+    Exit;
+  for I := 0 to High(AClassDef.Decorators) do
+    if ExpressionContainsSuspension(AClassDef.Decorators[I]) then
+      Exit;
+  for I := 0 to High(AClassDef.FElements) do
+  begin
+    for J := 0 to High(AClassDef.FElements[I].Decorators) do
+      if ExpressionContainsSuspension(AClassDef.FElements[I].Decorators[J]) then
+        Exit;
+    if AClassDef.FElements[I].IsComputed and
+       ExpressionContainsSuspension(
+         AClassDef.FElements[I].ComputedKeyExpression) then
+      Exit;
+    if AClassDef.FElements[I].IsStatic and
+       (AClassDef.FElements[I].Kind in [cekField, cekAccessor]) and
+       ExpressionContainsSuspension(AClassDef.FElements[I].FieldInitializer) then
+      Exit;
+  end;
+  Result := False;
+end;
+
 function ExpressionContainsSuspension(const AExpr: TGocciaExpression): Boolean;
 var
   CallExpr: TGocciaCallExpression;
@@ -1555,7 +1579,10 @@ begin
     Exit(ExpressionContainsSuspension(
       TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
       ExpressionContainsSuspension(
-        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
+        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value))
+  else if AExpr is TGocciaClassExpression then
+    Exit(ClassDefinitionContainsSuspension(
+      TGocciaClassExpression(AExpr).ClassDefinition));
 
   Result := False;
 end;
@@ -2622,7 +2649,7 @@ var
   LocalIdx, UpvalIdx: Integer;
   Local: TGocciaCompilerLocal;
   Upvalue: TGocciaCompilerUpvalue;
-  Slot, GlobalExistsReg, ErrorReg, MessageReg: UInt16;
+  Slot, GlobalExistsReg, ErrorReg: UInt16;
   ObjReg, KeyReg, CondReg: UInt16;
   TargetReg: Integer;
   NameIdx: UInt16;
@@ -2798,17 +2825,7 @@ begin
   end;
 
   GlobalExistsJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, GlobalExistsReg);
-
-  ErrorReg := GlobalExistsReg;
-  MessageReg := ACtx.Scope.AllocateRegister;
-  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ErrorReg,
-    ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-  EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, MessageReg,
-    ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-  EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, ErrorReg, ErrorReg, 1));
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, ErrorReg, 0, 0));
-  ACtx.Scope.FreeRegister;
-
+  EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
   PatchJumpTarget(ACtx, GlobalExistsJump);
   EmitSetGlobalByIndex(ACtx, ADest, NameIdx);
   ACtx.Scope.FreeRegister;
@@ -2953,7 +2970,19 @@ end;
 // order, through BindingInitialization of its elements and properties (§8.6.3,
 // §14.3.3.3 KeyedBindingInitialization) with their nested initializers. Any
 // read of a binding not initialized yet, a later parameter's or the one being
-// initialized, throws a ReferenceError (§9.1.1.1.6 GetBindingValue, step 2).
+// initialized, throws a ReferenceError (§9.1.1.1.6 GetBindingValue, step 2),
+// and so does a write (§9.1.1.1.5 SetMutableBinding, step 3): SingleNameBinding
+// initializes the binding only once its Initializer has completed
+// (InitializeReferencedBinding, the last step).
+//
+// An initializer compiled into the parameter's own register writes its
+// intermediate values there, an array or object under construction, the left
+// operand of && or ??, the value of an assignment before the target is
+// probed, and the TDZ hole is gone before a read or write of the binding in
+// the same initializer checks for it. Such an initializer is compiled into a
+// temporary and moved into the register once it completes. An initializer
+// that cannot reach its own binding (ParameterInitializerAvoidsOwnBinding)
+// keeps the register as its destination.
 //
 // That order and that TDZ are only observable through an expression in the
 // parameter list (§15.1.2 ContainsExpression: an initializer or a computed
@@ -2966,7 +2995,7 @@ procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 var
   I, J, LocalIdx: Integer;
-  Slot: UInt16;
+  Slot, InitSlot: UInt16;
   JumpIdx: Integer;
   IsCaptured: Boolean;
   Names: TUnicodeStringList;
@@ -3058,10 +3087,23 @@ begin
       if IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
       if AParams[I].IsPattern then
+        // The pattern's own register has no name, so its initializer cannot
+        // reach it; the names the pattern binds are separate locals.
         ACtx.CompileExpression(AParams[I].DefaultValue, Slot)
-      else
+      else if ParameterInitializerAvoidsOwnBinding(AParams, I) then
         CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
-          AParams[I].Name);
+          AParams[I].Name)
+      else
+      begin
+        InitSlot := ACtx.Scope.AllocateRegister;
+        try
+          CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue,
+            InitSlot, AParams[I].Name);
+          EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, InitSlot, 0));
+        finally
+          ACtx.Scope.FreeRegister;
+        end;
+      end;
       if IsCaptured then
         EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, Slot, UInt16(Slot)));
       PatchJumpTarget(ACtx, JumpIdx);
@@ -6430,7 +6472,7 @@ procedure CompileCompoundAssignment(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCompoundAssignmentExpression; const ADest: UInt16);
 var
   LocalIdx, UpvalIdx: Integer;
-  Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ArgReg, ObjReg,
+  Slot, RegVal, RegOld, RegResult, RegTemp, CondReg, ObjReg,
     KeyReg: UInt16;
   ReferenceReg: Integer;
   NameIdx: UInt16;
@@ -6573,17 +6615,10 @@ begin
 
     NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
     CondReg := ACtx.Scope.AllocateRegister;
-    ArgReg := ACtx.Scope.AllocateRegister;
     EmitInstruction(ACtx, EncodeABx(OP_HAS_GLOBAL, CondReg, NameIdx));
     OkJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, CondReg);
-    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, CondReg,
-      ACtx.Template.AddConstantString(REFERENCE_ERROR_NAME)));
-    EmitInstruction(ACtx, EncodeABx(OP_LOAD_CONST, ArgReg,
-      ACtx.Template.AddConstantString(Format(SErrorUndefinedVariable, [AExpr.Name]))));
-    EmitInstruction(ACtx, EncodeABC(OP_CONSTRUCT, CondReg, CondReg, 1));
-    EmitInstruction(ACtx, EncodeABC(OP_THROW, CondReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABx(OP_THROW_UNDEFINED_VARIABLE, 0, NameIdx));
     PatchJumpTarget(ACtx, OkJump);
-    ACtx.Scope.FreeRegister;
     ACtx.Scope.FreeRegister;
 
     EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));

@@ -198,7 +198,25 @@ const
   //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
   //               declares private auto-accessor names, and
   //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
-  GOCCIA_FORMAT_VERSION = 86;
+  //   v86 -> v87: added OP_CLASS_ADD_METHOD_DYNAMIC (opcode 144), which
+  //               defines a computed instance method on the class's
+  //               prototype, and computed instance accessors now pass the
+  //               class to OP_DEFINE_ACCESSOR_DYNAMIC, so both resolve
+  //               private names through their class. Added
+  //               OP_SET_PRIVATE_CLASS (opcode 145), which follows each
+  //               OP_CLOSURE and OP_NEW_CLASS in a class body and hands the
+  //               new function or class the class's private environment.
+  //   v87 -> v88: a static field initializer compiles to its own function,
+  //               run by OP_CLASS_EXEC_STATIC_BLOCK with the class as its
+  //               home object; OP_DEFINE_STATIC_PROP_CONST and
+  //               OP_DEFINE_STATIC_PROP_DYNAMIC no longer give the stored
+  //               value one, so inline initializers from v87 lose it.
+  //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
+  //               the intrinsic ReferenceError for an unresolvable reference,
+  //               with its suggestion, in place of the four-instruction
+  //               `new ReferenceError(...)` sequence that read the global
+  //               `ReferenceError` binding.
+  GOCCIA_FORMAT_VERSION = 89;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -405,6 +423,8 @@ type
     OP_USHR          = 141,
     OP_DEFINE_CLASS_METHOD_DYNAMIC = 142,
     OP_SET_CLASS_SOURCE_CONST = 143,
+    OP_CLASS_ADD_METHOD_DYNAMIC = 144,
+    OP_SET_PRIVATE_CLASS = 145,
     OP_IMPORT        = 167,
     OP_EXPORT        = 168,
     OP_AWAIT         = 169,
@@ -503,7 +523,13 @@ type
     // OP_GET_UPVALUE and OP_GET_GLOBAL it never consults a direct eval's var
     // scope, so it checks the binding an assignment resolved before its
     // right-hand side ran (ES2026 §9.1.1.1.5 SetMutableBinding step 3).
-    OP_CHECK_BINDING_INITIALIZED = 235
+    OP_CHECK_BINDING_INITIALIZED = 235,
+    // Bx = name-constant index; A is unused. Throws the ReferenceError
+    // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
+    // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
+    // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
+    // holds, and carrying the evaluator's suggestion.
+    OP_THROW_UNDEFINED_VARIABLE = 236
   );
 
 const
@@ -547,14 +573,14 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 135, 144..166]);
+    not (AOp in [99, 135, 146..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
     OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER,
-    OP_CHECK_BINDING_INITIALIZED]);
+    OP_CHECK_BINDING_INITIALIZED, OP_THROW_UNDEFINED_VARIABLE]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
@@ -573,7 +599,8 @@ begin
     OP_DEL_INDEX, OP_SET_OBJECT_PROTO, OP_DEFINE_PROP_DYNAMIC,
     OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP, OP_ADD, OP_SUB, OP_MUL,
     OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
-    OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_AWAIT,
+    OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC,
+    OP_CLASS_ADD_METHOD_DYNAMIC, OP_SET_PRIVATE_CLASS, OP_AWAIT,
     OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
     OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
     OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,
@@ -605,7 +632,8 @@ begin
     OP_DEFINE_STATIC_PROP_CONST, OP_DEFINE_STATIC_PROP_DYNAMIC,
     OP_DEFINE_PROP_DYNAMIC, OP_DEFINE_STATIC_METHOD_CONST,
     OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP,
-    OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_ITER_NEXT, OP_GET_INDEX,
+    OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_CLASS_ADD_METHOD_DYNAMIC,
+    OP_ITER_NEXT, OP_GET_INDEX,
     OP_SET_INDEX, OP_DEL_INDEX, OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE,
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR,
     OP_BXOR, OP_SHL, OP_SHR, OP_USHR, OP_EQ, OP_NEQ, OP_LOOSE_EQ,
