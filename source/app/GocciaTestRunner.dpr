@@ -744,6 +744,7 @@ end;
 procedure TTestRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   Files, RawFiles, StdinNames, TempFiles, CoverageSource: TStringList;
+  DiscoveredFiles: TStringList;
   I: Integer;
   AggregatedResult: TAggregatedTestResult;
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
@@ -809,11 +810,19 @@ begin
         for I := 0 to APaths.Count - 1 do
         begin
           if DirectoryExists(APaths[I]) then
+          begin
             { A committed node_modules tree is a resolution fixture, not a
               suite: its packages are ordinary .js files that would otherwise
-              be discovered and executed as test files. }
-            RawFiles.AddStrings(FindAllFilesExcludingDirectories(APaths[I],
-              ScriptExtensions, TEST_DISCOVERY_EXCLUDED_DIRECTORIES))
+              be discovered and executed as test files. The discovery call
+              returns a list the caller owns. }
+            DiscoveredFiles := FindAllFilesExcludingDirectories(APaths[I],
+              ScriptExtensions, TEST_DISCOVERY_EXCLUDED_DIRECTORIES);
+            try
+              RawFiles.AddStrings(DiscoveredFiles);
+            finally
+              DiscoveredFiles.Free;
+            end;
+          end
           else if FileExists(APaths[I]) then
             RawFiles.Add(APaths[I])
           else
