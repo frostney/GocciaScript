@@ -1985,6 +1985,83 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
   }
 });
 
+// ES2026 §13.3.6.1: `eval(...)` is a direct eval when the identifier resolves
+// to %eval%, also through a `with` object (#1587). It keeps the caller's
+// scope and `this`; any other function found there is called as a method of
+// the `with` object.
+await section("Test262 Runner: eval found on a with object is a direct eval...", async () => {
+  const source = [
+    "var out = [];",
+    'var x = "outer";',
+    'function emptyWith() { var x = "local"; with ({}) { return eval("x"); } }',
+    'out.push("emptyWith " + emptyWith());',
+    'function evalProperty() { var x = "local"; var o = { eval: eval }; with (o) { return eval("x"); } }',
+    'out.push("evalProperty " + evalProperty());',
+    'function withBindingVisible() { var x = "local"; with ({ eval: eval, x: "with" }) { return eval("x"); } }',
+    'out.push("withBindingVisible " + withBindingVisible());',
+    'function inheritedEval() { var x = "local"; with (Object.create({ eval: eval })) { return eval("x"); } }',
+    'out.push("inheritedEval " + inheritedEval());',
+    "function otherFunction() {",
+    '  var x = "local";',
+    '  var o = { eval: function (s) { return "custom:" + s + ":" + (this === o); } };',
+    '  with (o) { return eval("x"); }',
+    "}",
+    'out.push("otherFunction " + otherFunction());',
+    "function nested() {",
+    '  var x = "local";',
+    '  with ({}) { with ({ eval: eval, y: "inner" }) { return eval("x + \'/\' + y"); } }',
+    "}",
+    'out.push("nested " + nested());',
+    "function nestedFunction() {",
+    '  var x = "outer-fn";',
+    "  with ({ eval: eval }) {",
+    '    return (function () { var x = "inner-fn"; with ({ eval: eval }) { return eval("x"); } })();',
+    "  }",
+    "}",
+    'out.push("nestedFunction " + nestedFunction());',
+    "function varDeclaration() {",
+    "  var o = { eval: eval };",
+    "  with (o) { eval(\"var created = 'made'\"); }",
+    '  return created + ":" + ("created" in o) + ":" + ("created" in globalThis);',
+    "}",
+    'out.push("varDeclaration " + varDeclaration());',
+    'var marker = { name: "marker" };',
+    'function thisValue() { var o = { eval: eval }; with (o) { var t = eval("this"); return (t === marker) + ":" + (t === o); } }',
+    'out.push("thisValue " + thisValue.call(marker));',
+    'print(out.join("\\n"));',
+    "",
+  ].join("\n");
+  const expected = [
+    "emptyWith local",
+    "evalProperty local",
+    "withBindingVisible with",
+    "inheritedEval local",
+    "otherFunction custom:x:true",
+    "nested local/inner",
+    "nestedFunction inner-fn",
+    "varDeclaration made:false:false",
+    "thisValue true:false",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([
+      TEST262RUNNER,
+      "--eval-host",
+      `--mode=${mode}`,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} with-object eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} with-object eval was not a direct eval: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval in a finally block run by return or break resolves names outside the try block...", async () => {
   const source = [
     "const run = (exit) => {",
