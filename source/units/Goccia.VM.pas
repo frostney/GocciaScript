@@ -5299,6 +5299,17 @@ begin
       // setting the entry up: the call stack limit, the native stack or the
       // memory budget refusing it. While the continuation is still whole the
       // generator's code has not run, and it stays suspended where it was.
+      //
+      // ES2026 changes a generator's state in two kinds of step only. It
+      // becomes ~completed~ in GeneratorStart's closure (§27.5.3.1) once the
+      // body's evaluation ends, or in GeneratorResumeAbrupt (§27.5.3.4) when
+      // it is ~suspended-start~; that case is handled above, without an entry.
+      // GeneratorResume (§27.5.3.3), GeneratorResumeAbrupt and, for async
+      // generators, AsyncGeneratorResume (§27.6.3.6) set ~executing~ just
+      // before they push genContext. A refusal before the generator's code
+      // runs is an error raised by the next(), return() or throw() call
+      // itself, before that step, so the state stays suspended. V8 closes
+      // the generator here instead; the specification has no step that would.
       on E: TGocciaThrowValue do
       begin
         if HadContinuation and not FHasContinuation then

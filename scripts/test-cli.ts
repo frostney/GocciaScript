@@ -3699,11 +3699,16 @@ console.log("--max-stack (a refused generator resume leaves the generator suspen
   // At the limit the VM refuses to enter a generator's code, by the call
   // limit or by the native stack running low. The code has not run, so the
   // generator stays suspended and resumes later, instead of reporting that it
-  // is already executing. The work is inline in the catch block: calling a
-  // helper there would itself be refused. The interpreter does not refuse a
-  // resume, so this runs in bytecode only.
-  const resumeSync = 'try { fresh.next(); refused.push("ran"); } catch (x) { refused.push(x.name); } try { started.next(); refused.push("ran"); } catch (x) { refused.push(x.name); }';
-  const atLimit = `if (!asyncRefused) { ${resumeSync} asyncRefused = asyncFresh.next(); }`;
+  // is already executing. return() and throw() on a generator that has not
+  // started complete it without entering its code (ES2026 §27.5.3.4,
+  // §27.6.1.3, §27.6.1.4), so the limit cannot refuse them. The work is
+  // inline in the catch block: calling a helper there would itself be
+  // refused. The interpreter does not refuse a resume, so this runs in
+  // bytecode only.
+  const resumeSync = 'try { fresh.next(); refused.push("ran"); } catch (x) { refused.push(x.name); } try { started.next(); refused.push("ran"); } catch (x) { refused.push(x.name); }' +
+    ' abrupt.push(retGen.return(5)); try { thrGen.throw(boom); abrupt.push("ran"); } catch (x) { abrupt.push(x === boom ? "boom" : x.name); }';
+  const resumeAsync = "asyncRefused = asyncFresh.next(); asyncAbrupt = [asyncRet.return(5), asyncThr.throw(boom)];";
+  const atLimit = `if (!asyncRefused) { ${resumeSync} ${resumeAsync} }`;
   // How much native stack a call uses before the VM checks the headroom
   // depends on the native calls that lead to the check, and differs between
   // platforms. So the native-stack case descends through the same kind of
@@ -3714,7 +3719,7 @@ console.log("--max-stack (a refused generator resume leaves the generator suspen
     "const d = {",
     `  *sync() { try { d.sync().next(); } catch (e) { if (!refused.length) { ${resumeSync} } } },`,
     "  async *async() { entered++; const before = entered; const p = d.async().next();",
-    "    if (entered === before && !asyncRefused) { p.catch(() => {}); asyncRefused = asyncFresh.next(); } },",
+    `    if (entered === before && !asyncRefused) { p.catch(() => {}); ${resumeAsync} } },`,
     "};",
     "d.sync().next();",
     "d.async().next();",
@@ -3727,14 +3732,20 @@ console.log("--max-stack (a refused generator resume leaves the generator suspen
     const src = [
       "const o = { *g() { yield 1; yield 2; }, async *ag() { yield 1; yield 2; } };",
       "const fresh = o.g(), started = o.g(), asyncFresh = o.ag();",
+      "const retGen = o.g(), thrGen = o.g(), asyncRet = o.ag(), asyncThr = o.ag();",
+      'const boom = new Error("boom");',
       "started.next();",
-      "const refused = [];",
-      "let asyncRefused;",
+      "const refused = [], abrupt = [];",
+      "let asyncRefused, asyncAbrupt;",
       descend,
       'const rest = (it) => { try { return [...it].join(" "); } catch (e) { return e.name; } };',
       'asyncRefused.then(() => "ran", (e) => e.name).then(async (a) => {',
       '  let ar = []; try { for await (const v of asyncFresh) ar.push(v); ar = ar.join(" "); } catch (e) { ar = e.name; }',
       '  console.log(refused.join(","), "|", rest(fresh), "|", rest(started), "|", a, ar);',
+      "  const fmt = (r) => `${r.value},${r.done}`;",
+      "  const ra = fmt(await asyncAbrupt[0]), rn = fmt(await asyncRet.next());",
+      '  const ta = await asyncAbrupt[1].then(() => "ran", (e) => (e === boom ? "boom" : e.name)), tn = fmt(await asyncThr.next());',
+      '  console.log(fmt(abrupt[0]), fmt(retGen.next()), "|", abrupt[1], fmt(thrGen.next()), "|", ra, rn, "|", ta, tn);',
       "});",
       "",
     ].join("\n");
@@ -3748,6 +3759,9 @@ console.log("--max-stack (a refused generator resume leaves the generator suspen
     const expected = "RangeError,RangeError | 1 2 | 2 | RangeError 1 2";
     if (run.exitCode !== 0 || !containsLine(out, expected))
       throw new Error(`A generator resume refused at the ${label} should leave the generator suspended ("${expected}"), got exit ${run.exitCode}: ${out}`);
+    const expectedAbrupt = "5,true undefined,true | boom undefined,true | 5,true undefined,true | boom undefined,true";
+    if (!containsLine(out, expectedAbrupt))
+      throw new Error(`return() and throw() at the ${label} should complete a generator that has not started ("${expectedAbrupt}"), got: ${out}`);
   }
 }
 
