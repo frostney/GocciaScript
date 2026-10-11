@@ -4652,9 +4652,11 @@ console.log("Runtime diagnostic parity...");
 // reports a script's missing import as a RuntimeError, and it is being removed
 // (#825), so #1274 fixes only the bytecode half.
 // Everything a script printed before the runner's timing lines.
+// Line endings are normalized, because Windows writes CRLF.
 const scriptStdout = (out: string): string => {
-  const at = out.indexOf("Running script (");
-  return at < 0 ? out : out.slice(0, at);
+  const text = out.replace(/\r\n/g, "\n");
+  const at = text.indexOf("Running script (");
+  return at < 0 ? text : text.slice(0, at);
 };
 
 console.log("Undeclared name: Suggestion line in both modes...");
