@@ -647,7 +647,11 @@ type
     destructor Destroy; override;
     procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
-    function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Runs AModule's top level. AThisValue is its receiver, which a direct
+      eval at that top level reads as its caller's `this`; nil passes
+      undefined, as a Script or Module top level gets. }
+    function ExecuteModule(const AModule: TGocciaBytecodeModule;
+      const AThisValue: TGocciaValue = nil): TGocciaValue;
     function ExecuteImportedModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
@@ -16999,8 +17003,10 @@ begin
     VMValueToRegisterFast(AThisValue), RegisterArgs, APushExecutionContext));
 end;
 
-function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
+  ReceiverValue: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   PreviousAsyncPromise: TGocciaPromiseValue;
   Promise: TGocciaPromiseValue;
@@ -17009,6 +17015,10 @@ var
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
 begin
+  if Assigned(AThisValue) then
+    ReceiverValue := AThisValue
+  else
+    ReceiverValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(AModule.TopLevel);
   TopClosure.GlobalScope := FGlobalScope;
@@ -17032,8 +17042,8 @@ begin
             FCurrentAsyncPromise := Promise;
             try
               try
-                Promise.Resolve(ExecuteClosure(TopClosure,
-                  TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False));
+                Promise.Resolve(ExecuteClosure(TopClosure, ReceiverValue,
+                  EmptyArgs, False));
               except
                 on E: EGocciaBytecodeAsyncSuspend do
                 begin
@@ -17056,8 +17066,8 @@ begin
         Result := Promise;
       end
       else
-        Result := ExecuteClosure(TopClosure,
-          TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
+        Result := ExecuteClosure(TopClosure, ReceiverValue, EmptyArgs,
+          False);
     finally
       if Assigned(FRealm) then
         TGocciaExecutionContextStack.Pop;

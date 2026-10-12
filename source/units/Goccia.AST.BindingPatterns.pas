@@ -19,6 +19,13 @@ type
     vbnNonStrictScriptCompatibility
   );
 
+{ Whether VarDeclaredNames also takes the block-level function declarations
+  that ES2026 B.3.2 gives a var binding: in non-strict code of an engine with
+  the non-strict compatibility profile. }
+function VarBindingNameCollectionMode(
+  const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
+  TGocciaVarBindingNameCollectionMode;
+
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
   const ANames: TUnicodeStringList; const AUnique: Boolean = False);
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
@@ -49,6 +56,16 @@ procedure CollectVarBindingNamesFromNodes(
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
 
 implementation
+
+function VarBindingNameCollectionMode(
+  const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
+  TGocciaVarBindingNameCollectionMode;
+begin
+  if ANonStrictMode and ACompatibilityNonStrictMode then
+    Result := vbnNonStrictScriptCompatibility
+  else
+    Result := vbnStandard;
+end;
 
 procedure AddBindingName(const ANames: TUnicodeStringList;
   const AName: string;

@@ -4181,9 +4181,11 @@
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
+        // ES2026 §19.2.1.3 step 18: eval code's var binding is deletable.
         if Assigned(FGlobalScope) then
           FGlobalScope.DefineVariableBinding(GlobalName,
-            TGocciaUndefinedLiteralValue.UndefinedValue, False);
+            TGocciaUndefinedLiteralValue.UndefinedValue, False,
+            Template.GlobalEvalCode);
       end;
 
       OP_DEFINE_GLOBAL_VAR_LONG:
@@ -4191,6 +4193,15 @@
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
         GlobalBindingValue := GetRegister(A);
+        // ES2026 §14.3.2.1: in eval code the binding exists from the
+        // declaration instantiation, so the initializer is a PutValue to it.
+        if Template.GlobalEvalCode then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.AssignBinding(GlobalName, GlobalBindingValue, 0, 0,
+              not Template.StrictCode);
+          Continue;
+        end;
         // Top-level var names are instantiated before body execution.
         // Initializers inside loops can therefore use ordinary assignment
         // resolution instead of repeating CreateGlobalVarBinding each time.
@@ -4241,9 +4252,10 @@
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
+        // ES2026 §19.2.1.3 step 17: eval code's function binding is deletable.
         if Assigned(FGlobalScope) then
           FGlobalScope.CreateGlobalFunctionBinding(GlobalName, GetRegister(A),
-            False);
+            Template.GlobalEvalCode);
       end;
 
       OP_PREDECLARE_GLOBAL_LET_LONG:

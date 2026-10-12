@@ -2242,6 +2242,11 @@ begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
       if Local.SuspendCount > 0 then
         Continue;
+      // A global eval's var or function can be deleted, so the direct eval
+      // resolves it by name through the global environment, as the eval code
+      // itself does (TGocciaCompilerScope.GlobalBackedBindingsByName).
+      if Local.IsGlobalBacked and ACtx.Scope.GlobalBackedBindingsByName then
+        Continue;
       // A binding of the calling function is reached through its cell, as a
       // closure created at this call would reach it, so that eval code goes
       // on reading and writing it after the call has returned. Marking it
@@ -2308,6 +2313,8 @@ begin
         end;
         if (Local.Name <> KEYWORD_THIS) and
            not IsDirectEvalVisibleCompilerName(Local.Name) then
+          Continue;
+        if Local.IsGlobalBacked and ScopeCursor.GlobalBackedBindingsByName then
           Continue;
         if Local.IsGlobalBacked then
           AddDirectEvalBinding(Bindings, Names, Local.Name, debGlobal, 0,
@@ -3582,7 +3589,7 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, VarSlot, 0, 0));
     end;
 
-    if ACtx.NonStrictMode then
+    if ACtx.NonStrictMode and ACtx.CompatibilityNonStrictMode then
     begin
       DiscoverBlockFunctionVarBindings(Block, ACtx.Scope,
         ACtx.BlockFunctionVarBindings, BlockFunctionNames);

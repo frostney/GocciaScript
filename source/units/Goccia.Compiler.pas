@@ -7,6 +7,8 @@ interface
 uses
   Generics.Collections,
 
+  UnicodeStringList,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.AST.Statements,
@@ -29,10 +31,18 @@ type
     FNumberBindingProofs: TNumberBindingProofMap;
     FBlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     FGlobalBackedTopLevel: Boolean;
+    FGlobalEvalVarEnvironment: Boolean;
+    FGlobalEvalDeclaredVarNames: TUnicodeStringList;
+    FEvalCode: Boolean;
+    FCompletionRegister: Integer;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
+    // The engine's non-strict compatibility profile (Annex B block-function
+    // var bindings). It equals FNonStrictMode except while a directive-free
+    // eval compiles: that code is non-strict whatever the profile is.
+    FCompatibilityNonStrictMode: Boolean;
     FArgumentsObjectEnabled: Boolean;
     FLabelReentryStatement: TGocciaStatement;
     FLoopReentryStatement: TGocciaStatement;
@@ -55,6 +65,27 @@ type
     destructor Destroy; override;
 
     function Compile(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    { ES2026 §19.2.1.1 PerformEval with a global variable environment: compile
+      AProgram as the eval code of an indirect eval or of
+      ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.1.3). Its completion
+      value is the template's return value. AStrictEval is the eval's
+      strictness (ScriptIsStrict, step 13). A non-strict eval declares its
+      vars and functions as deletable global bindings (§19.2.1.3
+      EvalDeclarationInstantiation steps 17-18, CreateGlobalVarBinding and
+      CreateGlobalFunctionBinding with D = true) and keeps its lexical
+      declarations as locals of its own template (step 16); a strict eval keeps
+      every declaration local (§19.2.1.1 step 18: varEnv is lexEnv). The eval
+      code is strict only by its own directive, also in an engine whose
+      profile is strict (no non-strict compatibility): a directive-free eval
+      is non-strict code there too, as the interpreter evaluates it. The
+      profile still decides the Annex B block-function var bindings and,
+      in the parser, which syntax is accepted.
+      ADeclaredVarNames is declaredVarNames (§19.2.1.3 steps 11-12). The host
+      runs the declaration checks of §19.2.1.3 before the template, which only
+      binds. The template is never serialized. }
+    function CompileGlobalEval(const AProgram: TGocciaProgram;
+      const AStrictEval: Boolean;
+      const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -80,7 +111,6 @@ uses
   SysUtils,
 
   OrderedStringMap,
-  UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
   Goccia.Bytecode,
@@ -95,6 +125,17 @@ uses
   Goccia.Compiler.Statements,
   Goccia.Keywords.Reserved,
   Goccia.Modules;
+
+// The statements whose completion is UpdateEmpty(…, undefined): their value
+// is undefined unless their body leaves one.
+function StatementResetsCompletionValue(const AStmt: TGocciaStatement): Boolean;
+begin
+  Result := (AStmt is TGocciaIfStatement) or
+    (AStmt is TGocciaWithStatement) or
+    (AStmt is TGocciaTryStatement) or
+    (AStmt is TGocciaSwitchStatement) or
+    Goccia.Compiler.Statements.StatementIsIteration(AStmt);
+end;
 
 { TGocciaCompiler }
 
@@ -114,6 +155,7 @@ begin
   FTopLevelTemplate := nil;
   FCurrentScope := nil;
   FOptimizationOptions := DefaultCompilerOptimizationOptions;
+  FCompletionRegister := -1;
 end;
 
 destructor TGocciaCompiler.Destroy;
@@ -137,10 +179,18 @@ begin
   Result.BlockFunctionVarBindings := FBlockFunctionVarBindings;
   Result.GlobalBackedTopLevel := FGlobalBackedTopLevel and
     (FCurrentTemplate = FTopLevelTemplate);
+  Result.GlobalBackedTopLevelLexicals := Result.GlobalBackedTopLevel and
+    not FGlobalEvalVarEnvironment;
+  if FCurrentTemplate = FTopLevelTemplate then
+    Result.CompletionRegister := FCompletionRegister
+  else
+    Result.CompletionRegister := -1;
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
-  Result.CompatibilityNonStrictMode := FNonStrictMode;
+  Result.CompatibilityNonStrictMode := FNonStrictMode and
+    FCompatibilityNonStrictMode;
+  Result.NonStrictCodeEnabled := FNonStrictMode;
   Result.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
@@ -155,8 +205,8 @@ end;
 
 function TGocciaCompiler.NonStrictBlockFunctionVarBindingsEnabled: Boolean;
 begin
-  Result := FNonStrictMode and Assigned(FCurrentTemplate) and
-    not FCurrentTemplate.StrictCode;
+  Result := FNonStrictMode and FCompatibilityNonStrictMode and
+    Assigned(FCurrentTemplate) and not FCurrentTemplate.StrictCode;
 end;
 
 // The block-level function declarations whose var binding the body being
@@ -360,6 +410,25 @@ begin
   end;
 
   EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
+
+  // Eval code returns its completion value (ES2026 §19.2.1.1 PerformEval
+  // steps 29-30). An expression statement's value replaces it (§14.5.1). A
+  // statement whose result is UpdateEmpty(…, undefined) (if §14.6.2, the
+  // iteration statements §14.7, with §14.11.2, switch §14.12.4, try
+  // §14.15.3) sets it to undefined before its body runs, so the body's last
+  // value, or undefined, is what remains.
+  if Ctx.CompletionRegister >= 0 then
+  begin
+    if AStmt is TGocciaExpressionStatement then
+    begin
+      DoCompileExpression(TGocciaExpressionStatement(AStmt).Expression,
+        UInt16(Ctx.CompletionRegister));
+      Exit(Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt));
+    end;
+    if StatementResetsCompletionValue(AStmt) then
+      EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED,
+        UInt16(Ctx.CompletionRegister), 0, 0));
+  end;
 
   if AStmt is TGocciaExpressionStatement then
     Goccia.Compiler.Statements.CompileExpressionStatement(Ctx, TGocciaExpressionStatement(AStmt))
@@ -1442,6 +1511,55 @@ begin
   end;
 end;
 
+// The registers of a global eval's hoisted var locals. Their bindings live in
+// the global environment, so the locals only need a defined value.
+procedure EmitHoistedGlobalVarSlotInitializers(
+  const ACtx: TGocciaCompilationContext; const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+  Local: PGocciaCompilerLocal;
+begin
+  for I := 0 to AScope.LocalCount - 1 do
+  begin
+    Local := AScope.LocalAt(I);
+    if (Local^.Depth = 0) and (Local^.Name <> '__receiver') then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, Local^.Slot, 0, 0));
+  end;
+end;
+
+function TGocciaCompiler.CompileGlobalEval(const AProgram: TGocciaProgram;
+  const AStrictEval: Boolean;
+  const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
+var
+  SavedAsyncTopLevel, SavedGlobalBackedTopLevel,
+  SavedPreinitializedTopLevelFunctions, SavedNonStrictMode: Boolean;
+begin
+  SavedAsyncTopLevel := FAsyncTopLevel;
+  SavedNonStrictMode := FNonStrictMode;
+  // ES2026 §19.2.1.1 step 13: strictEval is ScriptIsStrict of the eval code.
+  FCompatibilityNonStrictMode := FNonStrictMode;
+  FNonStrictMode := not AStrictEval;
+  SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+  SavedPreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions;
+  FAsyncTopLevel := False;
+  FPreinitializedTopLevelFunctions := False;
+  FGlobalBackedTopLevel := not AStrictEval;
+  FGlobalEvalVarEnvironment := not AStrictEval;
+  FGlobalEvalDeclaredVarNames := ADeclaredVarNames;
+  FEvalCode := True;
+  try
+    Result := Compile(AProgram);
+  finally
+    FEvalCode := False;
+    FGlobalEvalDeclaredVarNames := nil;
+    FGlobalEvalVarEnvironment := False;
+    FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FPreinitializedTopLevelFunctions := SavedPreinitializedTopLevelFunctions;
+    FAsyncTopLevel := SavedAsyncTopLevel;
+    FNonStrictMode := SavedNonStrictMode;
+  end;
+end;
+
 function TGocciaCompiler.Compile(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
@@ -1455,6 +1573,8 @@ begin
   FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
+  if not FEvalCode then
+    FCompatibilityNonStrictMode := FNonStrictMode;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
   FCurrentTemplate := TGocciaFunctionTemplate.Create('<module>');
   FTopLevelTemplate := FCurrentTemplate;
@@ -1462,12 +1582,14 @@ begin
   FCurrentTemplate.IsAsync := FAsyncTopLevel;
   FCurrentTemplate.StrictCode := (not FNonStrictMode) or
     HasUseStrictDirective(AProgram);
+  FCurrentTemplate.GlobalEvalCode := FGlobalEvalVarEnvironment;
   FCurrentScope := TGocciaCompilerScope.Create(nil, 0);
   // A sloppy direct eval in global code declares its vars as globals, so the
   // top level has no hidden variable object.
   FCurrentScope.DirectEvalUsage := AProgram.DirectEvalUsage;
   FCurrentScope.AttachTemplate(FCurrentTemplate);
   FCurrentScope.DeclareLocal('__receiver', False);
+  FCurrentScope.GlobalBackedBindingsByName := FGlobalEvalVarEnvironment;
 
   try
     DiscoverProgramNumberBindings(AProgram, FCurrentScope,
@@ -1482,19 +1604,25 @@ begin
     if FGlobalBackedTopLevel then
     begin
       MarkHoistedVarsGlobalBacked(FCurrentScope);
-      EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
-      EmitUninitializedTopLevelGlobalVarDeclarations(BuildContext,
-        AProgram.Body);
+      if FGlobalEvalVarEnvironment then
+        EmitHoistedGlobalVarSlotInitializers(BuildContext, FCurrentScope)
+      else
+      begin
+        EmitHoistedGlobalVarDeclarations(BuildContext, FCurrentScope);
+        EmitUninitializedTopLevelGlobalVarDeclarations(BuildContext,
+          AProgram.Body);
+      end;
     end;
 
     PredeclaredLexicalStart := FCurrentScope.LocalCount;
     for I := 0 to AProgram.Body.Count - 1 do
       PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
     MarkModuleExportLocals(AProgram.Body, FCurrentScope);
-    if FGlobalBackedTopLevel then
+    if FGlobalBackedTopLevel and not FGlobalEvalVarEnvironment then
       MarkTopLevelGlobalBackedLocals(FCurrentScope);
     Ctx := BuildContext;
-    if FGlobalBackedTopLevel and not FPreinitializedTopLevelFunctions then
+    if FGlobalBackedTopLevel and not FPreinitializedTopLevelFunctions and
+       not FGlobalEvalVarEnvironment then
       EmitGlobalLexicalPredeclarations(Ctx, FCurrentScope,
         PredeclaredLexicalStart);
     for PredeclaredLexicalIndex := PredeclaredLexicalStart to
@@ -1505,7 +1633,8 @@ begin
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
           PredeclaredLocal^.Slot, 0, 0));
     end;
-    if not FPreinitializedTopLevelFunctions and not FGlobalBackedTopLevel then
+    if not FPreinitializedTopLevelFunctions and not FGlobalBackedTopLevel and
+       not FEvalCode then
       DeclareEntryModuleExports(Ctx, FModule, AProgram.Body);
 
     // Check if there are function declarations to hoist
@@ -1529,7 +1658,17 @@ begin
           DoCompileStatement(AProgram.Body[I]);
     end;
 
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 18:
+    // CreateGlobalVarBinding(vn, true) for each of declaredVarNames, after the
+    // function bindings. The template is marked GlobalEvalCode, so the
+    // instruction creates a deletable binding.
+    if FGlobalEvalVarEnvironment then
+      EmitHoistedGlobalVarDeclarationsForNames(BuildContext,
+        FGlobalEvalDeclaredVarNames);
+
     RetReg := FCurrentScope.AllocateRegister;
+    if FEvalCode then
+      FCompletionRegister := RetReg;
     Ctx := BuildContext;
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, RetReg, 0, 0));
     BodyAbrupt := False;
@@ -1583,6 +1722,7 @@ begin
     FModule := nil;
     FCurrentTemplate := nil;
   finally
+    FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
     FTopLevelTemplate := nil;
     if Assigned(FModule) then

@@ -275,6 +275,9 @@ type
     procedure DiscardRuntimePending;
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
+    { The parse options of this engine's language profile. }
+    function SourcePipelineOptions(
+      const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -393,6 +396,17 @@ type
     procedure RefreshGlobalThis;
     procedure SuspendRealmExecutionContext;
     function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
+    { ES2026 §19.2.1.1 PerformEval for eval code whose variable environment
+      is this realm's global environment: an indirect call of the realm's
+      `eval`, and ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.1.3).
+      ASourceText is the eval's source; the caller has handled a non-String.
+      Parses it as a Script, checks the static early errors, and has the
+      executor run it in this realm: compiled and run on the VM in bytecode
+      mode (ADR 0134 Phase 2), evaluated in interpreter mode. Returns the
+      completion value. When it raises, AStage tells whether compiling or
+      running failed. }
+    function EvaluateGlobalEval(const ASourceText, ASourcePath: string;
+      out AStage: TGocciaGlobalEvalStage): TGocciaValue;
     function AddExtension(
       const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
     function FindExtension(
@@ -511,6 +525,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
@@ -2252,6 +2267,81 @@ begin
   end;
 end;
 
+function TGocciaEngine.EvaluateGlobalEval(const ASourceText,
+  ASourcePath: string; out AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  Options: TGocciaSourcePipelineOptions;
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  ParseResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
+  SourceLines: TStringList;
+  StrictEval: Boolean;
+  Declarations: TGocciaGlobalEvalDeclarations;
+begin
+  AStage := gesCompile;
+  Declarations.VarNames := TUnicodeStringList.Create;
+  Declarations.FunctionNames := TUnicodeStringList.Create;
+  Declarations.DeclaredVarNames := TUnicodeStringList.Create;
+  SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  try
+    Options := SourcePipelineOptions(stScript);
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
+    try
+      RealmScope := ActivateRealmExecutionContext;
+      try
+        // §19.2.1.1 step 11: parse the source as a Script and check the early
+        // errors the eval call owns. An indirect eval is not in a function, a
+        // method or a derived constructor, so new.target, super.x and super()
+        // are SyntaxErrors.
+        ParseResult := TGocciaSourcePipeline.Parse(SourceLines, ASourcePath,
+          Options);
+        try
+          ValidateEvalScriptBody(ParseResult.ProgramNode.Body);
+          // Step 13: the eval is strict only by its own directive.
+          StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+          ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval, False,
+            False, False);
+          ValidateEvalControlFlow(ParseResult.ProgramNode);
+          CollectGlobalEvalDeclarationNames(ParseResult.ProgramNode,
+            VarBindingNameCollectionMode(not StrictEval,
+              cfNonStrictMode in FCompatibility),
+            Declarations.VarNames, Declarations.FunctionNames,
+            Declarations.DeclaredVarNames);
+          CheckEvalLexicalDeclarationConflicts(ParseResult.ProgramNode,
+            Declarations.VarNames);
+          Result := FExecutor.EvaluateGlobalEval(ParseResult.ProgramNode,
+            ASourcePath, StrictEval, Declarations, AStage);
+        finally
+          ParseResult.Free;
+        end;
+      finally
+        RealmScope.Free;
+      end;
+    finally
+      OptionsScope.Free;
+    end;
+  finally
+    SourceLines.Free;
+    Declarations.DeclaredVarNames.Free;
+    Declarations.FunctionNames.Free;
+    Declarations.VarNames.Free;
+  end;
+end;
+
+function TGocciaEngine.SourcePipelineOptions(
+  const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+begin
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := FPreprocessors;
+  Result.Compatibility := FCompatibility;
+  Result.LabelStatementsEnabled := FLabelStatementsEnabled;
+  Result.ForInLoopsEnabled := FForInLoopsEnabled;
+  Result.ExperimentalJSModuleSourceEnabled :=
+    FExperimentalJSModuleSourceEnabled;
+  Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  Result.SourceType := ASourceType;
+end;
+
 procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
 begin
   FRetainedModules.Add(AModule);
@@ -2999,15 +3089,7 @@ begin
   PipelineResult := nil;
 
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := FSourceType;
+    PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;

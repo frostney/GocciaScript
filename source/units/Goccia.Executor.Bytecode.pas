@@ -34,6 +34,8 @@ type
       const AEntry: TGocciaModule);
     function LoadLinkedModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
+    function RunModule(const AModule: TGocciaCompiledModule;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
     constructor Create;
     destructor Destroy; override;
@@ -48,6 +50,10 @@ type
       out AProgramConsumed: Boolean): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function EvaluateGlobalEval(const AProgram: TGocciaProgram;
+      const ASourcePath: string; const AStrictEval: Boolean;
+      const ADeclarations: TGocciaGlobalEvalDeclarations;
+      var AStage: TGocciaGlobalEvalStage): TGocciaValue; override;
     procedure ClearTransientCaches; override;
 
     function CompileModule(
@@ -219,6 +225,64 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
+{ ES2026 §19.2.1.1 PerformEval steps 17-33 with the realm's global
+  environment as the variable environment, compiled (ADR 0134 Phase 2). The
+  eval code compiles to a module of its own, kept for the engine's life like
+  the Function constructor's code (ADR 0134, decision 1). §19.2.1.3
+  EvalDeclarationInstantiation checks the global object first, then the
+  template binds the eval's functions and vars and runs the body on this
+  realm's VM, against the realm's global environment even when the eval was
+  called from a module body. Nothing here reaches the tree-walk evaluator. }
+function TGocciaBytecodeExecutor.EvaluateGlobalEval(
+  const AProgram: TGocciaProgram; const ASourcePath: string;
+  const AStrictEval: Boolean;
+  const ADeclarations: TGocciaGlobalEvalDeclarations;
+  var AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Options: TGocciaCompilerOptimizationOptions;
+  SavedGlobalScope: TGocciaScope;
+  SavedGlobalBackedTopLevel: Boolean;
+begin
+  Compiler := TGocciaCompiler.Create(ASourcePath);
+  try
+    Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      (TGocciaCoverageTracker.Instance <> nil) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Options.DirectEvalAvailable := RealmExposesDirectEval;
+    Compiler.OptimizationOptions := Options;
+    Module := Compiler.CompileGlobalEval(AProgram, AStrictEval,
+      ADeclarations.DeclaredVarNames);
+  finally
+    Compiler.Free;
+  end;
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
+
+  AStage := gesRun;
+  if not AStrictEval then
+    CheckGlobalEvalDeclarations(FGlobalScope, ADeclarations.VarNames,
+      ADeclarations.FunctionNames, ADeclarations.DeclaredVarNames);
+
+  // The eval can run inside a module body, which has the VM's global scope
+  // and script-top-level flag set for itself (EvaluateModuleBody); RunModule
+  // sets both for the eval, so the module body gets its own back.
+  SavedGlobalScope := FVM.GlobalScope;
+  SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  FVM.GlobalScope := FGlobalScope;
+  try
+    Result := RunModule(Module, FGlobalScope.ThisValue);
+  finally
+    FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.GlobalScope := SavedGlobalScope;
+  end;
+end;
+
 // Ordinary realms have no `eval`. A host that offers direct eval (the Test262
 // host, and a ShadowRealm created from such a realm) says so on the realm when
 // it installs the function; the global `eval` property itself is not asked,
@@ -374,6 +438,13 @@ end;
 
 function TGocciaBytecodeExecutor.RunCompiledModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
+begin
+  Result := RunModule(AModule, nil);
+end;
+
+function TGocciaBytecodeExecutor.RunModule(
+  const AModule: TGocciaCompiledModule;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
   SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
@@ -405,7 +476,7 @@ begin
        (TGocciaBytecodeModule(AModule).ExportCount > 0) then
       InitializeEntryExports(TGocciaBytecodeModule(AModule),
         FVM.CurrentRuntimeModule);
-    Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
+    Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule), AThisValue);
   finally
     FVM.LoadModule := SavedLoadModule;
     FLinkedModules.Free;

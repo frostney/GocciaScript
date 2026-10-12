@@ -40,6 +40,7 @@ type
     procedure TestRoundTripsDebugLocals;
     procedure TestRoundTripsDirectEvalSiteRecord;
     procedure TestRejectsMalformedDirectEvalSite;
+    procedure TestRefusesGlobalEvalCode;
   public
     procedure SetupTests; override;
   end;
@@ -66,6 +67,8 @@ begin
     TestRoundTripsDirectEvalSiteRecord);
   Test('Rejects a malformed direct eval site',
     TestRejectsMalformedDirectEvalSite);
+  Test('Refuses to write eval code, which lives only in memory',
+    TestRefusesGlobalEvalCode);
 end;
 
 // Serialises a one-instruction module and reads it back through the ordinary
@@ -666,6 +669,43 @@ begin
         .ToBe(Ord(OP_WIDE));
   finally
     Loaded.Free;
+  end;
+end;
+
+// ADR 0134 Phase 2: global eval code is compiled when the eval runs, and its
+// template's GlobalEvalCode flag has no field in the format, so the writer
+// refuses it instead of writing a template that would load without the flag.
+procedure TBytecodeBinaryTests.TestRefusesGlobalEvalCode;
+var
+  Module: TGocciaBytecodeModule;
+  Stream: TMemoryStream;
+  Writer: TGocciaBytecodeWriter;
+  Refused: Boolean;
+begin
+  Stream := TMemoryStream.Create;
+  Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
+  try
+    Module.TopLevel := TGocciaFunctionTemplate.Create('<module>');
+    Module.TopLevel.MaxRegisters := TEST_MAX_REGISTERS;
+    Module.TopLevel.GlobalEvalCode := True;
+    Module.TopLevel.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+    Module.HasDebugInfo := False;
+    Refused := False;
+    Writer := TGocciaBytecodeWriter.Create(Stream);
+    try
+      try
+        Writer.WriteModule(Module);
+      except
+        on E: Exception do
+          Refused := True;
+      end;
+    finally
+      Writer.Free;
+    end;
+    Expect<Boolean>(Refused).ToBe(True);
+  finally
+    Module.Free;
+    Stream.Free;
   end;
 end;
 
