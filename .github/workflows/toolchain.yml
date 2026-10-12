@@ -16,10 +16,13 @@ env:
   BINUTILS_VERSION: "2.44"
   # Bump a cache version when the steps or scripts that build that toolchain
   # change; an unchanged key keeps restoring the old toolchain.
-  CACHE_VERSION: "v33"
+  CACHE_VERSION: "v34"
   LINUX_CACHE_VERSION: "v1"
 
 jobs:
+  # Builds the Darwin targets, which need the macOS SDK. The cache keeps the
+  # cross-binutils and cross-libs paths of the Linux job so both toolchains
+  # restore through one cache step in ci.yml; this job leaves them empty.
   build:
     runs-on: macos-latest
     outputs:
@@ -65,47 +68,6 @@ jobs:
           brew unpack --patch fpc --destdir=.
           mv fpc-* fpc-source
 
-      - name: Build GNU Binutils for Linux targets
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          curl -L "https://ftp.gnu.org/gnu/binutils/binutils-${BINUTILS_VERSION}.tar.bz2" | tar xj
-          NCPU=$(sysctl -n hw.ncpu)
-
-          for target in x86_64-linux aarch64-linux; do
-            mkdir "build-binutils-${target}"
-            cd "build-binutils-${target}"
-            ../binutils-${BINUTILS_VERSION}/configure \
-              --target="${target}" \
-              --prefix="$PWD/../cross-binutils" \
-              --with-system-zlib \
-              --disable-nls \
-              --disable-werror \
-              --disable-gdb \
-              --disable-sim \
-              --disable-libdecnumber \
-              --disable-readline \
-              --disable-gprofng
-            make -j"$NCPU"
-            make install
-            cd ..
-          done
-
-      - name: Download Linux cross-libraries
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          CROSSLIB_BASE="https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all"
-          mkdir -p cross-libs
-
-          # Linux x86_64
-          curl -sL "$CROSSLIB_BASE/Linux_AMD64_Ubuntu_2204.zip" -o /tmp/linux-x64.zip
-          mkdir -p cross-libs/x86_64-linux
-          unzip -qo /tmp/linux-x64.zip -d cross-libs/x86_64-linux
-
-          # Linux aarch64
-          curl -sL "$CROSSLIB_BASE/Linux_AArch64_Ubuntu_1804.zip" -o /tmp/linux-arm64.zip
-          mkdir -p cross-libs/aarch64-linux
-          unzip -qo /tmp/linux-arm64.zip -d cross-libs/aarch64-linux
-
       - name: Set up prefix with native FPC
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
@@ -150,15 +112,6 @@ jobs:
             -Fi../aarch64 -Fi. \
             -FU"$NATIVE_RTL" sfpux80.pp
 
-      - name: Patch i386 cpuinfo for aarch64 host
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          # FPC 3.2.2's compiler/i386/cpuinfo.pas unconditionally uses
-          # TExtended80Rec which doesn't exist on aarch64 (extended = 8 bytes).
-          # The x86_64 version already has the guard; apply the same fix to i386.
-          cd fpc-source/compiler/i386
-          sed -i.bak 's/   bestrealrec = TExtended80Rec;/{$ifdef FPC_HAS_TYPE_EXTENDED}\n   bestrealrec = TExtended80Rec;\n{$else}\n   bestrealrec = TDoubleRec;\n{$endif}/' cpuinfo.pas
-
       - name: Build cross-compilers
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
@@ -172,21 +125,13 @@ jobs:
           # understood by the fpc driver, not bare compilers like ppca64.
           # We bypass the Makefile and compile pp.pas directly with ppca64.
 
-          # ppcrossx64 — cross-compiler for x86_64 targets
+          # ppcrossx64 — cross-compiler for x86_64-darwin
           mkdir -p x86_64/units/x86_64-darwin
           ppca64 -dFPC_SOFT_FPUX80 -dx86_64 -dRELEASE -O2 -Xs -n -Tdarwin \
             -Fux86_64 -Fusystems -Fux86 -Fix86_64 \
             -Fu"$NATIVE_RTL" -Fl"$SDK_LIB" \
             -FE. -FUx86_64/units/x86_64-darwin pp.pas
           mv pp "$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64"
-
-          # ppcross386 — cross-compiler for i386 targets
-          mkdir -p i386/units/i386-win32
-          ppca64 -dFPC_SOFT_FPUX80 -di386 -dRELEASE -O2 -Xs -n -Tdarwin \
-            -Fui386 -Fusystems -Fux86 -Fii386 \
-            -Fu"$NATIVE_RTL" -Fl"$SDK_LIB" \
-            -FE. -FUi386/units/i386-win32 pp.pas
-          mv pp "$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386"
 
       - name: Create fpc wrapper and config
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -208,7 +153,6 @@ jobs:
           for arg in "$@"; do
             case "$arg" in
               -Px86_64)   target_cpu="x86_64" ;;
-              -Pi386)     target_cpu="i386" ;;
               -Paarch64)  target_cpu="aarch64" ;;
               -PB)        print_binary=true ;;
               -P*)        ;;
@@ -218,7 +162,6 @@ jobs:
           get_compiler() {
             case "$target_cpu" in
               x86_64)  echo "$FPC_LIB/ppcrossx64" ;;
-              i386)    echo "$FPC_LIB/ppcross386" ;;
               *)       echo "$FPC_LIB/ppca64" ;;
             esac
           }
@@ -245,27 +188,11 @@ jobs:
           set -euo pipefail
           export PREFIX="$PWD/fpc-cross"
           export FPC_SOURCE="$GITHUB_WORKSPACE/fpc-source"
-          export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
+          export PATH="$PREFIX/bin:$PATH"
           build_units=./repo/.github/scripts/build-fpc-cross-units.sh
 
           # macOS x86_64
           "$build_units" ppcrossx64 x86_64 darwin
-
-          # Linux x86_64
-          LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/x86_64-linux" -name "libc.so" -exec dirname {} \; | head -1)
-          if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/x86_64-linux"; exit 1; fi
-          "$build_units" ppcrossx64 x86_64 linux "CROSSOPT=-Fl${LIBDIR}" BINUTILSPREFIX=x86_64-linux-
-
-          # Linux aarch64
-          LIBDIR=$(find "$GITHUB_WORKSPACE/cross-libs/aarch64-linux" -name "libc.so" -exec dirname {} \; | head -1)
-          if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/aarch64-linux"; exit 1; fi
-          "$build_units" ppca64 aarch64 linux "CROSSOPT=-Fl${LIBDIR}" BINUTILSPREFIX=aarch64-linux-
-
-          # Windows x86_64
-          "$build_units" ppcrossx64 x86_64 win64
-
-          # Windows i386
-          "$build_units" ppcross386 i386 win32
 
       - name: Save to cache
         if: steps.cache-check.outputs.cache-hit != 'true'

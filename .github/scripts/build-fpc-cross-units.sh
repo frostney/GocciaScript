@@ -3,7 +3,7 @@
 # Builds the FPC RTL and the package units GocciaScript needs for one target,
 # using a compiler already installed in the cached cross toolchain, and
 # installs them under $PREFIX/lib/fpc/$FPC_VERSION/units/<cpu>-<os>.
-# toolchain.yml runs it for every target on both of its hosts.
+# toolchain.yml runs it for each target that a toolchain host builds.
 #
 #   build-fpc-cross-units.sh <compiler> <cpu> <os> [CROSSOPT=...] [BINUTILSPREFIX=...]
 #

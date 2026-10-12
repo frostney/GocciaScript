@@ -176,7 +176,7 @@ jobs:
             fpc-cross
             cross-binutils
             cross-libs
-          key: ${{ matrix.runner == 'ubuntu-latest' && needs.toolchain.outputs.linux-cache-key || needs.toolchain.outputs.cache-key }}
+          key: ${{ runner.os == 'Linux' && needs.toolchain.outputs.linux-cache-key || needs.toolchain.outputs.cache-key }}
           fail-on-cache-miss: true
 
       - name: Cross-compile GocciaScript
@@ -213,7 +213,9 @@ jobs:
             linux)
               LIBDIR=$(find "$PWD/cross-libs/${CPU}-linux" -name "libc.so" -exec dirname {} \; | head -1)
               if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/${CPU}-linux"; exit 1; fi
-              EXTRA_FLAGS="-XP${CPU}-linux- -Fl${LIBDIR}"
+              # -Xd keeps the linker to the pinned cross-libs; without it,
+              # FPC searches the build host's own library directories first.
+              EXTRA_FLAGS="-Xd -XP${CPU}-linux- -Fl${LIBDIR}"
               ;;
             win32|win64)
               EXTRA_FLAGS=""
@@ -330,7 +332,10 @@ jobs:
           ls -la build/
 
       - name: Stage build artifacts
-        run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests --strip
+        # -Xs already strips the ELF and PE binaries. Only Mach-O needs the
+        # extra pass, and stripping a PE file rewrites its timestamp and
+        # checksum, which would make Windows builds irreproducible.
+        run: bash ./.github/scripts/stage-build-artifacts.sh build ci-artifacts --include-tests ${{ matrix.os == 'darwin' && '--strip' || '' }}
 
       - name: Stage TOML compliance runner
         run: |
