@@ -61,7 +61,8 @@ begin
     TestFormatDurationMatchesFormat);
 end;
 
-// The Format-based formatting FormatDuration reproduces without Format.
+// The Format-based formatting FormatDuration reproduces without Format,
+// with the same Double arithmetic.
 function ReferenceFormatDuration(const ANanoseconds: Int64): string;
 var
   Us, Ms, S: Double;
@@ -296,8 +297,10 @@ begin
       Inc(Mismatches);
     Value := Value * 3 + 7;
   end;
-  for I := 0 to 20000 do
-    if FormatDuration(I * 37) <> ReferenceFormatDuration(I * 37) then
+  // Every value through the microsecond unit and into milliseconds, where the
+  // unit values carry the precision of the 1000.0 constants.
+  for I := 0 to 1100000 do
+    if FormatDuration(I) <> ReferenceFormatDuration(I) then
       Inc(Mismatches);
   for I := 0 to 20000 do
     if FormatDuration(Int64(I) * 49999) <>
