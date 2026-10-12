@@ -511,6 +511,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
