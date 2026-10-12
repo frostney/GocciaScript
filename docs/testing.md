@@ -745,7 +745,7 @@ supersede → toolchain → build → test             → artifacts (main), rel
 test-structure
 ```
 
-**`toolchain`** / **`build`** — `toolchain` restores (or builds) the cached FPC cross-compilation toolchain; `build` cross-compiles all binaries for every target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`toolchain`** / **`build`** — `toolchain` restores (or builds) the cached FPC cross-compilation toolchains: one on macOS for the Darwin targets, and one on Linux for the Linux and Windows targets, which keeps those four builds off the scarcer macOS runners. `build` cross-compiles all binaries for every target on its toolchain's host and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
