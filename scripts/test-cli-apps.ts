@@ -2435,6 +2435,23 @@ await section("Test262 Runner: a sloppy eval var in a body with parameter expres
   ], ["2,2/1/2,5"]);
 });
 
+// The arguments object of a function with parameter expressions is bound with
+// the parameters (FunctionDeclarationInstantiation,
+// sec-functiondeclarationinstantiation, §10.2.11 step 22.f), outside the
+// body's VariableEnvironment (step 30). A sloppy eval's `var arguments` in the
+// body is a new binding of that environment (EvalDeclarationInstantiation,
+// sec-evaldeclarationinstantiation, §19.2.1.3 step 18), so the body and eval
+// code read 1 while a closure created in the parameter list still reads the
+// arguments object: object,0,1,1 and object,x,1.
+await section("Test262 Runner: a sloppy eval's var arguments leaves the parameter list's arguments object alone...", async () => {
+  expectEvalHostProbe("eval var arguments with parameter expressions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function f(a = () => arguments) { eval('var arguments = 1'); return [typeof a(), a().length, arguments, eval('arguments')].join(); }",
+    "function f2(a = () => arguments, b) { eval('var arguments = 1'); return [typeof a(), a()[1], arguments].join(); }",
+    "print([out(() => f()), out(() => f2(undefined, 'x'))].join(' '));",
+  ], ["object,0,1,1 object,x,1"]);
+});
+
 // A generator or async function keeps its VariableEnvironment across `yield`
 // and `await` (GeneratorYield, sec-generatoryield, §27.5.3.6; Await, await,
 // §27.7.5.3), so a var an eval declared before the suspension is the binding

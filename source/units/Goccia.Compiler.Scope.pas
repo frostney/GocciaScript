@@ -49,6 +49,10 @@ type
     // variable environment eval code declares its vars in
     // (TGocciaDirectEvalBindingInfo.IsCallerFunctionBinding).
     IsCallerFunctionBinding: Boolean;
+    // The local of the function's arguments object, which
+    // FunctionDeclarationInstantiation binds with the parameters (ES2026
+    // §10.2.11 step 22.f).
+    IsArgumentsObject: Boolean;
     IsGlobalBacked: Boolean;
     IsArrayTyped: Boolean;
     IsCallProvenNumeric: Boolean;
@@ -321,6 +325,9 @@ type
     // var shadows it (TGocciaCompilerLocal.IsOutsideVarEnvironment).
     function LocalOutsideVarEnvironment(const AIndex: Integer): Boolean;
     procedure MarkOutsideVarEnvironment(const AIndex: Integer);
+    // Marks the depth-0 local at ASlot as the arguments object's
+    // (TGocciaCompilerLocal.IsArgumentsObject).
+    procedure MarkArgumentsObjectSlot(const ASlot: UInt16);
     // Marks local AIndex, rebuilt from an eval site record, as a binding of
     // the caller function (IsCallerFunctionBinding), a var of its variable
     // environment when AIsVar.
@@ -464,6 +471,7 @@ begin
   FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsOutsideVarEnvironment := False;
   FLocals[FLocalCount].IsCallerFunctionBinding := False;
+  FLocals[FLocalCount].IsArgumentsObject := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -523,6 +531,7 @@ begin
   FLocals[FLocalCount].IsCatchParameter := False;
   FLocals[FLocalCount].IsOutsideVarEnvironment := False;
   FLocals[FLocalCount].IsCallerFunctionBinding := False;
+  FLocals[FLocalCount].IsArgumentsObject := False;
   FLocals[FLocalCount].IsGlobalBacked := False;
   FLocals[FLocalCount].IsArrayTyped := False;
   FLocals[FLocalCount].IsCallProvenNumeric := False;
@@ -913,14 +922,33 @@ begin
   PushWithBinding(FEvalVarObjectName);
 end;
 
+// With parameter expressions, the parameters and the arguments object are
+// bound in an environment outside the body's variable environment (ES2026
+// §10.2.11 steps 20, 22.f and 30). The arguments object's local is declared
+// as a var, so it is told apart by its flag; a body var named like a
+// parameter is a var of the body's environment.
 function TGocciaCompilerScope.LocalOutsideVarEnvironment(
   const AIndex: Integer): Boolean;
 begin
   Result := FLocals[AIndex].IsOutsideVarEnvironment or
     ((FParameterEvalVarObjectName <> '') and
-     (FLocals[AIndex].Depth = 0) and not FLocals[AIndex].IsVar and
-     ((FLocals[AIndex].Name = 'arguments') or
-      HasParameterName(FLocals[AIndex].Name)));
+     (FLocals[AIndex].Depth = 0) and
+     (FLocals[AIndex].IsArgumentsObject or
+      (not FLocals[AIndex].IsVar and
+       ((FLocals[AIndex].Name = 'arguments') or
+        HasParameterName(FLocals[AIndex].Name)))));
+end;
+
+procedure TGocciaCompilerScope.MarkArgumentsObjectSlot(const ASlot: UInt16);
+var
+  I: Integer;
+begin
+  for I := FLocalCount - 1 downto 0 do
+    if (FLocals[I].Depth = 0) and (FLocals[I].Slot = ASlot) then
+    begin
+      FLocals[I].IsArgumentsObject := True;
+      Exit;
+    end;
 end;
 
 procedure TGocciaCompilerScope.MarkOutsideVarEnvironment(

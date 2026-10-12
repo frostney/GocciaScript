@@ -2342,10 +2342,14 @@ begin
         // name is deeper, and a body `var` of it is the parameter's local.
         IsVarEnvironmentParameter := ACtx.Scope.ParametersInVarEnvironment and
           (Local.Depth = 0) and ACtx.Scope.HasParameterName(Local.Name);
+        // A binding outside the variable environment, the arguments object
+        // of a function with parameter expressions included, is none of its
+        // bindings, though declared as a var.
         if AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
            Local.Slot, Local.IsConst,
-           Local.IsVar or IsVarEnvironmentParameter or
-             IsEvalSensitiveArguments,
+           (Local.IsVar or IsVarEnvironmentParameter or
+            IsEvalSensitiveArguments) and
+             not ACtx.Scope.LocalOutsideVarEnvironment(LocalIdx),
            IsEvalSensitiveArguments or (Local.IsConst and
              Local.IsNonStrictImmutable),
            Local.IsCatchParameter,
@@ -3322,6 +3326,7 @@ begin
     Exit(-1);
 
   Result := AScope.DeclareVarLocal(IDENTIFIER_ARGUMENTS);
+  AScope.MarkArgumentsObjectSlot(UInt16(Result));
 end;
 
 function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
