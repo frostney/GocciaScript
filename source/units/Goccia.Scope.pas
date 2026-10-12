@@ -100,6 +100,19 @@ type
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
     function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
+    // Lets a variable environment answer a deletable var definition, the
+    // kind eval code makes, with a binding it already reaches some other way.
+    function TryDefineEvalVarInPlace(const AName: string;
+      const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
+      virtual;
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3: whether a var
+    // named AName that a sloppy direct eval declares is a SyntaxError because
+    // of this scope's own binding. AIsVariableEnvironment: this scope is the
+    // eval's variable environment, where a var or a parameter of the name is
+    // the binding the eval's var reuses; otherwise it lies between the eval
+    // and that environment, where any binding of the name conflicts.
+    function EvalVarDeclarationConflicts(const AName: string;
+      const AIsVariableEnvironment: Boolean): Boolean; virtual;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -331,6 +344,8 @@ type
     function TryAssignExistingBinding(const AName: string;
       const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
       const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
+    function EvalVarDeclarationConflicts(const AName: string;
+      const AIsVariableEnvironment: Boolean): Boolean; override;
   end;
 
   TGocciaWithScope = class(TGocciaScope)
@@ -890,6 +905,11 @@ begin
   TargetScope := FindFunctionOrModuleScope;
   EffectiveValue := AValue;
 
+  // Only eval code defines deletable vars (ES2026 §19.2.1.3 step 17).
+  if ACanDelete and
+     TargetScope.TryDefineEvalVarInPlace(AName, AValue, AHasInitializer) then
+    Exit;
+
   // §16.1.7: var/function declarations may shadow built-in globals in
   // script source.  Only the global scope carries built-in bindings, so
   // skip the lookup for function/module-scoped vars (the common case).
@@ -950,6 +970,12 @@ begin
 
 end;
 
+function TGocciaScope.TryDefineEvalVarInPlace(const AName: string;
+  const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
+begin
+  Result := False;
+end;
+
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;
 begin
   Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
@@ -959,6 +985,22 @@ end;
 function TGocciaScope.ContainsVarEnvironmentBinding(const AName: string): Boolean;
 begin
   Result := ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName);
+end;
+
+function TGocciaScope.EvalVarDeclarationConflicts(const AName: string;
+  const AIsVariableEnvironment: Boolean): Boolean;
+var
+  Binding: TLexicalBinding;
+begin
+  if not AIsVariableEnvironment then
+    Exit(ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName));
+  // A parameter declared in the variable environment itself is a binding of
+  // it, like a var (§10.2.11 step 28, a parameter list without expressions).
+  // With parameter expressions the body's vars get a scope of their own, and
+  // an eval in the parameter list rejects the parameter names through
+  // EvalDeclarationInstantiation's ARejectVarDeclarationNames.
+  Result := FLexicalBindings.TryGetValue(AName, Binding) and
+    (Binding.DeclarationType <> dtParameter);
 end;
 
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
@@ -1939,6 +1981,19 @@ begin
   else
     Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
       ALine, AColumn);
+end;
+
+// ES2026 §19.2.1.3 step 3.d, the normative-optional web-compat branch: a
+// sloppy direct eval may declare a var named like a parameter of an enclosing
+// catch clause, as `catch (e) { var e; }` may (B.3.4).
+function TGocciaCatchScope.EvalVarDeclarationConflicts(const AName: string;
+  const AIsVariableEnvironment: Boolean): Boolean;
+begin
+  if AIsVariableEnvironment then
+    Result := inherited EvalVarDeclarationConflicts(AName,
+      AIsVariableEnvironment)
+  else
+    Result := False;
 end;
 
 { TGocciaWithScope }

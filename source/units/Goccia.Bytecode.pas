@@ -216,7 +216,10 @@ const
   //               with its suggestion, in place of the four-instruction
   //               `new ReferenceError(...)` sequence that read the global
   //               `ReferenceError` binding.
-  GOCCIA_FORMAT_VERSION = 89;
+  //   v89 -> v90: a direct-eval site record stores the strictness of its call
+  //               expression, and each of its bindings whether it is a catch
+  //               parameter.
+  GOCCIA_FORMAT_VERSION = 90;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
