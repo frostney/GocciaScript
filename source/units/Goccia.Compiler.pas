@@ -39,6 +39,8 @@ type
     FDirectEvalCallerScope: TGocciaCompilerScope;
     FDirectEvalDerivedThisGuard: Boolean;
     FDirectEvalRejectArguments: Boolean;
+    FDirectEvalVarsByName: Boolean;
+    FDirectEvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
     FCompletionRegister: Integer;
     FAsyncTopLevel: Boolean;
     FPreinitializedTopLevelFunctions: Boolean;
@@ -91,21 +93,30 @@ type
     function CompileGlobalEval(const AProgram: TGocciaProgram;
       const AStrictEval: Boolean;
       const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
-    { ES2026 §19.2.1.1 PerformEval for a direct eval at a strict call site
-      (ADR 0134 Phase 3): compile AProgram as a function nested at the call,
-      whose top-level template the VM instantiates as a closure of the
-      caller's frame. ASite is the call's eval site record. Its bindings
-      rebuild the calling function's scope chain: a caller local is a local at
-      its register, a caller upvalue an upvalue at its index, a `with` object
-      a hidden `with` binding, and the record's private names are declared
-      with their keys. The eval is strict (step 12:
-      strictCaller), so step 18 makes its variable environment its own: every
-      declaration of the eval code is a local of the template. The body
-      compiles as an arrow would at the call, so `this`, `arguments`,
-      `new.target`, `super` and the private class are the caller's. The
-      template returns the completion value. It is never serialized. }
+    { ES2026 §19.2.1.1 PerformEval for a direct eval (ADR 0134 Phase 3):
+      compile AProgram as a function nested at the call, whose top-level
+      template the VM instantiates as a closure of the caller's frame. ASite
+      is the call's eval site record. Its bindings rebuild the calling
+      function's scope chain: a caller local is a local at its register, a
+      caller upvalue an upvalue at its index, a `with` object or a hidden
+      variable object a with binding, and the record's private names are
+      declared with their keys. The body compiles as an arrow would at the
+      call, so `this`, `arguments`, `new.target`, `super` and the private
+      class are the caller's. AStrictEval is strictEval (step 12-13).
+      - Strict eval: step 18 makes its variable environment its own, so
+        every declaration is a local of the template.
+      - Non-strict eval in a function: its var and function declarations are
+        bindings of the caller's variable environment, which the VM declared
+        (§19.2.1.3), so the code reaches them by name like any reference:
+        through the hidden variable object, or a caller's var binding.
+      - Non-strict eval in global code: as CompileGlobalEval, with
+        ADeclaredVarNames.
+      Lexical declarations are always locals. The template returns the
+      completion value. It is never serialized. }
     function CompileDirectEval(const AProgram: TGocciaProgram;
-      const ASite: TGocciaDirectEvalEnvironment): TGocciaBytecodeModule;
+      const ASite: TGocciaDirectEvalEnvironment;
+      const AStrictEval: Boolean;
+      const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
     property FormalParameterCounts: TFormalParameterCountMap
       read FFormalParameterCounts;
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
@@ -205,6 +216,8 @@ begin
     Result.CompletionRegister := FCompletionRegister
   else
     Result.CompletionRegister := -1;
+  Result.DirectEvalVarsByName := FDirectEvalVarsByName and
+    (FCurrentTemplate = FTopLevelTemplate);
   Result.PreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions and
     (FCurrentTemplate = FTopLevelTemplate);
   Result.StrictTypes := FStrictTypes;
@@ -1581,13 +1594,15 @@ begin
 end;
 
 function TGocciaCompiler.CompileDirectEval(const AProgram: TGocciaProgram;
-  const ASite: TGocciaDirectEvalEnvironment): TGocciaBytecodeModule;
+  const ASite: TGocciaDirectEvalEnvironment; const AStrictEval: Boolean;
+  const ADeclaredVarNames: TUnicodeStringList): TGocciaBytecodeModule;
 var
   OuterScope, CallerScope: TGocciaCompilerScope;
   Binding: TGocciaDirectEvalBindingInfo;
   ThisPosition, FlagPosition: Integer;
   SavedAsyncTopLevel, SavedGlobalBackedTopLevel,
   SavedPreinitializedTopLevelFunctions, SavedNonStrictMode: Boolean;
+  LocalIdx: Integer;
   I: Integer;
 begin
   // The record lists the bindings nearest first: the calling function's own
@@ -1626,8 +1641,12 @@ begin
       Binding := ASite.Bindings[I];
       case Binding.Kind of
         debLocal:
-          CallerScope.DeclareCallerLocal(Binding.Name, Binding.Index,
-            Binding.IsConst, Binding.IsVarEnvironmentBinding);
+        begin
+          LocalIdx := CallerScope.DeclareCallerLocal(Binding.Name,
+            Binding.Index, Binding.IsConst, Binding.IsVarEnvironmentBinding);
+          if Binding.IsOutsideVarEnvironment then
+            CallerScope.MarkOutsideVarEnvironment(LocalIdx);
+        end;
         debWithLocal:
         begin
           CallerScope.BeginScope;
@@ -1665,10 +1684,18 @@ begin
     SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
     SavedPreinitializedTopLevelFunctions := FPreinitializedTopLevelFunctions;
     FCompatibilityNonStrictMode := FNonStrictMode;
-    FNonStrictMode := False;
+    FNonStrictMode := not AStrictEval;
     FAsyncTopLevel := False;
     FPreinitializedTopLevelFunctions := False;
-    FGlobalBackedTopLevel := False;
+    FGlobalBackedTopLevel := not AStrictEval;
+    FGlobalEvalVarEnvironment := not AStrictEval;
+    FDirectEvalVarsByName := (not AStrictEval) and
+      (ASite.VarEnvironment <> devGlobal);
+    if (not AStrictEval) and (ASite.VarEnvironment = devGlobal) then
+      FGlobalEvalDeclaredVarNames := ADeclaredVarNames
+    else
+      FGlobalEvalDeclaredVarNames := nil;
+    FDirectEvalVarEnvironment := ASite.VarEnvironment;
     FEvalCode := True;
     FDirectEvalCallerScope := CallerScope;
     FDirectEvalRejectArguments := ASite.RejectArgumentsReference;
@@ -1678,6 +1705,9 @@ begin
       FDirectEvalCallerScope := nil;
       FDirectEvalDerivedThisGuard := False;
       FDirectEvalRejectArguments := False;
+      FDirectEvalVarsByName := False;
+      FGlobalEvalVarEnvironment := False;
+      FGlobalEvalDeclaredVarNames := nil;
       FEvalCode := False;
       FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
       FPreinitializedTopLevelFunctions := SavedPreinitializedTopLevelFunctions;
@@ -1728,7 +1758,11 @@ begin
   FCurrentScope := TGocciaCompilerScope.Create(FDirectEvalCallerScope, 0);
   FCurrentScope.IsArrow := Assigned(FDirectEvalCallerScope);
   if Assigned(FDirectEvalCallerScope) then
+  begin
     DoSetDerivedConstructorThisGuard(FDirectEvalDerivedThisGuard);
+    FCurrentScope.IsSloppyEvalCode := not FCurrentTemplate.StrictCode;
+    FCurrentScope.EvalCodeVarEnvironment := FDirectEvalVarEnvironment;
+  end;
   // A sloppy direct eval in global code declares its vars as globals, so the
   // top level has no hidden variable object.
   FCurrentScope.DirectEvalUsage := AProgram.DirectEvalUsage;
@@ -1807,7 +1841,7 @@ begin
     // CreateGlobalVarBinding(vn, true) for each of declaredVarNames, after the
     // function bindings. The template is marked GlobalEvalCode, so the
     // instruction creates a deletable binding.
-    if FGlobalEvalVarEnvironment then
+    if FGlobalEvalVarEnvironment and Assigned(FGlobalEvalDeclaredVarNames) then
       EmitHoistedGlobalVarDeclarationsForNames(BuildContext,
         FGlobalEvalDeclaredVarNames);
 

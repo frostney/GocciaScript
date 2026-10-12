@@ -5,7 +5,7 @@
 ## Executive Summary
 
 - **Two execution modes** — tree-walk interpreter (default) and bytecode VM (`--mode=bytecode`), sharing the same source pipeline, runtime objects, and GC
-- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; two residual couplings remain — direct `eval`, and a module's top-level function declarations, which are created and run by the tree-walk evaluator
+- **Executor abstraction** — `TGocciaBytecodeExecutor` implements `TGocciaExecutor` and drives only the compiler and VM; one residual coupling remains — a module's top-level function declarations, which are created and run by the tree-walk evaluator
 - **Goccia-owned VM** — executes directly on `TGocciaValue` with tagged `TGocciaRegister` values; not a generic VM layer
 - **Opcode space** — core instructions (0-127) for hot paths, non-core generic arithmetic/bitwise and class helpers (128-145, with 146-166 unused), and semantic/helper instructions from 167 up: module and async orchestration plus later additions, including fused superinstructions
 - **Binary format** — `.gbc` files with little-endian encoding, `GBC\0` magic, and version constant
@@ -17,7 +17,7 @@ GocciaScript has two execution modes:
 - **Interpreter mode**: tree-walk execution over the AST via `TGocciaInterpreterExecutor`
 - **Bytecode mode**: AST compilation to Goccia bytecode, then execution on `TGocciaVM` via `TGocciaBytecodeExecutor`
 
-Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM; the VM it drives, however, still calls the tree-walk evaluator for a direct `eval` at a sloppy call site (`TGocciaVM.ExecuteDirectEval` → `EvaluateEvalProgram`), so the bytecode path is not yet fully independent of the evaluator. A direct `eval` at a strict call site is compiled as a closure of the call site and runs on the VM ([ADR 0134](adr/0134-direct-eval-compiles-as-a-closure-of-its-call-site.md), Phase 3-strict). Eval code whose variable environment is the realm's global environment — an indirect `eval` call and `ShadowRealm.prototype.evaluate` — is already compiled and run on the VM (`TGocciaEngine.EvaluateGlobalEval`; [ADR 0134](adr/0134-direct-eval-compiles-as-a-closure-of-its-call-site.md), Phase 2).
+Both execution modes are implementations of `TGocciaExecutor` (see [Architecture](architecture.md#executor-architecture)). The single `TGocciaEngine` class bootstraps the core language environment (global scope, core built-ins, shims) and delegates execution to whichever executor is configured. Optional runtime globals are attached through runtime extensions. The `TGocciaBytecodeExecutor` unit itself depends only on the compiler and VM. All eval code is compiled and run on the VM ([ADR 0134](adr/0134-direct-eval-compiles-as-a-closure-of-its-call-site.md)): a direct `eval` as a closure of its call site, and eval code whose variable environment is the realm's global environment — an indirect `eval` call and `ShadowRealm.prototype.evaluate` — through `TGocciaEngine.EvaluateGlobalEval`.
 
 An imported module adds a second such coupling. Its environment is initialized while linking (ES2026 §16.2.1.7.3.1 InitializeEnvironment), and the module loader creates the top-level function declarations there with the tree-walk evaluator (`HoistFunctionDeclarations`). Bytecode compilation of that module therefore reuses those preinitialized bindings for exported declarations instead of compiling them (`PreinitializedTopLevelFunctions`), and their bodies keep running under the evaluator in bytecode mode. Everything an evaluator path can be handed from such a body — including a compiled `TGocciaVMClassValue` reached by `new`, `super()`, or a bound wrapper — must therefore work in both directions; `TGocciaClassValue.UsesOwnInstantiation` and `TryConstructOnReceiver` are what route construction of a compiled class back to the VM. `scripts/differential/l-modulefndecl.test.js` gates this split.
 
@@ -69,7 +69,7 @@ The opcode space is split into three tiers:
 - `128..166`: non-core generic arithmetic/bitwise operations
 - `167..255`: semantic helper/orchestration operations
 
-In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 215 opcodes, highest `237`):
+In the current VM (`TGocciaOpCode` in `Goccia.Bytecode.pas`, 212 opcodes, highest `237`):
 
 - core instructions cover hot execution paths such as locals, typed arithmetic, comparisons, property/index access, calls, construction, iteration, and class/object setup; `99` is unused
 - the non-core range holds the generic arithmetic operations `OP_ADD`…`OP_POW` (`129..134`) and bitwise operations `OP_BAND`…`OP_USHR` (`136..141`), plus the class/object helpers `OP_DEFINE_PROP_DYNAMIC` (`128`), `OP_DEFINE_CLASS_METHOD_DYNAMIC` (`142`), `OP_SET_CLASS_SOURCE_CONST` (`143`), `OP_CLASS_ADD_METHOD_DYNAMIC` (`144`), and `OP_SET_PRIVATE_CLASS` (`145`); `135` and `146..166` are unused
@@ -139,7 +139,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup. A global-backed script, whose environment no link step fills, also predeclares each imported name in the global scope and binds it there (`OP_CREATE_GLOBAL_IMPORT_BINDING` for a named import, a `const` define for a namespace, source-phase or deferred binding), so a later script against the same scope, such as the next REPL input, reads the live binding
 - read an initialized local straight from its register when it is an operand of a binary operator, a comparison jump, a compound assignment, an element access or a store, instead of copying it into a temporary with `OP_GET_LOCAL` first. The copy does three things, and the compiler takes the direct read only where it can show that none is needed (`TryResolveSettledLocalName` in `Goccia.Compiler.Expressions.pas`):
   - *The TDZ check.* A local is marked once the code that initializes it has been compiled: its declaration, a `for...of` or counted-loop binding, or the parameter preamble. The mark is forgotten at each `switch` clause, because a clause can be entered without running an earlier clause's declarations. An assignment to a marked local also drops its TDZ probe.
-  - *Reading the cell of a captured binding.* A closure writes a captured local through its cell and leaves the register stale. A `const` cannot be written. A `let` binding or a parameter is read directly only while no closure compiled so far has captured it and the read is not inside a loop that creates a closure anywhere in its body (`StatementCreatesNoClosure` in `Goccia.Compiler.OperandSafety.pas` examines a loop before it is compiled, because a closure created later in a loop runs before an earlier read on the next iteration; a loop nested in a flagged one inherits the answer, and every other loop is examined itself, since a `finally` block inlined at a `return` or `break` is compiled inside a loop it does not belong to). Parameters of a function with an `arguments` object keep the copy, because a mapped `arguments` object writes parameter cells; so does a function from its first direct `eval` onwards. A direct `eval` call captures every binding of the calling function visible at the call, as a closure created there would (`CaptureDirectEvalEnvironment`), and the code it creates reads and writes those bindings through their cells, also after the call has returned (compiled eval code at a strict call site, `TGocciaVMDirectEvalScope` at a sloppy one). A host that offers direct `eval` at all (the Test262 host, and a ShadowRealm created from such a realm) marks its realm with `HostsDirectEval` when it installs the function, and the executor passes that to the compiler as `DirectEvalAvailable`, which still keeps the copy for every `let` binding and parameter of the realm; the design that compiles direct `eval` to bytecode (#872) narrows that to the functions that contain one.
+  - *Reading the cell of a captured binding.* A closure writes a captured local through its cell and leaves the register stale. A `const` cannot be written. A `let` binding or a parameter is read directly only while no closure compiled so far has captured it and the read is not inside a loop that creates a closure anywhere in its body (`StatementCreatesNoClosure` in `Goccia.Compiler.OperandSafety.pas` examines a loop before it is compiled, because a closure created later in a loop runs before an earlier read on the next iteration; a loop nested in a flagged one inherits the answer, and every other loop is examined itself, since a `finally` block inlined at a `return` or `break` is compiled inside a loop it does not belong to). Parameters of a function with an `arguments` object keep the copy, because a mapped `arguments` object writes parameter cells; so does a function from its first direct `eval` onwards. A direct `eval` call captures every binding of the calling function visible at the call, as a closure created there would (`CaptureDirectEvalEnvironment`), and the code it compiles to reads and writes those bindings through their cells, also after the call has returned, so a function that contains a direct `eval` keeps the copy throughout (`MutableLocalsMayLeaveRegisters`). No other function is affected.
   - *Taking the value before later operands run.* `a + (a = 2)` adds the old value, so a `let` binding or a parameter is read directly only when no operand evaluated after it can write a local (`ExpressionKeepsLocalRegisters`): no assignment, increment, destructuring assignment, direct `eval`, `yield` or `await`. A call is allowed, since the callee has its own registers and no closure over the binding exists.
 
   Imports, global-backed bindings, `var` bindings and destructured parameters keep `OP_GET_LOCAL`, and so does every read when coverage is enabled, because a source line holding only such an operand would otherwise emit no instruction and be reported as never executed
@@ -253,7 +253,9 @@ keeps that true:
   throws the `ReferenceError` rather than the `TypeError` (ES2026 §9.1.1.1.5
   step 3). That opcode checks the captured cell or global binding the
   assignment resolved before its right-hand side ran, never a same-named var
-  a direct eval in the right-hand side declared. Debug locals are serialised to `.gbc` in the
+  a direct eval in the right-hand side declared: such a var is a property of
+  the function's hidden variable object, which the assignment probes before
+  the right-hand side runs. Debug locals are serialised to `.gbc` in the
   section the format already had; bytecode without them, such as a `.gbc` from
   an earlier build, falls back to the unnamed
   `Cannot access lexical binding before initialization`.
@@ -408,25 +410,33 @@ for a strict call, the global environment, the calling function, or its
 parameter list), the caller's register for the hidden variable object of
 that environment, the private names visible at the call with their class
 bodies' key prefixes, and, for a call in a computed class key, the register
-of the class being defined (ADR 0134). The compiler reserves the hidden
-object registers in each function the parser marked as containing a sloppy
-direct `eval`; nothing reads them yet.
+of the class being defined (ADR 0134).
 
-At a strict call site the VM parses the source, raises the eval's early
-errors, and has the executor compile it with
-`TGocciaCompiler.CompileDirectEval`: the record rebuilds the calling
-function's scope, a caller local at its register and a caller upvalue at its
-index, and the eval code compiles as an arrow function nested there, so its
-upvalue descriptors name the caller's cells and `this`, `arguments`,
-`new.target`, `super` and the private class are the caller's. The VM
-instantiates the template as `OP_CLOSURE` instantiates an arrow in the
+The VM parses the source, raises the eval's early errors, and has the
+executor compile it with `TGocciaCompiler.CompileDirectEval`: the record
+rebuilds the calling function's scope, a caller local at its register and a
+caller upvalue at its index, and the eval code compiles as an arrow function
+nested there, so its upvalue descriptors name the caller's cells and `this`,
+`arguments`, `new.target`, `super` and the private class are the caller's.
+The VM instantiates the template as `OP_CLOSURE` instantiates an arrow in the
 calling frame and pushes it as a frame whose return value, the eval's
-completion value, lands in the callee register. Its declarations are locals of
-its own template. The compiled code is kept for the engine's lifetime. A
-sloppy call site still runs on the tree-walk bridge. The verifier checks that
-`OP_DIRECT_EVAL` names an existing record and is followed by a call on its
-register, and that each record's registers are in range and match its
-environment.
+completion value, lands in the callee register. The compiled code is kept for
+the engine's lifetime. A strict eval's declarations are locals of its own
+template. A sloppy eval in a function declares its vars and functions in the
+caller's variable environment before its code runs: a var of the caller with
+the name is reused, and any other becomes a configurable property of the
+function's hidden variable object, a null-prototype object that the first
+eval needing it creates in a register the compiler reserved for each function
+the parser marked as containing a sloppy direct `eval` (a second one stands
+for a parameter list with expressions). Every reference such a var can shadow,
+in that function, in functions nested in it and in eval code, probes the
+object the way it probes a `with` object (`TGocciaCompilerScope.NameProbes`,
+`OP_HAS_WITH_BINDING`), before its static binding; until an eval creates the
+object the probe finds nothing. A sloppy eval in a script's global code
+declares its vars as deletable globals, as indirect eval does. The verifier
+checks that `OP_DIRECT_EVAL` names an existing record and is followed by a
+call on its register, and that each record's registers and binding indexes
+are in range and match its environment.
 
 A loaded file carries no proof, so the verifier makes a loaded `OP_CALL_SELF_NUM`
 memory-safe on its own. The closed numeric frame it would enter is sound only

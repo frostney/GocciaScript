@@ -100,11 +100,6 @@ type
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
     function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
-    // Lets a variable environment answer a deletable var definition, the
-    // kind eval code makes, with a binding it already reaches some other way.
-    function TryDefineEvalVarInPlace(const AName: string;
-      const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
-      virtual;
     // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3: whether a var
     // named AName that a sloppy direct eval declares is a SyntaxError because
     // of this scope's own binding. AIsVariableEnvironment: this scope is the
@@ -905,11 +900,6 @@ begin
   TargetScope := FindFunctionOrModuleScope;
   EffectiveValue := AValue;
 
-  // Only eval code defines deletable vars (ES2026 §19.2.1.3 step 17).
-  if ACanDelete and
-     TargetScope.TryDefineEvalVarInPlace(AName, AValue, AHasInitializer) then
-    Exit;
-
   // §16.1.7: var/function declarations may shadow built-in globals in
   // script source.  Only the global scope carries built-in bindings, so
   // skip the lookup for function/module-scoped vars (the common case).
@@ -968,12 +958,6 @@ begin
     TargetScope.FVarBindings.AddOrSetValue(AName, Binding);
   end;
 
-end;
-
-function TGocciaScope.TryDefineEvalVarInPlace(const AName: string;
-  const AValue: TGocciaValue; const AHasInitializer: Boolean): Boolean;
-begin
-  Result := False;
 end;
 
 function TGocciaScope.ContainsOwnVarBinding(const AName: string): Boolean;

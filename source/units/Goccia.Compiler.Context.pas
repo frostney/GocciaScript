@@ -70,6 +70,13 @@ type
     { The register that holds the completion value of eval code (§19.2.1.1
       PerformEval steps 29-30), or -1 outside the top level of eval code. }
     CompletionRegister: Integer;
+    { The top level of non-strict direct eval code in a function: its var and
+      function declarations are bindings of the caller's variable
+      environment, which the eval declared before its code runs (a caller's
+      var binding of the name, or a property of the caller's hidden variable
+      object). A declaration's value is assigned to the binding its name
+      resolves to, as an assignment would (ADR 0134). }
+    DirectEvalVarsByName: Boolean;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;

@@ -282,7 +282,7 @@ begin
     Scope := FScope;
     while Assigned(Scope) do
     begin
-      if Scope.WithBindingCount > 0 then
+      if Scope.WithObjectCount > 0 then
         Break;
       LocalIndex := Scope.ResolveLocal(AName);
       if LocalIndex >= 0 then

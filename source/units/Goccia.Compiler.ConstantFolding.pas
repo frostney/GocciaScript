@@ -413,7 +413,8 @@ function TryEvaluateIdentifier(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression;
   out AValue: TGocciaCompileTimeValue): Boolean;
 begin
-  if Assigned(ACtx.Scope) and (ACtx.Scope.WithBindingCount > 0) then
+  if Assigned(ACtx.Scope) and (ACtx.Scope.WithBindingCount > 0) and
+     (Length(ACtx.Scope.NameProbes(AExpr.Name)) > 0) then
   begin
     ResetCompileTimeValue(AValue, ctvkUnknown);
     Exit(False);

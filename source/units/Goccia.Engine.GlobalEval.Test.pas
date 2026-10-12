@@ -11,9 +11,10 @@ program Goccia.Engine.GlobalEval.Test;
   entry directly and through the Test262 host's eval; the ShadowRealm unit
   reaches the same entry and no longer links the evaluator.
 
-  ADR 0134 Phase 3-strict: a direct eval at a strict call site is compiled
-  too, as a closure of the call site, so what it creates is a VM value as
-  well; a sloppy call site still runs on the tree-walk bridge. }
+  ADR 0134 Phase 3: a direct eval is compiled too, as a closure of the call
+  site, so what it creates is a VM value as well, at a strict call site and
+  at a sloppy one. The VM no longer reaches the tree-walk evaluator for eval
+  code. }
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
@@ -77,7 +78,7 @@ begin
     TestInterpreterEvalCreatesASTFunctions);
   Test('Bytecode Test262 host eval creates VM functions',
     TestBytecodeTest262HostEvalCreatesVMFunctions);
-  Test('Bytecode direct eval at a strict call site creates VM values',
+  Test('Bytecode direct eval creates VM values at strict and sloppy sites',
     TestBytecodeStrictDirectEvalCreatesVMValues);
   Test('Bytecode global eval var is a deletable global property',
     TestBytecodeEvalVarIsDeletableGlobal);
@@ -255,7 +256,9 @@ begin
       ' return eval("(class {})"); })();' + LineEnding +
     'globalThis.classBodyFunction = class { static f = eval("() => 1"); }.f;' +
       LineEnding +
-    'globalThis.sloppyFunction = eval("(function () {})");';
+    'globalThis.sloppyFunction = eval("(function () {})");' + LineEnding +
+    'globalThis.sloppyInFunction = (function () {' +
+      ' return eval("var v = 1; (function () { return v; })"); })();';
   EngineOptions := Default(TGocciaTest262EngineOptions);
   EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
   EngineOptions.Mode := t262emBytecode;
@@ -279,9 +282,12 @@ begin
       VM_CLASS_CLASS).ToBe(True);
     Expect<Boolean>(GlobalObject.GetProperty('classBodyFunction').ClassName =
       BYTECODE_FUNCTION_CLASS).ToBe(True);
-    // A sloppy call site stays on the bridge until Phase 3-sloppy.
+    Expect<Boolean>(GlobalObject.GetProperty('sloppyFunction').ClassName =
+      BYTECODE_FUNCTION_CLASS).ToBe(True);
+    Expect<Boolean>(GlobalObject.GetProperty('sloppyInFunction').ClassName =
+      BYTECODE_FUNCTION_CLASS).ToBe(True);
     Expect<Boolean>(GlobalObject.GetProperty('sloppyFunction') is
-      TGocciaFunctionValue).ToBe(True);
+      TGocciaFunctionValue).ToBe(False);
   finally
     Host.Free;
     Engine.Free;

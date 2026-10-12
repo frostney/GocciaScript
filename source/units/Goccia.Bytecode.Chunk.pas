@@ -22,6 +22,13 @@ const
     an arrow-like function of the calling frame. Coverage does not count it
     as a function either. }
   DIRECT_EVAL_TEMPLATE_NAME = '<eval>';
+  { Prefixes of the names of a function's hidden variable object locals
+    (ADR 0134): its body's, and its parameter list's when the list has
+    expressions. Each is followed by a number unique to its function, so that
+    a nested function can name an enclosing one's, and an eval site record
+    lists them as with bindings. No source text can spell them. }
+  EVAL_VAR_OBJECT_LOCAL = '`#eval-var-object`:';
+  PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`:';
 
 type
   TGocciaBytecodeConstantKind = (
@@ -94,6 +101,11 @@ type
     // (normative-optional web-compat branch) lets a sloppy eval's var have its
     // name.
     IsCatchParameter: Boolean;
+    // A parameter, or `arguments`, of a calling function whose parameter list
+    // has expressions: outside the variable environment a sloppy eval in the
+    // body declares its vars in, so such a var shadows it (ES2026 §10.2.11
+    // steps 20 and 28).
+    IsOutsideVarEnvironment: Boolean;
   end;
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
@@ -481,6 +493,11 @@ type
     property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
 
+// Whether AName is a hidden variable object's local, of a function body or of
+// a parameter list.
+function IsEvalVarObjectName(const AName: string): Boolean;
+function IsBodyEvalVarObjectName(const AName: string): Boolean;
+
 implementation
 
 uses
@@ -490,6 +507,17 @@ uses
 
   Goccia.Bytecode,
   Goccia.GarbageCollector;
+
+function IsEvalVarObjectName(const AName: string): Boolean;
+begin
+  Result := (Pos(EVAL_VAR_OBJECT_LOCAL, AName) = 1) or
+    (Pos(PARAMETER_EVAL_VAR_OBJECT_LOCAL, AName) = 1);
+end;
+
+function IsBodyEvalVarObjectName(const AName: string): Boolean;
+begin
+  Result := Pos(EVAL_VAR_OBJECT_LOCAL, AName) = 1;
+end;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;

@@ -137,7 +137,6 @@ procedure InstallRealmEvalFunction(const ARealm: TGocciaRealm;
   const AFunction: TGocciaNativeFunctionValue);
 begin
   AFunction.DirectEvalHost := True;
-  ARealm.HostsDirectEval := True;
   ARealm.SetSlot(GEvalFunctionSlot, AFunction);
 end;
 

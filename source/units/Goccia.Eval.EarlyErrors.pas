@@ -73,6 +73,14 @@ procedure ValidateStrictFunctionExpression(
 procedure ValidateStrictFunctionEarlyErrors(
   const AFunction: TGocciaFunctionExpression);
 procedure ValidateEvalControlFlow(const AProgram: TGocciaProgram);
+{ ES2026 §14.2.1 Block and §14.12.1 CaseBlock Static Semantics: Early Errors:
+  a block's LexicallyDeclaredNames, its let, const, class and function
+  declarations, may not repeat a name, except that non-strict code may
+  declare a function twice (B.3.2.4). Checks every block of eval code, nested
+  function bodies included, before the code is compiled. Raises
+  TGocciaSyntaxError. }
+procedure ValidateEvalBlockDeclarations(const AProgram: TGocciaProgram;
+  const AStrictEval: Boolean);
 
 implementation
 
@@ -1733,6 +1741,167 @@ var
 begin
   for I := 0 to AProgram.Body.Count - 1 do
     ValidateEvalControlFlowStatement(AProgram.Body[I], False, False);
+end;
+
+procedure ValidateEvalBlockStatement(const AStmt: TGocciaStatement;
+  const AStrict: Boolean); forward;
+
+// The declarations of one block or case block, ANodes.
+procedure ValidateEvalBlockNodes(const ANodes: array of TGocciaASTNode;
+  const AStrict: Boolean);
+var
+  Names, FunctionNames, StatementNames: TUnicodeStringList;
+  Statement: TObjectList<TGocciaStatement>;
+  Declaration: TGocciaFunctionDeclaration;
+  I, J: Integer;
+
+  procedure RaiseAlreadyDeclared(const AName: string;
+    const ANode: TGocciaASTNode);
+  begin
+    raise TGocciaSyntaxError.Create(
+      Format(SErrorIdentifierAlreadyDeclared, [AName]), ANode.Line,
+      ANode.Column, '', nil, SSuggestAlreadyDeclared);
+  end;
+
+begin
+  Names := TUnicodeStringList.Create;
+  FunctionNames := TUnicodeStringList.Create;
+  StatementNames := TUnicodeStringList.Create;
+  Statement := TObjectList<TGocciaStatement>.Create(False);
+  try
+    for I := 0 to High(ANodes) do
+    begin
+      if not (ANodes[I] is TGocciaStatement) then
+        Continue;
+      Declaration := EvalFunctionDeclarationFromNode(ANodes[I]);
+      if Assigned(Declaration) then
+      begin
+        if Names.IndexOf(Declaration.Name) >= 0 then
+        begin
+          if AStrict or (FunctionNames.IndexOf(Declaration.Name) < 0) then
+            RaiseAlreadyDeclared(Declaration.Name, ANodes[I]);
+        end
+        else
+        begin
+          Names.Add(Declaration.Name);
+          FunctionNames.Add(Declaration.Name);
+        end;
+        Continue;
+      end;
+      Statement.Clear;
+      Statement.Add(TGocciaStatement(ANodes[I]));
+      StatementNames.Clear;
+      CollectTopLevelEvalLexicalNames(Statement, StatementNames);
+      for J := 0 to StatementNames.Count - 1 do
+      begin
+        if Names.IndexOf(StatementNames[J]) >= 0 then
+          RaiseAlreadyDeclared(StatementNames[J], ANodes[I]);
+        Names.Add(StatementNames[J]);
+      end;
+    end;
+    for I := 0 to High(ANodes) do
+      if ANodes[I] is TGocciaStatement then
+        ValidateEvalBlockStatement(TGocciaStatement(ANodes[I]), AStrict);
+  finally
+    Statement.Free;
+    StatementNames.Free;
+    FunctionNames.Free;
+    Names.Free;
+  end;
+end;
+
+procedure ValidateEvalFunctionBody(const ABody: TGocciaASTNode;
+  const AStrict: Boolean);
+var
+  Nodes: array of TGocciaASTNode;
+  I: Integer;
+begin
+  if not (ABody is TGocciaBlockStatement) then
+    Exit;
+  SetLength(Nodes, TGocciaBlockStatement(ABody).Nodes.Count);
+  for I := 0 to High(Nodes) do
+    Nodes[I] := TGocciaBlockStatement(ABody).Nodes[I];
+  // The body's own top level is checked by the function's declaration
+  // instantiation; its blocks are checked here.
+  for I := 0 to High(Nodes) do
+    if Nodes[I] is TGocciaStatement then
+      ValidateEvalBlockStatement(TGocciaStatement(Nodes[I]), AStrict);
+end;
+
+procedure ValidateEvalBlockStatement(const AStmt: TGocciaStatement;
+  const AStrict: Boolean);
+var
+  Nodes: array of TGocciaASTNode;
+  I, J, Count: Integer;
+  SwitchStmt: TGocciaSwitchStatement;
+  TryStmt: TGocciaTryStatement;
+  Declaration: TGocciaFunctionDeclaration;
+begin
+  if not Assigned(AStmt) then
+    Exit;
+  Declaration := EvalFunctionDeclarationFromNode(AStmt);
+  if Assigned(Declaration) then
+  begin
+    if Assigned(Declaration.FunctionExpression) then
+      ValidateEvalFunctionBody(Declaration.FunctionExpression.Body, AStrict);
+  end
+  else if AStmt is TGocciaBlockStatement then
+  begin
+    SetLength(Nodes, TGocciaBlockStatement(AStmt).Nodes.Count);
+    for I := 0 to High(Nodes) do
+      Nodes[I] := TGocciaBlockStatement(AStmt).Nodes[I];
+    ValidateEvalBlockNodes(Nodes, AStrict);
+  end
+  else if AStmt is TGocciaIfStatement then
+  begin
+    ValidateEvalBlockStatement(TGocciaIfStatement(AStmt).Consequent, AStrict);
+    ValidateEvalBlockStatement(TGocciaIfStatement(AStmt).Alternate, AStrict);
+  end
+  else if AStmt is TGocciaForStatement then
+    ValidateEvalBlockStatement(TGocciaForStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaForOfStatement then
+    ValidateEvalBlockStatement(TGocciaForOfStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaForInStatement then
+    ValidateEvalBlockStatement(TGocciaForInStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaWhileStatement then
+    ValidateEvalBlockStatement(TGocciaWhileStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaDoWhileStatement then
+    ValidateEvalBlockStatement(TGocciaDoWhileStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaWithStatement then
+    ValidateEvalBlockStatement(TGocciaWithStatement(AStmt).Body, AStrict)
+  else if AStmt is TGocciaTryStatement then
+  begin
+    TryStmt := TGocciaTryStatement(AStmt);
+    ValidateEvalBlockStatement(TryStmt.Block, AStrict);
+    ValidateEvalBlockStatement(TryStmt.CatchBlock, AStrict);
+    ValidateEvalBlockStatement(TryStmt.FinallyBlock, AStrict);
+  end
+  else if AStmt is TGocciaSwitchStatement then
+  begin
+    // §14.12.1: the case clauses share one block.
+    SwitchStmt := TGocciaSwitchStatement(AStmt);
+    Count := 0;
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      Inc(Count, SwitchStmt.Cases[I].Consequent.Count);
+    SetLength(Nodes, Count);
+    Count := 0;
+    for I := 0 to SwitchStmt.Cases.Count - 1 do
+      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
+      begin
+        Nodes[Count] := SwitchStmt.Cases[I].Consequent[J];
+        Inc(Count);
+      end;
+    ValidateEvalBlockNodes(Nodes, AStrict);
+  end;
+end;
+
+procedure ValidateEvalBlockDeclarations(const AProgram: TGocciaProgram;
+  const AStrictEval: Boolean);
+var
+  I: Integer;
+begin
+  for I := 0 to AProgram.Body.Count - 1 do
+    ValidateEvalBlockStatement(AProgram.Body[I], AStrictEval);
 end;
 
 procedure CollectGlobalEvalDeclarationNames(const AProgram: TGocciaProgram;

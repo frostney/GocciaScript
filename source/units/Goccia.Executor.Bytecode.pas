@@ -6,6 +6,7 @@ interface
 
 uses
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
@@ -29,7 +30,6 @@ type
     FArgumentsObjectEnabled: Boolean;
     FLinkedModules: TOrderedStringMap<TGocciaModule>;
     FLinkedReferrer: string;
-    function RealmExposesDirectEval: Boolean;
     procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
     procedure InitializeEntryExports(const AModule: TGocciaBytecodeModule;
       const AEntry: TGocciaModule);
@@ -38,8 +38,9 @@ type
     function RunModule(const AModule: TGocciaCompiledModule;
       const AThisValue: TGocciaValue): TGocciaValue;
     function CompileDirectEvalCode(const AProgram: TGocciaProgram;
-      const ASourcePath: string;
-      const ASite: TGocciaDirectEvalEnvironment): TGocciaFunctionTemplate;
+      const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
+      const AStrictEval: Boolean;
+      const ADeclaredVarNames: TUnicodeStringList): TGocciaFunctionTemplate;
   public
     constructor Create;
     destructor Destroy; override;
@@ -159,7 +160,6 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
@@ -259,7 +259,6 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Module := Compiler.CompileGlobalEval(AProgram, AStrictEval,
       ADeclarations.DeclaredVarNames);
@@ -295,7 +294,8 @@ end;
   (ADR 0134, decision 1). }
 function TGocciaBytecodeExecutor.CompileDirectEvalCode(
   const AProgram: TGocciaProgram; const ASourcePath: string;
-  const ASite: TGocciaDirectEvalEnvironment): TGocciaFunctionTemplate;
+  const ASite: TGocciaDirectEvalEnvironment; const AStrictEval: Boolean;
+  const ADeclaredVarNames: TUnicodeStringList): TGocciaFunctionTemplate;
 var
   Compiler: TGocciaCompiler;
   Module: TGocciaBytecodeModule;
@@ -310,24 +310,15 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
-    Module := Compiler.CompileDirectEval(AProgram, ASite);
+    Module := Compiler.CompileDirectEval(AProgram, ASite, AStrictEval,
+      ADeclaredVarNames);
   finally
     Compiler.Free;
   end;
   if Assigned(FRetainModule) then
     FRetainModule(Module);
   Result := Module.TopLevel;
-end;
-
-// Ordinary realms have no `eval`. A host that offers direct eval (the Test262
-// host, and a ShadowRealm created from such a realm) says so on the realm when
-// it installs the function; the global `eval` property itself is not asked,
-// because a script can delete or move it while eval-created code lives on.
-function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
-begin
-  Result := Assigned(FRealm) and FRealm.HostsDirectEval;
 end;
 
 function TGocciaBytecodeExecutor.CompileModule(
@@ -349,7 +340,6 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally
