@@ -3255,7 +3255,7 @@
       OP_FINISH_DECORATORS:
         SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A])));
 
-      OP_GET_GLOBAL:
+      OP_GET_GLOBAL, OP_GET_GLOBAL_DECLARED:
       begin
         if not Assigned(FGlobalScope) then
           FRegisters[A] := RegisterUndefined
@@ -3330,12 +3330,21 @@
                   GlobalReadCache^.Scope := Pointer(FGlobalScope);
                 FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
               end
+              else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
+                ThrowReferenceError(Format(SErrorUndefinedVariable,
+                  [GlobalName]), SSuggestDeclareBeforeUse)
               else
                 FRegisters[A] := RegisterUndefined;
             end
             else if FGlobalScope.TryGetBindingValue(GlobalName,
               GlobalBindingValue) then
               FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+            else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
+              // ES2026 §6.2.5.5 GetValue step 2: the declared binding is
+              // gone (a configurable global its var redeclared was deleted),
+              // so the reference is unresolvable.
+              ThrowReferenceError(Format(SErrorUndefinedVariable,
+                [GlobalName]), SSuggestDeclareBeforeUse)
             else
               FRegisters[A] := RegisterUndefined;
           end;
