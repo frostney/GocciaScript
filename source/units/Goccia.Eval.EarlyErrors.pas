@@ -1764,6 +1764,15 @@ var
   end;
 
 begin
+  // A name needs two declarations to repeat; a block of fewer nodes only has
+  // nested blocks to check.
+  if Length(ANodes) < 2 then
+  begin
+    for I := 0 to High(ANodes) do
+      if ANodes[I] is TGocciaStatement then
+        ValidateEvalBlockStatement(TGocciaStatement(ANodes[I]), AStrict);
+    Exit;
+  end;
   Names := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   StatementNames := TUnicodeStringList.Create;
