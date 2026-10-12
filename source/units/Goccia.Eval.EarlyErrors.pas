@@ -286,9 +286,12 @@ begin
   else if AExpr is TGocciaUnaryExpression then
     Exit(EvalExpressionContainsArgumentsReference(
       TGocciaUnaryExpression(AExpr).Operand))
+  // ES2026 §15.7.9 ContainsArguments: an assignment target is an
+  // IdentifierReference too.
   else if AExpr is TGocciaAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaAssignmentExpression(AExpr).Value))
+    Exit((TGocciaAssignmentExpression(AExpr).Name = IDENTIFIER_ARGUMENTS) or
+      EvalExpressionContainsArgumentsReference(
+        TGocciaAssignmentExpression(AExpr).Value))
   else if AExpr is TGocciaPropertyAssignmentExpression then
     Exit(EvalExpressionContainsArgumentsReference(
       TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
@@ -302,8 +305,9 @@ begin
       EvalExpressionContainsArgumentsReference(
         TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
   else if AExpr is TGocciaCompoundAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaCompoundAssignmentExpression(AExpr).Value))
+    Exit((TGocciaCompoundAssignmentExpression(AExpr).Name =
+      IDENTIFIER_ARGUMENTS) or EvalExpressionContainsArgumentsReference(
+        TGocciaCompoundAssignmentExpression(AExpr).Value))
   else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
     Exit(EvalExpressionContainsArgumentsReference(
       TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
@@ -395,9 +399,13 @@ begin
         TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
         Exit(True);
   end
+  // The target pattern's default initializers and computed keys are
+  // expressions of the eval code as well.
   else if AExpr is TGocciaDestructuringAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaDestructuringAssignmentExpression(AExpr).Right))
+    Exit(EvalPatternContainsArgumentsReference(
+      TGocciaDestructuringAssignmentExpression(AExpr).Left) or
+      EvalExpressionContainsArgumentsReference(
+        TGocciaDestructuringAssignmentExpression(AExpr).Right))
   else if AExpr is TGocciaPrivateMemberExpression then
     Exit(EvalExpressionContainsArgumentsReference(
       TGocciaPrivateMemberExpression(AExpr).ObjectExpr))

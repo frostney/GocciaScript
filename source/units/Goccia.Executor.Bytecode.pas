@@ -243,6 +243,7 @@ var
   Module: TGocciaBytecodeModule;
   Options: TGocciaCompilerOptimizationOptions;
   SavedGlobalScope: TGocciaScope;
+  SavedGlobalBackedTopLevel: Boolean;
 begin
   Compiler := TGocciaCompiler.Create(ASourcePath);
   try
@@ -268,11 +269,16 @@ begin
     CheckGlobalEvalDeclarations(FGlobalScope, ADeclarations.VarNames,
       ADeclarations.FunctionNames, ADeclarations.DeclaredVarNames);
 
+  // The eval can run inside a module body, which has the VM's global scope
+  // and script-top-level flag set for itself (EvaluateModuleBody); RunModule
+  // sets both for the eval, so the module body gets its own back.
   SavedGlobalScope := FVM.GlobalScope;
+  SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
   FVM.GlobalScope := FGlobalScope;
   try
     Result := RunModule(Module, FGlobalScope.ThisValue);
   finally
+    FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     FVM.GlobalScope := SavedGlobalScope;
   end;
 end;

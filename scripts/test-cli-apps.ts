@@ -1486,9 +1486,11 @@ await section("Test262 Runner: bytecode eval is direct eval...", async () => {
 
 // ADR 0134 Phase 2: eval code whose variable environment is the global one
 // (indirect eval, ShadowRealm.prototype.evaluate) is compiled in bytecode mode.
-// The expected output of each probe below is what Node.js 24.21 prints for the
-// same source run as a classic script (vm.runInThisContext, ShadowRealm under
-// --experimental-shadow-realm).
+// Each expected value below comes from the ECMAScript 2026 clause cited above
+// its section (tc39-mcp 0.6.3, es2026 snapshot 0248456c) or, for ShadowRealm,
+// the stage 2.7 proposal. Node.js 24.21 (classic script via
+// vm.runInThisContext, ShadowRealm under --experimental-shadow-realm) was run
+// as a cross-check only and agrees with every value.
 const runEvalHostProbe = (mode: string, lines: string[]) =>
   Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
     stdin: new TextEncoder().encode([...lines, ""].join("\n")),
@@ -1519,10 +1521,12 @@ await section("Test262 Runner: an indirect eval's let, const and class do not ou
   }
 });
 
-// ES2026 §19.2.1.3 EvalDeclarationInstantiation steps 17-18 create an eval's
-// global vars and functions with CreateGlobalVarBinding /
-// CreateGlobalFunctionBinding(…, true), so they are configurable and delete
-// removes them; a script's own var is not deletable.
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation (sec-evaldeclarationinstantiation)
+// steps 17-18 create an eval's global vars and functions with
+// CreateGlobalVarBinding / CreateGlobalFunctionBinding(…, true): writable,
+// enumerable and configurable (§9.1.1.4.16, §9.1.1.4.17), so delete (§13.5.1.2)
+// removes them and returns true. A script's own var is created with D = false
+// (§16.1.7 GlobalDeclarationInstantiation), so delete returns false.
 await section("Test262 Runner: delete removes a global var an indirect eval created...", async () => {
   for (const mode of ["interpreted", "bytecode"] as const) {
     const proc = runEvalHostProbe(mode, [
@@ -1553,10 +1557,13 @@ await section("Test262 Runner: delete removes a global var an indirect eval crea
   }
 });
 
-// ES2026 §14.15.3: a finally block that ends with an empty break replaces the
-// try statement's value with undefined; one that completes normally keeps it.
-// A direct eval inside the eval code resolves the eval's deleted global var by
-// name, as the eval code itself does.
+// ES2026 §14.15.3 TryStatement Evaluation (sec-try-statement-runtime-semantics-evaluation):
+// a normal finally block leaves the try statement's value C; an abrupt one
+// gives UpdateEmpty(F, undefined), so an empty break makes it undefined, and the
+// labelled or loop statement around it returns that (§14.13.4, §14.7.2.2).
+// After the eval's global is deleted, a nested direct eval finds no binding:
+// typeof gives "undefined" (§13.5.3.1 step 2.a) and a non-strict assignment
+// creates a global property again (§6.2.5.6 PutValue step 2.c).
 await section("Test262 Runner: an indirect eval's completion value and deleted globals reach a nested direct eval...", async () => {
   for (const mode of ["interpreted", "bytecode"] as const) {
     const proc = runEvalHostProbe(mode, [
@@ -1581,11 +1588,13 @@ await section("Test262 Runner: an indirect eval's completion value and deleted g
   }
 });
 
-// ES2026 §19.2.1.1 step 13: eval code is strict only by its own directive. A
-// test262 module test runs in an engine without the non-strict compatibility
-// profile, and a directive-free indirect eval there is still non-strict: an
-// assignment to an undeclared name creates a global, as in Node.js 24.21 (the
-// same body run as an ES module) and in the interpreter on main.
+// ES2026 §19.2.1.1 PerformEval (sec-performeval) step 13: an indirect eval is
+// strict only when ScriptIsStrict, by its own directive. A test262 module test
+// runs in an engine without the non-strict compatibility profile, and a
+// directive-free indirect eval there is still non-strict: an assignment to an
+// undeclared name creates a global (§6.2.5.6 PutValue step 2.c), and with the
+// directive it throws ReferenceError (step 2.a). Node.js 24.21 (the same body
+// as an ES module) and the interpreter on main agree.
 await section("Test262 Runner: a directive-free indirect eval is non-strict in a strict-only engine...", async () => {
   const tmp = makeTmp();
   try {
@@ -1633,10 +1642,73 @@ await section("Test262 Runner: a directive-free indirect eval is non-strict in a
   }
 });
 
-// TC39 ShadowRealm §3.1.3 PerformShadowRealmEval: a parse or early error is a
-// caller-realm SyntaxError (step 2); an abrupt completion of the declaration
-// instantiation or the body, a SyntaxError a nested eval throws included, is
-// a caller-realm TypeError (step 15).
+// ES2026 §19.2.1.1 PerformEval (sec-performeval) step 11.h: a direct eval in a
+// class field initializer (inClassFieldInitializer, step 10) throws a
+// SyntaxError when ContainsArguments of its body is true. ContainsArguments
+// (§15.7.9, sec-static-semantics-containsarguments) visits every child node, so
+// an `arguments` IdentifierReference counts in a destructuring target's default
+// or computed key and as an assignment target. Node.js 24.21 agrees.
+await section("Test262 Runner: eval in a class field initializer rejects arguments in a destructuring target...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var a, x, o = {};",
+      "function kind(src) {",
+      "  try { class C { f = eval(src); } new C(); return 'none'; }",
+      "  catch (e) { return e.constructor === SyntaxError ? 'SyntaxError' : e.constructor.name; }",
+      "}",
+      'print(kind("arguments"));',
+      'print(kind("[a = arguments] = []"));',
+      'print(kind("({[arguments]: x} = o)"));',
+      'print(kind("arguments = 1"));',
+      'print(kind("[a = 1] = []"));',
+    ]);
+    const expected = ["SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "none"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} field-initializer arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} missed an arguments reference in eval code: ${proc.stdout.toString()}`);
+  }
+});
+
+// A direct eval at a module's top level resolves `this` from the module:
+// PerformEval step 16 makes its lexical environment a child of the module's,
+// ResolveThisBinding (§9.4.4) and GetThisEnvironment (§9.4.3) reach the Module
+// Environment Record, and its GetThisBinding (§9.1.1.5.4,
+// sec-module-environment-records-getthisbinding) returns undefined. An earlier
+// indirect eval in the same module body (whose own `this` is the global one,
+// step 17, §9.1.1.4.9) must not change that. Node.js 24.21 agrees.
+await section("Test262 Runner: an indirect eval in a module body leaves the module's this undefined...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "mod.js"), [
+      '(0, eval)("1");',
+      'export const thisType = typeof eval("this");',
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      // The probe imports from the temporary directory, so it runs there.
+      const proc = Bun.spawnSync([resolve(TEST262RUNNER), "--eval-host", `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode('import { thisType } from "./mod.js";\nprint(thisType);\n'),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(`Test262 Runner ${mode} module this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined")
+        throw new Error(`Test262 Runner ${mode} module this after an indirect eval was: ${proc.stdout.toString()}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// TC39 ShadowRealm (stage 2.7) §3.1.3 PerformShadowRealmEval: a parse or early
+// error is a caller-realm SyntaxError (step 2); an abrupt completion of the
+// declaration instantiation (step 10) or the body (step 11), a SyntaxError a
+// nested eval throws included, is a caller-realm TypeError (step 15). The eval's
+// var environment is the realm's global environment (steps 5-8), so a var
+// persists across evaluate calls.
 await section("Test262 Runner: ShadowRealm evaluate maps early errors to SyntaxError and abrupt bodies to TypeError...", async () => {
   for (const mode of ["interpreted", "bytecode"] as const) {
     const proc = runEvalHostProbe(mode, [
