@@ -1,3 +1,10 @@
+// Every persistent callback a test creates is closed in a finally block. The
+// callback slot table is shared by the whole process, and GocciaTestRunner
+// runs files on worker threads of one process, so a callback left open here
+// takes a slot from whichever FFI file runs beside it. For the same reason
+// slot exhaustion is not tested here: it needs every slot, which only a
+// process of its own can guarantee. scripts/test-cli-ffi-callback-slots.ts
+// runs that check.
 describe("FFI.callback", () => {
   const lib = FFI.open("./fixtures/ffi/libfixture" + FFI.suffix);
   const I32Callback = FFI.callback({ args: ["i32"], returns: "i32" });
@@ -176,9 +183,13 @@ describe("FFI.callback", () => {
     });
     const callback = I32Callback.create((value) => value);
 
-    callback.close();
+    try {
+      callback.close();
 
-    expect(() => invoke(callback, 42)).toThrow(TypeError);
+      expect(() => invoke(callback, 42)).toThrow(TypeError);
+    } finally {
+      if (!callback.closed) callback.close();
+    }
   });
 
   test("stores persistent callback pointers in aggregate fields", () => {
@@ -454,24 +465,5 @@ describe("FFI.callback", () => {
 
     expect(() => capture((value) => value, input)).toThrow(TypeError);
     expect(getCapturedSum()).toBe(0);
-  });
-
-  test("reports callback slot exhaustion and reuses released slots", () => {
-    const callbacks = [];
-    let replacement;
-
-    try {
-      for (const unused of new Array(64)) {
-        callbacks.push(I32Callback.create((value) => value));
-      }
-      expect(() => I32Callback.create((value) => value)).toThrow(RangeError);
-
-      callbacks[0].close();
-      replacement = I32Callback.create((value) => value + 1);
-      expect(replacement.closed).toBe(false);
-    } finally {
-      for (const callback of callbacks) callback.close();
-      if (replacement) replacement.close();
-    }
   });
 });

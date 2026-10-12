@@ -801,6 +801,11 @@ jobs:
       - name: Make binaries executable
         run: chmod +x build/*
 
+      # test-cli-ffi-callback-slots.ts calls into the FFI fixture library, the
+      # same one the test job builds.
+      - name: Build FFI fixture library
+        run: ./fixtures/ffi/build.sh
+
       - name: Check shared CLI test assertions
         run: bun run scripts/test-cli-assertions.ts
 
@@ -827,6 +832,9 @@ jobs:
 
       - name: Check Intl taint robustness under lazy materialization
         run: bun run scripts/test-cli-intl-taint.ts
+
+      - name: Check FFI callback slot exhaustion in its own process
+        run: bun run scripts/test-cli-ffi-callback-slots.ts
 
       - name: Check differential suites against vitest and bun
         run: bun run scripts/test-cli-differential.ts
