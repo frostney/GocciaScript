@@ -2231,26 +2231,31 @@ begin
   end;
 end;
 
-function CallFlags(const ACtx: TGocciaCompilationContext;
+// ES2026 §13.3.6.1 step 6: `eval(...)` may be a direct eval however the
+// identifier resolves, so a call site gets an eval site record and the flag
+// whether it is compiled as OP_CALL or, through a `with` object, OP_CALL_METHOD.
+function DirectEvalCallFlag(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
 begin
-  Result := CallTrustedFlag(ACtx, AExpr);
+  Result := 0;
   if IsDirectEvalCall(AExpr) then
   begin
     CaptureDirectEvalEnvironment(ACtx, AExpr, ACallPC);
-    Result := Result or CALL_FLAG_DIRECT_EVAL;
+    Result := CALL_FLAG_DIRECT_EVAL;
   end;
+end;
+
+function CallFlags(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
+begin
+  Result := CallTrustedFlag(ACtx, AExpr) or
+    DirectEvalCallFlag(ACtx, AExpr, ACallPC);
 end;
 
 function SpreadCallFlags(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
 begin
-  Result := CALL_FLAG_SPREAD;
-  if IsDirectEvalCall(AExpr) then
-  begin
-    CaptureDirectEvalEnvironment(ACtx, AExpr, ACallPC);
-    Result := Result or CALL_FLAG_DIRECT_EVAL;
-  end;
+  Result := CALL_FLAG_SPREAD or DirectEvalCallFlag(ACtx, AExpr, ACallPC);
 end;
 
 function TryIntegerOp(const AOperator: TGocciaTokenType;
@@ -4624,7 +4629,8 @@ var
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
-          CALL_FLAG_SPREAD or TailFlag))
+          CALL_FLAG_SPREAD or TailFlag or
+          DirectEvalCallFlag(ACtx, AExpr, CurrentCodePosition(ACtx))))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
           SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
@@ -4638,7 +4644,8 @@ var
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
-          UInt16(AArgCount), TailFlag))
+          UInt16(AArgCount), TailFlag or
+          DirectEvalCallFlag(ACtx, AExpr, CurrentCodePosition(ACtx))))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(AArgCount),
         CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
