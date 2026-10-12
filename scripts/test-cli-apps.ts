@@ -2442,14 +2442,22 @@ await section("Test262 Runner: a sloppy eval var in a body with parameter expres
 // body is a new binding of that environment (EvalDeclarationInstantiation,
 // sec-evaldeclarationinstantiation, §19.2.1.3 step 18), so the body and eval
 // code read 1 while a closure created in the parameter list still reads the
-// arguments object: object,0,1,1 and object,x,1.
+// arguments object: object,0,1,1 and object,x,1. An arrow function has no
+// arguments object (step 16), so an eval in its parameter list declares
+// `var arguments` with no binding in between (§19.2.1.3 step 3.d), and the
+// body and a parameter closure read it: param,param; a body `var arguments`
+// is the body's own (step 30): local,param. No global is created
+// (test262 language/eval-code/direct/arrow-fn-*-declare-arguments-assign*).
 await section("Test262 Runner: a sloppy eval's var arguments leaves the parameter list's arguments object alone...", async () => {
   expectEvalHostProbe("eval var arguments with parameter expressions", [
     "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
     "function f(a = () => arguments) { eval('var arguments = 1'); return [typeof a(), a().length, arguments, eval('arguments')].join(); }",
     "function f2(a = () => arguments, b) { eval('var arguments = 1'); return [typeof a(), a()[1], arguments].join(); }",
     "print([out(() => f()), out(() => f2(undefined, 'x'))].join(' '));",
-  ], ["object,0,1,1 object,x,1"]);
+    "const a = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => [arguments, q()].join();",
+    "const a2 = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => { var arguments = 'local'; return [arguments, q()].join(); };",
+    "print([out(a), out(a2), typeof globalThis.arguments].join(' '));",
+  ], ["object,0,1,1 object,x,1", "param,param local,param undefined"]);
 });
 
 // A generator or async function keeps its VariableEnvironment across `yield`

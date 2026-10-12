@@ -2299,7 +2299,7 @@ var
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
   LocalIdx, UpvalueIdx: Integer;
-  IsEvalSensitiveArguments: Boolean;
+  IsEvalSensitiveArguments, IsSyntheticArguments: Boolean;
   IsVarEnvironmentParameter: Boolean;
   StrictCaller: Boolean;
   VarEnvironment: TGocciaDirectEvalVarEnvironment;
@@ -2344,12 +2344,18 @@ begin
           (Local.Depth = 0) and ACtx.Scope.HasParameterName(Local.Name);
         // A binding outside the variable environment, the arguments object
         // of a function with parameter expressions included, is none of its
-        // bindings, though declared as a var.
+        // bindings, though declared as a var. The `arguments` local that an
+        // eval in a parameter list declares its `var arguments` in, where the
+        // function has no arguments object (an arrow function, §10.2.11 step
+        // 16), stands for that eval's variable environment.
+        IsSyntheticArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
+          (ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot);
         if AddDirectEvalBinding(Bindings, Names, Local.Name, debLocal,
            Local.Slot, Local.IsConst,
-           (Local.IsVar or IsVarEnvironmentParameter or
-            IsEvalSensitiveArguments) and
-             not ACtx.Scope.LocalOutsideVarEnvironment(LocalIdx),
+           IsSyntheticArguments or
+           ((Local.IsVar or IsVarEnvironmentParameter or
+             IsEvalSensitiveArguments) and
+            not ACtx.Scope.LocalOutsideVarEnvironment(LocalIdx)),
            IsEvalSensitiveArguments or (Local.IsConst and
              Local.IsNonStrictImmutable),
            Local.IsCatchParameter,
