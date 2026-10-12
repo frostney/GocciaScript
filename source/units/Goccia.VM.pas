@@ -14841,24 +14841,6 @@ begin
   Result := False;
 end;
 
-function IsCurrentRealmEvalFunction(const ACallee: TGocciaValue;
-  const ARealm: TGocciaRealm): Boolean;
-var
-  GlobalObject: TGocciaObjectValue;
-  EvalValue: TGocciaValue;
-begin
-  Result := False;
-  if not Assigned(ARealm) or not (ARealm.GlobalObject is TGocciaObjectValue) then
-    Exit;
-
-  GlobalObject := TGocciaObjectValue(ARealm.GlobalObject);
-  if not GlobalObject.HasProperty('eval') then
-    Exit;
-
-  EvalValue := GlobalObject.GetProperty('eval');
-  Result := EvalValue = ACallee;
-end;
-
 function DirectEvalParameterPreambleVarRejectNames(
   const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
   const APC: UInt32): TGocciaEvalRejectNameArray;
@@ -14912,7 +14894,8 @@ begin
 end;
 
 // ES2026 §13.3.6.1 (Function Calls) step 6: a call the compiler flagged with
-// CALL_FLAG_DIRECT_EVAL is a direct eval when the callee is the realm's eval.
+// CALL_FLAG_DIRECT_EVAL is a direct eval when the callee is the realm's %eval%,
+// whatever the global `eval` property holds now.
 // OP_CALL and OP_CALL_METHOD share this; the second is the `eval` a `with`
 // object supplied, whose this-value direct eval does not use. The callee is in
 // register ACalleeReg, followed by its arguments, or by the spread arguments
@@ -14926,7 +14909,7 @@ begin
   Result := (FRegisters[ACalleeReg].Kind = grkObject) and
     (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
     TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
-    IsCurrentRealmEvalFunction(FRegisters[ACalleeReg].ObjectValue, FRealm);
+    IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue);
   if not Result then
     Exit;
   EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;

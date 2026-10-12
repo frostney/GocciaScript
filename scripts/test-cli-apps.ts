@@ -2062,6 +2062,61 @@ await section("Test262 Runner: eval found on a with object is a direct eval...",
   }
 });
 
+// ES2026 §13.3.6.1 step 6.a compares the callee with the realm's %eval%, not
+// with whatever the global `eval` property holds when the call runs. Checking
+// that property also read it a second time, running a getter twice.
+await section("Test262 Runner: direct eval recognises the realm's eval, not the global property...", async () => {
+  const source = [
+    "var out = [];",
+    'var x = "global";',
+    "var e = eval;",
+    "var reads = 0;",
+    'Object.defineProperty(globalThis, "eval", { get: function () { reads++; return e; }, configurable: true });',
+    'function getterReadOnce() { var x = "local"; var r = eval("x"); return r + ":" + reads; }',
+    'out.push("getterReadOnce " + getterReadOnce());',
+    'Object.defineProperty(globalThis, "eval", { value: function () { return "replaced"; }, writable: true, configurable: true });',
+    'function localBinding() { var x = "local"; var eval = e; return eval("x"); }',
+    'out.push("localBinding " + localBinding());',
+    'function parameter(eval) { var x = "local"; return eval("x"); }',
+    'out.push("parameter " + parameter(e));',
+    'function withObject() { var x = "local"; with ({ eval: e }) { return eval("x"); } }',
+    'out.push("withObject " + withObject());',
+    'function replacedGlobal() { var x = "local"; return eval("x"); }',
+    'out.push("replacedGlobal " + replacedGlobal());',
+    "delete globalThis.eval;",
+    'function afterDelete() { var x = "local"; var eval = e; return eval("x"); }',
+    'out.push("afterDelete " + afterDelete());',
+    'print(out.join("\\n"));',
+    "",
+  ].join("\n");
+  const expected = [
+    "getterReadOnce local:1",
+    "localBinding local",
+    "parameter local",
+    "withObject local",
+    "replacedGlobal replaced",
+    "afterDelete local",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([
+      TEST262RUNNER,
+      "--eval-host",
+      `--mode=${mode}`,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} realm eval identity probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} direct eval did not compare with the realm's eval: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval in a finally block run by return or break resolves names outside the try block...", async () => {
   const source = [
     "const run = (exit) => {",

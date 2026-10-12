@@ -249,8 +249,7 @@ begin
     try
       EvalFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
         FEvalHost.Invoke, 'eval', 1);
-      EvalFn.DirectEvalHost := True;
-      FEngine.Realm.HostsDirectEval := True;
+      InstallRealmEvalFunction(FEngine.Realm, EvalFn);
       (FEngine.Realm.GlobalObject as TGocciaObjectValue).DefineProperty('eval',
         TGocciaPropertyDescriptorData.Create(EvalFn,
           [pfWritable, pfConfigurable]));

@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Realm,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunctionCallback,
@@ -111,12 +112,41 @@ function ResolvePropertyWithoutCall(const AObject: TGocciaObjectValue;
   out AKind: TGocciaNativeIntrinsicKind): Boolean;
 
 
+{ Records AFunction as ARealm's %eval% (ES2026 §19.2.1) when a host installs
+  the global `eval`, and marks the realm as hosting direct eval. The realm
+  keeps it alive, so the identity check below holds after a script replaces
+  or deletes the global property. }
+procedure InstallRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AFunction: TGocciaNativeFunctionValue);
+
+{ ES2026 §13.3.6.1 step 6.a: SameValue(func, %eval%) for ARealm. Compares
+  with the function the host installed, not the current global `eval`. }
+function IsRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AValue: TGocciaValue): Boolean;
+
 implementation
 
 uses
   Goccia.Constants.PropertyNames,
-  Goccia.Realm,
   Goccia.Values.ObjectPropertyDescriptor;
+
+var
+  GEvalFunctionSlot: TGocciaRealmSlotId;
+
+procedure InstallRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AFunction: TGocciaNativeFunctionValue);
+begin
+  AFunction.DirectEvalHost := True;
+  ARealm.HostsDirectEval := True;
+  ARealm.SetSlot(GEvalFunctionSlot, AFunction);
+end;
+
+function IsRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(ARealm) and Assigned(AValue) and
+    (ARealm.GetSlot(GEvalFunctionSlot) = AValue);
+end;
 
 procedure MarkIntrinsicGetter(const APrototype: TGocciaObjectValue;
   const AName: string; const AKind: TGocciaNativeIntrinsicKind);
@@ -287,5 +317,8 @@ function TGocciaNativeFunctionValue.GetFunctionName: string;
 begin
   Result := FName;
 end;
+
+initialization
+  GEvalFunctionSlot := RegisterRealmSlot('eval');
 
 end.

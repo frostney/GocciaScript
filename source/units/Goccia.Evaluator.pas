@@ -3787,25 +3787,6 @@ begin
   Result := False;
 end;
 
-function IsCurrentRealmEvalFunction(const ACallee: TGocciaValue;
-  const AContext: TGocciaEvaluationContext): Boolean;
-var
-  GlobalObject: TGocciaObjectValue;
-  EvalValue: TGocciaValue;
-begin
-  Result := False;
-  if not Assigned(AContext.Realm) or
-     not (AContext.Realm.GlobalObject is TGocciaObjectValue) then
-    Exit;
-
-  GlobalObject := TGocciaObjectValue(AContext.Realm.GlobalObject);
-  if not GlobalObject.HasProperty('eval') then
-    Exit;
-
-  EvalValue := GlobalObject.GetProperty('eval');
-  Result := EvalValue = ACallee;
-end;
-
 function TryEvaluateInterpreterDirectEval(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
@@ -3833,7 +3814,7 @@ begin
   Result := False;
   if not ((ACallee is TGocciaNativeFunctionValue) and
      TGocciaNativeFunctionValue(ACallee).DirectEvalHost and
-     IsCurrentRealmEvalFunction(ACallee, AContext)) then
+     IsRealmEvalFunction(AContext.Realm, ACallee)) then
     Exit;
   if not (ACallExpression.Callee is TGocciaIdentifierExpression) or
      (TGocciaIdentifierExpression(ACallExpression.Callee).Name <> 'eval') then
