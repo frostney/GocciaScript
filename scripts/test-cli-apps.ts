@@ -1958,10 +1958,10 @@ await section("Test262 Runner: a private brand check in an eval finds the class'
 
 // OP_DIRECT_EVAL runs `eval(...)` when the callee is %eval% and otherwise
 // leaves the call to the OP_CALL after it, an ordinary call with its own
-// `this`, spread arguments and tail position (ES2026 §13.3.6.1). A const
-// read across a function containing a sloppy direct eval keeps its named
-// read, and one across a sloppy function without one is folded; both give
-// the result Node.js does (#872, ADR 0134 Phase 1).
+// `this`, spread arguments and tail position (ES2026 §13.3.6.1). An eval var
+// shadows an enclosing const for reads in the eval's function and in the
+// functions nested in it, as in Node.js; Goccia.Compiler.Test checks which of
+// those reads the compiler may fold (#872, ADR 0134 Phase 1).
 await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
   expectEvalHostProbe("eval call site", [
     "function notEval() { var eval = function (a, b) { return [typeof this, a, b].join(); }; return eval(1, ...[2]); }",
@@ -1975,6 +1975,12 @@ await section("Test262 Runner: an eval call site falls back to an ordinary call 
     "function inParameters(a = eval('var p = 4; p')) { return a + p; }",
     "print([shadows(), shadowsNested(), plain(), inParameters()].join());",
   ], ["object,1,2 3 done 42", "20,30,10,8"]);
+  // An element decorator is class-body code, strict by ES2026 §15.7.1, so its
+  // eval's var stays in the eval.
+  expectEvalHostProbe("eval in an element decorator", [
+    "function decorated() { var d = (v) => v; class C { @((() => { eval('var z = 1'); return d; })()) m() {} } return typeof z; }",
+    "print(decorated());",
+  ], ["undefined"]);
 });
 
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {

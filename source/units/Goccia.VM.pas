@@ -557,9 +557,9 @@ type
     function ExecuteDirectEval(const ASourceValue: TGocciaValue;
       const ATemplate: TGocciaFunctionTemplate;
       const ASiteIndex: Integer): TGocciaValue;
-    function TryExecuteDirectEvalSite(const ACalleeReg: UInt16;
+    procedure ExecuteDirectEvalSite(const ACalleeReg: UInt16;
       const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
-      var AIP, AInstructionStartIP: Integer): Boolean;
+      var AIP, AInstructionStartIP: Integer);
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     procedure PushFrame(const AResultRegister, AFrameIP: Integer;
       const ATemplate: TGocciaFunctionTemplate;
@@ -15143,11 +15143,11 @@ end;
 // completion value in ACalleeReg and moves AIP past the call, which does not
 // run. The call is the executing instruction while the eval runs, as it was
 // when OP_CALL ran it, so a frame, a stack trace or a handler sees the call.
-// For any other callee it returns False and changes nothing, and the call
-// runs as an ordinary call.
-function TGocciaVM.TryExecuteDirectEvalSite(const ACalleeReg: UInt16;
+// For any other callee it changes nothing, and the call runs as an ordinary
+// call.
+procedure TGocciaVM.ExecuteDirectEvalSite(const ACalleeReg: UInt16;
   const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
-  var AIP, AInstructionStartIP: Integer): Boolean;
+  var AIP, AInstructionStartIP: Integer);
 var
   CallInstruction: UInt32;
   CallIP: Integer;
@@ -15155,11 +15155,10 @@ var
   ArgsOperand, Flags: UInt16;
   EvalSourceValue: TGocciaValue;
 begin
-  Result := (FRegisters[ACalleeReg].Kind = grkObject) and
-    (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
-    TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
-    IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue);
-  if not Result then
+  if not ((FRegisters[ACalleeReg].Kind = grkObject) and
+     (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
+     TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
+     IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue)) then
     Exit;
   CallIP := AIP;
   CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);

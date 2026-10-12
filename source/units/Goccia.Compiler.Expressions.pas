@@ -2363,11 +2363,6 @@ begin
     UInt16(SiteIndex)));
 end;
 
-function CallFlags(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression): UInt16;
-begin
-  Result := CallTrustedFlag(ACtx, AExpr);
-end;
 
 function TryIntegerOp(const AOperator: TGocciaTokenType;
   out AIntOp: TGocciaOpCode): Boolean;
@@ -4775,7 +4770,7 @@ var
           UInt16(AArgCount), TailFlag))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(AArgCount),
-        CallFlags(ACtx, AExpr) or TailFlag));
+        CallTrustedFlag(ACtx, AExpr) or TailFlag));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -4880,7 +4875,7 @@ var
           UInt16(ArgCount), 0))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(ArgCount),
-          CallFlags(ACtx, AExpr)));
+          CallTrustedFlag(ACtx, AExpr)));
       for ArgIndex := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -5512,7 +5507,7 @@ begin
       EmitDirectEvalSite(ACtx, AExpr, BaseReg);
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(ArgCount),
-        CallFlags(ACtx, AExpr) or MethodTailFlag));
+        CallTrustedFlag(ACtx, AExpr) or MethodTailFlag));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;

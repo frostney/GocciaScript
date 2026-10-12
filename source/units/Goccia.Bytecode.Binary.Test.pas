@@ -561,6 +561,13 @@ end;
 // The VM reads the operands of the call after OP_DIRECT_EVAL and the record it
 // names, so the loader rejects a file in which either is missing or wrong.
 procedure TBytecodeBinaryTests.TestRejectsMalformedDirectEvalSite;
+const
+  WIDE_MAX_REGISTERS = 400;
+  WIDE_CALLEE_REGISTER = 300;
+var
+  Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  Message: string;
 
   function Reason(const ASiteIndex: UInt16; const ACall: UInt64;
     const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
@@ -596,6 +603,31 @@ begin
   Expect<Boolean>(Pos('names register 9, outside MaxRegisters 4',
     Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devParameters,
       TEST_OUT_OF_RANGE_REGISTER)) > 0).ToBe(True);
+
+  // OP_DIRECT_EVAL as the last instruction, with no call to read.
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, nil);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('not followed by a call', Message) > 0).ToBe(True);
+
+  // A call whose operands need an OP_WIDE prefix is still the call.
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := WIDE_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, WIDE_CALLEE_REGISTER, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, WIDE_CALLEE_REGISTER, 1, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, nil);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  try
+    Expect<string>(Message).ToBe('');
+    if Assigned(Loaded) then
+      Expect<Integer>(DecodeOp(Loaded.TopLevel.GetInstruction(2)))
+        .ToBe(Ord(OP_WIDE));
+  finally
+    Loaded.Free;
+  end;
 end;
 
 begin

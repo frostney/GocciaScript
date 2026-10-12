@@ -2534,8 +2534,12 @@
       end;
 
       OP_DIRECT_EVAL:
-        TryExecuteDirectEvalSite(A, DecodeBx(Instruction), Template, Frame.IP,
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
+        ExecuteDirectEvalSite(A, DecodeBx(Instruction), Template, Frame.IP,
           InstructionStartIP);
+      end;
 
       OP_CALL:
       begin

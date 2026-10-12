@@ -6879,6 +6879,7 @@ var
   HasElementDecorators: Boolean;
   ComputedKeyName: string;
   LocalIdx: Integer;
+  DecoratorCtx: TGocciaCompilationContext;
 begin
   HasElementDecorators := False;
   for I := 0 to High(AClassDef.FElements) do
@@ -6891,16 +6892,29 @@ begin
   if not HasElementDecorators and (Length(AClassDef.FDecorators) = 0) then
     Exit;
 
-  SetLength(DecoRegs, Length(AClassDef.FElements));
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    Elem := AClassDef.FElements[I];
-    SetLength(DecoRegs[I], Length(Elem.Decorators));
-    for J := 0 to High(Elem.Decorators) do
+  // ES2026 §15.7.1: an element decorator is part of the ClassBody, which is
+  // strict-mode code, as the parser already treats it. CompileExpression
+  // compiles from the compiler-wide flag, so both it and this context's copy
+  // are cleared, as for the heritage.
+  DecoratorCtx := ACtx;
+  DecoratorCtx.NonStrictMode := False;
+  if Assigned(ACtx.SetNonStrictMode) then
+    ACtx.SetNonStrictMode(False);
+  try
+    SetLength(DecoRegs, Length(AClassDef.FElements));
+    for I := 0 to High(AClassDef.FElements) do
     begin
-      DecoRegs[I][J] := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(Elem.Decorators[J], DecoRegs[I][J]);
+      Elem := AClassDef.FElements[I];
+      SetLength(DecoRegs[I], Length(Elem.Decorators));
+      for J := 0 to High(Elem.Decorators) do
+      begin
+        DecoRegs[I][J] := ACtx.Scope.AllocateRegister;
+        DecoratorCtx.CompileExpression(Elem.Decorators[J], DecoRegs[I][J]);
+      end;
     end;
+  finally
+    if Assigned(ACtx.SetNonStrictMode) then
+      ACtx.SetNonStrictMode(ACtx.CompatibilityNonStrictMode);
   end;
 
   SetLength(ClassDecoRegs, Length(AClassDef.FDecorators));

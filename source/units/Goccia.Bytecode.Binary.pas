@@ -775,6 +775,7 @@ var
   EvalRejectArgumentsReference: Boolean;
   EvalStrictCaller: Boolean;
   EvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  EvalVarEnvironmentKind: UInt8;
   EvalVarObjectSlot: Integer;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
@@ -876,11 +877,13 @@ begin
     EvalPC := ReadUInt32;
     EvalRejectArgumentsReference := ReadBoolean;
     EvalStrictCaller := ReadBoolean;
-    ConstKind := ReadUInt8;
-    if ConstKind > Ord(High(TGocciaDirectEvalVarEnvironment)) then
+    EvalVarEnvironmentKind := ReadUInt8;
+    if EvalVarEnvironmentKind > Ord(High(TGocciaDirectEvalVarEnvironment)) then
       raise Exception.CreateFmt(
-        'Invalid direct-eval variable environment: %d', [ConstKind]);
-    EvalVarEnvironment := TGocciaDirectEvalVarEnvironment(ConstKind);
+        'Invalid direct-eval variable environment: %d',
+        [EvalVarEnvironmentKind]);
+    EvalVarEnvironment := TGocciaDirectEvalVarEnvironment(
+      EvalVarEnvironmentKind);
     EvalVarObjectSlot := ReadUInt16;
     if EvalVarObjectSlot = High(UInt16) then
       EvalVarObjectSlot := -1;
