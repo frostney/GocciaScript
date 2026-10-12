@@ -277,19 +277,6 @@ begin
       ALine, AColumn);
 end;
 
-// The position the bytecode line map resolves a member-read fault to: the
-// base-most expression of the access chain. The compiler emits a line-map entry
-// as it descends to the base and none for the individual property reads, so a
-// read anywhere along `a.b.c` traces to `a`'s column. Walking to the same base
-// here keeps the interpreter's code-frame caret byte-identical with the VM's.
-function MemberChainBaseExpression(
-  const AExpr: TGocciaExpression): TGocciaExpression;
-begin
-  Result := AExpr;
-  while Result is TGocciaMemberExpression do
-    Result := TGocciaMemberExpression(Result).ObjectExpr;
-end;
-
 // A class value that carries its own [[Construct]] implementation — a typed
 // array, or a bytecode-compiled class whose constructor is a closure rather
 // than an AST method — cannot be built by InstantiateClass, which drives
@@ -4593,7 +4580,6 @@ var
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
   Roots: TGocciaActiveRootFrame;
-  MemberBaseExpr: TGocciaExpression;
   SavedFrame: TGocciaCallFrame;
   FrameStamped: Boolean;
 begin
@@ -4702,7 +4688,25 @@ begin
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
     AddValueRoot(Roots, PropertyValue);
-    PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
+    if (Obj is TGocciaNullLiteralValue) or
+       (Obj is TGocciaUndefinedLiteralValue) then
+    begin
+      { The nullish base throws here; locate it at the `[`, as the named read
+        below is located at its property name, and restore the frame as the
+        throw unwinds. }
+      FrameStamped := (TGocciaCallStack.Instance <> nil) and
+        TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
+      StampInterpreterThrowLocation(AContext, AMemberExpression.Line,
+        AMemberExpression.Column);
+      try
+        PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
+      finally
+        if FrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedFrame);
+      end;
+    end
+    else
+      PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
     AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
@@ -4767,10 +4771,10 @@ begin
       { Node's wording, shared with the bytecode VM's nullish-base path
         (Goccia.VM.ThrowNullishBasePropertyAccess) so the two executors report
         an identical message and suggestion for the same fault. Stamp the
-        executing frame with the access chain's base-most position so the trace
+        executing frame with the failed read's own position — the property name,
+        or the `[` of a computed member, where V8 reports it — so the trace
         points at the access rather than the enclosing function's call site, and
-        so the caret column matches the VM's line map (MemberChainBaseExpression). }
-      MemberBaseExpr := MemberChainBaseExpression(AMemberExpression);
+        so the caret column matches the VM's line map (EmitLoadMemberProperty). }
       { Snapshot the top frame before stamping and restore it as the throw
         unwinds: the error captures the stamped position at creation, but
         SetTopFrameLocation persists, so a try/catch that swallows this throw
@@ -4778,8 +4782,8 @@ begin
         later unstamped ThrowTypeError to capture. Mirrors EvaluateNewExpression. }
       FrameStamped := (TGocciaCallStack.Instance <> nil) and
         TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
-      StampInterpreterThrowLocation(AContext, MemberBaseExpr.Line,
-        MemberBaseExpr.Column);
+      StampInterpreterThrowLocation(AContext, AMemberExpression.Line,
+        AMemberExpression.Column);
       try
         if Obj is TGocciaNullLiteralValue then
           ThrowTypeError(

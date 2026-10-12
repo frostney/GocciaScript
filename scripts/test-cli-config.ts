@@ -1980,10 +1980,10 @@ console.log("Config globals module that throws is located as --globals locates i
         throw new Error(
           `Config globals throw should match the --globals form (${mode}).\nconfig:\n${fromConfig.combined}\n--globals:\n${fromCli.combined}`,
         );
-      // Bytecode locates a top-level throw; the interpreter does not yet
-      // (#1273), in either form.
-      if (mode === "bytecode" && !fromConfig.combined.includes(`--> ${globalsPath}:2:1`))
-        throw new Error(`Config globals throw should be located at g.js:2:1 (${mode}): ${fromConfig.combined}`);
+      // Bytecode locates a top-level throw, at the property whose read failed
+      // (ADR 0135); the interpreter does not yet (#1273), in either form.
+      if (mode === "bytecode" && !fromConfig.combined.includes(`--> ${globalsPath}:2:6`))
+        throw new Error(`Config globals throw should be located at g.js:2:6 (${mode}): ${fromConfig.combined}`);
     }
   } finally {
     clean(tmp);
