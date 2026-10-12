@@ -1585,8 +1585,7 @@ function TGocciaCompiler.CompileDirectEval(const AProgram: TGocciaProgram;
 var
   OuterScope, CallerScope: TGocciaCompilerScope;
   Binding: TGocciaDirectEvalBindingInfo;
-  ThisKind, FlagKind: TGocciaDirectEvalBindingKind;
-  HasThis, HasFlag: Boolean;
+  ThisPosition, FlagPosition: Integer;
   SavedAsyncTopLevel, SavedGlobalBackedTopLevel,
   SavedPreinitializedTopLevelFunctions, SavedNonStrictMode: Boolean;
   I: Integer;
@@ -1620,10 +1619,8 @@ begin
     end;
 
     CallerScope := TGocciaCompilerScope.Create(OuterScope, 0);
-    HasThis := False;
-    HasFlag := False;
-    ThisKind := debGlobal;
-    FlagKind := debGlobal;
+    ThisPosition := -1;
+    FlagPosition := -1;
     for I := High(ASite.Bindings) downto 0 do
     begin
       Binding := ASite.Bindings[I];
@@ -1645,15 +1642,9 @@ begin
             Binding.IsConst and Binding.IsEvalSyntheticArguments);
       end;
       if Binding.Name = KEYWORD_THIS then
-      begin
-        HasThis := True;
-        ThisKind := Binding.Kind;
-      end
+        ThisPosition := I
       else if Binding.Name = DERIVED_THIS_INITIALIZED_LOCAL then
-      begin
-        HasFlag := True;
-        FlagKind := Binding.Kind;
-      end;
+        FlagPosition := I;
     end;
     // Visible private names, the outermost class body's first, so that an
     // inner class body's name shadows it (ResolvePrivatePrefixForName).
@@ -1661,10 +1652,13 @@ begin
       CallerScope.DeclarePrivateNamePrefix(ASite.PrivateNames[I].Name,
         ASite.PrivateNames[I].Prefix);
     // `this` is checked against super() as in an arrow of a derived
-    // constructor. A method whose own `this` is a local is not the
-    // constructor that owns the flag, even when it is nested in one.
-    FDirectEvalDerivedThisGuard := HasFlag and
-      not (HasThis and (ThisKind = debLocal) and (FlagKind <> debLocal));
+    // constructor. The constructor declares its flag after its `this`, and
+    // the record lists the nearest bindings first, so the flag comes before
+    // the `this` it guards. A `this` listed before the flag belongs to a
+    // function nested in the constructor, a method for example, which
+    // super() does not initialize.
+    FDirectEvalDerivedThisGuard := (FlagPosition >= 0) and
+      ((ThisPosition < 0) or (FlagPosition < ThisPosition));
 
     SavedAsyncTopLevel := FAsyncTopLevel;
     SavedNonStrictMode := FNonStrictMode;

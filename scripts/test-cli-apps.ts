@@ -2340,15 +2340,19 @@ await section("Test262 Runner: a strict-site eval resolves private names as the 
 // binding through GetThisEnvironment (sec-getthisenvironment, §9.4.3), so
 // reading it before super() throws ReferenceError (GetThisBinding,
 // sec-function-environment-records-getthisbinding, §9.1.1.3.3 step 2) and
-// after super() is the new object. The interpreter returns the object early,
-// so this runs in bytecode mode.
+// after super() is the new object. An arrow in a method nested in the
+// constructor reads the method's own this binding, which super() does not
+// touch (GetThisEnvironment skips only arrow functions' environments). The
+// interpreter returns the object early, so this runs in bytecode mode.
 await section("Test262 Runner: a strict-site eval in a derived constructor reads this as the constructor does...", async () => {
   expectEvalHostProbe("derived constructor this", [
     "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
     "class P {}",
     "class Q extends P { constructor() { const r = out(() => eval('this')); super(); this.r = r + ':' + (eval('this') === this); } }",
     "print(new Q().r);",
-  ], ["ReferenceError:true"], ["bytecode"]);
+    "class M extends P { constructor() { const o = { m() { return () => eval('this'); } }; const r = o.m()() === o; super(); this.r = r; } }",
+    "print(new M().r);",
+  ], ["ReferenceError:true", "true"], ["bytecode"]);
 });
 
 // A strict call site in a function that contains a sloppy direct eval (a

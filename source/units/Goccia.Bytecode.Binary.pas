@@ -79,7 +79,7 @@ procedure VerifyFunctionTemplate(const ATemplate: TGocciaFunctionTemplate;
 var
   A, B, C: UInt16;
   Handler: TGocciaExceptionHandler;
-  I, PC: Integer;
+  I, J, PC: Integer;
   Instruction, Prefix: UInt32;
   JumpTarget: Int64;
   Op: UInt8;
@@ -417,6 +417,23 @@ begin
         'eval site record %d names private class register %d, outside ' +
         'MaxRegisters %d',
         [I, EvalEnv.PrivateClassRegister, ATemplate.MaxRegisters]));
+    // Eval code compiled at the site captures these registers and upvalues
+    // of the calling frame.
+    for J := 0 to High(EvalEnv.Bindings) do
+      case EvalEnv.Bindings[J].Kind of
+        debLocal, debWithLocal:
+          if EvalEnv.Bindings[J].Index >= ATemplate.MaxRegisters then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to register %d, outside ' +
+              'MaxRegisters %d', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.MaxRegisters]));
+        debUpvalue, debWithUpvalue:
+          if EvalEnv.Bindings[J].Index >= ATemplate.UpvalueCount then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to upvalue %d, outside ' +
+              'the %d upvalues', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.UpvalueCount]));
+      end;
   end;
 
   for I := 0 to ATemplate.FunctionCount - 1 do

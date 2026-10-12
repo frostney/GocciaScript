@@ -507,6 +507,9 @@ begin
 
   Template := TGocciaFunctionTemplate.Create('main');
   Template.MaxRegisters := EVAL_MAX_REGISTERS;
+  // The upvalues the record's upvalue bindings name.
+  for I := 0 to 4 do
+    Template.AddUpvalueDescriptor(False, UInt16(I), 'u' + IntToStr(I));
   // eval(x): a plain call with one argument.
   Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
   Template.EmitInstruction(EncodeABC(OP_CALL, 1, 1, 0));
@@ -590,6 +593,7 @@ const
 var
   Loaded: TGocciaBytecodeModule;
   Template: TGocciaFunctionTemplate;
+  Bindings: TGocciaDirectEvalBindingArray;
   Message: string;
 
   function Reason(const ASiteIndex: UInt16; const ACall: UInt64;
@@ -658,6 +662,31 @@ begin
   Loaded.Free;
   Expect<Boolean>(Pos('names private class register 9, outside ' +
     'MaxRegisters 4', Message) > 0).ToBe(True);
+
+  // Eval code captures the caller registers and upvalues the record names.
+  SetLength(Bindings, 1);
+  Bindings[0] := DirectEvalBinding('local', debLocal,
+    TEST_OUT_OF_RANGE_REGISTER, False, False, False, False);
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, Bindings);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('binds ''local'' to register 9, outside ' +
+    'MaxRegisters 4', Message) > 0).ToBe(True);
+  Bindings[0] := DirectEvalBinding('outer', debUpvalue, 0, False, False,
+    False, False);
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := TEST_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, True, devNone, -1, Bindings);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('binds ''outer'' to upvalue 0, outside the 0 ' +
+    'upvalues', Message) > 0).ToBe(True);
 
   // OP_DIRECT_EVAL as the last instruction, with no call to read.
   Template := TGocciaFunctionTemplate.Create('main');
