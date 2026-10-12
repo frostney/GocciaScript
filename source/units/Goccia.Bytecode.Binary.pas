@@ -83,6 +83,7 @@ var
   Instruction, Prefix: UInt32;
   JumpTarget: Int64;
   Op: UInt8;
+  EvalEnv: TGocciaDirectEvalEnvironment;
 
   procedure RequireConstant(const AIndex: Integer);
   begin
@@ -117,6 +118,40 @@ var
       RejectInvalidBytecode(ATemplate, PC, Format(
         'upvalue index %d is outside 0..%d',
         [AIndex, ATemplate.UpvalueCount - 1]));
+  end;
+
+  { OP_DIRECT_EVAL names an eval site record, and the VM reads the operands
+    of the OP_CALL or OP_CALL_METHOD after it, on the same callee register,
+    when the callee is %eval%. }
+  procedure RequireDirectEvalCall(const ASiteIndex: Integer;
+    const ACalleeReg: UInt16);
+  var
+    CallPC: Integer;
+    CallInstruction, CallPrefix: UInt32;
+    CallA: UInt16;
+  begin
+    if ASiteIndex >= ATemplate.DirectEvalEnvironmentCount then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'eval site record %d is outside 0..%d',
+        [ASiteIndex, ATemplate.DirectEvalEnvironmentCount - 1]));
+    CallPC := PC + 1;
+    CallPrefix := 0;
+    if (CallPC < ATemplate.CodeCount) and
+       (DecodeOp(ATemplate.GetInstruction(CallPC)) = Ord(OP_WIDE)) then
+    begin
+      CallPrefix := ATemplate.GetInstruction(CallPC);
+      Inc(CallPC);
+    end;
+    if CallPC >= ATemplate.CodeCount then
+      RejectInvalidBytecode(ATemplate, PC,
+        'OP_DIRECT_EVAL is not followed by a call');
+    CallInstruction := ATemplate.GetInstruction(CallPC);
+    CallA := DecodeA(CallInstruction) or
+      (UInt16(DecodeA(CallPrefix)) shl 8);
+    if not (DecodeOp(CallInstruction) in [Ord(OP_CALL),
+       Ord(OP_CALL_METHOD)]) or (CallA <> ACalleeReg) then
+      RejectInvalidBytecode(ATemplate, PC,
+        'OP_DIRECT_EVAL is not followed by a call on its callee register');
   end;
 
   procedure RequireJumpTarget(const ATarget: Int64);
@@ -192,6 +227,9 @@ begin
           RequireRegister(B)
         else
           RequireRegisterRange(Int64(A) + 1, B);
+
+      OP_DIRECT_EVAL:
+        RequireDirectEvalCall(DecodeBx(Instruction), A);
 
       OP_CALL_METHOD:
         begin
@@ -340,6 +378,40 @@ begin
       RejectInvalidBytecode(ATemplate, 0, 'invalid exception finally target');
     if Handler.CatchRegister >= ATemplate.MaxRegisters then
       RejectInvalidBytecode(ATemplate, 0, 'invalid exception catch register');
+  end;
+
+  for I := 0 to ATemplate.DirectEvalEnvironmentCount - 1 do
+  begin
+    EvalEnv := ATemplate.GetDirectEvalEnvironment(I);
+    if EvalEnv.PC >= UInt32(ATemplate.CodeCount) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, outside the code', [I, EvalEnv.PC]));
+    // The bridge compares the record's PC with the parameter preamble, so it
+    // must be the start of the OP_DIRECT_EVAL that names this record: its
+    // OP_WIDE prefix when it has one, as the compiler records it.
+    if (EvalEnv.PC > 0) and (DecodeOp(ATemplate.GetInstruction(
+       Integer(EvalEnv.PC) - 1)) = Ord(OP_WIDE)) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, inside an OP_WIDE instruction',
+        [I, EvalEnv.PC]));
+    Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC));
+    if (DecodeOp(Instruction) = Ord(OP_WIDE)) and
+       (Int64(EvalEnv.PC) + 1 < ATemplate.CodeCount) then
+      Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC) + 1);
+    if (DecodeOp(Instruction) <> Ord(OP_DIRECT_EVAL)) or
+       (DecodeBx(Instruction) <> I) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, which is not the OP_DIRECT_EVAL ' +
+        'that names it', [I, EvalEnv.PC]));
+    if (EvalEnv.VarEnvironment in [devFunction, devParameters]) <>
+       (EvalEnv.VarObjectSlot >= 0) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d has a variable object slot that does not ' +
+        'match its variable environment', [I]));
+    if EvalEnv.VarObjectSlot >= ATemplate.MaxRegisters then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d names register %d, outside MaxRegisters %d',
+        [I, EvalEnv.VarObjectSlot, ATemplate.MaxRegisters]));
   end;
 
   for I := 0 to ATemplate.FunctionCount - 1 do
@@ -503,6 +575,11 @@ begin
     WriteUInt32(EvalEnv.PC);
     WriteBoolean(EvalEnv.RejectArgumentsReference);
     WriteBoolean(EvalEnv.StrictCaller);
+    WriteUInt8(Ord(EvalEnv.VarEnvironment));
+    if EvalEnv.VarObjectSlot < 0 then
+      WriteUInt16(High(UInt16))
+    else
+      WriteUInt16(UInt16(EvalEnv.VarObjectSlot));
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -714,6 +791,9 @@ var
   EvalPC: UInt32;
   EvalRejectArgumentsReference: Boolean;
   EvalStrictCaller: Boolean;
+  EvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  EvalVarEnvironmentKind: UInt8;
+  EvalVarObjectSlot: Integer;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
@@ -814,6 +894,16 @@ begin
     EvalPC := ReadUInt32;
     EvalRejectArgumentsReference := ReadBoolean;
     EvalStrictCaller := ReadBoolean;
+    EvalVarEnvironmentKind := ReadUInt8;
+    if EvalVarEnvironmentKind > Ord(High(TGocciaDirectEvalVarEnvironment)) then
+      raise Exception.CreateFmt(
+        'Invalid direct-eval variable environment: %d',
+        [EvalVarEnvironmentKind]);
+    EvalVarEnvironment := TGocciaDirectEvalVarEnvironment(
+      EvalVarEnvironmentKind);
+    EvalVarObjectSlot := ReadUInt16;
+    if EvalVarObjectSlot = High(UInt16) then
+      EvalVarObjectSlot := -1;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -832,7 +922,7 @@ begin
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
-      EvalStrictCaller, EvalBindings);
+      EvalStrictCaller, EvalVarEnvironment, EvalVarObjectSlot, EvalBindings);
   end;
 
   HandlerCount := ReadUInt16;

@@ -25,6 +25,19 @@ function DirectEvalSiteRecordMatchesScope(const AScope: TGocciaCompilerScope;
   const ABindings: TGocciaDirectEvalBindingArray;
   const AStrictCaller: Boolean; out AName, AProblem: string): Boolean;
 
+// Compares where a direct eval site record sends the eval's vars with the
+// call's scope (ES2026 §19.2.1.1 PerformEval steps 16-18): nowhere for a
+// strict call, the global environment for a sloppy call in global code, and
+// otherwise the hidden variable object of the calling function, or of its
+// parameter list for a call compiled there. The object's register must be the
+// hidden local DeclareEvalVarObjects declared, which exists only when the
+// parser marked the function as containing a sloppy direct eval. False, with
+// the problem, on a mismatch.
+function DirectEvalSiteVarEnvironmentMatchesScope(
+  const AScope: TGocciaCompilerScope; const AStrictCaller: Boolean;
+  const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  const AVarObjectSlot: Integer; out AProblem: string): Boolean;
+
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaLiteralExpression; const ADest: UInt16);
 procedure CompileIdentifier(const ACtx: TGocciaCompilationContext;
@@ -1790,6 +1803,8 @@ end;
 function IsDirectEvalVisibleCompilerName(const AName: string): Boolean;
 begin
   Result := (AName <> '') and
+    (AName <> EVAL_VAR_OBJECT_LOCAL) and
+    (AName <> PARAMETER_EVAL_VAR_OBJECT_LOCAL) and
     (AName <> KEYWORD_THIS) and
     (AName <> '__receiver') and
     (AName <> '__super__') and
@@ -2097,14 +2112,96 @@ begin
   Result := True;
 end;
 
+// Where a direct eval at a call compiled in AScope declares its vars
+// (TGocciaDirectEvalVarEnvironment), and the register of the hidden variable
+// object that stands for that environment, or -1.
+function DirectEvalSiteVarEnvironment(const AScope: TGocciaCompilerScope;
+  const AStrictCaller: Boolean;
+  out AVarObjectSlot: Integer): TGocciaDirectEvalVarEnvironment;
+begin
+  AVarObjectSlot := -1;
+  if AStrictCaller then
+    Exit(devNone);
+  // The compiler's outermost scope is a script's global code; every function
+  // has a parent scope.
+  if not Assigned(AScope.Parent) then
+    Exit(devGlobal);
+  if AScope.CompilingParameters then
+  begin
+    AVarObjectSlot := AScope.ParameterEvalVarObjectSlot;
+    Exit(devParameters);
+  end;
+  AVarObjectSlot := AScope.EvalVarObjectSlot;
+  Result := devFunction;
+end;
+
+function DirectEvalSiteVarEnvironmentMatchesScope(
+  const AScope: TGocciaCompilerScope; const AStrictCaller: Boolean;
+  const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  const AVarObjectSlot: Integer; out AProblem: string): Boolean;
+var
+  ExpectedEnvironment: TGocciaDirectEvalVarEnvironment;
+  ExpectedSlot, LocalIdx: Integer;
+  ExpectedName: string;
+begin
+  AProblem := '';
+  ExpectedEnvironment := DirectEvalSiteVarEnvironment(AScope, AStrictCaller,
+    ExpectedSlot);
+  if AVarEnvironment <> ExpectedEnvironment then
+  begin
+    AProblem := Format('the record sends the eval''s vars to environment ' +
+      'kind %d, the call''s is kind %d',
+      [Ord(AVarEnvironment), Ord(ExpectedEnvironment)]);
+    Exit(False);
+  end;
+  if not (ExpectedEnvironment in [devFunction, devParameters]) then
+  begin
+    if AVarObjectSlot >= 0 then
+    begin
+      AProblem := Format('the record names variable object register %d ' +
+        'for an environment that has none', [AVarObjectSlot]);
+      Exit(False);
+    end;
+    Exit(True);
+  end;
+  if ExpectedSlot < 0 then
+  begin
+    AProblem := 'the calling function has no hidden variable object: the ' +
+      'parser did not mark it as containing a sloppy direct eval';
+    Exit(False);
+  end;
+  if AVarObjectSlot <> ExpectedSlot then
+  begin
+    AProblem := Format('the record names variable object register %d, ' +
+      'the calling function''s is %d', [AVarObjectSlot, ExpectedSlot]);
+    Exit(False);
+  end;
+  if ExpectedEnvironment = devParameters then
+    ExpectedName := PARAMETER_EVAL_VAR_OBJECT_LOCAL
+  else
+    ExpectedName := EVAL_VAR_OBJECT_LOCAL;
+  LocalIdx := AScope.ResolveLocal(ExpectedName);
+  if (LocalIdx < 0) or (AScope.GetLocal(LocalIdx).Slot <> AVarObjectSlot) then
+  begin
+    AProblem := Format('register %d is not the calling function''s hidden ' +
+      'variable object', [AVarObjectSlot]);
+    Exit(False);
+  end;
+  Result := True;
+end;
+
 // Raises when a direct eval site record does not mirror the compiler's scope
-// chain at the call (DirectEvalSiteRecordMatchesScope). Eval code finds a
-// caller binding only through this record, so a missing entry would otherwise
-// read as a global lookup without notice (ADR 0134, "The eval site record").
+// chain at the call (DirectEvalSiteRecordMatchesScope), or does not send the
+// eval's vars where the call's own scope does
+// (DirectEvalSiteVarEnvironmentMatchesScope). Eval code finds a caller binding
+// only through this record, so a missing entry would otherwise read as a
+// global lookup without notice (ADR 0134, "The eval site record").
 procedure VerifyDirectEvalSiteRecord(const ACtx: TGocciaCompilationContext;
   const ACall: TGocciaCallExpression;
   const ABindings: TGocciaDirectEvalBindingArray;
-  const AStrictCaller: Boolean);
+  const AStrictCaller: Boolean;
+  const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  const AVarObjectSlot: Integer);
 var
   Name, Problem: string;
 begin
@@ -2114,10 +2211,17 @@ begin
       'Compiler error: the direct eval site record at %s:%d:%d does not ' +
       'mirror the binding ''%s'' the compiler resolves there: %s',
       [ACtx.SourcePath, ACall.Line, ACall.Column, Name, Problem]);
+  if not DirectEvalSiteVarEnvironmentMatchesScope(ACtx.Scope, AStrictCaller,
+     AVarEnvironment, AVarObjectSlot, Problem) then
+    raise Exception.CreateFmt(
+      'Compiler error: the direct eval site record at %s:%d:%d does not ' +
+      'send the eval''s vars where the call does: %s',
+      [ACtx.SourcePath, ACall.Line, ACall.Column, Problem]);
 end;
 
-procedure CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
-  const ACall: TGocciaCallExpression; const APC: UInt32);
+// Records the eval site of a direct eval call and returns the record's index.
+function CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
+  const ACall: TGocciaCallExpression; const APC: UInt32): Integer;
 var
   Bindings: TGocciaDirectEvalBindingArray;
   Names: TUnicodeStringList;
@@ -2128,6 +2232,8 @@ var
   IsEvalSensitiveArguments: Boolean;
   IsVarEnvironmentParameter: Boolean;
   StrictCaller: Boolean;
+  VarEnvironment: TGocciaDirectEvalVarEnvironment;
+  VarObjectSlot: Integer;
 begin
   Names := TUnicodeStringList.Create;
   try
@@ -2222,9 +2328,13 @@ begin
     end;
 
     StrictCaller := not ACtx.NonStrictMode;
-    VerifyDirectEvalSiteRecord(ACtx, ACall, Bindings, StrictCaller);
-    ACtx.Template.AddDirectEvalEnvironment(APC,
-      ACtx.Template.RejectArgumentsInDirectEval, StrictCaller, Bindings);
+    VarEnvironment := DirectEvalSiteVarEnvironment(ACtx.Scope, StrictCaller,
+      VarObjectSlot);
+    VerifyDirectEvalSiteRecord(ACtx, ACall, Bindings, StrictCaller,
+      VarEnvironment, VarObjectSlot);
+    Result := ACtx.Template.AddDirectEvalEnvironment(APC,
+      ACtx.Template.RejectArgumentsInDirectEval, StrictCaller,
+      VarEnvironment, VarObjectSlot, Bindings);
     ACtx.Scope.MarkDirectEvalSeen;
   finally
     Names.Free;
@@ -2232,31 +2342,27 @@ begin
 end;
 
 // ES2026 §13.3.6.1 step 6: `eval(...)` may be a direct eval however the
-// identifier resolves, so a call site gets an eval site record and the flag
-// whether it is compiled as OP_CALL or, through a `with` object, OP_CALL_METHOD.
-function DirectEvalCallFlag(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
+// identifier resolves, so the call gets an eval site record and an
+// OP_DIRECT_EVAL ahead of its OP_CALL or, through a `with` object,
+// OP_CALL_METHOD, with the callee in ACalleeReg. Called with the arguments
+// compiled, immediately before the call is recorded and emitted.
+//
+// OP_DIRECT_EVAL runs the eval when the callee is %eval% and otherwise falls
+// through to the call, which is then an ordinary call or method call with its
+// own `this`, spread arguments and tail position.
+procedure EmitDirectEvalSite(const ACtx: TGocciaCompilationContext;
+  const AExpr: TGocciaCallExpression; const ACalleeReg: UInt16);
+var
+  SiteIndex: Integer;
 begin
-  Result := 0;
-  if IsDirectEvalCall(AExpr) then
-  begin
-    CaptureDirectEvalEnvironment(ACtx, AExpr, ACallPC);
-    Result := CALL_FLAG_DIRECT_EVAL;
-  end;
+  if not IsDirectEvalCall(AExpr) then
+    Exit;
+  SiteIndex := CaptureDirectEvalEnvironment(ACtx, AExpr,
+    UInt32(CurrentCodePosition(ACtx)));
+  EmitInstruction(ACtx, EncodeABx(OP_DIRECT_EVAL, ACalleeReg,
+    UInt16(SiteIndex)));
 end;
 
-function CallFlags(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
-begin
-  Result := CallTrustedFlag(ACtx, AExpr) or
-    DirectEvalCallFlag(ACtx, AExpr, ACallPC);
-end;
-
-function SpreadCallFlags(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaCallExpression; const ACallPC: UInt32): UInt16;
-begin
-  Result := CALL_FLAG_SPREAD or DirectEvalCallFlag(ACtx, AExpr, ACallPC);
-end;
 
 function TryIntegerOp(const AOperator: TGocciaTokenType;
   out AIntOp: TGocciaOpCode): Boolean;
@@ -3231,7 +3337,7 @@ end;
 // initializer and is destructured. Without one the arguments the call left in
 // the parameter registers stay there; only a rest parameter is packed and the
 // patterns are destructured.
-procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
+procedure EmitParameterListBindings(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray);
 var
   I, J, LocalIdx: Integer;
@@ -3351,6 +3457,20 @@ begin
 
     if AParams[I].IsPattern and Assigned(AParams[I].Pattern) then
       EmitDestructuring(ACtx, AParams[I].Pattern, Slot);
+  end;
+end;
+
+// The parameter list's code, compiled with CompilingParameters set: a direct
+// eval in it declares its vars in the parameters' environment (ES2026
+// §10.2.11 step 20), which its eval site record names.
+procedure EmitParameterInitialization(const ACtx: TGocciaCompilationContext;
+  const AParams: TGocciaParameterArray);
+begin
+  ACtx.Scope.CompilingParameters := True;
+  try
+    EmitParameterListBindings(ACtx, AParams);
+  finally
+    ACtx.Scope.CompilingParameters := False;
   end;
 end;
 
@@ -4481,6 +4601,8 @@ begin
     ChildScope.DirectEvalSyntheticArgumentsSlot :=
       ChildTemplate.DirectEvalSyntheticArgumentsSlot;
   end;
+  ChildScope.DirectEvalUsage := AExpr.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(ParameterListIsSimple(AExpr.Parameters));
 
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);
@@ -4626,14 +4748,14 @@ var
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      EmitDirectEvalSite(ACtx, AExpr, BaseReg);
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg,
-          CALL_FLAG_SPREAD or TailFlag or
-          DirectEvalCallFlag(ACtx, AExpr, CurrentCodePosition(ACtx))))
+          CALL_FLAG_SPREAD or TailFlag))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
-          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
+          CALL_FLAG_SPREAD or TailFlag));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -4641,14 +4763,14 @@ var
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[ArgIndex],
           ACtx.Scope.AllocateRegister);
+      EmitDirectEvalSite(ACtx, AExpr, BaseReg);
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       if AIsMethodCall then
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg,
-          UInt16(AArgCount), TailFlag or
-          DirectEvalCallFlag(ACtx, AExpr, CurrentCodePosition(ACtx))))
+          UInt16(AArgCount), TailFlag))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(AArgCount),
-        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or TailFlag));
+        CallTrustedFlag(ACtx, AExpr) or TailFlag));
       for ArgIndex := 0 to AArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -4739,7 +4861,7 @@ var
         EmitInstruction(ACtx, EncodeABC(OP_CALL_METHOD, BaseReg, ArgsReg, 1))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
-          SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+          CALL_FLAG_SPREAD));
       ACtx.Scope.FreeRegister;
     end
     else
@@ -4753,7 +4875,7 @@ var
           UInt16(ArgCount), 0))
       else
         EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(ArgCount),
-          CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx))));
+          CallTrustedFlag(ACtx, AExpr)));
       for ArgIndex := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -5372,18 +5494,20 @@ begin
     begin
       ArgsReg := ACtx.Scope.AllocateRegister;
       CompileSpreadArgsArray(ACtx, AExpr, ArgsReg);
+      EmitDirectEvalSite(ACtx, AExpr, BaseReg);
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, ArgsReg,
-        SpreadCallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
+        CALL_FLAG_SPREAD or MethodTailFlag));
       ACtx.Scope.FreeRegister;
     end
     else
     begin
       for I := 0 to ArgCount - 1 do
         ACtx.CompileExpression(AExpr.Arguments[I], ACtx.Scope.AllocateRegister);
+      EmitDirectEvalSite(ACtx, AExpr, BaseReg);
       RecordCallSite(ACtx, AExpr, AExpr.Callee);
       EmitInstruction(ACtx, EncodeABC(OP_CALL, BaseReg, UInt16(ArgCount),
-        CallFlags(ACtx, AExpr, CurrentCodePosition(ACtx)) or MethodTailFlag));
+        CallTrustedFlag(ACtx, AExpr) or MethodTailFlag));
       for I := 0 to ArgCount - 1 do
         ACtx.Scope.FreeRegister;
     end;
@@ -5732,6 +5856,8 @@ begin
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
     ChildTemplate.SourceText);
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(True);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -5815,6 +5941,8 @@ begin
       CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
     ChildTemplate.SourceText);
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(ParameterListIsSimple(SetterParams));
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
     ACtx.StrictTypes);
 
@@ -5890,6 +6018,8 @@ begin
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
     ChildTemplate.SourceText);
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(True);
 
   ACtx.SwapState(ChildTemplate, ChildScope);
   try
@@ -5976,6 +6106,8 @@ begin
       CollectDestructuringBindings(SetterParams[I].Pattern, ChildScope);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, SetterParams,
     ChildTemplate.SourceText);
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(ParameterListIsSimple(SetterParams));
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, SetterParams,
     ACtx.StrictTypes);
 
@@ -6657,6 +6789,8 @@ begin
 
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, AExpr.Parameters,
     ChildTemplate.SourceText);
+  ChildScope.DirectEvalUsage := AExpr.DirectEvalUsage;
+  ChildScope.DeclareEvalVarObjects(ParameterListIsSimple(AExpr.Parameters));
 
   ApplyParameterTypeAnnotations(ChildScope, ChildTemplate, AExpr.Parameters,
     ACtx.StrictTypes);

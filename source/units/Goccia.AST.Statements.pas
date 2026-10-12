@@ -278,6 +278,7 @@ type
     FReturnType: string;
     FGenericParams: string;
     FSourceText: string;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ASpan: TGocciaSourceSpan);
@@ -291,6 +292,8 @@ type
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
     property SourceText: string read FSourceText write FSourceText;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
   TGocciaClassMethodMap = TOrderedStringMap<TGocciaClassMethod>;
