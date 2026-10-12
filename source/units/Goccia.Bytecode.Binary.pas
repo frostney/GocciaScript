@@ -386,6 +386,23 @@ begin
     if EvalEnv.PC >= UInt32(ATemplate.CodeCount) then
       RejectInvalidBytecode(ATemplate, 0, Format(
         'eval site record %d is at PC %d, outside the code', [I, EvalEnv.PC]));
+    // The bridge compares the record's PC with the parameter preamble, so it
+    // must be the start of the OP_DIRECT_EVAL that names this record: its
+    // OP_WIDE prefix when it has one, as the compiler records it.
+    if (EvalEnv.PC > 0) and (DecodeOp(ATemplate.GetInstruction(
+       Integer(EvalEnv.PC) - 1)) = Ord(OP_WIDE)) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, inside an OP_WIDE instruction',
+        [I, EvalEnv.PC]));
+    Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC));
+    if (DecodeOp(Instruction) = Ord(OP_WIDE)) and
+       (Int64(EvalEnv.PC) + 1 < ATemplate.CodeCount) then
+      Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC) + 1);
+    if (DecodeOp(Instruction) <> Ord(OP_DIRECT_EVAL)) or
+       (DecodeBx(Instruction) <> I) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, which is not the OP_DIRECT_EVAL ' +
+        'that names it', [I, EvalEnv.PC]));
     if (EvalEnv.VarEnvironment in [devFunction, devParameters]) <>
        (EvalEnv.VarObjectSlot >= 0) then
       RejectInvalidBytecode(ATemplate, 0, Format(

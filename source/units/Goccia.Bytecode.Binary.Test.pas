@@ -586,6 +586,26 @@ var
     Loaded.Free;
   end;
 
+  // Two eval sites, at PC 0 and PC 2, whose records claim PCs AFirstPC and
+  // ASecondPC.
+  function TwoSiteReason(const AFirstPC, ASecondPC: UInt32): string;
+  var
+    Loaded: TGocciaBytecodeModule;
+    Template: TGocciaFunctionTemplate;
+  begin
+    Template := TGocciaFunctionTemplate.Create('main');
+    Template.MaxRegisters := TEST_MAX_REGISTERS;
+    Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+    Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+    Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 1));
+    Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+    Template.AddDirectEvalEnvironment(AFirstPC, False, True, devNone, -1, nil);
+    Template.AddDirectEvalEnvironment(ASecondPC, False, True, devNone, -1,
+      nil);
+    Loaded := LoadTemplateThroughBinary(Template, Result);
+    Loaded.Free;
+  end;
+
 begin
   Expect<string>(Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devFunction, 2))
     .ToBe('');
@@ -612,6 +632,25 @@ begin
   Loaded := LoadTemplateThroughBinary(Template, Message);
   Loaded.Free;
   Expect<Boolean>(Pos('not followed by a call', Message) > 0).ToBe(True);
+
+  // A record's PC is the OP_DIRECT_EVAL that names it, not the call after
+  // it, nor another site's OP_DIRECT_EVAL.
+  Expect<Boolean>(Pos('is not the OP_DIRECT_EVAL that names it',
+    TwoSiteReason(1, 2)) > 0).ToBe(True);
+  Expect<Boolean>(Pos('record 0 is at PC 2, which is not the OP_DIRECT_EVAL',
+    TwoSiteReason(2, 0)) > 0).ToBe(True);
+  Expect<string>(TwoSiteReason(0, 2)).ToBe('');
+
+  // With an OP_WIDE prefix, the PC is the prefix, as the compiler records it.
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := WIDE_MAX_REGISTERS;
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, WIDE_CALLEE_REGISTER, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, WIDE_CALLEE_REGISTER, 0, 0));
+  Template.AddDirectEvalEnvironment(1, False, True, devNone, -1, nil);
+  Loaded := LoadTemplateThroughBinary(Template, Message);
+  Loaded.Free;
+  Expect<Boolean>(Pos('inside an OP_WIDE instruction', Message) > 0)
+    .ToBe(True);
 
   // A call whose operands need an OP_WIDE prefix is still the call.
   Template := TGocciaFunctionTemplate.Create('main');
