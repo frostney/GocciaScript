@@ -50,6 +50,10 @@ type
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
+    // Reads of a global binding by name: OP_GET_GLOBAL (unresolved names and
+    // `typeof`) and OP_GET_GLOBAL_DECLARED (a script's top-level bindings).
+    function CountNamedGlobalReads(
+      const ATemplate: TGocciaFunctionTemplate): Integer;
     function FindFunctionWithOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
     function FindTemplateWithDirectEval(
@@ -134,6 +138,7 @@ type
     procedure TestConstPropagationReachesGlobalBackedReads;
     procedure TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier;
     procedure TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
+    procedure TestGlobalBackedReadsThrowForAMissingBinding;
     procedure TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
     procedure TestDirectEvalSiteRecordNamesVarEnvironment;
     procedure TestDirectEvalSiteRecordNamesPrivateEnvironment;
@@ -282,6 +287,8 @@ begin
     TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier);
   Test('Const propagation skips global-backed reads under a sloppy direct eval',
     TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval);
+  Test('Global-backed reads throw for a missing binding; typeof does not',
+    TestGlobalBackedReadsThrowForAMissingBinding);
   Test('A sloppy function folds an enclosing const unless it contains a sloppy direct eval',
     TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval);
   Test('A direct eval site record names where the eval''s vars go',
@@ -485,6 +492,13 @@ begin
   Result := CountOp(ATemplate, AOp);
   for I := 0 to ATemplate.FunctionCount - 1 do
     Inc(Result, CountOpRecursive(ATemplate.GetFunction(I), AOp));
+end;
+
+function TTestCompiler.CountNamedGlobalReads(
+  const ATemplate: TGocciaFunctionTemplate): Integer;
+begin
+  Result := CountOp(ATemplate, OP_GET_GLOBAL) +
+    CountOp(ATemplate, OP_GET_GLOBAL_DECLARED);
 end;
 
 function TTestCompiler.CountRawOpRecursive(
@@ -2365,7 +2379,7 @@ begin
     Expect<Integer>(CountArithmeticOps(Module.TopLevel)).ToBe(0);
 
     Reader := Module.TopLevel.GetFunction(0);
-    Expect<Integer>(CountOp(Reader, OP_GET_GLOBAL)).ToBe(0);
+    Expect<Integer>(CountNamedGlobalReads(Reader)).ToBe(0);
     Expect<Integer>(CountArithmeticOps(Reader)).ToBe(0);
     Expect<Boolean>(HasLoadInt(Reader, 10)).ToBe(True);
   finally
@@ -2384,9 +2398,9 @@ begin
     False, False, True);
   try
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL_DECLARED)).ToBe(1);
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(1), OP_GET_GLOBAL)).ToBe(0);
+      CountNamedGlobalReads(Module.TopLevel.GetFunction(1))).ToBe(0);
   finally
     Module.Free;
   end;
@@ -2405,13 +2419,44 @@ begin
     False, False, True, True, True, True, False, True);
   try
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(0);
+      CountNamedGlobalReads(Module.TopLevel.GetFunction(0))).ToBe(0);
     Expect<Boolean>(HasLoadInt(Module.TopLevel.GetFunction(0), 2)).ToBe(True);
     // g reads `eval` and `a` by name.
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(1), OP_GET_GLOBAL)).ToBe(2);
+      CountNamedGlobalReads(Module.TopLevel.GetFunction(1))).ToBe(2);
     Expect<Integer>(CountOp(Module.TopLevel.GetFunction(2).GetFunction(0),
-      OP_GET_GLOBAL)).ToBe(1);
+      OP_GET_GLOBAL_DECLARED)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+// A script var can redeclare a configurable global property and leave it
+// configurable (ES2026 §9.1.1.4.16 CreateGlobalVarBinding), so the binding
+// can be deleted. Reads of it then throw (§6.2.5.5 GetValue step 2), which
+// OP_GET_GLOBAL_DECLARED does on its miss path; `typeof` gives "undefined"
+// (§13.5.3.1 step 2.a) and keeps OP_GET_GLOBAL.
+procedure TTestCompiler.TestGlobalBackedReadsThrowForAMissingBinding;
+var
+  Module: TGocciaBytecodeModule;
+  Reader, TypeofReader, Updater: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource('var x = 1; const read = () => x;' +
+    ' const kind = () => typeof x; const bump = () => { x += 1; };' +
+    ' read() + kind() + x;',
+    False, False, True, True, True, True, False, False, True);
+  try
+    Reader := Module.TopLevel.GetFunction(0);
+    TypeofReader := Module.TopLevel.GetFunction(1);
+    Updater := Module.TopLevel.GetFunction(2);
+    Expect<Integer>(CountOp(Reader, OP_GET_GLOBAL_DECLARED)).ToBe(1);
+    Expect<Integer>(CountOp(Reader, OP_GET_GLOBAL)).ToBe(0);
+    Expect<Integer>(CountOp(TypeofReader, OP_GET_GLOBAL)).ToBe(1);
+    Expect<Integer>(CountOp(TypeofReader, OP_GET_GLOBAL_DECLARED)).ToBe(0);
+    Expect<Integer>(CountOp(Updater, OP_GET_GLOBAL_DECLARED)).ToBe(1);
+    Expect<Integer>(CountOp(Updater, OP_GET_GLOBAL)).ToBe(0);
+    Expect<Boolean>(
+      CountOp(Module.TopLevel, OP_GET_GLOBAL_DECLARED) >= 1).ToBe(True);
   finally
     Module.Free;
   end;
@@ -2737,7 +2782,7 @@ begin
     False, False, True);
   try
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL_DECLARED)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -3424,7 +3469,8 @@ begin
       CountOp(Module.TopLevel.GetFunction(0), OP_JUMP_IF_FALSE) > 0).ToBe(True);
     Expect<Boolean>(
       CountOp(Module.TopLevel.GetFunction(1), OP_JUMP_IF_FALSE) > 0).ToBe(True);
-    Expect<Boolean>(CountOpRecursive(Module.TopLevel, OP_GET_GLOBAL) >= 2)
+    Expect<Boolean>(
+      CountOpRecursive(Module.TopLevel, OP_GET_GLOBAL_DECLARED) >= 2)
       .ToBe(True);
   finally
     Module.Free;

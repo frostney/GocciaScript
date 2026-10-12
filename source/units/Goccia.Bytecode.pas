@@ -244,7 +244,12 @@ const
   //               OP_SET_UPVALUE_REF (222) and OP_SET_UPVALUE_DYNAMIC (224),
   //               which read and wrote through those scopes, are gone
   //               (ADR 0134 Phase 3).
-  GOCCIA_FORMAT_VERSION = 93;
+  //   v93 -> v94: added OP_GET_GLOBAL_DECLARED (opcode 238), which reads a
+  //               declared global binding and throws ReferenceError once the
+  //               binding is gone, as after a script `var` that redeclared a
+  //               configurable global property is deleted. v93 code reads
+  //               such a binding with OP_GET_GLOBAL, which yields undefined.
+  GOCCIA_FORMAT_VERSION = 94;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -560,7 +565,16 @@ type
     // is the realm's %eval% this runs the direct eval, leaves its completion
     // value in A and skips the call; otherwise it does nothing and the call
     // runs as an ordinary call or method call.
-    OP_DIRECT_EVAL = 237
+    OP_DIRECT_EVAL = 237,
+    // A = destination, Bx = name-constant index. OP_GET_GLOBAL for a read of
+    // a declared global binding: the same cached lookup, but a name the
+    // global environment no longer has throws the ReferenceError
+    // "<name> is not defined" where OP_GET_GLOBAL yields undefined. A
+    // script's var can redeclare a configurable global property and leave it
+    // configurable (ES2026 §9.1.1.4.16 CreateGlobalVarBinding), so deleting
+    // the property removes the binding, and GetValue of the now unresolvable
+    // reference throws (§6.2.5.5 GetValue step 2).
+    OP_GET_GLOBAL_DECLARED = 238
   );
 
 const

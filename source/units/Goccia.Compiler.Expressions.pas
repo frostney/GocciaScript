@@ -833,6 +833,34 @@ begin
   end;
 end;
 
+// GetValue of a reference to a global-backed binding: a top-level var,
+// function, let, const or class of a script, which code reads by name from
+// the global environment. A var leaves a configurable global property it
+// redeclares configurable (ES2026 §9.1.1.4.16 CreateGlobalVarBinding), so the
+// binding can be deleted; the global environment then has no binding of the
+// name (§9.1.1.4.1 HasBinding) and GetValue of the unresolvable reference
+// throws ReferenceError (§6.2.5.5 GetValue step 2). OP_GET_GLOBAL_DECLARED
+// checks for that on its miss path only.
+procedure EmitGetDeclaredGlobal(const ACtx: TGocciaCompilationContext;
+  const AName: string; const ADest: UInt16);
+begin
+  EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL_DECLARED, ADest,
+    ACtx.Template.AddConstantString(AName)));
+end;
+
+// `typeof` of the unresolvable reference is "undefined" (§13.5.3.1 step 2.a),
+// so a safe read keeps OP_GET_GLOBAL, which yields undefined for a missing
+// name.
+procedure EmitGlobalBackedRead(const ACtx: TGocciaCompilationContext;
+  const AName: string; const ADest: UInt16; const ASafe: Boolean);
+begin
+  if ASafe then
+    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
+      ACtx.Template.AddConstantString(AName)))
+  else
+    EmitGetDeclaredGlobal(ACtx, AName, ADest);
+end;
+
 procedure CompileIdentifierAccessNoWith(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt16;
   const ASafe: Boolean);
@@ -857,8 +885,7 @@ begin
     end;
     if Local.IsGlobalBacked then
     begin
-      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
+      EmitGlobalBackedRead(ACtx, AExpr.Name, ADest, ASafe);
       Exit;
     end;
     Slot := Local.Slot;
@@ -881,8 +908,7 @@ begin
     end;
     if ACtx.Scope.GetUpvalue(UpvalIdx).IsGlobalBacked then
     begin
-      NameIdx := ACtx.Template.AddConstantString(AExpr.Name);
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest, NameIdx));
+      EmitGlobalBackedRead(ACtx, AExpr.Name, ADest, ASafe);
       Exit;
     end;
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest, UInt16(UpvalIdx)));
@@ -3008,8 +3034,7 @@ procedure EmitPreparedUpvalueLoad(const ACtx: TGocciaCompilationContext;
   const AReferenceReg, ADest: UInt16);
 begin
   if AUpvalue.IsGlobalBacked then
-    EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
-      ACtx.Template.AddConstantString(AUpvalue.Name)))
+    EmitGetDeclaredGlobal(ACtx, AUpvalue.Name, ADest)
   else
     EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest,
       UInt16(AUpvalueIndex)));
@@ -7087,8 +7112,7 @@ begin
     begin
       if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
       begin
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
-          ACtx.Template.AddConstantString(AExpr.Name)));
+        EmitGetDeclaredGlobal(ACtx, AExpr.Name, ADest);
         JumpIdx := EmitJumpInstruction(ACtx, Op, ADest);
         CompileAssignmentValue(ACtx, AExpr.Value, ADest, AExpr.Name,
           AExpr.InferName);
@@ -7168,8 +7192,7 @@ begin
         EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
           UInt16(ReferenceReg), ADest)
       else if Upvalue.IsGlobalBacked then
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, ADest,
-          ACtx.Template.AddConstantString(AExpr.Name)))
+        EmitGetDeclaredGlobal(ACtx, AExpr.Name, ADest)
       else
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, ADest,
           UInt16(UpvalIdx)));
@@ -7233,8 +7256,7 @@ begin
     begin
       RegVal := ACtx.Scope.AllocateRegister;
       RegResult := ACtx.Scope.AllocateRegister;
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-        ACtx.Template.AddConstantString(AExpr.Name)));
+      EmitGetDeclaredGlobal(ACtx, AExpr.Name, RegResult);
       ACtx.CompileExpression(AExpr.Value, RegVal);
       LocalType := ACtx.Scope.GetLocal(LocalIdx).TypeHint;
       ValType := ExpressionType(ACtx.Scope, AExpr.Value);
@@ -7357,8 +7379,7 @@ begin
       EmitPreparedUpvalueLoad(ACtx, Upvalue, UpvalIdx,
         UInt16(ReferenceReg), RegResult)
     else if Upvalue.IsGlobalBacked then
-      EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-        ACtx.Template.AddConstantString(AExpr.Name)))
+      EmitGetDeclaredGlobal(ACtx, AExpr.Name, RegResult)
     else
       EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult,
         UInt16(UpvalIdx)));
@@ -7854,8 +7875,7 @@ begin
       if ACtx.Scope.GetLocal(LocalIdx).IsGlobalBacked then
       begin
         RegResult := ACtx.Scope.AllocateRegister;
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-          ACtx.Template.AddConstantString(Ident.Name)));
+        EmitGetDeclaredGlobal(ACtx, Ident.Name, RegResult);
         EmitIncrementStep(ACtx, AExpr, ADest, RegResult, Op, NumericOp,
           PostNumericOp, AKeepResult);
         EmitSetGlobalByName(ACtx, RegResult, Ident.Name);
@@ -7900,8 +7920,7 @@ begin
       Upvalue := ACtx.Scope.GetUpvalue(UpvalIdx);
       RegResult := ACtx.Scope.AllocateRegister;
       if Upvalue.IsGlobalBacked then
-        EmitInstruction(ACtx, EncodeABx(OP_GET_GLOBAL, RegResult,
-          ACtx.Template.AddConstantString(Ident.Name)))
+        EmitGetDeclaredGlobal(ACtx, Ident.Name, RegResult)
       else
         EmitInstruction(ACtx, EncodeABx(OP_GET_UPVALUE, RegResult,
           UInt16(UpvalIdx)));
