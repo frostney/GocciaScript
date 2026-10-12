@@ -26,9 +26,23 @@ type
     Column: Integer;
   end;
 
+  { How an export of a module-source entry is bound (ES2026 §16.2.1.7
+    ExportEntry Records). A local export names a binding of the program's
+    own, which its OP_EXPORTs initialize and update. Every other kind names
+    the module request it comes from: an indirect export forwards ImportName
+    of that module, a namespace export is that module's namespace object, a
+    star export forwards every name the module exports but default, and a
+    source or deferred namespace export is that phase's value of the
+    module. }
+  TGocciaModuleExportKind = (mekLocal, mekIndirect, mekNamespace, mekStar,
+    mekSource, mekDeferredNamespace);
+
   TGocciaModuleExport = record
     Name: string;
     LocalSlot: UInt16;
+    Kind: TGocciaModuleExportKind;
+    ModuleRequest: string;
+    ImportName: string;
   end;
 
   TGocciaBytecodeModule = class(TGocciaCompiledModule)
@@ -49,7 +63,9 @@ type
     procedure AddImport(const AModulePath: string;
       const ABindings: array of TGocciaModuleBinding;
       const ALine: Integer = 0; const AColumn: Integer = 0);
-    procedure AddExport(const AName: string; const ALocalSlot: UInt16);
+    procedure AddExport(const AName: string; const ALocalSlot: UInt16;
+      const AKind: TGocciaModuleExportKind = mekLocal;
+      const AModuleRequest: string = ''; const AImportName: string = '');
 
     function GetImport(const AIndex: Integer): TGocciaModuleImport;
     function GetExport(const AIndex: Integer): TGocciaModuleExport;
@@ -104,12 +120,16 @@ begin
 end;
 
 procedure TGocciaBytecodeModule.AddExport(const AName: string;
-  const ALocalSlot: UInt16);
+  const ALocalSlot: UInt16; const AKind: TGocciaModuleExportKind;
+  const AModuleRequest, AImportName: string);
 begin
   if FExportCount >= Length(FExports) then
     SetLength(FExports, FExportCount * 2 + 4);
   FExports[FExportCount].Name := AName;
   FExports[FExportCount].LocalSlot := ALocalSlot;
+  FExports[FExportCount].Kind := AKind;
+  FExports[FExportCount].ModuleRequest := AModuleRequest;
+  FExports[FExportCount].ImportName := AImportName;
   Inc(FExportCount);
 end;
 

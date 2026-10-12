@@ -182,7 +182,69 @@ const
   //   v81 -> v82: OP_GET_IMPORT_BINDING moved from ABx to ABC and carries the
   //               declaration's module request in C, so a missing-export
   //               SyntaxError names the specifier, not the host path.
-  GOCCIA_FORMAT_VERSION = 82;
+  //   v82 -> v83: a module-source entry records its exports in the module
+  //               export table, which the host binds before the entry's
+  //               imports evaluate. Each entry adds a kind tag, a module
+  //               request and an import name after its name and local slot.
+  //   v83 -> v84: added OP_CHECK_BINDING_INITIALIZED (opcode 235), the
+  //               temporal-dead-zone check an assignment to a const makes
+  //               before its TypeError. Opcode 234 is reserved for
+  //               OP_CREATE_GLOBAL_IMPORT_BINDING, a separate change.
+  //   v84 -> v85: added OP_CREATE_GLOBAL_IMPORT_BINDING (opcode 234), which
+  //               publishes a global-backed script's named import to the
+  //               global scope so a later script against it reads the binding.
+  //   v85 -> v86: a public auto-accessor compiles to a private storage field
+  //               and a getter/setter pair defined with OP_DEFINE_ACCESSOR_*
+  //               and ACCESSOR_FLAG_AUTO; OP_SETUP_AUTO_ACCESSOR_CONST only
+  //               declares private auto-accessor names, and
+  //               OP_SETUP_AUTO_ACCESSOR_DYNAMIC (opcode 135) is gone.
+  //   v86 -> v87: added OP_CLASS_ADD_METHOD_DYNAMIC (opcode 144), which
+  //               defines a computed instance method on the class's
+  //               prototype, and computed instance accessors now pass the
+  //               class to OP_DEFINE_ACCESSOR_DYNAMIC, so both resolve
+  //               private names through their class. Added
+  //               OP_SET_PRIVATE_CLASS (opcode 145), which follows each
+  //               OP_CLOSURE and OP_NEW_CLASS in a class body and hands the
+  //               new function or class the class's private environment.
+  //   v87 -> v88: a static field initializer compiles to its own function,
+  //               run by OP_CLASS_EXEC_STATIC_BLOCK with the class as its
+  //               home object; OP_DEFINE_STATIC_PROP_CONST and
+  //               OP_DEFINE_STATIC_PROP_DYNAMIC no longer give the stored
+  //               value one, so inline initializers from v87 lose it.
+  //   v88 -> v89: added OP_THROW_UNDEFINED_VARIABLE (opcode 236), which throws
+  //               the intrinsic ReferenceError for an unresolvable reference,
+  //               with its suggestion, in place of the four-instruction
+  //               `new ReferenceError(...)` sequence that read the global
+  //               `ReferenceError` binding.
+  //   v89 -> v90: a direct-eval site record stores the strictness of its call
+  //               expression, and each of its bindings whether it is a catch
+  //               parameter.
+  //   v90 -> v91: added OP_DIRECT_EVAL (opcode 237), which precedes the
+  //               OP_CALL or OP_CALL_METHOD of an `eval(...)` call and names
+  //               its eval site record by index; CALL_FLAG_DIRECT_EVAL is
+  //               gone. A site record stores where the eval's vars go (none,
+  //               global, function or parameter list) and the caller's
+  //               register for that environment's hidden variable object
+  //               (ADR 0134).
+  //   v91 -> v92: a direct-eval site record stores the private names
+  //               visible at the call with their class bodies' key prefixes,
+  //               and the caller's register that holds the class whose body
+  //               runs inline at the call (a computed key), or none, so that
+  //               eval code compiled at the call resolves private names as
+  //               the caller's code does (ADR 0134 Phase 3).
+  //   v92 -> v93: direct eval no longer runs against run-time dynamic var
+  //               scopes. Every reference a sloppy direct eval's var can
+  //               shadow probes the calling function's hidden variable object
+  //               as it probes a `with` object, and an eval site record lists
+  //               those objects among its with bindings and marks a caller
+  //               binding outside the variable environment and the bindings
+  //               of the function whose variable environment the eval
+  //               declares in; code compiled for
+  //               v92 has no such probes. OP_RESOLVE_UPVALUE_REF (221),
+  //               OP_SET_UPVALUE_REF (222) and OP_SET_UPVALUE_DYNAMIC (224),
+  //               which read and wrote through those scopes, are gone
+  //               (ADR 0134 Phase 3).
+  GOCCIA_FORMAT_VERSION = 93;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -190,6 +252,9 @@ const
   GOCCIA_NULLISH_MATCH_ANY = 255;
   ACCESSOR_FLAG_SETTER = 1;
   ACCESSOR_FLAG_STATIC = 2;
+  { A half of a public auto-accessor's getter/setter pair. A is the class, not
+    its prototype, for both the instance and the static case. }
+  ACCESSOR_FLAG_AUTO = 4;
   FUNCTION_NAME_PREFIX_NONE = 0;
   FUNCTION_NAME_PREFIX_GET  = 1;
   FUNCTION_NAME_PREFIX_SET  = 2;
@@ -206,12 +271,14 @@ const
   // carries the key register, still holding the UNCOERCED key: this validate is
   // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
   VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
+  // A operand of OP_CHECK_BINDING_INITIALIZED.
+  CHECK_BINDING_UPVALUE = 0;
+  CHECK_BINDING_GLOBAL = 1;
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
-  CALL_FLAG_DIRECT_EVAL = 4;
   // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its
   // enclosing function, so the VM reuses the current call frame instead of
   // pushing a new one (PrepareForTailCall).
@@ -375,7 +442,6 @@ type
     OP_DIV           = 132,
     OP_MOD           = 133,
     OP_POW           = 134,
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC = 135,
     OP_BAND          = 136,
     OP_BOR           = 137,
     OP_BXOR          = 138,
@@ -384,6 +450,8 @@ type
     OP_USHR          = 141,
     OP_DEFINE_CLASS_METHOD_DYNAMIC = 142,
     OP_SET_CLASS_SOURCE_CONST = 143,
+    OP_CLASS_ADD_METHOD_DYNAMIC = 144,
+    OP_SET_PRIVATE_CLASS = 145,
     OP_IMPORT        = 167,
     OP_EXPORT        = 168,
     OP_AWAIT         = 169,
@@ -441,10 +509,7 @@ type
     OP_PREDECLARE_GLOBAL_LET_LONG = 218,
     OP_PREDECLARE_GLOBAL_CONST_LONG = 219,
     OP_LOAD_CHAR     = 220,
-    OP_RESOLVE_UPVALUE_REF = 221,
-    OP_SET_UPVALUE_REF = 222,
     OP_SET_GLOBAL_STATIC = 223,
-    OP_SET_UPVALUE_DYNAMIC = 224,
     // Prefix for the following instruction. A/B/C contain the high byte of
     // the following instruction's A/B/C operands; the base word keeps the
     // ordinary compact encoding.
@@ -470,8 +535,44 @@ type
     // No operands. Emitted immediately before a dynamic-import opcode whose
     // specifier is not a string literal, so the module loader treats the
     // request as outside the static module graph (ADR 0122).
-    OP_COMPUTED_IMPORT_SPECIFIER = 233
+    OP_COMPUTED_IMPORT_SPECIFIER = 233,
+    // A = module namespace register, B = local-name constant index,
+    // C = export-name constant index. Binds the global scope's predeclared
+    // local name to the module's live export.
+    OP_CREATE_GLOBAL_IMPORT_BINDING = 234,
+    // A = CHECK_BINDING_UPVALUE: Bx = upvalue index, checks the closure's
+    // own captured cell. A = CHECK_BINDING_GLOBAL: Bx = name-constant index,
+    // checks the global scope's binding. Throws the binding's
+    // temporal-dead-zone ReferenceError when it is uninitialized. Unlike
+    // OP_GET_UPVALUE and OP_GET_GLOBAL it never consults a direct eval's var
+    // scope, so it checks the binding an assignment resolved before its
+    // right-hand side ran (ES2026 §9.1.1.1.5 SetMutableBinding step 3).
+    OP_CHECK_BINDING_INITIALIZED = 235,
+    // Bx = name-constant index; A is unused. Throws the ReferenceError
+    // "<name> is not defined" for an unresolvable reference (ES2026 §6.2.5.5
+    // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
+    // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
+    // holds, and carrying the evaluator's suggestion.
+    OP_THROW_UNDEFINED_VARIABLE = 236,
+    // A = callee register, Bx = index of the template's eval site record.
+    // Always followed by the OP_CALL or OP_CALL_METHOD of an `eval(...)`
+    // call (ES2026 §13.3.6.1), on the same callee register. When the callee
+    // is the realm's %eval% this runs the direct eval, leaves its completion
+    // value in A and skips the call; otherwise it does nothing and the call
+    // runs as an ordinary call or method call.
+    OP_DIRECT_EVAL = 237
   );
+
+const
+  // Runtime-only opcode, reserved at the top of the opcode range and never
+  // valid in a file: it is deliberately not a TGocciaOpCode member, so
+  // IsValidGocciaOpCode (bounded by High(TGocciaOpCode)) rejects it at load.
+  // File opcodes must stay below it. A = destination, B = first contiguous
+  // argument register, C = argument count: calls the running closure through
+  // an ordinary frame. The bytecode loader turns a loaded OP_CALL_SELF_NUM into
+  // it, because the proof that makes a closed numeric frame safe is not
+  // serialized (ADR 0127).
+  OP_CALL_SELF = 255;
 
 function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
@@ -503,13 +604,14 @@ function IsValidGocciaOpCode(const AOp: UInt8): Boolean;
 begin
   Result := (AOp >= Ord(Low(TGocciaOpCode))) and
     (AOp <= Ord(High(TGocciaOpCode))) and
-    not (AOp in [99, 144..166]);
+    not (AOp in [99, 135, 146..166]);
 end;
 
 function GocciaOpCodeUsesRegisterA(const AOp: TGocciaOpCode): Boolean;
 begin
   Result := not (AOp in [OP_NOP, OP_LINE, OP_JUMP, OP_POP_HANDLER,
-    OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER]);
+    OP_WIDE, OP_CLOSE_UPVALUE, OP_COMPUTED_IMPORT_SPECIFIER,
+    OP_CHECK_BINDING_INITIALIZED, OP_THROW_UNDEFINED_VARIABLE]);
 end;
 
 function GocciaOpCodeUsesRegisterB(const AOp: TGocciaOpCode): Boolean;
@@ -528,7 +630,8 @@ begin
     OP_DEL_INDEX, OP_SET_OBJECT_PROTO, OP_DEFINE_PROP_DYNAMIC,
     OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP, OP_ADD, OP_SUB, OP_MUL,
     OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
-    OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_AWAIT,
+    OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC,
+    OP_CLASS_ADD_METHOD_DYNAMIC, OP_SET_PRIVATE_CLASS, OP_AWAIT,
     OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
     OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
     OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,
@@ -538,7 +641,7 @@ begin
     OP_GET_WITH_BINDING_STRICT, OP_SET_WITH_BINDING,
     OP_SET_WITH_BINDING_LOOSE, OP_SUPER_SET, OP_SUPER_BASE,
     OP_SUPER_SET_BASE, OP_DEFINE_STATIC_PROP_DYNAMIC,
-    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM, OP_SET_UPVALUE_REF,
+    OP_CONSTRUCT_SPREAD, OP_SUB_NUM_IMM, OP_ADD_NUM_IMM,
     OP_JUMP_IF_NOT_LT,
     OP_DYNAMIC_IMPORT_OPTIONS, OP_DYNAMIC_IMPORT_SOURCE_OPTIONS,
     OP_DYNAMIC_IMPORT_DEFER_OPTIONS, OP_TO_NUMBER, OP_TO_STRING,
@@ -560,7 +663,8 @@ begin
     OP_DEFINE_STATIC_PROP_CONST, OP_DEFINE_STATIC_PROP_DYNAMIC,
     OP_DEFINE_PROP_DYNAMIC, OP_DEFINE_STATIC_METHOD_CONST,
     OP_DEFINE_DATA_PROP, OP_DEFINE_METHOD_PROP,
-    OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_ITER_NEXT, OP_GET_INDEX,
+    OP_DEFINE_CLASS_METHOD_DYNAMIC, OP_CLASS_ADD_METHOD_DYNAMIC,
+    OP_ITER_NEXT, OP_GET_INDEX,
     OP_SET_INDEX, OP_DEL_INDEX, OP_DEL_INDEX_LOOSE, OP_SET_INDEX_LOOSE,
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR,
     OP_BXOR, OP_SHL, OP_SHR, OP_USHR, OP_EQ, OP_NEQ, OP_LOOSE_EQ,

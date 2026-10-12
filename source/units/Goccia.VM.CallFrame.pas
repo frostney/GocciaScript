@@ -26,7 +26,6 @@ type
     ProfileEntryTimestamp: Int64;
     NewTarget: Pointer;
     GlobalScope: Pointer;
-    DynamicVarScope: Pointer;
     ExecutionContextPushed: Boolean;
   end;
 

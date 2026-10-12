@@ -266,6 +266,9 @@ type
       AImportingFilePath: string): string;
     procedure RegisterModule(const AResolvedPath: string;
       const AModule: TGocciaModule);
+    { Settles an entry module whose run raised AError. See the body. }
+    procedure FailEntryModule(const AModule: TGocciaModule;
+      const AError: Exception);
     procedure RegisterGlobalModuleProvider(const AModulePath: string;
       const AProvider: TGocciaGlobalModuleProvider);
     procedure UnregisterGlobalModuleProvider(const AModulePath: string);
@@ -1576,23 +1579,35 @@ begin
 end;
 
 procedure TGocciaModuleLoader.BeginEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.AddOrSetValue(APath, True);
-  FEvaluatingModules.AddOrSetValue(ExpandFileName(APath), True);
   FLoadingModules.AddOrSetValue(APath, True);
-  FLoadingModules.AddOrSetValue(ExpandFileName(APath), True);
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.AddOrSetValue(ExpandedPath, True);
+    FLoadingModules.AddOrSetValue(ExpandedPath, True);
+  end;
 end;
 
 procedure TGocciaModuleLoader.EndEvaluatingModulePath(const APath: string);
+var
+  ExpandedPath: string;
 begin
   if APath = '' then
     Exit;
+  ExpandedPath := ExpandFileName(APath);
   FEvaluatingModules.Remove(APath);
-  FEvaluatingModules.Remove(ExpandFileName(APath));
   FLoadingModules.Remove(APath);
-  FLoadingModules.Remove(ExpandFileName(APath));
+  if ExpandedPath <> APath then
+  begin
+    FEvaluatingModules.Remove(ExpandedPath);
+    FLoadingModules.Remove(ExpandedPath);
+  end;
 end;
 
 function TGocciaModuleLoader.IsEvaluatingModulePath(
@@ -1653,16 +1668,71 @@ procedure TGocciaModuleLoader.RegisterModule(const AResolvedPath: string;
   const AModule: TGocciaModule);
 var
   CacheKey: string;
+
+  { The loader owns every module it caches. A module this registration
+    replaces (an entry run again under the same path, as each REPL input
+    is) is retired, so the loader still frees it, rather than leaked. }
+  procedure CacheUnder(const AKey: string);
+  var
+    Existing: TGocciaModule;
+  begin
+    if FModules.TryGetValue(AKey, Existing) and (Existing <> AModule) then
+      RetireModule(Existing);
+    FModules.AddOrSetValue(AKey, AModule);
+  end;
+
 begin
   if (AResolvedPath = '') or not Assigned(AModule) then
     Exit;
 
   CacheKey := ExpandFileName(AResolvedPath);
-  FModules.AddOrSetValue(CacheKey, AModule);
+  CacheUnder(CacheKey);
   if CacheKey <> AResolvedPath then
-    FModules.AddOrSetValue(AResolvedPath, AModule);
+    CacheUnder(AResolvedPath);
   if AModule.IsHostOwned then
     MarkHostOwnedAddress(AResolvedPath);
+end;
+
+{ ES2026 §16.2.1.6.1.3 Evaluate: a module whose evaluation threw keeps that
+  error as its [[EvaluationError]], and every later import of it throws the
+  same value (§16.2.1.6.1.3.1 InnerModuleEvaluation step 2), as a module this
+  loader evaluated does through its failed-module record. An entry that
+  failed before it evaluated (a link error) is not a linked record: it leaves
+  the cache, so a later import links and evaluates its file again. Either
+  way a later import never gets the record of an incomplete run. }
+procedure TGocciaModuleLoader.FailEntryModule(const AModule: TGocciaModule;
+  const AError: Exception);
+var
+  CacheKey: string;
+  Cached: TGocciaModule;
+  ThrownValue: TGocciaValue;
+
+  procedure Evict(const AKey: string);
+  begin
+    if FModules.TryGetValue(AKey, Cached) and (Cached = AModule) then
+      FModules.Remove(AKey);
+  end;
+
+begin
+  if not Assigned(AModule) then
+    Exit;
+
+  ThrownValue := nil;
+  if AError is EGocciaBytecodeThrow then
+    ThrownValue := EGocciaBytecodeThrow(AError).ThrownValue
+  else if AError is TGocciaThrowValue then
+    ThrownValue := TGocciaThrowValue(AError).Value;
+
+  CacheKey := ExpandFileName(AModule.Path);
+  if Assigned(ThrownValue) then
+  begin
+    RecordFailedModuleError(CacheKey, ThrownValue, AModule.LastModified);
+    Exit;
+  end;
+
+  Evict(CacheKey);
+  Evict(AModule.Path);
+  RetireModule(AModule);
 end;
 
 procedure TGocciaModuleLoader.CopyModuleContents(const ASourceModule,

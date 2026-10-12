@@ -25,7 +25,15 @@
   FRegExpConstructor on the SpeciesConstructor fallback (receiver constructor =
   undefined), so this test additionally poisons the FPC heap and forces that path:
   it crashed with an access violation before the per-realm rebuild and passes after.
-  See docs/adr/0084. }
+  See docs/adr/0084.
+
+  Intl.Segmenter kept a cross-realm member cache after ADR 0084. Its cached
+  definitions held a GC-managed value, the [Symbol.toStringTag] string, which no
+  root keeps alive once the first realm's prototype is gone: the next realm's
+  prototype received a freed string, and the first collection that marked it
+  faulted. The script therefore reads each prototype's tag and then collects
+  inside the realm (Goccia.gc), which marks every value the later realm's
+  prototypes reach. }
 
 program Goccia.SharedPrototypeRealmReuse.Test;
 
@@ -84,7 +92,23 @@ const
     'const sp = reS[Symbol.split]("a-b-c"); if (sp.length !== 3 || sp[1] !== "b") throw new Error("RegExp.split species-fallback");' + sLineBreak +
     'const ex = /[a-z]/.exec("9x"); if (!ex || ex[0] !== "x") throw new Error("RegExp.exec");' + sLineBreak +
     'if (!/[0-9]/.test("x5")) throw new Error("RegExp.test");' + sLineBreak +
-    'if (/abc/.source !== "abc") throw new Error("RegExp.source");';
+    'if (/abc/.source !== "abc") throw new Error("RegExp.source");' + sLineBreak +
+    // Intl.Segmenter and its Segments and segment-iterator prototypes. Their
+    // definitions carry a GC-managed value ([Symbol.toStringTag]), so a
+    // cross-realm cache hands a later realm a string the collector already freed.
+    'const seg = new Intl.Segmenter("en", { granularity: "word" });' + sLineBreak +
+    'const words = [...seg.segment("a b")].map((x) => x.segment); if (words.join("|") !== "a| |b") throw new Error("Intl.Segmenter.segment");' + sLineBreak +
+    'if (seg.segment("ab").containing(1).segment !== "ab") throw new Error("Intl.Segmenter Segments.containing");' + sLineBreak +
+    'if (seg.segment("a")[Symbol.iterator]().next().value.segment !== "a") throw new Error("Intl.Segmenter iterator.next");' + sLineBreak +
+    'if (Intl.Segmenter.prototype[Symbol.toStringTag] !== "Intl.Segmenter") throw new Error("Intl.Segmenter toStringTag");' + sLineBreak +
+    'if (Object.prototype.toString.call(seg) !== "[object Intl.Segmenter]") throw new Error("Intl.Segmenter class string");' + sLineBreak +
+    'if (Temporal.PlainDate.prototype[Symbol.toStringTag] !== "Temporal.PlainDate") throw new Error("Temporal.PlainDate toStringTag");' + sLineBreak +
+    'if (Temporal.PlainDate.from("2024-02-29").dayOfYear !== 60) throw new Error("Temporal.PlainDate");' + sLineBreak +
+    'if (new Uint8Array([1, 2]).at(-1) !== 2) throw new Error("TypedArray.at");' + sLineBreak +
+    // Collect inside this realm: marks every value its prototypes reach, so a
+    // freed value inherited from an earlier realm faults here.
+    'Goccia.gc();' + sLineBreak +
+    'if (Intl.Segmenter.prototype[Symbol.toStringTag] !== "Intl.Segmenter") throw new Error("Intl.Segmenter toStringTag after gc");';
 
 type
   TRealmReuseTests = class(TTestSuite)

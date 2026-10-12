@@ -201,52 +201,54 @@ begin
   end;
 end;
 
-function StripPrefix(const AText, APrefix: string): string;
+// Exposed names are inferred from Pascal class and method names, which are
+// ASCII ShortStrings. Every engine boot infers a few hundred of them, so the
+// inference stays in ShortString and converts to string once, at the end:
+// a ShortString to string conversion goes through the widestring manager.
+
+procedure StripPrefix(var AText: ShortString; const APrefix: ShortString);
 begin
-  Result := AText;
-  if Copy(Result, 1, Length(APrefix)) = APrefix then
-    Delete(Result, 1, Length(APrefix));
+  if Copy(AText, 1, Length(APrefix)) = APrefix then
+    Delete(AText, 1, Length(APrefix));
 end;
 
-function StripSuffix(const AText, ASuffix: string): string;
+procedure StripSuffix(var AText: ShortString; const ASuffix: ShortString);
 begin
-  Result := AText;
-  if (Length(Result) >= Length(ASuffix)) and
-     (Copy(Result, Length(Result) - Length(ASuffix) + 1, Length(ASuffix)) = ASuffix) then
-    SetLength(Result, Length(Result) - Length(ASuffix));
+  if (Length(AText) >= Length(ASuffix)) and
+     (Copy(AText, Length(AText) - Length(ASuffix) + 1, Length(ASuffix)) = ASuffix) then
+    SetLength(AText, Length(AText) - Length(ASuffix));
 end;
 
-function InferTypePrefix(const AMethodHost: TGocciaMethodHost): string;
+function InferTypePrefix(const AMethodHost: TGocciaMethodHost): ShortString;
 begin
   Result := AMethodHost.ClassName;
-  Result := StripPrefix(Result, 'TGoccia');
-  Result := StripPrefix(Result, 'Global');
-  Result := StripSuffix(Result, 'SharedPrototype');
-  Result := StripSuffix(Result, 'ObjectValue');
-  Result := StripSuffix(Result, 'Builtin');
-  Result := StripSuffix(Result, 'ClassValue');
-  Result := StripSuffix(Result, 'Value');
+  StripPrefix(Result, 'TGoccia');
+  StripPrefix(Result, 'Global');
+  StripSuffix(Result, 'SharedPrototype');
+  StripSuffix(Result, 'ObjectValue');
+  StripSuffix(Result, 'Builtin');
+  StripSuffix(Result, 'ClassValue');
+  StripSuffix(Result, 'Value');
 end;
 
-function StripFirstMatchingPrefix(const AMethodName, ATypePrefix: string): string;
+procedure StripFirstMatchingPrefix(var AMethodName: ShortString;
+  const ATypePrefix: ShortString);
 var
-  Candidate: string;
+  Candidate: ShortString;
 begin
-  Result := AMethodName;
-
   Candidate := ATypePrefix;
-  if (Candidate <> '') and (Copy(Result, 1, Length(Candidate)) = Candidate) then
+  if (Candidate <> '') and (Copy(AMethodName, 1, Length(Candidate)) = Candidate) then
   begin
-    Delete(Result, 1, Length(Candidate));
+    Delete(AMethodName, 1, Length(Candidate));
     Exit;
   end;
 
   if Copy(ATypePrefix, 1, Length('TemporalPlain')) = 'TemporalPlain' then
   begin
     Candidate := Copy(ATypePrefix, Length('TemporalPlain') + 1, MaxInt);
-    if (Candidate <> '') and (Copy(Result, 1, Length(Candidate)) = Candidate) then
+    if (Candidate <> '') and (Copy(AMethodName, 1, Length(Candidate)) = Candidate) then
     begin
-      Delete(Result, 1, Length(Candidate));
+      Delete(AMethodName, 1, Length(Candidate));
       Exit;
     end;
   end;
@@ -254,24 +256,29 @@ begin
   if Copy(ATypePrefix, 1, Length('Temporal')) = 'Temporal' then
   begin
     Candidate := Copy(ATypePrefix, Length('Temporal') + 1, MaxInt);
-    if (Candidate <> '') and (Copy(Result, 1, Length(Candidate)) = Candidate) then
-      Delete(Result, 1, Length(Candidate));
+    if (Candidate <> '') and (Copy(AMethodName, 1, Length(Candidate)) = Candidate) then
+      Delete(AMethodName, 1, Length(Candidate));
   end;
 end;
 
-function LowercaseFirst(const AValue: string): string;
+// The identifier with its first letter lowercased, as a string. Pascal
+// identifiers are ASCII, so each character converts by its code.
+function ExposedNameFromIdentifier(const AIdentifier: ShortString): string;
+var
+  I: Integer;
 begin
-  Result := AValue;
-  if Result <> '' then
-    Result[1] := LowerCase(Copy(Result, 1, 1))[1];
+  SetLength(Result, Length(AIdentifier));
+  for I := 1 to Length(AIdentifier) do
+    Result[I] := WideChar(Ord(AIdentifier[I]));
+  if (Result <> '') and (Result[1] >= 'A') and (Result[1] <= 'Z') then
+    Result[1] := WideChar(Ord(Result[1]) + Ord('a') - Ord('A'));
 end;
 
 function InferExposedName(const ACallback: TGocciaNativeFunctionCallback): string;
 var
   MethodData: TMethod;
   MethodHost: TGocciaMethodHost;
-  MethodName: string;
-  TypePrefix: string;
+  MethodName: ShortString;
 begin
   MethodData := TMethod(ACallback);
   MethodHost := TGocciaMethodHost(MethodData.Data);
@@ -284,9 +291,8 @@ begin
       'Cannot infer exposed name for %s.%p. The method must be published or use DefineNamedMethod.',
       [MethodHost.ClassName, Pointer(MethodData.Code)]);
 
-  TypePrefix := InferTypePrefix(MethodHost);
-  MethodName := StripFirstMatchingPrefix(MethodName, TypePrefix);
-  Result := LowercaseFirst(MethodName);
+  StripFirstMatchingPrefix(MethodName, InferTypePrefix(MethodHost));
+  Result := ExposedNameFromIdentifier(MethodName);
 end;
 
 function DescribeMethodHost(const AMethodHost: TGocciaMethodHost): string;

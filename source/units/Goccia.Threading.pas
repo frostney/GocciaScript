@@ -264,9 +264,10 @@ procedure InitThreadRuntime(AEnableCoverage: Boolean; AMaxBytes: Int64);
 begin
   GIsWorkerThread := True;
   TGarbageCollector.Initialize;
-  // Disable automatic GC on worker threads. Explicit Goccia.gc() still
-  // runs under the global collector lock, but workers otherwise reclaim
-  // their thread-local heaps in bulk when the runtime shuts down.
+  // Disable automatic GC on worker threads. A worker collects only when asked:
+  // through Goccia.gc() or a host's explicit Collect (GocciaTestRunner
+  // collects after every file a worker runs), both under the global collector
+  // lock. Shutting the runtime down reclaims whatever is left.
   TGarbageCollector.Instance.Enabled := False;
   // Propagate the memory ceiling from the main thread so that --max-memory
   // is honoured on workers. Without this, workers use the auto-detected

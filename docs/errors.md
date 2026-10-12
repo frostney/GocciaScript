@@ -23,7 +23,7 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`Error`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) | Generic errors; base class for all error types | [Error](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error) |
 | [`TypeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) | Property access on `null`/`undefined`, calling a non-function, reassigning `const`, calling a constructor without `new` | [TypeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/TypeError) |
 | [`ReferenceError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) | Accessing an undeclared variable, using a variable before initialization (TDZ) | [ReferenceError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ReferenceError) |
-| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
+| [`RangeError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) | Invalid array length, negative `ArrayBuffer` size, out-of-range numeric conversions, call stack depth exceeded (`--max-stack`, or in bytecode mode the call stack reaching `--max-memory`) | [RangeError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RangeError) |
 | [`SyntaxError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) | Invalid syntax detected by the parser or lexer; also throwable at runtime via `new SyntaxError(...)` | [SyntaxError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SyntaxError) |
 | [`URIError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) | Malformed URI passed to `encodeURI`, `decodeURI`, `encodeURIComponent`, or `decodeURIComponent` | [URIError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/URIError) |
 | [`AggregateError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) | Multiple errors wrapped together; used by `Promise.any` when all promises reject | [AggregateError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/AggregateError) |
@@ -124,17 +124,20 @@ When an uncaught runtime error reaches the top level, GocciaScript displays the 
 ```text
 TypeError: Cannot read properties of undefined (reading 'x')
   Suggestion: check that the value is not null or undefined before accessing properties
-  --> script.js:2:10
+  --> script.js:2:21
    1 | const getX = (obj) => {
    2 |   return obj.nested.x;
-     |          ^
+     |                     ^
    3 | };
    4 | getX({});
 ```
 
+A failed property read is located at the property whose read failed, where V8 reports it (see [Stack Traces](#stack-traces)).
+
+Runtime errors can carry a suggestion too. Reading or assigning an undeclared name prints `Suggestion: check the spelling or declare the variable with const, let, or var before use` in both modes, and the `ReferenceError` is always the realm's own, even when the global `ReferenceError` has been replaced. A `RangeError` from the call stack reaching `--max-memory` in bytecode mode is located at the call that needed the larger stack, as an ordinary stack overflow is.
+
 Locations are not yet consistent between the two modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)):
 
-- The same error can report a different column: for `return obj.x;` the interpreter points at `obj` and bytecode mode at `.x`.
 - In interpreter mode, some top-level runtime errors lack a location. A top-level `ReferenceError` prints `--> :0:0` with no file name or source excerpt, and a top-level `TypeError` such as `const a = null; a.x;` prints no `-->` line at all. Bytecode mode shows the file, line, and excerpt for both.
 
 Stdin input uses `<stdin>` as the filename and retains full source context for error display. If source context is not available (e.g., errors originating inside native function callbacks without a JavaScript source location), GocciaScript falls back to displaying the stack trace string.
@@ -256,14 +259,30 @@ reporters render it through `FormatHostErrorDiagnostic` as its own line:
 
 ```text
 RuntimeError: Module not found: "./missing.js"
-  --> entry.js:0:0
+  --> entry.js:2:1
   Resolved to: /home/user/project/missing.js
 ```
 
-The `-->` line shows the entry path as it was passed on the command line. This
-is interpreter-mode output; bytecode mode currently prints the same failure as
-`Error: Module not found: "./missing.js"` with no `Resolved to:` line
-([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+The `-->` line names the importing file, as its path was passed on the command
+line, at the import declaration that asked for the module. Both modes print
+this output.
+
+A failed `import()` that nothing catches is located at the `import()` call, with
+a code frame:
+
+```text
+Error: Module not found: "./nope.js"
+  --> main.js:2:9
+   1 | const load = async () => {
+   2 |   await import("./nope.js");
+     |         ^
+   3 | };
+   4 | load();
+```
+
+Both locations come from the call site that both modes enter while the load
+runs, the one a `PermissionDenied` from the same load reports. `--output=json`
+reports the same `line` and `column`.
 
 `--output=json` and `--output=compact-json` do **not** carry it. The JSON
 envelope's `error` object is the documented set of `type`, `message`, `line`,
@@ -365,16 +384,31 @@ try {
 }
 ```
 
-In interpreter mode this prints:
+In bytecode mode this prints:
 
 ```text
 TypeError: Cannot read properties of null (reading 'x')
-    at inner (script.js:2:10)
-    at middle (script.js:8:9)
-    at outer (script.js:11:8)
+    at inner (script.js:2:14)
+    at middle (script.js:5:3)
+    at outer (script.js:8:3)
+    at <module> (script.js:11:3)
 ```
 
-Frame positions after the first are currently wrong in both modes ([#1273](https://github.com/frostney/GocciaScript/issues/1273)). In interpreter mode each outer frame shows the site where that function was called (`middle` at `8:9`, inside `outer`) rather than its own call to the next frame (`5:3`). In bytecode mode the first frame is `inner (script.js:2:13)`, every outer frame shows `0:0`, and a final `at <module> (script.js:0:0)` frame is added.
+The first frame is where the error happened. Every other frame is at the call that frame is making: `middle` at its call to `inner` on line 5, and `<module>`, the script's top level, at its call to `outer`. Node prints the same positions; it names the top-level frame `Object.<anonymous>`.
+
+Positions follow V8's rules, in both modes:
+
+| Construct | Located at | Example |
+|-----------|-----------|---------|
+| A call whose `(` follows an identifier | That identifier: the callee, or the property name of a member callee | `inner(obj)` at `inner`, `list.map(f)` at `map`, `super()` at `super` |
+| Any other call | Its `(` | `obj["m"]()`, `(f)()`, `f()()`, `f?.()`, `promise.catch(f)`, `this.#m()` |
+| `new` | The `new` keyword | `new ns.Widget()` at `new` |
+| A tagged template | The template | ``tag`text` `` at the backtick |
+| A failed property read | The property name, or the `[` of a computed read | `obj.x` at `x`, `obj["x"]` at `[` |
+
+V8 decides a call's position by the token before its `(`, so a reserved-word property name such as `catch`, `default` or `delete`, and a private name, leave the call at its `(`. The same position is what an audit event and a `PermissionDenied` error report for the call. Interpreter mode lists no `<module>` frame, and each frame there shows the site where that function was called (`middle` at `8:3`, inside `outer`) rather than its own call to the next frame ([#1273](https://github.com/frostney/GocciaScript/issues/1273)).
+
+A trace lists at most 100 frames, the innermost ones. A deeper stack ends with one `... N more frames` line, indented like the `at` lines (`... 1 more frame` for one), so a stack-overflow `RangeError` still shows where the recursion is: at the default `--max-stack` of 2,200, `const f = () => { f(); }; f();` gives the header, 100 `at f` lines and `... 2101 more frames`. Frames past the limit are neither named nor formatted; only their line and column numbers are read, as bytecode mode works out every frame's position from the instruction pointers the VM saved. Without the limit, building the trace of a stack-overflow `RangeError` took most of a deep recursion's run time. A stack of up to 100 frames renders as it always has. The limit applies to every error that captures a stack, in both modes, and is fixed (`STACK_TRACE_FRAME_LIMIT` in `Goccia.CallStack`); GocciaScript has no `Error.stackTraceLimit`, which is a V8 extension. JavaScriptCore's default `Error.stackTraceLimit` is also 100, SpiderMonkey keeps 128 frames and V8 10.
 
 ## Error.cause
 
@@ -521,269 +555,7 @@ err.message;    // "An error was suppressed"
 
 ## JSON Output Format
 
-When running with `--output=json`, GocciaScript wraps every execution result in a structured JSON envelope. This is useful for programmatic consumers and embedding scenarios.
-
-The `memory` block has two different scopes:
-
-- `memory.gc` reports the GocciaScript GC's approximate managed-object accounting. It tracks `TGCManagedObject.InstanceSize`, not all memory held by strings, dynamic arrays, or the FreePascal runtime. `allocatedDuringRunBytes` is cumulative allocation churn during the measured run, so it can be much larger than `liveBytes`.
-- `memory.heap` reports coarse FreePascal process heap-manager counters from `GetHeapStatus`. These are allocator diagnostics, not JavaScript heap size. `deltaFreeBytes` may be negative when the process heap has less reusable free space at the end of the run.
-
-For parallel runs, the top-level `memory.gc` block combines one measurement per worker thread plus the main thread. It does not sum per-file live snapshots, because each worker can process many files with the same thread-local GC. Per-file `files[].memory` is only populated by hosts that can measure a file independently.
-
-### Success
-
-```json
-{
-  "ok": true,
-  "build": {
-    "version": "0.1.0-dev",
-    "date": "2026-04-27",
-    "commit": "abc1234",
-    "os": "darwin",
-    "arch": "aarch64"
-  },
-  "stdout": "hello\n",
-  "stderr": "",
-  "output": ["hello"],
-  "error": null,
-  "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
-    "compile_ns": 0,
-    "exec_ns": 3100000,
-    "total_ns": 4800000
-  },
-  "memory": {
-    "gc": {
-      "liveBytes": 2048,
-      "startLiveBytes": 0,
-      "endLiveBytes": 2048,
-      "peakLiveBytes": 4096,
-      "deltaLiveBytes": 2048,
-      "allocatedDuringRunBytes": 4096,
-      "limitBytes": 536870912,
-      "startObjectCount": 0,
-      "endObjectCount": 24,
-      "collections": 0,
-      "collectedObjects": 0
-    },
-    "heap": {
-      "startAllocatedBytes": 16384,
-      "endAllocatedBytes": 32768,
-      "deltaAllocatedBytes": 16384,
-      "startFreeBytes": 8192,
-      "endFreeBytes": 4096,
-      "deltaFreeBytes": -4096
-    }
-  },
-  "workers": { "used": 1, "available": 1, "parallel": false },
-  "files": [
-    {
-      "fileName": "script.js",
-      "ok": true,
-      "stdout": "hello\n",
-      "stderr": "",
-      "output": ["hello"],
-      "error": null,
-      "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
-        "compile_ns": 0,
-        "exec_ns": 3100000,
-        "total_ns": 4800000
-      },
-      "memory": null,
-      "result": 42
-    }
-  ]
-}
-```
-
-### Error
-
-```json
-{
-  "ok": false,
-  "build": {
-    "version": "0.1.0-dev",
-    "date": "2026-04-27",
-    "commit": "abc1234",
-    "os": "darwin",
-    "arch": "aarch64"
-  },
-  "stdout": "",
-  "stderr": "",
-  "output": [],
-  "error": {
-    "type": "TypeError",
-    "message": "Cannot read properties of null (reading 'x')",
-    "line": null,
-    "column": null,
-    "fileName": "script.js"
-  },
-  "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
-    "compile_ns": 0,
-    "exec_ns": 100000,
-    "total_ns": 1800000
-  },
-  "memory": { "gc": { "liveBytes": 2048 }, "heap": { "endAllocatedBytes": 32768 } },
-  "workers": { "used": 1, "available": 1, "parallel": false },
-  "files": [
-    {
-      "fileName": "script.js",
-      "ok": false,
-      "stdout": "",
-      "stderr": "",
-      "output": [],
-      "error": {
-        "type": "TypeError",
-        "message": "Cannot read properties of null (reading 'x')",
-        "line": null,
-        "column": null,
-        "fileName": "script.js"
-      },
-      "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
-        "compile_ns": 0,
-        "exec_ns": 100000,
-        "total_ns": 1800000
-      },
-      "memory": null,
-      "result": null
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `ok` | `boolean` | `true` for success, `false` for error |
-| `build` | `object` | Build identity, including `version`, `date`, `commit`, `os`, and `arch` |
-| `stdout` | `string` | Unformatted stdout-oriented console output; present even when empty |
-| `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
-| `output` | `string[]` | Formatted console output split into lines |
-| `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
-| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
-| `error.message` | `string` | Error message text |
-| `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. Only parse errors carry it today; thrown runtime values report `null` ([#1273](https://github.com/frostney/GocciaScript/issues/1273)) |
-| `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable. Only parse errors carry it today, as for `error.line` |
-| `error.fileName` | `string \| null` | Source file path, or `null` if unavailable |
-| `timing` | `object` | Cumulative phase-level timings in nanoseconds (`*_ns`) |
-| `memory` | `object \| null` | GC and application heap measurements for the run |
-| `memory.gc.liveBytes` | `number` | GC-managed bytes live at the measurement endpoint. This is the report equivalent of `Goccia.gc.bytesAllocated` |
-| `memory.gc.allocatedDuringRunBytes` | `number` | Total GC-managed bytes allocated during the measured run, including allocations later collected |
-| `memory.gc.peakLiveBytes` | `number` | Highest live GC-managed byte count observed during the measurement |
-| `memory.gc.limitBytes` | `number` | Active GC byte ceiling from `--max-memory` or the auto-detected default |
-| `memory.heap.deltaAllocatedBytes` | `number` | Change in FreePascal heap-manager allocated bytes for the measured process/thread scope |
-| `memory.heap.deltaFreeBytes` | `number` | Change in FreePascal memory-manager free space. Negative values are valid and mean the process heap had less reusable free space at the end |
-| `workers` | `object` | Worker logistics: used worker count, available worker count, and whether the run was parallel |
-| `files` | `object[]` | Per-input results. Single-file runs use the same structure with one element |
-| `files[].fileName` | `string` | Input file path or `<stdin>` |
-| `files[].result` | any | The script completion value for that input. Serializes as `null` for both errors and JavaScript `undefined`; use `files[].ok` and `files[].error` to distinguish those cases. |
-
-### Compact JSON Output
-
-`--output=compact-json` emits the same envelope as `--output=json` with the `build`, `memory`, `stdout`, and `stderr` fields omitted at both the top level and per-file. All console output is still available through the normalized `output` array (lines from `console.log`/`info`/`debug` and prefixed lines like `Error: ...` or `Warning: ...` from `console.error`/`warn`); script errors remain available through the structured `error` object. Use this format when you do not need build identity, memory measurements, or the raw stdout/stderr split — and want a smaller payload.
-
-```json
-{
-  "ok": true,
-  "output": ["hello", "Error: oops"],
-  "error": null,
-  "timing": {
-    "lex_ns": 500000,
-    "parse_ns": 1200000,
-    "compile_ns": 0,
-    "exec_ns": 3100000,
-    "total_ns": 4800000
-  },
-  "workers": { "used": 1, "available": 1, "parallel": false },
-  "files": [
-    {
-      "fileName": "script.js",
-      "ok": true,
-      "output": ["hello", "Error: oops"],
-      "error": null,
-      "timing": {
-        "lex_ns": 500000,
-        "parse_ns": 1200000,
-        "compile_ns": 0,
-        "exec_ns": 3100000,
-        "total_ns": 4800000
-      },
-      "result": 42
-    }
-  ]
-}
-```
-
-### TimeoutError in JSON
-
-When execution exceeds the `--timeout` limit, the JSON envelope reports a `TimeoutError`:
-
-```json
-{
-  "ok": false,
-  "build": { "version": "0.1.0-dev", "date": "2026-04-27", "commit": "abc1234", "os": "darwin", "arch": "aarch64" },
-  "stdout": "",
-  "stderr": "",
-  "output": [],
-  "error": {
-    "type": "TimeoutError",
-    "message": "file timed out after 100ms",
-    "line": null,
-    "column": null,
-    "fileName": "<stdin>"
-  },
-  "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
-  "memory": {
-    "gc": {
-      "liveBytes": 8192,
-      "startLiveBytes": 0,
-      "endLiveBytes": 8192,
-      "peakLiveBytes": 16384,
-      "deltaLiveBytes": 8192,
-      "allocatedDuringRunBytes": 16384,
-      "limitBytes": 536870912,
-      "startObjectCount": 0,
-      "endObjectCount": 80,
-      "collections": 0,
-      "collectedObjects": 0
-    },
-    "heap": {
-      "startAllocatedBytes": 16384,
-      "endAllocatedBytes": 32768,
-      "deltaAllocatedBytes": 16384,
-      "startFreeBytes": 8192,
-      "endFreeBytes": 4096,
-      "deltaFreeBytes": -4096
-    }
-  },
-  "workers": { "used": 1, "available": 1, "parallel": false },
-  "files": [
-    {
-      "fileName": "<stdin>",
-      "ok": false,
-      "stdout": "",
-      "stderr": "",
-      "output": [],
-      "error": {
-        "type": "TimeoutError",
-        "message": "file timed out after 100ms",
-        "line": null,
-        "column": null,
-        "fileName": "<stdin>"
-      },
-      "timing": { "lex_ns": 100000, "parse_ns": 200000, "compile_ns": 0, "exec_ns": 100000000, "total_ns": 100300000 },
-      "memory": null,
-      "result": null
-    }
-  ]
-}
-```
+`--output=json` and `--output=compact-json` wrap every run in a structured JSON envelope; its fields, including how an error and a timeout are reported, are described in [JSON Output](json-output.md).
 
 ## Embedding
 
@@ -795,3 +567,4 @@ For Pascal-side error handling when embedding GocciaScript in FreePascal applica
 - [Built-in Objects](built-ins.md) -- Error constructors and API reference
 - [Embedding the Engine](embedding.md) -- Pascal-side error handling for embedders
 - [Testing](testing.md) -- Writing tests that assert on error behavior
+- [JSON Output](json-output.md) -- The `--output=json` envelope and its `error` object

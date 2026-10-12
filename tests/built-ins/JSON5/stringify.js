@@ -498,4 +498,9 @@ describe("JSON5.stringify", () => {
 
     expect(JSON5.stringify(arr)).toBe("[7]");
   });
+
+  test("stringifies the elements of a typed array as index keys", () => {
+    expect(JSON5.stringify(new Uint8Array([1, 2]))).toBe("{'0':1,'1':2}");
+    expect(JSON5.stringify({ a: new Int8Array([3]) })).toBe("{a:{'0':3}}");
+  });
 });

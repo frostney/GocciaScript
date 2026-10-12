@@ -1,0 +1,6 @@
+{
+  "compat-arguments-object": true,
+  "compat-function": true,
+  "compat-non-strict-mode": true,
+  "compat-var": true
+}

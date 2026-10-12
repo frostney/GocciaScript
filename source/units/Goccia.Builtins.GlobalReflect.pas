@@ -436,7 +436,7 @@ begin
   // Step 2: Let key be ? ToPropertyKey(propertyKey)
   if PropKey is TGocciaSymbolValue then
   begin
-    if Obj.HasSymbolProperty(TGocciaSymbolValue(PropKey)) then
+    if Obj.HasSymbolPropertyInChain(TGocciaSymbolValue(PropKey)) then
       Result := TGocciaBooleanLiteralValue.TrueValue
     else
       Result := TGocciaBooleanLiteralValue.FalseValue;

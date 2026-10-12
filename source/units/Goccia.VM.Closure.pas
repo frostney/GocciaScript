@@ -16,14 +16,15 @@ type
   private
     FTemplate: TGocciaFunctionTemplate;
     FUpvalues: array of TGocciaBytecodeUpvalue;
-    // Marks static captures whose path crosses the function environment that
-    // owns DynamicVarScope, allowing eval-created vars to shadow them.
-    FDynamicVarUpvalues: array of Boolean;
     FHomeObject: TGocciaObjectValue;
     FHomeClass: TGocciaObjectValue;
+    // The class whose private names the closure's code resolves first: the
+    // innermost class body the function was created in (ES2026 §10.2.3
+    // OrdinaryFunctionCreate's PrivateEnvironment). Unlike HomeClass it does
+    // not depend on the function being a method, so super stays unaffected.
+    FPrivateClass: TGocciaObjectValue;
     FFunctionValue: TGocciaValue;
     FGlobalScope: TGocciaScope;
-    FDynamicVarScope: TGocciaScope;
     FNewTarget: TGocciaValue;
     FAllowsNewTarget: Boolean;
   public
@@ -33,17 +34,14 @@ type
     function Clone: TGocciaBytecodeClosure;
     procedure SetUpvalue(const AIndex: Integer; const AUpvalue: TGocciaBytecodeUpvalue);
     function GetUpvalue(const AIndex: Integer): TGocciaBytecodeUpvalue;
-    procedure SetDynamicVarUpvalue(const AIndex: Integer;
-      const AEnabled: Boolean);
-    function IsDynamicVarUpvalue(const AIndex: Integer): Boolean;
     function GetUpvalueCount: Integer;
     property Template: TGocciaFunctionTemplate read FTemplate;
     property UpvalueCount: Integer read GetUpvalueCount;
     property HomeObject: TGocciaObjectValue read FHomeObject write FHomeObject;
     property HomeClass: TGocciaObjectValue read FHomeClass write FHomeClass;
+    property PrivateClass: TGocciaObjectValue read FPrivateClass write FPrivateClass;
     property FunctionValue: TGocciaValue read FFunctionValue write FFunctionValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
-    property DynamicVarScope: TGocciaScope read FDynamicVarScope write FDynamicVarScope;
     property NewTarget: TGocciaValue read FNewTarget write FNewTarget;
     property AllowsNewTarget: Boolean read FAllowsNewTarget write FAllowsNewTarget;
   end;
@@ -57,19 +55,17 @@ begin
   FTemplate := ATemplate;
   FHomeObject := nil;
   FHomeClass := nil;
+  FPrivateClass := nil;
   FFunctionValue := nil;
   FGlobalScope := nil;
-  FDynamicVarScope := nil;
   FNewTarget := nil;
   FAllowsNewTarget := False;
   SetLength(FUpvalues, AUpvalueCount);
-  SetLength(FDynamicVarUpvalues, AUpvalueCount);
 end;
 
 destructor TGocciaBytecodeClosure.Destroy;
 begin
   SetLength(FUpvalues, 0);
-  SetLength(FDynamicVarUpvalues, 0);
   inherited;
 end;
 
@@ -80,16 +76,13 @@ begin
   Result := TGocciaBytecodeClosure.Create(FTemplate, Length(FUpvalues));
   Result.FHomeObject := FHomeObject;
   Result.FHomeClass := FHomeClass;
+  Result.FPrivateClass := FPrivateClass;
   Result.FFunctionValue := FFunctionValue;
   Result.FGlobalScope := FGlobalScope;
-  Result.FDynamicVarScope := FDynamicVarScope;
   Result.FNewTarget := FNewTarget;
   Result.FAllowsNewTarget := FAllowsNewTarget;
   for I := 0 to High(FUpvalues) do
-  begin
     Result.FUpvalues[I] := FUpvalues[I];
-    Result.FDynamicVarUpvalues[I] := FDynamicVarUpvalues[I];
-  end;
 end;
 
 procedure TGocciaBytecodeClosure.SetUpvalue(const AIndex: Integer;
@@ -107,21 +100,6 @@ begin
     Result := FUpvalues[AIndex]
   else
     Result := nil;
-end;
-
-procedure TGocciaBytecodeClosure.SetDynamicVarUpvalue(const AIndex: Integer;
-  const AEnabled: Boolean);
-begin
-  if (AIndex < 0) or (AIndex >= Length(FDynamicVarUpvalues)) then
-    Exit;
-  FDynamicVarUpvalues[AIndex] := AEnabled;
-end;
-
-function TGocciaBytecodeClosure.IsDynamicVarUpvalue(
-  const AIndex: Integer): Boolean;
-begin
-  Result := (AIndex >= 0) and (AIndex < Length(FDynamicVarUpvalues)) and
-    FDynamicVarUpvalues[AIndex];
 end;
 
 function TGocciaBytecodeClosure.GetUpvalueCount: Integer;

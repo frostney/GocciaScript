@@ -17,8 +17,9 @@ import {
   mkdirSync,
   symlinkSync,
   linkSync,
+  realpathSync,
 } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import {
   RUNNER,
   BARE,
@@ -71,6 +72,254 @@ for (const [label, source] of [
     throw new Error(`Top-level ${label} self-reference should throw ReferenceError, got ${json.error?.type}`);
 }
 
+console.log("Bytecode stack frames locate each caller at the call it is making...");
+{
+  // The docs/errors.md § Stack Traces sample. Each caller frame is located at
+  // its own call to the next frame, and the top level at its call to outer.
+  // Every position is the one V8 (Node) prints: a call at its callee's name,
+  // and the failed read at the property name.
+  const source = [
+    "const inner = (obj) => {",
+    "  return obj.x;",
+    "};",
+    "const middle = (obj) => {",
+    "  inner(obj);",
+    "};",
+    "const outer = () => {",
+    "  middle(null);",
+    "};",
+    "try {",
+    "  outer();",
+    "} catch (e) {",
+    "  console.log(e.stack);",
+    "}",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString();
+  for (const frame of [
+    "    at inner (<stdin>:2:14)",
+    "    at middle (<stdin>:5:3)",
+    "    at outer (<stdin>:8:3)",
+    "    at <module> (<stdin>:11:3)",
+  ]) {
+    if (!containsLine(out, frame))
+      throw new Error(`Bytecode stack should contain "${frame}", got: ${out}`);
+  }
+}
+
+console.log("Bytecode names a computed static field's initializer from its key...");
+{
+  // A static field initializer runs as its own method (ES2026 §15.7.10), and
+  // an anonymous function or class in it still takes its name from the
+  // computed key (§8.4.5 NamedEvaluation). The interpreter does not name these
+  // yet; it is being removed (#825), so this runs in bytecode only.
+  const source = [
+    "const key = Symbol('sym');",
+    "class Base { static greet() { return 'base'; } }",
+    "class C extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "}",
+    "console.log([C.arrow.name, C.arrow(), C[key].name, C.klass.name, C.klass.ownName].join(','));",
+    "const E = class extends Base {",
+    "  static ['arrow'] = () => super.greet();",
+    "  static [key] = () => 'fn';",
+    "  static ['klass'] = class { static ownName = this.name; };",
+    "};",
+    "console.log([E.arrow.name, E.arrow(), E[key].name, E.klass.name, E.klass.ownName].join(','));",
+    // A static initializer whose class suspends stays inline in the generator
+    // and still names its value from the computed key.
+    "class H { static *g() { const k = 'yk'; return class { static [k] = class { static [yield 1] = 1; }; }; } }",
+    "const it = H.g(); it.next(); const Y = it.next('p').value;",
+    "console.log([Y.yk.name, Y.yk.p].join(','));",
+    "",
+  ].join("\n");
+  const proc = Bun.spawnSync([RUNNER, "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const out = proc.stdout.toString().trim().split(/\r?\n/).slice(0, 3).join("|");
+  const expected = "arrow,base,[sym],klass,klass|arrow,base,[sym],klass,klass|yk,1";
+  if (proc.exitCode !== 0 || out !== expected)
+    throw new Error(`Bytecode computed static field names expected ${expected}, got: ${proc.stdout.toString()}${proc.stderr.toString()}`);
+}
+
+console.log("--output=json reports where a thrown error was created...");
+for (const mode of ["interpreted", "bytecode"]) {
+  const { exitCode, json } = runLoaderJson(
+    'const fail = () => {\n  throw new TypeError("boom");\n};\nfail();\n',
+    [`--mode=${mode}`],
+  );
+  if (exitCode === 0) throw new Error(`A thrown TypeError should fail the run (${mode})`);
+  if (json.error?.line !== 2 || json.error?.column !== 9)
+    throw new Error(
+      `JSON error should be located at 2:9 (${mode}), got ${json.error?.line}:${json.error?.column}`,
+    );
+}
+
+// The `-->` header of a diagnostic, and the column of the caret in the code
+// frame under it, counted from the first character after the gutter's "| ".
+const codeFrameLocation = (out: string): { header: string; caretColumn: number } => {
+  const lines = normalizeLineEndings(out).split("\n");
+  const at = lines.findIndex((line) => line.trimStart().startsWith("--> "));
+  if (at < 0) return { header: "", caretColumn: 0 };
+  const caretLine = lines.slice(at + 1).find((line) => /^\s*\|\s*\^/.test(line));
+  const caretColumn = caretLine
+    ? caretLine.indexOf("^") - caretLine.indexOf("|") - 1
+    : 0;
+  return { header: lines[at].trim(), caretColumn };
+};
+
+console.log("An uncaught failed property read is located at its property name...");
+{
+  const tmp = mkdtemp("goccia-member-read-");
+  try {
+    const file = join(tmp, "member.js");
+    // Node reports `obj.x` at `x`, `holder.a.b` at `b`, the property whose read
+    // failed, and a computed read at its `[`.
+    const cases = [
+      ["const inner = (obj) => {\n  return obj.x;\n};\ninner(null);\n", 2, 14],
+      ["const holder = { a: null };\nconst read = () => holder.a.b;\nread();\n", 2, 29],
+      ['const holder = { a: null };\nconst read = () => holder.a["b"];\nread();\n', 2, 28],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [source, line, column] of cases) {
+        writeFileSync(file, source);
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header, caretColumn } = codeFrameLocation(out);
+        if (proc.exitCode === 0 || header !== `--> ${file}:${line}:${column}` || caretColumn !== column)
+          throw new Error(
+            `Failed read (${mode}) should be located at ${line}:${column} with the caret under it, got header "${header}", caret ${caretColumn}: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A failed import() is located at the import() call...");
+{
+  const tmp = mkdtemp("goccia-dynamic-import-missing-");
+  try {
+    const topLevel = join(tmp, "dyn.js");
+    writeFileSync(topLevel, 'const x = 1;\nimport("./nope.js");\n');
+    const inAsync = join(tmp, "dyn-async.js");
+    writeFileSync(
+      inAsync,
+      'const load = async () => {\n  await import("./nope.js");\n};\nload();\n',
+    );
+    const cases = [
+      [topLevel, 2, 1, '2 | import("./nope.js");'],
+      [inAsync, 2, 9, '2 |   await import("./nope.js");'],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [file, line, column, excerpt] of cases) {
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header, caretColumn } = codeFrameLocation(out);
+        if (
+          proc.exitCode === 0 ||
+          !out.includes('Module not found: "./nope.js"') ||
+          header !== `--> ${file}:${line}:${column}` ||
+          caretColumn !== column ||
+          !out.includes(excerpt)
+        )
+          throw new Error(
+            `A failed import() (${mode}) should be located at ${line}:${column} with a code frame, got: ${out}`,
+          );
+        const json = Bun.spawnSync([RUNNER, file, `--mode=${mode}`, "--output=json"], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const error = JSON.parse(json.stdout.toString()).error;
+        if (error?.line !== line || error?.column !== column)
+          throw new Error(
+            `A failed import() (${mode}) should report ${line}:${column} in JSON, got ${error?.line}:${error?.column}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("A static import of a missing module is located at its declaration...");
+{
+  const tmp = mkdtemp("goccia-static-import-missing-");
+  try {
+    const entry = join(tmp, "entry.js");
+    writeFileSync(entry, 'const y = 2;\nimport { a } from "./missing.js";\nconsole.log(a);\n');
+    // A module the entry imports fails the same way, located in its own file.
+    const viaDep = join(tmp, "via-dep.js");
+    writeFileSync(viaDep, 'import { b } from "./dep.js";\nconsole.log(b);\n');
+    const dep = join(tmp, "dep.js");
+    writeFileSync(dep, '// dep\nexport { a as b } from "./missing.js";\n');
+    const cases = [
+      [entry, `--> ${entry}:2:1`],
+      [viaDep, `--> ${dep}:2:1`],
+    ] as const;
+    for (const mode of ["interpreted", "bytecode"]) {
+      for (const [file, expected] of cases) {
+        const proc = Bun.spawnSync([RUNNER, file, `--mode=${mode}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        const { header } = codeFrameLocation(out);
+        if (
+          proc.exitCode === 0 ||
+          !out.includes('Module not found: "./missing.js"') ||
+          !out.includes("Resolved to: ") ||
+          header !== expected
+        )
+          throw new Error(
+            `A missing static import (${mode}) should be located at "${expected}", got: ${out}`,
+          );
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--output=json names an uncaught private-member error's member as written...");
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const [label, source, message] of [
+    [
+      "field",
+      "class C {\n  #p = 1;\n  static read(o) { return o.#p; }\n}\nC.read({});\n",
+      "Private field #p is not accessible",
+    ],
+    [
+      "method",
+      "class C {\n  #m() {}\n  static write(o) { o.#m = 1; }\n}\nC.write(new C());\n",
+      "Private method #m is not writable",
+    ],
+  ] as const) {
+    const { exitCode, json } = runLoaderJson(source, [`--mode=${mode}`]);
+    if (exitCode === 0) throw new Error(`An uncaught private ${label} error should fail the run (${mode})`);
+    if (json.error?.type !== "TypeError" || json.error?.message !== message)
+      throw new Error(
+        `JSON private ${label} error should be TypeError "${message}" (${mode}), got ${json.error?.type} "${json.error?.message}"`,
+      );
+  }
+}
+
 console.log("Top-level const with a mismatched strict type...");
 for (const mode of ["interpreted", "bytecode"]) {
   const { exitCode, json } = runLoaderJson(
@@ -102,6 +351,83 @@ for (const mode of ["interpreted", "bytecode"]) {
     throw new Error(`REPL (${mode}) top-level const across inputs expected 16,17,16, got: ${output}`);
   if (!output.includes("SyntaxError"))
     throw new Error(`REPL (${mode}) should reject redeclaring a top-level const, got: ${output}`);
+}
+
+console.log("REPL import bindings across inputs...");
+{
+  const tmp = mkdtemp("goccia-repl-import-");
+  try {
+    writeFileSync(
+      join(tmp, "dep.mjs"),
+      [
+        "export const answer = 42;",
+        "export let count = 0;",
+        "export const increment = () => { count = count + 1; };",
+        'export default "fallback";',
+        "",
+      ].join("\n"),
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const repl = Bun.spawnSync([resolve(REPL), `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode(
+          [
+            'import { answer, count, increment } from "./dep.mjs";',
+            'import { answer as renamed } from "./dep.mjs";',
+            'import fallback from "./dep.mjs";',
+            'import * as ns from "./dep.mjs";',
+            '[answer, renamed, fallback, ns.answer].join(",");',
+            "increment();",
+            '["live", count, ns.count].join(":");',
+            "answer = 1;",
+            "const answer = 2;",
+            'import { count as renamed } from "./dep.mjs";',
+            '["kept", answer, renamed].join(":");',
+            "",
+          ].join("\n"),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const output = normalizeLineEndings(repl.stdout.toString() + repl.stderr.toString());
+      if (repl.exitCode !== 0 || !output.includes("42,42,fallback,42"))
+        throw new Error(`REPL (${mode}) imports across inputs expected 42,42,fallback,42, got: ${output}`);
+      if (!output.includes("live:1:1"))
+        throw new Error(`REPL (${mode}) import binding should stay live across inputs, got: ${output}`);
+      if (!output.includes("TypeError: Assignment to constant variable 'answer'"))
+        throw new Error(`REPL (${mode}) should reject assigning to an import binding, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'answer' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject redeclaring an imported name, got: ${output}`);
+      if (!output.includes("SyntaxError: Identifier 'renamed' has already been declared"))
+        throw new Error(`REPL (${mode}) should reject importing an already imported name again, got: ${output}`);
+      if (!output.includes("kept:42:42"))
+        throw new Error(`REPL (${mode}) import binding should survive the rejected inputs, got: ${output}`);
+    }
+
+    // Bytecode rejects a missing export before the input runs, so the name is
+    // never declared and a corrected import of it succeeds. The interpreter
+    // declares the name first and leaves it uninitialized (#1274).
+    const retry = Bun.spawnSync([resolve(REPL), "--mode=bytecode"], {
+      cwd: tmp,
+      stdin: new TextEncoder().encode(
+        [
+          'import { missing as answer } from "./dep.mjs";',
+          'import { answer } from "./dep.mjs";',
+          '["retried", answer].join(":");',
+          "",
+        ].join("\n"),
+      ),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const retryOutput = normalizeLineEndings(retry.stdout.toString() + retry.stderr.toString());
+    if (!retryOutput.includes('has no export named "missing"'))
+      throw new Error(`REPL (bytecode) should reject a missing export, got: ${retryOutput}`);
+    if (retry.exitCode !== 0 || !retryOutput.includes("retried:42"))
+      throw new Error(`REPL (bytecode) should accept a corrected import after a missing export, got: ${retryOutput}`);
+  } finally {
+    clean(tmp);
+  }
 }
 
 // -- Stdin smoke (TestRunner) --------------------------------------------------
@@ -462,6 +788,81 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
         throw new Error(`Test262 Runner ${mode} direct eval shadowing a top-level const expected 5,7,16,16, got: ${evalShadowOut}`);
     }
 
+    // An assignment resolves its target before the right-hand side runs
+    // (ES2026 §13.15.2), so a same-named var that a direct eval declares
+    // there does not redirect it: a const still in its dead zone throws the
+    // ReferenceError, an initialized one the TypeError (§9.1.1.1.5 step 3).
+    const evalConstTargetSource = [
+      "const outcome = function (run) {",
+      "  try { run(); return 'none'; } catch (e) { return e.constructor.name + ': ' + e.message; }",
+      "};",
+      "const results = [",
+      "  outcome(function () {",
+      '    const inner = function () { early = eval("var early = 5; 1"); };',
+      "    inner();",
+      "    const early = 0;",
+      "  }),",
+      "  outcome(function () {",
+      '    const inner = function () { TOP_LATE = eval("var TOP_LATE = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "  outcome(function () {",
+      "    const fixed = 0;",
+      '    const inner = function () { fixed = eval("var fixed = 5; 1"); };',
+      "    inner();",
+      "  }),",
+      "];",
+      "const TOP_LATE = 1;",
+      'print(results.join(" | "));',
+      "",
+    ].join("\n");
+    const evalConstTargetExpected = [
+      "ReferenceError: Cannot access 'early' before initialization",
+      "ReferenceError: Cannot access 'TOP_LATE' before initialization",
+      "TypeError: Assignment to constant variable 'fixed'",
+    ].join(" | ");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalConstTarget = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalConstTargetSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalConstTargetOut =
+        evalConstTarget.stdout.toString() + evalConstTarget.stderr.toString();
+      if (evalConstTarget.exitCode !== 0 || evalConstTarget.stdout.toString().trim() !== evalConstTargetExpected)
+        throw new Error(`Test262 Runner ${mode} const assignment target across direct eval expected ${evalConstTargetExpected}, got: ${evalConstTargetOut}`);
+    }
+
+    // A direct eval in an arrow sees the private names of the class body the
+    // arrow is in, even when the arrow has no home object of its own, as in a
+    // static field's array literal (ES2026 §19.2.1.1 PerformEval step 6.b).
+    const evalPrivateArrowSource = [
+      "const outcome = (run) => { try { return String(run()); } catch (e) { return e.name; } };",
+      "class C { #x = 1; static read = () => eval('(new C()).#x'); }",
+      "class I { static #u = 8; static arr = [() => eval('I.#u')]; }",
+      "class K { static #k = 1; static arr = [() => eval('K.#missing')]; }",
+      "const outside = [() => eval('({}).#a')];",
+      "print([outcome(C.read), outcome(I.arr[0]), outcome(K.arr[0]), outcome(outside[0])].join(','));",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const evalPrivateArrow = Bun.spawnSync(
+        [TEST262RUNNER, "--eval-host", `--mode=${mode}`],
+        {
+          stdin: new TextEncoder().encode(evalPrivateArrowSource),
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const evalPrivateArrowOut =
+        evalPrivateArrow.stdout.toString() + evalPrivateArrow.stderr.toString();
+      if (evalPrivateArrow.exitCode !== 0 || evalPrivateArrow.stdout.toString().trim() !== "1,8,SyntaxError,SyntaxError")
+        throw new Error(`Test262 Runner ${mode} direct eval of a private name in a class-body arrow expected 1,8,SyntaxError,SyntaxError, got: ${evalPrivateArrowOut}`);
+    }
+
     const wideCapturedBlockSrc = join(tmp, "wide-captured-block.js");
     writeFileSync(
       wideCapturedBlockSrc,
@@ -593,6 +994,52 @@ console.log("--compat-function (Loader) + Bare loader compat parsing...");
   } finally {
     clean(tmp);
   }
+}
+
+// -- Block-level function var binding skipped on a collision (bytecode) --------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation and §16.1.7
+// GlobalDeclarationInstantiation, web-compat steps (Annex B.3.2.1 and B.3.2.2
+// up to ES2025): a non-strict block-level function declaration gets a var
+// binding only if no parameter has its name and `var` in its place would not
+// be an early error; B.3.3 puts an `if` clause's function declaration in a
+// block of its own. The JavaScript suite under tests/ covers the shapes both
+// modes get right; the interpreter still lets these block functions write the
+// outer binding, so only bytecode is checked here.
+
+console.log("Bytecode block-level function var binding skipped on a collision...");
+{
+  const cases: [string, string, string][] = [
+    ["parameter with a default", "(() => { function g(a, b = 2) { { function a() {} } return typeof a + ':' + a; } return g(1); })()", "number:1"],
+    ["parameter with a default, switch case", "(() => { function g(a, b = 2) { switch (1) { case 1: function a() {} } return a; } return g(1); })()", "1"],
+    ["parameter, if clause", "(() => { function h(a) { if (true) function a() {} return a; } return h(1); })()", "1"],
+    ["parameter, else clause", "(() => { function h(a) { if (false) ; else function a() {} return a; } return h(1); })()", "1"],
+    ["if clause without a collision", "(() => { function h() { const before = typeof q; if (true) function q() { return 7; } return before + ':' + q(); } return h(); })()", "undefined:7"],
+    ["let in an enclosing block", "(() => { function f() { { let a = 1; { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["let in an enclosing block, parameter with a default", "(() => { function f(x = 0) { { let a = 1; { function a() {} } } try { return a; } catch (e) { return e.name; } } return f(); })()", "ReferenceError"],
+    ["let loop head", "(() => { function f() { for (let a of [1]) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["destructured catch parameter", "(() => { function f() { try { throw {}; } catch ({ a }) { { function a() {} } } return typeof a; } return f(); })()", "undefined"],
+    ["two declarations in one block both keep it", "(() => { function f() { { function a() { return 1; } function a() { return 2; } } return a(); } return f(); })()", "2"],
+    ["same name in a nested block", "(() => { function f() { { function a() { return 1; } { function a() { return 2; } } } return a(); } return f(); })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const flags = ["--mode=bytecode", "--compat-var", "--compat-function", "--compat-non-strict-mode"];
+  const { exitCode, json } = runLoaderJson(source, flags);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode block function cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode block function (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  const scriptRun = runLoaderJson(
+    "const k = 1;\nif (true) function k() {}\nconsole.log(typeof k + ':' + k);\n",
+    flags,
+  );
+  if (scriptRun.exitCode !== 0 || scriptRun.json.output[0] !== "number:1")
+    throw new Error(`Bytecode script if-clause function named like a const expected number:1, got: ${JSON.stringify(scriptRun.json)}`);
 }
 
 // -- --compat-non-strict-mode (Loader + Bundler + TestRunner + Bare) -----------
@@ -739,6 +1186,74 @@ console.log("--compat-non-strict-mode (Loader + Bundler + TestRunner + Bare)..."
     if (!existsSync(warningOut)) throw new Error("Bundler --warning-unsupported-features should preserve warning recovery mode");
   } finally {
     clean(tmp);
+  }
+}
+
+// -- Body var named like a parameter starts with its value (bytecode) ---------
+//
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30.e.i.4: with an
+// expression in the parameter list, a body var named like a parameter (or
+// `arguments`) is a binding of its own that starts with that binding's value.
+// The JavaScript suite under tests/ covers the separation in both modes; these
+// cases read the var before the body assigns it, which the interpreter still
+// answers with undefined, so only bytecode is checked here.
+
+console.log("Bytecode body var named like a parameter starts with its value...");
+{
+  const cases: [string, string, string][] = [
+    ["var without an initializer", "((a, f = () => a) => { var a; return [a, f()]; })(1)", "1,1"],
+    ["default closure writes the parameter", "((a, f = () => { a = 7; }) => { var a; f(); return a; })(1)", "1"],
+    ["defaulted parameter", "((a = 2, f = () => a) => { var a; return [a, f()]; })()", "2,2"],
+    ["destructured parameter with a default", "(({ a = 0 }) => { var a; return a; })({ a: 1 })", "1"],
+    ["function declaration", "(() => { function h(a, f = () => a) { var a; return a; } return h(1); })()", "1"],
+    ["method", "({ m(a, f = () => a) { var a; return [a, f()]; } }).m(3)", "3,3"],
+    ["var named arguments", "(() => { function g(a, f = () => arguments) { var arguments; return [arguments === f(), arguments.length]; } return g(1, undefined, 3); })()", "true,3"],
+    ["unmapped arguments object", "(() => { function g(a, b = 1) { arguments[0] = 9; var a; return [a, arguments[0]]; } return g(1); })()", "1,9"],
+    ["generator copies when called", "(() => { let w; function* g(a, f = (w = () => { a = 9; })) { var a; yield a; } const it = g(1); w(); return it.next().value; })()", "1"],
+  ];
+  const source = cases
+    .map(([, expression]) => `console.log(String(${expression}));`)
+    .join("\n") + "\n";
+  const { exitCode, json } = runLoaderJson(source, [
+    "--mode=bytecode",
+    "--compat-var",
+    "--compat-function",
+    "--compat-arguments-object",
+    "--compat-non-strict-mode",
+  ]);
+  if (exitCode !== 0)
+    throw new Error(`Bytecode body var cases should run, got: ${JSON.stringify(json.error)}`);
+  cases.forEach(([label, , expected], index) => {
+    if (json.output[index] !== expected)
+      throw new Error(`Bytecode body var (${label}) expected ${expected}, got: ${json.output[index]}`);
+  });
+
+  // A direct eval in the body reaches the body var; one in a default reaches
+  // the parameter. The interpreter agrees except where the var is read before
+  // it is assigned (the last case).
+  const evalSource = [
+    'function read(a, f = () => a) { var a = 5; return [eval("a"), f()]; }',
+    'function write(a, f = () => a) { var a = 5; eval("a = 6"); return [a, f()]; }',
+    'function inDefault(a, f = eval("() => a")) { var a = 5; return [a, f()]; }',
+    'function closureWrites(a, f = () => { a = 7; }) { var a = 3; f(); return [eval("a"), a]; }',
+    'function unassigned(a, f = () => a) { var a; return [eval("a"), f()]; }',
+    'const shared = [read(1), write(1), inDefault(1), closureWrites(1)].map((r) => r.join(":")).join(",");',
+    'print(shared);',
+    'print(unassigned(1).join(":"));',
+    "",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const evalRun = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode(evalSource),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const evalOut = normalizeLineEndings(evalRun.stdout.toString()).split("\n");
+    const evalAll = evalRun.stdout.toString() + evalRun.stderr.toString();
+    if (evalRun.exitCode !== 0 || evalOut[0] !== "5:1,6:1,5:1,3:3")
+      throw new Error(`Test262 Runner ${mode} direct eval with a body var expected 5:1,6:1,5:1,3:3, got: ${evalAll}`);
+    if (mode === "bytecode" && evalOut[1] !== "1:1")
+      throw new Error(`Test262 Runner bytecode direct eval of an unassigned body var expected 1:1, got: ${evalAll}`);
   }
 }
 
@@ -1065,6 +1580,71 @@ for (const mode of ["interpreted", "bytecode"]) {
   const out = res.text();
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode} (${mode})`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError (${mode})`);
+}
+
+console.log("--max-memory (peak resident memory stays near the ceiling)...");
+if (process.platform === "linux") {
+  // BytesAllocated charges each value its InstanceSize, well under half of
+  // what the heap manager actually hands out, so a ceiling compared only
+  // against it let collectable garbage grow to about six times the ceiling
+  // before a collection ran (#1442). The collector now also triggers on the
+  // heap manager's in-use total (ADR 0129). Both scripts keep little alive and
+  // churn garbage far past the ceiling: a flat loop of short-lived objects and
+  // arrays, and Promise jobs drained in batches. Linux only.
+  const ceiling = 64 * 1024 * 1024;
+  // Bun's resourceUsage.maxRSS is getrusage's ru_maxrss, which Linux reports
+  // in KiB; Bun 1.3 passes that through and Bun 1.4 converts it to bytes. The
+  // two readings cannot be confused for these runs: the runner alone is
+  // resident for more than 8 MB, and neither script comes near 8 GB (8 million
+  // KiB) even with no collection at all.
+  const peakBytes = (maxRSS: number) => (maxRSS < 8_000_000 ? maxRSS * 1024 : maxRSS);
+  const scripts = {
+    flat: [
+      "let n = 0;",
+      "for (const _ of Array.from({ length: 250000 })) { n += Reflect.ownKeys({ x: 1 }).length; }",
+      "console.log('n', n);",
+      "",
+    ].join("\n"),
+    promise: [
+      "const N = 10000;",
+      "const noop = () => {};",
+      "const idx = Array.from({ length: N }, (_, i) => i);",
+      "const time = async (fn) => { for (const _ of [0, 1, 2, 3, 4]) { idx.forEach(fn); await null; } };",
+      "await time((i) => { Promise.resolve(i).then(noop); });",
+      "await time((i) => { Promise.reject(i).catch(noop); });",
+      "const thrower = async () => { throw 1; }; await time(() => { thrower().catch(noop); });",
+      "const ok = async () => 1; await time(() => { ok().then(noop); });",
+      "console.log('n', idx.length * 25);",
+      "",
+    ].join("\n"),
+  };
+  const expected = { flat: "n 250000", promise: "n 250000" };
+  const dir = mkdtemp("goccia-rss-");
+  try {
+    for (const [name, src] of Object.entries(scripts)) {
+      const path = join(dir, `${name}.js`);
+      writeFileSync(path, src);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const proc = Bun.spawnSync([RUNNER, path, `--mode=${mode}`, `--max-memory=${ceiling}`], {
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 120_000,
+        });
+        const out = proc.stdout.toString() + proc.stderr.toString();
+        if (proc.exitCode !== 0 || !out.includes(expected[name as keyof typeof expected]))
+          throw new Error(`${name} (${mode}) at --max-memory=${ceiling} should complete, got exit ${proc.exitCode}: ${out}`);
+        const maxRSS = proc.resourceUsage?.maxRSS;
+        if (typeof maxRSS !== "number" || maxRSS <= 0)
+          throw new Error(`${name} (${mode}): Bun reported no peak RSS for the child`);
+        if (peakBytes(maxRSS) >= 2 * ceiling)
+          throw new Error(`${name} (${mode}) peaked at ${peakBytes(maxRSS)} bytes resident, at or above twice the ${ceiling}-byte ceiling`);
+      }
+    }
+  } finally {
+    clean(dir);
+  }
+} else {
+  console.log("  skipped: peak RSS is asserted on Linux only");
 }
 
 console.log("--max-memory (own-key enumeration survives a mid-loop collection)...");
@@ -3156,9 +3736,55 @@ console.log("--max-stack (default overflow)...");
 }
 
 console.log("--max-stack (custom limit)...");
+// The limit is the number of nested calls: n counts the calls that started,
+// and the 101st is refused. The top level is not a call.
+for (const mode of ["interpreted", "bytecode"]) {
+  for (const sourceType of ["script", "module"]) {
+    const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100 --mode=${mode} --source-type=${sourceType}`.text();
+    if (!containsLine(out, "100"))
+      throw new Error(`--max-stack=100 (${mode}, ${sourceType}) should allow 100 nested calls, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (TestRunner test function)...");
+// The runner calls the test function itself, so its calls have the whole limit.
+for (const mode of ["interpreted", "bytecode"]) {
+  const src = [
+    "const count = (k) => (k <= 1 ? 1 : count(k - 1) + 1);",
+    'test("ten nested calls", () => { expect(count(10)).toBe(10); });',
+    'test("eleven nested calls", () => { expect(() => count(11)).toThrow(RangeError); });',
+  ].join("\n");
+  const out = await $`echo ${src} | ${TESTRUNNER} --max-stack=10 --mode=${mode} --no-progress`.nothrow().text();
+  if (!out.includes("Passed: 2"))
+    throw new Error(`TestRunner --max-stack=10 (${mode}) should allow 10 nested calls in a test, got: ${out}`);
+}
+
+console.log("--max-stack (imported module top level)...");
+// A module's top level is not a call, wherever it is imported from: each
+// module counts its nested calls before the RangeError and prints them.
 {
-  const out = await $`echo 'let n=0; const f=()=>{n++;f()}; try{f()}catch(e){console.log(n)};' | ${RUNNER} --max-stack=100`.text();
-  if (!out.includes("100")) throw new Error(`Custom max-stack output should contain 100, got: ${out}`);
+  const tmp = mkdtemp("goccia-max-stack-import-");
+  try {
+    const count = (label: string) =>
+      `let n = 0; const f = () => { n++; f(); }; try { f(); } catch (e) { console.log("${label}", n, e.name); }\n`;
+    writeFileSync(join(tmp, "dep.js"), `${count("dep")}export const dep = 1;\n`);
+    writeFileSync(join(tmp, "inner.js"), `${count("inner")}export const inner = 1;\n`);
+    writeFileSync(join(tmp, "outer.js"), `import { inner } from "./inner.js";\n${count("outer")}export const outer = 1;\n`);
+    writeFileSync(join(tmp, "dynamic.js"), `${count("dynamic")}export const dynamic = 1;\n`);
+    writeFileSync(
+      join(tmp, "main.js"),
+      `import { dep } from "./dep.js";\nimport { outer } from "./outer.js";\n${count("main")}await import("./dynamic.js");\n`,
+    );
+    for (const mode of ["interpreted", "bytecode"]) {
+      const out = await $`${RUNNER} ${join(tmp, "main.js")} --max-stack=10 --mode=${mode}`.nothrow().text();
+      for (const label of ["dep", "inner", "outer", "main", "dynamic"]) {
+        if (!containsLine(out, `${label} 10 RangeError`))
+          throw new Error(`--max-stack=10 (${mode}): ${label}.js's top level should allow 10 nested calls, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
 }
 
 console.log("--max-stack (bytecode trampoline)...");
@@ -3166,6 +3792,185 @@ console.log("--max-stack (bytecode trampoline)...");
   const src = "let n = 0; const f = () => { n++; if (n < 20000) f(); }; f(); console.log(n);";
   const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=0`.text();
   if (!out.includes("20000")) throw new Error(`Trampoline should reach 20000, got: ${out}`);
+}
+
+// Constructors, async functions, generators, accessors, Proxy traps,
+// ToPrimitive methods and callbacks from built-ins are entered by a native
+// re-entry of the bytecode VM. Each is a nested call, and --max-stack counts
+// it. Every script counts the calls that started in n and prints
+// "RangeError <n>" once the limit stops it.
+const nativeReentryShapes: Record<string, string> = {
+  constructor: "class A { constructor() { n++; new A(); } } try { new A(); } catch (e) { console.log(e.name, n); }",
+  "async function": "const f = async () => { n++; await f(); }; f().catch((e) => console.log(e.name, n));",
+  "generator next()": "const o = { *g() { n++; o.g().next(); yield; } }; try { o.g().next(); } catch (e) { console.log(e.name, n); }",
+  getter: "const o = { get x() { n++; return o.x; } }; try { o.x; } catch (e) { console.log(e.name, n); }",
+  setter: "const o = { set x(v) { n++; o.x = v; } }; try { o.x = 1; } catch (e) { console.log(e.name, n); }",
+  "Proxy trap": "const p = new Proxy({}, { get() { n++; return p.x; } }); try { p.x; } catch (e) { console.log(e.name, n); }",
+  toString: "const o = { toString() { n++; return `${o}`; } }; try { `${o}`; } catch (e) { console.log(e.name, n); }",
+  valueOf: "const o = { valueOf() { n++; return +o; } }; try { +o; } catch (e) { console.log(e.name, n); }",
+  "iterator next()": "const it = { [Symbol.iterator]() { return { next() { n++; for (const x of it) {} return { done: true }; } }; } }; try { for (const x of it) {} } catch (e) { console.log(e.name, n); }",
+  toJSON: "const o = { toJSON() { n++; return JSON.stringify(o); } }; try { JSON.stringify(o); } catch (e) { console.log(e.name, n); }",
+  "sort comparator": "const c = () => { n++; [2, 1].sort(c); return 0; }; try { [2, 1].sort(c); } catch (e) { console.log(e.name, n); }",
+  "Reflect.construct": "class A { constructor() { n++; Reflect.construct(A, []); } } try { new A(); } catch (e) { console.log(e.name, n); }",
+  "yield*": "const o = { *g() { n++; yield* o.g(); } }; try { o.g().next(); } catch (e) { console.log(e.name, n); }",
+  "map callback": "const f = () => { n++; [0].map(() => f()); }; try { f(); } catch (e) { console.log(e.name, n); }",
+};
+// The interpreter does not count accessors, Proxy traps, ToPrimitive or
+// iterator methods, and overflows the native stack on some of them; only
+// bytecode is checked for those.
+const interpreterCountsShape = new Set(["constructor", "async function", "generator next()", "map callback"]);
+const runNativeReentry = (shape: string, args: string[]) => {
+  const run = Bun.spawnSync([RUNNER, "--max-memory=256MiB", ...args], {
+    stdin: new TextEncoder().encode(`let n = 0; ${nativeReentryShapes[shape]}\n`),
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 60_000,
+  });
+  return { exitCode: run.exitCode, out: run.stdout.toString() + run.stderr.toString() };
+};
+
+console.log("--max-stack (native re-entry counts as a call)...");
+for (const shape of Object.keys(nativeReentryShapes)) {
+  // Two calls per level, f and the callback map makes.
+  const expected = shape === "map callback" ? "RangeError 5" : "RangeError 10";
+  const modes = interpreterCountsShape.has(shape) ? ["interpreted", "bytecode"] : ["bytecode"];
+  for (const mode of modes) {
+    const { exitCode, out } = runNativeReentry(shape, ["--max-stack=10", `--mode=${mode}`]);
+    if (exitCode !== 0 || !containsLine(out, expected))
+      throw new Error(`--max-stack=10 (${mode}) should stop ${shape} recursion at "${expected}", got exit ${exitCode}: ${out}`);
+  }
+}
+
+console.log("--max-stack (native re-entry at the default limit)...");
+{
+  // 1,000 constructor calls fit in the default 2,200; a fixed cap of 512
+  // native re-entries refused them.
+  const src = 'let d = 0; class A { constructor(k) { d++; if (k) new A(k - 1); } } new A(999); console.log("ok", d);';
+  for (const mode of ["interpreted", "bytecode"]) {
+    const out = await $`echo ${src} | ${RUNNER} --mode=${mode}`.text();
+    if (!containsLine(out, "ok 1000"))
+      throw new Error(`1,000 nested constructor calls (${mode}) should fit the default limit, got: ${out}`);
+  }
+}
+
+console.log("--max-stack (a refused generator resume leaves the generator suspended)...");
+{
+  // At the limit the VM refuses to enter a generator's code, by the call
+  // limit or by the native stack running low. The code has not run, so the
+  // generator stays suspended and resumes later, instead of reporting that it
+  // is already executing. return() and throw() on a generator that has not
+  // started complete it without entering its code (ES2026 §27.5.3.4,
+  // §27.6.1.3, §27.6.1.4), so the limit cannot refuse them. The work is
+  // inline in the catch block: calling a helper there would itself be
+  // refused. The interpreter does not refuse a resume, so this runs in
+  // bytecode only.
+  const resumeSync = 'try { fresh.next(); refused.push("ran"); } catch (x) { refused.push(x.name); } try { started.next(); refused.push("ran"); } catch (x) { refused.push(x.name); }' +
+    ' abrupt.push(retGen.return(5)); try { thrGen.throw(boom); abrupt.push("ran"); } catch (x) { abrupt.push(x === boom ? "boom" : x.name); }';
+  const resumeAsync = "asyncRefused = asyncFresh.next(); asyncAbrupt = [asyncRet.return(5), asyncThr.throw(boom)];";
+  const atLimit = `if (!asyncRefused) { ${resumeSync} ${resumeAsync} }`;
+  // How much native stack a call uses before the VM checks the headroom
+  // depends on the native calls that lead to the check, and differs between
+  // platforms. So the native-stack case descends through the same kind of
+  // resume it then makes, from the same frame: a refused sync resume throws,
+  // and a refused async generator request runs none of the callee's code.
+  const nativeDescent = [
+    "let entered = 0;",
+    "const d = {",
+    `  *sync() { try { d.sync().next(); } catch (e) { if (!refused.length) { ${resumeSync} } } },`,
+    "  async *async() { entered++; const before = entered; const p = d.async().next();",
+    `    if (entered === before && !asyncRefused) { p.catch(() => {}); ${resumeAsync} } },`,
+    "};",
+    "d.sync().next();",
+    "d.async().next();",
+  ].join("\n");
+  const descents: Record<string, [string, string]> = {
+    "call limit": [`const descend = () => { try { descend(); } catch (e) { ${atLimit} } }; descend();`, "--max-stack=50"],
+    "native stack": [nativeDescent, "--max-stack=100000"],
+  };
+  for (const [label, [descend, limit]] of Object.entries(descents)) {
+    const src = [
+      "const o = { *g() { yield 1; yield 2; }, async *ag() { yield 1; yield 2; } };",
+      "const fresh = o.g(), started = o.g(), asyncFresh = o.ag();",
+      "const retGen = o.g(), thrGen = o.g(), asyncRet = o.ag(), asyncThr = o.ag();",
+      'const boom = new Error("boom");',
+      "started.next();",
+      "const refused = [], abrupt = [];",
+      "let asyncRefused, asyncAbrupt;",
+      descend,
+      'const rest = (it) => { try { return [...it].join(" "); } catch (e) { return e.name; } };',
+      'asyncRefused.then(() => "ran", (e) => e.name).then(async (a) => {',
+      '  let ar = []; try { for await (const v of asyncFresh) ar.push(v); ar = ar.join(" "); } catch (e) { ar = e.name; }',
+      '  console.log(refused.join(","), "|", rest(fresh), "|", rest(started), "|", a, ar);',
+      "  const fmt = (r) => `${r.value},${r.done}`;",
+      "  const ra = fmt(await asyncAbrupt[0]), rn = fmt(await asyncRet.next());",
+      '  const ta = await asyncAbrupt[1].then(() => "ran", (e) => (e === boom ? "boom" : e.name)), tn = fmt(await asyncThr.next());',
+      '  console.log(fmt(abrupt[0]), fmt(retGen.next()), "|", abrupt[1], fmt(thrGen.next()), "|", ra, rn, "|", ta, tn);',
+      "});",
+      "",
+    ].join("\n");
+    const run = Bun.spawnSync([RUNNER, "--mode=bytecode", limit, "--max-memory=256MiB"], {
+      stdin: new TextEncoder().encode(src),
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 60_000,
+    });
+    const out = run.stdout.toString() + run.stderr.toString();
+    const expected = "RangeError,RangeError | 1 2 | 2 | RangeError 1 2";
+    if (run.exitCode !== 0 || !containsLine(out, expected))
+      throw new Error(`A generator resume refused at the ${label} should leave the generator suspended ("${expected}"), got exit ${run.exitCode}: ${out}`);
+    const expectedAbrupt = "5,true undefined,true | boom undefined,true | 5,true undefined,true | boom undefined,true";
+    if (!containsLine(out, expectedAbrupt))
+      throw new Error(`return() and throw() at the ${label} should complete a generator that has not started ("${expectedAbrupt}"), got: ${out}`);
+  }
+}
+
+console.log("--max-stack (native re-entry never overflows the native stack)...");
+{
+  // A limit far above what the native stack holds ends every shape in a
+  // RangeError once the stack runs low, not in a crash.
+  for (const shape of Object.keys(nativeReentryShapes)) {
+    const { exitCode, out } = runNativeReentry(shape, ["--max-stack=100000", "--mode=bytecode"]);
+    const count = /^RangeError (\d+)$/m.exec(out);
+    if (exitCode !== 0 || !count || Number(count[1]) < 1000)
+      throw new Error(`--max-stack=100000 should end ${shape} recursion in a RangeError, got exit ${exitCode}: ${out}`);
+  }
+
+  // The test runner runs files on worker threads, whose stacks it sizes
+  // itself.
+  const tmp = mkdtemp("goccia-native-reentry-");
+  try {
+    const endless: Record<string, string> = {
+      "constructors.test.js": "class A { constructor() { new A(); } }\ntest('constructor', () => { expect(() => new A()).toThrow(RangeError); });\n",
+      "async.test.js": "const f = async () => { await f(); };\ntest('async function', async () => { let caught; try { await f(); } catch (e) { caught = e; } expect(caught instanceof RangeError).toBe(true); });\n",
+      "accessors.test.js": [
+        "const o = { get x() { return o.x; }, set y(v) { o.y = v; } };",
+        "const s = { *g() { s.g().next(); yield; } };",
+        "test('getter', () => { expect(() => o.x).toThrow(RangeError); });",
+        "test('setter', () => { expect(() => { o.y = 1; }).toThrow(RangeError); });",
+        "test('generator next()', () => { expect(() => s.g().next()).toThrow(RangeError); });",
+        "test('sort comparator', () => { const c = () => { [2, 1].sort(c); return 0; }; expect(() => [2, 1].sort(c)).toThrow(RangeError); });",
+      ].join("\n") + "\n",
+    };
+    for (const [name, src] of Object.entries(endless)) writeFileSync(join(tmp, name), src);
+    const res = await $`${TESTRUNNER} ${tmp} --max-stack=100000 --max-memory=256MiB --mode=bytecode --jobs=2 --no-progress`.nothrow().quiet();
+    const out = res.text();
+    if (res.exitCode !== 0 || !out.includes("Passed: 6"))
+      throw new Error(`TestRunner --max-stack=100000 should end native re-entry recursion in a RangeError on worker threads, got exit ${res.exitCode}: ${out}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--max-stack (deep RangeError trace keeps 100 frames)...");
+// A stack trace renders its innermost 100 frames and counts the rest, so the
+// RangeError of a 200,000-deep recursion is as short as one of 101 frames.
+// The frames are the 200,000 calls of f and the top level.
+{
+  const src =
+    'let d = 0; const f = () => { d++; f(); }; try { f(); } catch (e) { const lines = e.stack.split("\\n"); console.log(lines.length, d, lines[lines.length - 1].trim()); }';
+  const out = await $`echo ${src} | ${RUNNER} --mode=bytecode --max-stack=200000`.text();
+  if (!containsLine(out, "102 200000 ... 199901 more frames"))
+    throw new Error(`A 200,000-deep RangeError should keep 100 frames and count 199,901 more, got: ${out}`);
 }
 
 // -- Console observable behavior (Loader, interpreted + bytecode) ---------------
@@ -3577,7 +4382,8 @@ console.log("Runtime diagnostic parity...");
       for (const expected of [
         "TypeError: obj.missingMethod is not a function",
         "Suggestion: 'obj' is of type 'object' which does not have method 'missingMethod'",
-        "callee.test.js:2:18",
+        // The call is located at the method's name, where Node puts it.
+        "callee.test.js:2:5",
         "2 | obj.missingMethod();",
       ]) {
         if (!out.includes(expected))
@@ -4172,6 +4978,227 @@ console.log("Runtime diagnostic parity...");
 // evaluates the entry's earlier imports before it links the later ones and
 // reports a script's missing import as a RuntimeError, and it is being removed
 // (#825), so #1274 fixes only the bytecode half.
+// Everything a script printed before the runner's timing lines.
+// Line endings are normalized, because Windows writes CRLF.
+const scriptStdout = (out: string): string => {
+  const text = out.replace(/\r\n/g, "\n");
+  const at = text.indexOf("Running script (");
+  return at < 0 ? text : text.slice(0, at);
+};
+
+console.log("Undeclared name: Suggestion line in both modes...");
+{
+  // A read of an undeclared name throws the intrinsic ReferenceError with
+  // the evaluator's suggestion in bytecode mode too (#1494 item 10).
+  const tmp = mkdtemp("goccia-undeclared-suggestion-");
+  try {
+    const sources: Record<string, string> = {
+      "read.js": "missingName;\n",
+      "assign.js": "let total = 0;\nmissingTarget = total;\n",
+      "compound.js": "let total = 0;\ntotal += 1;\nmissingCompound += 1;\n",
+    };
+    for (const [name, source] of Object.entries(sources)) {
+      const path = join(tmp, name);
+      writeFileSync(path, source);
+      for (const mode of ["interpreted", "bytecode"]) {
+        const run = await $`${RUNNER} ${path} --mode=${mode} 2>&1`.nothrow().quiet();
+        const out = run.text();
+        if (run.exitCode !== 1)
+          throw new Error(`${name} (${mode}) should exit 1, got ${run.exitCode}: ${out}`);
+        if (!/ReferenceError: missing\w+ is not defined/.test(out))
+          throw new Error(`${name} (${mode}) should report a ReferenceError, got: ${out}`);
+        if (!out.includes("Suggestion: check the spelling or declare the variable with const, let, or var before use"))
+          throw new Error(`${name} (${mode}) should print the declare-before-use suggestion, got: ${out}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("console.log renders functions, classes and errors as util.inspect does...");
+{
+  // Functions, classes and errors printed as `{}` (#1494 item 9). The
+  // expected lines are Node's util.inspect output for the same script.
+  const tmp = mkdtemp("goccia-console-inspect-");
+  try {
+    const fns = join(tmp, "fns.js");
+    writeFileSync(
+      fns,
+      [
+        "const named = () => 1;",
+        "const obj = { method() {} };",
+        "class Base {}",
+        "class Derived extends Base {}",
+        "class WithStatic { static count = 2; }",
+        "const tagged = () => 1;",
+        'tagged.label = "t";',
+        "console.log(() => 1);",
+        "console.log(named);",
+        "console.log(obj.method);",
+        "console.log(Base);",
+        "console.log(Derived);",
+        "console.log(class {});",
+        "console.log(WithStatic);",
+        "console.log(tagged);",
+        "console.log(async () => {});",
+        "console.log(Math.max);",
+        "console.log([named, Base]);",
+        "console.log({ f: named });",
+        "",
+      ].join("\n"),
+    );
+    const expectedFns = [
+      "[Function (anonymous)]",
+      "[Function: named]",
+      "[Function: method]",
+      "[class Base]",
+      "[class Derived extends Base]",
+      "[class (anonymous)]",
+      "[class WithStatic] { count: 2 }",
+      "[Function: tagged] { label: 't' }",
+      "[AsyncFunction (anonymous)]",
+      "[Function: max]",
+      "[ [Function: named], [class Base] ]",
+      "{ f: [Function: named] }",
+      "",
+    ].join("\n");
+    for (const mode of ["interpreted", "bytecode"]) {
+      const run = await $`${RUNNER} ${fns} --mode=${mode}`.nothrow().quiet();
+      const out = scriptStdout(run.stdout.toString());
+      if (run.exitCode !== 0 || out !== expectedFns)
+        throw new Error(`Function and class rendering (${mode}) should be:\n${expectedFns}\ngot (exit ${run.exitCode}):\n${out}${run.stderr.toString()}`);
+    }
+
+    const errors = join(tmp, "errors.js");
+    writeFileSync(
+      errors,
+      [
+        'const error = new TypeError("boom");',
+        "error.code = 5;",
+        "console.log(error);",
+        "console.log({ error });",
+        'console.log(new Error("outer", { cause: new RangeError("inner") }));',
+        "",
+      ].join("\n"),
+    );
+    // An error prints its stack, then its own properties; nested, its stack
+    // lines are indented under the entry, and `cause` reads `[cause]`.
+    const expectedErrors = [
+      "TypeError: boom",
+      "    at <module> (errors.js:1:15) {",
+      "  code: 5",
+      "}",
+      "{",
+      "  error: TypeError: boom",
+      "      at <module> (errors.js:1:15) {",
+      "    code: 5",
+      "  }",
+      "}",
+      "Error: outer",
+      "    at <module> (errors.js:5:13) {",
+      "  [cause]: RangeError: inner",
+      "      at <module> (errors.js:5:41)",
+      "}",
+      "",
+    ].join("\n");
+    const bytecode = await $`${resolve(RUNNER)} errors.js --mode=bytecode`.cwd(tmp).nothrow().quiet();
+    const bytecodeOut = scriptStdout(bytecode.stdout.toString());
+    if (bytecode.exitCode !== 0 || bytecodeOut !== expectedErrors)
+      throw new Error(`Error rendering (bytecode) should be:\n${expectedErrors}\ngot (exit ${bytecode.exitCode}):\n${bytecodeOut}${bytecode.stderr.toString()}`);
+    // The interpreter records no frame for the top level (#1273), so its
+    // stack has no frames and util.inspect brackets it.
+    const interpreted = await $`${resolve(RUNNER)} errors.js --mode=interpreted`.cwd(tmp).nothrow().quiet();
+    const interpretedOut = scriptStdout(interpreted.stdout.toString());
+    const expectedInterpreted = [
+      "[TypeError: boom] { code: 5 }",
+      "{ error: [TypeError: boom] { code: 5 } }",
+      "[Error: outer] { [cause]: [RangeError: inner] }",
+      "",
+    ].join("\n");
+    if (interpreted.exitCode !== 0 || interpretedOut !== expectedInterpreted)
+      throw new Error(`Error rendering (interpreted) should be:\n${expectedInterpreted}\ngot (exit ${interpreted.exitCode}):\n${interpretedOut}${interpreted.stderr.toString()}`);
+
+    // Inside console.group every line of a multi-line value is indented.
+    const grouped = join(tmp, "grouped.js");
+    writeFileSync(
+      grouped,
+      'console.group("G");\nconsole.log(new Error("in group"));\nconsole.groupEnd();\n',
+    );
+    const groupRun = await $`${resolve(RUNNER)} grouped.js --mode=bytecode`.cwd(tmp).nothrow().quiet();
+    const expectedGroup = "G\n  Error: in group\n      at <module> (grouped.js:2:13)\n";
+    if (scriptStdout(groupRun.stdout.toString()) !== expectedGroup)
+      throw new Error(`Grouped error should be:\n${expectedGroup}\ngot:\n${groupRun.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+console.log("--max-memory stack refusal is located at the call (bytecode)...");
+{
+  // A refused stack growth is settled at the first instruction boundary in
+  // the callee, since a call skips the boundary; the RangeError is located at
+  // the call that needed the stack, as an ordinary stack overflow is (#1494
+  // item 11), at the callee's name (ADR 0135), whether or not the callee's
+  // first instruction has a source position of its own.
+  const tmp = mkdtemp("goccia-stack-memory-location-");
+  try {
+    const cases: { name: string; body: string[]; expected: string[] }[] = [
+      {
+        // The callee's first instruction has no source position.
+        name: "block.js",
+        body: [
+          "const r = (n) => {",
+          "  const o = { n };",
+          "  return n === 0 ? 0 : r(n - 1) + 1;",
+          "};",
+        ],
+        expected: ["--> block.js:5:24", "5 |   return n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+      {
+        // The callee's first instruction is the located `n === 0`.
+        name: "expression.js",
+        body: [
+          "const r = (n) =>",
+          "  n === 0 ? 0 : r(n - 1) + 1;",
+        ],
+        expected: ["--> expression.js:4:17", "4 |   n === 0 ? 0 : r(n - 1) + 1;"],
+      },
+    ];
+    for (const { name, body, expected: located } of cases) {
+      writeFileSync(
+        join(tmp, name),
+        [
+          "const keep = [];",
+          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          ...body,
+          "console.log(r(1000000));",
+          "",
+        ].join("\n"),
+      );
+      // The depth limit is raised past the recursion, so the memory limit is
+      // what stops it on every platform: a 32-bit build's smaller objects
+      // leave room for the default 2,200 frames inside 8 MiB.
+      const run = await $`${resolve(RUNNER)} ${name} --mode=bytecode --compat-traditional-for-loop --max-memory=8MiB --max-stack=2000000 2>&1`.cwd(tmp).nothrow().quiet();
+      const out = run.text();
+      if (run.exitCode !== 1)
+        throw new Error(`Stack memory refusal (${name}) should exit 1, got ${run.exitCode}: ${out}`);
+      for (const expected of [
+        "RangeError: Maximum call stack size exceeded",
+        "Suggestion: the call stack reached the memory limit",
+        ...located,
+      ]) {
+        if (!out.includes(expected))
+          throw new Error(`Stack memory refusal (${name}) should report "${expected}", got: ${out}`);
+      }
+      if (out.includes(":0:0"))
+        throw new Error(`Stack memory refusal (${name}) must not be located at 0:0, got: ${out}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("Entry module linking (bytecode)...");
 {
   const tmp = mkdtemp("goccia-entry-link-");
@@ -4238,6 +5265,84 @@ console.log("Entry module linking (bytecode)...");
       throw new Error(`REPL (bytecode) should evaluate only the later input's module, once, got: ${output}`);
     if (!output.includes("ready:linked"))
       throw new Error(`REPL (bytecode) should run the input after a failed link, got: ${output}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
+// -- Entry module evaluated once (#1447) --------------------------------------
+
+// ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation: a module record evaluates once,
+// and an import that resolves to the entry's own file must get the entry's own
+// record (§16.2.1.10 HostLoadImportedModule). The entry is the file the runner
+// was given, so the path it was named by (relative, ./, absolute) and the .gbc
+// form can only be exercised from the CLI. tests/language/modules covers the
+// test runner, live bindings and the temporal dead zone.
+console.log("Entry module evaluated once...");
+{
+  const tmp = mkdtemp("goccia-entry-once-");
+  // The runner names a relative entry by the working directory getcwd()
+  // reports, and on macOS that has the /var -> /private/var symlink resolved
+  // while tmpdir() keeps /var. abs.mjs must import itself by the spelling
+  // the runner gives it; one file reached through two spellings is #1498.
+  // Plain realpathSync keeps a Windows 8.3 name, as getcwd() does there.
+  const runnerTmp = realpathSync(tmp);
+  try {
+    const files: Record<string, string> = {
+      "self.mjs": 'import "./self.mjs";\nconsole.log("self ran");\n',
+      "abs.mjs": `import ${JSON.stringify(join(runnerTmp, "abs.mjs"))};\nconsole.log("abs ran");\n`,
+      "id.mjs": 'export const o = {};\nimport { o as p } from "./id.mjs";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.mjs": 'import "./cycle-b.mjs";\nconsole.log("a ran");\n',
+      "cycle-b.mjs": 'import "./cycle-a.mjs";\nconsole.log("b ran");\n',
+      "self.js": 'import "./self.js";\nconsole.log("self ran");\n',
+      "id.js": 'export const o = {};\nimport { o as p } from "./id.js";\nconsole.log("same record:", o === p);\n',
+      "cycle-a.js": 'import "./cycle-b.js";\nconsole.log("a ran");\n',
+      "cycle-b.js": 'import "./cycle-a.js";\nconsole.log("b ran");\n',
+      "bundled.mjs": 'import "./bundled.gbc";\nconsole.log("bundled ran");\n',
+    };
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(tmp, name), source);
+
+    const programOutput = (out: string): string[] =>
+      normalizeLineEndings(out)
+        .split("\n")
+        .filter((line) => line.endsWith(" ran") || line.startsWith("same record:"));
+    const expectRun = async (label: string, args: string[], expected: string[]): Promise<void> => {
+      const run = await $`${join(process.cwd(), RUNNER)} ${args}`.cwd(tmp).nothrow().quiet();
+      const out = run.text() + run.stderr.toString();
+      const lines = programOutput(out);
+      if (run.exitCode !== 0 || JSON.stringify(lines) !== JSON.stringify(expected))
+        throw new Error(`${label}: expected ${JSON.stringify(expected)}, got exit ${run.exitCode}: ${out}`);
+    };
+
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Module source: the entry record is the one its own path resolves to.
+      for (const entry of ["self.mjs", "./self.mjs", join(tmp, "self.mjs")])
+        await expectRun(`module entry ${entry} (${mode})`, [entry, `--mode=${mode}`], ["self ran"]);
+      await expectRun(`module entry importing itself by absolute path (${mode})`,
+        ["abs.mjs", `--mode=${mode}`], ["abs ran"]);
+      await expectRun(`module entry record identity (${mode})`,
+        ["id.mjs", `--mode=${mode}`], ["same record: true"]);
+      await expectRun(`module entry in a cycle (${mode})`,
+        ["cycle-a.mjs", `--mode=${mode}`], ["b ran", "a ran"]);
+      await expectRun(`--source-type=module entry (${mode})`,
+        ["self.js", `--mode=${mode}`, "--source-type=module"], ["self ran"]);
+
+      // Script source: the entry is a Script Record (§16.1.4), not a Module
+      // Record, so its own path names a separate module record. That module
+      // evaluates once, before the script body, and its bindings are its own.
+      await expectRun(`script entry importing itself (${mode})`,
+        ["self.js", `--mode=${mode}`], ["self ran", "self ran"]);
+      await expectRun(`script entry record identity (${mode})`,
+        ["id.js", `--mode=${mode}`], ["same record: true", "same record: false"]);
+      await expectRun(`script entry in a cycle (${mode})`,
+        ["cycle-a.js", `--mode=${mode}`], ["a ran", "b ran", "a ran"]);
+    }
+
+    // A bundled module-source entry is the .gbc file: an import of that file
+    // gets the running entry instead of reading the bytecode as source.
+    const bundle = await $`${join(process.cwd(), BUNDLER)} bundled.mjs`.cwd(tmp).nothrow().quiet();
+    if (bundle.exitCode !== 0) throw new Error(`Bundling bundled.mjs failed: ${bundle.text()}`);
+    await expectRun("module .gbc entry importing itself", ["bundled.gbc", "--source-type=module"], ["bundled ran"]);
   } finally {
     clean(tmp);
   }

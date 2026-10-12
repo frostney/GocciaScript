@@ -49,7 +49,6 @@ type
       const AByteOffset: Integer = 0; const AByteLength: Integer = AUTO_BYTE_LENGTH); overload;
 
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure FinalizeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
@@ -61,6 +60,13 @@ type
 
     property BufferValue: TGocciaValue read FBufferValue;
     property ByteOffset: Integer read FByteOffset;
+    // [[ByteLength]]: the length of a fixed-length view, or AUTO_BYTE_LENGTH
+    // for a length-tracking one, as the constructors take it.
+    property ByteLengthSlot: Integer read FByteLength;
+    // True when [[ByteLength]] is AUTO: the view tracks a resizable buffer.
+    property IsLengthTracking: Boolean read IsAutoLength;
+    // ES2026 §25.3.1.4 IsViewOutOfBounds, which a detached buffer also is.
+    property IsOutOfBounds: Boolean read IsViewOutOfBounds;
   published
     function DataViewBufferGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function DataViewByteLengthGetter(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -449,11 +455,6 @@ end;
 function TGocciaDataViewValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_DATA_VIEW;
-end;
-
-function TGocciaDataViewValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaDataViewValue.MarkReferences;

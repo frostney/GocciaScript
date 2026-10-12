@@ -149,13 +149,14 @@ begin
     OP_DEFINE_PROP_DYNAMIC:            Result := 'OP_DEFINE_PROP_DYNAMIC';
     OP_DEFINE_CLASS_METHOD_DYNAMIC:    Result := 'OP_DEFINE_CLASS_METHOD_DYNAMIC';
     OP_SET_CLASS_SOURCE_CONST:         Result := 'OP_SET_CLASS_SOURCE_CONST';
+    OP_CLASS_ADD_METHOD_DYNAMIC:       Result := 'OP_CLASS_ADD_METHOD_DYNAMIC';
+    OP_SET_PRIVATE_CLASS:              Result := 'OP_SET_PRIVATE_CLASS';
     OP_ADD:                            Result := 'OP_ADD';
     OP_SUB:                            Result := 'OP_SUB';
     OP_MUL:                            Result := 'OP_MUL';
     OP_DIV:                            Result := 'OP_DIV';
     OP_MOD:                            Result := 'OP_MOD';
     OP_POW:                            Result := 'OP_POW';
-    OP_SETUP_AUTO_ACCESSOR_DYNAMIC:    Result := 'OP_SETUP_AUTO_ACCESSOR_DYNAMIC';
     OP_BAND:                           Result := 'OP_BAND';
     OP_BOR:                            Result := 'OP_BOR';
     OP_BXOR:                           Result := 'OP_BXOR';
@@ -214,10 +215,7 @@ begin
     OP_PREDECLARE_GLOBAL_LET_LONG:     Result := 'OP_PREDECLARE_GLOBAL_LET_LONG';
     OP_PREDECLARE_GLOBAL_CONST_LONG:   Result := 'OP_PREDECLARE_GLOBAL_CONST_LONG';
     OP_LOAD_CHAR:                      Result := 'OP_LOAD_CHAR';
-    OP_RESOLVE_UPVALUE_REF:             Result := 'OP_RESOLVE_UPVALUE_REF';
-    OP_SET_UPVALUE_REF:                 Result := 'OP_SET_UPVALUE_REF';
     OP_SET_GLOBAL_STATIC:               Result := 'OP_SET_GLOBAL_STATIC';
-    OP_SET_UPVALUE_DYNAMIC:             Result := 'OP_SET_UPVALUE_DYNAMIC';
     OP_WIDE:                           Result := 'OP_WIDE';
     OP_CONSTRUCT_SPREAD:               Result := 'OP_CONSTRUCT_SPREAD';
     OP_SUB_NUM_IMM:                    Result := 'OP_SUB_NUM_IMM';
@@ -227,8 +225,15 @@ begin
     OP_GET_LOCAL_PROP_CONST:           Result := 'OP_GET_LOCAL_PROP_CONST';
     OP_JUMP_IF_NOT_LT:                 Result := 'OP_JUMP_IF_NOT_LT';
     OP_COMPUTED_IMPORT_SPECIFIER:      Result := 'OP_COMPUTED_IMPORT_SPECIFIER';
+    OP_CREATE_GLOBAL_IMPORT_BINDING:   Result := 'OP_CREATE_GLOBAL_IMPORT_BINDING';
+    OP_CHECK_BINDING_INITIALIZED:      Result := 'OP_CHECK_BINDING_INITIALIZED';
+    OP_THROW_UNDEFINED_VARIABLE:       Result := 'OP_THROW_UNDEFINED_VARIABLE';
+    OP_DIRECT_EVAL:                    Result := 'OP_DIRECT_EVAL';
   else
-    Result := Format('OP_UNKNOWN_%d', [AOp]);
+    if AOp = OP_CALL_SELF then
+      Result := 'OP_CALL_SELF'
+    else
+      Result := Format('OP_UNKNOWN_%d', [AOp]);
   end;
 end;
 

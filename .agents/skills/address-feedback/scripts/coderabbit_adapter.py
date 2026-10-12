@@ -11,22 +11,33 @@ head commit, merged across the open pull requests whose head it is:
   commit, its first parent;
 - the summary comment version CodeRabbit edited in just before a rate-limit
   status, which carries the only stated retry time; and
-- the requested pull request's trigger commands, and when the head arrived
-  on it, it was opened, and it was last marked ready, after which CodeRabbit
-  starts its own review.
+- the requested pull request's trigger commands, and when the head last
+  arrived on it (its first push, or no earlier than a later force push
+  leaving or reaching it), it was opened, and it was last marked ready,
+  after which CodeRabbit starts its own review.
 
 The latest review cycle wins: evidence, triggers and pending statuses from
 before the latest trigger or the requested pull request's latest push, open
 or ready event are superseded, and among a pending status, a trigger and a
-findings review the newest decides. Every state that waits on CodeRabbit ends
-after a fixed bound: the wait for its own review becomes a trigger, and an
-unanswered trigger, a stalled review, an unexplained refusal and a second
-lock loss each become a blocked state. A GitHub read that fails is an
-operational error, never missing evidence. Triggers are serialized by a lock
-per user account, GitHub API root and repository owner: CodeRabbit's review
-allowance belongs to the organization or account that owns the repository,
-so runs for different owners never wait on each other. The API root is the
-one gh sends requests to.
+findings review the newest decides. A review that completed the commit
+after the head last reached the requested pull request's branch, after its
+latest trigger and after any newer review of the head still unfinished keeps
+it complete for every pull request on it, whatever pull request was opened
+or marked ready since and whatever status CodeRabbit posts on the commit
+later. A newer review is unfinished from its pending status until CodeRabbit
+completes, pauses or skips it, in the order of time and status id; on a head
+other open pull requests share, a skip may answer one of them, so the
+pending status stays current. Every
+state that waits on CodeRabbit ends after a fixed bound: the wait for its
+own review becomes a trigger, and an unanswered trigger, a stalled review,
+an unexplained refusal and a second lock loss each become a blocked state.
+A refusal whose newest paired notice is CodeRabbit's line saying waiting
+won't change it is blocked at once. A GitHub read that
+fails is an operational error, never missing evidence. Triggers are
+serialized by a lock per user account, GitHub API root and repository
+owner: CodeRabbit's review allowance belongs to the organization or account
+that owns the repository, so runs for different owners never wait on each
+other. The API root is the one gh sends requests to.
 """
 
 from __future__ import annotations
@@ -80,6 +91,15 @@ STATUS_LOCK_LOSS = re.compile(r"^\s*review stopped after lock loss\b", re.IGNORE
 STATED_WAIT = re.compile(
     r"Next (?:included )?review available in[\s*:]*(\d+)\s*(minute|second)s?\b", re.IGNORECASE
 )
+# CodeRabbit's notice when every seat is assigned and the review ran on the free
+# tier; its stated wait is then no retry time. Only this line counts, beside the
+# "Next included review available in N minutes" line of the same comment:
+# > This review ran on the free tier because every seat on this organization's
+# > plan is already assigned. Waiting won't change this — ask an organization admin ...
+NO_CAPACITY = re.compile(
+    r"^> This review ran on the free tier\b[^\n]*\. Waiting won['\u2019]t change this\b", re.MULTILINE
+)
+INCLUDED_WAIT = re.compile(r"Next included review available in \d+ minutes", re.IGNORECASE)
 
 # A findings review names its findings in its body.
 ACTIONABLE = re.compile(r"Actionable comments posted:\s*(\d+)", re.IGNORECASE)
@@ -132,6 +152,16 @@ READY_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
     }
   } }
 }"""
+# Read backwards, newest page first, until a force push touching the head or the first one.
+FORCE_PUSH_QUERY = """query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    timelineItems(last: 100, before: $cursor, itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT]) {
+      pageInfo { hasPreviousPage startCursor }
+      nodes { ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } }
+    }
+  } }
+}"""
+FORCE_PUSH_PAGES = 20
 
 # Every state a command reports, and the commands that report it. `status`
 # reports one state per head and one for the whole set; `run` reports its
@@ -153,6 +183,7 @@ HEAD_STATES = frozenset(
         "blocked-unanswered",
         "blocked-stalled",
         "blocked-unknown-wait",
+        "blocked-no-capacity",
         "blocked-unconfirmed",
         "blocked-lock-loss",
         "unrecognized-status",
@@ -178,6 +209,7 @@ BLOCKED_STATES = frozenset(
         "blocked-unanswered",
         "blocked-stalled",
         "blocked-unknown-wait",
+        "blocked-no-capacity",
         "blocked-unconfirmed",
         "blocked-lock-loss",
         "unrecognized-status",
@@ -226,6 +258,11 @@ def rest_items(gh: Gh, endpoint: str) -> list[dict[str, Any]]:
             raise WaitError(f"paginated GitHub response for {endpoint} is invalid")
         items.extend(page)
     return items
+
+
+def no_capacity(body: str) -> bool:
+    """Whether a comment version holds CodeRabbit's notice that waiting won't change its wait."""
+    return bool(NO_CAPACITY.search(body) and INCLUDED_WAIT.search(body))
 
 
 def stated_seconds(body: str) -> int | None:
@@ -353,28 +390,41 @@ def correlated_wait(
     """
     start = status_at - CORRELATION_SECONDS
     best: tuple[float, float, int, dict[str, Any]] | None = None
+    # The newest paired version alone says whether waiting can help, whatever retry time is latest;
+    # between comments, the first listed wins a tie.
+    newest: tuple[float, bool] | None = None
     for item in comments:
         if not is_summary(item):
             continue
         if parse_timestamp(item.get("updated_at"), "comment updated_at") < start:
             continue
+        # Within one comment the current body, then GitHub's newest-first edit history, decides
+        # what the comment showed at a second, whether or not that version states a wait.
+        shown: set[float] = set()
         for at, body in comment_versions(gh, item, start):
+            if at in shown:
+                continue
+            shown.add(at)
             seconds = stated_seconds(body)
             if seconds is None or not start <= at <= status_at:
                 continue
             if best is None or at + seconds > best[0]:
                 best = (at + seconds, at, seconds, item)
-    if best is None:
+            if newest is None or at > newest[0]:
+                newest = (at, no_capacity(body))
+    if best is None or newest is None:
         return None, (
             f"no summary-comment version stating a wait was set within {CORRELATION_SECONDS} s "
             "before the status"
         )
     available, at, seconds, item = best
+    capacity_refused = newest[1]
     return (
         {
             "commentId": item.get("id"),
             "editedAt": format_timestamp(at),
             "statedSeconds": seconds,
+            "noCapacity": capacity_refused,
             "availableAt": format_timestamp(available),
             "retryAt": format_timestamp(available + WAIT_BUFFER_SECONDS),
             "retryAtEpoch": available + WAIT_BUFFER_SECONDS,
@@ -436,15 +486,72 @@ def clean_review(bot_comments: list[dict[str, Any]], covered: list[str]) -> dict
 # --- Triggers ----------------------------------------------------------------
 
 
+def pull_timeline(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
+    owner, name = repo_parts(repo)
+    data = gh.graphql(READY_QUERY, {"owner": owner, "name": name, "number": pr})
+    return ((data or {}).get("repository") or {}).get("pullRequest") or {}
+
+
 def head_arrival(
-    gh: Gh, repo: str, pull: dict[str, Any], head: str, statuses: list[dict[str, Any]]
+    gh: Gh,
+    repo: str,
+    pull: dict[str, Any],
+    head: str,
+    statuses: list[dict[str, Any]],
+    pr: int,
 ) -> tuple[float, str]:
-    """When the head reached the PR branch, and the evidence for it.
+    """When the head last reached the PR branch, and the evidence for it.
 
     GitHub creates check suites for a pushed commit on its branch at push
-    time. Without one, CodeRabbit's first status on the head, which follows
-    the push; without that, the commit time, which precedes it.
+    time, once per commit: a rerun or a later push of the same commit adds
+    none. Without one, CodeRabbit's first status on the head, which follows
+    the push; without that, the commit time, which precedes it. A branch that
+    left the head did so by a force push, which the pull request's timeline
+    dates; it came back no earlier, by that force push's return or by a push
+    no event dates, so the latest force push leaving or reaching the head
+    bounds its arrival.
     """
+    first = first_arrival(gh, repo, pull, head, statuses)
+    move = latest_force_push(gh, repo, pr, head)
+    if move is None or move[0] <= first[0]:
+        return first
+    return move[0], "force-push" if move[1] else "force-push-away"
+
+
+def latest_force_push(gh: Gh, repo: str, pr: int, head: str) -> tuple[float, bool] | None:
+    """The latest force push that left or reached `head`, and whether it reached it.
+
+    A history that cannot be read back to such a force push or to its start is
+    an operational error: an unread force push may have left the head.
+    """
+    owner, name = repo_parts(repo)
+    cursor: str | None = None
+    for _page in range(FORCE_PUSH_PAGES):
+        data = gh.graphql(FORCE_PUSH_QUERY, {"owner": owner, "name": name, "number": pr, "cursor": cursor})
+        items = (((data or {}).get("repository") or {}).get("pullRequest") or {}).get("timelineItems")
+        page = (items or {}).get("pageInfo")
+        if not isinstance(page, dict) or not isinstance(page.get("hasPreviousPage"), bool):
+            raise WaitError("the pull request's force-push history has no page information")
+        moves = []
+        for node in items.get("nodes") or []:
+            commits = [((node or {}).get(key) or {}).get("oid") for key in ("beforeCommit", "afterCommit")]
+            if not all(isinstance(oid, str) and oid for oid in commits):
+                raise WaitError("a force push on the pull request's timeline is missing its commits")
+            if head in commits:
+                moves.append((parse_timestamp(node.get("createdAt"), "force push createdAt"), commits[1] == head))
+        if moves:
+            return max(moves)
+        if not page["hasPreviousPage"]:
+            return None
+        cursor = page.get("startCursor")
+        if not isinstance(cursor, str) or not cursor:
+            raise WaitError("the pull request's force-push history has no cursor for its earlier page")
+    raise WaitError(f"the pull request's force-push history was not read to its start within {FORCE_PUSH_PAGES} pages")
+
+
+def first_arrival(
+    gh: Gh, repo: str, pull: dict[str, Any], head: str, statuses: list[dict[str, Any]]
+) -> tuple[float, str]:
     head_ref = (pull.get("head") or {}).get("ref")
     pages = gh.rest_pages(f"repos/{repo}/commits/{head}/check-suites?per_page=100")
     created = [
@@ -464,17 +571,14 @@ def head_arrival(
 
 
 def automatic_review_start(
-    gh: Gh, repo: str, pr: int, pull: dict[str, Any], arrival: tuple[float, str]
+    pull: dict[str, Any], timeline: dict[str, Any], arrival: tuple[float, str]
 ) -> tuple[float, str]:
     """The latest event after which CodeRabbit starts its own review of the head.
 
     It reviews a head when it is pushed, when the pull request is opened, and
     when the pull request is marked ready for review.
     """
-    owner, name = repo_parts(repo)
-    data = gh.graphql(READY_QUERY, {"owner": owner, "name": name, "number": pr})
-    pull_request = ((data or {}).get("repository") or {}).get("pullRequest") or {}
-    nodes = ((pull_request.get("timelineItems") or {}).get("nodes")) or []
+    nodes = ((timeline.get("timelineItems") or {}).get("nodes")) or []
     events = [arrival, (parse_timestamp(pull.get("created_at"), "pull request created_at"), "opened")]
     events += [
         (parse_timestamp(node.get("createdAt"), "ready-for-review createdAt"), "ready-for-review")
@@ -573,9 +677,10 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
     for number in numbers:
         comments += own if number == pr else rest_items(gh, f"repos/{repo}/issues/{number}/comments?per_page=100")
         reviews += rest_items(gh, f"repos/{repo}/pulls/{number}/reviews?per_page=100")
-    arrival = head_arrival(gh, repo, pull, head, statuses)
+    timeline = pull_timeline(gh, repo, pr)
+    arrival = head_arrival(gh, repo, pull, head, statuses, pr)
     automatic, automatic_source = automatic_review_start(
-        gh, repo, pr, pull, (arrival[0], f"head-{arrival[1]}")
+        pull, timeline, (arrival[0], f"head-{arrival[1]}")
     )
     bot_comments = [item for item in comments if is_bot(item)]
     earlier = None
@@ -606,7 +711,8 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
             head_triggers(own, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
         ),
         "statusHistory": [
-            {"createdAt": status["created_at"], "kind": status_kind(status)} for status in statuses
+            {"createdAt": status["created_at"], "kind": status_kind(status), "description": status.get("description")}
+            for status in statuses
         ],
         "rateLimit": rate_limit,
     }
@@ -662,6 +768,12 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
                 f"CodeRabbit rate-limited the head at {refusal['statusAt']} and {refusal['missing']}",
                 mode,
             )
+        if refusal and refusal["wait"]["noCapacity"]:
+            return result(
+                "blocked-no-capacity",
+                f"CodeRabbit refused the head at {refusal['statusAt']} and its notice says waiting "
+                "won't change this",
+            )
         if refusal and refusal["wait"]["retryAtEpoch"] > now:
             return result(
                 "waiting",
@@ -689,6 +801,17 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     status = evidence["status"]
     kind = status["kind"] if status else "none"
     status_at = parse_timestamp(status["createdAt"], "status createdAt") if status else None
+    history = [
+        (parse_timestamp(item["createdAt"], "status createdAt"), item["kind"], item.get("description"))
+        for item in evidence["statusHistory"]
+    ]
+    # On a head other open pull requests share, a skip can answer one of them while CodeRabbit
+    # still reviews the head: the pending status before it stays current.
+    if evidence["sharedWith"] and kind == "skipped":
+        answered = [entry for entry in history if entry[1] != "skipped"]
+        if answered and answered[-1][1] == "in-progress":
+            status_at, kind = answered[-1][0], "in-progress"
+            status = {"description": answered[-1][2], "createdAt": format_timestamp(status_at)}
     # A newer push, open or ready event starts a new cycle: older triggers no longer
     # await an answer, and a pending status's bound counts from the new cycle.
     triggers = [trigger for trigger in evidence["triggers"] if trigger["at"] >= start]
@@ -697,10 +820,27 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     begun = max(start, latest["at"]) if latest else start
     # No answer comes within a second of its trigger, so a status in that second predates it.
     trigger_newer = latest is not None and (status_at is None or latest["at"] >= status_at)
+    # Completion belongs to the commit: the pull request's own open or ready event leaves a
+    # review of the head standing, while its triggers, the head's latest push and a newer review
+    # of the head supersede it. A newer review counts from its pending status until CodeRabbit
+    # completes, pauses or skips it; a lock loss or rate limit ends it unfinished, and on a shared
+    # head a skip may answer another pull request.
+    arrived = parse_timestamp(evidence["headArrival"]["at"], "head arrival")
+    asked = [trigger["at"] for trigger in evidence["triggers"]]
+    # The history is in CodeRabbit's order, by time and then status id: what follows the pending
+    # status in it came after it, whatever second each shows.
+    ending = {"completed", "paused", "draft-skip"} | (set() if evidence["sharedWith"] else {"skipped"})
+    pending = [index for index, (_when, seen, _description) in enumerate(history) if seen == "in-progress"]
+    newer = [
+        history[index][0] for index in pending[-1:]
+        if not any(seen in ending for _when, seen, _description in history[index + 1:])
+    ]
+    reviewed_since = max([arrived, *asked, *newer])
     review = evidence["findingsReview"]
     reviewed_at = parse_timestamp(review["submittedAt"], "review submitted_at") if review else None
+    completed_at = max((when for when, seen, _description in history if seen == "completed"), default=None)
     # Among a pending status, a trigger and a findings review, the newest decides.
-    if reviewed_at is not None and reviewed_at > begun and (kind != "in-progress" or reviewed_at > status_at):
+    if reviewed_at is not None and reviewed_at > reviewed_since and (kind != "in-progress" or reviewed_at > status_at):
         return result("review-complete", "a CodeRabbit review of exactly this head states findings")
     if kind == "in-progress" and not trigger_newer:
         return bounded(
@@ -711,7 +851,9 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
             f"CodeRabbit has reported {status['description']!r} on the head since {status['createdAt']}",
         )
     # CodeRabbit keeps the marker while it reviews again; the completed status dates the pass.
-    if evidence["cleanReview"] and kind == "completed" and status_at > begun:
+    # A later status that is not pending, such as a skip for another pull request on the
+    # commit, leaves the commit reviewed.
+    if evidence["cleanReview"] and completed_at is not None and completed_at > reviewed_since:
         return result(
             "clean-complete",
             f"CodeRabbit's summary marks {evidence['cleanReview']['coveredCommitId']} covered "
@@ -745,11 +887,7 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     if unreviewed:
         return gate("incremental")
     if kind == "lock-loss":
-        history = [
-            (parse_timestamp(item["createdAt"], "status createdAt"), item["kind"])
-            for item in evidence["statusHistory"]
-        ]
-        losses = [when for when, seen in history if seen == "lock-loss" and when >= start]
+        losses = [when for when, seen, _description in history if seen == "lock-loss" and when >= start]
         if len(losses) > 1:
             return result(
                 "blocked-lock-loss",
@@ -758,7 +896,7 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
             )
         # Retry the interrupted review once: the latest trigger's mode when nothing else answered it.
         answered = latest is not None and any(
-            latest["at"] < when < status_at and seen != "in-progress" for when, seen in history
+            latest["at"] < when < status_at and seen != "in-progress" for when, seen, _description in history
         )
         return gate(latest["mode"] if latest and not answered else "incremental")
     if kind == "skipped":

@@ -249,6 +249,11 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, FPrototypeMembers);
+  // WebIDL: the class string lives on the interface prototype. Defined here,
+  // not in the thread-cached member list, so each realm gets its own string.
+  Shared.Prototype.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_URL), [pfConfigurable]));
 end;
 
 class procedure TGocciaURLValue.ExposePrototype(

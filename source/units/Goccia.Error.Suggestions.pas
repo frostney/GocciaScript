@@ -235,7 +235,6 @@ resourcestring
   // Runtime errors — object property constraints
   SSuggestPropertyHasOnlyGetter = 'the property has only a getter and no setter defined';
   SSuggestObjectNotExtensible = 'the object has been frozen, sealed, or marked non-extensible with Object.preventExtensions()';
-  SSuggestPrototypeChainTooDeep = 'check for circular prototype chains';
   SSuggestPropertyDescriptorObject = 'pass an object with writable, enumerable, configurable, value, get, or set properties';
 
   // Runtime errors — string
@@ -381,6 +380,7 @@ resourcestring
 
   // Runtime errors — GC memory limit
   SSuggestMemoryLimitExceeded = 'call Goccia.gc() to free unreachable objects, or increase the limit with --max-memory';
+  SSuggestStackMemoryLimitExceeded = 'the call stack reached the memory limit; bound the recursion, or increase the limit with --max-memory';
 
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';

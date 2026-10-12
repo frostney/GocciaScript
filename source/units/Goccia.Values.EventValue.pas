@@ -71,7 +71,8 @@ uses
   Goccia.ObjectModel,
   Goccia.Realm,
   Goccia.Values.ErrorHelper,
-  Goccia.Values.ObjectPropertyDescriptor;
+  Goccia.Values.ObjectPropertyDescriptor,
+  Goccia.Values.SymbolValue;
 
 var
   GEventSharedSlot: TGocciaRealmOwnedSlotId;
@@ -131,6 +132,11 @@ begin
       [pfConfigurable]);
     Members.AddNamedMethod(PROP_PREVENT_DEFAULT, PreventDefault, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_EVENT),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

@@ -9,7 +9,10 @@ uses
   Classes,
   Math,
 
+  UnicodeStringList,
+
   Goccia.Arguments.Collection,
+  Goccia.AST.Node,
   Goccia.Bytecode,
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
@@ -40,6 +43,17 @@ uses
 type
   TGocciaVM = class;
   TASCIIStringCodeUnit = 0..127;
+
+  { Compiles the eval code AProgram of a direct eval against eval site record
+    ASite of the calling template (ADR 0134 Phase 3,
+    TGocciaCompiler.CompileDirectEval), and returns its top-level template.
+    The host keeps the compiled code for the engine's lifetime (ADR 0134,
+    decision 1). }
+  TGocciaCompileDirectEvalCallback = function(const AProgram: TGocciaProgram;
+    const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
+    const AStrictEval: Boolean;
+    const ADeclaredVarNames: TUnicodeStringList): TGocciaFunctionTemplate
+    of object;
 
   TGocciaVMStackRoot = class(TGCManagedObject)
   private
@@ -118,10 +132,7 @@ type
     caoHandlePrivateKeys,
     // Get: try the VM literal-object own-data fast path before the generic
     // GetProperty walk (OP_GET_INDEX).
-    caoLiteralFastPath,
-    // Set: class receivers install the value with DefineProperty
-    // ([pfConfigurable, pfWritable]) instead of assignment (OP_SET_INDEX).
-    caoClassDefineSemantics
+    caoLiteralFastPath
   );
   TGocciaComputedAccessOptions = set of TGocciaComputedAccessOption;
 
@@ -134,6 +145,34 @@ type
     RegisterBase: Integer;
     PrevCovLine: UInt32;
     ProfileEntryTimestamp: Int64;
+  end;
+
+  { One native entry into the dispatch loop (ExecuteClosureRegistersInternal).
+    The call-stack frames it pushed start at FirstCallFrame. For each one
+    except its executing frame, the instruction pointer is saved in the frame
+    stack from FirstSavedFrame, followed by the closed numeric frame stack
+    from FirstClosedNumericFrame. The executing frame's template and
+    instruction pointer are the entry's own locals, which the probes point
+    at. FrameIPProbe points past the instruction being executed, and stays
+    right between a call or return and the next instruction, while the start
+    the instruction probe holds is refreshed only at the next instruction. }
+  TGocciaVMActivation = record
+    TemplateProbe: PPointer;
+    InstructionIPProbe: PInteger;
+    FrameIPProbe: PInteger;
+    FirstCallFrame: Integer;
+    FirstSavedFrame: Integer;
+    FirstClosedNumericFrame: Integer;
+  end;
+
+  PGocciaVMActivation = ^TGocciaVMActivation;
+
+  // What a VM has accounted for one of its thread's stacks, the call stack or
+  // the execution-context stack. Those belong to the thread, so the account
+  // records which thread's stack the bytes are for (ADR 0132).
+  TGocciaVMThreadStackAccount = record
+    Stack: Pointer;
+    Bytes: Int64;
   end;
 
   TGocciaVM = class
@@ -173,15 +212,41 @@ type
     FLoadModuleSource: TLoadModuleSourceCallback;
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
+    FCompileDirectEval: TGocciaCompileDirectEvalCallback;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
-    // Depth of native VM re-entries (ExecuteClosureRegistersInternal invocations
-    // nested via generator resume, host eval, or native callbacks). Bounded
-    // separately from FFrameDepth because each native re-entry costs a real
-    // native stack frame; see CheckNativeReentryDepth in Goccia.StackLimit.
+    // Depth of native VM re-entries (ExecuteClosureRegistersInternal
+    // invocations: constructors, async functions, generator resume, accessors,
+    // Proxy traps, host eval and native callbacks). Each one costs a real
+    // native stack frame, so besides counting against --max-stack through
+    // FFrameDepth it is refused once the native stack runs low (see
+    // CheckNativeStackHeadroom in Goccia.StackLimit).
     FNativeExecutionDepth: Integer;
+    // NativeStackLimit of the thread the VM is bound to, looked up by the
+    // first check that needs it after BindToCurrentThread.
+    FNativeStackLimit: NativeUInt;
     FMemoryPressureCheckCountdown: Integer;
+    // The register, local-cell, argument, frame and closed-numeric-frame
+    // stacks are charged to the collector for everything they grow past their
+    // initial capacities, so --max-memory bounds a recursion that --max-stack
+    // does not (ADR 0130). Growth happens inside call setup, which is neither
+    // a safe point to collect at nor a consistent point to throw from, so a
+    // growth that does not fit is made uncharged and FStackChargePending asks
+    // the next instruction boundary to settle it or to refuse it.
+    FStackChargedBytes: Int64;
+    FStackUnchargedBytes: Int64;
+    FStackChargeCollector: TGarbageCollector;
+    FStackChargePending: Boolean;
+    // The call stack's depth when the pending growth began, less the frame
+    // whose setup made it. A frame above it was entered by the call that
+    // needed the growth (LocateUnstartedFrameAtItsCall).
+    FStackGrowthCallDepth: Integer;
+    // The thread's call stack and execution-context stack are grown by the
+    // VM too, and their growth is charged with its own stacks (ADR 0132). A
+    // shrink gives back no more than the VM accounted for each of them.
+    FCallStackAccount: TGocciaVMThreadStackAccount;
+    FContextStackAccount: TGocciaVMThreadStackAccount;
     FFrameStack: array of TGocciaVMCallFrame;
     FFrameStackCount: Integer;
     FClosedNumericFrameStack: array of TGocciaClosedNumericFrame;
@@ -192,7 +257,6 @@ type
     FCurrentModuleExports: TGocciaValueMap;
     FPendingNewTarget: TGocciaValue;
     FCurrentNewTarget: TGocciaValue;
-    FCurrentDynamicVarScope: TGocciaScope;
     FCurrentAsyncPromise: TGocciaPromiseValue;
     FActiveDecoratorSession: TObject;
     FGlobalBackedTopLevel: Boolean;
@@ -213,6 +277,14 @@ type
     // Read only on throw paths (StampThrowLocation).
     FActiveTemplateProbe: PPointer;
     FActiveInstructionIPProbe: PInteger;
+    // The native entries running now, innermost last. Pushed and popped once
+    // per native entry, never per call; read only when a stack trace is
+    // captured (ResolveFrameLocations).
+    FActivations: array of TGocciaVMActivation;
+    FActivationCount: Integer;
+    // The call stack's location resolver from before the outermost entry
+    // installed this VM's own, restored when that entry returns.
+    FPreviousLocationResolver: TGocciaFrameLocationResolver;
     FStackRoot: TGocciaVMStackRoot;
     FStackRootRegistered: Boolean;
     FTempSavedStateRoots: TGocciaVMSavedStateRootArray;
@@ -249,11 +321,44 @@ type
     procedure NoteLocalCells(const AWindowCount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     function LocalCellsAreClear(const AStart, AEnd: Integer): Boolean;
     procedure AcquireArgumentWindow(const ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    function StackChargeCollector: TGarbageCollector;
+    function StackAllowance(const AGC: TGarbageCollector): Int64;
+    function StackGrowthLength(const ACurrentLength, ARequiredLength,
+      APreferredLength, AEntrySize: Integer): Integer;
+    procedure GrowRegisterStack(const ARequired: Integer);
+    procedure GrowLocalCellStack(const ARequired: Integer);
+    procedure GrowArgumentStack(const ARequired: Integer);
+    procedure GrowFrameStack;
+    procedure GrowClosedNumericFrameStack;
+    procedure GrowCallStack;
+    procedure PushNamedCallFrame(const AName: string);
+    procedure GrowExecutionContextStack;
+    procedure GrowHandlerStack(const ARequired: Integer);
+    function RecordStackGrowthLength(const ACurrentLength, ARequiredLength,
+      AEntrySize: Integer): Integer;
+    function ThreadStackGrowthLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ACurrentLength, ARequiredLength,
+      AEntrySize: Integer): Integer;
+    function ThreadStackShrunkLength(var AAccount: TGocciaVMThreadStackAccount;
+      const AStack: Pointer; const ALength, AUsed, AEntrySize: Integer;
+      var AFreed: Int64): Integer;
+    procedure ShrinkThreadStacks(var AFreed: Int64);
+    function LargestStackBytes: Int64;
+    procedure SettleStackGrowth;
+    procedure LocateUnstartedFrameAtItsCall;
+    procedure ShrinkIdleStacks;
     function CurrentArgumentsSnapshot: TGocciaRegisterArray;
     procedure EnsureRegisterCapacity(const ACount: Integer);
     procedure EnsureLocalCapacity(const ACount: Integer);
     function GetLocalCell(const AIndex: Integer): TGocciaBytecodeCell;
     function GetLocalRegister(const AIndex: Integer): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+    { Temporal-dead-zone ReferenceErrors, named from the template's debug
+      locals or upvalue descriptors. Only the throw path calls them, so the
+      binding name costs the non-throwing dispatch nothing. }
+    procedure ThrowUninitializedLocal(const ATemplate: TGocciaFunctionTemplate;
+      const APC, ASlot: Integer);
+    procedure ThrowUninitializedUpvalue(
+      const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
     function GetRegister(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     function GetRegisterFast(const AIndex: Integer): TGocciaValue; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegister(const AIndex: Integer; const AValue: TGocciaValue); {$IFDEF FPC}inline;{$ENDIF}
@@ -319,9 +424,6 @@ type
       const ARealm: TGocciaRealm = nil): TGocciaRegister;
     procedure SetFunctionNameFromKey(const AFunction, AKey: TGocciaValue;
       const APrefixKind: UInt8);
-    function EnsureCurrentDynamicVarScope: TGocciaScope;
-    function ResolveDynamicUpvalueScope(const AIndex: Integer;
-      const AName: string): TGocciaScope;
     function KeyDisplaySafe(const AKey: TGocciaRegister): string;
     { Stamps the executing call-stack frame with the source position of the
       instruction the VM is currently on, so an error created from here carries
@@ -398,8 +500,9 @@ type
       const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AFlags: Integer;
       const AClassValue: TGocciaValue = nil);
-    procedure SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-      const ABackingName: string; const AFlags: Integer);
+    procedure DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+      const AName: string; const AKey: TGocciaValue;
+      const AFunction: TGocciaValue; const AFlags: Integer);
     procedure RunClassInitializers(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue;
       const APreserveExistingPrivateSlots: Boolean = False);
@@ -430,12 +533,13 @@ type
       AKey, AValue: TGocciaValue);
     procedure SetSuperPropertyBaseValueByKey(const ABaseValue, AThisValue,
       AKey, AValue: TGocciaValue);
+    function LexicalBytecodePrivateClass(const AKey: string): TGocciaClassValue;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
       const AKey: string): TGocciaClassValue;
     procedure ThrowBytecodePrivateTypeError(const AKey,
-      AMessage: string);
+      AMessageFormat: string);
     function GetPropertyValue(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     function GetPropertyValueGeneric(const AObject: TGocciaValue; const AKey: string): TGocciaValue;
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
@@ -461,9 +565,16 @@ type
     function InvokeFunctionValue(const ACallee: TGocciaValue;
       const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
-    function ExecuteDirectEval(const ASourceValue: TGocciaValue;
-      const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
-      const ACallerStrict: Boolean): TGocciaValue;
+    function ExecuteDirectEvalSite(const ACalleeReg: UInt16;
+      const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
+      var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
+    procedure InstantiateDirectEvalDeclarations(
+      const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
+      const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
+      AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+    function PrepareCompiledDirectEval(const ASourceText: string;
+      const ATemplate: TGocciaFunctionTemplate;
+      const ASiteIndex: Integer): TGocciaBytecodeClosure;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     procedure PushFrame(const AResultRegister, AFrameIP: Integer;
       const ATemplate: TGocciaFunctionTemplate;
@@ -476,7 +587,7 @@ type
     procedure PushClosedNumericFrame(const AResultRegister, AArgumentBase,
       AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-      var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+      var AProfileTimestamp: Int64);
     function PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
       const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
       var AProfileTimestamp: Int64): Integer;
@@ -491,6 +602,12 @@ type
       const ANewTarget: TGocciaValue; const AArgumentBase, AArgCount: Integer);
     procedure PopSavedStateRoot;
     procedure BindToCurrentThread;
+    procedure EnterActivation(const ATemplateProbe: PPointer;
+      const AInstructionIPProbe, AFrameIPProbe: PInteger;
+      const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
+    procedure LeaveActivation;
+    procedure ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
+      const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
     procedure InternExecutionSourcePath(const ASourcePath: string);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
@@ -504,6 +621,11 @@ type
       var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
       const ASuggestion: string = '';
       const ASuggestionIsHostOnly: Boolean = False);
+    function TryUnwindToHandler(const AErrorValue: TGocciaValue;
+      const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+      ASavedHandlerCount: Integer;
+      var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
     procedure ExecuteGeneratorParameterPreamble(const AGenerator: TObject);
     function ExecuteClosureRegistersInternal(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
@@ -540,11 +662,19 @@ type
     destructor Destroy; override;
     procedure EnsureStackRootRegistered;
     function ExecuteFunction(const ATemplate: TGocciaFunctionTemplate): TGocciaValue;
-    function ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+    { Runs AModule's top level. AThisValue is its receiver, which a direct
+      eval at that top level reads as its caller's `this`; nil passes
+      undefined, as a Script or Module top level gets. }
+    function ExecuteModule(const AModule: TGocciaBytecodeModule;
+      const AThisValue: TGocciaValue = nil): TGocciaValue;
+    function ExecuteImportedModule(
+      const AModule: TGocciaBytecodeModule): TGocciaValue;
     property GlobalScope: TGocciaScope read FGlobalScope write FGlobalScope;
     property GlobalThisValue: TGocciaValue read FGlobalThisValue write FGlobalThisValue;
     property Realm: TGocciaRealm read FRealm write FRealm;
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
+    property CompileDirectEval: TGocciaCompileDirectEvalCallback
+      read FCompileDirectEval write FCompileDirectEval;
     property LoadModuleSource: TLoadModuleSourceCallback
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
@@ -575,7 +705,7 @@ uses
 
   Goccia.Arguments.ArrayLike,
   Goccia.Arithmetic,
-  Goccia.AST.Node,
+  Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.CapabilityAudit,
   Goccia.Constants,
@@ -592,6 +722,7 @@ uses
   Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Evaluator,
   Goccia.Evaluator.Decorators,
   Goccia.Execution.CallSite,
@@ -603,8 +734,10 @@ uses
   Goccia.NumberExponentiation,
   Goccia.NumberRemainder,
   Goccia.PatternMatching,
+  Goccia.PrivateNames,
   Goccia.Profiler,
   Goccia.RegExp.Runtime,
+  Goccia.Scope.Redeclaration,
   Goccia.SourcePipeline,
   Goccia.StackLimit,
   Goccia.Timeout,
@@ -643,9 +776,26 @@ const
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
+  // How far TGocciaVMLiteralObjectValue.TrySetLiteralDataPropertyFast looks
+  // up the chain before it leaves the store to the general assignment path.
+  LITERAL_FAST_SET_MAX_CHAIN_DEPTH = 256;
   DERIVED_THIS_INITIALIZED_LOCAL = '__derived_this_initialized';
   MEMORY_PRESSURE_CHECK_INTERVAL = 1024;
+  // Initial capacities of the VM stacks. Growth past them is charged to the
+  // collector, and a stack never shrinks below them (ADR 0130).
+  // The register, local-cell and argument arenas and the frame stack start
+  // small and double on demand (AcquireRegisters, AcquireLocalCells,
+  // AcquireArgumentWindow, EnsureRegisterCapacity, EnsureLocalCapacity,
+  // PushFrame). SetLength zero-fills the whole allocation, so a large initial
+  // size is paid on every engine boot even by a program that needs a handful
+  // of slots: three 4096-slot arenas cost about 30,000 instructions per VM.
+  VM_INITIAL_STACK_SIZE = 64;
+  VM_INITIAL_FRAME_STACK_SIZE = 8;
+  VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE = 64;
+  // The call stack, the execution-context stack and the handler stack grow to
+  // this many entries uncharged; past it the VM grows them like its own
+  // stacks, charged, and shrinks them back no further (ADR 0132).
+  VM_INITIAL_RECORD_STACK_SIZE = 64;
   MAX_POOLED_ARGUMENT_COLLECTIONS = 32;
   // A pooled argument collection keeps its backing store only when the call
   // it served carried at most this many arguments.
@@ -671,60 +821,6 @@ type
     procedure MarkReferences; override;
   end;
 
-  TGocciaVMDirectEvalScope = class(TGocciaScope)
-  private
-    FVM: TGocciaVM;
-    FTemplate: TGocciaFunctionTemplate;
-    FEnvironmentIndex: Integer;
-    FHomeObject: TGocciaValue;
-    FHomeClass: TGocciaValue;
-    FNewTarget: TGocciaValue;
-    FDeletedVarBindings: TStringList;
-    function TryFindBinding(const AName: string;
-      out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
-    function IsDeletedVarBinding(const AName: string): Boolean;
-    procedure MarkDeletedVarBinding(const AName: string);
-    function BindingValue(
-      const ABinding: TGocciaDirectEvalBindingInfo): TGocciaValue;
-    function HasWithObjectBinding(const AObject: TGocciaObjectValue;
-      const AName: string): Boolean;
-    function TryFindWithObjectBinding(const AName: string;
-      out AObject: TGocciaObjectValue): Boolean;
-    procedure SetBindingValue(const ABinding: TGocciaDirectEvalBindingInfo;
-      const AValue: TGocciaValue);
-  protected
-    function GetOwningClass: TGocciaValue; override;
-    function GetSuperClass: TGocciaValue; override;
-    function GetSuperConstructor: TGocciaValue; override;
-    function GetNewTarget: TGocciaValue; override;
-    function GetThisValue: TGocciaValue; override;
-    function IsFunctionBoundary: Boolean; override;
-    function MarkSuperConstructorCalled: Boolean; override;
-  public
-    constructor Create(const AParent: TGocciaScope; const AVM: TGocciaVM;
-      const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
-      const AUseGlobalVarEnvironment: Boolean;
-      const ALexicalClosure: TGocciaBytecodeClosure;
-      const ANewTarget: TGocciaValue);
-    destructor Destroy; override;
-    procedure MarkReferences; override;
-    function TryGetBinding(const AName: string; out ABinding: TLexicalBinding;
-      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
-    function TryAssignExistingBinding(const AName: string;
-      const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
-      const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
-    function DeleteBinding(const AName: string): Boolean; override;
-    procedure ResolveIdentifierReference(const AName: string;
-      out AValue, AThisValue: TGocciaValue; const ALine: Integer = 0;
-      const AColumn: Integer = 0); override;
-    procedure ResolveAssignmentTarget(const AName: string;
-      out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope); override;
-    function Contains(const AName: string): Boolean; override;
-    function ContainsVarEnvironmentBinding(const AName: string): Boolean; override;
-    procedure CopyBackVariableBindings;
-    procedure CopyNewVariableBindingsToParent;
-  end;
-
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
   TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -736,16 +832,6 @@ begin
     Result := foikAsync
   else
     Result := foikOrdinary;
-end;
-
-function DirectEvalBindingIsNonStrictImmutable(
-  const ABinding: TGocciaDirectEvalBindingInfo;
-  const ATemplate: TGocciaFunctionTemplate): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  Result := ABinding.IsConst and
-    (ABinding.IsEvalSyntheticArguments or
-     ((ABinding.Kind = debUpvalue) and Assigned(ATemplate) and
-      (ATemplate.Name <> '') and (ABinding.Name = ATemplate.Name)));
 end;
 
 { ES2026 §16.2.1.7.3.1 InitializeEnvironment: a named import that resolves to
@@ -865,6 +951,59 @@ begin
   end;
 end;
 
+{ Builds the receiver of a built-in that super() or an implicit constructor
+  reaches, with newTarget as the constructor (ES2026 §10.1.13
+  OrdinaryCreateFromConstructor). The receiver takes its final [[Prototype]]
+  before the built-in's own steps run, because those steps read from it: Map
+  (§24.1.1.1 step 5), Set, WeakMap and WeakSet look up their `set`/`add` adder
+  on it. When newTarget.prototype is not an object, §10.1.14
+  GetPrototypeFromConstructor step 3 falls back to the built-in's own intrinsic
+  in newTarget's realm, never to %Object.prototype%. The families that validate
+  their arguments before reading newTarget.prototype keep that read after
+  initialization. The receiver is rooted throughout: both the prototype read
+  and the initialization can run user code. }
+function CreateNativeReceiverFromConstructor(
+  const ANativeClass: TGocciaClassValue;
+  const ANativeDefaultPrototype: TGocciaObjectValue;
+  const AArguments: TGocciaArgumentsCollection;
+  const ANewTarget: TGocciaValue;
+  const AInstanceClass: TGocciaClassValue): TGocciaObjectValue;
+var
+  NativeInstance: TGocciaInstanceValue;
+  DelayPrototype: Boolean;
+  Roots: TGocciaActiveRootFrame;
+begin
+  Result := ANativeClass.CreateNativeInstance(AArguments);
+  if not Assigned(Result) then
+    ThrowTypeError(
+      'Superclass constructor did not return an object',
+      SSuggestNotConstructorType);
+  if Result is TGocciaInstanceValue then
+    NativeInstance := TGocciaInstanceValue(Result)
+  else
+    NativeInstance := nil;
+  DelayPrototype := ShouldDelayNativePrototypeLookup(ANativeClass, AArguments);
+  Roots.Initialize;
+  Roots.Add(Result);
+  try
+    if not DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+    begin
+      NativeInstance.ClassValue := AInstanceClass;
+      NativeInstance.InitializeNativeFromArguments(AArguments);
+    end;
+    if DelayPrototype then
+      Result.Prototype := GetNativePrototypeFromConstructor(ANativeClass,
+        ANewTarget, ANativeDefaultPrototype);
+    if Assigned(NativeInstance) then
+      NativeInstance.FinalizeNativeFromArguments(AArguments);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 function IsBytecodePrivateKey(const AKey: string): Boolean; forward;
 function IsBytecodePrivateBrandKey(const AKey: string): Boolean; forward;
 function HasBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
@@ -882,263 +1021,18 @@ function BytecodePrivateTokenForKey(const AKey,
   AFallbackPrivateBrandToken: string): string; forward;
 function BytecodePrivateReceiverBrandToken(
   const AObject: TGocciaValue): string; forward;
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue; forward;
 
 function UTF16CodeUnitImmediateToString(const ACodeUnit: UInt16): string;
 begin
   Result := Char(ACodeUnit);
 end;
 
-{ TGocciaVMDirectEvalScope }
-
-constructor TGocciaVMDirectEvalScope.Create(const AParent: TGocciaScope;
-  const AVM: TGocciaVM; const ATemplate: TGocciaFunctionTemplate;
-  const AEnvironmentIndex: Integer; const AUseGlobalVarEnvironment: Boolean;
-  const ALexicalClosure: TGocciaBytecodeClosure;
-  const ANewTarget: TGocciaValue);
-var
-  Env: TGocciaDirectEvalEnvironment;
-  Binding: TGocciaDirectEvalBindingInfo;
-  BindingRuntimeValue: TGocciaValue;
-  ThisBindingValue: TGocciaValue;
-  I: Integer;
-begin
-  if AUseGlobalVarEnvironment then
-    inherited Create(AParent, skGlobal, 'BytecodeDirectEval')
-  else
-    inherited Create(AParent, skFunction, 'BytecodeDirectEval');
-  FVM := AVM;
-  FTemplate := ATemplate;
-  FEnvironmentIndex := AEnvironmentIndex;
-  FNewTarget := ANewTarget;
-  if Assigned(ALexicalClosure) then
-  begin
-    FHomeObject := ALexicalClosure.HomeObject;
-    FHomeClass := ALexicalClosure.HomeClass;
-  end;
-  if Assigned(FVM) and Assigned(FVM.FGlobalThisValue) then
-    ThisValue := FVM.FGlobalThisValue;
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit;
-
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-  begin
-    Binding := Env.Bindings[I];
-    if Binding.Name = KEYWORD_THIS then
-    begin
-      if Binding.Kind <> debGlobal then
-      begin
-        ThisBindingValue := BindingValue(Binding);
-        if ThisBindingValue <> TGocciaHoleValue.HoleValue then
-          ThisValue := ThisBindingValue;
-      end;
-      Continue;
-    end;
-    if Binding.IsVarEnvironmentBinding then
-      Continue;
-    if Binding.Kind in [debWithLocal, debWithUpvalue] then
-      Continue;
-    if Binding.Kind = debGlobal then
-      Continue;
-    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3.d: a var declared
-    // by sloppy direct eval conflicts only with the declarations between the
-    // eval's lexical environment and the caller's variable environment.  An
-    // upvalue belongs to an enclosing function, beyond that range, so it is
-    // resolved through the binding table and never declared here, where it
-    // would read as a lexical declaration of the calling function.
-    if Binding.Kind = debUpvalue then
-      Continue;
-    BindingRuntimeValue := BindingValue(Binding);
-    if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
-      Continue;
-    if Binding.IsConst then
-      DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtConst)
-    else
-      DefineLexicalBinding(Binding.Name, BindingRuntimeValue, dtLet);
-  end;
-end;
-
-destructor TGocciaVMDirectEvalScope.Destroy;
-begin
-  FDeletedVarBindings.Free;
-  inherited;
-end;
-
-procedure TGocciaVMDirectEvalScope.MarkReferences;
-begin
-  inherited;
-  if Assigned(FHomeObject) then
-    FHomeObject.MarkReferences;
-  if Assigned(FHomeClass) then
-    FHomeClass.MarkReferences;
-  if Assigned(FNewTarget) then
-    FNewTarget.MarkReferences;
-end;
-
-function TGocciaVMDirectEvalScope.TryFindBinding(const AName: string;
-  out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
-var
-  Env: TGocciaDirectEvalEnvironment;
-  I: Integer;
-begin
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit(False);
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-    if not (Env.Bindings[I].Kind in [debWithLocal, debWithUpvalue]) and
-       (Env.Bindings[I].Name = AName) then
-    begin
-      ABinding := Env.Bindings[I];
-      Exit(True);
-    end;
-  Result := False;
-end;
-
-function TGocciaVMDirectEvalScope.IsDeletedVarBinding(
-  const AName: string): Boolean;
-begin
-  Result := Assigned(FDeletedVarBindings) and
-    (FDeletedVarBindings.IndexOf(AName) >= 0) and
-    not ContainsOwnVarBinding(AName);
-end;
-
-procedure TGocciaVMDirectEvalScope.MarkDeletedVarBinding(
-  const AName: string);
-begin
-  if not Assigned(FDeletedVarBindings) then
-  begin
-    FDeletedVarBindings := TStringList.Create;
-    FDeletedVarBindings.CaseSensitive := True;
-    FDeletedVarBindings.Sorted := False;
-    FDeletedVarBindings.Duplicates := dupIgnore;
-  end;
-  if FDeletedVarBindings.IndexOf(AName) < 0 then
-    FDeletedVarBindings.Add(AName);
-end;
-
-function TGocciaVMDirectEvalScope.BindingValue(
-  const ABinding: TGocciaDirectEvalBindingInfo): TGocciaValue;
-var
-  Upvalue: TGocciaBytecodeUpvalue;
-begin
-  case ABinding.Kind of
-    debLocal:
-      Result := FVM.GetLocal(ABinding.Index);
-    debWithLocal:
-      Result := FVM.GetLocal(ABinding.Index);
-    debUpvalue:
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Result := RegisterToValue(Upvalue.Cell.Value);
-      end;
-    end;
-    debWithUpvalue:
-    begin
-      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Result := RegisterToValue(Upvalue.Cell.Value);
-      end;
-    end;
-    debGlobal:
-      Result := FVM.FGlobalScope.GetBinding(ABinding.Name).Value;
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  end;
-end;
-
-function TGocciaVMDirectEvalScope.HasWithObjectBinding(
-  const AObject: TGocciaObjectValue; const AName: string): Boolean;
-var
-  Unscopables: TGocciaValue;
-  Blocked: TGocciaValue;
-begin
-  Result := Assigned(AObject) and AObject.HasProperty(AName);
-  if not Result then
-    Exit;
-
-  Unscopables := AObject.GetSymbolProperty(
-    TGocciaSymbolValue.WellKnownUnscopables);
-  if Unscopables is TGocciaObjectValue then
-  begin
-    Blocked := TGocciaObjectValue(Unscopables).GetProperty(AName);
-    if Assigned(Blocked) and Blocked.ToBooleanLiteral.Value then
-      Exit(False);
-  end;
-end;
-
-function TGocciaVMDirectEvalScope.TryFindWithObjectBinding(
-  const AName: string; out AObject: TGocciaObjectValue): Boolean;
-var
-  Env: TGocciaDirectEvalEnvironment;
-  Binding: TGocciaDirectEvalBindingInfo;
-  BindingObject: TGocciaValue;
-  I: Integer;
-begin
-  AObject := nil;
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit(False);
-
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-  begin
-    Binding := Env.Bindings[I];
-    if not (Binding.Kind in [debWithLocal, debWithUpvalue]) then
-      Continue;
-
-    BindingObject := BindingValue(Binding);
-    if (BindingObject is TGocciaObjectValue) and
-       HasWithObjectBinding(TGocciaObjectValue(BindingObject), AName) then
-    begin
-      AObject := TGocciaObjectValue(BindingObject);
-      Exit(True);
-    end;
-  end;
-
-  Result := False;
-end;
-
-procedure TGocciaVMDirectEvalScope.SetBindingValue(
-  const ABinding: TGocciaDirectEvalBindingInfo; const AValue: TGocciaValue);
-var
-  Upvalue: TGocciaBytecodeUpvalue;
-begin
-  case ABinding.Kind of
-    debLocal:
-      FVM.SetLocal(ABinding.Index, AValue);
-    debWithLocal:
-      ; // with-object bindings are object environment metadata, not variables.
-    debUpvalue:
-      if Assigned(FVM.FCurrentClosure) then
-      begin
-        Upvalue := FVM.FCurrentClosure.GetUpvalue(ABinding.Index);
-        if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          Upvalue.Cell.Value := ValueToRegister(AValue);
-      end;
-    debWithUpvalue:
-      ; // with-object bindings are object environment metadata, not variables.
-    debGlobal:
-      FVM.FGlobalScope.AssignBinding(ABinding.Name, AValue);
-  end;
-end;
-
 function TemplateUsesGlobalEvalEnvironment(
   const ATemplate: TGocciaFunctionTemplate): Boolean;
 begin
   Result := Assigned(ATemplate) and (ATemplate.Name = '<module>');
-end;
-
-function ClosureUsesGlobalScriptThis(const AVM: TGocciaVM;
-  const AClosure: TGocciaBytecodeClosure): Boolean;
-begin
-  Result := Assigned(AVM) and AVM.FGlobalBackedTopLevel and
-    Assigned(AClosure) and TemplateUsesGlobalEvalEnvironment(AClosure.Template);
 end;
 
 function DirectEvalLexicalClosure(const AVM: TGocciaVM): TGocciaBytecodeClosure;
@@ -1159,504 +1053,6 @@ begin
      Candidate.AllowsNewTarget then
     Exit(Candidate);
   Exit(nil);
-end;
-
-function CollectBytecodeDirectEvalPrivateNames(
-  const AVM: TGocciaVM): TStringList;
-var
-  Closure: TGocciaBytecodeClosure;
-  RawNames: TStringList;
-  SourceName: string;
-  I: Integer;
-begin
-  Result := TStringList.Create;
-  Result.CaseSensitive := True;
-  Result.Sorted := False;
-  Result.Duplicates := dupIgnore;
-
-  Closure := DirectEvalLexicalClosure(AVM);
-  if not (Assigned(Closure) and (Closure.HomeClass is TGocciaClassValue)) then
-    Exit;
-
-  RawNames := TStringList.Create;
-  try
-    RawNames.CaseSensitive := True;
-    RawNames.Sorted := False;
-    RawNames.Duplicates := dupIgnore;
-    TGocciaClassValue(Closure.HomeClass).AppendOwnPrivateNames(RawNames);
-
-    for I := 0 to RawNames.Count - 1 do
-    begin
-      SourceName := BytecodePrivateSourceName(RawNames[I]);
-      if (SourceName <> '') and (Result.IndexOf(SourceName) < 0) then
-        Result.Add(SourceName);
-    end;
-  finally
-    RawNames.Free;
-  end;
-end;
-
-function DirectEvalCapturedThisValue(const AVM: TGocciaVM;
-  const ATemplate: TGocciaFunctionTemplate;
-  const AEnvironmentIndex: Integer; out AValue: TGocciaValue): Boolean;
-var
-  Env: TGocciaDirectEvalEnvironment;
-  Binding: TGocciaDirectEvalBindingInfo;
-  Upvalue: TGocciaBytecodeUpvalue;
-  I: Integer;
-begin
-  Result := False;
-  if (not Assigned(AVM)) or (not Assigned(ATemplate)) or
-     (AEnvironmentIndex < 0) then
-    Exit;
-
-  Env := ATemplate.GetDirectEvalEnvironment(AEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-  begin
-    Binding := Env.Bindings[I];
-    if Binding.Name <> KEYWORD_THIS then
-      Continue;
-
-    case Binding.Kind of
-      debLocal:
-        AValue := AVM.GetLocal(Binding.Index);
-      debUpvalue:
-      begin
-        AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        if Assigned(AVM.FCurrentClosure) then
-        begin
-          Upvalue := AVM.FCurrentClosure.GetUpvalue(Binding.Index);
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-            AValue := RegisterToValue(Upvalue.Cell.Value);
-        end;
-      end;
-      debGlobal:
-        Exit(False);
-    else
-      AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-    end;
-    if AValue = TGocciaHoleValue.HoleValue then
-      Exit(False);
-    Exit(True);
-  end;
-end;
-
-function DirectEvalLexicalThisValue(const AVM: TGocciaVM;
-  const AUseGlobalVarEnvironment: Boolean;
-  const ATemplate: TGocciaFunctionTemplate;
-  const AEnvironmentIndex: Integer): TGocciaValue;
-var
-  Candidate: TGocciaBytecodeClosure;
-  I, Slot: Integer;
-begin
-  if DirectEvalCapturedThisValue(AVM, ATemplate, AEnvironmentIndex, Result) then
-    Exit;
-
-  if Assigned(AVM) and Assigned(AVM.FCurrentClosure) and
-     Assigned(AVM.FCurrentClosure.Template) and
-     AVM.FCurrentClosure.Template.IsArrow then
-    for I := AVM.FFrameStackCount - 1 downto 0 do
-    begin
-      Candidate := AVM.FFrameStack[I].Closure;
-      if Assigned(Candidate) and Assigned(Candidate.Template) and
-         not Candidate.Template.IsArrow then
-      begin
-        if ClosureUsesGlobalScriptThis(AVM, Candidate) then
-        begin
-          if Assigned(AVM.FGlobalThisValue) then
-            Exit(AVM.FGlobalThisValue);
-          Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-        end;
-        if AVM.FFrameStack[I].LocalCellCount > 0 then
-        begin
-          Slot := AVM.FFrameStack[I].LocalCellBase;
-          if (Slot >= 0) and (Slot < Length(AVM.FLocalCellStack)) and
-             Assigned(AVM.FLocalCellStack[Slot]) then
-            Exit(RegisterToValue(AVM.FLocalCellStack[Slot].Value));
-        end;
-        if AVM.FFrameStack[I].RegisterCount > 0 then
-        begin
-          Slot := AVM.FFrameStack[I].RegisterBase;
-          if (Slot >= 0) and (Slot < Length(AVM.FRegisterStack)) then
-            Exit(RegisterToValue(AVM.FRegisterStack[Slot]));
-        end;
-        Break;
-      end;
-    end;
-
-  if Assigned(AVM) and ClosureUsesGlobalScriptThis(AVM, AVM.FCurrentClosure) then
-  begin
-    if Assigned(AVM.FGlobalThisValue) then
-      Exit(AVM.FGlobalThisValue);
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  end;
-  if Assigned(AVM) and (AVM.FLocalCellCount > 0) then
-    Exit(AVM.GetLocal(0));
-  if AUseGlobalVarEnvironment then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  if Assigned(AVM) and Assigned(AVM.FGlobalThisValue) then
-    Exit(AVM.FGlobalThisValue);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TGocciaVMDirectEvalScope.GetSuperClass: TGocciaValue;
-var
-  HomeClass: TGocciaClassValue;
-begin
-  Result := nil;
-
-  if FHomeClass is TGocciaClassValue then
-  begin
-    HomeClass := TGocciaClassValue(FHomeClass);
-    if Assigned(HomeClass.SuperClass) then
-      Exit(HomeClass.SuperClass);
-    if Assigned(HomeClass.NativeSuperConstructor) then
-      Exit(HomeClass.NativeSuperConstructor);
-  end;
-
-  if Assigned(FHomeObject) then
-    Result := FHomeObject;
-end;
-
-function TGocciaVMDirectEvalScope.GetOwningClass: TGocciaValue;
-begin
-  Result := FHomeClass;
-end;
-
-function TGocciaVMDirectEvalScope.GetSuperConstructor: TGocciaValue;
-var
-  HomeClass: TGocciaClassValue;
-  SuperConstructor: TGocciaValue;
-begin
-  Result := nil;
-  if not (Assigned(FVM) and (FHomeClass is TGocciaClassValue)) then
-    Exit;
-
-  HomeClass := TGocciaClassValue(FHomeClass);
-  SuperConstructor := TGocciaObjectValue(HomeClass).Prototype;
-  if not Assigned(SuperConstructor) then
-    Exit;
-
-  Result := TGocciaVMSuperConstructorValue.Create(SuperConstructor,
-    FNewTarget, HomeClass);
-end;
-
-function TGocciaVMDirectEvalScope.GetNewTarget: TGocciaValue;
-begin
-  Result := FNewTarget;
-end;
-
-function TGocciaVMDirectEvalScope.GetThisValue: TGocciaValue;
-begin
-  Result := ThisValue;
-end;
-
-function TGocciaVMDirectEvalScope.MarkSuperConstructorCalled: Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-begin
-  Result := Assigned(FVM);
-  if not Result then
-    Exit;
-
-  FVM.FCurrentConstructorSuperCalled := True;
-  if TryFindBinding(DERIVED_THIS_INITIALIZED_LOCAL, Binding) then
-    SetBindingValue(Binding, TGocciaBooleanLiteralValue.TrueValue);
-  if FVM.FLocalCellCount > 0 then
-    FVM.SetLocal(0, ThisValue);
-  FVM.FLastClosureThisValue := ValueToRegister(ThisValue);
-end;
-
-function TGocciaVMDirectEvalScope.IsFunctionBoundary: Boolean;
-begin
-  Result := False;
-end;
-
-// Direct-eval environments resolve through their own binding table before
-// the ordinary scope walk, so the Try* core must consult the with-object
-// bindings and the captured binding table first and only then fall through
-// to the inherited resolution.  GetBinding/AssignBinding need no overrides:
-// the base wrappers over these Try* methods reproduce them exactly.
-function TGocciaVMDirectEvalScope.TryGetBinding(const AName: string;
-  out ABinding: TLexicalBinding; const ALine: Integer = 0;
-  const AColumn: Integer = 0): Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  BindingRuntimeValue: TGocciaValue;
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    ABinding.Value := WithObject.GetProperty(AName);
-    ABinding.DeclarationType := dtVar;
-    ABinding.Initialized := True;
-    ABinding.BuiltIn := False;
-    ABinding.GlobalObjectBacked := False;
-    ABinding.CanDelete := False;
-    ABinding.TypeHint := sltUntyped;
-    Exit(True);
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Exit(Parent.TryGetBinding(AName, ABinding, ALine, AColumn));
-    ABinding := Default(TLexicalBinding);
-    Exit(False);
-  end;
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    // A var declared by this eval shadows an enclosing function's binding of
-    // the same name, const or not; a const of the calling function itself
-    // never coexists with one.
-    if ((not Binding.IsConst) or (Binding.Kind = debUpvalue)) and
-       ContainsOwnVarBinding(AName) then
-      Exit(inherited TryGetBinding(AName, ABinding, ALine, AColumn));
-    BindingRuntimeValue := BindingValue(Binding);
-    if BindingRuntimeValue = TGocciaHoleValue.HoleValue then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
-    ABinding.Value := BindingRuntimeValue;
-    if Binding.IsConst then
-      ABinding.DeclarationType := dtConst
-    else
-      ABinding.DeclarationType := dtVar;
-    ABinding.Initialized := True;
-    ABinding.BuiltIn := False;
-    ABinding.GlobalObjectBacked := False;
-    ABinding.CanDelete := False;
-    ABinding.TypeHint := sltUntyped;
-    Exit(True);
-  end;
-
-  Result := inherited TryGetBinding(AName, ABinding, ALine, AColumn);
-end;
-
-function TGocciaVMDirectEvalScope.TryAssignExistingBinding(const AName: string;
-  const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
-  const ALine: Integer = 0; const AColumn: Integer = 0): Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    if ANonStrictMode then
-      WithObject.AssignPropertyWithReceiver(AName, AValue, WithObject)
-    else
-      WithObject.AssignProperty(AName, AValue);
-    Exit(True);
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Exit(Parent.TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-        ALine, AColumn));
-    Exit(False);
-  end;
-
-  if ContainsOwnVarBinding(AName) then
-    Exit(inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-      ALine, AColumn));
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    // TDZ: a captured lexical binding still holding the hole sentinel has
-    // not been initialized yet; assignment through direct eval must raise
-    // the same ReferenceError the ordinary local/upvalue paths produce.
-    if BindingValue(Binding) = TGocciaHoleValue.HoleValue then
-      raise TGocciaReferenceError.Create(
-        Format(SErrorCannotAccessBeforeInit, [AName]),
-        ALine, AColumn, '', nil, SSuggestTemporalDeadZone);
-    if Binding.IsConst then
-    begin
-      if ANonStrictMode and
-         DirectEvalBindingIsNonStrictImmutable(Binding, FTemplate) then
-        Exit(True);
-      raise TGocciaTypeError.Create(
-        Format(SErrorAssignToConstant, [AName]),
-        ALine, AColumn, '', nil, SSuggestUseLetNotConst);
-    end;
-    // ES2026 §19.2.1.1 PerformEval step 18: direct eval's lexical
-    // environment has the caller lexical environment as its outer
-    // environment.  Captured bytecode locals are aliases for that caller
-    // environment, so assignments update the captured slot/upvalue directly
-    // instead of creating a local var shadow in this adapter scope.
-    SetBindingValue(Binding, AValue);
-    Exit(True);
-  end;
-
-  Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
-    ALine, AColumn);
-end;
-
-function TGocciaVMDirectEvalScope.DeleteBinding(const AName: string): Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WasOwnVarBinding: Boolean;
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-    Exit(WithObject.DeleteProperty(AName));
-
-  WasOwnVarBinding := ContainsOwnVarBinding(AName);
-  // An enclosing function's lexical binding is not declared in this scope, so
-  // the inherited walk would not find it: it stays undeletable unless a var
-  // declared by an earlier eval of the calling function shadows it.
-  if (not WasOwnVarBinding) and TryFindBinding(AName, Binding) and
-     (Binding.Kind = debUpvalue) and (not Binding.IsVarEnvironmentBinding) and
-     not Assigned(FVM.ResolveDynamicUpvalueScope(Binding.Index, AName)) then
-    Exit(False);
-  Result := inherited DeleteBinding(AName);
-  if Result and WasOwnVarBinding then
-    MarkDeletedVarBinding(AName);
-end;
-
-procedure TGocciaVMDirectEvalScope.ResolveIdentifierReference(
-  const AName: string; out AValue, AThisValue: TGocciaValue;
-  const ALine: Integer; const AColumn: Integer);
-var
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    AValue := WithObject.GetProperty(AName);
-    AThisValue := WithObject;
-    Exit;
-  end;
-
-  inherited ResolveIdentifierReference(AName, AValue, AThisValue, ALine,
-    AColumn);
-end;
-
-procedure TGocciaVMDirectEvalScope.ResolveAssignmentTarget(const AName: string;
-  out AObjectBinding: TGocciaObjectValue; out AScopeBinding: TGocciaScope);
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WithObject: TGocciaObjectValue;
-begin
-  if TryFindWithObjectBinding(AName, WithObject) then
-  begin
-    AObjectBinding := WithObject;
-    AScopeBinding := nil;
-    Exit;
-  end;
-
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Parent.ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding)
-    else
-    begin
-      AObjectBinding := nil;
-      AScopeBinding := Self;
-    end;
-    Exit;
-  end;
-
-  if ContainsOwnVarBinding(AName) then
-  begin
-    AObjectBinding := nil;
-    AScopeBinding := Self;
-    Exit;
-  end;
-
-  if TryFindBinding(AName, Binding) then
-  begin
-    AObjectBinding := nil;
-    AScopeBinding := Self;
-    Exit;
-  end;
-  inherited ResolveAssignmentTarget(AName, AObjectBinding, AScopeBinding);
-end;
-
-function TGocciaVMDirectEvalScope.Contains(const AName: string): Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-  WithObject: TGocciaObjectValue;
-begin
-  if IsDeletedVarBinding(AName) then
-  begin
-    if Assigned(Parent) then
-      Exit(Parent.Contains(AName));
-    Exit(False);
-  end;
-
-  if TryFindWithObjectBinding(AName, WithObject) or inherited Contains(AName) then
-    Exit(True);
-  Result := TryFindBinding(AName, Binding) and
-    (Binding.Kind in [debLocal, debGlobal]);
-end;
-
-function TGocciaVMDirectEvalScope.ContainsVarEnvironmentBinding(
-  const AName: string): Boolean;
-var
-  Binding: TGocciaDirectEvalBindingInfo;
-begin
-  if ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName) then
-    Exit(True);
-  Result := TryFindBinding(AName, Binding) and
-    (Binding.Kind = debLocal) and Binding.IsVarEnvironmentBinding;
-end;
-
-procedure TGocciaVMDirectEvalScope.CopyBackVariableBindings;
-var
-  Env: TGocciaDirectEvalEnvironment;
-  Binding: TGocciaDirectEvalBindingInfo;
-  LexicalBinding: TLexicalBinding;
-  I: Integer;
-begin
-  if (FEnvironmentIndex < 0) or not Assigned(FTemplate) then
-    Exit;
-  Env := FTemplate.GetDirectEvalEnvironment(FEnvironmentIndex);
-  for I := 0 to High(Env.Bindings) do
-  begin
-    Binding := Env.Bindings[I];
-    if IsDeletedVarBinding(Binding.Name) then
-      Continue;
-    if Binding.IsConst or (Binding.Kind in [debGlobal, debWithLocal,
-       debWithUpvalue]) then
-      Continue;
-    if ContainsOwnVarBinding(Binding.Name) and (Binding.Kind <> debUpvalue) then
-    begin
-      // Read this scope's own var environment directly: GetBinding would
-      // dispatch back through this scope's TryGetBinding override, whose
-      // with-object head shadows the var binding being copied back
-      // (compat block function hoisting inside `with`).
-      if TryGetOwnBinding(Binding.Name, LexicalBinding) then
-        SetBindingValue(Binding, LexicalBinding.Value);
-    end;
-  end;
-end;
-
-procedure TGocciaVMDirectEvalScope.CopyNewVariableBindingsToParent;
-var
-  Names: TGocciaStringArray;
-  Name: string;
-  Binding: TLexicalBinding;
-begin
-  if not Assigned(Parent) then
-    Exit;
-
-  Names := GetOwnVarBindingNames;
-  for Name in Names do
-  begin
-    if IsDeletedVarBinding(Name) then
-      Continue;
-    if not ContainsOwnVarBinding(Name) then
-      Continue;
-    if not TryGetOwnBinding(Name, Binding) then
-      Continue;
-    Parent.DefineVariableBinding(Name, Binding.Value, True, True);
-    // ES2026 §19.2.1.3 EvalDeclarationInstantiation creates deletable
-    // bindings in variableEnv. Remove only this adapter's temporary binding;
-    // virtual DeleteBinding would resolve a same-named with-object property.
-    if inherited DeleteBinding(Name) then
-      MarkDeletedVarBinding(Name);
-  end;
 end;
 
 function VMIsObjectInstanceOfClass(const AObj: TGocciaObjectValue;
@@ -1692,21 +1088,6 @@ begin
       Exit(True);
     CurrentProto := CurrentProto.Prototype;
   end;
-end;
-
-function VMHasSymbolPropertyInChain(const AObject: TGocciaObjectValue;
-  const ASymbol: TGocciaSymbolValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-var
-  Current: TGocciaObjectValue;
-begin
-  Current := AObject;
-  while Assigned(Current) do
-  begin
-    if Current.HasSymbolProperty(ASymbol) then
-      Exit(True);
-    Current := Current.Prototype;
-  end;
-  Result := False;
 end;
 
 function VMGetOwnDataDescriptorValue(const AObject: TGocciaObjectValue;
@@ -2391,8 +1772,9 @@ begin
 end;
 
 // Integer-only result: skips IsNaN/IsInfinite/Frac checks that VMNumberRegister
-// performs, since integer arithmetic on LongInt-range inputs cannot produce
-// NaN, Infinity, negative zero, or fractional results.
+// performs, since integer addition and subtraction on LongInt-range inputs
+// cannot produce NaN, Infinity, negative zero, or fractional results. A product
+// can be negative zero; multiplication goes through VMIntProductResult.
 // Uses implicit Double assignment (not Int64 * 1.0) to avoid AArch64 FPC 3.2.2
 // codegen bug where Int64 * 1.0 produces wrong results near LongInt boundaries.
 function VMIntResult(const AValue: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
@@ -2406,6 +1788,22 @@ begin
     FloatValue := AValue;
     Result := RegisterFloat(FloatValue);
   end;
+end;
+
+// IEEE 754 multiplication gives a zero product the exclusive-or of the operand
+// signs, so 0 * -1 is -0. That is the one integer operation whose result an
+// integer register cannot hold. ES2026 §6.1.6.1.4 Number::multiply spells out
+// only the -0 operand cases (steps 4 and 5); read literally its last step gives
+// +0 here, but the float path and every engine follow IEEE 754.
+function VMIntProductResult(const ALeft, ARight: Int64): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  Product: Int64;
+begin
+  Product := ALeft * ARight;
+  if (Product = 0) and ((ALeft < 0) or (ARight < 0)) then
+    Result := RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue)
+  else
+    Result := VMIntResult(Product);
 end;
 
 // ES2026 §7.1.6 ToInt32 of a numeric scalar register, for the bitwise and shift
@@ -2712,21 +2110,6 @@ begin
 end;
 
 type
-  TGocciaResolvedEnvironmentReferenceValue = class(TGocciaValue)
-  private
-    FScope: TGocciaScope;
-    FStrict: Boolean;
-  public
-    constructor Create(const AScope: TGocciaScope; const AStrict: Boolean);
-    procedure MarkReferences; override;
-    function TypeName: string; override;
-    function TypeOf: string; override;
-    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
-    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
-    property Scope: TGocciaScope read FScope;
-    property Strict: Boolean read FStrict;
-  end;
 
   TGocciaBytecodeGeneratorObjectValue = class;
 
@@ -2882,8 +2265,14 @@ type
     FContinuationRegisters: TGocciaRegisterArray;
     FContinuationLocalCells: TGocciaBytecodeCellArray;
     FContinuationHandlers: TGocciaBytecodeHandlerEntryArray;
+    // The largest suspended frame this generator has held, charged to the
+    // collector and released when it finishes or is destroyed (ADR 0130).
+    // The release goes to the collector that took the charge, which outlives
+    // this object (it is freed before its collector shuts down), whichever
+    // thread finishes or frees it.
+    FContinuationChargedBytes: Int64;
+    FContinuationChargeCollector: TGarbageCollector;
     FContinuationPrevCovLine: UInt32;
-    FContinuationDynamicVarScope: TGocciaScope;
     FDelegateActive: Boolean;
     FDelegateIteratorValue: TGocciaValue;
     FDelegateIterator: TGocciaIteratorValue;
@@ -2903,6 +2292,7 @@ type
     function RestoreContinuation(var AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; out APrevCovLine: UInt32): Boolean;
     procedure ClearDelegateState;
+    procedure ReleaseContinuationCharge;
   public
     constructor Create(const AVM: TGocciaVM; const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection);
@@ -2934,7 +2324,6 @@ type
       const AContinuationIP: Integer);
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaBytecodeAsyncGeneratorObjectValue = class(TGocciaAsyncGeneratorBaseValue)
@@ -3003,7 +2392,6 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
     procedure MarkReferences; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
   end;
 
   TGocciaVMAsyncGeneratorYieldAwaitHandler = class(TGocciaObjectValue)
@@ -3026,6 +2414,13 @@ type
     FVM: TGocciaVM;
     FConstructorValue: TGocciaValue;
     FNativeInstanceNewTarget: TGocciaValue;
+    // The class whose body encloses this class's definition, or nil at the
+    // outermost level: the outer link of the class's PrivateEnvironment
+    // (ES2026 §15.7.14 ClassDefinitionEvaluation step 6).
+    FOuterPrivateClass: TGocciaClassValue;
+    // Compiled keys of private static elements, which the class declares
+    // under a per-evaluation runtime key instead of the compiled one.
+    FRuntimeKeyedPrivateKeys: array of string;
     function CreateNativeInstanceWithNewTarget(
       const AArguments: TGocciaArgumentsCollection;
       const ANewTarget: TGocciaValue): TGocciaObjectValue;
@@ -3048,50 +2443,29 @@ type
     procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
     procedure SetVMConstructor(const AValue: TGocciaValue);
     procedure MarkReferences; override;
+    procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
+    function DeclaresCompiledPrivateKey(const ACompiledKey,
+      ASourceName: string): Boolean;
+    property OuterPrivateClass: TGocciaClassValue read FOuterPrivateClass
+      write FOuterPrivateClass;
   end;
 
-constructor TGocciaResolvedEnvironmentReferenceValue.Create(
-  const AScope: TGocciaScope; const AStrict: Boolean);
+// The refusal of a charged VM allocation (ADR 0130): a catchable RangeError.
+// The error object allocates, and the charge it answers was refused because
+// the heap is near the ceiling, so the limit is suspended while it is built,
+// as it is for a value allocation the limit refuses.
+procedure ThrowVMMemoryLimitExceeded(const AGC: TGarbageCollector;
+  const AMessage, ASuggestion: string);
+var
+  WasFiring: Boolean;
 begin
-  inherited Create;
-  FScope := AScope;
-  FStrict := AStrict;
-end;
-
-procedure TGocciaResolvedEnvironmentReferenceValue.MarkReferences;
-begin
-  if GCMarked then Exit;
-  inherited;
-  if Assigned(FScope) then
-    FScope.MarkReferences;
-end;
-
-function TGocciaResolvedEnvironmentReferenceValue.TypeName: string;
-begin
-  Result := '<environment-reference>';
-end;
-
-function TGocciaResolvedEnvironmentReferenceValue.TypeOf: string;
-begin
-  Result := '<environment-reference>';
-end;
-
-function TGocciaResolvedEnvironmentReferenceValue.ToBooleanLiteral:
-  TGocciaBooleanLiteralValue;
-begin
-  Result := TGocciaBooleanLiteralValue.TrueValue;
-end;
-
-function TGocciaResolvedEnvironmentReferenceValue.ToNumberLiteral:
-  TGocciaNumberLiteralValue;
-begin
-  Result := TGocciaNumberLiteralValue.NaNValue;
-end;
-
-function TGocciaResolvedEnvironmentReferenceValue.ToStringLiteral:
-  TGocciaStringLiteralValue;
-begin
-  Result := TGocciaStringLiteralValue.Create('<environment-reference>');
+  WasFiring := AGC.MemoryLimitFiring;
+  AGC.MemoryLimitFiring := True;
+  try
+    ThrowRangeError(AMessage, ASuggestion);
+  finally
+    AGC.MemoryLimitFiring := WasFiring;
+  end;
 end;
 
 { TGocciaVMStackRoot }
@@ -3122,12 +2496,12 @@ begin
     AClosure.HomeObject.MarkReferences;
   if Assigned(AClosure.HomeClass) then
     AClosure.HomeClass.MarkReferences;
+  if Assigned(AClosure.PrivateClass) then
+    AClosure.PrivateClass.MarkReferences;
   if Assigned(AClosure.NewTarget) then
     AClosure.NewTarget.MarkReferences;
   if Assigned(AClosure.GlobalScope) then
     AClosure.GlobalScope.MarkReferences;
-  if Assigned(AClosure.DynamicVarScope) then
-    AClosure.DynamicVarScope.MarkReferences;
   for I := 0 to AClosure.UpvalueCount - 1 do
   begin
     Upvalue := AClosure.GetUpvalue(I);
@@ -3199,8 +2573,6 @@ begin
     FVM.FPendingNewTarget.MarkReferences;
   if Assigned(FVM.FCurrentNewTarget) then
     FVM.FCurrentNewTarget.MarkReferences;
-  if Assigned(FVM.FCurrentDynamicVarScope) then
-    FVM.FCurrentDynamicVarScope.MarkReferences;
   if Assigned(FVM.FCurrentAsyncPromise) then
     FVM.FCurrentAsyncPromise.MarkReferences;
   // The argument arena is stack-disciplined like the register/cell stacks, so
@@ -3209,7 +2581,15 @@ begin
   // below are redundant with this but kept for parity with the register stack.
   MarkArgumentRange(0, FVM.FArgumentBase + FVM.FArgCount);
 
+  // Closed numeric frames (ADR 0101) are the innermost frames whenever any is
+  // live: they call only themselves, and no other frame is set up above them.
+  // Their windows are not cleared, so they can still hold references an
+  // earlier frame left behind, and what the frames store themselves is
+  // scalars and pinned numbers. Mark only the registers below the first one.
   Limit := FVM.FRegisterBase + FVM.FRegisterCount;
+  if FVM.FClosedNumericFrameStackCount > 0 then
+    Limit := FVM.FClosedNumericFrameStack[0].RegisterBase +
+      FVM.FRegisterCount;
   if Limit > Length(FVM.FRegisterStack) then
     Limit := Length(FVM.FRegisterStack);
   for I := 0 to Limit - 1 do
@@ -3235,8 +2615,6 @@ begin
       TGocciaValue(FVM.FFrameStack[I].NewTarget).MarkReferences;
     if Assigned(FVM.FFrameStack[I].GlobalScope) then
       TGocciaScope(FVM.FFrameStack[I].GlobalScope).MarkReferences;
-    if Assigned(FVM.FFrameStack[I].DynamicVarScope) then
-      TGocciaScope(FVM.FFrameStack[I].DynamicVarScope).MarkReferences;
   end;
 
   for I := 0 to FVM.FTempSavedStateRootCount - 1 do
@@ -3430,7 +2808,7 @@ begin
   while Assigned(Current) do
   begin
     Inc(ChainDepth);
-    if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
+    if ChainDepth > LITERAL_FAST_SET_MAX_CHAIN_DEPTH then
       Exit(False);
     // A Proxy or exotic parent answers [[Set]] itself; leave it to the
     // generic AssignProperty walk.
@@ -3492,6 +2870,7 @@ begin
   FVM := AVM;
   FConstructorValue := nil;
   FNativeInstanceNewTarget := nil;
+  FOuterPrivateClass := nil;
 end;
 
 function TGocciaVMClassValue.GetClassLength: Integer;
@@ -4411,6 +3790,7 @@ end;
 
 destructor TGocciaBytecodeGeneratorObjectValue.Destroy;
 begin
+  ReleaseContinuationCharge;
   FClosure.Free;
   inherited;
 end;
@@ -4448,13 +3828,9 @@ var
   I: Integer;
   LiveLocalCellCount: Integer;
   LiveRegisterCount: Integer;
+  FrameBytes: Int64;
+  GC: TGarbageCollector;
 begin
-  FHasContinuation := True;
-  FContinuationIP := AContinuationIP;
-  FContinuationPrevCovLine := APrevCovLine;
-  FResumeRegister := AResumeRegister;
-  FContinuationDynamicVarScope := FVM.FCurrentDynamicVarScope;
-
   LiveLocalCellCount := FVM.FLocalCellCount;
   while (LiveLocalCellCount > 0) and
         not Assigned(FVM.FLocalCells[LiveLocalCellCount - 1]) do
@@ -4465,6 +3841,42 @@ begin
         (FVM.FRegisters[LiveRegisterCount - 1].Kind = grkUndefined) and
         (LiveRegisterCount > LiveLocalCellCount) do
     Dec(LiveRegisterCount);
+
+  // The suspended frame leaves the VM stacks for this generator, so it is
+  // charged like them (ADR 0130), before anything here changes: a refusal is
+  // a throw at the yield or await. Only growth past the largest frame this
+  // generator has already held is charged, so a generator that yields in a
+  // loop takes the accounting lock once. Nothing can collect here, because
+  // the value being yielded may be held only in the caller's locals, so the
+  // charge is the non-collecting one, as for a value allocation.
+  FrameBytes := Int64(LiveRegisterCount) * SizeOf(TGocciaRegister) +
+    Int64(LiveLocalCellCount) * SizeOf(TGocciaBytecodeCell) +
+    Int64(Length(FArguments)) * SizeOf(TGocciaRegister);
+  if FVM.FHandlerStack.Count > AHandlerBaseCount then
+    Inc(FrameBytes, Int64(FVM.FHandlerStack.Count - AHandlerBaseCount) *
+      SizeOf(TGocciaBytecodeHandlerEntry));
+  if FrameBytes > FContinuationChargedBytes then
+  begin
+    GC := FContinuationChargeCollector;
+    if not Assigned(GC) then
+    begin
+      GC := TGarbageCollector.Instance;
+      FContinuationChargeCollector := GC;
+    end;
+    if Assigned(GC) then
+    begin
+      if not GC.TryChargeExternalBytes(
+         FrameBytes - FContinuationChargedBytes) then
+        ThrowVMMemoryLimitExceeded(GC, SErrorMemoryLimitExceeded,
+          SSuggestMemoryLimitExceeded);
+      FContinuationChargedBytes := FrameBytes;
+    end;
+  end;
+
+  FHasContinuation := True;
+  FContinuationIP := AContinuationIP;
+  FContinuationPrevCovLine := APrevCovLine;
+  FResumeRegister := AResumeRegister;
 
   SetLength(FContinuationRegisters, LiveRegisterCount);
   for I := 0 to High(FContinuationRegisters) do
@@ -4496,7 +3908,9 @@ begin
   if not Result then
     Exit;
 
-  FHasContinuation := False;
+  // Growing the VM's stacks can throw the memory budget's RangeError (ADR
+  // 0130). The continuation is consumed only after the last of them, so a
+  // resume refused here leaves it whole and ResumeRaw can suspend it again.
   FVM.EnsureRegisterCapacity(Length(FContinuationRegisters));
   for I := 0 to High(FContinuationRegisters) do
     FVM.FRegisters[I] := FContinuationRegisters[I];
@@ -4507,15 +3921,29 @@ begin
 
   while FVM.FHandlerStack.Count > AHandlerBaseCount do
     FVM.FHandlerStack.Pop;
+  if FVM.FHandlerStack.Count + Length(FContinuationHandlers) >
+     FVM.FHandlerStack.Capacity then
+    FVM.GrowHandlerStack(FVM.FHandlerStack.Count +
+      Length(FContinuationHandlers));
   FVM.FHandlerStack.RestoreFrom(FContinuationHandlers, FVM.FFrameDepth);
 
+  FHasContinuation := False;
   AFrame.IP := FContinuationIP;
-  FVM.FCurrentDynamicVarScope := FContinuationDynamicVarScope;
-  FContinuationDynamicVarScope := nil;
   APrevCovLine := FContinuationPrevCovLine;
   SetLength(FContinuationRegisters, 0);
   SetLength(FContinuationLocalCells, 0);
   SetLength(FContinuationHandlers, 0);
+end;
+
+// A completed generator holds no suspended frame, so it gives back the
+// charge for one (ADR 0130).
+procedure TGocciaBytecodeGeneratorObjectValue.ReleaseContinuationCharge;
+begin
+  if (FContinuationChargedBytes > 0) and
+     Assigned(FContinuationChargeCollector) then
+    FContinuationChargeCollector.ReleaseExternalBytes(
+      FContinuationChargedBytes);
+  FContinuationChargedBytes := 0;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.ClearDelegateState;
@@ -4880,6 +4308,8 @@ function TGocciaBytecodeGeneratorObjectValue.ResumeRaw(
   out ADone: Boolean): TGocciaValue;
 var
   PreviousGenerator: TGocciaBytecodeGeneratorObjectValue;
+  PreviousState: TGocciaBytecodeGeneratorState;
+  HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
 begin
   FLastResumeResultIsIteratorResult := False;
@@ -4896,9 +4326,12 @@ begin
   if FState = bgsExecuting then
     raise TGocciaThrowValue.Create(VMGeneratorExecutingError);
 
+  // A generator whose parameters set up a frame before its first resume
+  // already holds a frame charge (CaptureInitialContinuation).
   if (FState = bgsSuspendedStart) and (AKind = bgrkReturn) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     ADone := True;
     Exit(AValue);
   end;
@@ -4906,6 +4339,7 @@ begin
   if (FState = bgsSuspendedStart) and (AKind = bgrkThrow) then
   begin
     FState := bgsCompleted;
+    ReleaseContinuationCharge;
     raise TGocciaThrowValue.Create(AValue);
   end;
 
@@ -4914,6 +4348,8 @@ begin
   FReturnRequiresAwait := False;
   if AKind <> bgrkReturn then
     FReturnResumeValueAwaited := False;
+  PreviousState := FState;
+  HadContinuation := FHasContinuation;
   FState := bgsExecuting;
 
   PreviousGenerator := GActiveBytecodeGenerator;
@@ -4957,9 +4393,39 @@ begin
           raise;
         end;
       end;
+      // The entry converts every throw from the generator's code into
+      // EGocciaBytecodeThrow, so a TGocciaThrowValue here comes from the VM
+      // setting the entry up: the call stack limit, the native stack or the
+      // memory budget refusing it. While the continuation is still whole the
+      // generator's code has not run, and it stays suspended where it was.
+      //
+      // ES2026 changes a generator's state in two kinds of step only. It
+      // becomes ~completed~ in GeneratorStart's closure (§27.5.3.1) once the
+      // body's evaluation ends, or in GeneratorResumeAbrupt (§27.5.3.4) when
+      // it is ~suspended-start~; that case is handled above, without an entry.
+      // GeneratorResume (§27.5.3.3), GeneratorResumeAbrupt and, for async
+      // generators, AsyncGeneratorResume (§27.6.3.6) set ~executing~ just
+      // before they push genContext. A refusal before the generator's code
+      // runs is an error raised by the next(), return() or throw() call
+      // itself, before that step, so the state stays suspended. V8 closes
+      // the generator here instead; the specification has no step that would.
+      on E: TGocciaThrowValue do
+      begin
+        if HadContinuation and not FHasContinuation then
+        begin
+          FState := bgsCompleted;
+          ClearDelegateState;
+          ADone := True;
+        end
+        else
+          FState := PreviousState;
+        raise;
+      end;
     end;
   finally
     GActiveBytecodeGenerator := PreviousGenerator;
+    if FState = bgsCompleted then
+      ReleaseContinuationCharge;
   end;
 end;
 
@@ -5175,7 +4641,8 @@ begin
     begin
       if IsEngineIntegrityFault(E) then
         raise;
-      FPromise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+      FPromise.Reject(CreateImportCallErrorObject(ERROR_NAME, E.Message,
+        FReferrer, FSiteLine, FSiteColumn));
     end;
   end;
 end;
@@ -5254,12 +4721,12 @@ begin
       FClosure.HomeObject.MarkReferences;
     if Assigned(FClosure.HomeClass) then
       FClosure.HomeClass.MarkReferences;
+    if Assigned(FClosure.PrivateClass) then
+      FClosure.PrivateClass.MarkReferences;
     if Assigned(FClosure.NewTarget) then
       FClosure.NewTarget.MarkReferences;
     if Assigned(FClosure.GlobalScope) then
       FClosure.GlobalScope.MarkReferences;
-    if Assigned(FClosure.DynamicVarScope) then
-      FClosure.DynamicVarScope.MarkReferences;
     for I := 0 to FClosure.UpvalueCount - 1 do
     begin
       Upvalue := FClosure.GetUpvalue(I);
@@ -5286,18 +4753,11 @@ begin
     FReturnSentinel.MarkReferences;
   if Assigned(FReturnValue) then
     FReturnValue.MarkReferences;
-  if Assigned(FContinuationDynamicVarScope) then
-    FContinuationDynamicVarScope.MarkReferences;
 end;
 
 function TGocciaBytecodeGeneratorObjectValue.ToStringTag: string;
 begin
   Result := 'Generator';
-end;
-
-function TGocciaBytecodeGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 constructor TGocciaBytecodeAsyncGeneratorObjectValue.Create(const AVM: TGocciaVM;
@@ -5559,6 +5019,7 @@ begin
                (FInner.FState in [bgsSuspendedStart, bgsCompleted]) then
             begin
               FInner.FState := bgsCompleted;
+              FInner.ReleaseContinuationCharge;
               AwaitReturnValue(ARequest.Promise, ARequest.Value);
               Exit;
             end;
@@ -5610,6 +5071,7 @@ begin
               begin
 	                FInner.FState := bgsCompleted;
 	                FInner.ClearDelegateState;
+	                FInner.ReleaseContinuationCharge;
 	                ARequest.Promise.Reject(E.Value);
                 FinishRequest;
 	                Exit;
@@ -5763,11 +5225,6 @@ begin
   Result := 'AsyncGenerator';
 end;
 
-function TGocciaBytecodeAsyncGeneratorObjectValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
-end;
-
 function TGocciaBytecodeFunctionValue.GetFunctionName: string;
 begin
   Result := FClosure.Template.Name;
@@ -5791,10 +5248,11 @@ begin
   TGocciaCoverageTracker.Instance.RecordLineHit(
     Template.DebugInfo.SourceFile,
     Template.DebugInfo.GetLineMapEntry(0).Line);
-  TGocciaCoverageTracker.Instance.RecordFunctionHit(
-    Template.DebugInfo.SourceFile, Template.Name,
-    Template.DebugInfo.CoverageLine,
-    Template.DebugInfo.CoverageColumn);
+  if Template.Name <> STATIC_FIELD_TEMPLATE_NAME then
+    TGocciaCoverageTracker.Instance.RecordFunctionHit(
+      Template.DebugInfo.SourceFile, Template.Name,
+      Template.DebugInfo.CoverageLine,
+      Template.DebugInfo.CoverageColumn);
 end;
 
 function TGocciaBytecodeFunctionValue.GetSourceText: string;
@@ -6366,7 +5824,7 @@ var
   WasSuperAlreadyCalled: Boolean;
   PreviousSuperClassSuperCalled: Boolean;
   SuperClassCalledItsOwnSuper: Boolean;
-  ReceiverPrototype: TGocciaObjectValue;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function IsUndefinedConstructedValue(const AValue: TGocciaValue): Boolean;
   begin
     Result := (not Assigned(AValue)) or (AValue is TGocciaUndefinedLiteralValue);
@@ -6584,22 +6042,14 @@ begin
     Exit(AThisValue);
   end;
 
-  if SuperClass.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := SuperClass.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    NewThis := SuperClass.CreateNativeInstance(AArguments);
-    if not (NewThis is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
-    if NewThis is TGocciaInstanceValue then
-    begin
-      TGocciaInstanceValue(NewThis).ClassValue := FCurrentCtorClass;
-      TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
-    end;
-    ReceiverPrototype := GetProtoFromConstructor(FNewTarget);
-    TGocciaObjectValue(NewThis).Prototype := ReceiverPrototype;
-    if NewThis is TGocciaInstanceValue then
-      TGocciaInstanceValue(NewThis).FinalizeNativeFromArguments(AArguments);
+    { §13.3.7.1 step 6 Construct(func, argList, newTarget): the built-in
+      allocates from newTarget before its own steps run, so a subclass's `set`
+      or `add` is the adder Map, Set, WeakMap and WeakSet use. }
+    NewThis := CreateNativeReceiverFromConstructor(SuperClass,
+      NativeDefaultPrototype, AArguments, FNewTarget, FCurrentCtorClass);
     MarkCurrentConstructorSuperCalled;
     InitializeCurrentCtorReceiver(NewThis);
     Exit(NewThis);
@@ -6627,8 +6077,12 @@ begin
         SuperClass, AThisValue, AArguments);
       if not Assigned(NewThis) then
         NewThis := AThisValue;
+      ImplicitSuperInitialized := True;
     end;
-    if NewThis is TGocciaInstanceValue then
+    { The implicit super() recursion already ran the built-in's own steps on
+      the receiver it allocated; running them again here appended an Array
+      subclass's elements twice and called a Set subclass's `add` twice. }
+    if (not ImplicitSuperInitialized) and (NewThis is TGocciaInstanceValue) then
       TGocciaInstanceValue(NewThis).InitializeNativeFromArguments(AArguments);
     if NewThis is TGocciaObjectValue then
     begin
@@ -6664,11 +6118,10 @@ begin
 end;
 
 constructor TGocciaVM.Create;
-const
-  INITIAL_STACK_SIZE = 4096;
 begin
   inherited Create;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   FHandlerStack := TGocciaBytecodeHandlerStack.Create;
   // Teach the shared call stack how to materialise the template-pointer frames
   // that SetupNewFrame pushes on the hot path. This is class-level, so it is
@@ -6683,37 +6136,58 @@ begin
   FTempSavedStateRootCount := 0;
   FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
   FCurrentExecutionContextPushed := False;
-  FCurrentDynamicVarScope := nil;
   FGlobalBackedTopLevel := False;
-  SetLength(FRegisterStack, INITIAL_STACK_SIZE);
+  SetLength(FRegisterStack, VM_INITIAL_STACK_SIZE);
   FRegisterBase := 0;
   FRegisters := nil;
   FRegisterCount := 0;
-  SetLength(FLocalCellStack, INITIAL_STACK_SIZE);
+  SetLength(FLocalCellStack, VM_INITIAL_STACK_SIZE);
   FLocalCellStaleTop := 0;
   FLocalCellBase := 0;
   FLocalCells := nil;
   FLocalCellCount := 0;
-  SetLength(FArgumentStack, INITIAL_STACK_SIZE);
+  SetLength(FArgumentStack, VM_INITIAL_STACK_SIZE);
   FArgumentBase := 0;
   FArguments := nil;
   FArgCount := 0;
-  SetLength(FFrameStack, 64);
+  SetLength(FFrameStack, VM_INITIAL_FRAME_STACK_SIZE);
   FFrameStackCount := 0;
-  SetLength(FClosedNumericFrameStack, 64);
+  SetLength(FClosedNumericFrameStack,
+    VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE);
   FClosedNumericFrameStackCount := 0;
   FStackRoot := TGocciaVMStackRoot.Create(Self);
   EnsureStackRootRegistered;
+  FStackChargeCollector := TGarbageCollector.Instance;
 end;
 
 destructor TGocciaVM.Destroy;
 var
   I: Integer;
+  Freed: Int64;
 begin
+  // Never leave the call stack holding a resolver into a freed VM.
+  if (FActivationCount > 0) and Assigned(FCallStack) then
+    FCallStack.LocationResolver := FPreviousLocationResolver;
+  FActivationCount := 0;
   if (TGarbageCollector.Instance <> nil) and Assigned(FStackRoot) and
      FStackRootRegistered then
     TGarbageCollector.Instance.RemoveRootObject(FStackRoot);
   FStackRoot.Free;
+  if (FStackChargedBytes > 0) and Assigned(FStackChargeCollector) and
+     (FStackChargeCollector = TGarbageCollector.Instance) then
+    FStackChargeCollector.ReleaseExternalBytes(FStackChargedBytes);
+  FStackChargedBytes := 0;
+  // The thread's stacks are released with the rest of the charge, so give
+  // their memory back too while this is still the thread the VM ran on.
+  // Otherwise the next engine on the thread would use it uncharged: a
+  // recursion that ends in an uncaught error leaves no instruction boundary
+  // at which to shrink them.
+  if Assigned(FCallStack) and (FCallStack = TGocciaCallStack.Instance) and
+     (FExecutionContextThread = TGocciaExecutionContextStack.ThreadState) then
+  begin
+    Freed := 0;
+    ShrinkThreadStacks(Freed);
+  end;
   if Assigned(FActiveDecoratorSession) then
   begin
     TGarbageCollector.Instance.RemoveTempRoot(
@@ -7063,9 +6537,17 @@ begin
     ShouldDelayNativePrototypeLookup(NativeClass, AArguments) or
     ShouldDelayNativeSuperPrototypeLookup(NativeSuperConstructorForPrototype);
 
-  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget)
+  // ES2026 §10.2.2 step 5: Let proto be ? GetPrototypeFromConstructor(newTarget).
+  // A built-in receiver falls back to that built-in's own intrinsic (§10.1.14
+  // step 3), not %Object.prototype%.
   if Assigned(ANewTarget) and not DelayNativePrototypeLookup then
-    InstancePrototype := GetProtoFromConstructor(ANewTarget)
+  begin
+    if Assigned(NativeClass) then
+      InstancePrototype := GetNativePrototypeFromConstructor(NativeClass,
+        ANewTarget, NativeIntrinsicPrototype)
+    else
+      InstancePrototype := GetProtoFromConstructor(ANewTarget);
+  end
   else
     InstancePrototype := Prototype;
 
@@ -8016,6 +7498,44 @@ begin
     TGocciaBytecodeFunctionValue(AValue).FConstructClassValue := Self;
 end;
 
+function BytecodeOuterPrivateClass(
+  const AClass: TGocciaObjectValue): TGocciaObjectValue;
+begin
+  if AClass is TGocciaVMClassValue then
+    Result := TGocciaVMClassValue(AClass).OuterPrivateClass
+  else
+    Result := nil;
+end;
+
+procedure TGocciaVMClassValue.AddRuntimeKeyedPrivateKey(
+  const ACompiledKey: string);
+var
+  Count: Integer;
+begin
+  Count := Length(FRuntimeKeyedPrivateKeys);
+  SetLength(FRuntimeKeyedPrivateKeys, Count + 1);
+  FRuntimeKeyedPrivateKeys[Count] := ACompiledKey;
+end;
+
+// Whether this class body declares the private name that ACompiledKey
+// names. The compiled key carries the class body's compile-time prefix, so a
+// same-named private name of another class body does not match.
+function TGocciaVMClassValue.DeclaresCompiledPrivateKey(const ACompiledKey,
+  ASourceName: string): Boolean;
+var
+  DeclaredKey: string;
+  I: Integer;
+begin
+  if not ResolveDeclaredPrivateKey(ASourceName, DeclaredKey) then
+    Exit(False);
+  if DeclaredKey = ACompiledKey then
+    Exit(True);
+  for I := 0 to High(FRuntimeKeyedPrivateKeys) do
+    if FRuntimeKeyedPrivateKeys[I] = ACompiledKey then
+      Exit(True);
+  Result := False;
+end;
+
 procedure TGocciaVMClassValue.MarkReferences;
 begin
   if GCMarked then Exit;
@@ -8024,6 +7544,8 @@ begin
     FConstructorValue.MarkReferences;
   if Assigned(FNativeInstanceNewTarget) then
     FNativeInstanceNewTarget.MarkReferences;
+  if Assigned(FOuterPrivateClass) then
+    FOuterPrivateClass.MarkReferences;
 end;
 
 procedure TGocciaVMSuperConstructorValue.MarkReferences;
@@ -8053,12 +7575,12 @@ begin
     FClosure.HomeObject.MarkReferences;
   if Assigned(FClosure.HomeClass) then
     FClosure.HomeClass.MarkReferences;
+  if Assigned(FClosure.PrivateClass) then
+    FClosure.PrivateClass.MarkReferences;
   if Assigned(FClosure.NewTarget) then
     FClosure.NewTarget.MarkReferences;
   if Assigned(FClosure.GlobalScope) then
     FClosure.GlobalScope.MarkReferences;
-  if Assigned(FClosure.DynamicVarScope) then
-    FClosure.DynamicVarScope.MarkReferences;
   if Assigned(FConstructClassValue) then
     FConstructClassValue.MarkReferences;
 
@@ -8230,7 +7752,7 @@ begin
   NewBase := FRegisterBase + FRegisterCount;
   Required := NewBase + ACount;
   if Required > Length(FRegisterStack) then
-    SetLength(FRegisterStack, Required * 2);
+    GrowRegisterStack(Required);
   FRegisterBase := NewBase;
   FRegisterCount := ACount;
   FRegisters := @FRegisterStack[FRegisterBase];
@@ -8244,7 +7766,7 @@ begin
   NewBase := FLocalCellBase + FLocalCellCount;
   Required := NewBase + ACount;
   if Required > Length(FLocalCellStack) then
-    SetLength(FLocalCellStack, Required * 2);
+    GrowLocalCellStack(Required);
   FLocalCellBase := NewBase;
   FLocalCellCount := ACount;
   FLocalCells := @FLocalCellStack[FLocalCellBase];
@@ -8308,10 +7830,478 @@ begin
   // valid address even for a zero-argument call (ACount = 0) under range checks.
   Required := NewBase + ACount + 1;
   if Required > Length(FArgumentStack) then
-    SetLength(FArgumentStack, Required * 2);
+    GrowArgumentStack(Required);
   FArgumentBase := NewBase;
   FArgCount := ACount;
   FArguments := @FArgumentStack[FArgumentBase];
+end;
+
+// The length an idle stack shrinks to: a stack holding four times what it
+// uses shrinks to twice that, never below its initial capacity.
+function ShrunkStackLength(const ALength, AUsed, AInitial: Integer): Integer;
+begin
+  Result := ALength;
+  if (ALength > AInitial) and (Int64(AUsed) * 4 < ALength) then
+  begin
+    Result := AUsed * 2;
+    if Result < AInitial then
+      Result := AInitial;
+  end;
+end;
+
+{ VM stack growth and --max-memory (ADR 0130, ADR 0132).
+
+  The register, local-cell, argument, frame and closed-numeric-frame stacks,
+  the handler stack, and the thread's call stack and execution-context stack
+  are charged to the collector for the capacity they have past their initial
+  capacities. The charge is released when a stack shrinks back after deep
+  recursion has returned, and when the VM is destroyed.
+
+  The stacks may grow up to the memory-pressure line, the reserve below the
+  ceiling within which the VM collects at every pressure check
+  (StackAllowance). A stack doubles while doubling leaves at least as much of
+  that allowance as it takes; past that it takes half of what is left, and at
+  the end only the entries its frame needs.
+
+  SetLength copies a growing stack into a new block before it frees the old
+  one, so for a moment both are allocated. A growth must therefore also leave
+  room under the ceiling itself to copy the largest stack once more: then
+  neither this copy nor the next one, charged or not, takes the process past
+  the ceiling.
+
+  A growth is decided inside call setup, which can neither collect nor throw.
+  It cannot collect because the callee, the receiver and the arguments of a
+  call made from native code are still held only in Pascal locals there
+  (SetupNewFrame copies them into the argument window before anything can
+  collect). It cannot throw because the caller's frame is already saved and
+  the callee's is not yet set up, and unwinding from between the two would
+  tear down a frame that does not exist. So a growth that does not fit takes
+  only the entries its frame needs, uncharged, and the next instruction
+  boundary, where the VM already collects for memory pressure, settles it: it
+  collects if that could help, charges the growth if it now fits, and
+  otherwise throws RangeError. }
+
+// The collector that stack growth is charged to: the one the VM's stack
+// root is registered with, bound when the VM is created. A VM can be entered
+// from another thread between two outermost entries; its charges and
+// releases still go to that collector, as its roots do, so a charge is never
+// stranded on one collector or released against another.
+function TGocciaVM.StackChargeCollector: TGarbageCollector;
+begin
+  Result := FStackChargeCollector;
+end;
+
+// How many more bytes the stacks may take now. Stacks that reached into the
+// pressure reserve would make every pressure check a full collection, each
+// marking every frame, so a deep recursion is refused at the line instead,
+// and the reserve is left for the RangeError and the handler that catches it.
+// Stacks no bigger than the reserve may still use it, up to the ceiling
+// itself, so that a program whose heap fills the ceiling can still make
+// calls.
+function TGocciaVM.StackAllowance(const AGC: TGarbageCollector): Int64;
+var
+  Live, Reserve, Small: Int64;
+begin
+  if AGC.MaxBytes <= 0 then
+    Exit(High(Int64) div 4);
+  Live := AGC.BytesAllocated;
+  Reserve := AGC.MemoryPressureReserve;
+  Result := AGC.MaxBytes - Reserve - Live;
+  Small := Reserve - FStackChargedBytes - FStackUnchargedBytes;
+  if Small > AGC.MaxBytes - Live then
+    Small := AGC.MaxBytes - Live;
+  if Small > Result then
+    Result := Small;
+end;
+
+// The length a stack of AEntrySize-byte entries grows to when it must hold
+// ARequiredLength entries and would double to APreferredLength.
+function TGocciaVM.StackGrowthLength(const ACurrentLength, ARequiredLength,
+  APreferredLength, AEntrySize: Integer): Integer;
+var
+  GC: TGarbageCollector;
+  Available, CopyRoom, Bytes: Int64;
+begin
+  GC := StackChargeCollector;
+  if not Assigned(GC) then
+    Exit(APreferredLength);
+  if FStackUnchargedBytes = 0 then
+  begin
+    Available := StackAllowance(GC);
+    // A growth of G bytes leaves the stacks G bytes bigger and their largest
+    // stack at most G bytes bigger, and both must fit under the ceiling
+    // together: 2G + largest <= MaxBytes - BytesAllocated.
+    if GC.MaxBytes > 0 then
+    begin
+      CopyRoom := (GC.MaxBytes - GC.BytesAllocated - LargestStackBytes) div 2;
+      if CopyRoom < Available then
+        Available := CopyRoom;
+    end;
+    if Int64(APreferredLength - ACurrentLength) * AEntrySize <=
+       Available div 2 then
+      Result := APreferredLength
+    else
+    begin
+      Result := ACurrentLength + Integer((Available div 2) div AEntrySize);
+      if Result < ARequiredLength then
+        Result := ARequiredLength;
+    end;
+    if Int64(Result - ACurrentLength) * AEntrySize <= Available then
+    begin
+      Bytes := Int64(Result - ACurrentLength) * AEntrySize;
+      if GC.TryChargeExternalBytes(Bytes) then
+      begin
+        Inc(FStackChargedBytes, Bytes);
+        Exit;
+      end;
+    end;
+  end;
+  // Nothing fits, or an earlier growth is still unsettled or was refused:
+  // take only the entries this frame needs, uncharged, and let the next
+  // instruction boundary settle the charge or refuse it. Taking no more than
+  // that is what stops a script that catches the RangeError and recurses
+  // again from doubling the stacks past the ceiling.
+  Result := ARequiredLength;
+  Inc(FStackUnchargedBytes, Int64(Result - ACurrentLength) * AEntrySize);
+  if not FStackChargePending then
+    if Assigned(FCallStack) then
+      FStackGrowthCallDepth := FCallStack.Count
+    else
+      FStackGrowthCallDepth := 0;
+  FStackChargePending := True;
+  FMemoryPressureCheckCountdown := 0;
+end;
+
+procedure TGocciaVM.GrowRegisterStack(const ARequired: Integer);
+begin
+  SetLength(FRegisterStack, StackGrowthLength(Length(FRegisterStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaRegister)));
+end;
+
+procedure TGocciaVM.GrowLocalCellStack(const ARequired: Integer);
+begin
+  SetLength(FLocalCellStack, StackGrowthLength(Length(FLocalCellStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaBytecodeCell)));
+end;
+
+procedure TGocciaVM.GrowArgumentStack(const ARequired: Integer);
+begin
+  SetLength(FArgumentStack, StackGrowthLength(Length(FArgumentStack),
+    ARequired, ARequired * 2, SizeOf(TGocciaRegister)));
+end;
+
+procedure TGocciaVM.GrowFrameStack;
+begin
+  SetLength(FFrameStack, StackGrowthLength(Length(FFrameStack),
+    FFrameStackCount + 1, FFrameStackCount * 2 + 8,
+    SizeOf(TGocciaVMCallFrame)));
+end;
+
+procedure TGocciaVM.GrowClosedNumericFrameStack;
+begin
+  SetLength(FClosedNumericFrameStack, StackGrowthLength(
+    Length(FClosedNumericFrameStack), FClosedNumericFrameStackCount + 1,
+    FClosedNumericFrameStackCount * 2 + 8,
+    SizeOf(TGocciaClosedNumericFrame)));
+end;
+
+// The length the call stack, the execution-context stack or the handler stack
+// grows to. Up to VM_INITIAL_RECORD_STACK_SIZE entries it is not charged, as
+// the VM's own stacks are not charged for their initial capacities.
+function TGocciaVM.RecordStackGrowthLength(const ACurrentLength,
+  ARequiredLength, AEntrySize: Integer): Integer;
+begin
+  if ARequiredLength <= VM_INITIAL_RECORD_STACK_SIZE then
+    Result := Max(VM_INITIAL_RECORD_STACK_SIZE, ACurrentLength)
+  else
+    Result := StackGrowthLength(ACurrentLength, ARequiredLength,
+      ARequiredLength * 2, AEntrySize);
+end;
+
+// The length one of the thread's stacks grows to, recording in AAccount what
+// the VM accounted for it. If the VM now runs on another thread's stack, what
+// it accounted for the previous one stays charged until the VM is destroyed,
+// because that memory is still allocated.
+function TGocciaVM.ThreadStackGrowthLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ACurrentLength, ARequiredLength, AEntrySize: Integer): Integer;
+begin
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
+  Result := RecordStackGrowthLength(ACurrentLength, ARequiredLength,
+    AEntrySize);
+  if Result > VM_INITIAL_RECORD_STACK_SIZE then
+    Inc(AAccount.Bytes, Int64(Result - ACurrentLength) * AEntrySize);
+end;
+
+// The length one of the thread's idle stacks shrinks to. What it gives back is
+// added to AFreed, and is never more than the VM accounted for that stack:
+// other code can grow the thread's stacks too, uncharged, and that growth is
+// shrunk without releasing anything.
+function TGocciaVM.ThreadStackShrunkLength(
+  var AAccount: TGocciaVMThreadStackAccount; const AStack: Pointer;
+  const ALength, AUsed, AEntrySize: Integer; var AFreed: Int64): Integer;
+var
+  Given: Int64;
+begin
+  if AAccount.Stack <> AStack then
+  begin
+    AAccount.Stack := AStack;
+    AAccount.Bytes := 0;
+  end;
+  Result := ShrunkStackLength(ALength, AUsed, VM_INITIAL_RECORD_STACK_SIZE);
+  Given := Int64(ALength - Result) * AEntrySize;
+  if Given > AAccount.Bytes then
+    Given := AAccount.Bytes;
+  Dec(AAccount.Bytes, Given);
+  Inc(AFreed, Given);
+end;
+
+// Stacks still at their initial capacity are skipped without a call: this runs
+// at every memory-pressure checkpoint while any stack holds a charge.
+procedure TGocciaVM.ShrinkThreadStacks(var AFreed: Int64);
+var
+  NewLength: Integer;
+begin
+  if Assigned(FCallStack) and
+     (FCallStack.Capacity > VM_INITIAL_RECORD_STACK_SIZE) then
+  begin
+    NewLength := ThreadStackShrunkLength(FCallStackAccount, FCallStack,
+      FCallStack.Capacity, FCallStack.Count, SizeOf(TGocciaCallFrame), AFreed);
+    if NewLength < FCallStack.Capacity then
+      FCallStack.SetCapacity(NewLength);
+  end;
+  if Assigned(FExecutionContextThread) and
+     (TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread) > VM_INITIAL_RECORD_STACK_SIZE) then
+  begin
+    NewLength := ThreadStackShrunkLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread),
+      SizeOf(TGocciaExecutionContextStackEntry), AFreed);
+    if NewLength < TGocciaExecutionContextStack.FunctionContextCapacity(
+         FExecutionContextThread) then
+      TGocciaExecutionContextStack.SetFunctionContextCapacity(
+        FExecutionContextThread, NewLength);
+  end;
+end;
+
+// Makes room for one more frame record on the thread's call stack before
+// SetupNewFrame or PushClosedNumericFrame pushes it.
+procedure TGocciaVM.GrowCallStack;
+begin
+  FCallStack.SetCapacity(ThreadStackGrowthLength(FCallStackAccount,
+    FCallStack, FCallStack.Capacity, FCallStack.Count + 1,
+    SizeOf(TGocciaCallFrame)));
+end;
+
+// Pushes a named frame for a call the VM makes into native code, such as a
+// native constructor. On the call stack the VM is bound to, the VM makes the
+// room itself, so that a deep recursion of such calls is charged like any
+// other (ADR 0132).
+procedure TGocciaVM.PushNamedCallFrame(const AName: string);
+var
+  CallStack: TGocciaCallStack;
+begin
+  CallStack := TGocciaCallStack.Instance;
+  if CallStack = nil then
+    Exit;
+  if (CallStack = FCallStack) and (CallStack.Count >= CallStack.Capacity) then
+    GrowCallStack;
+  CallStack.Push(AName, '', 0, 0);
+end;
+
+// Makes room for one more context on the thread's execution-context stack
+// before SetupNewFrame pushes it. SetupNewFrame has already pushed the frame's
+// call-stack record by then, so a growth this makes pending belongs to the
+// call entering that frame, not to the frame itself.
+procedure TGocciaVM.GrowExecutionContextStack;
+var
+  WasPending: Boolean;
+begin
+  WasPending := FStackChargePending;
+  TGocciaExecutionContextStack.SetFunctionContextCapacity(
+    FExecutionContextThread, ThreadStackGrowthLength(FContextStackAccount,
+      FExecutionContextThread,
+      TGocciaExecutionContextStack.FunctionContextCapacity(
+        FExecutionContextThread),
+      TGocciaExecutionContextStack.FunctionContextCount(
+        FExecutionContextThread) + 1,
+      SizeOf(TGocciaExecutionContextStackEntry)));
+  if FStackChargePending and not WasPending then
+    Dec(FStackGrowthCallDepth);
+end;
+
+procedure TGocciaVM.GrowHandlerStack(const ARequired: Integer);
+begin
+  FHandlerStack.SetCapacity(RecordStackGrowthLength(FHandlerStack.Capacity,
+    ARequired, SizeOf(TGocciaBytecodeHandlerEntry)));
+end;
+
+// The size of the largest stack: the most that the next copy of one can add.
+// It lists every charged stack, as ShrinkIdleStacks and the Grow* helpers do;
+// a stack missing here would make the copy room too small.
+function TGocciaVM.LargestStackBytes: Int64;
+
+  procedure Consider(const ABytes: Int64);
+  begin
+    if ABytes > Result then
+      Result := ABytes;
+  end;
+
+begin
+  Result := Int64(Length(FRegisterStack)) * SizeOf(TGocciaRegister);
+  Consider(Int64(Length(FLocalCellStack)) * SizeOf(TGocciaBytecodeCell));
+  Consider(Int64(Length(FArgumentStack)) * SizeOf(TGocciaRegister));
+  Consider(Int64(Length(FFrameStack)) * SizeOf(TGocciaVMCallFrame));
+  Consider(Int64(Length(FClosedNumericFrameStack)) *
+    SizeOf(TGocciaClosedNumericFrame));
+  Consider(Int64(FHandlerStack.Capacity) *
+    SizeOf(TGocciaBytecodeHandlerEntry));
+  if Assigned(FCallStack) then
+    Consider(Int64(FCallStack.Capacity) * SizeOf(TGocciaCallFrame));
+  if Assigned(FExecutionContextThread) then
+    Consider(Int64(TGocciaExecutionContextStack.FunctionContextCapacity(
+      FExecutionContextThread)) * SizeOf(TGocciaExecutionContextStackEntry));
+end;
+
+// Runs at an instruction boundary, where everything live is reachable from
+// the VM's roots, so the collector may run before the charge is decided. The
+// growth is kept only if the allowance then also has room for the stacks to
+// grow by a quarter: a collection marks every frame, so one that buys room for
+// a few more frames would be repeated every few frames, and the recursion
+// would slow quadratically on its way to the same refusal. That growth must
+// also leave room under the ceiling to copy the largest stack, as in
+// StackGrowthLength. A refused growth stays in place, uncharged, because the
+// frames that use it are live until the RangeError unwinds them; a later
+// boundary shrinks the stacks back (ShrinkIdleStacks).
+procedure TGocciaVM.SettleStackGrowth;
+var
+  GC: TGarbageCollector;
+  Needed, Reserve, Copy: Int64;
+  Fits: Boolean;
+begin
+  FStackChargePending := False;
+  GC := StackChargeCollector;
+  if not Assigned(GC) or (FStackUnchargedBytes = 0) then
+  begin
+    FStackUnchargedBytes := 0;
+    Exit;
+  end;
+  Needed := FStackUnchargedBytes + FStackChargedBytes div 4;
+  if GC.MaxBytes <= 0 then
+    Fits := True
+  else
+  begin
+    // The two halves of StackAllowance, each tested after a collection if
+    // one could make it fit, with room to copy the largest stack.
+    Reserve := GC.MemoryPressureReserve;
+    Copy := Needed + FStackChargedBytes div 4 + LargestStackBytes;
+    Fits := GC.TryCollectForLimitedBytes(Max(Needed + Reserve, Copy)) or
+      ((FStackChargedBytes + Needed <= Reserve) and
+       GC.TryCollectForLimitedBytes(Copy));
+  end;
+  if Fits then
+    if GC.TryChargeExternalBytes(FStackUnchargedBytes) then
+    begin
+      Inc(FStackChargedBytes, FStackUnchargedBytes);
+      FStackUnchargedBytes := 0;
+      Exit;
+    end;
+  FMemoryPressureCheckCountdown := 0;
+  LocateUnstartedFrameAtItsCall;
+  ThrowVMMemoryLimitExceeded(GC, SErrorMaxCallStackExceeded,
+    SSuggestStackMemoryLimitExceeded);
+end;
+
+// Gives memory back once deep recursion has returned: a stack holding four
+// times what it uses shrinks to twice that, never below its initial
+// capacity. Every live window lies below the current top of its stack, so no
+// live entry is dropped; the bytes freed pay off uncharged growth first and
+// then release the charge.
+procedure TGocciaVM.ShrinkIdleStacks;
+var
+  Freed: Int64;
+  NewLength: Integer;
+  GC: TGarbageCollector;
+begin
+  Freed := 0;
+  NewLength := ShrunkStackLength(Length(FRegisterStack),
+    FRegisterBase + FRegisterCount, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FRegisterStack) then
+  begin
+    Inc(Freed, Int64(Length(FRegisterStack) - NewLength) *
+      SizeOf(TGocciaRegister));
+    SetLength(FRegisterStack, NewLength);
+    FRegisters := @FRegisterStack[FRegisterBase];
+  end;
+  NewLength := ShrunkStackLength(Length(FLocalCellStack),
+    FLocalCellBase + FLocalCellCount, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FLocalCellStack) then
+  begin
+    Inc(Freed, Int64(Length(FLocalCellStack) - NewLength) *
+      SizeOf(TGocciaBytecodeCell));
+    SetLength(FLocalCellStack, NewLength);
+    FLocalCells := @FLocalCellStack[FLocalCellBase];
+    if FLocalCellStaleTop > NewLength then
+      FLocalCellStaleTop := NewLength;
+  end;
+  NewLength := ShrunkStackLength(Length(FArgumentStack),
+    FArgumentBase + FArgCount + 1, VM_INITIAL_STACK_SIZE);
+  if NewLength < Length(FArgumentStack) then
+  begin
+    Inc(Freed, Int64(Length(FArgumentStack) - NewLength) *
+      SizeOf(TGocciaRegister));
+    SetLength(FArgumentStack, NewLength);
+    FArguments := @FArgumentStack[FArgumentBase];
+  end;
+  NewLength := ShrunkStackLength(Length(FFrameStack), FFrameStackCount,
+    VM_INITIAL_FRAME_STACK_SIZE);
+  if NewLength < Length(FFrameStack) then
+  begin
+    Inc(Freed, Int64(Length(FFrameStack) - NewLength) *
+      SizeOf(TGocciaVMCallFrame));
+    SetLength(FFrameStack, NewLength);
+  end;
+  NewLength := ShrunkStackLength(Length(FClosedNumericFrameStack),
+    FClosedNumericFrameStackCount,
+    VM_INITIAL_CLOSED_NUMERIC_FRAME_STACK_SIZE);
+  if NewLength < Length(FClosedNumericFrameStack) then
+  begin
+    Inc(Freed, Int64(Length(FClosedNumericFrameStack) - NewLength) *
+      SizeOf(TGocciaClosedNumericFrame));
+    SetLength(FClosedNumericFrameStack, NewLength);
+  end;
+  NewLength := ShrunkStackLength(FHandlerStack.Capacity, FHandlerStack.Count,
+    VM_INITIAL_RECORD_STACK_SIZE);
+  if NewLength < FHandlerStack.Capacity then
+  begin
+    Inc(Freed, Int64(FHandlerStack.Capacity - NewLength) *
+      SizeOf(TGocciaBytecodeHandlerEntry));
+    FHandlerStack.SetCapacity(NewLength);
+  end;
+  ShrinkThreadStacks(Freed);
+  if Freed = 0 then
+    Exit;
+  if Freed <= FStackUnchargedBytes then
+  begin
+    Dec(FStackUnchargedBytes, Freed);
+    Exit;
+  end;
+  Dec(Freed, FStackUnchargedBytes);
+  FStackUnchargedBytes := 0;
+  if Freed > FStackChargedBytes then
+    Freed := FStackChargedBytes;
+  GC := StackChargeCollector;
+  if Assigned(GC) and (Freed > 0) then
+    GC.ReleaseExternalBytes(Freed);
+  Dec(FStackChargedBytes, Freed);
 end;
 
 // Copy the current frame's live argument window out of the arena into a
@@ -8336,7 +8326,7 @@ begin
     Growth := ACount - FRegisterCount;
     Required := FRegisterBase + ACount;
     if Required > Length(FRegisterStack) then
-      SetLength(FRegisterStack, Required * 2);
+      GrowRegisterStack(Required);
     FillChar(FRegisterStack[FRegisterBase + FRegisterCount],
       Growth * SizeOf(TGocciaRegister), 0);
     FRegisterCount := ACount;
@@ -8353,7 +8343,7 @@ begin
     GrowthStart := FLocalCellBase + FLocalCellCount;
     Required := FLocalCellBase + ACount;
     if Required > Length(FLocalCellStack) then
-      SetLength(FLocalCellStack, Required * 2);
+      GrowLocalCellStack(Required);
     if GrowthStart < FLocalCellStaleTop then
       ClearStaleLocalCells(GrowthStart, Required);
     Assert(LocalCellsAreClear(GrowthStart, Required),
@@ -8373,6 +8363,37 @@ begin
     NoteLocalCells(AIndex + 1);
   end;
   Result := FLocalCells[AIndex];
+end;
+
+const
+  // Binary bytecode written without debug locals cannot name the binding.
+  SErrorCannotAccessLexicalBeforeInit =
+    'Cannot access lexical binding before initialization';
+
+procedure TGocciaVM.ThrowUninitializedLocal(
+  const ATemplate: TGocciaFunctionTemplate; const APC, ASlot: Integer);
+var
+  Name: string;
+begin
+  if Assigned(ATemplate) and Assigned(ATemplate.DebugInfo) and
+     ATemplate.DebugInfo.TryGetLocalName(UInt16(ASlot), UInt32(APC), Name) then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
+end;
+
+procedure TGocciaVM.ThrowUninitializedUpvalue(
+  const ATemplate: TGocciaFunctionTemplate; const AIndex: Integer);
+var
+  Name: string;
+begin
+  Name := ATemplate.GetUpvalueDescriptor(AIndex).Name;
+  if Name <> '' then
+    ThrowReferenceError(Format(SErrorCannotAccessBeforeInit, [Name]),
+      SSuggestTemporalDeadZone);
+  ThrowReferenceError(SErrorCannotAccessLexicalBeforeInit,
+    SSuggestTemporalDeadZone);
 end;
 
 function TGocciaVM.GetLocalRegister(const AIndex: Integer): TGocciaRegister;
@@ -8524,8 +8545,12 @@ begin
   if SourceName <> '' then
   begin
     if AUseRuntimeKey then
+    begin
       InternalName := BytecodePrivateRuntimeKey(AName,
-        TGocciaClassValue(AClassValue).PrivateBrandToken)
+        TGocciaClassValue(AClassValue).PrivateBrandToken);
+      if (AClassValue is TGocciaVMClassValue) and IsBytecodePrivateKey(AName) then
+        TGocciaVMClassValue(AClassValue).AddRuntimeKeyedPrivateKey(AName);
+    end
     else
       InternalName := AName;
     TGocciaClassValue(AClassValue).DeclarePrivateName(SourceName,
@@ -8533,21 +8558,82 @@ begin
   end;
 end;
 
+// ES2026 §15.7.14 ClassDefinitionEvaluation step 6: a class's own private
+// environment holds only the PrivateBoundIdentifiers of its body. The
+// instance field initializer defines each private field and auto-accessor
+// storage of the class on its receiver, local slot 0 (CompileFieldInitializer
+// in Goccia.Compiler.Statements). Any other private key in the initializer
+// names a private name of an enclosing class body, resolved outward by
+// §9.2.1.2 ResolvePrivateIdentifier, or of a class created inside an
+// initializer, so declaring it here would make this class claim it.
 procedure DeclareBytecodePrivateNamesFromTemplate(
   const AClassValue: TGocciaValue; const ATemplate: TGocciaFunctionTemplate);
+const
+  FIELD_INITIALIZER_RECEIVER_SLOT = 0;
 var
-  ConstantValue: TGocciaBytecodeConstant;
-  I: Integer;
+  Instruction: UInt32;
+  WideA, WideB: UInt16;
+  A, B: UInt16;
+  Op: UInt8;
+  PC: Integer;
+  LoadedConstReg, LoadedConstIndex: Integer;
+  KeyIndex: Integer;
+  KeyConstant: TGocciaBytecodeConstant;
 begin
   if not (Assigned(ATemplate) and (AClassValue is TGocciaClassValue)) then
     Exit;
 
-  for I := 0 to ATemplate.ConstantCount - 1 do
+  // A key past the 8-bit constant operand is loaded into a register by the
+  // instruction just before OP_DEFINE_STATIC_PROP_DYNAMIC
+  // (EmitDefineStaticPropertyByName).
+  LoadedConstReg := -1;
+  LoadedConstIndex := -1;
+  PC := 0;
+  while PC < ATemplate.CodeCount do
   begin
-    ConstantValue := ATemplate.GetConstantUnchecked(I)^;
-    if (ConstantValue.Kind = bckString) and
-       IsBytecodePrivateKey(ConstantValue.StringValue) then
-      DeclareBytecodePrivateNameForClass(AClassValue, ConstantValue.StringValue);
+    Instruction := ATemplate.GetInstructionUnchecked(PC);
+    Inc(PC);
+    WideA := 0;
+    WideB := 0;
+    if DecodeOp(Instruction) = Ord(OP_WIDE) then
+    begin
+      if PC >= ATemplate.CodeCount then
+        Break;
+      WideA := UInt16(DecodeA(Instruction)) shl 8;
+      WideB := UInt16(DecodeB(Instruction)) shl 8;
+      Instruction := ATemplate.GetInstructionUnchecked(PC);
+      Inc(PC);
+    end;
+    Op := DecodeOp(Instruction);
+    A := WideA or DecodeA(Instruction);
+    B := WideB or DecodeB(Instruction);
+
+    KeyIndex := -1;
+    if (Op = Ord(OP_DEFINE_STATIC_PROP_CONST)) and
+       (A = FIELD_INITIALIZER_RECEIVER_SLOT) then
+      KeyIndex := B
+    else if (Op = Ord(OP_DEFINE_STATIC_PROP_DYNAMIC)) and
+            (A = FIELD_INITIALIZER_RECEIVER_SLOT) and
+            (Integer(B) = LoadedConstReg) then
+      KeyIndex := LoadedConstIndex;
+
+    if Op = Ord(OP_LOAD_CONST) then
+    begin
+      LoadedConstReg := A;
+      LoadedConstIndex := DecodeBx(Instruction);
+    end
+    else
+    begin
+      LoadedConstReg := -1;
+      LoadedConstIndex := -1;
+    end;
+
+    if (KeyIndex < 0) or (KeyIndex >= ATemplate.ConstantCount) then
+      Continue;
+    KeyConstant := ATemplate.GetConstantUnchecked(KeyIndex)^;
+    if (KeyConstant.Kind = bckString) and
+       IsBytecodePrivateKey(KeyConstant.StringValue) then
+      DeclareBytecodePrivateNameForClass(AClassValue, KeyConstant.StringValue);
   end;
 end;
 
@@ -8722,7 +8808,7 @@ const
     [caoHandlePrivateKeys, caoLiteralFastPath];                     // OP_GET_INDEX
   ELEMENT_SET_OPTIONS: TGocciaComputedAccessOptions = [];           // OP_ARRAY_SET
   MEMBER_SET_OPTIONS: TGocciaComputedAccessOptions =
-    [caoClassDefineSemantics, caoHandlePrivateKeys];                 // OP_SET_INDEX
+    [caoHandlePrivateKeys];                                         // OP_SET_INDEX
 
 function TGocciaVM.ClassifyPropertyKey(const AKeyReg: TGocciaRegister;
   const AProbeArrayIndex: Boolean): TGocciaPropertyKey;
@@ -9028,40 +9114,11 @@ begin
     end;
   end
   else if (FRegisters[ATargetIndex].Kind = grkObject) and
-          (FRegisters[ATargetIndex].ObjectValue is TGocciaClassValue) then
-  begin
-    Key := ClassifyPropertyKey(AKeyReg, False);
-    if caoClassDefineSemantics in AOptions then
-    begin
-      if Key.Kind = pkkSymbol then
-        TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-          .DefineSymbolProperty(Key.Symbol,
-            TGocciaPropertyDescriptorData.Create(
-              Value, [pfConfigurable, pfWritable]))
-      else
-      begin
-        KeyName := PropertyKeyName(Key);
-        if (caoHandlePrivateKeys in AOptions) and
-           IsBytecodePrivateKey(KeyName) then
-          SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName,
-            Value)
-        else
-          TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-            .DefineProperty(KeyName,
-              TGocciaPropertyDescriptorData.Create(
-                Value, [pfConfigurable, pfWritable]));
-      end;
-    end
-    else if Key.Kind = pkkSymbol then
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .AssignSymbolProperty(Key.Symbol, Value)
-    else
-      TGocciaClassValue(FRegisters[ATargetIndex].ObjectValue)
-        .SetProperty(PropertyKeyName(Key), Value);
-  end
-  else if (FRegisters[ATargetIndex].Kind = grkObject) and
           (FRegisters[ATargetIndex].ObjectValue is TGocciaObjectValue) then
   begin
+    // ES2026 §6.2.5.6 PutValue: an assignment runs [[Set]] on every object,
+    // a class included, so an inherited static setter is called and a
+    // non-writable property rejects the write.
     Key := ClassifyPropertyKey(AKeyReg, False);
     if Key.Kind = pkkSymbol then
       TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
@@ -9224,6 +9281,17 @@ begin
       Prefix := 'set';
   else
     Prefix := '';
+  end;
+
+  { The compiler emits this for a class right after OP_NEW_CLASS, before any
+    class element, so the class still has its synthesized name; setting the
+    internal name keeps it synthesized and puts it in the class's error
+    messages too. }
+  if AFunction is TGocciaClassValue then
+  begin
+    TGocciaClassValue(AFunction).SetInferredName(
+      FunctionNameFromPropertyKey(AKey, Prefix));
+    Exit;
   end;
 
   TGocciaObjectValue(AFunction).DefineProperty(PROP_NAME,
@@ -9766,7 +9834,8 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
+  CycleMark: TGocciaObjectValue;
+  CycleSteps, CycleLimit: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -9784,15 +9853,19 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links and has no length limit.
+      // Those links should not form a cycle (every [[SetPrototypeOf]] refuses
+      // one, and the walk does not follow a Proxy's [[GetPrototypeOf]], so a
+      // cycle closed through a Proxy ends it), but an internal write that
+      // skipped the check would make the walk loop forever. Brent's method
+      // notices a revisited link without remembering the objects: CycleMark
+      // jumps to the current link after 1, 2, 4, ... steps.
       Current := Obj;
-      ChainDepth := 0;
+      CycleMark := Obj;
+      CycleSteps := 0;
+      CycleLimit := 1;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
@@ -9823,6 +9896,15 @@ begin
           end;
         end;
         Current := Current.Prototype;
+        if Current = CycleMark then
+          ThrowRangeError(SErrorMaxCallStackExceeded);
+        Inc(CycleSteps);
+        if CycleSteps = CycleLimit then
+        begin
+          CycleMark := Current;
+          CycleSteps := 0;
+          CycleLimit := CycleLimit * 2;
+        end;
       end;
     finally
       Visited.Free;
@@ -10049,10 +10131,7 @@ begin
     begin
       EvalContext := Default(TGocciaEvaluationContext);
       EvalContext.Realm := FRealm;
-      if Assigned(FCurrentDynamicVarScope) then
-        EvalContext.Scope := FCurrentDynamicVarScope
-      else
-        EvalContext.Scope := FGlobalScope;
+      EvalContext.Scope := FGlobalScope;
       EvalContext.OnError := ThrowError;
       EvalContext.LoadModule := FLoadModule;
       EvalContext.LoadModuleSource := FLoadModuleSource;
@@ -10105,8 +10184,7 @@ begin
           [TGocciaNativeFunctionValue(AConstructor).Name]),
         SSuggestNotConstructorType);
     ConstructorName := TGocciaNativeFunctionValue(AConstructor).Name;
-    if (TGocciaCallStack.Instance <> nil) then
-      TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+    PushNamedCallFrame(ConstructorName);
     try
       Result := TGocciaNativeFunctionValue(AConstructor).Construct(
         AArguments, EffectiveNewTarget);
@@ -10160,8 +10238,7 @@ begin
     ReceiverInstance := TGocciaObjectValue.Create(ReceiverPrototype);
     TGarbageCollector.Instance.AddTempRoot(ReceiverInstance);
     try
-      if (TGocciaCallStack.Instance <> nil) then
-        TGocciaCallStack.Instance.Push(ConstructorName, '', 0, 0);
+      PushNamedCallFrame(ConstructorName);
       try
         // InvokeConstructableWithReceiver merges bound args, dispatches to
         // the underlying target, and applies the spec return rules
@@ -10589,77 +10666,6 @@ begin
   DefineStaticSetterProperty(ATarget, AKey.ToStringLiteral.Value, ASetter);
 end;
 
-function TGocciaVM.EnsureCurrentDynamicVarScope: TGocciaScope;
-var
-  ParentScope: TGocciaScope;
-begin
-  if Assigned(FCurrentDynamicVarScope) then
-    Exit(FCurrentDynamicVarScope);
-
-  if not Assigned(FGlobalScope) then
-    Exit(nil);
-
-  ParentScope := FGlobalScope;
-  if Assigned(FCurrentClosure) and
-     Assigned(FCurrentClosure.DynamicVarScope) then
-    ParentScope := FCurrentClosure.DynamicVarScope;
-  FCurrentDynamicVarScope := ParentScope.CreateChild(skFunction,
-    'BytecodeDynamicVarEnv');
-  if FLocalCellCount > 0 then
-    FCurrentDynamicVarScope.ThisValue := GetLocal(0)
-  else if Assigned(FGlobalThisValue) then
-    FCurrentDynamicVarScope.ThisValue := FGlobalThisValue;
-  FCurrentDynamicVarScope.NonStrictMode := True;
-  Result := FCurrentDynamicVarScope;
-end;
-
-function FindDynamicVarBindingScope(const AScope: TGocciaScope;
-  const AName: string): TGocciaScope;
-var
-  ScopeCursor: TGocciaScope;
-begin
-  ScopeCursor := AScope;
-  while Assigned(ScopeCursor) and (ScopeCursor.ScopeKind <> skGlobal) do
-  begin
-    if ScopeCursor.ContainsOwnVarBinding(AName) or
-       ScopeCursor.ContainsOwnLexicalBinding(AName) then
-      Exit(ScopeCursor);
-    ScopeCursor := ScopeCursor.Parent;
-  end;
-  Result := nil;
-end;
-
-function HasDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  Result := Assigned(FindDynamicVarBindingScope(AScope, AName));
-end;
-
-function HasOwnDynamicVarBinding(const AScope: TGocciaScope;
-  const AName: string): Boolean; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  Result := Assigned(AScope) and
-    (AScope.ContainsOwnVarBinding(AName) or
-     AScope.ContainsOwnLexicalBinding(AName));
-end;
-
-function TGocciaVM.ResolveDynamicUpvalueScope(const AIndex: Integer;
-  const AName: string): TGocciaScope;
-begin
-  Result := nil;
-  if (AName = '') or not Assigned(FCurrentClosure) or
-     not Assigned(FCurrentDynamicVarScope) then
-    Exit;
-
-  if (FCurrentDynamicVarScope <> FCurrentClosure.DynamicVarScope) and
-     HasOwnDynamicVarBinding(FCurrentDynamicVarScope, AName) then
-    Exit(FCurrentDynamicVarScope);
-
-  if FCurrentClosure.IsDynamicVarUpvalue(AIndex) then
-    Result := FindDynamicVarBindingScope(FCurrentClosure.DynamicVarScope,
-      AName);
-end;
-
 procedure TGocciaVM.DefineGlobalBinding(const AName: string;
   const AValue: TGocciaValue;
   const ADeclarationType: TGocciaDeclarationType;
@@ -10863,9 +10869,38 @@ begin
       NormalizeBytecodePrivateKey(AKey, APrivateBrandToken);
 end;
 
+// ES2026 §9.2.1.2 ResolvePrivateIdentifier: walk the running function's
+// private environments outward to the class body that declares AKey. The
+// compiled key names the class body, so only the matching evaluation of it
+// can answer.
+function TGocciaVM.LexicalBytecodePrivateClass(
+  const AKey: string): TGocciaClassValue;
+var
+  SourceName: string;
+  Candidate: TGocciaObjectValue;
+begin
+  Result := nil;
+  if not Assigned(FCurrentClosure) then
+    Exit;
+  Candidate := FCurrentClosure.PrivateClass;
+  if not Assigned(Candidate) then
+    Exit;
+  SourceName := BytecodePrivateSourceName(AKey);
+  if SourceName = '' then
+    Exit;
+  while Candidate is TGocciaVMClassValue do
+  begin
+    if TGocciaVMClassValue(Candidate).DeclaresCompiledPrivateKey(AKey,
+         SourceName) then
+      Exit(TGocciaVMClassValue(Candidate));
+    Candidate := TGocciaVMClassValue(Candidate).OuterPrivateClass;
+  end;
+end;
+
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
   const AObject: TGocciaValue): string;
 var
+  LexicalClass: TGocciaClassValue;
   HomeClass: TGocciaClassValue;
   CandidateClass: TGocciaClassValue;
   ExactReceiverClass: TGocciaClassValue;
@@ -10888,6 +10923,10 @@ var
     end;
   end;
 begin
+  LexicalClass := LexicalBytecodePrivateClass(AKey);
+  if Assigned(LexicalClass) then
+    Exit(LexicalClass.PrivateBrandToken);
+
   Result := BytecodePrivateTokenForKey(AKey,
     BytecodePrivateReceiverBrandToken(AObject));
 
@@ -10935,7 +10974,9 @@ var
   DeclaredKey: string;
   SourceName: string;
 begin
-  Result := nil;
+  Result := LexicalBytecodePrivateClass(AKey);
+  if Assigned(Result) then
+    Exit;
   if (not Assigned(FCurrentClosure)) or
      not (FCurrentClosure.HomeClass is TGocciaClassValue) then
     Exit;
@@ -10949,17 +10990,21 @@ begin
   Result := nil;
 end;
 
+// AMessageFormat takes the private name without its '#', as the interpreter
+// formats it, so both modes name the member as written in the source.
 procedure TGocciaVM.ThrowBytecodePrivateTypeError(const AKey,
-  AMessage: string);
+  AMessageFormat: string);
 var
   AccessClass: TGocciaClassValue;
+  Message: string;
 begin
+  Message := Format(AMessageFormat, [PrivateStorageSourceName(AKey)]);
   AccessClass := CurrentBytecodePrivateAccessClass(AKey);
   if Assigned(AccessClass) then
-    ThrowTypeErrorInRealm(AMessage, SSuggestPrivateFieldAccess,
+    ThrowTypeErrorInRealm(Message, SSuggestPrivateFieldAccess,
       AccessClass.CreationRealm)
   else
-    ThrowTypeError(AMessage, SSuggestPrivateFieldAccess);
+    ThrowTypeError(Message, SSuggestPrivateFieldAccess);
 end;
 
 function BytecodePrivateInitializedKey(
@@ -11147,7 +11192,15 @@ begin
       begin
         PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
           Names[I]);
-        if Assigned(PrototypeDescriptor) then
+        // A private data element on the prototype is a method. Its copy is
+        // not writable, so SetPropertyValue rejects assigning to it instead
+        // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
+        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+              PrototypeDescriptor.Flags - [pfWritable]))
+        else if Assigned(PrototypeDescriptor) then
           DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
@@ -11243,13 +11296,12 @@ function TGocciaVM.InvokeImplicitSuperInitialization(
   const AArguments: TGocciaArgumentsCollection): TGocciaValue;
 var
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -11317,41 +11369,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
-    TargetInstance := AClassValue.CreateNativeInstance(AArguments);
-    if not (TargetInstance is TGocciaObjectValue) then
-      ThrowTypeError(
-        'Superclass constructor did not return an object',
-        SSuggestNotConstructorType);
     { ES2026 §10.2.2 steps 5-6 put newTarget's prototype on the receiver before
       the built-in's own steps run, and §24.1.1.1 Map reads its `set` adder off
       that receiver — so a foreign newTarget whose prototype has no adder has
-      to throw here rather than quietly populating through Map.prototype.
-      The families that validate their arguments before newTarget.prototype may
-      be observed (§10.1.13 ordering) keep the lookup after initialization. }
-    DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-      AArguments);
-    if not DelayReceiverPrototype then
-      TGocciaObjectValue(TargetInstance).Prototype :=
-        GetProtoFromConstructor(EffectiveNewTarget);
-    if TargetInstance is TGocciaInstanceValue then
-    begin
-      if AInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).ClassValue :=
-          TGocciaInstanceValue(AInstance).ClassValue
-      else
-        TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-      TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(AArguments);
-    end;
-    if DelayReceiverPrototype then
-    begin
-      ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-      TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-    end;
-    if TargetInstance is TGocciaInstanceValue then
-      TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(AArguments);
-    Exit(TargetInstance);
+      to throw here rather than quietly populating through Map.prototype. }
+    if AInstance is TGocciaInstanceValue then
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, AArguments, EffectiveNewTarget,
+        TGocciaInstanceValue(AInstance).ClassValue));
+    Exit(CreateNativeReceiverFromConstructor(AClassValue,
+      NativeDefaultPrototype, AArguments, EffectiveNewTarget, AClassValue));
   end;
 
   if (AClassValue is TGocciaVMClassValue) and
@@ -11453,14 +11483,13 @@ var
   BoxedArgs: TGocciaArgumentsCollection;
   BytecodeConstructor: TGocciaBytecodeFunctionValue;
   ConstructorThisValue: TGocciaValue;
-  ReceiverPrototype: TGocciaObjectValue;
   SuperResult: TGocciaValue;
   SuperResultRegister: TGocciaRegister;
   TargetInstance: TGocciaValue;
   PreviousConstructorSuperCalled: Boolean;
   ConstructorSuperCalled: Boolean;
   ImplicitSuperTarget: TGocciaObjectValue;
-  DelayReceiverPrototype: Boolean;
+  NativeDefaultPrototype: TGocciaObjectValue;
   function EffectiveNewTarget: TGocciaValue;
   begin
     if Assigned(FPendingNewTarget) then
@@ -11543,39 +11572,19 @@ begin
        (not ImplicitSuperTarget.IsConstructable))) then
     ThrowTypeError(SErrorSuperNotConstructor, SSuggestNotConstructorType);
 
-  if AClassValue.NativeInstanceDefaultPrototype <> nil then
+  NativeDefaultPrototype := AClassValue.NativeInstanceDefaultPrototype;
+  if Assigned(NativeDefaultPrototype) then
   begin
     BoxedArgs := MaterializeArguments(AArguments);
     try
-      TargetInstance := AClassValue.CreateNativeInstance(BoxedArgs);
-      if not (TargetInstance is TGocciaObjectValue) then
-        ThrowTypeError(
-          'Superclass constructor did not return an object',
-          SSuggestNotConstructorType);
       { §10.2.2 steps 5-6 before the built-in's own steps — see the same
         ordering in InvokeImplicitSuperInitialization. }
-      DelayReceiverPrototype := ShouldDelayNativePrototypeLookup(AClassValue,
-        BoxedArgs);
-      if not DelayReceiverPrototype then
-        TGocciaObjectValue(TargetInstance).Prototype :=
-          GetProtoFromConstructor(EffectiveNewTarget);
-      if TargetInstance is TGocciaInstanceValue then
-      begin
-        if AInstance is TGocciaInstanceValue then
-          TGocciaInstanceValue(TargetInstance).ClassValue :=
-            TGocciaInstanceValue(AInstance).ClassValue
-        else
-          TGocciaInstanceValue(TargetInstance).ClassValue := AClassValue;
-        TGocciaInstanceValue(TargetInstance).InitializeNativeFromArguments(BoxedArgs);
-      end;
-      if DelayReceiverPrototype then
-      begin
-        ReceiverPrototype := GetProtoFromConstructor(EffectiveNewTarget);
-        TGocciaObjectValue(TargetInstance).Prototype := ReceiverPrototype;
-      end;
-      if TargetInstance is TGocciaInstanceValue then
-        TGocciaInstanceValue(TargetInstance).FinalizeNativeFromArguments(BoxedArgs);
-      Exit(TargetInstance);
+      if AInstance is TGocciaInstanceValue then
+        Exit(CreateNativeReceiverFromConstructor(AClassValue,
+          NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget,
+          TGocciaInstanceValue(AInstance).ClassValue));
+      Exit(CreateNativeReceiverFromConstructor(AClassValue,
+        NativeDefaultPrototype, BoxedArgs, EffectiveNewTarget, AClassValue));
     finally
       ReleaseArguments(BoxedArgs);
     end;
@@ -11729,14 +11738,18 @@ begin
   Result := TargetInstance;
 end;
 
+// A private auto-accessor (`accessor #x`) is a private field in both modes:
+// declaring its name on the class is all its setup needs. A public one is
+// compiled to a private storage field and a getter/setter pair (see
+// DefineAutoAccessorHalf), so nothing reaches here for it.
 procedure TGocciaVM.SetupAutoAccessorValue(const AName: string;
   const AFlags: Integer; const AClassValue: TGocciaValue);
 var
   ClassVal: TGocciaClassValue;
-  IsStatic: Boolean;
-  IsPrivate: Boolean;
   SourceName: string;
 begin
+  if (AFlags and 2) = 0 then
+    Exit;
   if Assigned(FActiveDecoratorSession) then
   begin
     if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
@@ -11748,33 +11761,59 @@ begin
     ClassVal := TGocciaClassValue(AClassValue)
   else
     Exit;
-  IsStatic := (AFlags and 1) <> 0;
-  IsPrivate := (AFlags and 2) <> 0;
-  if IsPrivate then
-  begin
-    SourceName := BytecodePrivateSourceName(AName);
-    if SourceName <> '' then
-      ClassVal.DeclarePrivateName(SourceName, AName);
-    Exit;
-  end;
-  ClassVal.AddAutoAccessor(AName, '__accessor_' + AName, IsStatic);
+  SourceName := BytecodePrivateSourceName(AName);
+  if SourceName <> '' then
+    ClassVal.DeclarePrivateName(SourceName, AName);
 end;
 
-procedure TGocciaVM.SetupAutoAccessorValueByKey(const AKey: TGocciaValue;
-  const ABackingName: string; const AFlags: Integer);
+// TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+// `accessor`: the getter and setter are defined together with
+// DefinePropertyOrThrow and { [[Enumerable]]: true, [[Configurable]]: true },
+// replacing whatever a member declared earlier under the same key defined.
+// The compiler emits the getter half (ACCESSOR_FLAG_AUTO), which starts the
+// property afresh, immediately followed by the setter half, which joins it.
+// AClassValue is the class; AKey is a symbol key, or nil when AName names it.
+procedure TGocciaVM.DefineAutoAccessorHalf(const AClassValue: TGocciaValue;
+  const AName: string; const AKey: TGocciaValue;
+  const AFunction: TGocciaValue; const AFlags: Integer);
 var
-  ClassVal: TGocciaClassValue;
   IsStatic: Boolean;
+  Target: TGocciaObjectValue;
+  ExistingDescriptor: TGocciaPropertyDescriptor;
+  Getter, Setter: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptorAccessor;
 begin
-  if not Assigned(FActiveDecoratorSession) then
+  if not (AClassValue is TGocciaClassValue) then
     Exit;
-  if not (TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue is TGocciaClassValue) then
-    Exit;
+  IsStatic := (AFlags and ACCESSOR_FLAG_STATIC) <> 0;
+  SetBytecodeHomeObject(AFunction, AClassValue, IsStatic);
+  if IsStatic then
+    Target := TGocciaClassValue(AClassValue)
+  else
+    Target := TGocciaClassValue(AClassValue).Prototype;
 
-  ClassVal := TGocciaClassValue(
-    TGocciaVMDecoratorSession(FActiveDecoratorSession).ClassValue);
-  IsStatic := (AFlags and 1) <> 0;
-  ClassVal.AddAutoAccessorWithKey('', AKey, ABackingName, IsStatic);
+  Getter := nil;
+  Setter := nil;
+  if (AFlags and ACCESSOR_FLAG_SETTER) <> 0 then
+  begin
+    if AKey is TGocciaSymbolValue then
+      ExistingDescriptor := Target.GetOwnSymbolPropertyDescriptor(
+        TGocciaSymbolValue(AKey))
+    else
+      ExistingDescriptor := Target.GetOwnPropertyDescriptor(AName);
+    if ExistingDescriptor is TGocciaPropertyDescriptorAccessor then
+      Getter := TGocciaPropertyDescriptorAccessor(ExistingDescriptor).Getter;
+    Setter := AFunction;
+  end
+  else
+    Getter := AFunction;
+
+  Descriptor := TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
+    [pfEnumerable, pfConfigurable]);
+  if AKey is TGocciaSymbolValue then
+    Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+  else
+    Target.DefineProperty(AName, Descriptor);
 end;
 
 procedure TGocciaVM.BeginDecorators(const AClassValue, ASuperValue: TGocciaValue);
@@ -11943,6 +11982,11 @@ var
         AName, TGocciaMethodValue(AValue));
   end;
 
+  { These three install a decorator's replacement. The decorators proposal
+    (tc39/ecma262 PR #2417, ApplyDecoratorsToElementDefinition) stores the
+    returned function as the element's [[Value]], [[Get]] or [[Set]] without
+    calling MakeMethod on it, so the replacement keeps whatever
+    [[HomeObject]] it was created with; none is set here. }
   procedure DefineDecoratedMethodProperty(const AIsStatic: Boolean;
     const AName: string; const AKey, AValue: TGocciaValue);
   var
@@ -11957,10 +12001,6 @@ var
       KeyValue := AKey
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
-    if AIsStatic then
-      SetBytecodeHomeObject(AValue, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AValue, TargetObject);
     if KeyValue is TGocciaSymbolValue then
       TargetObject.DefineSymbolProperty(
         TGocciaSymbolValue(KeyValue),
@@ -12009,10 +12049,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(AGetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(AGetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
@@ -12060,10 +12096,6 @@ var
     else
       KeyValue := TGocciaStringLiteralValue.Create(AName);
 
-    if AIsStatic then
-      SetBytecodeHomeObject(ASetter, TGocciaClassValue(ClassVal), True)
-    else
-      SetBytecodeHomeObject(ASetter, TargetObject);
     if KeyValue is TGocciaSymbolValue then
     begin
       if AIsStatic then
@@ -12916,10 +12948,12 @@ begin
      (AObject is TGocciaUndefinedLiteralValue) then
     StampThrowLocation;
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -12944,14 +12978,14 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoGetter, [AKey]));
+          SErrorPrivateGetterMissing);
       if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
         PrivateName, Result) then
         Exit;
       if TryGetRawPrivateValue(AObject, AKey, Result) then
         Exit;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -12967,7 +13001,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           if Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Getter) then
           begin
             EmptyArgs := TGocciaArgumentsCollection.Create;
@@ -12980,7 +13014,7 @@ begin
             end;
           end;
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoGetter, [AKey]));
+            SErrorPrivateGetterMissing);
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
         begin
@@ -12988,7 +13022,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             BrandValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
         end;
         Current := Current.Prototype;
@@ -12998,7 +13032,7 @@ begin
     if TryGetRawPrivateValue(AObject, AKey, Result) then
       Exit;
     ThrowBytecodePrivateTypeError(AKey,
-      Format(SErrorPrivateFieldNotAccessible, [AKey]));
+      SErrorPrivateFieldInaccessible);
   end
   else if TryGetRawPrivateValue(AObject, AKey, Result) then
     Exit;
@@ -13171,10 +13205,12 @@ var
   ExistingValue: TGocciaValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if IsBytecodePrivateKey(AKey) then
   begin
@@ -13199,10 +13235,10 @@ begin
       end;
       if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format(SErrorPrivateAccessorNoSetter, [AKey]));
+          SErrorPrivateSetterMissing);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(PrivateName) then
         ThrowBytecodePrivateTypeError(AKey,
-          Format('Private method %s is not writable', [AKey]));
+          SErrorPrivateMethodNotWritable);
       if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(PrivateName) then
       begin
         TGocciaClassValue(AObject).AddPrivateStaticProperty(
@@ -13210,7 +13246,7 @@ begin
         Exit;
       end;
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
     end;
 
     if AObject is TGocciaObjectValue then
@@ -13227,7 +13263,7 @@ begin
             AObject, BytecodePrivateBrandKey(AKey, PrivateBrandToken),
             ExistingValue) then
             ThrowBytecodePrivateTypeError(AKey,
-              Format(SErrorPrivateFieldNotAccessible, [AKey]));
+              SErrorPrivateFieldInaccessible);
           SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
           try
             InvokeFunctionValue(
@@ -13239,10 +13275,24 @@ begin
           Exit;
         end;
         if Descriptor is TGocciaPropertyDescriptorData then
+        begin
+          // Only the private methods StampBytecodePrivateBrands copies onto
+          // a receiver that is not a class instance are not writable.
+          if not Descriptor.Writable then
+          begin
+            if TryGetRawPrivateValue(AObject,
+               BytecodePrivateBrandKey(AKey, PrivateBrandToken),
+               ExistingValue) then
+              ThrowBytecodePrivateTypeError(AKey,
+                SErrorPrivateMethodNotWritable);
+            ThrowBytecodePrivateTypeError(AKey,
+              SErrorPrivateFieldInaccessible);
+          end;
           Break;
+        end;
         if Descriptor is TGocciaPropertyDescriptorAccessor then
           ThrowBytecodePrivateTypeError(AKey,
-            Format(SErrorPrivateAccessorNoSetter, [AKey]));
+            SErrorPrivateSetterMissing);
         Current := Current.Prototype;
       end;
     end;
@@ -13253,8 +13303,18 @@ begin
         Exit;
     end
     else
+    begin
+      // The walk stopped at a private data element the receiver does not hold
+      // as a field: a private method, which cannot be assigned once the
+      // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
+      if (AObject is TGocciaObjectValue) and
+         (Descriptor is TGocciaPropertyDescriptorData) and
+         TryGetRawPrivateValue(AObject,
+           BytecodePrivateBrandKey(AKey, PrivateBrandToken), ExistingValue) then
+        ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
       ThrowBytecodePrivateTypeError(AKey,
-        Format(SErrorPrivateFieldNotAccessible, [AKey]));
+        SErrorPrivateFieldInaccessible);
+    end;
     SetRawPrivateValue(AObject, AKey, AValue);
     Exit;
   end;
@@ -13293,10 +13353,12 @@ var
   BoxedValue: TGocciaObjectValue;
 begin
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
+      [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
   if IsBytecodePrivateKey(AKey) then
@@ -13451,7 +13513,7 @@ begin
   end;
 
   ThrowBytecodePrivateTypeError(AKey,
-    Format(SErrorPrivateFieldNotAccessible, [AKey]));
+    SErrorPrivateFieldInaccessible);
 end;
 
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
@@ -13469,7 +13531,7 @@ begin
     if AKey is TGocciaSymbolValue then
       KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
     else
-      KeyStr := AKey.ToStringLiteral.Value;
+      KeyStr := DisplayClassElementName(AKey.ToStringLiteral.Value);
     if AObject is TGocciaSymbolValue then
       ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
         TGocciaSymbolValue(AObject).ToDisplayString.Value]),
@@ -13505,13 +13567,8 @@ begin
       ResolvedKey := AKey;
     if ResolvedKey is TGocciaSymbolValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(ResolvedKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if TGocciaObjectValue(AObject).HasSymbolProperty(TGocciaSymbolValue(ResolvedKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(
+        TGocciaSymbolValue(ResolvedKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
@@ -13550,6 +13607,10 @@ var
   Unscopables: TGocciaValue;
   Blocked: TGocciaValue;
 begin
+  // A function's hidden variable object is undefined until an eval of the
+  // function declares a var in it (ADR 0134), so nothing is bound there yet.
+  if AObject is TGocciaUndefinedLiteralValue then
+    Exit(TGocciaBooleanLiteralValue.FalseValue);
   BindingObject := ToObject(AObject);
   KeyStr := KeyToPropertyName(AKey);
 
@@ -13580,7 +13641,8 @@ begin
   if not BindingObject.HasProperty(KeyStr) then
   begin
     if AStrict then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
   end;
 
@@ -13611,7 +13673,8 @@ begin
     StillExists := BindingObject.HasProperty(KeyStr);
 
     if AStrict and not StillExists then
-      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]));
+      ThrowReferenceError(Format(SErrorUndefinedVariable, [KeyStr]),
+        SSuggestDeclareBeforeUse);
 
     if AStrict then
       SetPropertyValue(BindingObject, KeyStr, AValue)
@@ -13636,21 +13699,13 @@ begin
   begin
     if AObject is TGocciaObjectValue then
     begin
-      if AObject is TGocciaProxyValue then
-      begin
-        if TGocciaProxyValue(AObject).HasSymbolTrap(TGocciaSymbolValue(AKey)) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
-      if VMHasSymbolPropertyInChain(TGocciaObjectValue(AObject),
-        TGocciaSymbolValue(AKey)) then
+      if TGocciaObjectValue(AObject).HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
         Exit(TGocciaBooleanLiteralValue.TrueValue);
       Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
 
     Boxed := AObject.Box;
-    if Assigned(Boxed) and VMHasSymbolPropertyInChain(Boxed,
-      TGocciaSymbolValue(AKey)) then
+    if Assigned(Boxed) and Boxed.HasSymbolPropertyInChain(TGocciaSymbolValue(AKey)) then
       Exit(TGocciaBooleanLiteralValue.TrueValue);
     Exit(TGocciaBooleanLiteralValue.FalseValue);
   end;
@@ -13805,24 +13860,6 @@ begin
   Result := False;
 end;
 
-function IsCurrentRealmEvalFunction(const ACallee: TGocciaValue;
-  const ARealm: TGocciaRealm): Boolean;
-var
-  GlobalObject: TGocciaObjectValue;
-  EvalValue: TGocciaValue;
-begin
-  Result := False;
-  if not Assigned(ARealm) or not (ARealm.GlobalObject is TGocciaObjectValue) then
-    Exit;
-
-  GlobalObject := TGocciaObjectValue(ARealm.GlobalObject);
-  if not GlobalObject.HasProperty('eval') then
-    Exit;
-
-  EvalValue := GlobalObject.GetProperty('eval');
-  Result := EvalValue = ACallee;
-end;
-
 function DirectEvalParameterPreambleVarRejectNames(
   const ATemplate: TGocciaFunctionTemplate; const AEnvironmentIndex: Integer;
   const APC: UInt32): TGocciaEvalRejectNameArray;
@@ -13875,182 +13912,389 @@ begin
   Result := Names;
 end;
 
-function TGocciaVM.ExecuteDirectEval(const ASourceValue: TGocciaValue;
-  const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
-  const ACallerStrict: Boolean): TGocciaValue;
+// OP_DIRECT_EVAL, ES2026 §13.3.6.1 (Function Calls) step 6: `eval(...)` is a
+// direct eval when the callee is the realm's %eval%, whatever the global
+// `eval` property holds now. The callee is in register ACalleeReg, and AIP is
+// the OP_CALL or OP_CALL_METHOD after OP_DIRECT_EVAL (the second when a `with`
+// object supplied `eval`, whose this-value direct eval does not use). Its B
+// operand is the argument count, or, with CALL_FLAG_SPREAD in C, the register
+// of the spread arguments array.
+//
+// For %eval% this runs the eval with eval site record ASiteIndex and moves
+// AIP past the call, which does not run. The call is the executing
+// instruction while the eval runs, as it was when OP_CALL ran it, so a frame,
+// a stack trace or a handler sees the call. At a strict call site the eval
+// code is compiled, and the result is its closure, which the dispatch loop
+// pushes as a frame whose completion value lands in ACalleeReg (ADR 0134
+// Phase 3). Otherwise the eval has run, its completion value is in
+// ACalleeReg, and the result is nil. For any other callee it changes
+// nothing, and the call runs as an ordinary call.
+function TGocciaVM.ExecuteDirectEvalSite(const ACalleeReg: UInt16;
+  const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
+  var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
 var
-  SourceText: string;
+  CallInstruction: UInt32;
+  CallIP: Integer;
+  WideB, WideC: UInt16;
+  ArgsOperand, Flags: UInt16;
+  EvalSourceValue: TGocciaValue;
+begin
+  Result := nil;
+  if not ((FRegisters[ACalleeReg].Kind = grkObject) and
+     (FRegisters[ACalleeReg].ObjectValue is TGocciaNativeFunctionValue) and
+     TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
+     IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue)) then
+    Exit;
+  CallIP := AIP;
+  CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
+  Inc(CallIP);
+  WideB := 0;
+  WideC := 0;
+  if DecodeOp(CallInstruction) = Ord(OP_WIDE) then
+  begin
+    WideB := UInt16(DecodeB(CallInstruction)) shl 8;
+    WideC := UInt16(DecodeC(CallInstruction)) shl 8;
+    CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
+    Inc(CallIP);
+  end;
+  ArgsOperand := WideB or DecodeB(CallInstruction);
+  Flags := WideC or DecodeC(CallInstruction);
+  AInstructionStartIP := AIP;
+  AIP := CallIP;
+
+  EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if (Flags and CALL_FLAG_SPREAD) <> 0 then
+  begin
+    if (FRegisters[ArgsOperand].Kind = grkObject) and
+       (FRegisters[ArgsOperand].ObjectValue is TGocciaArrayValue) and
+       (TGocciaArrayValue(FRegisters[ArgsOperand].ObjectValue).Elements.Count > 0) then
+      EvalSourceValue := TGocciaArrayValue(
+        FRegisters[ArgsOperand].ObjectValue).GetProperty('0');
+  end
+  else if ArgsOperand > 0 then
+    EvalSourceValue := GetRegister(ACalleeReg + 1);
+  // PerformEval step 2: a non-String argument is the result. Otherwise the
+  // eval code is compiled as a closure of the call site (ADR 0134 Phase 3).
+  if EvalSourceValue is TGocciaStringLiteralValue then
+    Result := PrepareCompiledDirectEval(
+      TGocciaStringLiteralValue(EvalSourceValue).Value, ATemplate, ASiteIndex)
+  else
+    SetRegister(ACalleeReg, EvalSourceValue);
+end;
+
+// A binding a non-strict eval's var declaration of AName conflicts with
+// (ES2026 §19.2.1.3 step 3.d): a binding of the function whose variable
+// environment the eval declares in, or of eval code running in it
+// (IsCallerFunctionBinding), in a declarative environment between the eval
+// and that environment, one still in its temporal dead zone included. A
+// catch clause's parameter is exempt (the step's normative-optional
+// web-compat branch), and in a function body a parameter outside the
+// variable environment is not between (§10.2.11 steps 20 and 30).
+function DirectEvalVarConflicts(const ASite: TGocciaDirectEvalEnvironment;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ASite.Bindings) do
+    if (ASite.Bindings[I].Name = AName) and
+       ASite.Bindings[I].IsCallerFunctionBinding and
+       not ASite.Bindings[I].IsVarEnvironmentBinding and
+       not ASite.Bindings[I].IsCatchParameter and
+       not ((ASite.VarEnvironment = devFunction) and
+            ASite.Bindings[I].IsOutsideVarEnvironment) then
+      Exit(True);
+  Result := False;
+end;
+
+// Whether the caller's variable environment already binds AName (§19.2.1.3
+// steps 17-18, varEnv.HasBinding): a var, a function declaration, a simple
+// parameter or `arguments` of the function it belongs to. A non-strict
+// eval's var or function of the name is that binding.
+function DirectEvalVarIsCallerBinding(
+  const ASite: TGocciaDirectEvalEnvironment; const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ASite.Bindings) do
+    if (ASite.Bindings[I].Name = AName) and
+       ASite.Bindings[I].IsCallerFunctionBinding and
+       ASite.Bindings[I].IsVarEnvironmentBinding then
+      Exit(True);
+  Result := False;
+end;
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation for a non-strict direct eval,
+// before its compiled code runs. AStandardVarNames is VarDeclaredNames of the
+// body, and AVarNames adds the block-level functions the web-compat steps
+// consider. AFunctionNames and ADeclaredVarNames are the functions and the
+// other vars it declares, the latter with the block-level functions that get
+// a var binding. In global code the global object's checks run (steps 3.a, 10 and
+// 12) and the code defines its globals itself. In a function, the
+// variable environment is the caller's: a name it already binds is reused,
+// and every other one becomes a deletable binding, a configurable property
+// of the function's hidden variable object (ADR 0134), which the first eval
+// that needs it creates. The site record lists the hidden variable objects
+// nearest first, so its first is the one of the eval's variable environment.
+procedure TGocciaVM.InstantiateDirectEvalDeclarations(
+  const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
+  const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
+  AVarNames, AFunctionNames, ADeclaredVarNames: TUnicodeStringList);
+var
+  I, J: Integer;
+  VarObjectBinding: Integer;
+  VarObject: TGocciaValue;
+  VarObjectValue: TGocciaObjectValue;
+  Upvalue: TGocciaBytecodeUpvalue;
+  RejectNames: TGocciaEvalRejectNameArray;
+
+  procedure RaiseAlreadyDeclared(const AName: string);
+  begin
+    ThrowSyntaxError(Format(SErrorIdentifierAlreadyDeclared, [AName]),
+      SSuggestAlreadyDeclared);
+  end;
+
+  procedure DeclareName(const AName: string);
+  begin
+    if DirectEvalVarIsCallerBinding(ASite, AName) or
+       VarObjectValue.HasOwnProperty(AName) then
+      Exit;
+    VarObjectValue.DefineProperty(AName, TGocciaPropertyDescriptorData.Create(
+      TGocciaUndefinedLiteralValue.UndefinedValue,
+      [pfConfigurable, pfEnumerable, pfWritable]));
+  end;
+
+begin
+  // Step 3.d. A block-level function is not among varNames: a binding
+  // between the eval and the variable environment leaves it without a var
+  // binding (step web-compat-bindingexists), which the compiler worked out.
+  for I := 0 to AStandardVarNames.Count - 1 do
+    if DirectEvalVarConflicts(ASite, AStandardVarNames[I]) then
+      RaiseAlreadyDeclared(AStandardVarNames[I]);
+
+  if ASite.VarEnvironment = devGlobal then
+  begin
+    CheckGlobalEvalDeclarations(FGlobalScope, AVarNames, AFunctionNames,
+      ADeclaredVarNames);
+    Exit;
+  end;
+
+  // A var in a parameter list with expressions cannot name a parameter, nor
+  // `arguments` where the function has an arguments object (§10.2.11).
+  RejectNames := DirectEvalParameterPreambleVarRejectNames(ATemplate,
+    ASiteIndex, ASite.PC);
+  for J := 0 to High(RejectNames) do
+    if AVarNames.IndexOf(RejectNames[J]) >= 0 then
+      RaiseAlreadyDeclared(RejectNames[J]);
+  if (AVarNames.IndexOf(IDENTIFIER_ARGUMENTS) >= 0) and
+     DirectEvalRejectsArgumentsVarDeclaration(ATemplate, ASiteIndex,
+       ASite.PC) then
+    RaiseAlreadyDeclared(IDENTIFIER_ARGUMENTS);
+
+  VarObjectBinding := -1;
+  for I := 0 to High(ASite.Bindings) do
+    if IsEvalVarObjectName(ASite.Bindings[I].Name) then
+    begin
+      VarObjectBinding := I;
+      Break;
+    end;
+  if VarObjectBinding < 0 then
+    raise Exception.Create('Compiler error: a non-strict direct eval site ' +
+      'in a function lists no hidden variable object');
+
+  Upvalue := nil;
+  if ASite.Bindings[VarObjectBinding].Kind = debWithLocal then
+    VarObject := GetLocal(ASite.Bindings[VarObjectBinding].Index)
+  else
+  begin
+    Upvalue := FCurrentClosure.GetUpvalue(ASite.Bindings[VarObjectBinding].Index);
+    VarObject := RegisterToValue(Upvalue.Cell.Value);
+  end;
+  if VarObject is TGocciaObjectValue then
+    VarObjectValue := TGocciaObjectValue(VarObject)
+  else
+  begin
+    // A null-prototype object: its properties are exactly the bindings
+    // (ADR 0134, "Where eval declarations go").
+    VarObjectValue := TGocciaObjectValue.Create(nil);
+    if Assigned(Upvalue) then
+      Upvalue.Cell.Value := VMValueToRegisterFast(VarObjectValue)
+    else
+      SetRegister(ASite.Bindings[VarObjectBinding].Index, VarObjectValue);
+  end;
+
+  // Steps 17-18: functions first, then the other vars, each a deletable
+  // binding initialized to undefined until the code assigns it. The
+  // compiler left in ADeclaredVarNames the block-level functions the
+  // web-compat steps give a var binding.
+  for I := 0 to AFunctionNames.Count - 1 do
+    DeclareName(AFunctionNames[I]);
+  for I := 0 to ADeclaredVarNames.Count - 1 do
+    DeclareName(ADeclaredVarNames[I]);
+end;
+
+// ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
+// body (ADR 0134 Phase 3). The call's frame is the current one. Parses
+// ASourceText as a Script with the call's private names, raises the early
+// errors of step 11 and the Script's own (§16.1.1), instantiates a non-strict
+// eval's declarations (InstantiateDirectEvalDeclarations), has the host
+// compile it against eval site record ASiteIndex of ATemplate, and
+// instantiates the code as a closure of the current frame, as OP_CLOSURE
+// instantiates an arrow function written at the call. The caller pushes it.
+//
+// The eval code reaches the caller's bindings through the cells its closure
+// captures, so a function it creates goes on reading and writing them after
+// the call has returned. A strict eval's declarations are locals of its
+// template (step 18). Step 10's inFunction, inMethod and inDerivedConstructor
+// come from the closure the call runs in (DirectEvalLexicalClosure).
+function TGocciaVM.PrepareCompiledDirectEval(const ASourceText: string;
+  const ATemplate: TGocciaFunctionTemplate;
+  const ASiteIndex: Integer): TGocciaBytecodeClosure;
+var
+  Site: TGocciaDirectEvalEnvironment;
+  SourceName: string;
   EvalSource: TStringList;
   EvalOptions: TGocciaSourcePipelineOptions;
   PipelineResult: TGocciaSourcePipelineResult;
-  EnvIndex: Integer;
-  DirectEvalEnv: TGocciaDirectEvalEnvironment;
-  StrictEval: Boolean;
-  CallerScope, EvalScope: TGocciaVMDirectEvalScope;
-  CallerParentScope: TGocciaScope;
-  ActiveScope: TGocciaScope;
-  VarScope: TGocciaScope;
-  EvalContext: TGocciaEvaluationContext;
-  ExecutionContext: TGocciaExecutionContextScope;
-  SourceName: string;
+  PrivateNames: TStringList;
+  VarNames, StandardVarNames, FunctionNames,
+  DeclaredVarNames: TUnicodeStringList;
   CallerClosure: TGocciaBytecodeClosure;
-  DeclaredPrivateNames: TStringList;
-  CurrentFunctionValue: TGocciaValue;
   CurrentCtorClass: TGocciaClassValue;
-  LexicalNewTarget: TGocciaValue;
-  RejectArgumentsVarDeclaration: Boolean;
-  RejectVarDeclarationNames: TGocciaEvalRejectNameArray;
-  RejectArgumentsReference: Boolean;
-  AllowNewTarget: Boolean;
-  AllowSuperProperty: Boolean;
-  AllowSuperCall: Boolean;
-  UseGlobalVarEnvironment: Boolean;
+  AllowNewTarget, AllowSuperProperty, AllowSuperCall: Boolean;
+  CompatibilityNonStrictMode, StrictEval: Boolean;
+  EvalTemplate: TGocciaFunctionTemplate;
+  Desc: TGocciaUpvalueDescriptor;
+  PrivateClassRegister: TGocciaRegister;
+  I: Integer;
 begin
-  if not (ASourceValue is TGocciaStringLiteralValue) then
-    Exit(ASourceValue);
-
-  SourceText := TGocciaStringLiteralValue(ASourceValue).Value;
+  Site := ATemplate.GetDirectEvalEnvironment(ASiteIndex);
   if FCurrentModuleSourcePath <> '' then
     SourceName := FCurrentModuleSourcePath
   else
     SourceName := '<bytecode-direct-eval>';
-  EvalSource := CreateECMAScriptSourceLines(SourceText);
+
+  CallerClosure := DirectEvalLexicalClosure(Self);
+  AllowNewTarget := Assigned(CallerClosure) and CallerClosure.AllowsNewTarget;
+  AllowSuperProperty := Assigned(CallerClosure) and
+    Assigned(CallerClosure.HomeObject);
+  if Assigned(CallerClosure) and
+     (CallerClosure.HomeClass is TGocciaClassValue) then
+    CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
+  else
+    CurrentCtorClass := nil;
+  AllowSuperCall := Assigned(FCurrentNewTarget) and
+    Assigned(CurrentCtorClass) and
+    (Assigned(CurrentCtorClass.SuperClass) or
+     Assigned(CurrentCtorClass.NativeSuperConstructor));
+
+  EvalSource := CreateECMAScriptSourceLines(ASourceText);
+  PrivateNames := TStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  StandardVarNames := TUnicodeStringList.Create;
+  FunctionNames := TUnicodeStringList.Create;
+  DeclaredVarNames := TUnicodeStringList.Create;
   try
+    PrivateNames.CaseSensitive := True;
+    for I := 0 to High(Site.PrivateNames) do
+      if PrivateNames.IndexOf(Site.PrivateNames[I].Name) < 0 then
+        PrivateNames.Add(Site.PrivateNames[I].Name);
+    // Step 11: the source is a Script, strict when its call is (step 12:
+    // strictCaller).
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
+    CompatibilityNonStrictMode := cfNonStrictMode in EvalOptions.Compatibility;
     EvalOptions.SourceType := stScript;
-    EvalOptions.InheritedStrictMode := ACallerStrict;
-    if ACallerStrict then
+    EvalOptions.InheritedStrictMode := Site.StrictCaller;
+    if Site.StrictCaller then
       Exclude(EvalOptions.Compatibility, cfNonStrictMode);
-    DeclaredPrivateNames := CollectBytecodeDirectEvalPrivateNames(Self);
+    PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
+      EvalOptions, PrivateNames);
     try
-      PipelineResult := TGocciaSourcePipeline.Parse(EvalSource, SourceName,
-        EvalOptions, DeclaredPrivateNames);
-    finally
-      DeclaredPrivateNames.Free;
-    end;
-    try
+      // Steps 12-13.
+      StrictEval := Site.StrictCaller or
+        HasUseStrictDirective(PipelineResult.ProgramNode);
       if HasDirectEvalTopLevelUsingDeclaration(PipelineResult.ProgramNode) then
         ThrowSyntaxError(
           'Using declarations are not allowed at the top level of eval');
-
-      if not ATemplate.FindDirectEvalEnvironment(APC, EnvIndex) then
-        EnvIndex := -1;
-      StrictEval := ACallerStrict or HasUseStrictDirective(PipelineResult.ProgramNode);
-      UseGlobalVarEnvironment := TemplateUsesGlobalEvalEnvironment(ATemplate);
-      CallerClosure := DirectEvalLexicalClosure(Self);
-      if Assigned(CallerClosure) and Assigned(CallerClosure.Template) and
-         CallerClosure.Template.IsArrow then
-        LexicalNewTarget := CallerClosure.NewTarget
-      else
-        LexicalNewTarget := FCurrentNewTarget;
-      if UseGlobalVarEnvironment then
-        CallerParentScope := FGlobalScope
-      else
-        CallerParentScope := EnsureCurrentDynamicVarScope;
-
-      CallerScope := TGocciaVMDirectEvalScope.Create(CallerParentScope, Self,
-        ATemplate, EnvIndex, UseGlobalVarEnvironment, CallerClosure,
-        LexicalNewTarget);
-      CallerScope.ThisValue := DirectEvalLexicalThisValue(Self,
-        UseGlobalVarEnvironment, ATemplate, EnvIndex);
-
-      if (TGarbageCollector.Instance <> nil) then
-        TGarbageCollector.Instance.AddTempRoot(CallerScope);
-      try
-        if StrictEval then
-          ActiveScope := CallerScope.CreateChild(skFunction, 'StrictDirectEval')
-        else
-          ActiveScope := CallerScope.CreateChild(skBlock, 'DirectEval');
-        if StrictEval then
-          VarScope := ActiveScope
-        else if UseGlobalVarEnvironment then
-          VarScope := FGlobalScope
-        else
-          VarScope := CallerScope;
-        ActiveScope.ThisValue := CallerScope.ThisValue;
-        ActiveScope.NonStrictMode := not StrictEval;
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.AddTempRoot(ActiveScope);
-        try
-          EvalContext := Default(TGocciaEvaluationContext);
-          EvalContext.Realm := FRealm;
-          EvalContext.Scope := ActiveScope;
-          EvalContext.OnError := ThrowError;
-          EvalContext.LoadModule := FLoadModule;
-          EvalContext.LoadModuleSource := FLoadModuleSource;
-          EvalContext.ResolveModuleURL := FResolveModuleURL;
-          EvalContext.CurrentFilePath := SourceName;
-          EvalContext.CoverageEnabled := FCoverageEnabled;
-          EvalContext.StrictTypes := False;
-          if Assigned(FGlobalScope) then
-            EvalContext.StrictTypes := FGlobalScope.EffectiveStrictTypes;
-          EvalContext.NonStrictMode := not StrictEval;
-          if Assigned(FGlobalScope) then
-            EvalContext.CompatibilityNonStrictMode :=
-              FGlobalScope.EffectiveNonStrictMode;
-
-          if Assigned(CallerClosure) then
-            CurrentFunctionValue := CallerClosure.FunctionValue
-          else
-            CurrentFunctionValue := nil;
-          if Assigned(CallerClosure) and
-             (CallerClosure.HomeClass is TGocciaClassValue) then
-            CurrentCtorClass := TGocciaClassValue(CallerClosure.HomeClass)
-          else
-            CurrentCtorClass := nil;
-          AllowNewTarget := Assigned(CallerClosure) and
-            CallerClosure.AllowsNewTarget;
-          AllowSuperProperty := Assigned(CallerClosure) and
-            Assigned(CallerClosure.HomeObject);
-          AllowSuperCall := Assigned(FCurrentNewTarget) and
-            Assigned(CurrentCtorClass) and
-            (Assigned(CurrentCtorClass.SuperClass) or
-             Assigned(CurrentCtorClass.NativeSuperConstructor));
-          ExecutionContext := TGocciaExecutionContextScope.Create(
-            CreateExecutionContext(FRealm, ActiveScope, SourceName,
-              PipelineResult.ProgramNode, CurrentFunctionValue));
-            try
-              RejectArgumentsVarDeclaration :=
-                DirectEvalRejectsArgumentsVarDeclaration(ATemplate, EnvIndex,
-                  APC);
-            RejectVarDeclarationNames :=
-              DirectEvalParameterPreambleVarRejectNames(
-                ATemplate, EnvIndex, APC);
-            RejectArgumentsReference := ATemplate.RejectArgumentsInDirectEval;
-            if EnvIndex >= 0 then
-            begin
-              DirectEvalEnv := ATemplate.GetDirectEvalEnvironment(EnvIndex);
-              RejectArgumentsReference := RejectArgumentsReference or
-                DirectEvalEnv.RejectArgumentsReference;
-            end;
-            try
-              Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
-                EvalContext, VarScope, ActiveScope, StrictEval,
-                RejectArgumentsVarDeclaration, RejectVarDeclarationNames,
-                AllowNewTarget,
-                AllowSuperProperty, AllowSuperCall, RejectArgumentsReference);
-            finally
-              CallerScope.CopyBackVariableBindings;
-              if not UseGlobalVarEnvironment then
-                CallerScope.CopyNewVariableBindingsToParent;
-            end;
-          finally
-            ExecutionContext.Free;
-          end;
-        finally
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.RemoveTempRoot(ActiveScope);
-        end;
-      finally
-        if (TGarbageCollector.Instance <> nil) then
-          TGarbageCollector.Instance.RemoveTempRoot(CallerScope);
+      ValidateEvalScriptBody(PipelineResult.ProgramNode.Body);
+      // Step 11: ContainsArguments in a class field initializer's eval.
+      if (ATemplate.RejectArgumentsInDirectEval or
+          Site.RejectArgumentsReference) and
+         EvalProgramContainsArgumentsReference(PipelineResult.ProgramNode) then
+        ThrowSyntaxError('arguments is not allowed in this eval context');
+      ValidateEvalEarlyErrors(PipelineResult.ProgramNode, StrictEval,
+        AllowNewTarget, AllowSuperProperty, AllowSuperCall);
+      ValidateEvalControlFlow(PipelineResult.ProgramNode);
+      ValidateEvalBlockDeclarations(PipelineResult.ProgramNode, StrictEval);
+      CollectGlobalEvalDeclarationNames(PipelineResult.ProgramNode,
+        VarBindingNameCollectionMode(not StrictEval,
+          CompatibilityNonStrictMode), VarNames, FunctionNames,
+        DeclaredVarNames);
+      // §16.1.1: a name both lexically and var-declared at the top level.
+      CheckEvalLexicalDeclarationConflicts(PipelineResult.ProgramNode,
+        VarNames);
+      EvalTemplate := FCompileDirectEval(PipelineResult.ProgramNode,
+        SourceName, Site, StrictEval, DeclaredVarNames);
+      if not StrictEval then
+      begin
+        CollectVarBindingNamesFromStatements(PipelineResult.ProgramNode.Body,
+          StandardVarNames);
+        InstantiateDirectEvalDeclarations(ATemplate, ASiteIndex, Site,
+          StandardVarNames, VarNames, FunctionNames, DeclaredVarNames);
       end;
     finally
       PipelineResult.Free;
     end;
   finally
+    DeclaredVarNames.Free;
+    FunctionNames.Free;
+    StandardVarNames.Free;
+    VarNames.Free;
+    PrivateNames.Free;
     EvalSource.Free;
   end;
+
+  // As OP_CLOSURE instantiates an arrow function in the calling frame.
+  Result := TGocciaBytecodeClosure.Create(EvalTemplate,
+    EvalTemplate.UpvalueCount);
+  Result.GlobalScope := FGlobalScope;
+  // §19.2.1.1 step 16: privateEnv is the running context's
+  // PrivateEnvironment, which a class body running inline at the call makes
+  // the class being defined.
+  if Site.PrivateClassRegister >= 0 then
+  begin
+    PrivateClassRegister := FRegisters[Site.PrivateClassRegister];
+    if (PrivateClassRegister.Kind = grkObject) and
+       (PrivateClassRegister.ObjectValue is TGocciaVMClassValue) then
+      Result.PrivateClass := TGocciaVMClassValue(
+        PrivateClassRegister.ObjectValue);
+  end;
+  if Assigned(FCurrentClosure) then
+  begin
+    if not Assigned(Result.PrivateClass) then
+      Result.PrivateClass := FCurrentClosure.PrivateClass;
+    Result.HomeObject := FCurrentClosure.HomeObject;
+    Result.HomeClass := FCurrentClosure.HomeClass;
+    if Assigned(FCurrentClosure.Template) and
+       FCurrentClosure.Template.IsArrow then
+      Result.AllowsNewTarget := FCurrentClosure.AllowsNewTarget
+    else
+      Result.AllowsNewTarget := Assigned(FCurrentClosure.FunctionValue) and
+        not TemplateUsesGlobalEvalEnvironment(FCurrentClosure.Template);
+  end;
+  Result.NewTarget := FCurrentNewTarget;
+  for I := 0 to EvalTemplate.UpvalueCount - 1 do
+  begin
+    Desc := EvalTemplate.GetUpvalueDescriptor(I);
+    if Desc.IsLocal then
+      Result.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
+        GetLocalCell(Desc.Index)))
+    else if Assigned(FCurrentClosure) then
+      Result.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
+  end;
+  // The function value owns the closure, and the frame keeps it reachable
+  // (TGocciaVMStackRoot.MarkClosureReferences) until the eval returns. No
+  // script can reach it.
+  TGocciaBytecodeFunctionValue.Create(Self, Result);
 end;
 
 procedure TGocciaVM.ThrowError(const AMessage: string; const ALine,
@@ -14120,9 +14364,12 @@ procedure TGocciaVM.PushFrame(const AResultRegister, AFrameIP: Integer;
 var
   Saved: PGocciaVMCallFrame;
 begin
-  CheckStackDepth(FFrameDepth + 1);
+  // The limit caps nested calls. FFrameDepth also counts the outermost frame,
+  // the top level or a function the host called while no script ran, which is
+  // not one, so this call is the FFrameDepth-th nested call.
+  CheckStackDepth(FFrameDepth);
   if FFrameStackCount >= Length(FFrameStack) then
-    SetLength(FFrameStack, FFrameStackCount * 2 + 8);
+    GrowFrameStack;
   // Through a pointer: indexing the array for each field recomputes the
   // element address every time.
   Saved := @FFrameStack[FFrameStackCount];
@@ -14141,7 +14388,6 @@ begin
   Saved^.ProfileEntryTimestamp := AProfileTimestamp;
   Saved^.NewTarget := Pointer(FCurrentNewTarget);
   Saved^.GlobalScope := Pointer(FGlobalScope);
-  Saved^.DynamicVarScope := Pointer(FCurrentDynamicVarScope);
   Saved^.ExecutionContextPushed := FCurrentExecutionContextPushed;
   Inc(FFrameStackCount);
 end;
@@ -14171,7 +14417,6 @@ begin
   AProfileTimestamp := Saved^.ProfileEntryTimestamp;
   FCurrentNewTarget := TGocciaValue(Saved^.NewTarget);
   FGlobalScope := TGocciaScope(Saved^.GlobalScope);
-  FCurrentDynamicVarScope := TGocciaScope(Saved^.DynamicVarScope);
   FCurrentExecutionContextPushed := Saved^.ExecutionContextPushed;
   Result := Saved^.ReturnRegister;
 end;
@@ -14197,11 +14442,11 @@ end;
 procedure TGocciaVM.PushClosedNumericFrame(const AResultRegister,
   AArgumentBase, AArgumentCount: UInt16; var AFrame: TGocciaVMCallFrame;
   const ATemplate: TGocciaFunctionTemplate; var APrevCovLine: UInt32;
-  var AProfileTimestamp: Int64; var AInitializedRegisterTop: Integer);
+  var AProfileTimestamp: Int64);
 var
   Arguments: array[0..2] of TGocciaRegister;
   I: Integer;
-  NewBase, Required, ClearStart: Integer;
+  NewBase, Required: Integer;
 begin
   if (AArgumentCount < 1) or (AArgumentCount > 3) or
      (AArgumentCount <> ATemplate.ParameterCount) then
@@ -14215,10 +14460,10 @@ begin
       raise Exception.Create('Invalid non-numeric OP_CALL_SELF_NUM argument');
   end;
 
-  CheckStackDepth(FFrameDepth + 1);
+  // As in PushFrame: FFrameDepth includes the outermost frame.
+  CheckStackDepth(FFrameDepth);
   if FClosedNumericFrameStackCount >= Length(FClosedNumericFrameStack) then
-    SetLength(FClosedNumericFrameStack,
-      FClosedNumericFrameStackCount * 2 + 8);
+    GrowClosedNumericFrameStack;
   FClosedNumericFrameStack[FClosedNumericFrameStackCount].IP := AFrame.IP;
   FClosedNumericFrameStack[FClosedNumericFrameStackCount].ReturnRegister :=
     AResultRegister;
@@ -14233,21 +14478,15 @@ begin
   NewBase := FRegisterBase + FRegisterCount;
   Required := NewBase + FRegisterCount;
   if Required > Length(FRegisterStack) then
-    SetLength(FRegisterStack, Required * 2);
-  if Required > AInitializedRegisterTop then
-  begin
-    ClearStart := Max(NewBase, AInitializedRegisterTop);
-    if Required > ClearStart then
-      FillChar(FRegisterStack[ClearStart],
-        (Required - ClearStart) * SizeOf(TGocciaRegister), 0);
-    AInitializedRegisterTop := Required;
-  end;
+    GrowRegisterStack(Required);
   FRegisterBase := NewBase;
   FRegisters := @FRegisterStack[FRegisterBase];
-  // Each depth is cleared on first use in this outer invocation. The proof
-  // then admits only scalar-number expressions, numeric predicates, and direct
-  // self-calls, so sibling reuse can contain only non-reference scalars or
-  // undefined and no stale object pointer can reach the GC.
+  // The window is not cleared, so it can still hold references that an
+  // earlier frame left there; the collector does not mark closed numeric
+  // windows (TGocciaVMStackRoot.MarkReferences). The proof admits only
+  // scalar-number expressions, numeric predicates, and direct self-calls, so
+  // the frame writes each register before reading it and stores only scalars
+  // and the pinned NaN, infinity and -0 values.
   FRegisters[0] := RegisterUndefined;
   for I := 0 to AArgumentCount - 1 do
     FRegisters[I + 1] := Arguments[I];
@@ -14255,11 +14494,15 @@ begin
 
   Inc(FFrameDepth);
   if Assigned(FCallStack) then
+  begin
+    if FCallStack.Count >= FCallStack.Capacity then
+      GrowCallStack;
     if Assigned(ATemplate.DebugInfo) and
        (ATemplate.DebugInfo.SourceFile <> '') then
       FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
       FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+  end;
 
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -14268,7 +14511,8 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
@@ -14401,10 +14645,229 @@ begin
   FCallStack := TGocciaCallStack.Instance;
   FExecutionContextThread := TGocciaExecutionContextStack.ThreadState;
   FThreadPolls := @GThreadPolls;
+  FNativeStackLimit := NATIVE_STACK_LIMIT_UNSET;
   // Interned references belong to the thread that interned them.
   if Pointer(FExecutionSourcePath) <> nil then
     FExecutionSourcePath := '';
   FExecutionSourcePathRef := nil;
+end;
+
+{ Records a native entry into the dispatch loop, so a stack trace captured
+  while it runs can find the position of each frame it pushes. The caller has
+  already made room in FActivations. The outermost entry also installs this
+  VM as the call stack's location resolver. }
+procedure TGocciaVM.EnterActivation(const ATemplateProbe: PPointer;
+  const AInstructionIPProbe, AFrameIPProbe: PInteger;
+  const AFirstSavedFrame, AFirstClosedNumericFrame: Integer);
+var
+  Activation: PGocciaVMActivation;
+begin
+  Activation := @FActivations[FActivationCount];
+  Activation^.TemplateProbe := ATemplateProbe;
+  Activation^.InstructionIPProbe := AInstructionIPProbe;
+  Activation^.FrameIPProbe := AFrameIPProbe;
+  if Assigned(FCallStack) then
+    Activation^.FirstCallFrame := FCallStack.Count
+  else
+    Activation^.FirstCallFrame := 0;
+  Activation^.FirstSavedFrame := AFirstSavedFrame;
+  Activation^.FirstClosedNumericFrame := AFirstClosedNumericFrame;
+  if (FActivationCount = 0) and Assigned(FCallStack) then
+  begin
+    FPreviousLocationResolver := FCallStack.LocationResolver;
+    FCallStack.LocationResolver := ResolveFrameLocations;
+  end;
+  Inc(FActivationCount);
+  FActiveTemplateProbe := ATemplateProbe;
+  FActiveInstructionIPProbe := AInstructionIPProbe;
+end;
+
+procedure TGocciaVM.LeaveActivation;
+begin
+  if FActivationCount <= 0 then
+    Exit;
+  Dec(FActivationCount);
+  if FActivationCount > 0 then
+  begin
+    FActiveTemplateProbe := FActivations[FActivationCount - 1].TemplateProbe;
+    FActiveInstructionIPProbe :=
+      FActivations[FActivationCount - 1].InstructionIPProbe;
+  end
+  else
+  begin
+    FActiveTemplateProbe := nil;
+    FActiveInstructionIPProbe := nil;
+    if Assigned(FCallStack) then
+      FCallStack.LocationResolver := FPreviousLocationResolver;
+    FPreviousLocationResolver := nil;
+  end;
+end;
+
+{ The position a frame of ATemplate reports while it executes the instruction
+  starting at APC: the call expression the compiler recorded for it, or the
+  instruction's own line and column. }
+procedure LocateFrameAt(const ATemplate: TGocciaFunctionTemplate;
+  const APC: Integer; var ALocation: TGocciaFrameLocation);
+var
+  Line, Column: Integer;
+begin
+  if (not Assigned(ATemplate)) or (APC < 0) or
+     (APC >= ATemplate.CodeCount) then
+    Exit;
+  if ATemplate.TryGetCallSitePosition(UInt32(APC), Line, Column) then
+  begin
+    ALocation.Line := Line;
+    ALocation.Column := Column;
+  end
+  else if Assigned(ATemplate.DebugInfo) then
+  begin
+    ALocation.Line := Integer(ATemplate.DebugInfo.GetLineForPC(UInt32(APC)));
+    ALocation.Column :=
+      Integer(ATemplate.DebugInfo.GetColumnForPC(UInt32(APC)));
+  end;
+end;
+
+{ A suspended frame's saved instruction pointer is the instruction after the
+  call it is making, and so is an executing frame's, which the dispatch loop
+  advances past an instruction before running it. That instruction is one
+  word, or two behind an OP_WIDE prefix. A frame that has not started (IP 0)
+  is left unlocated. }
+procedure LocateFrameAfterCall(const ATemplate: TGocciaFunctionTemplate;
+  const AReturnIP: Integer; var ALocation: TGocciaFrameLocation);
+var
+  PC: Integer;
+begin
+  if (not Assigned(ATemplate)) or (AReturnIP < 1) or
+     (AReturnIP > ATemplate.CodeCount) then
+    Exit;
+  PC := AReturnIP - 1;
+  if (PC >= 1) and
+     (DecodeOp(ATemplate.GetInstructionUnchecked(PC - 1)) = Ord(OP_WIDE)) then
+    Dec(PC);
+  LocateFrameAt(ATemplate, PC, ALocation);
+end;
+
+{ SettleStackGrowth refuses a growth at an instruction boundary after the
+  instruction that needed it. When that was a call, the boundary falls in the
+  callee, after its first instruction: a call skips the boundary. The resolver
+  would locate that frame at the callee's first instruction, or leave it
+  unlocated (ADR 0131) and the RangeError would read file:0:0 when that
+  instruction has no source position. Stamps that frame with the position of
+  the call that entered it, which is where an ordinary stack overflow is
+  located. A growth is a call's when the call stack is deeper than when the
+  growth began (FStackGrowthCallDepth); any other growth keeps its frame's own
+  position and is stamped only when that frame has none. The caller is the
+  innermost suspended frame of the running entry: a numeric self-call's
+  closed frame when there is one, since those are pushed inside the frame
+  stack's, else the frame stack's top. }
+procedure TGocciaVM.LocateUnstartedFrameAtItsCall;
+var
+  Activation: PGocciaVMActivation;
+  CallerTemplate: TGocciaFunctionTemplate;
+  CallerIP: Integer;
+  Location: TGocciaFrameLocation;
+begin
+  if (FActivationCount = 0) or not Assigned(FCallStack) then
+    Exit;
+  Activation := @FActivations[FActivationCount - 1];
+  Location.Line := 0;
+  Location.Column := 0;
+  if FCallStack.Count <= FStackGrowthCallDepth then
+  begin
+    LocateFrameAfterCall(TGocciaFunctionTemplate(Activation^.TemplateProbe^),
+      Activation^.FrameIPProbe^, Location);
+    if Location.Line <> 0 then
+      Exit;
+  end;
+  if FClosedNumericFrameStackCount > Activation^.FirstClosedNumericFrame then
+  begin
+    CallerTemplate := TGocciaFunctionTemplate(Activation^.TemplateProbe^);
+    CallerIP := FClosedNumericFrameStack[
+      FClosedNumericFrameStackCount - 1].IP;
+  end
+  else if FFrameStackCount > Activation^.FirstSavedFrame then
+  begin
+    CallerTemplate := FFrameStack[FFrameStackCount - 1].Template;
+    CallerIP := FFrameStack[FFrameStackCount - 1].IP;
+  end
+  else
+    Exit;
+  LocateFrameAfterCall(CallerTemplate, CallerIP, Location);
+  if (Location.Line = 0) or not Assigned(CallerTemplate.DebugInfo) then
+    Exit;
+  FCallStack.SetTopFrameLocation(CallerTemplate.DebugInfo.SourceFile,
+    Location.Line, Location.Column);
+end;
+
+{ The call stack's location resolver while this VM runs (ADR 0074 keeps
+  positions off the call path). Each native entry pushed one call-stack frame
+  per frame it runs, in order, and saved the instruction pointer of every one
+  but the executing frame when that frame made its call: first in the frame
+  stack, then, for numeric self-calls, in the closed numeric frame stack. The
+  two sequences are paired up per entry, innermost first. An entry whose
+  frames do not pair up, such as one throwing while it sets up a call, keeps
+  the frames that cannot be matched unlocated rather than guessing. Frames
+  below the outermost entry belong to whoever ran before this VM. }
+procedure TGocciaVM.ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
+  const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
+var
+  ActivationIndex, UpperCallFrame, UpperSavedFrame, UpperClosedFrame: Integer;
+  Activation: PGocciaVMActivation;
+  DeferredCount, SavedCount, ClosedCount, Ordinal, I: Integer;
+  Saved: PGocciaVMCallFrame;
+begin
+  UpperCallFrame := ACount;
+  UpperSavedFrame := FFrameStackCount;
+  UpperClosedFrame := FClosedNumericFrameStackCount;
+  for ActivationIndex := FActivationCount - 1 downto 0 do
+  begin
+    Activation := @FActivations[ActivationIndex];
+    if UpperCallFrame > ACount then
+      UpperCallFrame := ACount;
+    DeferredCount := 0;
+    for I := Activation^.FirstCallFrame to UpperCallFrame - 1 do
+      if Assigned(AFrames[I].Template) then
+        Inc(DeferredCount);
+    SavedCount := UpperSavedFrame - Activation^.FirstSavedFrame;
+    ClosedCount := UpperClosedFrame - Activation^.FirstClosedNumericFrame;
+    if (SavedCount >= 0) and (ClosedCount >= 0) and
+       ((DeferredCount = SavedCount + ClosedCount + 1) or
+        (DeferredCount = SavedCount + ClosedCount)) then
+    begin
+      // The Ordinal-th deferred frame of this entry is paired with the
+      // Ordinal-th saved instruction pointer, or with the probe after them.
+      Ordinal := 0;
+      for I := Activation^.FirstCallFrame to UpperCallFrame - 1 do
+      begin
+        if not Assigned(AFrames[I].Template) then
+          Continue;
+        if IsUnlocatedFrame(AFrames[I]) then
+        begin
+          if Ordinal < SavedCount then
+          begin
+            Saved := @FFrameStack[Activation^.FirstSavedFrame + Ordinal];
+            if Pointer(Saved^.Template) = AFrames[I].Template then
+              LocateFrameAfterCall(Saved^.Template, Saved^.IP, ALocations[I]);
+          end
+          else if Ordinal < SavedCount + ClosedCount then
+            LocateFrameAfterCall(TGocciaFunctionTemplate(AFrames[I].Template),
+              FClosedNumericFrameStack[Activation^.FirstClosedNumericFrame +
+                Ordinal - SavedCount].IP, ALocations[I])
+          else if Activation^.TemplateProbe^ = AFrames[I].Template then
+            LocateFrameAfterCall(
+              TGocciaFunctionTemplate(AFrames[I].Template),
+              Activation^.FrameIPProbe^, ALocations[I]);
+        end;
+        Inc(Ordinal);
+      end;
+    end;
+    UpperCallFrame := Activation^.FirstCallFrame;
+    UpperSavedFrame := Activation^.FirstSavedFrame;
+    UpperClosedFrame := Activation^.FirstClosedNumericFrame;
+  end;
+  if Assigned(FPreviousLocationResolver) and (FActivationCount > 0) and
+     (UpperCallFrame > 0) then
+    FPreviousLocationResolver(AFrames, UpperCallFrame, ALocations);
 end;
 
 { SetupNewFrame's slow path: the callee's source path is not the one the last
@@ -14437,6 +14900,10 @@ var
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
 begin
+  // The collector does not mark the registers of closed numeric frames, which
+  // relies on no other frame running above them.
+  Assert(FClosedNumericFrameStackCount = 0,
+    'A frame was set up above a closed numeric frame');
   AProfileTimestamp := 0;
   ATemplate := AClosure.Template;
   // The frame's source path is the template's own source file, or the running
@@ -14463,11 +14930,6 @@ begin
   FCurrentClosure := AClosure;
   if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
-  if Assigned(AClosure) and
-     (ATemplate.DirectEvalEnvironmentCount = 0) then
-    FCurrentDynamicVarScope := AClosure.DynamicVarScope
-  else
-    FCurrentDynamicVarScope := nil;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   // Push a deferred frame: store the template pointer and (only when the
@@ -14476,10 +14938,14 @@ begin
   // in the constructor reproduces ATemplate.Name and the frame's source path
   // at capture time, keeping Error.stack output byte-identical.
   if Assigned(FCallStack) then
+  begin
+    if FCallStack.Count >= FCallStack.Capacity then
+      GrowCallStack;
     if HasOwnSourceFile then
       FCallStack.PushTemplate(Pointer(ATemplate), '')
     else
       FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+  end;
 
   // The dispatch loop's frame record carries only the instruction pointer and
   // the template; its other fields exist for the entries PushFrame saves and
@@ -14499,7 +14965,9 @@ begin
     TGocciaCoverageTracker.Instance.RecordLineHit(
       ATemplate.DebugInfo.SourceFile,
       ATemplate.DebugInfo.GetLineMapEntry(0).Line);
-    if ATemplate.Name <> '<module>' then
+    if (ATemplate.Name <> '<module>') and
+       (ATemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) and
+       (ATemplate.Name <> DIRECT_EVAL_TEMPLATE_NAME) then
       TGocciaCoverageTracker.Instance.RecordFunctionHit(
         ATemplate.DebugInfo.SourceFile, ATemplate.Name,
         ATemplate.DebugInfo.CoverageLine,
@@ -14528,12 +14996,6 @@ begin
   FRegisters[0] := AThisValue;
   for I := 0 to AArgCount - 1 do
     FRegisters[I + 1] := FArguments[I];
-  // ES2026 §10.2.11 FunctionDeclarationInstantiation steps 19-20: sloppy
-  // parameter expressions need a separate var environment for direct eval.
-  if (ATemplate.DirectEvalEnvironmentCount > 0) and
-     not TemplateUsesGlobalEvalEnvironment(ATemplate) then
-    EnsureCurrentDynamicVarScope;
-
   // BytecodeClosureExecutionRealm, with the class of a bytecode function
   // compared first: it is what almost every closure belongs to, and an exact
   // class comparison is one load where `is` is a call.
@@ -14559,6 +15021,9 @@ begin
     else if Pointer(FCurrentModuleSourcePath) <>
             Pointer(FExecutionSourcePath) then
       InternExecutionSourcePath(FCurrentModuleSourcePath);
+    if TGocciaExecutionContextStack.FunctionContextsFull(
+         FExecutionContextThread) then
+      GrowExecutionContextStack;
     TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
       ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
     FCurrentExecutionContextPushed := True;
@@ -14577,6 +15042,25 @@ procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
   var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64;
   const ASuggestion: string; const ASuggestionIsHostOnly: Boolean);
+begin
+  // Outermost frame: let the finally block handle teardown. The suggestion
+  // travels with the throw so a host runner can render the same
+  // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
+  if not TryUnwindToHandler(AErrorValue, AInitialFrameStackCount,
+     AInitialClosedNumericFrameCount, ASavedHandlerCount, AFrame, ATemplate,
+     APrevCovLine, AProfileTimestamp) then
+    raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
+      ASuggestionIsHostOnly);
+end;
+
+// Pops trampoline frames until one of this native entry's handlers catches
+// AErrorValue, and points AFrame at it. False once the entry's outermost
+// frame has no handler for it, which the caller raises.
+function TGocciaVM.TryUnwindToHandler(const AErrorValue: TGocciaValue;
+  const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
+  ASavedHandlerCount: Integer;
+  var AFrame: TGocciaVMCallFrame; var ATemplate: TGocciaFunctionTemplate;
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64): Boolean;
 var
   Handler: TGocciaBytecodeHandlerEntry;
   TargetHandlerCount: Integer;
@@ -14593,7 +15077,10 @@ begin
 
   while True do
   begin
-    if (not FHandlerStack.IsEmpty) and
+    // A handler below ASavedHandlerCount belongs to a frame of an outer
+    // native entry, even at this frame's depth: an imported module's top
+    // level runs at the depth of the frame below it (ExecuteImportedModule).
+    if (FHandlerStack.Count > ASavedHandlerCount) and
        (FHandlerStack.Peek.FrameDepth = FFrameDepth) then
     begin
       Handler := FHandlerStack.Peek;
@@ -14614,14 +15101,10 @@ begin
       if Assigned(FCallStack) then
         FCallStack.ClearTopFrameLocation;
       SetRegister(Handler.CatchRegister, AErrorValue);
-      Exit;
+      Exit(True);
     end;
-    // Outermost frame: let the finally block handle teardown. The suggestion
-    // travels with the throw so a host runner can render the same
-    // "Suggestion:" line the tree-walk evaluator's TGocciaThrowValue carries.
     if FFrameStackCount <= AInitialFrameStackCount then
-      raise EGocciaBytecodeThrow.Create(AErrorValue, ASuggestion,
-        ASuggestionIsHostOnly);
+      Exit(False);
     // Intermediate trampoline frame: tear down and pop to parent
     TeardownCurrentFrame(ATemplate, AProfileTimestamp,
       FFrameStack[FFrameStackCount - 1].HandlerCount);
@@ -14652,6 +15135,20 @@ begin
     Generator);
 end;
 
+{ A typed arithmetic or comparison opcode's operands, when one of them is not
+  a number. Out of line, so that the conversion's call to ToNumber is not
+  inlined into the dispatch loop: an inlined call there makes the compiler
+  keep a stack slot for the left operand, which it holds across the call, in
+  every native re-entry's frame, one slot per opcode. }
+{$IFDEF FPC}{$OPTIMIZATION NOAUTOINLINE}{$ENDIF}
+procedure RegistersToDoubles(const ALeft, ARight: TGocciaRegister;
+  out ALeftNumber, ARightNumber: Double);
+begin
+  ALeftNumber := RegisterToDouble(ALeft);
+  ARightNumber := RegisterToDouble(ARight);
+end;
+{$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
+
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: PGocciaRegister; const AArgCount: Integer;
@@ -14675,9 +15172,6 @@ var
   SavedClosure: TGocciaBytecodeClosure;
   SavedNewTarget: TGocciaValue;
   SavedGlobalScope: TGocciaScope;
-  SavedDynamicVarScope: TGocciaScope;
-  ResolvedDynamicVarScope: TGocciaScope;
-  ResolvedEnvironmentReference: TGocciaResolvedEnvironmentReferenceValue;
   SavedExecutionContextPushed: Boolean;
   SavedHandlerCount: Integer;
   InitialFrameStackCount: Integer;
@@ -14720,8 +15214,16 @@ var
   Template: TGocciaFunctionTemplate;
   Constant: PGocciaBytecodeConstant;
   ChildTemplate: TGocciaFunctionTemplate;
-  LeftValue, RightValue, TargetValue, PropKeyValue, EvalSourceValue: TGocciaValue;
+  LeftValue, RightValue, TargetValue, PropKeyValue: TGocciaValue;
   NumericValue: Double;
+  // The operands of a typed arithmetic or comparison opcode when one is not a
+  // number, converted out of line by RegistersToDoubles.
+  LeftDouble, RightDouble: Double;
+  // A throw that no handler of this entry catches, and the error value a
+  // Pascal error was converted to, kept from the except block that caught it
+  // to the raise after it.
+  EscapingThrow: EGocciaBytecodeThrow;
+  CaughtValue: TGocciaValue;
   PropKey: TGocciaPropertyKey;
   PrivateDescriptor: TGocciaPropertyDescriptor;
   FunctionConstructorValue, ObjectConstructorValue: TGocciaValue;
@@ -14753,7 +15255,6 @@ var
   ExecutionRealm: TGocciaRealm;
   RealmSwitched: Boolean;
   PreviousCallSite: TGocciaCallSite;
-  ClosedNumericInitializedRegisterTop: Integer;
   InstructionLimitState: PGocciaInstructionLimitState;
   UseProdDispatch: Boolean;
   GC: TGarbageCollector;
@@ -14763,8 +15264,6 @@ var
   // and then re-enter guest code (key coercion / custom-matcher lookup) before
   // consuming it. Re-Initialized per use, so sharing one record is safe.
   OperandRoots: TGocciaActiveRootFrame;
-  SavedActiveTemplateProbe: PPointer;
-  SavedActiveInstructionIPProbe: PInteger;
   SavedConstructFrame: TGocciaCallFrame;
   SavedConstructFrameOk: Boolean;
 
@@ -14970,13 +15469,22 @@ var
 
 begin
   // This is a native VM re-entry: the bytecode loop runs on a fresh native stack
-  // frame. Bound the native re-entry depth before any state is saved so the
-  // throw unwinds cleanly (the matching Inc/Dec are paired with the try/finally
-  // below). Without this, generator resume / eval / native-callback recursion
-  // overflows the native stack (SIGSEGV) instead of throwing RangeError.
-  CheckNativeReentryDepth(FNativeExecutionDepth + 1);
+  // frame. Both checks run before any state is saved, so their throw unwinds
+  // cleanly (the matching Inc/Dec are paired with the try/finally below).
+  //
+  // The frame SetupNewFrame pushes is a function call, and counts against
+  // --max-stack like one PushFrame pushes: FFrameDepth includes the outermost
+  // frame, which is not a nested call, so this is the FFrameDepth-th.
+  CheckStackDepth(FFrameDepth);
   if FNativeExecutionDepth = 0 then
     BindToCurrentThread;
+  // Each entry also costs kilobytes of native stack. Without this, recursion
+  // through constructors, generators or callbacks overflows the native stack
+  // (SIGSEGV) once --max-stack allows more entries than the stack holds.
+  CheckNativeStackHeadroom(FNativeExecutionDepth + 1, FNativeStackLimit);
+  // Grown before any state is saved, so that EnterActivation cannot fail.
+  if FActivationCount >= Length(FActivations) then
+    SetLength(FActivations, FActivationCount * 2 + 8);
   PreviousRealm := CurrentRealm;
   ExecutionRealm := BytecodeClosureExecutionRealm(AClosure, FRealm);
   RealmSwitched := Assigned(ExecutionRealm) and (ExecutionRealm <> PreviousRealm);
@@ -14990,7 +15498,6 @@ begin
   SavedClosure := FCurrentClosure;
   SavedNewTarget := FCurrentNewTarget;
   SavedGlobalScope := FGlobalScope;
-  SavedDynamicVarScope := FCurrentDynamicVarScope;
   SavedExecutionContextPushed := FCurrentExecutionContextPushed;
   SavedHandlerCount := FHandlerStack.Count;
   InitialFrameStackCount := FFrameStackCount;
@@ -15020,14 +15527,11 @@ begin
       // Template makes the stamp a no-op until the loop sets a real one.
       Template := nil;
       InstructionStartIP := 0;
-      SavedActiveTemplateProbe := FActiveTemplateProbe;
-      SavedActiveInstructionIPProbe := FActiveInstructionIPProbe;
-      FActiveTemplateProbe := PPointer(@Template);
-      FActiveInstructionIPProbe := @InstructionStartIP;
+      EnterActivation(PPointer(@Template), @InstructionStartIP, @Frame.IP,
+        InitialFrameStackCount, InitialClosedNumericFrameCount);
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-    ClosedNumericInitializedRegisterTop := FRegisterBase + FRegisterCount;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then
@@ -15081,6 +15585,11 @@ begin
                 try
                   AwaitPromise := PromiseResolveIntrinsic(
                     GActiveBytecodeGenerator.FReturnValue);
+                  // Inside the same handlers: the capture charges the frame
+                  // and throws if that does not fit (ADR 0130).
+                  GActiveBytecodeGenerator.CaptureContinuation(Frame,
+                    SavedHandlerCount, PrevCovLine,
+                    GActiveBytecodeGenerator.FResumeRegister, Frame.IP);
                 except
                   on E: EGocciaBytecodeThrow do
                   begin
@@ -15102,9 +15611,6 @@ begin
                 if not ReturnAwaitAbrupt then
                 begin
                   GActiveBytecodeGenerator.FReturnResumeValueAwaited := True;
-                  GActiveBytecodeGenerator.CaptureContinuation(Frame,
-                    SavedHandlerCount, PrevCovLine,
-                    GActiveBytecodeGenerator.FResumeRegister, Frame.IP);
                   GActiveBytecodeGenerator.FState := bgsSuspendedYield;
                   AwaitPromise.InvokeThen(
                     TGocciaVMAsyncAwaitContinuationValue.Create(Self,
@@ -15132,6 +15638,7 @@ begin
     end;
     Running := True;
     InstructionLimitState := CaptureInstructionLimitState;
+    EscapingThrow := nil;
     while Running and (Frame.IP < Template.CodeCount) do
     begin
       try
@@ -15227,6 +15734,10 @@ LDispatchCase:
           if Assigned(GC) then
             GC.CollectForMemoryPressure(nil);
           FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+          if FStackChargePending then
+            SettleStackGrowth
+          else if FStackChargedBytes + FStackUnchargedBytes > 0 then
+            ShrinkIdleStacks;
         end
         else
           Dec(FMemoryPressureCheckCountdown);
@@ -15241,48 +15752,72 @@ LDispatchNext:
 LInnerLoopsDone:
       except
         on E: EGocciaBytecodeThrow do
-          HandleExceptionUnwind(E.ThrownValue,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.ThrownValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.ThrownValue,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaThrowValue do
-          HandleExceptionUnwind(E.Value,
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion,
-            E.SuggestionIsHostOnly);
+          if not TryUnwindToHandler(E.Value,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(E.Value,
+              E.Suggestion, E.SuggestionIsHostOnly);
         on E: TGocciaTypeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(TYPE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(TYPE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaReferenceError do
-          HandleExceptionUnwind(
-            CreateErrorObject(REFERENCE_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(REFERENCE_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaSyntaxError do
-          HandleExceptionUnwind(
-            CreateErrorObject(SYNTAX_ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(SYNTAX_ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
         on E: TGocciaRuntimeError do
-          HandleExceptionUnwind(
-            CreateErrorObject(ERROR_NAME, E.Message),
-            InitialFrameStackCount, InitialClosedNumericFrameCount,
-            SavedHandlerCount,
-            Frame, Template, PrevCovLine, ProfileEntryTimestamp, E.Suggestion);
+        begin
+          CaughtValue := CreateErrorObject(ERROR_NAME, E.Message);
+          if not TryUnwindToHandler(CaughtValue,
+             InitialFrameStackCount, InitialClosedNumericFrameCount,
+             SavedHandlerCount, Frame, Template, PrevCovLine,
+             ProfileEntryTimestamp) then
+            EscapingThrow := EGocciaBytecodeThrow.Create(CaughtValue,
+              E.Suggestion);
+        end;
       end;
+      // Raised only once the except block is done. On i386-win32, FPC runs an
+      // except block on top of the stack the exception was raised on, and
+      // only gives that stack back when the block ends, so a throw raised
+      // inside it would keep every native entry it passes through on the
+      // stack until the throw is caught: from deep recursion, megabytes.
+      if Assigned(EscapingThrow) then
+        raise EscapingThrow;
     end;
     Result := RegisterUndefined;
     finally
       Dec(FNativeExecutionDepth);
-      FActiveTemplateProbe := SavedActiveTemplateProbe;
-      FActiveInstructionIPProbe := SavedActiveInstructionIPProbe;
+      LeaveActivation;
       try
       UnwindClosedNumericFrames(InitialClosedNumericFrameCount, Frame,
         Template, PrevCovLine, ProfileEntryTimestamp);
@@ -15299,7 +15834,6 @@ LInnerLoopsDone:
       FCurrentClosure := SavedClosure;
       FCurrentNewTarget := SavedNewTarget;
       FGlobalScope := SavedGlobalScope;
-      FCurrentDynamicVarScope := SavedDynamicVarScope;
       FCurrentExecutionContextPushed := SavedExecutionContextPushed;
       FArgumentBase := SavedArgumentBase;
       FArgCount := SavedArgCount;
@@ -15370,8 +15904,10 @@ begin
     VMValueToRegisterFast(AThisValue), RegisterArgs, APushExecutionContext));
 end;
 
-function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule): TGocciaValue;
+function TGocciaVM.ExecuteModule(const AModule: TGocciaBytecodeModule;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
+  ReceiverValue: TGocciaValue;
   EmptyArgs: TGocciaArgumentsCollection;
   PreviousAsyncPromise: TGocciaPromiseValue;
   Promise: TGocciaPromiseValue;
@@ -15380,6 +15916,10 @@ var
   SavedModuleSourcePath: string;
   SavedModuleExports: TGocciaValueMap;
 begin
+  if Assigned(AThisValue) then
+    ReceiverValue := AThisValue
+  else
+    ReceiverValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   EmptyArgs := TGocciaArgumentsCollection.Create;
   TopClosure := TGocciaBytecodeClosure.Create(AModule.TopLevel);
   TopClosure.GlobalScope := FGlobalScope;
@@ -15403,8 +15943,8 @@ begin
             FCurrentAsyncPromise := Promise;
             try
               try
-                Promise.Resolve(ExecuteClosure(TopClosure,
-                  TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False));
+                Promise.Resolve(ExecuteClosure(TopClosure, ReceiverValue,
+                  EmptyArgs, False));
               except
                 on E: EGocciaBytecodeAsyncSuspend do
                 begin
@@ -15427,8 +15967,8 @@ begin
         Result := Promise;
       end
       else
-        Result := ExecuteClosure(TopClosure,
-          TGocciaUndefinedLiteralValue.UndefinedValue, EmptyArgs, False);
+        Result := ExecuteClosure(TopClosure, ReceiverValue, EmptyArgs,
+          False);
     finally
       if Assigned(FRealm) then
         TGocciaExecutionContextStack.Pop;
@@ -15439,6 +15979,30 @@ begin
   finally
     TopClosure.Free;
     EmptyArgs.Free;
+  end;
+end;
+
+{ ES2026 §16.2.1.6.1.3.1 InnerModuleEvaluation runs a module's top level for
+  the module that imports it, so the importer's frame, or the call that read a
+  deferred namespace, is still live below it. The top level is not a function
+  call, and --max-stack caps nested calls (docs/embedding.md): its frame takes
+  the depth of the frame below instead of one more, as the interpreter, which
+  evaluates a module body without a call-stack entry, counts it. A module
+  imported from a top level keeps the whole limit; one evaluated k calls deep
+  keeps the limit less those k calls. With no frame below, the top level is the
+  outermost frame, which FFrameDepth already counts as no call. }
+function TGocciaVM.ExecuteImportedModule(
+  const AModule: TGocciaBytecodeModule): TGocciaValue;
+var
+  SavedFrameDepth: Integer;
+begin
+  SavedFrameDepth := FFrameDepth;
+  if SavedFrameDepth > 0 then
+    FFrameDepth := SavedFrameDepth - 1;
+  try
+    Result := ExecuteModule(AModule);
+  finally
+    FFrameDepth := SavedFrameDepth;
   end;
 end;
 
@@ -15496,5 +16060,6 @@ end;
 
 initialization
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
+  RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
 
 end.

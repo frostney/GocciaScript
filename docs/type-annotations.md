@@ -18,7 +18,23 @@ The annotation surface is part of GocciaScript's language profile; see
 
 GocciaScript implements the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal. Supported annotations follow its types-as-comments model and have no runtime effect by default. Raw type strings are preserved on AST nodes for potential future optimization.
 
-**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime in both interpreter and bytecode modes. Annotated variables, function parameters, and primitive-literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
+**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime in both interpreter and bytecode modes. Annotated variables, function parameters, and literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
+
+An unannotated `let` takes an inferred type from the syntactic form of its initializer alone, and only from these forms:
+
+| Initializer | Inferred type |
+|---|---|
+| Number, string, or boolean literal | `number`, `string`, or `boolean` |
+| Template literal, with or without substitutions | `string` |
+| Object literal, array literal, `new` expression, arrow function, or function expression | `object` (any non-primitive value) |
+
+Every other initializer leaves the binding untyped, whatever the engine could work out about its value: an identifier, a call, an operator expression (including a negated number such as `-1`), a BigInt literal, `null`, or `undefined`.
+
+```javascript
+const base = 16;
+let count = 1;        // inferred number: count = "text" throws TypeError
+let total = base + 1; // untyped: total = "text" is allowed
+```
 
 ## Supported Syntax
 

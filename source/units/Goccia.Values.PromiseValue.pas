@@ -100,7 +100,6 @@ type
     function GetProperty(const AName: string): TGocciaValue; override;
     function GetPropertyWithContext(const AName: string; const AThisContext: TGocciaValue): TGocciaValue; override;
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure MarkReferences; override;
 
@@ -1162,11 +1161,6 @@ end;
 function TGocciaPromiseValue.ToStringTag: string;
 begin
   Result := 'Promise';
-end;
-
-function TGocciaPromiseValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 initialization

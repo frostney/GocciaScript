@@ -1000,6 +1000,17 @@ begin
       Continue;
     end;
 
+    { An instance auto-accessor's initializer is in PrivateInstanceProperties
+      under its storage name, so only a static one is visited here. Its
+      getter and setter are synthesized and hold no directive. }
+    if ADefinition.FElements[I].Kind = cekAccessor then
+    begin
+      VisitNode(ADefinition.FElements[I].ComputedKeyExpression, False);
+      if ADefinition.FElements[I].IsStatic then
+        VisitNode(ADefinition.FElements[I].FieldInitializer, False);
+      Continue;
+    end;
+
     if not ADefinition.FElements[I].IsComputed then
       Continue;
 

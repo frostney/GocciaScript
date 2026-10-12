@@ -47,6 +47,9 @@ type
     procedure TestRemoveHostTreeBeneathRefusesALastDotDot;
     procedure TestRemoveHostTreeBeneathRemovesJunctionsItself;
     procedure TestReplaceWhileASharedReaderHoldsTheFile;
+    procedure TestForceHostDirectoriesCreatesEveryLevel;
+    procedure TestForceHostDirectoriesRefusesAFileInThePath;
+    procedure TestForceHostDirectoriesSurvivesConcurrentCreators;
   public
     procedure SetupTests; override;
     procedure BeforeEach; override;
@@ -121,6 +124,18 @@ begin
   Skip('ReplaceHostFile replaces a file a shared reader holds open',
     TestReplaceWhileASharedReaderHoldsTheFile,
     'share modes exist only on Windows');
+  {$ENDIF}
+  Test('ForceHostDirectories creates every missing level',
+    TestForceHostDirectoriesCreatesEveryLevel);
+  Test('ForceHostDirectories is false when a file is in the path',
+    TestForceHostDirectoriesRefusesAFileInThePath);
+  {$IFDEF UNIX}
+  Test('ForceHostDirectories creates its leaf while other processes create ' +
+    'sibling directories', TestForceHostDirectoriesSurvivesConcurrentCreators);
+  {$ELSE}
+  Skip('ForceHostDirectories creates its leaf while other processes create ' +
+    'sibling directories', TestForceHostDirectoriesSurvivesConcurrentCreators,
+    'the test forks its concurrent creators');
   {$ENDIF}
 end;
 
@@ -722,6 +737,71 @@ begin
   end;
   Expect<Integer>(FpStat(Target, Info)).ToBe(0);
   Expect<Integer>(Info.st_mode and PERMISSION_BITS).ToBe(PRIVATE_FILE);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
+procedure TFileUtilsTests.TestForceHostDirectoriesCreatesEveryLevel;
+var
+  Leaf: string;
+begin
+  Leaf := FTempDir + PathDelim + 'a' + PathDelim + 'b' + PathDelim + 'c';
+  Expect<Boolean>(ForceHostDirectories(Leaf)).ToBe(True);
+  Expect<Boolean>(DirectoryExists(Leaf)).ToBe(True);
+  Expect<Boolean>(ForceHostDirectories(Leaf)).ToBe(True);
+end;
+
+procedure TFileUtilsTests.TestForceHostDirectoriesRefusesAFileInThePath;
+var
+  Leaf: string;
+begin
+  CreateTempFile('occupied');
+  Leaf := FTempDir + PathDelim + 'occupied' + PathDelim + 'below';
+  Expect<Boolean>(ForceHostDirectories(Leaf)).ToBe(False);
+  Expect<Boolean>(DirectoryExists(Leaf)).ToBe(False);
+end;
+
+{ Forked test262 workers each create the directory for their own profile
+  under parents that do not exist yet. SysUtils.ForceDirectories gives up in
+  the worker that loses the race for a shared parent, leaving that worker's
+  leaf uncreated; with eight workers that happens in several percent of the
+  calls, so forty rounds would not pass by chance. }
+procedure TFileUtilsTests.TestForceHostDirectoriesSurvivesConcurrentCreators;
+{$IFDEF UNIX}
+const
+  ROUNDS = 40;
+  WORKERS = 8;
+var
+  Base, Leaf: string;
+  Failures, Round, Status, Worker: Integer;
+  Pid: TPid;
+begin
+  Failures := 0;
+  for Round := 1 to ROUNDS do
+  begin
+    Base := FTempDir + PathDelim + 'round' + IntToStr(Round) + PathDelim +
+      'shared' + PathDelim + 'parent';
+    for Worker := 1 to WORKERS do
+    begin
+      Pid := fpFork;
+      if Pid = 0 then
+      begin
+        Leaf := Base + PathDelim + 'leaf' + IntToStr(Worker);
+        if ForceHostDirectories(Leaf) and DirectoryExists(Leaf) then
+          fpExit(0);
+        fpExit(1);
+      end;
+      if Pid < 0 then
+        Inc(Failures);
+    end;
+    for Worker := 1 to WORKERS do
+      if (fpWaitPid(-1, @Status, 0) > 0) and
+         ((not wifexited(Status)) or (wexitStatus(Status) <> 0)) then
+        Inc(Failures);
+  end;
+  Expect<Integer>(Failures).ToBe(0);
 end;
 {$ELSE}
 begin

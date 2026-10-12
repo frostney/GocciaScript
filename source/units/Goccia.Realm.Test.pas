@@ -469,6 +469,7 @@ var
   Thread, PathRef: Pointer;
   Running, Popped: TGocciaExecutionContext;
   HadRunning: Boolean;
+  Depth: Integer;
 begin
   PreviousRealm := CurrentRealm;
   HadRunning := HasRunningExecutionContext;
@@ -482,6 +483,19 @@ begin
     Expect<Boolean>(PathRef = InternSourcePath('<call-path-test>')).ToBe(True);
     Expect<Boolean>(PathRef <> InternSourcePath('<another-path>')).ToBe(True);
     Expect<Boolean>(InternSourcePath('') = nil).ToBe(True);
+
+    // The call-path push does not grow the stack: its caller makes room.
+    // Push, which does grow it, keeps the capacity the call path reads.
+    Depth := TGocciaExecutionContextStack.FunctionContextCount(Thread);
+    TGocciaExecutionContextStack.SetFunctionContextCapacity(Thread, Depth);
+    TGocciaExecutionContextStack.Push(
+      CreateExecutionContext(OuterRealm, nil, ''));
+    Expect<Boolean>(TGocciaExecutionContextStack.FunctionContextCapacity(
+      Thread) > Depth + 1).ToBe(True);
+    TGocciaExecutionContextStack.Pop;
+    TGocciaExecutionContextStack.SetFunctionContextCapacity(Thread, Depth + 4);
+    Expect<Integer>(TGocciaExecutionContextStack.FunctionContextCapacity(
+      Thread)).ToBe(Depth + 4);
 
     TGocciaExecutionContextStack.PushFunctionContext(Thread, InnerRealm, nil,
       nil, PathRef);

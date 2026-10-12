@@ -126,7 +126,8 @@
       begin
         FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP,
+            DecodeBx(Instruction));
       end;
 
       OP_SET_LOCAL:
@@ -136,28 +137,11 @@
       begin
         if Assigned(FCurrentClosure) then
         begin
-          // Only a dynamic var scope can redirect an upvalue read, and
-          // ResolveDynamicUpvalueScope answers nil without one. Checking here
-          // keeps the descriptor, a record holding a string, from being
-          // copied on every read.
-          if Assigned(FCurrentDynamicVarScope) then
-          begin
-            Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-            ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-              DecodeBx(Instruction), Desc.Name);
-            if Assigned(ResolvedDynamicVarScope) then
-            begin
-              FRegisters[A] := VMValueToRegisterFast(
-                ResolvedDynamicVarScope.GetValue(Desc.Name));
-              goto LDispatchNext;
-            end;
-          end;
-
           Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             SetRegisterRaw(A, Upvalue.Cell.Value)
           end
           else
@@ -175,70 +159,28 @@
           if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
           begin
             if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError('Cannot access lexical binding before initialization');
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
             Upvalue.Cell.Value := FRegisters[A];
           end;
         end;
       end;
 
-      OP_SET_UPVALUE_DYNAMIC:
-      begin
-        Desc := Template.GetUpvalueDescriptor(DecodeBx(Instruction));
-        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(
-          DecodeBx(Instruction), Desc.Name);
-        if Assigned(ResolvedDynamicVarScope) then
-          ResolvedDynamicVarScope.AssignBinding(Desc.Name,
-            RegisterToValue(FRegisters[A]))
-        else if Assigned(FCurrentClosure) then
+      OP_CHECK_BINDING_INITIALIZED:
+        if A = CHECK_BINDING_GLOBAL then
         begin
-          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          begin
-            if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
-            Upvalue.Cell.Value := FRegisters[A];
-          end;
-        end;
-      end;
-
-      OP_RESOLVE_UPVALUE_REF:
-      begin
-        Desc := Template.GetUpvalueDescriptor(B);
-        ResolvedDynamicVarScope := ResolveDynamicUpvalueScope(B, Desc.Name);
-        if Assigned(ResolvedDynamicVarScope) then
-          SetRegister(A, TGocciaResolvedEnvironmentReferenceValue.Create(
-            ResolvedDynamicVarScope, C <> 0))
-        else
-          FRegisters[A] := RegisterUndefined;
-      end;
-
-      OP_SET_UPVALUE_REF:
-      begin
-        Desc := Template.GetUpvalueDescriptor(C);
-        if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is
-             TGocciaResolvedEnvironmentReferenceValue) then
-        begin
-          ResolvedEnvironmentReference :=
-            TGocciaResolvedEnvironmentReferenceValue(
-              FRegisters[B].ObjectValue);
-          ResolvedEnvironmentReference.Scope.SetOwnMutableBinding(Desc.Name,
-            RegisterToValue(FRegisters[A]),
-            ResolvedEnvironmentReference.Strict);
+          // The global scope's own lookup raises the binding's named
+          // ReferenceError while it is uninitialized.
+          if Assigned(FGlobalScope) then
+            FGlobalScope.TryGetBindingValue(Template.GetConstantUnchecked(
+              DecodeBx(Instruction)).StringValue, GlobalBindingValue);
         end
         else if Assigned(FCurrentClosure) then
         begin
-          Upvalue := FCurrentClosure.GetUpvalue(C);
-          if Assigned(Upvalue) and Assigned(Upvalue.Cell) then
-          begin
-            if Upvalue.Cell.Value.Kind = grkHole then
-              ThrowReferenceError(
-                'Cannot access lexical binding before initialization');
-            Upvalue.Cell.Value := FRegisters[A];
-          end;
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) and Assigned(Upvalue.Cell) and
+             (Upvalue.Cell.Value.Kind = grkHole) then
+            ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
         end;
-      end;
 
       OP_SET_GLOBAL_STATIC:
       begin
@@ -247,7 +189,8 @@
         if Assigned(FGlobalScope) and
            not FGlobalScope.TryAssignExistingBinding(GlobalName,
              RegisterToValue(FRegisters[A])) then
-          ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]));
+          ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]),
+            SSuggestDeclareBeforeUse);
       end;
 
       OP_CLOSE_UPVALUE:
@@ -372,8 +315,8 @@
                   RegisterIsNumericScalar(FRegisters[B]) then
           begin
             if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-            NumericComparisonResult := RegisterToDouble(FRegisters[A]) <
-              RegisterToDouble(FRegisters[B]);
+            NumericComparisonResult := NumericScalarToDouble(FRegisters[A]) <
+              NumericScalarToDouble(FRegisters[B]);
           end
           else
           begin
@@ -446,11 +389,19 @@
             Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
 
       OP_PUSH_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
+      end;
 
       OP_PUSH_FINALLY_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth,
           bhkFinally);
+      end;
 
       OP_POP_HANDLER:
         if not FHandlerStack.IsEmpty then
@@ -460,25 +411,59 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
             FRegisters[C].IntValue)
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]))
         else
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
-            RegisterToDouble(FRegisters[C]));
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+        end;
 
       OP_ADD_FLOAT:
-        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
-          RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+        end;
 
       OP_SUB_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
             FRegisters[C].IntValue)
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) -
+            NumericScalarToDouble(FRegisters[C]))
         else
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
-            RegisterToDouble(FRegisters[C]));
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+        end;
 
       OP_SUB_FLOAT:
-        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
-          RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) -
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+        end;
 
       OP_SUB_NUM_IMM:
         if FRegisters[B].Kind = grkInt then
@@ -500,95 +485,232 @@
 
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue)
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) *
+            NumericScalarToDouble(FRegisters[C]))
         else
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
-            RegisterToDouble(FRegisters[C]));
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+        end;
 
       OP_MUL_FLOAT:
-        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
-          RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) *
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+        end;
 
       OP_DIV_INT, OP_DIV_FLOAT:
-        FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) /
-          RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) /
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble / RightDouble);
+        end;
 
       OP_MOD_INT, OP_MOD_FLOAT:
-        FRegisters[A] := VMModuloRegister(RegisterToDouble(FRegisters[B]),
-          RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMModuloRegister(
+            NumericScalarToDouble(FRegisters[B]),
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMModuloRegister(LeftDouble, RightDouble);
+        end;
 
       OP_EQ_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue = FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) =
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble = RightDouble);
+        end;
 
       OP_EQ_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) = RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) =
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble = RightDouble);
+        end;
 
       OP_NEQ_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <> FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) <>
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble <> RightDouble);
+        end;
 
       OP_NEQ_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) <> RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <>
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble <> RightDouble);
+        end;
 
       OP_LT_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue < FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) <
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble < RightDouble);
+        end;
 
       OP_LT_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) < RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble < RightDouble);
+        end;
 
       OP_GT_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue > FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) >
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble > RightDouble);
+        end;
 
       OP_GT_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) > RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) >
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble > RightDouble);
+        end;
 
       OP_LTE_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue <= FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) <=
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble <= RightDouble);
+        end;
 
       OP_LTE_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) <= RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <=
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble <= RightDouble);
+        end;
 
       OP_GTE_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := RegisterBoolean(
             FRegisters[B].IntValue >= FRegisters[C].IntValue)
-        else
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := RegisterBoolean(
-            RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]));
+            NumericScalarToDouble(FRegisters[B]) >=
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble >= RightDouble);
+        end;
 
       OP_GTE_FLOAT:
-        FRegisters[A] := RegisterBoolean(
-          RegisterToDouble(FRegisters[B]) >= RegisterToDouble(FRegisters[C]));
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) >=
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := RegisterBoolean(LeftDouble >= RightDouble);
+        end;
 
       OP_NEG_INT, OP_NEG_FLOAT:
         FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]));
@@ -674,6 +796,10 @@
       begin
         FRegisters[A] := RegisterObject(TGocciaVMClassValue.Create(Self,
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue, nil));
+        if Assigned(FCurrentClosure) and
+           (FCurrentClosure.PrivateClass is TGocciaClassValue) then
+          TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+            TGocciaClassValue(FCurrentClosure.PrivateClass);
         TGocciaVMClassValue(FRegisters[A].ObjectValue).Prototype.DefineProperty(
           PROP_CONSTRUCTOR, TGocciaPropertyDescriptorData.Create(
             FRegisters[A].ObjectValue, [pfConfigurable, pfWritable]));
@@ -805,14 +931,17 @@
         end;
       end;
 
-      // ES2022 §15.7.14: execute static block closure with this = class
+      // Runs a static block (ES2026 §15.7.11) or a static field initializer
+      // (§15.7.10) with this = class and leaves its return value in B. Both
+      // are methods whose [[HomeObject]] is the class itself, not its
+      // prototype, so `super.x` there reads the class's [[Prototype]].
       OP_CLASS_EXEC_STATIC_BLOCK:
       begin
         if (FRegisters[B].Kind = grkObject) and
            (FRegisters[B].ObjectValue is TGocciaBytecodeFunctionValue) then
         begin
           SetBytecodeHomeObject(RegisterToValue(FRegisters[B]),
-            FRegisters[A].ObjectValue);
+            FRegisters[A].ObjectValue, True);
           // Copied out of the register window first: where a register is
           // passed by reference (Win64), SetupNewFrame would otherwise read
           // `this` through the window after acquiring registers moved it.
@@ -830,8 +959,8 @@
         begin
           CallArgs := AcquireArguments(0);
           try
-            InvokeFunctionValue(RegisterToValue(FRegisters[B]),
-              CallArgs, RegisterToValue(FRegisters[A]));
+            SetRegister(B, InvokeFunctionValue(RegisterToValue(FRegisters[B]),
+              CallArgs, RegisterToValue(FRegisters[A])));
           finally
             ReleaseArguments(CallArgs);
           end;
@@ -842,7 +971,7 @@
       begin
         FRegisters[A] := GetLocalRegister(B);
         if FRegisters[A].Kind = grkHole then
-          ThrowReferenceError('Cannot access lexical binding before initialization');
+          ThrowUninitializedLocal(Template, InstructionStartIP, B);
         B := A;
         goto LGetPropConstShared;
       end;
@@ -1052,6 +1181,10 @@
         SetPropertyValueLoose(TargetValue, GlobalName, RightValue);
       end;
 
+      // Defines a field: static fields on the class, `<fields>` instance
+      // fields on the receiver. ES2026 §7.3.33 DefineField never calls
+      // MakeMethod on the value, so neither definition opcode sets a home
+      // object; the initializer itself is the method (§15.7.10).
       OP_DEFINE_STATIC_PROP_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(B).StringValue;
@@ -1059,9 +1192,6 @@
         if (FRegisters[A].Kind = grkObject) and
            (FRegisters[A].ObjectValue is TGocciaObjectValue) then
         begin
-          if FRegisters[A].ObjectValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, RegisterToValue(FRegisters[A]),
-              True);
           if IsBytecodePrivateKey(GlobalName) then
           begin
             if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
@@ -1103,9 +1233,6 @@
         if TargetValue is TGocciaObjectValue then
         begin
           PropKey := ClassifyPropertyKey(FRegisters[B], False);
-          if TargetValue is TGocciaVMClassValue then
-            SetBytecodeHomeObject(RightValue, TargetValue, True);
-
           if PropKey.Kind = pkkSymbol then
             TGocciaObjectValue(TargetValue).DefineSymbolProperty(
               PropKey.Symbol,
@@ -1238,6 +1365,46 @@
           SetPropertyValue(TargetValue,
             KeyToPropertyNameRegister(FRegisters[B]), RightValue);
       end;
+
+      // A computed instance method: installed on the prototype, which is its
+      // home object, while the class in A supplies its private names.
+      OP_CLASS_ADD_METHOD_DYNAMIC:
+      begin
+        RightValue := RegisterToValue(FRegisters[C]);
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaVMClassValue) then
+        begin
+          TargetValue := TGocciaVMClassValue(FRegisters[A].ObjectValue)
+            .Prototype;
+          PropKey := ClassifyPropertyKey(FRegisters[B], False);
+          SetBytecodeHomeObject(RightValue, FRegisters[A].ObjectValue);
+          if PropKey.Kind = pkkSymbol then
+            TGocciaObjectValue(TargetValue).DefineSymbolProperty(
+              PropKey.Symbol,
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]))
+          else
+            TGocciaObjectValue(TargetValue).DefineProperty(
+              PropertyKeyName(PropKey),
+              TGocciaPropertyDescriptorData.Create(
+                RightValue, [pfConfigurable, pfWritable]));
+        end;
+      end;
+
+      // A function or class created in a class body joins the class's
+      // private environment; a class's own then links to it.
+      OP_SET_PRIVATE_CLASS:
+        if (FRegisters[A].Kind = grkObject) and
+           (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          if FRegisters[A].ObjectValue is TGocciaBytecodeFunctionValue then
+            TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue).FClosure
+              .PrivateClass := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+          else if FRegisters[A].ObjectValue is TGocciaVMClassValue then
+            TGocciaVMClassValue(FRegisters[A].ObjectValue).OuterPrivateClass :=
+              TGocciaVMClassValue(FRegisters[B].ObjectValue);
+        end;
 
       OP_SET_OBJECT_PROTO:
         SetObjectLiteralPrototype(RegisterToValue(FRegisters[A]),
@@ -1392,8 +1559,9 @@
         begin
           if FProfilingOpcodes then
             TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) +
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]));
         end
         else begin
           if FProfilingOpcodes then
@@ -1458,8 +1626,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) -
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) -
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1513,7 +1682,7 @@
           // a local's own register as B, where a hole is a lexical binding
           // that is still uninitialized (§9.1.1.1.6 GetBindingValue step 2).
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1540,7 +1709,7 @@
             SetRegister(A, TGocciaNumberLiteralValue.NaNValue);
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1607,7 +1776,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1681,7 +1850,7 @@
           end;
           // Temporal dead zone: see OP_INC_NUMERIC.
           grkHole:
-            ThrowReferenceError('Cannot access lexical binding before initialization');
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
         else
           LeftValue := ToPrimitive(GetRegisterFast(B), tphNumber);
           if LeftValue is TGocciaBigIntValue then
@@ -1703,15 +1872,16 @@
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue *
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue);
         end
         else if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) *
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) *
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1727,8 +1897,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(RegisterToDouble(FRegisters[B]) /
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) /
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1744,8 +1915,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMModuloRegister(RegisterToDouble(FRegisters[B]),
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMModuloRegister(
+            NumericScalarToDouble(FRegisters[B]),
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1761,8 +1933,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMPowerRegister(RegisterToDouble(FRegisters[B]),
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := VMPowerRegister(
+            NumericScalarToDouble(FRegisters[B]),
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1774,7 +1947,8 @@
 
       OP_NEG:
         if RegisterIsNumericScalar(FRegisters[B]) then
-          FRegisters[A] := VMNumberRegister(-RegisterToDouble(FRegisters[B]))
+          FRegisters[A] := VMNumberRegister(
+            -NumericScalarToDouble(FRegisters[B]))
         else
         begin
           // ES2026 §13.5.5 UnaryMinus invokes ToNumeric (= ToPrimitive
@@ -1961,8 +2135,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -1993,8 +2168,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) >
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -2025,8 +2201,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) <=
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <=
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -2057,8 +2234,9 @@
            RegisterIsNumericScalar(FRegisters[C]) then
         begin
           if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(RegisterToDouble(FRegisters[B]) >=
-            RegisterToDouble(FRegisters[C]));
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) >=
+            NumericScalarToDouble(FRegisters[C]));
         end
         else
         begin
@@ -2215,7 +2393,8 @@
         ChildTemplate := Template.GetFunctionUnchecked(DecodeBx(Instruction));
         if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
            Assigned(ChildTemplate.DebugInfo) and
-           (ChildTemplate.DebugInfo.LineMapCount > 0) then
+           (ChildTemplate.DebugInfo.LineMapCount > 0) and
+           (ChildTemplate.Name <> STATIC_FIELD_TEMPLATE_NAME) then
           TGocciaCoverageTracker.Instance.RegisterFunction(
             ChildTemplate.DebugInfo.SourceFile, ChildTemplate.Name,
             ChildTemplate.DebugInfo.CoverageLine,
@@ -2223,7 +2402,11 @@
         ChildClosure := TGocciaBytecodeClosure.Create(
           ChildTemplate, ChildTemplate.UpvalueCount);
         ChildClosure.GlobalScope := FGlobalScope;
-        ChildClosure.DynamicVarScope := FCurrentDynamicVarScope;
+        // ES2026 §10.2.3 OrdinaryFunctionCreate: every function captures the
+        // running PrivateEnvironment, whatever kind of function it is. Class
+        // element definitions then move a method into its own class body.
+        if Assigned(FCurrentClosure) then
+          ChildClosure.PrivateClass := FCurrentClosure.PrivateClass;
         if ChildTemplate.IsArrow and Assigned(FCurrentClosure) then
         begin
           ChildClosure.HomeObject := FCurrentClosure.HomeObject;
@@ -2246,14 +2429,7 @@
             ChildClosure.SetUpvalue(I, TGocciaBytecodeUpvalue.Create(
               GetLocalCell(Desc.Index)))
           else if Assigned(FCurrentClosure) then
-          begin
             ChildClosure.SetUpvalue(I, FCurrentClosure.GetUpvalue(Desc.Index));
-            ChildClosure.SetDynamicVarUpvalue(I,
-              ((FCurrentDynamicVarScope <>
-                FCurrentClosure.DynamicVarScope) and
-               Assigned(FCurrentDynamicVarScope)) or
-              FCurrentClosure.IsDynamicVarUpvalue(Desc.Index));
-          end;
         end;
         BytecodeFunction := TGocciaBytecodeFunctionValue.Create(Self, ChildClosure);
         // ES2026 §10.2.5 MakeConstructor: install own `prototype` data property
@@ -2271,34 +2447,32 @@
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
         PushClosedNumericFrame(A, B, C, Frame, Template, PrevCovLine,
-          ProfileEntryTimestamp, ClosedNumericInitializedRegisterTop);
+          ProfileEntryTimestamp);
         goto LDispatchNext;
+      end;
+
+      OP_DIRECT_EVAL:
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          CheckExecutionTimeout;
+        ChildClosure := ExecuteDirectEvalSite(A, DecodeBx(Instruction),
+          Template, Frame.IP, InstructionStartIP);
+        // Eval code compiled at a strict call site runs as a frame of its
+        // own, which returns its completion value to the callee register.
+        if Assigned(ChildClosure) then
+        begin
+          PushFrame(A, Frame.IP, Template, PrevCovLine,
+            ProfileEntryTimestamp);
+          SetupNewFrame(ChildClosure, RegisterUndefined, nil, 0, True,
+            Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+          goto LDispatchNext;
+        end;
       end;
 
       OP_CALL:
       begin
         if FThreadPolls^.TimeoutArmed then
           CheckExecutionTimeout;
-        if ((C and CALL_FLAG_DIRECT_EVAL) <> 0) and
-           (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
-           TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).DirectEvalHost and
-           IsCurrentRealmEvalFunction(FRegisters[A].ObjectValue, FRealm) then
-        begin
-          EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          if (C and CALL_FLAG_SPREAD) <> 0 then
-          begin
-	            if (FRegisters[B].Kind = grkObject) and
-	               (FRegisters[B].ObjectValue is TGocciaArrayValue) and
-	               (TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count > 0) then
-	              EvalSourceValue := TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty('0');
-          end
-          else if B > 0 then
-            EvalSourceValue := GetRegister(A + 1);
-          SetRegister(A, ExecuteDirectEval(EvalSourceValue, Template,
-            UInt32(InstructionStartIP), Template.StrictCode));
-          goto LDispatchNext;
-        end;
         // A bytecode function is the usual callee and is neither a native nor
         // a bound function. Its class is sealed, so one exact class comparison
         // decides it: a bytecode callee skips the two `is` tests below, and
@@ -3063,10 +3237,6 @@
         SetupAutoAccessorValue(Template.GetConstantUnchecked(C).StringValue,
           B, RegisterToValue(FRegisters[A]));
 
-      OP_SETUP_AUTO_ACCESSOR_DYNAMIC:
-        SetupAutoAccessorValueByKey(RegisterToValue(FRegisters[A]),
-          Template.GetConstantUnchecked(C).StringValue, B);
-
       OP_BEGIN_DECORATORS:
         BeginDecorators(RegisterToValue(FRegisters[A]), RegisterToValue(FRegisters[A + 1]));
 
@@ -3087,18 +3257,8 @@
 
       OP_GET_GLOBAL:
       begin
-        if Assigned(FCurrentDynamicVarScope) or not Assigned(FGlobalScope) then
-        begin
-          GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-          if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-            FRegisters[A] := VMValueToRegisterFast(
-              FCurrentDynamicVarScope.GetValue(GlobalName))
-          else if Assigned(FGlobalScope) and
-                  FGlobalScope.TryGetBindingValue(GlobalName, GlobalBindingValue) then
-            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-          else
-            FRegisters[A] := RegisterUndefined;
-        end
+        if not Assigned(FGlobalScope) then
+          FRegisters[A] := RegisterUndefined
         else
         begin
           // Per-site inline cache keyed by the name-constant index.  It serves
@@ -3185,10 +3345,7 @@
       OP_SET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FCurrentDynamicVarScope.AssignBinding(GlobalName,
-            RegisterToValue(FRegisters[A]))
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           if not FGlobalScope.TryAssignExistingBinding(GlobalName,
             RegisterToValue(FRegisters[A])) then
@@ -3203,7 +3360,8 @@
                 DebugLine, DebugColumn,
                 '', nil, SSuggestUseLetNotConst);
             end;
-            ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]));
+            ThrowReferenceError(Format(SErrorUndefinedVariable, [GlobalName]),
+              SSuggestDeclareBeforeUse);
           end;
         end;
       end;
@@ -3211,10 +3369,7 @@
       OP_SET_GLOBAL_LOOSE:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FCurrentDynamicVarScope.AssignBinding(GlobalName,
-            RegisterToValue(FRegisters[A]), 0, 0, True)
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           GlobalBindingValue := RegisterToValue(FRegisters[A]);
           if FGlobalScope.ContainsOwnVarBinding(GlobalName) and
@@ -3244,7 +3399,7 @@
 
       OP_HAS_GLOBAL:
       begin
-        if not Assigned(FCurrentDynamicVarScope) and Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
         begin
           GlobalReadCache := Template.GlobalReadCacheSlot(
             DecodeBx(Instruction));
@@ -3271,17 +3426,13 @@
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
         FRegisters[A] := RegisterBoolean(
-          HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) or
           (Assigned(FGlobalScope) and FGlobalScope.Contains(GlobalName)));
       end;
 
       OP_DELETE_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-        if HasDynamicVarBinding(FCurrentDynamicVarScope, GlobalName) then
-          FRegisters[A] := RegisterBoolean(
-            FCurrentDynamicVarScope.DeleteBinding(GlobalName))
-        else if Assigned(FGlobalScope) then
+        if Assigned(FGlobalScope) then
           FRegisters[A] := RegisterBoolean(FGlobalScope.DeleteBinding(GlobalName))
         else
           FRegisters[A] := RegisterBoolean(True);
@@ -3372,6 +3523,24 @@
           end
           else
             SetRegister(A, GetPropertyValue(GetRegister(A), GlobalName));
+        end;
+
+      // ES2026 §9.1.1.5.5 CreateImportBinding(envRec, N, M, N2): the global
+      // scope keeps an immutable indirect binding to the module's export, so
+      // a later script against that scope reads the export's current value.
+      // An export the module cannot resolve leaves the predeclared name
+      // uninitialized.
+      OP_CREATE_GLOBAL_IMPORT_BINDING:
+        begin
+          GlobalName := Template.GetConstantUnchecked(C).StringValue;
+          if Assigned(FGlobalScope) and (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaModuleNamespaceObject) and
+             TGocciaModuleNamespaceObject(
+               FRegisters[A].ObjectValue).CanResolveExport(GlobalName) then
+            FGlobalScope.CreateImportBinding(
+              Template.GetConstantUnchecked(B).StringValue,
+              TGocciaModuleNamespaceObject(FRegisters[A].ObjectValue).Module,
+              GlobalName);
         end;
 
       OP_EXPORT:
@@ -3488,8 +3657,9 @@
             begin
               if IsEngineIntegrityFault(E) then
                 raise;
-              DynImportPromise.Reject(
-                CreateErrorObject(ERROR_NAME, E.Message));
+              CurrentCallExpressionLocation(DebugLine, DebugColumn);
+              DynImportPromise.Reject(CreateImportCallErrorObject(ERROR_NAME,
+                E.Message, GlobalName, DebugLine, DebugColumn));
             end;
           end;
           SetRegister(A, DynImportPromise);
@@ -3581,8 +3751,9 @@
             begin
               if IsEngineIntegrityFault(E) then
                 raise;
-              DynImportPromise.Reject(
-                CreateErrorObject(ERROR_NAME, E.Message));
+              CurrentCallExpressionLocation(DebugLine, DebugColumn);
+              DynImportPromise.Reject(CreateImportCallErrorObject(ERROR_NAME,
+                E.Message, GlobalName, DebugLine, DebugColumn));
             end;
           end;
           SetRegister(A, DynImportPromise);
@@ -3759,7 +3930,10 @@
       OP_DEFINE_ACCESSOR_CONST:
       begin
         GlobalName := Template.GetConstantUnchecked(C).StringValue;
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+          DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), GlobalName,
+            nil, RegisterToValue(FRegisters[A + 1]), B)
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if IsBytecodePrivateKey(GlobalName) then
             DeclareBytecodePrivateNameForClass(
@@ -3787,7 +3961,18 @@
 
       OP_DEFINE_ACCESSOR_DYNAMIC:
       begin
-        if (B and ACCESSOR_FLAG_STATIC) <> 0 then
+        if (B and ACCESSOR_FLAG_AUTO) <> 0 then
+        begin
+          RightValue := RegisterToValue(FRegisters[C]);
+          if RightValue is TGocciaSymbolValue then
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]), '',
+              RightValue, RegisterToValue(FRegisters[A + 1]), B)
+          else
+            DefineAutoAccessorHalf(RegisterToValue(FRegisters[A]),
+              RightValue.ToStringLiteral.Value, nil,
+              RegisterToValue(FRegisters[A + 1]), B);
+        end
+        else if (B and ACCESSOR_FLAG_STATIC) <> 0 then
         begin
           if (B and ACCESSOR_FLAG_SETTER) <> 0 then
             DefineStaticSetterPropertyByKey(RegisterToValue(FRegisters[A]),
@@ -3895,13 +4080,20 @@
         ThrowTypeError(
           Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue);
 
+      OP_THROW_UNDEFINED_VARIABLE:
+        ThrowReferenceError(Format(SErrorUndefinedVariable,
+          [Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue]),
+          SSuggestDeclareBeforeUse);
+
       OP_DEFINE_GLOBAL_VAR_DECL_LONG:
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
+        // ES2026 §19.2.1.3 step 18: eval code's var binding is deletable.
         if Assigned(FGlobalScope) then
           FGlobalScope.DefineVariableBinding(GlobalName,
-            TGocciaUndefinedLiteralValue.UndefinedValue, False);
+            TGocciaUndefinedLiteralValue.UndefinedValue, False,
+            Template.GlobalEvalCode);
       end;
 
       OP_DEFINE_GLOBAL_VAR_LONG:
@@ -3909,6 +4101,15 @@
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
         GlobalBindingValue := GetRegister(A);
+        // ES2026 §14.3.2.1: in eval code the binding exists from the
+        // declaration instantiation, so the initializer is a PutValue to it.
+        if Template.GlobalEvalCode then
+        begin
+          if Assigned(FGlobalScope) then
+            FGlobalScope.AssignBinding(GlobalName, GlobalBindingValue, 0, 0,
+              not Template.StrictCode);
+          Continue;
+        end;
         // Top-level var names are instantiated before body execution.
         // Initializers inside loops can therefore use ordinary assignment
         // resolution instead of repeating CreateGlobalVarBinding each time.
@@ -3959,9 +4160,10 @@
       begin
         GlobalName := Template.GetConstantUnchecked(
           DecodeBx(Instruction)).StringValue;
+        // ES2026 §19.2.1.3 step 17: eval code's function binding is deletable.
         if Assigned(FGlobalScope) then
           FGlobalScope.CreateGlobalFunctionBinding(GlobalName, GetRegister(A),
-            False);
+            Template.GlobalEvalCode);
       end;
 
       OP_PREDECLARE_GLOBAL_LET_LONG:
@@ -4053,5 +4255,20 @@
         goto LDispatchNext;
       end;
         else
-          raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
+          // OP_CALL_SELF is a reserved runtime-only opcode outside
+          // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
+          // arguments are read straight out of the caller's registers, as in
+          // OP_CALL: SetupNewFrame copies them before it acquires registers.
+          if Op = OP_CALL_SELF then
+          begin
+            if FThreadPolls^.TimeoutArmed then
+              CheckExecutionTimeout;
+            PushFrame(A, Frame.IP, Template, PrevCovLine,
+              ProfileEntryTimestamp);
+            SetupNewFrame(FCurrentClosure, RegisterUndefined, @FRegisters[B],
+              C, True, Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            goto LDispatchNext;
+          end
+          else
+            raise Exception.CreateFmt('Unsupported Goccia VM opcode in minimal executor: %d', [Op]);
         end;

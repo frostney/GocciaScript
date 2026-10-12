@@ -92,7 +92,8 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
-  Goccia.Values.PromiseValue;
+  Goccia.Values.PromiseValue,
+  Goccia.Values.SymbolValue;
 
 var
   GResponseSharedSlot: TGocciaRealmOwnedSlotId;
@@ -176,6 +177,11 @@ begin
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
     Members.AddNamedMethod(PROP_ARRAY_BUFFER_METHOD, ResponseArrayBuffer, 0,
       gmkPrototypeMethod, [gmfNoFunctionPrototype]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_RESPONSE),
+      [pfConfigurable]);
 
     PrototypeMembers := Members.ToDefinitions;
   finally

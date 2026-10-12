@@ -22,6 +22,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Compiler.ConstantValue,
+  Goccia.Compiler.Expressions,
   Goccia.Compiler.Scope,
   Goccia.Error,
   Goccia.GarbageCollector,
@@ -44,14 +45,19 @@ type
       const AEnableDeadBranchElimination: Boolean = True;
       const ATraditionalForLoops: Boolean = False;
       const ANonStrictMode: Boolean = False;
-      const AVarDeclarations: Boolean = False;
-      const ADirectEvalAvailable: Boolean = False): TGocciaBytecodeModule;
+      const AVarDeclarations: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function FindFunctionWithOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): TGocciaFunctionTemplate;
+    function FindTemplateWithDirectEval(
+      const ATemplate: TGocciaFunctionTemplate): TGocciaFunctionTemplate;
+    // Counts a raw opcode byte, for the runtime-only opcodes that are not
+    // TGocciaOpCode members.
+    function CountRawOpRecursive(const ATemplate: TGocciaFunctionTemplate;
+      const AOp: UInt8): Integer;
     function CountArithmeticOps(
       const ATemplate: TGocciaFunctionTemplate): Integer;
     function HasLoadInt(const ATemplate: TGocciaFunctionTemplate;
@@ -87,8 +93,12 @@ type
     procedure TestSwitchClauseForgetsInitializedConsts;
     procedure TestCoverageKeepsConstOperandCopies;
     procedure TestParameterOperandsSkipGetLocal;
-    procedure TestDirectEvalHostKeepsOperandCopies;
-    procedure TestDirectEvalInFunctionKeepsLaterOperandCopies;
+    procedure TestFunctionWithoutDirectEvalReadsOperandRegisters;
+    procedure TestDirectEvalInFunctionKeepsOperandCopies;
+    procedure TestDirectEvalSiteRecordListsCallSiteBindings;
+    procedure TestDirectEvalSiteRecordTakesCallStrictness;
+    procedure TestDirectEvalSiteRecordCheckRejectsMismatches;
+    procedure TestDirectEvalCapturesCallSiteLocals;
     procedure TestMethodParameterOperandsSkipGetLocal;
     procedure TestLetOperandsSkipGetLocal;
     procedure TestLetOperandBeforeDeclarationKeepsGetLocal;
@@ -97,6 +107,8 @@ type
     procedure TestLoopThatCreatesClosureKeepsGetLocal;
     procedure TestSwitchClauseForgetsInitializedLets;
     procedure TestDefaultParameterValueKeepsGetLocal;
+    procedure TestDefaultParameterValueReachingItsBindingUsesTemporary;
+    procedure TestParameterExpressionBodyVarEnvironment;
     procedure TestOperandThatIsItsOwnDestinationKeepsGetLocal;
     procedure TestCountedForVariableOperandSkipsGetLocal;
     procedure TestCoverageKeepsLetAndParameterOperandCopies;
@@ -121,7 +133,11 @@ type
     procedure TestConstPropagationSkipsMutable;
     procedure TestConstPropagationReachesGlobalBackedReads;
     procedure TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier;
-    procedure TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+    procedure TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
+    procedure TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
+    procedure TestDirectEvalSiteRecordNamesVarEnvironment;
+    procedure TestDirectEvalSiteRecordNamesPrivateEnvironment;
+    procedure TestDirectEvalCompilesAsClosureOfCallSite;
     procedure TestConstPropagationSkipsGlobalBackedBigInt;
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
@@ -140,6 +156,8 @@ type
     procedure TestGlobalBackedShortCircuitChecksStrictType;
     procedure TestGlobalBackedCompoundChecksStrictType;
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
+    procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
+    procedure TestReturnAnnotationDoesNotTypeCallResult;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -154,7 +172,10 @@ type
     procedure TestCoveragePreservesGlobalBackedConstantBranch;
     procedure TestConstantEvaluationOptionsAreIndependent;
     procedure TestStrictTypeSimplificationRequiresStrictTypes;
+    procedure TestStrictTypesHintOnlyEnforcedLocals;
+    procedure TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
     procedure TestSwitchExitJumpsCloseUpvalues;
+    procedure TestBodyVarsStartUndefined;
   public
     procedure SetupTests; override;
   end;
@@ -182,10 +203,18 @@ begin
     TestCoverageKeepsConstOperandCopies);
   Test('Parameter operands skip OP_GET_LOCAL',
     TestParameterOperandsSkipGetLocal);
-  Test('A host with direct eval keeps the copy of let and parameter operands',
-    TestDirectEvalHostKeepsOperandCopies);
-  Test('A function keeps operand copies from its first direct eval onwards',
-    TestDirectEvalInFunctionKeepsLaterOperandCopies);
+  Test('A function without direct eval reads let and parameter operands ' +
+    'from their registers', TestFunctionWithoutDirectEvalReadsOperandRegisters);
+  Test('A function that contains a direct eval keeps operand copies',
+    TestDirectEvalInFunctionKeepsOperandCopies);
+  Test('A direct eval site record lists every binding visible at the call',
+    TestDirectEvalSiteRecordListsCallSiteBindings);
+  Test('A direct eval site record takes the strictness of its call',
+    TestDirectEvalSiteRecordTakesCallStrictness);
+  Test('The direct eval site record check rejects a record that differs from the scope chain',
+    TestDirectEvalSiteRecordCheckRejectsMismatches);
+  Test('A direct eval captures the bindings of the calling function',
+    TestDirectEvalCapturesCallSiteLocals);
   Test('Method parameter operands skip OP_GET_LOCAL',
     TestMethodParameterOperandsSkipGetLocal);
   Test('Initialized let operands skip OP_GET_LOCAL',
@@ -202,6 +231,10 @@ begin
     TestSwitchClauseForgetsInitializedLets);
   Test('A default parameter value keeps OP_GET_LOCAL',
     TestDefaultParameterValueKeepsGetLocal);
+  Test('A default parameter value that can reach its binding uses a temporary',
+    TestDefaultParameterValueReachingItsBindingUsesTemporary);
+  Test('With parameter expressions the body vars get their own environment',
+    TestParameterExpressionBodyVarEnvironment);
   Test('An operand that is its own destination keeps OP_GET_LOCAL',
     TestOperandThatIsItsOwnDestinationKeepsGetLocal);
   Test('A counted for variable operand skips OP_GET_LOCAL',
@@ -247,8 +280,16 @@ begin
     TestConstPropagationReachesGlobalBackedReads);
   Test('Const propagation skips global-backed reads compiled before the declaration',
     TestConstPropagationSkipsGlobalBackedReadsCompiledEarlier);
-  Test('Const propagation skips global-backed bindings in non-strict mode',
-    TestConstPropagationSkipsGlobalBackedInNonStrictMode);
+  Test('Const propagation skips global-backed reads under a sloppy direct eval',
+    TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval);
+  Test('A sloppy function folds an enclosing const unless it contains a sloppy direct eval',
+    TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval);
+  Test('A direct eval site record names where the eval''s vars go',
+    TestDirectEvalSiteRecordNamesVarEnvironment);
+  Test('A direct eval site record names the private environment at the call',
+    TestDirectEvalSiteRecordNamesPrivateEnvironment);
+  Test('Direct eval code compiles as a closure of its strict call site',
+    TestDirectEvalCompilesAsClosureOfCallSite);
   Test('Const propagation skips global-backed BigInt bindings',
     TestConstPropagationSkipsGlobalBackedBigInt);
   Test('Inferred numeric locals use typed arithmetic', TestInferredNumericLocalsUseTypedArithmetic);
@@ -274,6 +315,10 @@ begin
   Test('Global-backed short-circuit checks strict type', TestGlobalBackedShortCircuitChecksStrictType);
   Test('Global-backed compound checks strict type', TestGlobalBackedCompoundChecksStrictType);
   Test('Captured numeric local avoids typed arithmetic', TestCapturedNumericLocalAvoidsTypedArithmetic);
+  Test('Reassigned local keeps type only when every value is a Number',
+    TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
+  Test('Return annotation does not type call result',
+    TestReturnAnnotationDoesNotTypeCallResult);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -294,7 +339,12 @@ begin
     TestCoveragePreservesGlobalBackedConstantBranch);
   Test('Constant evaluation options are independent', TestConstantEvaluationOptionsAreIndependent);
   Test('Strict type simplification requires strict-types', TestStrictTypeSimplificationRequiresStrictTypes);
+  Test('Strict types hint only enforced locals', TestStrictTypesHintOnlyEnforcedLocals);
+  Test('Strict var redeclaration in a catch block keeps its type on the var',
+    TestStrictVarRedeclarationInCatchKeepsTypeOnVar);
   Test('Switch exit jumps close upvalues', TestSwitchExitJumpsCloseUpvalues);
+  Test('Body vars start undefined; other bindings emit nothing',
+    TestBodyVarsStartUndefined);
 end;
 
 procedure TTestCompiler.TestASTSpansUseUTF16CodeUnitOffsets;
@@ -369,8 +419,7 @@ function TTestCompiler.CompileSource(
   const AEnableDeadBranchElimination: Boolean;
   const ATraditionalForLoops: Boolean;
   const ANonStrictMode: Boolean;
-  const AVarDeclarations: Boolean;
-  const ADirectEvalAvailable: Boolean): TGocciaBytecodeModule;
+  const AVarDeclarations: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -383,11 +432,14 @@ begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-  if ATraditionalForLoops or AVarDeclarations then
+  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode then
   begin
     ParserOptions := Parser.Options;
     ParserOptions.TraditionalForLoopsEnabled := ATraditionalForLoops;
     ParserOptions.VarDeclarationsEnabled := AVarDeclarations;
+    // The parser marks a function that contains a sloppy direct eval; the
+    // compiler relies on it when it compiles that function as sloppy code.
+    ParserOptions.NonStrictModeEnabled := ANonStrictMode;
     Parser.ApplyOptions(ParserOptions);
   end;
   ProgramNode := Parser.Parse;
@@ -399,7 +451,6 @@ begin
     Compiler.NonStrictMode := ANonStrictMode;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape := APreserveCoverageShape;
-    Options.DirectEvalAvailable := ADirectEvalAvailable;
     Options.EnableConstantFolding := AEnableConstantFolding;
     Options.EnableConstPropagation := AEnableConstPropagation;
     Options.EnableDeadBranchElimination := AEnableDeadBranchElimination;
@@ -434,6 +485,19 @@ begin
   Result := CountOp(ATemplate, AOp);
   for I := 0 to ATemplate.FunctionCount - 1 do
     Inc(Result, CountOpRecursive(ATemplate.GetFunction(I), AOp));
+end;
+
+function TTestCompiler.CountRawOpRecursive(
+  const ATemplate: TGocciaFunctionTemplate; const AOp: UInt8): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ATemplate.CodeCount - 1 do
+    if DecodeOp(ATemplate.GetInstruction(I)) = AOp then
+      Inc(Result);
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    Inc(Result, CountRawOpRecursive(ATemplate.GetFunction(I), AOp));
 end;
 
 function TTestCompiler.FindFunctionWithOp(
@@ -879,36 +943,29 @@ begin
   end;
 end;
 
-procedure TTestCompiler.TestDirectEvalHostKeepsOperandCopies;
+// ADR 0134: code a direct eval creates writes its caller's bindings through
+// their cells, like any closure, so a function without one reads its let
+// bindings and parameters from their registers whatever host compiles it.
+procedure TTestCompiler.TestFunctionWithoutDirectEvalReadsOperandRegisters;
 const
   SOURCE =
     'const sum = (a, b) => { let t = a * b; const k = a * 2; return t + a + k; };';
-
-  function CopiesWith(const ADirectEvalAvailable: Boolean): Integer;
-  var
-    Module: TGocciaBytecodeModule;
-    Func: TGocciaFunctionTemplate;
-  begin
-    Result := -1;
-    Module := CompileSource(SOURCE, False, False, False, True, True, True,
-      False, False, False, ADirectEvalAvailable);
-    try
-      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
-      if Assigned(Func) then
-        Result := CountOp(Func, OP_GET_LOCAL);
-    finally
-      Module.Free;
-    end;
-  end;
-
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
 begin
-  Expect<Integer>(CopiesWith(False)).ToBe(0);
-  // Each read of a parameter or of the let binding is copied again: a three
-  // times, b and t once. The const k is not: nothing can write it.
-  Expect<Integer>(CopiesWith(True)).ToBe(5);
+  Module := CompileSource(SOURCE);
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+      Expect<Integer>(CountOp(Func, OP_GET_LOCAL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
 end;
 
-procedure TTestCompiler.TestDirectEvalInFunctionKeepsLaterOperandCopies;
+procedure TTestCompiler.TestDirectEvalInFunctionKeepsOperandCopies;
 
   function CopiesIn(const ASource: string): Integer;
   var
@@ -930,19 +987,301 @@ begin
   // A call to any other global reads every operand in place.
   Expect<Integer>(CopiesIn(
     'const f = (a) => { const before = a * 2; evil("0"); return a * 3 + before; };')).ToBe(0);
-  // After a direct eval the parameter is copied again, for `a * 3`; the read
-  // before the eval call and the const stay in place.
+  // A function that contains a direct eval copies every read of the
+  // parameter, before the eval call as after it: code the eval creates
+  // writes it through its cell (ADR 0134). The const stays in place.
   Expect<Integer>(CopiesIn(
-    'const f = (a) => { const before = a * 2; eval("0"); return a * 3 + before; };')).ToBe(1);
+    'const f = (a) => { const before = a * 2; eval("0"); return a * 3 + before; };')).ToBe(2);
 
-  // In a loop the eval call comes back around, so the reads compiled ahead of
-  // it are copied as well: t and a in `t + a * 2`. The loop is examined before
-  // it is compiled. Both loops copy `items` to iterate over it.
+  // In a loop too, the reads of t and a in `t + a * 2` are copied. Both loops
+  // copy `items` to iterate over it, and t after the loop.
   Expect<Integer>(
     CopiesIn(
       'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; eval("0"); } return t; };') -
     CopiesIn(
       'const f = (a, items) => { let t = 0; for (const item of items) { t = t + a * 2; evil("0"); } return t; };')).ToBe(2);
+end;
+
+function TTestCompiler.FindTemplateWithDirectEval(
+  const ATemplate: TGocciaFunctionTemplate): TGocciaFunctionTemplate;
+var
+  I: Integer;
+begin
+  if ATemplate.DirectEvalEnvironmentCount > 0 then
+    Exit(ATemplate);
+  for I := 0 to ATemplate.FunctionCount - 1 do
+  begin
+    Result := FindTemplateWithDirectEval(ATemplate.GetFunction(I));
+    if Assigned(Result) then
+      Exit;
+  end;
+  Result := nil;
+end;
+
+function FindDirectEvalRecordEntry(const AEnv: TGocciaDirectEvalEnvironment;
+  const AName: string; out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AEnv.Bindings) do
+    if AEnv.Bindings[I].Name = AName then
+    begin
+      ABinding := AEnv.Bindings[I];
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+procedure TTestCompiler.TestDirectEvalSiteRecordListsCallSiteBindings;
+const
+  SOURCE =
+    'const f = (p) => { try { throw 1; } catch (c) {' +
+    ' { eval("0"); let later = 1; const k = 2; class K {} } } };';
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  Env: TGocciaDirectEvalEnvironment;
+  Binding: TGocciaDirectEvalBindingInfo;
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True, True);
+  try
+    Func := FindTemplateWithDirectEval(Module.TopLevel);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    Env := Func.GetDirectEvalEnvironment(0);
+    Expect<Boolean>(Env.StrictCaller).ToBe(False);
+
+    // A parameter of a simple parameter list is in the variable environment.
+    Expect<Boolean>(FindDirectEvalRecordEntry(Env, 'p', Binding)).ToBe(True);
+    Expect<Integer>(Ord(Binding.Kind)).ToBe(Ord(debLocal));
+    Expect<Boolean>(Binding.IsVarEnvironmentBinding).ToBe(True);
+    Expect<Boolean>(Binding.IsCatchParameter).ToBe(False);
+
+    Expect<Boolean>(FindDirectEvalRecordEntry(Env, 'c', Binding)).ToBe(True);
+    Expect<Boolean>(Binding.IsCatchParameter).ToBe(True);
+    Expect<Boolean>(Binding.IsVarEnvironmentBinding).ToBe(False);
+
+    // Declarations after the call, still in their temporal dead zone there.
+    Expect<Boolean>(FindDirectEvalRecordEntry(Env, 'later', Binding)).ToBe(True);
+    Expect<Boolean>(Binding.IsConst).ToBe(False);
+    Expect<Boolean>(Binding.IsVarEnvironmentBinding).ToBe(False);
+    Expect<Boolean>(FindDirectEvalRecordEntry(Env, 'k', Binding)).ToBe(True);
+    Expect<Boolean>(Binding.IsConst).ToBe(True);
+    Expect<Boolean>(FindDirectEvalRecordEntry(Env, 'K', Binding)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDirectEvalSiteRecordTakesCallStrictness;
+const
+  SOURCE =
+    'const g = () => { return eval("1"); };' +
+    'const h = () => { "use strict"; return eval("1"); };' +
+    'class C { static f = eval("1"); static [eval("''k''")] = 1; }' +
+    'class D extends (eval("Object")) {}';
+var
+  Module: TGocciaBytecodeModule;
+  StrictSites, SloppySites: Integer;
+
+  procedure CountSites(const ATemplate: TGocciaFunctionTemplate);
+  var
+    J: Integer;
+  begin
+    for J := 0 to ATemplate.DirectEvalEnvironmentCount - 1 do
+      if ATemplate.GetDirectEvalEnvironment(J).StrictCaller then
+        Inc(StrictSites)
+      else
+        Inc(SloppySites);
+  end;
+
+  procedure CountNestedSites(const ATemplate: TGocciaFunctionTemplate);
+  var
+    J: Integer;
+  begin
+    for J := 0 to ATemplate.FunctionCount - 1 do
+    begin
+      CountSites(ATemplate.GetFunction(J));
+      CountNestedSites(ATemplate.GetFunction(J));
+    end;
+  end;
+
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True, True);
+  try
+    // The computed key and the heritage run inline in the sloppy script,
+    // and their calls are strict; the script's StrictCode is not.
+    StrictSites := 0;
+    SloppySites := 0;
+    CountSites(Module.TopLevel);
+    Expect<Boolean>(Module.TopLevel.StrictCode).ToBe(False);
+    Expect<Integer>(StrictSites).ToBe(2);
+    Expect<Integer>(SloppySites).ToBe(0);
+
+    // g is sloppy; h and the static field initializer, which compiles to
+    // its own function, are strict. g's call has two sites: `eval` may
+    // resolve to a var an eval declared in g's hidden variable object, or
+    // to the global (ADR 0134).
+    StrictSites := 0;
+    SloppySites := 0;
+    CountNestedSites(Module.TopLevel);
+    Expect<Integer>(SloppySites).ToBe(2);
+    Expect<Integer>(StrictSites).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
+function WithoutEntry(const ABindings: TGocciaDirectEvalBindingArray;
+  const AIndex: Integer): TGocciaDirectEvalBindingArray;
+var
+  I, J: Integer;
+begin
+  SetLength(Result, Length(ABindings) - 1);
+  J := 0;
+  for I := 0 to High(ABindings) do
+    if I <> AIndex then
+    begin
+      Result[J] := ABindings[I];
+      Inc(J);
+    end;
+end;
+
+procedure TTestCompiler.TestDirectEvalSiteRecordCheckRejectsMismatches;
+var
+  Outer, Inner: TGocciaCompilerScope;
+  Bindings, Changed: TGocciaDirectEvalBindingArray;
+  UpvalueIdx: Integer;
+  Name, Problem: string;
+
+  procedure SetEntry(var AEntry: TGocciaDirectEvalBindingInfo;
+    const AName: string; const AKind: TGocciaDirectEvalBindingKind;
+    const AIndex: Integer);
+  begin
+    AEntry := Default(TGocciaDirectEvalBindingInfo);
+    AEntry.Name := AName;
+    AEntry.Kind := AKind;
+    AEntry.Index := UInt16(AIndex);
+  end;
+
+begin
+  Outer := TGocciaCompilerScope.Create(nil, 0);
+  Inner := TGocciaCompilerScope.Create(Outer, 0);
+  try
+    Outer.DeclareLocal('up', False);
+    Outer.DeclareLocal('hidden', False);
+    Inner.DeclareLocal('x', False);
+    // Declared, but not reached yet: in its temporal dead zone at the call.
+    Inner.DeclareLocal('later', False);
+    // A local of an enclosing function the calling function shadows.
+    Inner.DeclareLocal('hidden', True);
+    UpvalueIdx := Inner.ResolveUpvalue('up');
+
+    SetLength(Bindings, 4);
+    SetEntry(Bindings[0], 'x', debLocal, Inner.GetLocal(0).Slot);
+    SetEntry(Bindings[1], 'later', debLocal, Inner.GetLocal(1).Slot);
+    SetEntry(Bindings[2], 'hidden', debLocal, Inner.GetLocal(2).Slot);
+    SetEntry(Bindings[3], 'up', debUpvalue, UpvalueIdx);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Bindings,
+      False, Name, Problem)).ToBe(True);
+
+    // A binding in its temporal dead zone left out.
+    Changed := WithoutEntry(Bindings, 1);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe('later');
+
+    // An enclosing function's binding left out.
+    Changed := WithoutEntry(Bindings, 3);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe('up');
+
+    // The wrong slot.
+    Changed := Copy(Bindings, 0, Length(Bindings));
+    Changed[0].Index := Changed[1].Index;
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe('x');
+
+    // The shadowed enclosing binding instead of the calling function's.
+    Changed := Copy(Bindings, 0, Length(Bindings));
+    SetEntry(Changed[2], 'hidden', debUpvalue, UpvalueIdx);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe('hidden');
+
+    // A name nothing declares.
+    Changed := Copy(Bindings, 0, Length(Bindings));
+    SetLength(Changed, Length(Changed) + 1);
+    SetEntry(Changed[High(Changed)], 'ghost', debLocal, 0);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe('ghost');
+
+    // The call is sloppy, the record says strict.
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Bindings,
+      True, Name, Problem)).ToBe(False);
+
+    // Where the eval's vars go. Inner has no hidden variable object until
+    // the parser's mark makes DeclareEvalVarObjects declare one.
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, True,
+      devNone, -1, Problem)).ToBe(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Outer, False,
+      devGlobal, -1, Problem)).ToBe(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, -1, Problem)).ToBe(False);
+    Expect<Boolean>(Pos('parser did not mark', Problem) > 0).ToBe(True);
+    Inner.DirectEvalUsage := [deuDirectEval, deuSloppyDirectEval];
+    Inner.DeclareEvalVarObjects(True);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, Inner.EvalVarObjectSlot, Problem)).ToBe(True);
+    // The wrong environment, register or strictness.
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devGlobal, -1, Problem)).ToBe(False);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, False,
+      devFunction, Inner.GetLocal(0).Slot, Problem)).ToBe(False);
+    Expect<Boolean>(DirectEvalSiteVarEnvironmentMatchesScope(Inner, True,
+      devFunction, Inner.EvalVarObjectSlot, Problem)).ToBe(False);
+    // The record lists the hidden variable object as a with binding, which
+    // eval code probes as the calling function's own code does.
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Bindings,
+      False, Name, Problem)).ToBe(False);
+    Expect<string>(Name).ToBe(Inner.EvalVarObjectName);
+    Changed := Copy(Bindings, 0, Length(Bindings));
+    SetLength(Changed, Length(Changed) + 1);
+    SetEntry(Changed[High(Changed)], Inner.EvalVarObjectName, debWithLocal,
+      Inner.EvalVarObjectSlot);
+    Expect<Boolean>(DirectEvalSiteRecordMatchesScope(Inner, True, Changed,
+      False, Name, Problem)).ToBe(True);
+  finally
+    Inner.Free;
+    Outer.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestDirectEvalCapturesCallSiteLocals;
+
+  function ClosesIn(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Result := CountOpRecursive(Module.TopLevel, OP_CLOSE_UPVALUE);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Eval code reaches a block's bindings through their cells, as a closure
+  // created at the call would, so the block closes them when it ends.
+  Expect<Integer>(ClosesIn(
+    'const f = () => { { let x = 1; const y = 2; evil("0"); } };')).ToBe(0);
+  Expect<Integer>(ClosesIn(
+    'const f = () => { { let x = 1; const y = 2; eval("0"); } };')).ToBe(2);
 end;
 
 procedure TTestCompiler.TestMethodParameterOperandsSkipGetLocal;
@@ -1180,6 +1519,116 @@ begin
   end;
 end;
 
+// ES2026 §8.6.3 SingleNameBinding initializes the parameter only after its
+// Initializer completes. An initializer that can reach the binding is compiled
+// into a temporary and moved into the parameter's register once it completes,
+// so the TDZ hole stays in place for the read or write. One that cannot reach
+// it keeps the register as its destination and costs no move.
+procedure TTestCompiler.TestDefaultParameterValueReachingItsBindingUsesTemporary;
+
+  function PreambleMoves(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if not Assigned(Func) then
+        Exit;
+      Result := 0;
+      for I := 0 to Func.ParameterPreambleSize - 1 do
+        if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = OP_MOVE then
+          Inc(Result);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Each initializer is paired with one that has the same shape but reaches
+  // another binding instead of its own.
+  Expect<Integer>(PreambleMoves('const f = (p, a = [a, 1]) => a * p;') -
+    PreambleMoves('const f = (p, a = [p, 1]) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = { v: a }) => a * p;') -
+    PreambleMoves('const f = (p, a = { v: p }) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = 0 || a) => a * p;') -
+    PreambleMoves('const f = (p, a = 0 || p) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = (a = 7)) => a * p;') -
+    PreambleMoves('const f = (p, a = (p = 7)) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = ([a] = [7])) => a * p;') -
+    PreambleMoves('const f = (p, a = ([p] = [7])) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p, a = () => a) => a * p;') -
+    PreambleMoves('const f = (p, a = () => p) => a * p;')).ToBe(1);
+  Expect<Integer>(PreambleMoves('const f = (p = () => a, a = [1]) => a * p;') -
+    PreambleMoves('const f = (p = () => q, a = [1]) => a * p;')).ToBe(1);
+end;
+
+// ES2026 §10.2.11 FunctionDeclarationInstantiation step 30: with an expression
+// in the parameter list the body's vars get an Environment Record of their own.
+procedure TTestCompiler.TestParameterExpressionBodyVarEnvironment;
+
+  function PreambleOps(const ASource: string; const AOp: TGocciaOpCode;
+    out AAllGetLocals: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    I: Integer;
+  begin
+    Result := -1;
+    AAllGetLocals := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      if not Assigned(Func) then
+        Exit;
+      Result := 0;
+      for I := 0 to Func.ParameterPreambleSize - 1 do
+        if TGocciaOpCode(DecodeOp(Func.GetInstruction(I))) = AOp then
+          Inc(Result);
+      AAllGetLocals := CountOp(Func, OP_GET_LOCAL);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  AllGetLocals: Integer;
+begin
+  // No closure in the parameter list captured `a`, so its var keeps the
+  // parameter's register, and reads it in place like a parameter.
+  Expect<Integer>(PreambleOps(
+    'const f = (a, b = 1) => { var a; return a * b; };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+  Expect<Integer>(AllGetLocals).ToBe(0);
+
+  // `g` captured `a`: the var is a register of its own, which the preamble
+  // fills from the parameter's cell (step 30.e.i.4).
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { var a; return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (a, g = () => a) => { return a * g(); };', OP_GET_LOCAL,
+    AllGetLocals)).ToBe(0);
+
+  // A var that names no parameter starts as undefined (step 30.e.i.3). Its
+  // register can hold a preamble temporary or a surplus argument, so the
+  // preamble clears it.
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = p.x * p.y) => { var t; return t * a; };',
+    OP_LOAD_UNDEFINED, AllGetLocals) - PreambleOps(
+    'const f = (p, a = p.x * p.y) => { return p * a; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
+  Expect<Integer>(PreambleOps(
+    'const f = (p, a = 1) => { var t; return t * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals) - PreambleOps(
+    'const f = (p, a = 1) => { return a * p; };', OP_LOAD_UNDEFINED,
+    AllGetLocals)).ToBe(1);
+end;
+
 procedure TTestCompiler.TestOperandThatIsItsOwnDestinationKeepsGetLocal;
 var
   Module: TGocciaBytecodeModule;
@@ -1413,14 +1862,21 @@ begin
     '}; run();', False, False, False, False, False, False);
   TempFile := GetTempFileName + '.gbc';
   try
+    // The compiled module emits the closed numeric self-call...
+    LoadedFunction := FindFunctionWithOp(Original.TopLevel, OP_CALL_SELF_NUM);
+    Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
+    if Assigned(LoadedFunction) then
+      Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF_NUM)).ToBe(2);
     SaveModuleToFile(Original, TempFile);
     Loaded := LoadModuleFromFile(TempFile);
     try
-      LoadedFunction := FindFunctionWithOp(Loaded.TopLevel,
-        OP_CALL_SELF_NUM);
-      Expect<Boolean>(Assigned(LoadedFunction)).ToBe(True);
-      if Assigned(LoadedFunction) then
-        Expect<Integer>(CountOp(LoadedFunction, OP_CALL_SELF_NUM)).ToBe(2);
+      // ...but the loader de-specializes it to the ordinary self-call, because
+      // the proof that makes a closed numeric frame memory-safe is not
+      // serialized (ADR 0101, ADR 0127).
+      Expect<Boolean>(Assigned(FindFunctionWithOp(Loaded.TopLevel,
+        OP_CALL_SELF_NUM))).ToBe(False);
+      Expect<Integer>(CountRawOpRecursive(Loaded.TopLevel, OP_CALL_SELF))
+        .ToBe(2);
     finally
       Loaded.Free;
     end;
@@ -1667,11 +2123,20 @@ begin
 
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_TYPE_ERROR_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(99)).ToBe(False);
-  Expect<Boolean>(IsValidGocciaOpCode(144)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(146)).ToBe(False);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_SET_PRIVATE_CLASS))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_SET_PRIVATE_CLASS)).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CLASS_ADD_METHOD_DYNAMIC))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_CLASS_ADD_METHOD_DYNAMIC)).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CALL_SELF_NUM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_UNDEFINED_VARIABLE))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterA(OP_THROW_UNDEFINED_VARIABLE)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_GET_LOCAL_PROP_CONST)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_LT)).ToBe(True);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_LT)).ToBe(False);
@@ -1692,6 +2157,11 @@ begin
   Template := TGocciaFunctionTemplate.Create('invalid-compact-b-register');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABC(OP_MOVE, 0, 1, 0));
+  ExpectRejected(Template);
+
+  Template := TGocciaFunctionTemplate.Create('invalid-class-method-key-register');
+  Template.MaxRegisters := 2;
+  Template.EmitInstruction(EncodeABC(OP_CLASS_ADD_METHOD_DYNAMIC, 0, 2, 1));
   ExpectRejected(Template);
 
   Template := TGocciaFunctionTemplate.Create('invalid-data-property-register');
@@ -1737,11 +2207,6 @@ begin
   Template := TGocciaFunctionTemplate.Create('invalid-upvalue');
   Template.MaxRegisters := 1;
   Template.EmitInstruction(EncodeABx(OP_GET_UPVALUE, 0, 0));
-  ExpectRejected(Template);
-
-  Template := TGocciaFunctionTemplate.Create('invalid-upvalue-reference');
-  Template.MaxRegisters := 1;
-  Template.EmitInstruction(EncodeABC(OP_RESOLVE_UPVALUE_REF, 0, 0, 0));
   ExpectRejected(Template);
 
   Template := TGocciaFunctionTemplate.Create('invalid-constant');
@@ -1927,18 +2392,340 @@ begin
   end;
 end;
 
-procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedInNonStrictMode;
+procedure TTestCompiler.TestConstPropagationSkipsGlobalBackedUnderSloppyDirectEval;
 var
   Module: TGocciaBytecodeModule;
 begin
-  // A sloppy direct eval can shadow the name with a function-level var.
-  Module := CompileSource('const a = 2; const f = () => a; f();',
+  // A sloppy direct eval in g can shadow the name with a var of g, and in the
+  // function nested in h, a var of h. f contains none and is nested in none.
+  Module := CompileSource('const a = 2; const f = () => a;' +
+    ' const g = () => { eval("var a = 3"); return a; };' +
+    ' const h = () => { eval("0"); return () => a; };' +
+    ' f() + g() + h()();',
     False, False, True, True, True, True, False, True);
   try
     Expect<Integer>(
-      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(1);
+      CountOp(Module.TopLevel.GetFunction(0), OP_GET_GLOBAL)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Module.TopLevel.GetFunction(0), 2)).ToBe(True);
+    // g reads `eval` and `a` by name.
+    Expect<Integer>(
+      CountOp(Module.TopLevel.GetFunction(1), OP_GET_GLOBAL)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel.GetFunction(2).GetFunction(0),
+      OP_GET_GLOBAL)).ToBe(1);
   finally
     Module.Free;
+  end;
+end;
+
+// ADR 0134: the parser marks the functions that contain a sloppy direct eval,
+// and only a binding read across one of them loses what the compiler knows
+// about it (DirectEvalMayShadow). Before, every non-strict function did.
+procedure TTestCompiler.TestSloppyFunctionFoldsEnclosingConstWithoutDirectEval;
+const
+  SOURCE =
+    'const outer = () => {' +
+    '  const k = 3;' +
+    '  const plain = () => k * 2;' +
+    '  const evals = () => { eval("var k = 1"); return k * 2; };' +
+    '  const nested = () => { eval("0"); return () => k * 2; };' +
+    '  const strictEval = () => { "use strict"; eval("var k = 1");' +
+    '    return k * 2; };' +
+    '  return plain() + evals() + nested()() + strictEval();' +
+    '};';
+var
+  Module: TGocciaBytecodeModule;
+  Outer, Plain, Evals, NestedInner, StrictEval: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True);
+  try
+    Outer := Module.TopLevel.GetFunction(0);
+    Expect<Boolean>(Outer.StrictCode).ToBe(False);
+    Plain := Outer.GetFunction(0);
+    Evals := Outer.GetFunction(1);
+    NestedInner := Outer.GetFunction(2).GetFunction(0);
+    StrictEval := Outer.GetFunction(3);
+
+    // No sloppy direct eval between the read and the const: k * 2 is 6.
+    Expect<Integer>(CountOp(Plain, OP_GET_UPVALUE)).ToBe(0);
+    Expect<Integer>(CountArithmeticOps(Plain)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(Plain, 6)).ToBe(True);
+
+    // The eval can declare a var k of the reading function, or of the
+    // function the read is nested in. The read probes that function's
+    // hidden variable object, a local of Evals and an upvalue of
+    // NestedInner, before it reads the upvalue k.
+    Expect<Integer>(CountOp(Evals, OP_GET_UPVALUE)).ToBe(1);
+    Expect<Boolean>(CountArithmeticOps(Evals) > 0).ToBe(True);
+    Expect<Integer>(CountOp(NestedInner, OP_GET_UPVALUE)).ToBe(2);
+    Expect<Integer>(CountOp(NestedInner, OP_HAS_WITH_BINDING)).ToBe(1);
+    Expect<Boolean>(CountArithmeticOps(NestedInner) > 0).ToBe(True);
+
+    // A strict eval's vars stay in the eval.
+    Expect<Integer>(CountOp(StrictEval, OP_GET_UPVALUE)).ToBe(0);
+    Expect<Boolean>(HasLoadInt(StrictEval, 6)).ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// The record of each eval site names where the eval's vars go (ES2026
+// §19.2.1.1 PerformEval) and, inside a function, the register of the hidden
+// variable object that stands for that environment. OP_DIRECT_EVAL names the
+// record and comes right before the call on the same callee register.
+procedure TTestCompiler.TestDirectEvalSiteRecordNamesVarEnvironment;
+const
+  SOURCE =
+    'eval("0");' +
+    'const f = (a, b = eval("1")) => { eval("2"); };' +
+    'const g = (a) => { eval("3"); };' +
+    'const h = () => { "use strict"; eval("4"); };';
+var
+  Module: TGocciaBytecodeModule;
+  F, G, H: TGocciaFunctionTemplate;
+  ParameterEnv, BodyEnv: TGocciaDirectEvalEnvironment;
+
+  procedure ExpectSitesPrecedeCalls(const ATemplate: TGocciaFunctionTemplate);
+  var
+    PC, Sites: Integer;
+    Instruction, Next: UInt32;
+  begin
+    Sites := 0;
+    for PC := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(PC);
+      if DecodeOp(Instruction) <> Ord(OP_DIRECT_EVAL) then
+        Continue;
+      Expect<Integer>(DecodeBx(Instruction)).ToBe(Sites);
+      Expect<Integer>(ATemplate.GetDirectEvalEnvironment(Sites).PC).ToBe(PC);
+      Next := ATemplate.GetInstruction(PC + 1);
+      Expect<Integer>(DecodeOp(Next)).ToBe(Ord(OP_CALL));
+      Expect<Integer>(DecodeA(Next)).ToBe(DecodeA(Instruction));
+      Inc(Sites);
+    end;
+    Expect<Integer>(Sites).ToBe(ATemplate.DirectEvalEnvironmentCount);
+  end;
+
+begin
+  Module := CompileSource(SOURCE, False, False, False, True, True, True,
+    False, True);
+  try
+    Expect<Integer>(Module.TopLevel.DirectEvalEnvironmentCount).ToBe(1);
+    Expect<Integer>(Ord(Module.TopLevel.GetDirectEvalEnvironment(0)
+      .VarEnvironment)).ToBe(Ord(devGlobal));
+    Expect<Integer>(
+      Module.TopLevel.GetDirectEvalEnvironment(0).VarObjectSlot).ToBe(-1);
+    ExpectSitesPrecedeCalls(Module.TopLevel);
+
+    // A parameter list with an expression has an environment of its own.
+    // Each call has a site for every binding `eval` may resolve to: the
+    // hidden variable objects a var of that name could be in, nearest
+    // first, then the global: two in the parameter list, three in the body.
+    F := Module.TopLevel.GetFunction(0);
+    Expect<Integer>(F.DirectEvalEnvironmentCount).ToBe(5);
+    ParameterEnv := F.GetDirectEvalEnvironment(0);
+    BodyEnv := F.GetDirectEvalEnvironment(2);
+    Expect<Integer>(Ord(F.GetDirectEvalEnvironment(1).VarEnvironment))
+      .ToBe(Ord(devParameters));
+    Expect<Integer>(Ord(F.GetDirectEvalEnvironment(4).VarEnvironment))
+      .ToBe(Ord(devFunction));
+    Expect<Integer>(Ord(ParameterEnv.VarEnvironment))
+      .ToBe(Ord(devParameters));
+    Expect<Integer>(Ord(BodyEnv.VarEnvironment)).ToBe(Ord(devFunction));
+    Expect<Boolean>(ParameterEnv.VarObjectSlot >= 0).ToBe(True);
+    Expect<Boolean>(BodyEnv.VarObjectSlot >= 0).ToBe(True);
+    Expect<Boolean>(ParameterEnv.VarObjectSlot <> BodyEnv.VarObjectSlot)
+      .ToBe(True);
+    Expect<Boolean>(BodyEnv.VarObjectSlot < F.MaxRegisters).ToBe(True);
+    Expect<Boolean>(ParameterEnv.VarObjectSlot < F.MaxRegisters).ToBe(True);
+    // The hidden locals follow the parameters, so a call's arguments land
+    // in the parameters' registers as before.
+    Expect<Boolean>(BodyEnv.VarObjectSlot > 2).ToBe(True);
+    ExpectSitesPrecedeCalls(F);
+
+    // A simple parameter list shares the function's environment.
+    G := Module.TopLevel.GetFunction(1);
+    Expect<Integer>(G.DirectEvalEnvironmentCount).ToBe(2);
+    Expect<Integer>(Ord(G.GetDirectEvalEnvironment(0).VarEnvironment))
+      .ToBe(Ord(devFunction));
+    Expect<Boolean>(G.GetDirectEvalEnvironment(0).VarObjectSlot > 1)
+      .ToBe(True);
+
+    H := Module.TopLevel.GetFunction(2);
+    Expect<Integer>(Ord(H.GetDirectEvalEnvironment(0).VarEnvironment))
+      .ToBe(Ord(devNone));
+    Expect<Integer>(H.GetDirectEvalEnvironment(0).VarObjectSlot).ToBe(-1);
+
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_DIRECT_EVAL))
+      .ToBe(9);
+  finally
+    Module.Free;
+  end;
+end;
+
+// ADR 0134 Phase 3: eval code resolves private names as the code at its call
+// does (ES2026 §19.2.1.1 PerformEval: privateEnv is the running context's
+// PrivateEnvironment). A method's eval sees its class body's names and gets
+// the class from the running closure; a computed key runs inline in the
+// enclosing function, so its record names the register of the class being
+// defined; and an `extends` expression runs in the outer PrivateEnvironment
+// (§15.7.14), so the class's own names are not visible there.
+procedure TTestCompiler.TestDirectEvalSiteRecordNamesPrivateEnvironment;
+var
+  Module: TGocciaBytecodeModule;
+  Env: TGocciaDirectEvalEnvironment;
+  Method, Inner: TGocciaFunctionTemplate;
+  I: Integer;
+
+  function NameList(const AEnv: TGocciaDirectEvalEnvironment): string;
+  var
+    I: Integer;
+  begin
+
+    Result := '';
+    for I := 0 to High(AEnv.PrivateNames) do
+    begin
+      if Result <> '' then
+        Result := Result + ',';
+      Result := Result + AEnv.PrivateNames[I].Name;
+      Expect<Boolean>((AEnv.PrivateNames[I].Prefix <> '') and
+        (AEnv.PrivateNames[I].Prefix[Length(AEnv.PrivateNames[I].Prefix)] =
+         '$')).ToBe(True);
+    end;
+  end;
+
+begin
+  Module := CompileSource('class A { #a = 1; m() { return eval("1"); } }');
+  try
+    Method := FindTemplateWithDirectEval(Module.TopLevel);
+    Expect<Boolean>(Assigned(Method)).ToBe(True);
+    Env := Method.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(-1);
+  finally
+    Module.Free;
+  end;
+
+  Module := CompileSource('class A { #a = 1; static [eval("\"k\"")] = 1; }');
+  try
+    Expect<Integer>(Module.TopLevel.DirectEvalEnvironmentCount).ToBe(1);
+    Env := Module.TopLevel.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Boolean>(Env.PrivateClassRegister >= 0).ToBe(True);
+    Expect<Boolean>(Env.PrivateClassRegister <
+      Module.TopLevel.MaxRegisters).ToBe(True);
+  finally
+    Module.Free;
+  end;
+
+  // The inner class's #b shadows nothing and the outer #a stays visible; in
+  // the inner class's heritage only #a is.
+  Module := CompileSource('class A { #a = 1; static m() { ' +
+    'class B extends (eval("0"), Object) { #b; n() { return eval("2"); } } ' +
+    '} }');
+  try
+    Method := FindTemplateWithDirectEval(Module.TopLevel);
+    Expect<Boolean>(Assigned(Method)).ToBe(True);
+    Env := Method.GetDirectEvalEnvironment(0);
+    Expect<string>(NameList(Env)).ToBe('a');
+    Expect<Integer>(Env.PrivateClassRegister).ToBe(-1);
+    Inner := nil;
+    for I := 0 to Method.FunctionCount - 1 do
+    begin
+      Inner := FindTemplateWithDirectEval(Method.GetFunction(I));
+      if Assigned(Inner) then
+        Break;
+    end;
+    Expect<Boolean>(Assigned(Inner)).ToBe(True);
+    if Assigned(Inner) then
+      Expect<string>(NameList(Inner.GetDirectEvalEnvironment(0)))
+        .ToBe('a,b');
+  finally
+    Module.Free;
+  end;
+end;
+
+// ADR 0134 Phase 3: eval code is compiled as a function nested at its call
+// site against the call's record. A binding of the calling function becomes
+// an upvalue that names the caller's register, one of an enclosing function
+// an upvalue that names the caller closure's upvalue index, and a name the
+// record does not list stays a global reference. The eval's own declarations
+// are locals of its template, which is an arrow-like strict function.
+procedure TTestCompiler.TestDirectEvalCompilesAsClosureOfCallSite;
+const
+  CALLER_SOURCE = 'const f = (a) => { let b = 2; ' +
+    'return () => { let c = 3; return eval("x"); }; };';
+  EVAL_SOURCE = 'let own = 1; a + b + c + own + typeof unlisted';
+var
+  Caller, EvalModule: TGocciaBytecodeModule;
+  Site: TGocciaFunctionTemplate;
+  Env: TGocciaDirectEvalEnvironment;
+  Binding: TGocciaDirectEvalBindingInfo;
+  Lexer: TGocciaLexer;
+  Parser: TGocciaParser;
+  ProgramNode: TGocciaProgram;
+  Compiler: TGocciaCompiler;
+  SourceLines: TStringList;
+  Template: TGocciaFunctionTemplate;
+  Descriptor: TGocciaUpvalueDescriptor;
+  I, Matched: Integer;
+begin
+  Caller := CompileSource(CALLER_SOURCE);
+  EvalModule := nil;
+  try
+    Site := FindTemplateWithDirectEval(Caller.TopLevel);
+    Expect<Boolean>(Assigned(Site)).ToBe(True);
+    if not Assigned(Site) then
+      Exit;
+    Env := Site.GetDirectEvalEnvironment(0);
+    Expect<Boolean>(Env.StrictCaller).ToBe(True);
+
+    Lexer := TGocciaLexer.Create(EVAL_SOURCE, '<eval>');
+    SourceLines := CreateTextLines(EVAL_SOURCE);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<eval>', SourceLines);
+    ProgramNode := Parser.Parse;
+    Compiler := TGocciaCompiler.Create('<eval>');
+    try
+      EvalModule := Compiler.CompileDirectEval(ProgramNode, Env, True, nil);
+    finally
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+
+    Template := EvalModule.TopLevel;
+    Expect<string>(Template.Name).ToBe(DIRECT_EVAL_TEMPLATE_NAME);
+    Expect<Boolean>(Template.IsArrow).ToBe(True);
+    Expect<Boolean>(Template.StrictCode).ToBe(True);
+    Expect<Integer>(Template.UpvalueCount).ToBe(3);
+    Matched := 0;
+    for I := 0 to Template.UpvalueCount - 1 do
+    begin
+      Descriptor := Template.GetUpvalueDescriptor(I);
+      Expect<Boolean>(FindDirectEvalRecordEntry(Env, Descriptor.Name,
+        Binding)).ToBe(True);
+      // `c` is the arrow's own local; `a` and `b` are its upvalues.
+      if Descriptor.Name = 'c' then
+      begin
+        Expect<Integer>(Ord(Binding.Kind)).ToBe(Ord(debLocal));
+        Expect<Boolean>(Descriptor.IsLocal).ToBe(True);
+        Inc(Matched);
+      end
+      else if (Descriptor.Name = 'a') or (Descriptor.Name = 'b') then
+      begin
+        Expect<Integer>(Ord(Binding.Kind)).ToBe(Ord(debUpvalue));
+        Expect<Boolean>(Descriptor.IsLocal).ToBe(False);
+        Inc(Matched);
+      end;
+      Expect<Integer>(Descriptor.Index).ToBe(Binding.Index);
+    end;
+    Expect<Integer>(Matched).ToBe(3);
+    Expect<Integer>(CountOp(Template, OP_GET_GLOBAL)).ToBe(1);
+  finally
+    EvalModule.Free;
+    Caller.Free;
   end;
 end;
 
@@ -2315,6 +3102,91 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // The string assigned at the end of the body reaches the reads at its
+  // start on the next iteration.
+  Module := CompileSource(
+    'let a = 1;' + sLineBreak +
+    'for (const s of [0, 1]) { a + 1; a + a; a = "x"; }',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // The string assigned in one branch reaches the read after the join.
+  Module := CompileSource(
+    'let a = 1;' + sLineBreak +
+    'if (a > 0) { a = "x"; } else { a = 2; }' + sLineBreak +
+    'a + 1;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // Every value given to a and b is a Number, so every read stays typed,
+  // including the reads after assignments the compiler cannot type itself.
+  Module := CompileSource(
+    'let a = 1; let b = 0.5;' + sLineBreak +
+    'for (const s of [0, 1]) { b = b * 2 - a; a += 2; a = a ^ 3; }' + sLineBreak +
+    'a + b;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_MUL_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestReturnAnnotationDoesNotTypeCallResult;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A return-type annotation is not checked, so neither a direct call nor a
+  // call through a captured binding gets typed arithmetic from it.
+  Module := CompileSource(
+    'const f = (): number => 1; f() + 1; f() + f();' +
+    'const g = () => f() - 1; g();',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // Under strict types a binding initialized from the call is not enforced,
+  // and an enforced binding checks a value computed from the call.
+  Module := CompileSource(
+    'const f = (): number => 1; const r = f(); r + 1;' +
+    'let t: number = 0; t = t + f();',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestForOfSkipsHandlerWithoutAbruptClose;
 var
   Module: TGocciaBytecodeModule;
@@ -2600,6 +3472,78 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestStrictTypesHintOnlyEnforcedLocals;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A literal-initialized or annotated let is enforced, so it keeps its typed
+  // arithmetic and a guard on each incompatible assignment.
+  Module := CompileSource(
+    'let a = 1; let b: number = 2; a + b; a = "x"; b = "y";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+
+  // An expression-initialized let is not enforced, so neither its
+  // initializer nor a later assignment gives it a hint.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a; c = 3; c + a; c = "x";',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A const cannot be reassigned, so it keeps the wider inference.
+  Module := CompileSource(
+    'let a = 1; const c = a + 2.5; c + a;',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // Without strict types nothing is enforced and inference is unchanged.
+  Module := CompileSource(
+    'let a = 1; let c = a + 2.5; c + a;',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestStrictVarRedeclarationInCatchKeepsTypeOnVar;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // `var x;` inside `catch (x)` redeclares the function's var binding, but
+  // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
+  // enforced Number type stays on the var: the read after the try statement
+  // is typed, the catch parameter read is not.
+  Module := CompileSource(
+    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    True, False, False, False, False, False, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestSwitchExitJumpsCloseUpvalues;
 var
   Module: TGocciaBytecodeModule;
@@ -2641,6 +3585,41 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+procedure TTestCompiler.TestBodyVarsStartUndefined;
+
+  function LoadUndefinedCount(const ASource: string): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+  begin
+    Result := -1;
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, False, True);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_MUL);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+        Result := CountOp(Func, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // Every function body ends with an implicit `return undefined`: one
+  // OP_LOAD_UNDEFINED. Each var the body declares adds one, since its register
+  // may hold a surplus argument or a parameter-destructuring temporary.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var x, y; p.r = a * x; };')).ToBe(3);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = ({ a }, p) => { if (p) { var x; } p.r = a * x; };')).ToBe(2);
+  // A body without a var, and a var naming a parameter, add nothing.
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { const x = a; p.r = a * x; };')).ToBe(1);
+  Expect<Integer>(LoadUndefinedCount(
+    'const f = (a, p) => { var a; p.r = a * a; };')).ToBe(1);
 end;
 
 begin

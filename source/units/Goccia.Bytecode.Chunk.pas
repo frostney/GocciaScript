@@ -13,6 +13,23 @@ uses
   Goccia.Bytecode.Debug,
   Goccia.Error.CallDiagnostics;
 
+const
+  { The function a static field initializer compiles to. Coverage does not
+    count it as a function: the source has none there, and it would share a
+    position with the function value it returns. }
+  STATIC_FIELD_TEMPLATE_NAME = '<static field>';
+  { The top level of direct eval code compiled at its call site (ADR 0134):
+    an arrow-like function of the calling frame. Coverage does not count it
+    as a function either. }
+  DIRECT_EVAL_TEMPLATE_NAME = '<eval>';
+  { Prefixes of the names of a function's hidden variable object locals
+    (ADR 0134): its body's, and its parameter list's when the list has
+    expressions. Each is followed by a number unique to its function, so that
+    a nested function can name an enclosing one's, and an eval site record
+    lists them as with bindings. No source text can spell them. }
+  EVAL_VAR_OBJECT_LOCAL = '`#eval-var-object`:';
+  PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`:';
+
 type
   TGocciaBytecodeConstantKind = (
     bckNil,
@@ -65,20 +82,101 @@ type
     debWithUpvalue
   );
 
+  // One binding visible at a direct eval call site. Every binding the compiler
+  // can resolve there has an entry, including those still in their temporal
+  // dead zone (CaptureDirectEvalEnvironment checks this when it builds the
+  // record), so a name eval code cannot find here is not a binding of the
+  // caller.
   TGocciaDirectEvalBindingInfo = record
     Name: string;
     Kind: TGocciaDirectEvalBindingKind;
     Index: UInt16;
     IsConst: Boolean;
+    // In the caller's variable environment: a var, a function declaration,
+    // `arguments`, or a parameter of a function whose parameter list has no
+    // expressions. A sloppy eval's var of the same name is this binding.
     IsVarEnvironmentBinding: Boolean;
     IsEvalSyntheticArguments: Boolean;
+    // A parameter of an enclosing `catch` clause. ES2026 §19.2.1.3 step 3.d
+    // (normative-optional web-compat branch) lets a sloppy eval's var have its
+    // name.
+    IsCatchParameter: Boolean;
+    // A parameter, or `arguments`, of a calling function whose parameter list
+    // has expressions: outside the variable environment a sloppy eval in the
+    // body declares its vars in, so such a var shadows it (ES2026 §10.2.11
+    // steps 20 and 30).
+    IsOutsideVarEnvironment: Boolean;
+    // A binding of the function whose variable environment a sloppy eval at
+    // the call declares its vars in, or of eval code running in it: one of
+    // its vars, which such a var is, or a binding between the call and that
+    // environment, which such a var conflicts with (ES2026 §19.2.1.3 step
+    // 3.d). False for the bindings of enclosing functions.
+    IsCallerFunctionBinding: Boolean;
   end;
 
   TGocciaDirectEvalBindingArray = array of TGocciaDirectEvalBindingInfo;
 
+  // A private name visible at a direct eval call, and the compile-time prefix
+  // of the class body that declares it, which makes its compiled key. The
+  // record lists them outermost class body first, so that a later entry of
+  // a name shadows an earlier one.
+  TGocciaDirectEvalPrivateName = record
+    Name: string;
+    Prefix: string;
+  end;
+
+  TGocciaDirectEvalPrivateNameArray = array of TGocciaDirectEvalPrivateName;
+
+  // Where a direct eval call's var-scoped declarations go (ES2026 §19.2.1.1
+  // PerformEval steps 16-18, ADR 0134 "The eval site record"):
+  // - devNone: a strict call site, whose eval gets a variable environment of
+  //   its own;
+  // - devGlobal: the global environment, for a sloppy call in a script's
+  //   global code;
+  // - devFunction: the calling function's variable environment, which the
+  //   function's hidden variable object stands for;
+  // - devParameters: a call in the parameter list of a sloppy function whose
+  //   parameter list has expressions, where a second hidden object stands for
+  //   the parameters' environment (§10.2.11 FunctionDeclarationInstantiation
+  //   step 20).
+  TGocciaDirectEvalVarEnvironment = (
+    devNone,
+    devGlobal,
+    devFunction,
+    devParameters
+  );
+
   TGocciaDirectEvalEnvironment = record
+    // The start of the site's OP_DIRECT_EVAL instruction. The instruction
+    // names the record by its index; the bridge compares the PC with the
+    // parameter preamble to tell a call in the parameter list.
     PC: UInt32;
     RejectArgumentsReference: Boolean;
+    // IsStrict of the call expression (ES2026 §13.3.6.1 step 6.a), which is
+    // not the template's StrictCode when the call is in a class body that runs
+    // inline in a sloppy function: a computed key, a static field initializer
+    // or an `extends` expression.
+    StrictCaller: Boolean;
+    VarEnvironment: TGocciaDirectEvalVarEnvironment;
+    // The caller's register that holds the hidden variable object for
+    // devFunction and devParameters, -1 otherwise. Nothing reads the
+    // register before Phase 3 of ADR 0134 compiles sloppy direct eval.
+    VarObjectSlot: Integer;
+    // Where the eval code's private environment comes from (ES2026
+    // §19.2.1.1 PerformEval step 16: privateEnv is the running context's
+    // PrivateEnvironment). -1: the running closure's private class, as for any
+    // function created at the call. Otherwise the caller's register holding
+    // the class whose body runs inline in the calling function at the call: a
+    // computed key, which ClassDefinitionEvaluation (§15.7.14) evaluates with
+    // the class's PrivateEnvironment (ADR 0134, "Private names, super and the
+    // class body").
+    PrivateClassRegister: Integer;
+    // The private names visible at the call (privateEnv, the running
+    // context's PrivateEnvironment), which eval code may reference
+    // (§19.2.1.3 steps 4-7, AllPrivateIdentifiersValid) and compiles to their
+    // keys. A class body whose `extends` expression contains the call is not
+    // around it: the heritage runs in the outer PrivateEnvironment (§15.7.14).
+    PrivateNames: TGocciaDirectEvalPrivateNameArray;
     Bindings: TGocciaDirectEvalBindingArray;
   end;
 
@@ -227,6 +325,10 @@ type
     // direct self-call opcode carries the runtime contract, so this name is not
     // part of the serialized bytecode format.
     FClosedNumericSelfName: string;
+    // Runtime-only: the top level of eval code whose variable environment is
+    // the global one. Eval code is compiled when the eval runs and is never
+    // serialized, so this is not part of the bytecode format.
+    FGlobalEvalCode: Boolean;
     FTemplateSiteId: UInt64;
     FStringConstantIndex: TOrderedStringMap<UInt16>;
     // Runtime-only cache for immutable string constants. ECMAScript strings
@@ -320,9 +422,15 @@ type
     function AddFunction(const AFunction: TGocciaFunctionTemplate): UInt16;
     procedure AddUpvalueDescriptor(const AIsLocal: Boolean; const AIndex: UInt16;
       const AName: string = '');
-    procedure AddDirectEvalEnvironment(const APC: UInt32;
-      const ARejectArgumentsReference: Boolean;
-      const ABindings: TGocciaDirectEvalBindingArray);
+    { Adds an eval site record and returns its index, which the site's
+      OP_DIRECT_EVAL carries in Bx. }
+    function AddDirectEvalEnvironment(const APC: UInt32;
+      const ARejectArgumentsReference, AStrictCaller: Boolean;
+      const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+      const AVarObjectSlot: Integer;
+      const ABindings: TGocciaDirectEvalBindingArray;
+      const APrivateClassRegister: Integer = -1;
+      const APrivateNames: TGocciaDirectEvalPrivateNameArray = nil): Integer;
     procedure AddExceptionHandler(const ATryStart, ATryEnd, ACatchTarget,
       AFinallyTarget: UInt32; const ACatchRegister: UInt16);
 
@@ -339,8 +447,6 @@ type
     function GetUpvalueDescriptor(const AIndex: Integer): TGocciaUpvalueDescriptor;
     function GetDirectEvalEnvironment(
       const AIndex: Integer): TGocciaDirectEvalEnvironment;
-    function FindDirectEvalEnvironment(const APC: UInt32;
-      out AIndex: Integer): Boolean;
     function GetExceptionHandler(const AIndex: Integer): TGocciaExceptionHandler;
 
     property Name: string read FName write FName;
@@ -383,8 +489,20 @@ type
     property SourceText: string read FSourceText write FSourceText;
     property ClosedNumericSelfName: string read FClosedNumericSelfName
       write FClosedNumericSelfName;
+    { ES2026 §19.2.1.3 EvalDeclarationInstantiation: the global var and
+      function bindings this template's global-define instructions create are
+      deletable (CreateGlobalVarBinding and CreateGlobalFunctionBinding with
+      D = true), and a var initializer assigns the binding the declaration
+      instantiation already made. }
+    property GlobalEvalCode: Boolean read FGlobalEvalCode
+      write FGlobalEvalCode;
     property TemplateSiteId: UInt64 read FTemplateSiteId;
   end;
+
+// Whether AName is a hidden variable object's local, of a function body or of
+// a parameter list.
+function IsEvalVarObjectName(const AName: string): Boolean;
+function IsBodyEvalVarObjectName(const AName: string): Boolean;
 
 implementation
 
@@ -395,6 +513,17 @@ uses
 
   Goccia.Bytecode,
   Goccia.GarbageCollector;
+
+function IsEvalVarObjectName(const AName: string): Boolean;
+begin
+  Result := (Pos(EVAL_VAR_OBJECT_LOCAL, AName) = 1) or
+    (Pos(PARAMETER_EVAL_VAR_OBJECT_LOCAL, AName) = 1);
+end;
+
+function IsBodyEvalVarObjectName(const AName: string): Boolean;
+begin
+  Result := Pos(EVAL_VAR_OBJECT_LOCAL, AName) = 1;
+end;
 
 var
   GTemplateSiteIdLock: TGocciaCriticalSection;
@@ -956,9 +1085,13 @@ begin
   Inc(FUpvalueCount);
 end;
 
-procedure TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
-  const ARejectArgumentsReference: Boolean;
-  const ABindings: TGocciaDirectEvalBindingArray);
+function TGocciaFunctionTemplate.AddDirectEvalEnvironment(const APC: UInt32;
+  const ARejectArgumentsReference, AStrictCaller: Boolean;
+  const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  const AVarObjectSlot: Integer;
+  const ABindings: TGocciaDirectEvalBindingArray;
+  const APrivateClassRegister: Integer;
+  const APrivateNames: TGocciaDirectEvalPrivateNameArray): Integer;
 var
   I: Integer;
 begin
@@ -969,11 +1102,22 @@ begin
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].RejectArgumentsReference :=
     ARejectArgumentsReference;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].StrictCaller :=
+    AStrictCaller;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].VarEnvironment :=
+    AVarEnvironment;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].VarObjectSlot :=
+    AVarObjectSlot;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PrivateClassRegister :=
+    APrivateClassRegister;
+  FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PrivateNames :=
+    Copy(APrivateNames);
   SetLength(FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings,
     Length(ABindings));
   for I := 0 to High(ABindings) do
     FDirectEvalEnvironments[FDirectEvalEnvironmentCount].Bindings[I] :=
       ABindings[I];
+  Result := FDirectEvalEnvironmentCount;
   Inc(FDirectEvalEnvironmentCount);
 end;
 
@@ -1060,21 +1204,6 @@ begin
       [AIndex, FDirectEvalEnvironmentCount - 1]);
   {$ENDIF}
   Result := FDirectEvalEnvironments[AIndex];
-end;
-
-function TGocciaFunctionTemplate.FindDirectEvalEnvironment(const APC: UInt32;
-  out AIndex: Integer): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to FDirectEvalEnvironmentCount - 1 do
-    if FDirectEvalEnvironments[I].PC = APC then
-    begin
-      AIndex := I;
-      Exit(True);
-    end;
-  AIndex := -1;
-  Result := False;
 end;
 
 function TGocciaFunctionTemplate.GetFunctionCount: Integer;

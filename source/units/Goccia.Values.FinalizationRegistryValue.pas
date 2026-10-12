@@ -42,7 +42,6 @@ type
     destructor Destroy; override;
 
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -153,11 +152,6 @@ end;
 function TGocciaFinalizationRegistryValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_FINALIZATION_REGISTRY;
-end;
-
-function TGocciaFinalizationRegistryValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 // ES2026 §26.2.1.1 FinalizationRegistry(cleanupCallback)

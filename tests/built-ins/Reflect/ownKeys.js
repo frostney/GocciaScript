@@ -53,3 +53,135 @@ describe("Reflect.ownKeys", () => {
     expect(() => Reflect.ownKeys(null)).toThrow(TypeError);
   });
 });
+
+describe("Reflect.ownKeys on a function or class whose length or name is defined again", () => {
+  const redefine = (target, key, value) =>
+    Object.defineProperty(target, key, { value, configurable: true });
+
+  test("a class lists a re-created length or name after the keys that existed", () => {
+    class ReLength {}
+    delete ReLength.length;
+    redefine(ReLength, "length", 0);
+    expect(Reflect.ownKeys(ReLength)).toEqual(["name", "prototype", "length"]);
+
+    class ReName {}
+    delete ReName.name;
+    redefine(ReName, "name", "ReName");
+    expect(Reflect.ownKeys(ReName)).toEqual(["length", "prototype", "name"]);
+
+    class Extra {}
+    delete Extra.name;
+    Extra.extra = 1;
+    redefine(Extra, "name", "Extra");
+    expect(Reflect.ownKeys(Extra)).toEqual(["length", "prototype", "extra", "name"]);
+    expect(Object.getOwnPropertyNames(Extra)).toEqual(["length", "prototype", "extra", "name"]);
+    expect(Object.keys(Object.getOwnPropertyDescriptors(Extra))).toEqual([
+      "length",
+      "prototype",
+      "extra",
+      "name",
+    ]);
+  });
+
+  test("a class whose length or name is assigned after re-creation keeps the new position", () => {
+    class Writable {}
+    delete Writable.name;
+    Object.defineProperty(Writable, "name", { value: "A", writable: true, configurable: true });
+    Writable.name = "B";
+    expect(Writable.name).toBe("B");
+    expect(Reflect.ownKeys(Writable)).toEqual(["length", "prototype", "name"]);
+  });
+
+  test("a re-created class name can be deleted and re-created again", () => {
+    class Twice {}
+    delete Twice.name;
+    redefine(Twice, "name", "first");
+    Twice.extra = 1;
+    delete Twice.name;
+    expect(Object.hasOwn(Twice, "name")).toBe(false);
+    expect(Reflect.ownKeys(Twice)).toEqual(["length", "prototype", "extra"]);
+    redefine(Twice, "name", "second");
+    expect(Twice.name).toBe("second");
+    expect(Reflect.ownKeys(Twice)).toEqual(["length", "prototype", "extra", "name"]);
+  });
+
+  test("a method, an arrow and a built-in list a re-created length or name last", () => {
+    const method = { m() {} }.m;
+    delete method.name;
+    method.extra = 1;
+    redefine(method, "name", "m");
+    expect(Reflect.ownKeys(method)).toEqual(["length", "extra", "name"]);
+
+    const arrow = () => {};
+    delete arrow.length;
+    redefine(arrow, "length", 0);
+    expect(Reflect.ownKeys(arrow)).toEqual(["name", "length"]);
+    expect(arrow.length).toBe(0);
+
+    const max = Math.max;
+    delete max.length;
+    redefine(max, "length", 0);
+    expect(Reflect.ownKeys(max)).toEqual(["name", "length"]);
+    expect(max.length).toBe(0);
+  });
+
+  test("Reflect.defineProperty re-creates a length or name at the end", () => {
+    const arrow = (a) => {};
+    delete arrow.length;
+    arrow.extra = 1;
+    expect(Reflect.defineProperty(arrow, "length", { value: 0, configurable: true })).toBe(true);
+    expect(Reflect.ownKeys(arrow)).toEqual(["name", "extra", "length"]);
+
+    class Defined {}
+    delete Defined.name;
+    Defined.extra = 1;
+    expect(Reflect.defineProperty(Defined, "name", { value: "D", configurable: true })).toBe(true);
+    expect(Reflect.ownKeys(Defined)).toEqual(["length", "prototype", "extra", "name"]);
+  });
+
+  test("a re-created class length or name is an own property with its defined attributes", () => {
+    class C {}
+    delete C.length;
+    delete C.name;
+    redefine(C, "length", 3);
+    redefine(C, "name", "Again");
+    expect(Object.hasOwn(C, "length")).toBe(true);
+    expect(Object.hasOwn(C, "name")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(C, "length")).toEqual({
+      value: 3,
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(Object.getOwnPropertyDescriptor(C, "name")).toEqual({
+      value: "Again",
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
+  });
+
+  test("a function's re-created name can be deleted again", () => {
+    const arrow = () => {};
+    delete arrow.name;
+    redefine(arrow, "name", "again");
+    expect(arrow.name).toBe("again");
+    expect(delete arrow.name).toBe(true);
+    expect(Object.hasOwn(arrow, "name")).toBe(false);
+    expect(Reflect.ownKeys(arrow)).toEqual(["length"]);
+  });
+
+  test("length and name that were redefined without a delete keep their first position", () => {
+    class Kept {
+      static extra = 1;
+    }
+    Object.defineProperty(Kept, "name", { enumerable: true });
+    Object.defineProperty(Kept, "length", { value: 4 });
+    expect(Reflect.ownKeys(Kept)).toEqual(["length", "name", "prototype", "extra"]);
+
+    const arrow = () => {};
+    arrow.extra = 1;
+    Object.defineProperty(arrow, "name", { value: "renamed" });
+    expect(Reflect.ownKeys(arrow)).toEqual(["length", "name", "extra"]);
+  });
+});

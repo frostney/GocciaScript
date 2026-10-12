@@ -142,4 +142,31 @@ describe("FFI type descriptors", () => {
       lib.close();
     }
   });
+
+  test("FFI values take their tags from a shared prototype", () => {
+    const Point = FFI.struct({ x: "i32" });
+    const point = Point.create({ x: 1 });
+    const Callback = FFI.callback({ args: ["i32"], returns: "i32" });
+    const callback = Callback.create((value) => value);
+    const tail = FFI.varargs(["i32"], [1]);
+    const tag = (value) => Object.prototype.toString.call(value);
+    try {
+      expect([tag(Point), tag(point), tag(Callback), tag(callback), tag(tail)]).toEqual([
+        "[object FFIType]",
+        "[object FFIAggregate]",
+        "[object FFIType]",
+        "[object FFICallback]",
+        "[object FFIVarArgs]",
+      ]);
+      expect(Object.getPrototypeOf(Object.getPrototypeOf(point))).toBe(Object.prototype);
+      expect(Object.getPrototypeOf(Point)).toBe(Object.getPrototypeOf(Callback));
+
+      for (const value of [Point, point, callback, tail]) {
+        Object.setPrototypeOf(value, null);
+        expect(tag(value)).toBe("[object Object]");
+      }
+    } finally {
+      callback.close();
+    }
+  });
 });

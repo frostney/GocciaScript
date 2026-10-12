@@ -370,7 +370,7 @@ Keep such a fast path in a procedure with no managed locals, and call the proced
 | `TGocciaShapedPropertyMap.EnsureShape` | `ExtendShape` |
 | `ToPrimitive` | `ToPrimitiveGeneric` |
 | `TGocciaValue.AfterConstruction` | `ThrowMemoryLimitExceeded` |
-| `CheckStackDepth`, `CheckNativeReentryDepth` | `ThrowMaxCallStackExceeded` |
+| `CheckStackDepth`, `CheckNativeStackHeadroom` | `ThrowMaxCallStackExceeded`, `CheckNativeStackHeadroomSlow` |
 | `TGocciaVM.SetupNewFrame` | `TGocciaVM.InternExecutionSourcePath` |
 | `TGocciaVM.ExecuteClosure` | `TGocciaVM.ExecuteClosureWithHeapArguments` |
 
@@ -393,7 +393,7 @@ end;
 
 Turn the switch back on explicitly, as above. `{$PUSH}` and `{$POP}` do not save optimizer switches in FPC 3.2.2, so a `{$POP}` leaves automatic inlining off for the rest of the unit. Do not use `{$OPTIMIZATION DEFAULT}` either: it resets to the command line and drops the `NOFASTMATH` guard. A core that contains a `try` block, or that is well above ten nodes, is not inlined and needs no bracket.
 
-FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckNativeReentryDepth` as a compare and a branch.
+FPC also does not inline a procedure into another unit when it calls one that is local to the implementation section. `ThrowMaxCallStackExceeded` is declared in the interface of `Goccia.StackLimit` for that reason: the VM inlines `CheckStackDepth` and `CheckNativeStackHeadroom` as a compare and a branch.
 
 An explicit `try..finally` installs the same frame when control reaches it (on targets where FPC uses `setjmp` frames; Win64 uses table-based unwinding). Around a lock it is only needed if the locked region can raise: `TGarbageCollector.RegisterObject` reads the instance size first, so that what runs under the accounting lock is integer arithmetic on its own fields, and takes the lock without one.
 
@@ -406,7 +406,7 @@ Three patterns keep them off those paths:
 | Pattern | Where | What it replaces |
 |---------|-------|------------------|
 | One mirrored word for checks that are normally off | `GThreadPolls` (`Goccia.ThreadPolls`): `TGocciaValue.AfterConstruction` reads `GThreadPolls.Any` once and calls `RunAllocationPolls` only when a timeout, an instruction limit or the allocation profiler is armed | Four lookups per allocated value (`CheckExecutionTimeout` one, `CheckInstructionLimit` two, the profiling flag one) |
-| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread` | A lookup per bytecode call, backward jump and native call site |
+| A pointer bound per outermost entry | `TGocciaVM.FThreadPolls`, `FCallStack`, `FExecutionContextThread`, set by `BindToCurrentThread`, and `FNativeStackLimit`, which it clears for the first deep native entry to look up | A lookup per bytecode call, backward jump and native call site |
 | A handle captured at the loop boundary | `CaptureInstructionLimitState` / `PollInstructionLimit` | A lookup per opcode in the instrumented loop |
 
 Two of the three flags are mirrors, not the source of truth: `TimeoutArmed` and `InstructionLimitActive` are written in the same procedure that changes the state they mirror (`RecomputeMinDeadline` and the two resets in `Goccia.Timeout`, `SetInstructionLimitActive` in `Goccia.InstructionLimit`), and the check behind each flag still decides for itself. `Goccia.ThreadPolls.Test` walks every way either state can change and compares the flag after each. `ProfilingAllocations` has no other owner: the VM sets it around a native entry and restores it on the way out.
@@ -457,6 +457,8 @@ Anything that reaches outside the process asks the owning engine's immutable `TG
 ### Shimmed Legacy Globals
 
 Legacy ECMAScript globals such as `parseInt`, `parseFloat`, `isNaN`, and `isFinite` live in the shim layer rather than the primary built-in registration path. `parseInt` and `parseFloat` delegate to their `Number.*` counterparts; global `isNaN` and `isFinite` preserve standard coercion behavior by wrapping `Number.isNaN(Number(value))` and `Number.isFinite(Number(value))`.
+
+A default shim is lexed and parsed once per thread runtime, not once per engine. `LoadShimValue` keeps each parsed program in a per-thread cache and evaluates it into the loading engine's scope, so every engine still gets its own `Date`, `Date.prototype` and patched `Object.prototype`. The cache exists because a parsed AST is never released while code may still run it: the functions a shim defines point into the AST, and `TGocciaProgram.Free` frees only the program node. Parsing per engine leaked the shim ASTs of every engine, about 1.1 MB per engine that uses `Date` on 64-bit (0.93 MB for `Date`, 0.18 MB for the seven eager `Object.prototype` shims), and the test runner builds one engine per file. Reuse is sound because evaluation writes no runtime values into the AST. The one node that could cache a value on itself is a tagged template: the evaluator keeps its template object on the node only when the evaluation context has no realm. A shim is always evaluated with the engine's realm, so the template object goes into that realm's template map (ES2026 §13.2.8.3 GetTemplateObject), and `Goccia.Shims.Test` checks that a shared program leaves it there. `Goccia.ThreadCleanupRegistry` releases the cache when the thread's runtime shuts down.
 
 Use the same shim pattern for future legacy names: if the modern implementation already exists (`Number.*`, `Object.*`, Temporal-backed date behavior, etc.), expose the old spelling through the Goccia.shims registry and list it there instead of duplicating the core built-in implementation. Do not generalize this into broad Annex B support: browser-only Annex B semantics are deferred before 1.0, and parser/runtime/object-model compatibility work needs a separate design decision tied to a future Web API or browser-compatibility profile.
 

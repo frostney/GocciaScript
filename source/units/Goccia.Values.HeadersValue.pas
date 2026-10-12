@@ -144,6 +144,11 @@ begin
       TGocciaSymbolValue.WellKnownIterator,
       '[Symbol.iterator]', HeadersSymbolIterator, 0,
       [pfConfigurable, pfWritable]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_HEADERS),
+      [pfConfigurable]);
     PrototypeMembers := Members.ToDefinitions;
   finally
     Members.Free;

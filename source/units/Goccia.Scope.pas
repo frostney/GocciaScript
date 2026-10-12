@@ -100,6 +100,14 @@ type
       const AHasInitializer: Boolean; const ACanDelete: Boolean = False);
     function ContainsOwnVarBinding(const AName: string): Boolean;
     function ContainsVarEnvironmentBinding(const AName: string): Boolean; virtual;
+    // ES2026 §19.2.1.3 EvalDeclarationInstantiation step 3: whether a var
+    // named AName that a sloppy direct eval declares is a SyntaxError because
+    // of this scope's own binding. AIsVariableEnvironment: this scope is the
+    // eval's variable environment, where a var or a parameter of the name is
+    // the binding the eval's var reuses; otherwise it lies between the eval
+    // and that environment, where any binding of the name conflicts.
+    function EvalVarDeclarationConflicts(const AName: string;
+      const AIsVariableEnvironment: Boolean): Boolean; virtual;
     function HasLexicalDeclaration(const AName: string): Boolean;
     function HasRestrictedGlobalProperty(const AName: string): Boolean;
     function CanDeclareGlobalVar(const AName: string): Boolean;
@@ -184,6 +192,9 @@ type
     // Walk the parent chain to find the nearest owning class / superclass
     function FindOwningClass: TGocciaValue;
     function FindOwningClassAfter(const AAfter: TGocciaValue): TGocciaValue;
+    // Like FindOwningClassAfter, but also yields the classes that private
+    // environment scopes contribute; only private-name resolution uses it.
+    function FindPrivateClassAfter(const AAfter: TGocciaValue): TGocciaValue;
     function FindSuperClass: TGocciaValue;
     function FindSuperConstructor: TGocciaValue;
     function FindNewTarget: TGocciaValue;
@@ -305,6 +316,20 @@ type
     property OwningClass: TGocciaValue read FOwningClass;
   end;
 
+  // A class whose private names code in this scope can use, without being
+  // the owner of that code: super, new.target and field initialization do not
+  // see it. Direct eval in bytecode uses it to give the evaluated code the
+  // calling function's private environment (ES2026 §19.2.1.1 step 13).
+  TGocciaPrivateEnvironmentScope = class(TGocciaScope)
+  private
+    FPrivateClass: TGocciaValue;
+  public
+    constructor Create(const AParent: TGocciaScope;
+      const APrivateClass: TGocciaValue);
+    procedure MarkReferences; override;
+    property PrivateClass: TGocciaValue read FPrivateClass;
+  end;
+
   // Specialized scope for try-catch blocks with proper assignment propagation
   TGocciaCatchScope = class(TGocciaScope)
   private
@@ -314,6 +339,8 @@ type
     function TryAssignExistingBinding(const AName: string;
       const AValue: TGocciaValue; const ANonStrictMode: Boolean = False;
       const ALine: Integer = 0; const AColumn: Integer = 0): Boolean; override;
+    function EvalVarDeclarationConflicts(const AName: string;
+      const AIsVariableEnvironment: Boolean): Boolean; override;
   end;
 
   TGocciaWithScope = class(TGocciaScope)
@@ -574,6 +601,33 @@ begin
   while Assigned(Current) do
   begin
     Candidate := Current.GetOwningClass;
+    if Assigned(Candidate) then
+    begin
+      if FoundAfter and (Candidate <> AAfter) then
+        Exit(Candidate);
+      if Candidate = AAfter then
+        FoundAfter := True;
+    end;
+    Current := Current.FParent;
+  end;
+  Result := nil;
+end;
+
+function TGocciaScope.FindPrivateClassAfter(
+  const AAfter: TGocciaValue): TGocciaValue;
+var
+  Current: TGocciaScope;
+  Candidate: TGocciaValue;
+  FoundAfter: Boolean;
+begin
+  Current := Self;
+  FoundAfter := not Assigned(AAfter);
+  while Assigned(Current) do
+  begin
+    Candidate := Current.GetOwningClass;
+    if (not Assigned(Candidate)) and
+       (Current is TGocciaPrivateEnvironmentScope) then
+      Candidate := TGocciaPrivateEnvironmentScope(Current).PrivateClass;
     if Assigned(Candidate) then
     begin
       if FoundAfter and (Candidate <> AAfter) then
@@ -915,6 +969,22 @@ end;
 function TGocciaScope.ContainsVarEnvironmentBinding(const AName: string): Boolean;
 begin
   Result := ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName);
+end;
+
+function TGocciaScope.EvalVarDeclarationConflicts(const AName: string;
+  const AIsVariableEnvironment: Boolean): Boolean;
+var
+  Binding: TLexicalBinding;
+begin
+  if not AIsVariableEnvironment then
+    Exit(ContainsOwnLexicalBinding(AName) or ContainsOwnVarBinding(AName));
+  // A parameter declared in the variable environment itself is a binding of
+  // it, like a var (§10.2.11 step 28, a parameter list without expressions).
+  // With parameter expressions the body's vars get a scope of their own, and
+  // an eval in the parameter list rejects the parameter names through
+  // EvalDeclarationInstantiation's ARejectVarDeclarationNames.
+  Result := FLexicalBindings.TryGetValue(AName, Binding) and
+    (Binding.DeclarationType <> dtParameter);
 end;
 
 // ES2026 §9.1.1.4.15 HasLexicalDeclaration(N) — global-scope approximation.
@@ -1594,11 +1664,25 @@ begin
   Result := FLexicalBindings.TryGetValue(AName, Binding) and Binding.BuiltIn;
 end;
 
+// HasBinding along the chain. In the global scope a var is a property of
+// the global object, as a built-in the global object backs is: once the
+// property is deleted, the global Environment Record has no binding of the
+// name (ES2026 §9.1.1.4.1 HasBinding, through the Object Environment
+// Record's HasBinding, §9.1.1.2.1).
 function TGocciaScope.Contains(const AName: string): Boolean;
+var
+  Binding: TLexicalBinding;
+  GlobalObjectBacked: Boolean;
 begin
-  Result := ContainsOwnLexicalBinding(AName) or
-    ContainsOwnVarBinding(AName) or
-    ((FScopeKind = skGlobal) and (FThisValue is TGocciaObjectValue) and
+  GlobalObjectBacked := (FScopeKind = skGlobal) and
+    (FThisValue is TGocciaObjectValue);
+  if FLexicalBindings.TryGetValue(AName, Binding) and
+     not IsGlobalBuiltInObjectBinding(Binding) then
+    Exit(True);
+  Result := (Assigned(FVarBindings) and FVarBindings.ContainsKey(AName)) or
+    ((not GlobalObjectBacked) and Assigned(FGlobalVarNames) and
+     FGlobalVarNames.ContainsKey(AName)) or
+    (GlobalObjectBacked and
      TGocciaObjectValue(FThisValue).HasProperty(AName)) or
     (Assigned(FParent) and FParent.Contains(AName));
 end;
@@ -1854,6 +1938,23 @@ begin
     FOwningClass.MarkReferences;
 end;
 
+{ TGocciaPrivateEnvironmentScope }
+
+constructor TGocciaPrivateEnvironmentScope.Create(const AParent: TGocciaScope;
+  const APrivateClass: TGocciaValue);
+begin
+  inherited Create(AParent, skBlock, 'PrivateEnvironment');
+  FPrivateClass := APrivateClass;
+end;
+
+procedure TGocciaPrivateEnvironmentScope.MarkReferences;
+begin
+  if GCMarked then Exit;
+  inherited;
+  if Assigned(FPrivateClass) then
+    FPrivateClass.MarkReferences;
+end;
+
 { TGocciaCatchScope }
 
 constructor TGocciaCatchScope.Create(const AParent: TGocciaScope; const ACatchParameter: string);
@@ -1878,6 +1979,19 @@ begin
   else
     Result := inherited TryAssignExistingBinding(AName, AValue, ANonStrictMode,
       ALine, AColumn);
+end;
+
+// ES2026 §19.2.1.3 step 3.d, the normative-optional web-compat branch: a
+// sloppy direct eval may declare a var named like a parameter of an enclosing
+// catch clause, as `catch (e) { var e; }` may (B.3.4).
+function TGocciaCatchScope.EvalVarDeclarationConflicts(const AName: string;
+  const AIsVariableEnvironment: Boolean): Boolean;
+begin
+  if AIsVariableEnvironment then
+    Result := inherited EvalVarDeclarationConflicts(AName,
+      AIsVariableEnvironment)
+  else
+    Result := False;
 end;
 
 { TGocciaWithScope }

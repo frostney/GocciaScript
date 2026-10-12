@@ -22,6 +22,7 @@ uses
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.FileExtensions,
+  Goccia.FloatingPoint,
   Goccia.GarbageCollector,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
@@ -211,13 +212,22 @@ var
   Module: TGocciaBytecodeModule;
   SourceMap: TGocciaSourceMap;
   StartTime, EndTime: Int64;
+  FloatingPointState: TGocciaFloatingPointState;
 begin
   if not GIsWorkerThread then
     WriteLn('Compiling: ', AFileName);
   StartTime := GetNanoseconds;
 
   SourceMap := nil;
-  Module := CompileSource(ASource, AFileName, SourceMap);
+  { Constant folding is IEEE-754 arithmetic and needs floating-point
+    exceptions masked, as TGocciaEngine does around its compile and run
+    steps. The scope is per call because the mask is per thread. }
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  try
+    Module := CompileSource(ASource, AFileName, SourceMap);
+  finally
+    LeaveGocciaFloatingPointScope(FloatingPointState);
+  end;
   try
     Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
     WriteSourceMapIfEnabled(SourceMap, AFileName, AOutputPath);

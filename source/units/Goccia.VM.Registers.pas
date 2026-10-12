@@ -49,6 +49,10 @@ function RegisterToValue(const ARegister: TGocciaRegister): TGocciaValue; {$IFDE
 function RegisterToDouble(const ARegister: TGocciaRegister): Double; {$IFDEF FPC}inline;{$ENDIF}
 function RegisterToBoolean(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+// RegisterToDouble for a register RegisterIsNumericScalar has accepted. It
+// makes no call, so the VM's dispatch loop does not have to keep a spill slot
+// in its frame for a value it holds across one.
+function NumericScalarToDouble(const ARegister: TGocciaRegister): Double; {$IFDEF FPC}inline;{$ENDIF}
 procedure MarkRegisterReferences(const ARegister: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
@@ -204,6 +208,14 @@ end;
 function RegisterIsNumericScalar(const ARegister: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
   Result := ARegister.Kind in [grkInt, grkFloat];
+end;
+
+function NumericScalarToDouble(const ARegister: TGocciaRegister): Double; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if ARegister.Kind = grkInt then
+    Result := ARegister.IntValue
+  else
+    Result := ARegister.FloatValue;
 end;
 
 procedure MarkRegisterReferences(const ARegister: TGocciaRegister); {$IFDEF FPC}inline;{$ENDIF}

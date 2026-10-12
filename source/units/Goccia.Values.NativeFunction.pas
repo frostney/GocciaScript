@@ -6,6 +6,7 @@ interface
 
 uses
   Goccia.Arguments.Collection,
+  Goccia.Realm,
   Goccia.Values.FunctionBase,
   Goccia.Values.HoleValue,
   Goccia.Values.NativeFunctionCallback,
@@ -40,7 +41,18 @@ type
     nikTypedArrayBuffer,
     nikTypedArrayByteLength,
     nikTypedArrayByteOffset,
-    nikTypedArrayLength
+    nikTypedArrayLength,
+    { The getters of ArrayBuffer.prototype.byteLength, maxByteLength,
+      resizable, detached and immutable, and of SharedArrayBuffer.prototype
+      .byteLength, maxByteLength and growable, marked for the same reason. }
+    nikArrayBufferByteLength,
+    nikArrayBufferMaxByteLength,
+    nikArrayBufferResizable,
+    nikArrayBufferDetached,
+    nikArrayBufferImmutable,
+    nikSharedArrayBufferByteLength,
+    nikSharedArrayBufferMaxByteLength,
+    nikSharedArrayBufferGrowable
   );
 
   TGocciaNativeFunctionValue = class(TGocciaFunctionBase)
@@ -77,12 +89,125 @@ type
       read FIntrinsicKind write FIntrinsicKind;
   end;
 
+{ Stamps AKind on the native getter of APrototype's own accessor AName, so
+  ResolvePropertyWithoutCall recognises the built-in getter itself rather than
+  whatever function a program later defines under the same name. }
+procedure MarkIntrinsicGetter(const APrototype: TGocciaObjectValue;
+  const AName: string; const AKind: TGocciaNativeIntrinsicKind);
+
+{ The ordinary lookup of AName from AObject (ES2026 §10.1.8.1 OrdinaryGet), for
+  the chains it can answer without calling anything: AObject's own property
+  map, then each prototype while that prototype is a plain object. AObject must
+  keep all its own properties in that map. Returns True with AKind = nikNone
+  and AValue set for a plain data property, or to undefined when the chain ends
+  without the property. Returns True with AValue nil and AKind set for an
+  accessor whose getter is a native function marked by MarkIntrinsicGetter; the
+  caller computes that getter's result for AObject itself as the receiver, or
+  declines if the kind is not one of its own. Returns False for anything else
+  (a getter a program defined, a lazy property, a prototype that is not a plain
+  object), which leaves the read to the full lookup. No managed locals: buffers
+  read every named property through it. }
+function ResolvePropertyWithoutCall(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: TGocciaValue;
+  out AKind: TGocciaNativeIntrinsicKind): Boolean;
+
+
+{ Records AFunction as ARealm's %eval% (ES2026 §19.2.1) when a host installs
+  the global `eval`, and marks the realm as hosting direct eval. The realm
+  keeps it alive, so the identity check below holds after a script replaces
+  or deletes the global property. }
+procedure InstallRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AFunction: TGocciaNativeFunctionValue);
+
+{ ES2026 §13.3.6.1 step 6.a: SameValue(func, %eval%) for ARealm. Compares
+  with the function the host installed, not the current global `eval`. }
+function IsRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AValue: TGocciaValue): Boolean;
 
 implementation
 
 uses
   Goccia.Constants.PropertyNames,
-  Goccia.Realm;
+  Goccia.Values.ObjectPropertyDescriptor;
+
+var
+  GEvalFunctionSlot: TGocciaRealmSlotId;
+
+procedure InstallRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AFunction: TGocciaNativeFunctionValue);
+begin
+  AFunction.DirectEvalHost := True;
+  ARealm.SetSlot(GEvalFunctionSlot, AFunction);
+end;
+
+function IsRealmEvalFunction(const ARealm: TGocciaRealm;
+  const AValue: TGocciaValue): Boolean;
+begin
+  Result := Assigned(ARealm) and Assigned(AValue) and
+    (ARealm.GetSlot(GEvalFunctionSlot) = AValue);
+end;
+
+procedure MarkIntrinsicGetter(const APrototype: TGocciaObjectValue;
+  const AName: string; const AKind: TGocciaNativeIntrinsicKind);
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
+begin
+  Descriptor := APrototype.GetOwnPropertyDescriptor(AName);
+  if Descriptor is TGocciaPropertyDescriptorAccessor then
+    Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter
+  else
+    Getter := nil;
+  // A miss here would silently send every read of AName through the getter
+  // call: still correct, so no behaviour test could notice.
+  Assert(Getter is TGocciaNativeFunctionValue,
+    AName + ' must have a native getter to carry its intrinsic kind');
+  // Production builds compile assertions out (source/shared/Shared.inc), so
+  // the type test has to stand on its own before the cast.
+  if Getter is TGocciaNativeFunctionValue then
+    TGocciaNativeFunctionValue(Getter).IntrinsicKind := AKind;
+end;
+
+function ResolvePropertyWithoutCall(const AObject: TGocciaObjectValue;
+  const AName: string; out AValue: TGocciaValue;
+  out AKind: TGocciaNativeIntrinsicKind): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Getter: TGocciaValue;
+  Holder: TGocciaObjectValue;
+begin
+  AValue := nil;
+  AKind := nikNone;
+  Result := False;
+  Holder := AObject;
+  repeat
+    if Holder.Properties.TryGetValue(AName, Descriptor) then
+    begin
+      // Exact classes: a not-yet-materialized lazy descriptor is a subclass of
+      // the data descriptor and must take the full lookup, which replaces it.
+      if Descriptor.ClassType = TGocciaPropertyDescriptorData then
+      begin
+        AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
+        Exit(True);
+      end;
+      if Descriptor.ClassType <> TGocciaPropertyDescriptorAccessor then
+        Exit;
+      Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+      if (not Assigned(Getter)) or
+         (Getter.ClassType <> TGocciaNativeFunctionValue) then
+        Exit;
+      AKind := TGocciaNativeFunctionValue(Getter).IntrinsicKind;
+      Result := AKind <> nikNone;
+      Exit;
+    end;
+    Holder := Holder.Prototype;
+  until (not Assigned(Holder)) or (Holder.ClassType <> TGocciaObjectValue);
+  if not Assigned(Holder) then
+  begin
+    AValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+    Result := True;
+  end;
+end;
 
 constructor TGocciaNativeFunctionValue.Create(const AFunction: TGocciaNativeFunctionCallback;
   const AName: string; const AArity: Integer);
@@ -191,5 +316,8 @@ function TGocciaNativeFunctionValue.GetFunctionName: string;
 begin
   Result := FName;
 end;
+
+initialization
+  GEvalFunctionSlot := RegisterRealmSlot('eval');
 
 end.

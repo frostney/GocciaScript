@@ -102,6 +102,13 @@ type
   end;
   PDisposableStackSlot = ^TDisposableStackSlot;
 
+  { A DisposableStack or AsyncDisposableStack instance. Its state lives in
+    the side table; the class only tells it apart from an ordinary object,
+    which a pointer-keyed table cannot do once a dead stack's address is
+    reused. }
+  TGocciaDisposableStackObjectValue = class(TGocciaObjectValue)
+  end;
+
   TAsyncDisposableStackDisposeJob = class(TGocciaObjectValue)
   private
     FSlot: PDisposableStackSlot;
@@ -753,7 +760,7 @@ var
   Instance: TGocciaObjectValue;
   Slot: PDisposableStackSlot;
 begin
-  Instance := TGocciaObjectValue.Create(APrototype);
+  Instance := TGocciaDisposableStackObjectValue.Create(APrototype);
 
   // Allocate internal slot (side-channel, invisible to JS)
   New(Slot);

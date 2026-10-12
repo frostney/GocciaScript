@@ -76,6 +76,13 @@ function ExpandHostFileName(const APath: string): string;
 function HostDirectoryExists(const APath: string): Boolean;
 function HostFileExists(const APath: string): Boolean;
 
+{ ForceDirectories for a directory that other threads or processes may be
+  creating at the same time. SysUtils.ForceDirectories stops at the first
+  level whose CreateDir fails, so a caller that loses the race for a parent
+  gets False and its own leaf is never created. True when ADirectory exists
+  as a directory on return. }
+function ForceHostDirectories(const ADirectory: string): Boolean;
+
 { True when APath itself is a symbolic link (UNIX) or a reparse
   point / junction (Windows). Does not follow the link. }
 function HostPathIsSymlink(const APath: string): Boolean;
@@ -381,6 +388,24 @@ end;
 function HostFileExists(const APath: string): Boolean;
 begin
   Result := FileExists(APath);
+end;
+
+function ForceHostDirectories(const ADirectory: string): Boolean;
+var
+  Attempt, I, Levels: Integer;
+begin
+  { An attempt that loses a race stops at a level a concurrent creator has
+    just made, so the next attempt gets at least one level further. One
+    attempt per level is therefore enough, and a real failure such as a
+    missing permission still ends the loop. }
+  Levels := 1;
+  for I := 1 to Length(ADirectory) do
+    if ADirectory[I] in AllowDirectorySeparators then
+      Inc(Levels);
+  for Attempt := 1 to Levels do
+    if ForceDirectories(ADirectory) or DirectoryExists(ADirectory) then
+      Exit(True);
+  Result := False;
 end;
 
 function HostPathIsSymlink(const APath: string): Boolean;

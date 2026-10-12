@@ -39,7 +39,6 @@ type
     function HasEntry(const AKey: TGocciaValue): Boolean;
 
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -185,11 +184,6 @@ end;
 function TGocciaWeakMapValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_WEAK_MAP;
-end;
-
-function TGocciaWeakMapValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 procedure TGocciaWeakMapValue.InitializeNativeFromArguments(

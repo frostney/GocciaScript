@@ -41,12 +41,18 @@ type
       const AColumn: UInt16);
     procedure AddLocal(const AName: string; const ASlot: UInt16;
       const AStartPC, AEndPC: UInt32);
+    procedure SetLocalEndPC(const AIndex: Integer; const AEndPC: UInt32);
 
     function GetLineForPC(const APC: UInt32): UInt32;
     function GetColumnForPC(const APC: UInt32): UInt16;
 
     function GetLineMapEntry(const AIndex: Integer): TGocciaLineMapEntry;
     function GetLocalInfo(const AIndex: Integer): TGocciaLocalInfo;
+    { The name of the local that occupies ASlot at APC: the innermost one, as
+      a slot is reused once its block ends. For error messages only, so a
+      linear scan is fine. }
+    function TryGetLocalName(const ASlot: UInt16; const APC: UInt32;
+      out AName: string): Boolean;
 
     { Declaration position, falling back to the first line-map entry when the
       declaration site was not recorded, so callers always get a usable
@@ -100,6 +106,15 @@ end;
 procedure TGocciaDebugInfo.AddLineMapping(const APC: UInt32;
   const ALine: UInt32; const AColumn: UInt16);
 begin
+  { An entry at the same PC as the one before it supersedes that one, which
+    GetLineForPC can then never reach, so it takes its place rather than
+    growing the map. The first entry always stays: CoverageLine reads it. }
+  if (FLineMapCount > 1) and (FLineMap[FLineMapCount - 1].PC = APC) then
+  begin
+    FLineMap[FLineMapCount - 1].Line := ALine;
+    FLineMap[FLineMapCount - 1].Column := AColumn;
+    Exit;
+  end;
   if FLineMapCount >= Length(FLineMap) then
     SetLength(FLineMap, FLineMapCount * 2 + 8);
   FLineMap[FLineMapCount].PC := APC;
@@ -118,6 +133,12 @@ begin
   FLocals[FLocalCount].StartPC := AStartPC;
   FLocals[FLocalCount].EndPC := AEndPC;
   Inc(FLocalCount);
+end;
+
+procedure TGocciaDebugInfo.SetLocalEndPC(const AIndex: Integer;
+  const AEndPC: UInt32);
+begin
+  FLocals[AIndex].EndPC := AEndPC;
 end;
 
 function TGocciaDebugInfo.GetLineForPC(const APC: UInt32): UInt32;
@@ -148,6 +169,22 @@ end;
 function TGocciaDebugInfo.GetLocalInfo(const AIndex: Integer): TGocciaLocalInfo;
 begin
   Result := FLocals[AIndex];
+end;
+
+function TGocciaDebugInfo.TryGetLocalName(const ASlot: UInt16;
+  const APC: UInt32; out AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := FLocalCount - 1 downto 0 do
+    if (FLocals[I].Slot = ASlot) and (FLocals[I].StartPC <= APC) and
+       (APC < FLocals[I].EndPC) then
+    begin
+      AName := FLocals[I].Name;
+      Exit(True);
+    end;
+  AName := '';
+  Result := False;
 end;
 
 end.

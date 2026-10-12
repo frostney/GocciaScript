@@ -10,6 +10,7 @@ uses
 
   OrderedStringMap,
 
+  Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
@@ -79,8 +80,25 @@ type
     function TryGetValue(out AValue: TGocciaValue): Boolean;
   end;
 
+  { Roots the values a module holds directly for as long as the module lives:
+    its value-bound exports, the export snapshot table and the evaluation
+    promise. A local export is rooted through the module's environment scope
+    (SetEnvironment) and a forwarded one belongs to its source module, but a
+    value binding has neither. The namespace object marks these values too,
+    yet it exists only once something asks for it, so without this a host
+    module's exports, or a JSON module's parsed value, were collectable while
+    the module still handed them out. See ADR 0133. }
+  TGocciaModuleRoots = class(TGCRootSource)
+  private
+    FModule: TGocciaModule;
+  public
+    constructor Create(const AModule: TGocciaModule);
+    procedure MarkRootReferences; override;
+  end;
+
   TGocciaModule = class
   private
+    FRoots: TGocciaModuleRoots;
     FAmbiguousExports: TOrderedStringMap<Boolean>;
     FPath: string;
     FEnvironment: TGCManagedObject;
@@ -94,6 +112,9 @@ type
     FStarExportNames: TOrderedStringMap<Boolean>;
     FExportResolutionVersion: Cardinal;
     procedure InvalidateExportResolutions;
+    procedure EnsureRoots;
+    function GetExportsTable: TGocciaValueMap;
+    procedure MarkHeldValues;
     procedure SetExportBinding(const AExportName: string;
       const ABinding: TGocciaModuleExportBinding);
     function TryResolveExportIdentity(const AExportName: string;
@@ -140,7 +161,7 @@ type
     function TryGetExportValue(const AExportName: string;
       out AValue: TGocciaValue): Boolean;
     property Path: string read FPath;
-    property ExportsTable: TGocciaValueMap read FExportsTable;
+    property ExportsTable: TGocciaValueMap read GetExportsTable;
     property EvaluationPromise: TGocciaValue read FEvaluationPromise write FEvaluationPromise;
     property AsyncCycleRoot: TGocciaModule read FAsyncCycleRoot
       write FAsyncCycleRoot;
@@ -156,6 +177,8 @@ type
     FResolvedBindings: TGocciaModuleImportBindingMap;
     procedure ClearResolvedBindings;
     procedure DetachModule;
+    function AcceptsDescriptor(const AName: string;
+      const ADescriptor: TGocciaPropertyDescriptor): Boolean;
   public
     constructor Create(const AModule: TGocciaModule);
     destructor Destroy; override;
@@ -202,6 +225,8 @@ type
   public
     class function SharedPrototype: TGocciaObjectValue; static;
     class function SharedModuleSourcePrototype: TGocciaObjectValue; static;
+    class function ToStringTagGetter(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     constructor Create(const APath: string; const ASourceText: string);
     function ToStringTag: string; override;
     property Path: string read FPath;
@@ -290,6 +315,7 @@ uses
   Goccia.Scope,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.NativeFunction,
   Goccia.VM.Exception;
 
 const
@@ -518,13 +544,83 @@ end;
 
 { TGocciaModule }
 
+{ TGocciaModuleRoots }
+
+constructor TGocciaModuleRoots.Create(const AModule: TGocciaModule);
+begin
+  inherited Create;
+  FModule := AModule;
+end;
+
+procedure TGocciaModuleRoots.MarkRootReferences;
+begin
+  FModule.MarkHeldValues;
+end;
+
+{ TGocciaModule }
+
 constructor TGocciaModule.Create(const APath: string);
 begin
+  // An embedder may build a host module before any engine has started the
+  // thread's collector; the root source registers only with a live one.
+  // Initialize is idempotent.
+  if not Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Initialize;
   FAmbiguousExports := TOrderedStringMap<Boolean>.Create;
   FPath := APath;
   FExportBindings := TGocciaModuleExportBindingMap.Create;
   FExportsTable := TGocciaValueMap.Create;
   FStarExportNames := TOrderedStringMap<Boolean>.Create;
+  EnsureRoots;
+end;
+
+// A host can keep a module across a collector replacement (a thread pool that
+// resets its runtime between work items), and a root source marks only for
+// the collector it registered with. Re-register before the module takes a
+// value the current collector manages, as TGocciaTimerQueue.EnsureRoots does.
+procedure TGocciaModule.EnsureRoots;
+var
+  Collector: TGarbageCollector;
+begin
+  Collector := TGarbageCollector.Instance;
+  if Assigned(FRoots) and Assigned(Collector) and
+     (FRoots.RegisteredCollector = Collector) then
+    Exit;
+  FreeAndNil(FRoots);
+  if Assigned(Collector) then
+    FRoots := TGocciaModuleRoots.Create(Self);
+end;
+
+// Host modules publish by writing this table directly.
+function TGocciaModule.GetExportsTable: TGocciaValueMap;
+begin
+  EnsureRoots;
+  Result := FExportsTable;
+end;
+
+procedure TGocciaModule.MarkHeldValues;
+var
+  Binding: TGocciaModuleExportBinding;
+  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+begin
+  // Only value bindings: reading a local binding could raise in its temporal
+  // dead zone, and its environment scope is a root of its own. The export
+  // table is marked as well: data modules (YAML, TOML, JSON5) write it without
+  // a binding, and it keeps the snapshot a local export took when it was
+  // linked, which a namespace object built later marks.
+  for BindingPair in FExportBindings do
+  begin
+    Binding := BindingPair.Value;
+    if Assigned(Binding.FValue) and not Assigned(Binding.FSourceModule) and
+       not Assigned(Binding.FEnvironment) then
+      Binding.FValue.MarkReferences;
+  end;
+  for ExportPair in FExportsTable do
+    if Assigned(ExportPair.Value) then
+      ExportPair.Value.MarkReferences;
+  if Assigned(FEvaluationPromise) then
+    FEvaluationPromise.MarkReferences;
 end;
 
 procedure TGocciaModule.InvalidateExportResolutions;
@@ -552,6 +648,7 @@ var
   ExistingBinding: TGocciaModuleExportBinding;
   Value: TGocciaValue;
 begin
+  EnsureRoots;
   InvalidateNamespaceObject;
 
   if FExportBindings.TryGetValue(AExportName, ExistingBinding) then
@@ -709,6 +806,7 @@ procedure TGocciaModule.UpdateExportValue(const AExportName: string;
 var
   Binding: TGocciaModuleExportBinding;
 begin
+  EnsureRoots;
   if FExportBindings.TryGetValue(AExportName, Binding) then
   begin
     if Assigned(Binding.FEnvironment) then
@@ -960,6 +1058,11 @@ begin
   Result := FAmbiguousExports.ContainsKey(AExportName);
 end;
 
+{ A change to the module's exports drops what the namespace object resolved,
+  but keeps the object: ES2026 §16.2.1.13 GetModuleNamespace creates a
+  module's [[Namespace]] once, so every namespace import and `export * as`
+  of the module is the same object, however late an export is registered.
+  Only a module that is going away detaches and releases it. }
 procedure TGocciaModule.InvalidateNamespaceObject(const ADetachModule: Boolean);
 begin
   InvalidateExportResolutions;
@@ -971,6 +1074,8 @@ begin
       if ADetachModule then
         TGocciaModuleNamespaceObject(FNamespaceObject).DetachModule;
     end;
+    if not ADetachModule then
+      Exit;
     if (TGarbageCollector.Instance <> nil) then
       TGarbageCollector.Instance.RemoveRootObject(FNamespaceObject);
     FNamespaceObject := nil;
@@ -1008,6 +1113,7 @@ destructor TGocciaModule.Destroy;
 var
   BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
 begin
+  FreeAndNil(FRoots);
   InvalidateNamespaceObject(True);
   SetEnvironment(nil);
   for BindingPair in FExportBindings do
@@ -1079,12 +1185,17 @@ begin
   Result := inherited DeleteProperty(AName);
 end;
 
+// DefineProperty follows the base contract: it takes ownership of ADescriptor
+// only on success, and leaves it to the caller when it throws. Going through
+// TryDefineProperty here freed the descriptor before the throw, so callers
+// such as Object.defineProperty freed it a second time.
 procedure TGocciaModuleNamespaceObject.DefineProperty(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor);
 begin
-  if not TryDefineProperty(AName, ADescriptor) then
+  if not AcceptsDescriptor(AName, ADescriptor) then
     ThrowTypeError(Format(SErrorCannotRedefineNonConfigurable, [AName]),
       SSuggestCannotDeleteNonConfigurable);
+  ADescriptor.Free;
 end;
 
 function TGocciaModuleNamespaceObject.GetAllPropertyNames: TArray<string>;
@@ -1278,26 +1389,35 @@ begin
 end;
 
 // ES2026 §10.4.6.6 Module Namespace Exotic Objects [[DefineOwnProperty]](P, Desc)
-function TGocciaModuleNamespaceObject.TryDefineProperty(const AName: string;
+// for a string key: the export must exist and the descriptor must describe it
+// unchanged. Owns nothing.
+function TGocciaModuleNamespaceObject.AcceptsDescriptor(const AName: string;
   const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   CurrentValue: TGocciaValue;
 begin
+  if not TryGetExportValue(AName, CurrentValue) then
+    Exit(False);
+  if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
+    Exit(False);
+  if ADescriptor.HasEnumerableField and not ADescriptor.Enumerable then
+    Exit(False);
+  if IsAccessorDescriptor(ADescriptor) then
+    Exit(False);
+  if ADescriptor.HasWritableField and not ADescriptor.Writable then
+    Exit(False);
+  if ADescriptor.HasValue then
+    Exit(IsSameValue(TGocciaPropertyDescriptorData(ADescriptor).Value,
+      CurrentValue));
+  Result := True;
+end;
+
+// Takes ownership of ADescriptor in every case, like the base TryDefineProperty.
+function TGocciaModuleNamespaceObject.TryDefineProperty(const AName: string;
+  const ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
   try
-    if not TryGetExportValue(AName, CurrentValue) then
-      Exit(False);
-    if ADescriptor.HasConfigurableField and ADescriptor.Configurable then
-      Exit(False);
-    if ADescriptor.HasEnumerableField and not ADescriptor.Enumerable then
-      Exit(False);
-    if IsAccessorDescriptor(ADescriptor) then
-      Exit(False);
-    if ADescriptor.HasWritableField and not ADescriptor.Writable then
-      Exit(False);
-    if ADescriptor.HasValue then
-      Exit(IsSameValue(TGocciaPropertyDescriptorData(ADescriptor).Value,
-        CurrentValue));
-    Result := True;
+    Result := AcceptsDescriptor(AName, ADescriptor);
   finally
     ADescriptor.Free;
   end;
@@ -1316,7 +1436,26 @@ begin
     Result := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype);
     CurrentRealm.SetSlot(GModuleSourcePrototypeSlot, Result);
+    // %AbstractModuleSource%.prototype [ %Symbol.toStringTag% ]: an accessor
+    // that reports [[ModuleSourceClassName]], and undefined for anything
+    // without that slot.
+    Result.DefineSymbolProperty(TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaPropertyDescriptorAccessor.Create(
+        TGocciaNativeFunctionValue.CreateWithoutPrototype(ToStringTagGetter,
+          'get [Symbol.toStringTag]', 0),
+        nil, [pfConfigurable]));
   end;
+end;
+
+class function TGocciaModuleSourceValue.ToStringTagGetter(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  if AThisValue is TGocciaModuleSourceValue then
+    Result := TGocciaStringLiteralValue.Create(
+      TGocciaModuleSourceValue(AThisValue).ToStringTag)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 class function TGocciaModuleSourceValue.SharedModuleSourcePrototype:

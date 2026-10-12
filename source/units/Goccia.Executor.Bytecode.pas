@@ -6,8 +6,10 @@ interface
 
 uses
   OrderedStringMap,
+  UnicodeStringList,
 
   Goccia.AST.Node,
+  Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.Compiler,
   Goccia.Evaluator.Context,
@@ -28,10 +30,17 @@ type
     FArgumentsObjectEnabled: Boolean;
     FLinkedModules: TOrderedStringMap<TGocciaModule>;
     FLinkedReferrer: string;
-    function RealmExposesDirectEval: Boolean;
     procedure LinkModuleRequests(const AModule: TGocciaBytecodeModule);
+    procedure InitializeEntryExports(const AModule: TGocciaBytecodeModule;
+      const AEntry: TGocciaModule);
     function LoadLinkedModule(const AModulePath,
       AImportingFilePath: string): TGocciaModule;
+    function RunModule(const AModule: TGocciaCompiledModule;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function CompileDirectEvalCode(const AProgram: TGocciaProgram;
+      const ASourcePath: string; const ASite: TGocciaDirectEvalEnvironment;
+      const AStrictEval: Boolean;
+      const ADeclaredVarNames: TUnicodeStringList): TGocciaFunctionTemplate;
   public
     constructor Create;
     destructor Destroy; override;
@@ -46,6 +55,10 @@ type
       out AProgramConsumed: Boolean): TGocciaValue; override;
     function ExecuteDynamicFunction(
       const AProgram: TGocciaProgram): TGocciaValue; override;
+    function EvaluateGlobalEval(const AProgram: TGocciaProgram;
+      const ASourcePath: string; const AStrictEval: Boolean;
+      const ADeclarations: TGocciaGlobalEvalDeclarations;
+      var AStage: TGocciaGlobalEvalStage): TGocciaValue; override;
     procedure ClearTransientCaches; override;
 
     function CompileModule(
@@ -75,8 +88,10 @@ uses
   Goccia.Compiler.ConstantValue,
   Goccia.Coverage,
   Goccia.GarbageCollector,
+  Goccia.Keywords.Reserved,
   Goccia.Profiler,
   Goccia.Realm,
+  Goccia.Scope.BindingMap,
   Goccia.Scope.Redeclaration,
   Goccia.Values.PromiseValue;
 
@@ -106,6 +121,7 @@ begin
   FVM.LoadModuleSource := AModuleLoader.LoadModuleSourceValue;
   FVM.LoadDeferredModule := AModuleLoader.LoadDeferredModuleNamespaceValue;
   FVM.ResolveModuleURL := AModuleLoader.ResolveModuleURL;
+  FVM.CompileDirectEval := CompileDirectEvalCode;
   AModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
 end;
 
@@ -144,7 +160,6 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     BytecodeModule := Compiler.Compile(AProgram);
   finally
@@ -170,7 +185,7 @@ begin
   try
     if Assigned(AContext.Realm) then
       FVM.Realm := AContext.Realm;
-    Result := FVM.ExecuteModule(BytecodeModule);
+    Result := FVM.ExecuteImportedModule(BytecodeModule);
     if AProgram.HasTopLevelAwait and Assigned(AContext.CurrentModule) and
        (Result is TGocciaPromiseValue) then
       AContext.CurrentModule.EvaluationPromise := Result;
@@ -215,13 +230,95 @@ begin
   Result := RunCompiledModule(Module);
 end;
 
-// Ordinary realms have no `eval`. A host that offers direct eval (the Test262
-// host, and a ShadowRealm created from such a realm) says so on the realm when
-// it installs the function; the global `eval` property itself is not asked,
-// because a script can delete or move it while eval-created code lives on.
-function TGocciaBytecodeExecutor.RealmExposesDirectEval: Boolean;
+{ ES2026 §19.2.1.1 PerformEval steps 17-33 with the realm's global
+  environment as the variable environment, compiled (ADR 0134 Phase 2). The
+  eval code compiles to a module of its own, kept for the engine's life like
+  the Function constructor's code (ADR 0134, decision 1). §19.2.1.3
+  EvalDeclarationInstantiation checks the global object first, then the
+  template binds the eval's functions and vars and runs the body on this
+  realm's VM, against the realm's global environment even when the eval was
+  called from a module body. Nothing here reaches the tree-walk evaluator. }
+function TGocciaBytecodeExecutor.EvaluateGlobalEval(
+  const AProgram: TGocciaProgram; const ASourcePath: string;
+  const AStrictEval: Boolean;
+  const ADeclarations: TGocciaGlobalEvalDeclarations;
+  var AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Options: TGocciaCompilerOptimizationOptions;
+  SavedGlobalScope: TGocciaScope;
+  SavedGlobalBackedTopLevel: Boolean;
 begin
-  Result := Assigned(FRealm) and FRealm.HostsDirectEval;
+  Compiler := TGocciaCompiler.Create(ASourcePath);
+  try
+    Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      (TGocciaCoverageTracker.Instance <> nil) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Compiler.OptimizationOptions := Options;
+    Module := Compiler.CompileGlobalEval(AProgram, AStrictEval,
+      ADeclarations.DeclaredVarNames);
+  finally
+    Compiler.Free;
+  end;
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
+
+  AStage := gesRun;
+  if not AStrictEval then
+    CheckGlobalEvalDeclarations(FGlobalScope, ADeclarations.VarNames,
+      ADeclarations.FunctionNames, ADeclarations.DeclaredVarNames);
+
+  // The eval can run inside a module body, which has the VM's global scope
+  // and script-top-level flag set for itself (EvaluateModuleBody); RunModule
+  // sets both for the eval, so the module body gets its own back.
+  SavedGlobalScope := FVM.GlobalScope;
+  SavedGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  FVM.GlobalScope := FGlobalScope;
+  try
+    Result := RunModule(Module, FGlobalScope.ThisValue);
+  finally
+    FVM.GlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.GlobalScope := SavedGlobalScope;
+  end;
+end;
+
+{ The VM's compiler for direct eval at a strict call site (ADR 0134 Phase
+  3): AProgram compiled as a function nested at the call that eval site
+  record ASite describes, with this engine's language profile. The compiled
+  module is kept for the engine's life like the Function constructor's code
+  (ADR 0134, decision 1). }
+function TGocciaBytecodeExecutor.CompileDirectEvalCode(
+  const AProgram: TGocciaProgram; const ASourcePath: string;
+  const ASite: TGocciaDirectEvalEnvironment; const AStrictEval: Boolean;
+  const ADeclaredVarNames: TUnicodeStringList): TGocciaFunctionTemplate;
+var
+  Compiler: TGocciaCompiler;
+  Module: TGocciaBytecodeModule;
+  Options: TGocciaCompilerOptimizationOptions;
+begin
+  Compiler := TGocciaCompiler.Create(ASourcePath);
+  try
+    Compiler.StrictTypes := FStrictTypes;
+    Compiler.NonStrictMode := FNonStrictMode;
+    Compiler.ArgumentsObjectEnabled := FArgumentsObjectEnabled;
+    Options := Compiler.OptimizationOptions;
+    Options.PreserveCoverageShape :=
+      (TGocciaCoverageTracker.Instance <> nil) and
+      TGocciaCoverageTracker.Instance.Enabled;
+    Compiler.OptimizationOptions := Options;
+    Module := Compiler.CompileDirectEval(AProgram, ASite, AStrictEval,
+      ADeclaredVarNames);
+  finally
+    Compiler.Free;
+  end;
+  if Assigned(FRetainModule) then
+    FRetainModule(Module);
+  Result := Module.TopLevel;
 end;
 
 function TGocciaBytecodeExecutor.CompileModule(
@@ -243,7 +340,6 @@ begin
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
-    Options.DirectEvalAvailable := RealmExposesDirectEval;
     Compiler.OptimizationOptions := Options;
     Result := Compiler.Compile(AProgram);
   finally
@@ -281,6 +377,83 @@ begin
   FVM.LoadModule := LoadLinkedModule;
 end;
 
+{ ES2026 §16.2.1.7.3.1 InitializeEnvironment for a module-source entry, the
+  Module Record the engine registered as the VM's current runtime module.
+  Run after its requests are linked and before any of them evaluates, so a
+  module in a cycle with the entry resolves every name the entry exports.
+  A local export is a binding in its temporal dead zone, kept in a module
+  environment of its own (the program's top-level bindings live in VM
+  registers); the program's OP_EXPORTs initialize and update it. The other
+  kinds bind to the linked module of their request. }
+procedure TGocciaBytecodeExecutor.InitializeEntryExports(
+  const AModule: TGocciaBytecodeModule; const AEntry: TGocciaModule);
+var
+  Changed: Boolean;
+  ExportEnvironment: TGocciaScope;
+  Export_: TGocciaModuleExport;
+  I: Integer;
+  SourceModule: TGocciaModule;
+  StarName: string;
+begin
+  ExportEnvironment := nil;
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    if Export_.Kind <> mekLocal then
+      Continue;
+    if not Assigned(ExportEnvironment) then
+      ExportEnvironment := TGocciaScope.Create(nil, skModule,
+        'ModuleExports:' + AEntry.Path);
+    ExportEnvironment.PredeclareLexicalBinding(Export_.Name, dtLet);
+    AEntry.AddExportBinding(Export_.Name, Export_.Name, ExportEnvironment);
+  end;
+  if Assigned(ExportEnvironment) then
+    AEntry.SetEnvironment(ExportEnvironment);
+
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    case Export_.Kind of
+      mekSource:
+        AEntry.AddExportValue(Export_.Name,
+          FModuleLoader.LoadModuleSourceValue(Export_.ModuleRequest,
+            AModule.SourcePath));
+      mekDeferredNamespace:
+        AEntry.AddExportValue(Export_.Name,
+          FModuleLoader.LoadDeferredModuleNamespaceValue(
+            Export_.ModuleRequest, AModule.SourcePath));
+      mekIndirect, mekNamespace:
+        if Assigned(FLinkedModules) and
+           FLinkedModules.TryGetValue(Export_.ModuleRequest, SourceModule) then
+        begin
+          if Export_.Kind = mekNamespace then
+            AEntry.AddExportValue(Export_.Name,
+              SourceModule.GetNamespaceObject)
+          else
+            AEntry.AddExportForwarding(Export_.Name, SourceModule,
+              Export_.ImportName);
+        end;
+    end;
+  end;
+
+  { Star exports last: a name the entry exports explicitly is not replaced
+    by one a star export would forward (§16.2.1.7.2.2 ResolveExport). }
+  for I := 0 to AModule.ExportCount - 1 do
+  begin
+    Export_ := AModule.GetExport(I);
+    if (Export_.Kind <> mekStar) or not Assigned(FLinkedModules) or
+       not FLinkedModules.TryGetValue(Export_.ModuleRequest, SourceModule) then
+      Continue;
+    repeat
+      Changed := False;
+      for StarName in SourceModule.GetExportNames do
+        if StarName <> KEYWORD_DEFAULT then
+          Changed := AEntry.AddStarExportForwarding(StarName, SourceModule,
+            StarName) or Changed;
+    until not Changed;
+  end;
+end;
+
 function TGocciaBytecodeExecutor.LoadLinkedModule(const AModulePath,
   AImportingFilePath: string): TGocciaModule;
 begin
@@ -293,6 +466,13 @@ end;
 
 function TGocciaBytecodeExecutor.RunCompiledModule(
   const AModule: TGocciaCompiledModule): TGocciaValue;
+begin
+  Result := RunModule(AModule, nil);
+end;
+
+function TGocciaBytecodeExecutor.RunModule(
+  const AModule: TGocciaCompiledModule;
+  const AThisValue: TGocciaValue): TGocciaValue;
 var
   GC: TGarbageCollector;
   SavedLinkedModules: TOrderedStringMap<TGocciaModule>;
@@ -320,7 +500,11 @@ begin
   FLinkedModules := nil;
   try
     LinkModuleRequests(TGocciaBytecodeModule(AModule));
-    Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule));
+    if Assigned(FVM.CurrentRuntimeModule) and
+       (TGocciaBytecodeModule(AModule).ExportCount > 0) then
+      InitializeEntryExports(TGocciaBytecodeModule(AModule),
+        FVM.CurrentRuntimeModule);
+    Result := FVM.ExecuteModule(TGocciaBytecodeModule(AModule), AThisValue);
   finally
     FVM.LoadModule := SavedLoadModule;
     FLinkedModules.Free;

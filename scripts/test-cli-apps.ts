@@ -1484,6 +1484,257 @@ await section("Test262 Runner: bytecode eval is direct eval...", async () => {
     throw new Error(`Bare bytecode direct eval got: ${proc.stdout.toString()}`);
 });
 
+// ADR 0134 Phase 2: eval code whose variable environment is the global one
+// (indirect eval, ShadowRealm.prototype.evaluate) is compiled in bytecode mode.
+// Each expected value below comes from the ECMAScript 2026 clause cited above
+// its section (tc39-mcp 0.6.3, es2026 snapshot 0248456c) or, for ShadowRealm,
+// the stage 2.7 proposal. Node.js 24.21 (classic script via
+// vm.runInThisContext, ShadowRealm under --experimental-shadow-realm) was run
+// as a cross-check only and agrees with every value.
+const runEvalHostProbe = (mode: string, lines: string[]) =>
+  Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+    stdin: new TextEncoder().encode([...lines, ""].join("\n")),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+// ES2026 §19.2.1.1 PerformEval steps 17-18: an indirect eval's lexical
+// declarations live in a new declarative environment of their own, and a
+// strict eval's vars do too.
+await section("Test262 Runner: an indirect eval's let, const and class do not outlive the call...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'print(geval("let kept = 1; kept"));',
+      'print(geval("typeof kept"));',
+      'print(geval("let kept = 2; kept"));',
+      'print(geval("const c = 3; class K {} typeof K + c"));',
+      "print(typeof K);",
+      `print(geval("'use strict'; var sv = 4; sv"));`,
+      "print(typeof sv);",
+    ]);
+    const expected = ["1", "undefined", "2", "function3", "undefined", "4", "undefined"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} indirect eval lexical probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} indirect eval lexical declarations leaked: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation (sec-evaldeclarationinstantiation)
+// steps 17-18 create an eval's global vars and functions with
+// CreateGlobalVarBinding / CreateGlobalFunctionBinding(…, true): writable,
+// enumerable and configurable (§9.1.1.4.16, §9.1.1.4.17), so delete (§13.5.1.2)
+// removes them and returns true. A script's own var is created with D = false
+// (§16.1.7 GlobalDeclarationInstantiation), so delete returns false.
+await section("Test262 Runner: delete removes a global var an indirect eval created...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'geval("var made = 5; function madeFn() {}");',
+      "print(made);",
+      'var d = Object.getOwnPropertyDescriptor(globalThis, "made");',
+      'print(d.configurable + " " + d.enumerable + " " + d.writable);',
+      "print(delete made);",
+      "print(typeof made);",
+      'print(Object.prototype.hasOwnProperty.call(globalThis, "made"));',
+      "print(delete madeFn);",
+      "print(typeof madeFn);",
+      'print(geval("var inEval = 7; delete inEval"));',
+      "print(typeof inEval);",
+      "var scriptVar = 6;",
+      "print(delete scriptVar);",
+      "print(typeof scriptVar);",
+    ]);
+    const expected = [
+      "5", "true true true", "true", "undefined", "false", "true", "undefined",
+      "true", "undefined", "false", "number",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval var delete probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} eval-created global var was not deletable: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §14.15.3 TryStatement Evaluation (sec-try-statement-runtime-semantics-evaluation):
+// a normal finally block leaves the try statement's value C; an abrupt one
+// gives UpdateEmpty(F, undefined), so an empty break makes it undefined, and the
+// labelled or loop statement around it returns that (§14.13.4, §14.7.2.2).
+// After the eval's global is deleted, a nested direct eval finds no binding:
+// typeof gives "undefined" (§13.5.3.1 step 2.a) and a non-strict assignment
+// creates a global property again (§6.2.5.6 PutValue step 2.c).
+await section("Test262 Runner: an indirect eval's completion value and deleted globals reach a nested direct eval...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var geval = eval;",
+      'print(geval("1; try { 2 } finally { 3 }"));',
+      'print(geval("99; do { -99; try { 39 } finally { break; } } while (false)"));',
+      'print(geval("l: try { 5 } finally { break l; }"));',
+      'print(geval("m: try { 6 } finally { 7; break m; }"));',
+      'print(geval("n: { 8; try { 9; break n; } finally { 10 } }"));',
+      `print(geval("var d5 = 1; delete globalThis.d5; eval('typeof d5')"));`,
+      `print(geval("var d7 = 1; delete globalThis.d7; eval('d7 = 4'); globalThis.d7"));`,
+      `print(geval("var d10 = 1; delete globalThis.d10; (function () { return eval('typeof d10'); })()"));`,
+      `print(geval("function fdel() {} delete globalThis.fdel; eval('typeof fdel')"));`,
+    ]);
+    const expected = [
+      "2", "undefined", "undefined", "7", "9", "undefined", "4", "undefined", "undefined",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} eval completion probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} eval completion or deleted-global lookup was wrong: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §19.2.1.1 PerformEval (sec-performeval) step 13: an indirect eval is
+// strict only when ScriptIsStrict, by its own directive. A test262 module test
+// runs in an engine without the non-strict compatibility profile, and a
+// directive-free indirect eval there is still non-strict: an assignment to an
+// undeclared name creates a global (§6.2.5.6 PutValue step 2.c), and with the
+// directive it throws ReferenceError (step 2.a). Node.js 24.21 (the same body
+// as an ES module) and the interpreter on main agree.
+await section("Test262 Runner: a directive-free indirect eval is non-strict in a strict-only engine...", async () => {
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), "");
+    writeFileSync(join(tests, "indirect-eval-sloppy.js"), [
+      "/*---",
+      "flags: [module]",
+      "---*/",
+      '(0, eval)("implicitFromEval = 1");',
+      "if (globalThis.implicitFromEval !== 1)",
+      '  throw new Error("implicit global: " + typeof globalThis.implicitFromEval);',
+      'if ((0, eval)("var fromEval = 2; fromEval") !== 2 || globalThis.fromEval !== 2)',
+      '  throw new Error("eval var did not reach the global object");',
+      "var strictThrew = false;",
+      `try { (0, eval)("'use strict'; strictImplicit = 3"); } catch (e) { strictThrew = e instanceof ReferenceError; }`,
+      'if (!strictThrew) throw new Error("strict eval created a global");',
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      const out = join(tmp, `sloppy-${mode}.json`);
+      const proc = Bun.spawnSync(
+        [
+          TEST262RUNNER,
+          "--suite-dir", suite,
+          "--categories", "language",
+          `--mode=${mode}`,
+          "--jobs=1",
+          "--output", out,
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+      );
+      const report = JSON.parse(readFileSync(out, "utf8"));
+      if (proc.exitCode !== 0 || report.summary.passed !== 1)
+        throw new Error(`${mode}: a directive-free indirect eval should be non-strict, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// ES2026 §19.2.1.1 PerformEval (sec-performeval) step 11.h: a direct eval in a
+// class field initializer (inClassFieldInitializer, step 10) throws a
+// SyntaxError when ContainsArguments of its body is true. ContainsArguments
+// (§15.7.9, sec-static-semantics-containsarguments) visits every child node, so
+// an `arguments` IdentifierReference counts in a destructuring target's default
+// or computed key and as an assignment target. Node.js 24.21 agrees.
+await section("Test262 Runner: eval in a class field initializer rejects arguments in a destructuring target...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var a, x, o = {};",
+      "function kind(src) {",
+      "  try { class C { f = eval(src); } new C(); return 'none'; }",
+      "  catch (e) { return e.constructor === SyntaxError ? 'SyntaxError' : e.constructor.name; }",
+      "}",
+      'print(kind("arguments"));',
+      'print(kind("[a = arguments] = []"));',
+      'print(kind("({[arguments]: x} = o)"));',
+      'print(kind("arguments = 1"));',
+      'print(kind("[a = 1] = []"));',
+    ]);
+    const expected = ["SyntaxError", "SyntaxError", "SyntaxError", "SyntaxError", "none"].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} field-initializer arguments probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} missed an arguments reference in eval code: ${proc.stdout.toString()}`);
+  }
+});
+
+// A direct eval at a module's top level resolves `this` from the module:
+// PerformEval step 16 makes its lexical environment a child of the module's,
+// ResolveThisBinding (§9.4.4) and GetThisEnvironment (§9.4.3) reach the Module
+// Environment Record, and its GetThisBinding (§9.1.1.5.4,
+// sec-module-environment-records-getthisbinding) returns undefined. An earlier
+// indirect eval in the same module body (whose own `this` is the global one,
+// step 17, §9.1.1.4.9) must not change that. Node.js 24.21 agrees.
+await section("Test262 Runner: an indirect eval in a module body leaves the module's this undefined...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "mod.js"), [
+      '(0, eval)("1");',
+      'export const thisType = typeof eval("this");',
+      "",
+    ].join("\n"));
+    for (const mode of ["interpreted", "bytecode"] as const) {
+      // The probe imports from the temporary directory, so it runs there.
+      const proc = Bun.spawnSync([resolve(TEST262RUNNER), "--eval-host", `--mode=${mode}`], {
+        cwd: tmp,
+        stdin: new TextEncoder().encode('import { thisType } from "./mod.js";\nprint(thisType);\n'),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      if (proc.exitCode !== 0)
+        throw new Error(`Test262 Runner ${mode} module this probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      if (normalizeLineEndings(proc.stdout.toString()).trim() !== "undefined")
+        throw new Error(`Test262 Runner ${mode} module this after an indirect eval was: ${proc.stdout.toString()}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// TC39 ShadowRealm (stage 2.7) §3.1.3 PerformShadowRealmEval: a parse or early
+// error is a caller-realm SyntaxError (step 2); an abrupt completion of the
+// declaration instantiation (step 10) or the body (step 11), a SyntaxError a
+// nested eval throws included, is a caller-realm TypeError (step 15). The eval's
+// var environment is the realm's global environment (steps 5-8), so a var
+// persists across evaluate calls.
+await section("Test262 Runner: ShadowRealm evaluate maps early errors to SyntaxError and abrupt bodies to TypeError...", async () => {
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = runEvalHostProbe(mode, [
+      "var r = new ShadowRealm();",
+      "function kind(f) {",
+      '  try { f(); return "none"; }',
+      '  catch (e) { return e.constructor === SyntaxError ? "SyntaxError" : e.constructor === TypeError ? "TypeError" : "other"; }',
+      "}",
+      'print(kind(() => r.evaluate("let a; let a;")));',
+      'print(kind(() => r.evaluate("let b; var b;")));',
+      `print(kind(() => r.evaluate("throw new RangeError('x')")));`,
+      'print(kind(() => r.evaluate("null.x")));',
+      `print(kind(() => r.evaluate("eval('let c; let c;')")));`,
+      'print(r.evaluate("var kept = 1; kept"));',
+      'print(r.evaluate("typeof kept"));',
+    ]);
+    const expected = [
+      "SyntaxError", "SyntaxError", "TypeError", "TypeError", "TypeError", "1", "number",
+    ].join("\n");
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate error probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} ShadowRealm evaluate mapped an error wrongly: ${proc.stdout.toString()}`);
+  }
+});
+
 console.log("Test262 Runner: rejected eval source preserves primitive singletons...");
 for (const { label, args } of [
   {
@@ -1770,6 +2021,545 @@ await section("Test262 Runner: eval var declarations conflict only with the call
   }
 });
 
+// The bytecode direct-eval bridge: each probe runs in both modes against the
+// result Node.js gives, ES2026 §19.2.1.1 PerformEval and §19.2.1.3
+// EvalDeclarationInstantiation (#872, ADR 0134 Phase 0).
+function expectEvalHostProbe(label: string, lines: string[], expected: string[],
+  modes: readonly ("interpreted" | "bytecode")[] = ["interpreted", "bytecode"]) {
+  for (const mode of modes) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`], {
+      stdin: new TextEncoder().encode([...lines, ""].join("\n")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} ${label} probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const actual = normalizeLineEndings(proc.stdout.toString()).trim();
+    if (actual !== expected.join("\n"))
+      throw new Error(`Test262 Runner ${mode} ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
+  }
+}
+
+await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
+  expectEvalHostProbe("second eval", [
+    "var s = 'outer';",
+    "function global() { eval(\"var s = 'inner'\"); return eval('s'); }",
+    "function outer() { var t = 'outer'; function inner() { eval(\"var t = 'inner'\"); return eval('t'); } return inner(); }",
+    "function arrow() { var u = 'outer'; return (() => { eval(\"var u = 'inner'\"); return eval('u'); })(); }",
+    "function nested() { eval(\"var n = 'outer eval'\"); function inner() { let n = 'let'; return eval('n'); } return inner(); }",
+    "print([global(), outer(), arrow(), nested(), s].join());",
+  ], ["inner,inner,inner,let,outer"]);
+});
+
+await section("Test262 Runner: an eval in a class body that runs inline in sloppy code is strict...", async () => {
+  expectEvalHostProbe("class-body eval strictness", [
+    "const isStrict = '(function () { return this === undefined; })()';",
+    "class StaticField { static f = eval(isStrict); }",
+    "class ComputedKey { static [String(eval(isStrict))] = 1; }",
+    "class Heritage extends (eval(isStrict) ? Object : Array) {}",
+    "class InstanceField { f = eval(isStrict); }",
+    "function sloppy() { return eval(isStrict); }",
+    "print([StaticField.f, Object.keys(ComputedKey)[0], Object.getPrototypeOf(Heritage) === Object, new InstanceField().f, sloppy()].join());",
+  ], ["true,true,true,true,false"]);
+});
+
+await section("Test262 Runner: an eval var conflicts with a let, const or class still in its temporal dead zone...", async () => {
+  expectEvalHostProbe("TDZ conflict", [
+    "function attempt(source) { try { return eval(source); } catch (error) { return error.name; } }",
+    "function blockLet() { try { { eval('var x'); let x; } return 'none'; } catch (error) { return error.name; } }",
+    "function blockConst() { try { { eval('var x'); const x = 1; } return 'none'; } catch (error) { return error.name; } }",
+    "function blockClass() { try { { eval('var x'); class x {} } return 'none'; } catch (error) { return error.name; } }",
+    "function bodyLet() { try { eval('var x'); let x; return 'none'; } catch (error) { return error.name; } }",
+    "let top;",
+    "try { { eval('var y'); let y; } top = 'none'; } catch (error) { top = error.name; }",
+    "function tdzRead() { try { eval('later'); } catch (error) { return error.name; } let later = 1; }",
+    "print([blockLet(), blockConst(), blockClass(), bodyLet(), top, tdzRead()].join());",
+  ], ["SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,ReferenceError"]);
+});
+
+// #1368: the function eval creates captures the caller's bindings, not slot
+// numbers of whichever frame is running when it is called.
+await section("Test262 Runner: a function eval creates keeps its caller's bindings after the call returns...", async () => {
+  expectEvalHostProbe("outlived eval closure", [
+    "function reader() { var v = 1; return eval('(function () { return v; })'); }",
+    "var read = reader();",
+    "function other() { var a = function () { return 'other'; }; var b = 2; return read(); }",
+    "function writer() { var v = 1; var set = eval('(function (n) { v = n; return v; })'); return [set, function () { return v; }]; }",
+    "var pair = writer();",
+    "function victim(x, y) { pair[0](7); return x + ',' + y; }",
+    "function live() { let x = 1; const set = eval('(function (n) { x = n; return x; })'); function helper(f) { let p = 0, q = 0; return f(5); } return helper(set) + ':' + x; }",
+    "function shared() { var n = 0; return [eval('(function () { return ++n; })'), eval('(function () { return n; })')]; }",
+    "var counter = shared(); counter[0](); counter[0]();",
+    "function noise() { var n = 100, m = 200; return counter[1](); }",
+    "function loop() { var fs = []; for (let i = 0; i < 3; i++) fs.push(eval('(function () { return i; })')); return fs.map(function (f) { return f(); }).join('/'); }",
+    "function later() { var y = 1; var g = eval('(function () { return y; })'); y = 2; return g; }",
+    "function* gen() { let k = 1; const r = eval('(function () { return k; })'); yield r(); k = 2; yield r(); }",
+    "var it = gen();",
+    "function letAfter() { var g = eval('(function () { return t; })'); let t = 'set'; return g(); }",
+    "function incLoop() { var c = 0; for (var i = 0; i < 3; i++) { c = c + 1; eval('c += 10'); } return c; }",
+    "print([other(), victim(7, 8), pair[1](), live(), noise(), loop(), later()(), it.next().value, it.next().value, letAfter(), incLoop()].join());",
+  ], ["1,7,8,7,5:5,2,0/1/2,2,1,2,set,33"]);
+});
+
+await section("Test262 Runner: an eval var named like a parameter is the parameter...", async () => {
+  expectEvalHostProbe("parameter var", [
+    "function simple(x) { eval('var x = 2'); return x; }",
+    "const arrow = (x) => { eval('var x = 3'); return x; };",
+    "function rest(...x) { eval('var x = 4'); return x; }",
+    "function inParams(x, y = eval('var x = 5')) { return x; }",
+    "let defaults;",
+    "try { inParams(1); defaults = 'none'; } catch (error) { defaults = error.name; }",
+    "print([simple(1), arrow(1), rest(1), defaults].join());",
+  ], ["2,3,4,SyntaxError"]);
+});
+
+// ES2026 §19.2.1.3 step 3.d, normative-optional web-compat branch: as for
+// `catch (e) { var e; }` outside eval (B.3.4). The step exempts the
+// environment of any Catch clause, a destructured parameter's included; V8
+// exempts only a single-name parameter.
+await section("Test262 Runner: an eval var may be named like a catch parameter...", async () => {
+  expectEvalHostProbe("catch parameter var", [
+    "function simple() { try { throw 1; } catch (x) { eval('var x = 2'); return x; } }",
+    "function after() { try { throw 1; } catch (x) { eval('var x = 2'); } return typeof x; }",
+    "function pattern() { try { throw { x: 1 }; } catch ({ x }) { eval('var x = 3'); return x; } }",
+    "function blockLet() { try { throw 1; } catch (e) { try { { let x; eval('var x'); } return 'none'; } catch (error) { return error.name; } } }",
+    // The initializer assigns the catch parameter; the var is created in the
+    // function, never assigned, and deletable like any eval var.
+    "function bothSides() { var inside; try { throw 1; } catch (X) { eval('var X = 2'); inside = X; } return [inside, typeof X, X === undefined, delete X].join('/'); }",
+    "print([simple(), after(), pattern(), blockLet(), bothSides()].join());",
+  ], ["2,undefined,3,SyntaxError,2/undefined/true/true"]);
+});
+
+await section("Test262 Runner: an eval resolves a with object between the bindings around it...", async () => {
+  expectEvalHostProbe("with order", [
+    "function withOuter() { var v = 'var'; with ({ v: 'with' }) { return eval('v'); } }",
+    "function letInside() { with ({ b: 'with' }) { let b = 'let'; return eval('b'); } }",
+    "function missing() { var m = 'var'; with ({}) { return eval('m'); } }",
+    "print([withOuter(), letInside(), missing()].join());",
+  ], ["with,let,var"]);
+});
+
+// ES2026 §13.5.1.2 delete UnaryExpression step 5.c and §9.1.1.1.7
+// DeleteBinding: a binding of the caller or an enclosing function is created
+// undeletable, so `delete` in eval code returns false and leaves it, and a
+// same-named global, alone. Only a var the eval declared is deletable.
+await section("Test262 Runner: delete in an eval leaves its caller's bindings...", async () => {
+  expectEvalHostProbe("delete caller binding", [
+    "globalThis.g = 5;",
+    "function local() { var v = 1; return [eval('delete v'), v]; }",
+    "function param(p) { return [eval('delete p'), p]; }",
+    "function fn() { function h() {} return [eval('delete h'), typeof h]; }",
+    "function args() { return [eval('delete arguments'), typeof arguments]; }",
+    "function shadowsGlobal() { var g = 1; return [eval('delete g'), g, globalThis.g]; }",
+    "function catchParam() { try { throw 1; } catch (e) { return [eval('delete e'), e]; } }",
+    "function lexical() { let l = 1; return [eval('delete l'), l]; }",
+    "function upvalue() { var u = 1; return function () { return [eval('delete u'), u]; }; }",
+    "function upvalueShadowsGlobal() { var g = 1; return function () { return [eval('delete g'), g, globalThis.g]; }; }",
+    "function evalVar() { eval('var ev = 1'); return [eval('delete ev'), typeof ev]; }",
+    "print([local(), param(1), fn(), args(), shadowsGlobal(), catchParam(), lexical(), upvalue()(), upvalueShadowsGlobal()(), evalVar()].join(' '));",
+  ], ["false,1 false,1 false,function false,object false,1,5 false,1 false,1 false,1 false,1,5 true,undefined"]);
+});
+
+// ES2026 §19.2.1.3 EvalDeclarationInstantiation and B.3.2.3: a var or a
+// block-level function an eval declares under the name of a caller var is
+// that var, so it stays undeletable, takes the function, and functions the
+// eval creates keep reading and writing it after the call.
+await section("Test262 Runner: an eval var or block function named like a caller var is that var...", async () => {
+  expectEvalHostProbe("eval var over caller var", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function plainVar() { var x = 1; var d = eval('var x; delete x'); return [d, typeof x, eval('x')].join('/'); }",
+    "function blockFunction() { var x = 1; var d = eval(\"{ function x() { return 'fn'; } } delete x\"); return [d, typeof x, eval('typeof x')].join('/'); }",
+    "function escaped() { var x = 1; var fns = eval('{ function x() {} } [function () { return typeof x; }, function (v) { x = v; }]'); var before = fns[0](); x = 'after'; return [before, fns[0](), (fns[1](7), typeof x)].join('/'); }",
+    "function redeclared() { eval('var y = 1'); var d = eval('delete y'); eval('var y = 2'); return [d, y, eval('delete y'), typeof y].join('/'); }",
+    "print([out(plainVar), out(blockFunction), out(escaped), out(redeclared)].join(' '));",
+  ], ["false/number/1 false/function/function function/string/number true/2/true/undefined"]);
+});
+
+// ES2026 §9.1.1.4.1 HasBinding: a global var redeclaring a configurable
+// property keeps it configurable (§9.1.1.4.17 CreateGlobalVarBinding), so it
+// can be deleted after the call site was compiled. The name is then
+// unresolvable: a read throws, a sloppy assignment creates the property again
+// and a strict one throws.
+await section("Test262 Runner: an eval treats a deleted global its call site recorded as unresolvable...", async () => {
+  expectEvalHostProbe("deleted global", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "var JSON = globalThis.JSON;",
+    "function k(src) { return eval(src); }",
+    "var r = [delete globalThis.JSON];",
+    "r.push(out(() => k('JSON')), out(() => k('JSON = 1; globalThis.JSON')));",
+    "delete globalThis.JSON;",
+    "r.push(out(() => k('\"use strict\"; JSON = 2')), out(() => k('JSON += 1')), out(() => k('delete JSON')));",
+    "r.push(out(() => eval('JSON = 3; globalThis.JSON')), out(() => k('JSON')));",
+    "print(r.join());",
+  ], ["true,ReferenceError,1,ReferenceError,ReferenceError,true,3,3"]);
+});
+
+// #1569: ES2026 §13.10.1 with §7.3.26 PrivateElementFind. A direct eval in a
+// class method resolves `#x` through the method's PrivateEnvironment
+// (§19.2.1.1 PerformEval), so the brand check agrees with one outside eval.
+await section("Test262 Runner: a private brand check in an eval finds the class's instance elements...", async () => {
+  expectEvalHostProbe("private in", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class C { #x = 1; #m() {} get #a() { return 1; } set #w(v) {} static ev(src, o) { return eval(src); } }",
+    "class D extends C {}",
+    "const targets = [new C(), new D(), {}, Object.freeze({})];",
+    "print(['#x', '#m', '#a', '#w'].map((n) => targets.map((o) => out(() => C.ev(n + ' in o', o))).join('/')).join(' '));",
+    "print([out(() => C.ev('#x in o', 1)), out(() => C.ev('o.#x', new C()))].join());",
+  ], ["true/true/false/false true/true/false/false true/true/false/false true/true/false/false", "TypeError,1"]);
+});
+
+// OP_DIRECT_EVAL runs `eval(...)` when the callee is %eval% and otherwise
+// leaves the call to the OP_CALL after it (#872, ADR 0134 Phase 1). Expected
+// values follow ECMA-262 2026 (tc39-mcp snapshot 0248456c):
+// - Call (sec-function-calls-runtime-semantics-evaluation, §13.3.6.1): a callee
+//   that is not %eval% takes EvaluateCall (sec-evaluatecall, §13.3.6.2). Its
+//   this value is the declarative environment's WithBaseObject(), undefined,
+//   which OrdinaryCallBindThis (sec-ordinarycallbindthis, §10.2.1.2) turns into
+//   the global object for a non-strict callee, so `typeof this` is "object".
+//   The spread arguments are all passed, and a tail call returns the same
+//   value. `eval(...['40 + 2'])` is a direct eval: PerformEval gets the first
+//   element of the evaluated argument list, 42.
+// - Shadowed reads: a non-strict direct eval declares `var k` in the caller's
+//   VariableEnvironment (sec-performeval, §19.2.1.1; sec-evaldeclarationinstantiation,
+//   §19.2.1.3), the function's own environment, which
+//   GetIdentifierReference (sec-getidentifierreference, §9.1.2.1) reaches before
+//   the global `const k` from the function and every closure in it: 20 and 30.
+//   plain() reaches the global binding: 10.
+// - inParameters: during the parameter list the VariableEnvironment is the
+//   function environment outside the parameters' environment, and the body's
+//   environment is inside both (sec-functiondeclarationinstantiation, §10.2.11
+//   steps 20 and 30), so `var p` from the default is visible in the body: 4 + 4.
+// Goccia.Compiler.Test checks which of these reads the compiler may fold.
+await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
+  expectEvalHostProbe("eval call site", [
+    "function notEval() { var eval = function (a, b) { return [typeof this, a, b].join(); }; return eval(1, ...[2]); }",
+    "function spreadNotEval() { var eval = (...args) => args.length; return eval(...[1, 2, 3]); }",
+    "function tail() { var eval = function (n) { return n > 0 ? eval(n - 1) : 'done'; }; return eval(3); }",
+    "print([notEval(), spreadNotEval(), tail(), eval(...['40 + 2'])].join(' '));",
+    "const k = 1;",
+    "function shadows() { eval('var k = 2'); return (() => k * 10)(); }",
+    "function shadowsNested() { eval('var k = 3'); function inner() { return k * 10; } return inner(); }",
+    "function plain() { return (() => k * 10)(); }",
+    "function inParameters(a = eval('var p = 4; p')) { return a + p; }",
+    "print([shadows(), shadowsNested(), plain(), inParameters()].join());",
+  ], ["object,1,2 3 done 42", "20,30,10,8"]);
+  // All parts of a class are strict mode code (sec-strict-mode-code, §11.2.2;
+  // the note of sec-class-definitions, §15.7). The decorators proposal
+  // (Stage 2.7) adds a DecoratorList to ClassElement and leaves only the
+  // DecoratorList at the top level of a class non-strict, so an element
+  // decorator is strict: its eval is a strict direct eval whose vars go to a
+  // new environment of its own (sec-performeval, §19.2.1.1), and `z` is not
+  // declared in decorated().
+  expectEvalHostProbe("eval in an element decorator", [
+    "function decorated() { var d = (v) => v; class C { @((() => { eval('var z = 1'); return d; })()) m() {} } return typeof z; }",
+    "print(decorated());",
+  ], ["undefined"]);
+});
+
+// ADR 0134 Phase 3-strict: a direct eval at a strict call site compiles as a
+// closure of the call site. Expected values follow ECMA-262 2026 (tc39-mcp
+// 0.6.3, es2026 snapshot 0248456c758431e4bb8e5d26333ff1865123c9cd); Node.js
+// 24 was run only as a cross-check and agrees with every value.
+//
+// PerformEval (sec-performeval, §19.2.1.1) gives the eval code
+// NewDeclarativeEnvironment(the caller's LexicalEnvironment) and, with
+// strictCaller true, that environment as its VariableEnvironment (steps 16
+// and 18). A function the eval code creates closes over that environment
+// (OrdinaryFunctionCreate, sec-ordinaryfunctioncreate, §10.2.3), so after the
+// caller returns it still reads and writes the caller's bindings, not those of
+// whichever function is running: 1, 7 (the write reaches `v`), 8 (victim's own
+// `y` is untouched), 7. A per-iteration `let` (CreatePerIterationEnvironment,
+// §14.7.4.4) gives each eval its own `i`: 0/1/2. The eval's own `let n` lives
+// in its declarative environment, which the arrow keeps: 2.
+await section("Test262 Runner: a function a strict-site eval creates keeps its caller's bindings after the call returns...", async () => {
+  expectEvalHostProbe("strict outlived eval closure", [
+    "function reader() { 'use strict'; var v = 1; return eval('(function () { return v; })'); }",
+    "var read = reader();",
+    "function other() { var a = function () { return 'other'; }; var b = 2; return read(); }",
+    "function writer() { 'use strict'; var v = 1; var set = eval('(function (n) { v = n; return v; })'); return [set, function () { return v; }]; }",
+    "var pair = writer();",
+    "function victim(x, y) { pair[0](7); return x + ',' + y; }",
+    "function live() { 'use strict'; let x = 1; const set = eval('(n) => { x = n; return x; }'); function helper(f) { let p = 0, q = 0; return f(5); } return helper(set) + ':' + x; }",
+    "function loop() { 'use strict'; var fs = []; for (let i = 0; i < 3; i++) fs.push(eval('() => i')); return fs.map((f) => f()).join('/'); }",
+    "function own() { 'use strict'; const inc = eval('let n = 0; () => ++n'); inc(); return inc(); }",
+    "print([other(), victim(7, 8), pair[1](), live(), loop(), own()].join());",
+  ], ["1,7,8,7,5:5,0/1/2,2"]);
+});
+
+// A generator or async function keeps its environment across `yield` and
+// `await` (GeneratorYield, sec-generatoryield, §27.5.3.6; Await, await,
+// §27.7.5.3, resume the same execution context). An eval at a strict call site
+// reads and writes the function's `let` through that environment, and an
+// arrow the eval creates sees later writes: 1, 2, 3, 3, and 2 after `await`.
+await section("Test262 Runner: a strict-site eval in a generator and an async function sees the frame across yield and await...", async () => {
+  expectEvalHostProbe("strict eval across yield and await", [
+    "function* gen() { 'use strict'; let k = 1; const r = eval('() => k'); yield eval('k'); k = 2; yield r(); yield eval('k += 1; k'); yield k; }",
+    "async function af() { 'use strict'; let y = 1; await null; y = eval('y + 1'); await null; return eval('() => y')(); }",
+    "print([...gen()].join());",
+    "af().then((v) => print('async ' + v));",
+  ], ["1,2,3,3", "async 2"]);
+});
+
+// #1574: a direct eval in a static method resolves `#y` through the method's
+// PrivateEnvironment (PerformEval step 16), and `#y in C` is true when C
+// holds that Private Name (sec-relational-operators-runtime-semantics-
+// evaluation, §13.10.1, through PrivateElementFind, §7.3.26). A static
+// private field is on the class itself, so the check is true for D, false for
+// a subclass or another object, and agrees with the check written outside
+// eval.
+//
+// #1568: ClassDefinitionEvaluation (sec-runtime-semantics-
+// classdefinitionevaluation, §15.7.14) evaluates the class elements, computed
+// keys included, with the class's PrivateEnvironment, so an eval in a
+// computed key, or in an arrow created there, resolves `#s` to the class's
+// own name: 6 each time. The ClassHeritage is evaluated with the outer
+// PrivateEnvironment (the NOTE in the same clause), so an eval in `extends`
+// cannot name the class's own `#h` (AllPrivateIdentifiersValid,
+// sec-static-semantics-allprivateidentifiersvalid, §15.7.7, via §19.2.1.3
+// steps 4-7): SyntaxError; it can name an outer class's `#o`.
+//
+// The interpreter still differs on both, and #825 drops mode parity as an
+// oracle, so these run in bytecode mode.
+await section("Test262 Runner: a strict-site eval resolves private names as the code at its call does...", async () => {
+  expectEvalHostProbe("private names at strict eval sites", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class D { static #y = 1; static direct() { return #y in this; } static evIn() { return eval('#y in this'); } static evInArg(v) { return eval('#y in v'); } static evRead() { return eval('this.#y'); } }",
+    "class Sub extends D {}",
+    "print([out(() => D.direct()), out(() => D.evIn()), out(() => D.evInArg(D)), out(() => D.evInArg({})), out(() => D.evInArg(Sub)), out(() => D.evRead())].join());",
+    "let f1, f2, f3;",
+    "class G1 { static #s = 6; static [(f1 = () => G1.#s, 'x')] = 1; }",
+    "class G2 { static #s = 6; static [(f2 = eval('() => G2.#s'), 'x')] = 1; }",
+    "class G3 { static #s = 6; static [(f3 = () => eval('G3.#s'), 'x')] = 1; }",
+    "print([out(() => f1()), out(() => f2()), out(() => f3())].join());",
+    "print(out(() => { class H extends (eval('#h in {}'), Object) { #h; } return 'none'; }), out(() => { class H2 { #o; static m() { class I extends (eval('(o) => #o in o'), Object) { #i; } return 'ok'; } } return H2.m(); }));",
+  ], ["true,true,true,false,false,1", "6,6,6", "SyntaxError ok"], ["bytecode"]);
+});
+
+// In a derived constructor `this` is uninitialized until super() returns
+// (BindThisValue, §9.1.1.3.1), and eval code reaches the constructor's this
+// binding through GetThisEnvironment (sec-getthisenvironment, §9.4.3), so
+// reading it before super() throws ReferenceError (GetThisBinding,
+// sec-function-environment-records-getthisbinding, §9.1.1.3.3 step 2) and
+// after super() is the new object. An arrow in a method nested in the
+// constructor reads the method's own this binding, which super() does not
+// touch (GetThisEnvironment skips only arrow functions' environments). The
+// interpreter returns the object early, so this runs in bytecode mode.
+await section("Test262 Runner: a strict-site eval in a derived constructor reads this as the constructor does...", async () => {
+  expectEvalHostProbe("derived constructor this", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "class P {}",
+    "class Q extends P { constructor() { const r = out(() => eval('this')); super(); this.r = r + ':' + (eval('this') === this); } }",
+    "print(new Q().r);",
+    "class M extends P { constructor() { const o = { m() { return () => eval('this'); } }; const r = o.m()() === o; super(); this.r = r; } }",
+    "print(new M().r);",
+  ], ["ReferenceError:true", "true"], ["bytecode"]);
+});
+
+// A strict call site in a function that contains a sloppy direct eval (a
+// class body, or a strict function nested in it) reads the vars that sloppy
+// eval declared in the function's VariableEnvironment (§19.2.1.3 step 16),
+// which shadow a binding of an enclosing function (GetIdentifierReference,
+// sec-getidentifierreference, §9.1.2.1): 5, 2, 3.
+await section("Test262 Runner: a strict-site eval sees the vars a sloppy eval of an enclosing function declared...", async () => {
+  expectEvalHostProbe("strict site under sloppy eval", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function F1() { eval('var dv = 5'); class K { static [eval('dv')] = 1; } return Object.keys(K)[0]; }",
+    "function F2() { var x = 1; return (function () { eval('var x = 2'); class K { static [eval('x')] = 1; } return Object.keys(K)[0]; })(); }",
+    "function F3() { eval('var y = 3'); return (function () { 'use strict'; return eval('y'); })(); }",
+    "print([out(F1), out(F2), out(F3)].join());",
+  ], ["5,2,3"]);
+});
+
+// GetIdentifierReference (sec-getidentifierreference, §9.1.2.1) walks the
+// environments from the innermost outwards, so a closure inside a function
+// that is itself inside a `with` finds the function's own binding before
+// the with object's property of the same name, and a strict-site eval in
+// such a function does too: local four times. An eval in a computed class
+// key inside a `with` (class code is strict) finds the with object's
+// property before the function's var, a `let` inside the `with` block
+// before the property, and the var when the object lacks the name: with,
+// let, var.
+await section("Test262 Runner: a closure in a function inside with reads the function's own binding first...", async () => {
+  expectEvalHostProbe("function inside with", [
+    "function arrow() { with ({ u: 'with' }) { return (function () { var u = 'local'; return (() => u)(); })(); } }",
+    "function inner() { with ({ u: 'with' }) { return (function () { let u = 'local'; return function () { return u; }(); })(); } }",
+    "function strictEval() { with ({ u: 'with' }) { return (function () { 'use strict'; var u = 'local'; return eval('u'); })(); } }",
+    "function strictEvalArrow() { with ({ u: 'with' }) { return (function () { 'use strict'; let u = 'local'; return eval('() => u')(); })(); } }",
+    "print([arrow(), inner(), strictEval(), strictEvalArrow()].join());",
+    "function key(f) { return Object.keys(f())[0]; }",
+    "function withKey() { var v = 'var'; with ({ v: 'with' }) { return key(() => class { static [eval('v')] = 1; }); } }",
+    "function letKey() { with ({ b: 'with' }) { let b = 'let'; return key(() => class { static [eval('b')] = 1; }); } }",
+    "function varKey() { var m = 'var'; with ({}) { return key(() => class { static [eval('m')] = 1; }); } }",
+    "print([withKey(), letKey(), varKey()].join());",
+  ], ["local,local,local,local", "with,let,var"]);
+});
+
+// PerformEval (sec-performeval, §19.2.1.1) step 10 takes inClassFieldInitializer
+// from GetThisEnvironment (sec-getthisenvironment, §9.4.3). Eval code has no
+// this environment of its own, so a direct eval nested in a class field
+// initializer's eval code, or in an arrow function it creates, is still in
+// that initializer, and step 11 makes `arguments` in it a SyntaxError
+// (ContainsArguments, sec-static-semantics-containsarguments, §15.7.9).
+await section("Test262 Runner: a direct eval nested in a field initializer's eval code rejects arguments...", async () => {
+  expectEvalHostProbe("nested field initializer eval", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "print(out(() => { class C { x = eval(\"eval('arguments')\"); } return new C().x; }));",
+    "print(out(() => { class C { x = eval(\"() => eval('arguments')\"); } return new C().x(); }));",
+    "print(out(() => { class C { x = eval(\"eval('1 + 1')\"); } return new C().x; }));",
+  ], ["SyntaxError", "SyntaxError", "2"]);
+});
+
+// ADR 0134 Phase 3-sloppy: a direct eval at a non-strict call site compiles
+// as a closure of its call site too, and the vars it declares live in the
+// calling function's hidden variable object, which every reference such a var
+// can shadow probes first. Expected values follow ECMA-262 2026 (tc39-mcp
+// 0.6.3, es2026 snapshot 0248456c758431e4bb8e5d26333ff1865123c9cd); Node.js
+// 24 was run only as a cross-check and agrees with every value.
+//
+// With parameter expressions the parameters live in an environment of their
+// own and the body's vars in a new one inside it
+// (FunctionDeclarationInstantiation, sec-functiondeclarationinstantiation,
+// §10.2.11 steps 20 and 30). A sloppy eval in the body declares its var in the
+// body's VariableEnvironment (PerformEval, sec-performeval, §19.2.1.1 step 16;
+// EvalDeclarationInstantiation, sec-evaldeclarationinstantiation, §19.2.1.3),
+// where it shadows the parameter of the same name for the body (2) but not for
+// a closure created in the parameter list (1); `var arguments` likewise
+// shadows the arguments object (5).
+await section("Test262 Runner: a sloppy eval var in a body with parameter expressions shadows the parameter...", async () => {
+  expectEvalHostProbe("parameter expressions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function withDefaults(X, y = 0) { eval('var X = 2'); return X; }",
+    "function closureInParams(X, f = () => X) { eval('var X = 2'); return [X, f(), eval('X')].join('/'); }",
+    "function argumentsShadow(a, b = 0) { eval('var arguments = 5'); return arguments; }",
+    "print([out(() => withDefaults(1)), out(() => closureInParams(1)), out(() => argumentsShadow(1))].join());",
+  ], ["2,2/1/2,5"]);
+});
+
+// The arguments object of a function with parameter expressions is bound with
+// the parameters (FunctionDeclarationInstantiation,
+// sec-functiondeclarationinstantiation, §10.2.11 step 22.f), outside the
+// body's VariableEnvironment (step 30). A sloppy eval's `var arguments` in the
+// body is a new binding of that environment (EvalDeclarationInstantiation,
+// sec-evaldeclarationinstantiation, §19.2.1.3 step 18), so the body and eval
+// code read 1 while a closure created in the parameter list still reads the
+// arguments object: object,0,1,1 and object,x,1. An arrow function has no
+// arguments object (step 16), so an eval in its parameter list declares
+// `var arguments` with no binding in between (§19.2.1.3 step 3.d), and the
+// body and a parameter closure read it: param,param; a body `var arguments`
+// is the body's own (step 30): local,param. No global is created
+// (test262 language/eval-code/direct/arrow-fn-*-declare-arguments-assign*).
+await section("Test262 Runner: a sloppy eval's var arguments leaves the parameter list's arguments object alone...", async () => {
+  expectEvalHostProbe("eval var arguments with parameter expressions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function f(a = () => arguments) { eval('var arguments = 1'); return [typeof a(), a().length, arguments, eval('arguments')].join(); }",
+    "function f2(a = () => arguments, b) { eval('var arguments = 1'); return [typeof a(), a()[1], arguments].join(); }",
+    "print([out(() => f()), out(() => f2(undefined, 'x'))].join(' '));",
+    "const a = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => [arguments, q()].join();",
+    "const a2 = (p = eval(\"var arguments = 'param'\"), q = () => arguments) => { var arguments = 'local'; return [arguments, q()].join(); };",
+    "print([out(a), out(a2), typeof globalThis.arguments].join(' '));",
+  ], ["object,0,1,1 object,x,1", "param,param local,param undefined"]);
+});
+
+// A generator or async function keeps its VariableEnvironment across `yield`
+// and `await` (GeneratorYield, sec-generatoryield, §27.5.3.6; Await, await,
+// §27.7.5.3), so a var an eval declared before the suspension is the binding
+// an eval or an arrow reads after it: 1, 2, 2 and 11. A closure created before
+// the eval resolves the name when it runs (GetIdentifierReference,
+// sec-getidentifierreference, §9.1.2.1): ReferenceError before the eval, 7
+// after it.
+await section("Test262 Runner: a sloppy eval var lives on across yield and await and reaches older closures...", async () => {
+  expectEvalHostProbe("sloppy eval across suspensions", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function* gen() { yield eval('var g1 = 1; g1'); yield eval('g1 += 1; g1'); yield (() => g1)(); }",
+    "async function af() { eval('var a1 = 1'); await null; eval('a1 += 10'); await null; return (() => a1)(); }",
+    "function before() { const f = () => late; const r1 = out(f); eval('var late = 7'); return r1 + ':' + f(); }",
+    "print([...gen()].join());",
+    "print(before());",
+    "af().then((v) => print('async ' + v));",
+  ], ["1,2,2", "ReferenceError:7", "async 11"]);
+});
+
+// A call through a binding of a declarative environment, which the hidden
+// variable object stands for, gets an undefined this value (EvaluateCall,
+// sec-evaluatecall, §13.3.6.2, takes the environment's WithBaseObject,
+// sec-declarative-environment-records-withbaseobject, §9.1.1.1.11), so a
+// strict function an eval declared sees undefined. A block-level function in
+// eval code sets the binding of the eval's VariableEnvironment, not a `with`
+// object's property of the name (§19.2.1.3, the web-compat step of B.3.2):
+// eval, with. An inner function's eval var shadows the outer function's var
+// only inside the inner function: inner, outer.
+await section("Test262 Runner: sloppy eval functions and vars bind in the caller's variable environment...", async () => {
+  expectEvalHostProbe("sloppy eval bindings", [
+    "function strictThis() { eval('function g() { \"use strict\"; return this; }'); return typeof g(); }",
+    "function withBlockFn() { function g() { return 'outer'; } var o = { g() { return 'with'; } }; with (o) { eval('{ function g() { return \"eval\"; } }'); } return g() + ',' + o.g(); }",
+    "function nestedSloppy() { var v = 'outer'; return (function () { eval('var v = \"inner\"'); return (function () { return eval('v'); })(); })() + ',' + v; }",
+    "print([strictThis(), withBlockFn(), nestedSloppy()].join(' '));",
+  ], ["undefined eval,with inner,outer"]);
+});
+
+// EvalDeclarationInstantiation (sec-evaldeclarationinstantiation, §19.2.1.3)
+// in a function. A for-in, for-of or destructuring var binds in the caller's
+// VariableEnvironment, not the global object: a,undefined and 4,5,undefined.
+// A var the caller has is that binding (steps 17-18): the body var a of a
+// function with parameter expressions starts with the parameter's value
+// (sec-functiondeclarationinstantiation, §10.2.11 step 30.e.i.4), 1, and an
+// eval's function declaration, even one in nested eval code, sets it
+// (step 17): function. A binding between the eval and the VariableEnvironment
+// makes a var of its name a SyntaxError (step 3.d), the outer function's
+// `let z` for nested eval code included, but a catch clause's parameter does
+// not (its web-compat branch): function. It leaves a block-level function
+// without a var binding (step web-compat-bindingexists), so `let g` stays 1
+// and `var f` stays undefined, while a catch parameter does not: function.
+// `var x = 2` in a catch block assigns the catch parameter
+// (sec-variable-statement-runtime-semantics-evaluation, §14.3.2.1, through
+// ResolveBinding), so the function's x stays 1 on both sides: 1,1, 2,undefined
+// and, from nested eval code, 1. A var the eval code deleted is unresolvable
+// again, so assigning it creates a global (PutValue, sec-putvalue, §6.2.5.6):
+// number,3. Inside `with`, the object's property of the name is the binding a
+// for-in var assigns (ForIn/OfBodyEvaluation,
+// sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset,
+// §14.7.5.7): a,undefined.
+await section("Test262 Runner: sloppy eval declarations reuse, skip or conflict with the caller's bindings...", async () => {
+  expectEvalHostProbe("sloppy eval declaration instantiation", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function forIn() { eval('for (var k in {a:1});'); return k + ',' + typeof globalThis.k; }",
+    "function patterns() { eval('var {d} = {d: 4}; for (var e of [5]);'); return d + ',' + e + ',' + typeof globalThis.d; }",
+    "function paramVar(a, b = 0) { var a; eval('var a'); return a; }",
+    "function nestedLet() { let z; eval(\"eval('var z')\"); return 'none'; }",
+    "function nestedFn() { var y = 1; eval(\"eval('function y(){}')\"); return typeof y; }",
+    "function letBlockFn() { let g = 1; eval('{ function g(){} }'); return g; }",
+    "function catchFn() { var y; try { throw 0; } catch (y) { eval('function y(){}'); } return typeof y; }",
+    "print([out(forIn), out(patterns), out(() => paramVar(1)), out(nestedLet), out(nestedFn), out(letBlockFn), out(catchFn)].join(' '));",
+    "function catchVar() { var x = 1; try { throw 0; } catch (x) { eval('var x = 2'); } return x + ',' + eval('x'); }",
+    "function catchOnly() { try { throw 0; } catch (x) { eval('var x = 2'); var r = x; } return r + ',' + x; }",
+    "function catchBlockFn() { var y = 1; try { throw 0; } catch (y) { eval('{ function y(){} }'); } return typeof y; }",
+    "function deleted() { eval('var q = 1; delete q; q = 3'); return typeof q + ',' + globalThis.q; }",
+    "function withForIn() { var o = {k: 0}; with (o) { eval('for (var k in {a:1});'); } return o.k + ',' + typeof k; }",
+    "function nestedCatch() { var z = 1; try { throw 0; } catch (z) { eval(\"eval('var z = 5')\"); } return z; }",
+    "function shadowedBlockFn() { var f; { let f = 1; eval('{ function f(){} }'); } return typeof f; }",
+    "print([out(catchVar), out(catchOnly), out(catchBlockFn), out(deleted), out(withForIn), out(nestedCatch), out(shadowedBlockFn)].join(' '));",
+  ], [
+    "a,undefined 4,5,undefined 1 SyntaxError function 1 function",
+    "1,1 2,undefined function number,3 a,undefined 1 undefined",
+  ], ["bytecode"]);
+});
+
+// Block Static Semantics: Early Errors (sec-block-static-semantics-early-errors,
+// §14.2.1): a block may not declare a name twice, except that non-strict code
+// may declare a function twice (B.3.2). Eval code gets its early errors before
+// it runs (PerformEval step 11). The interpreter rejects the non-strict
+// duplicate functions, so this runs in bytecode mode.
+await section("Test262 Runner: eval code's blocks reject redeclared names...", async () => {
+  expectEvalHostProbe("eval block redeclaration", [
+    "const out = (f) => { try { return String(f()); } catch (e) { return e.name; } };",
+    "function strictDup() { return out(() => eval('\"use strict\"; { function f() {} function f() {} }')); }",
+    "function letDup() { return out(() => eval('{ let x = 42; function x() {} }')); }",
+    "function constDup() { return out(() => eval('{ const x = 42; function x() {} }')); }",
+    "function sloppyDup() { return out(() => eval('{ function f() { return 1; } function f() { return 2; } } f()')); }",
+    "print([strictDup(), letDup(), constDup(), sloppyDup()].join());",
+  ], ["SyntaxError,SyntaxError,SyntaxError,2"], ["bytecode"]);
+});
+
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,
@@ -1982,6 +2772,138 @@ await section("Test262 Runner: Annex B eval preserves with-object properties..."
       throw new Error(`Bare ${mode.label} Annex B eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
     if (normalizeLineEndings(proc.stdout.toString()).trim() !== "eval-g,with-g")
       throw new Error(`Bare ${mode.label} Annex B eval probe got: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §13.3.6.1: `eval(...)` is a direct eval when the identifier resolves
+// to %eval%, also through a `with` object (#1587). It keeps the caller's
+// scope and `this`; any other function found there is called as a method of
+// the `with` object.
+await section("Test262 Runner: eval found on a with object is a direct eval...", async () => {
+  const source = [
+    "var out = [];",
+    'var x = "outer";',
+    'function emptyWith() { var x = "local"; with ({}) { return eval("x"); } }',
+    'out.push("emptyWith " + emptyWith());',
+    'function evalProperty() { var x = "local"; var o = { eval: eval }; with (o) { return eval("x"); } }',
+    'out.push("evalProperty " + evalProperty());',
+    'function withBindingVisible() { var x = "local"; with ({ eval: eval, x: "with" }) { return eval("x"); } }',
+    'out.push("withBindingVisible " + withBindingVisible());',
+    'function inheritedEval() { var x = "local"; with (Object.create({ eval: eval })) { return eval("x"); } }',
+    'out.push("inheritedEval " + inheritedEval());',
+    "function otherFunction() {",
+    '  var x = "local";',
+    '  var o = { eval: function (s) { return "custom:" + s + ":" + (this === o); } };',
+    '  with (o) { return eval("x"); }',
+    "}",
+    'out.push("otherFunction " + otherFunction());',
+    "function nested() {",
+    '  var x = "local";',
+    '  with ({}) { with ({ eval: eval, y: "inner" }) { return eval("x + \'/\' + y"); } }',
+    "}",
+    'out.push("nested " + nested());',
+    "function nestedFunction() {",
+    '  var x = "outer-fn";',
+    "  with ({ eval: eval }) {",
+    '    return (function () { var x = "inner-fn"; with ({ eval: eval }) { return eval("x"); } })();',
+    "  }",
+    "}",
+    'out.push("nestedFunction " + nestedFunction());',
+    "function varDeclaration() {",
+    "  var o = { eval: eval };",
+    "  with (o) { eval(\"var created = 'made'\"); }",
+    '  return created + ":" + ("created" in o) + ":" + ("created" in globalThis);',
+    "}",
+    'out.push("varDeclaration " + varDeclaration());',
+    'var marker = { name: "marker" };',
+    'function thisValue() { var o = { eval: eval }; with (o) { var t = eval("this"); return (t === marker) + ":" + (t === o); } }',
+    'out.push("thisValue " + thisValue.call(marker));',
+    'print(out.join("\\n"));',
+    "",
+  ].join("\n");
+  const expected = [
+    "emptyWith local",
+    "evalProperty local",
+    "withBindingVisible with",
+    "inheritedEval local",
+    "otherFunction custom:x:true",
+    "nested local/inner",
+    "nestedFunction inner-fn",
+    "varDeclaration made:false:false",
+    "thisValue true:false",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([
+      TEST262RUNNER,
+      "--eval-host",
+      `--mode=${mode}`,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} with-object eval probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} with-object eval was not a direct eval: ${proc.stdout.toString()}`);
+  }
+});
+
+// ES2026 §13.3.6.1 step 6.a compares the callee with the realm's %eval%, not
+// with whatever the global `eval` property holds when the call runs. Checking
+// that property also read it a second time, running a getter twice.
+await section("Test262 Runner: direct eval recognises the realm's eval, not the global property...", async () => {
+  const source = [
+    "var out = [];",
+    'var x = "global";',
+    "var e = eval;",
+    "var reads = 0;",
+    'Object.defineProperty(globalThis, "eval", { get: function () { reads++; return e; }, configurable: true });',
+    'function getterReadOnce() { var x = "local"; var r = eval("x"); return r + ":" + reads; }',
+    'out.push("getterReadOnce " + getterReadOnce());',
+    'Object.defineProperty(globalThis, "eval", { value: function () { return "replaced"; }, writable: true, configurable: true });',
+    'function localBinding() { var x = "local"; var eval = e; return eval("x"); }',
+    'out.push("localBinding " + localBinding());',
+    'function parameter(eval) { var x = "local"; return eval("x"); }',
+    'out.push("parameter " + parameter(e));',
+    'function withObject() { var x = "local"; with ({ eval: e }) { return eval("x"); } }',
+    'out.push("withObject " + withObject());',
+    'function replacedGlobal() { var x = "local"; return eval("x"); }',
+    'out.push("replacedGlobal " + replacedGlobal());',
+    "delete globalThis.eval;",
+    'function afterDelete() { var x = "local"; var eval = e; return eval("x"); }',
+    'out.push("afterDelete " + afterDelete());',
+    'print(out.join("\\n"));',
+    "",
+  ].join("\n");
+  const expected = [
+    "getterReadOnce local:1",
+    "localBinding local",
+    "parameter local",
+    "withObject local",
+    "replacedGlobal replaced",
+    "afterDelete local",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"] as const) {
+    const proc = Bun.spawnSync([
+      TEST262RUNNER,
+      "--eval-host",
+      `--mode=${mode}`,
+      "--compat-var",
+      "--compat-function",
+      "--compat-non-strict-mode",
+    ], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Test262 Runner ${mode} realm eval identity probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Test262 Runner ${mode} direct eval did not compare with the realm's eval: ${proc.stdout.toString()}`);
   }
 });
 
@@ -2213,6 +3135,87 @@ await section("Test262 Runner: eval rejects arguments in generator method defaul
   }
 });
 
+await section("Test262 Runner: a decorator's replacement method does not let eval use super...", async () => {
+  // The decorators proposal (tc39/ecma262 PR #2417) stores a decorator's
+  // returned function as the element's value, getter or setter without
+  // calling MakeMethod on it, so it keeps the home object it was created
+  // with (here none) and §19.2.1.1 PerformEval rejects super inside it.
+  // A decorated method that is kept or wrapped is still a method.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const replacement = function () { return eval('super.describe()'); };",
+    "const replace = (value, context) => replacement;",
+    "const replaceFresh = (value, context) => function () { return eval('super.describe()'); };",
+    "class Derived extends Base {",
+    "  @replace m() { return 'original'; }",
+    "  @replaceFresh static s() { return 'original'; }",
+    "}",
+    "probe('instance method', () => new Derived().m());",
+    "probe('static method', () => Derived.s());",
+    "probe('replacement afterwards', () => replacement.call({}));",
+    "const replaceArrow = (value, context) => () => eval('super.describe()');",
+    "class ArrowDerived extends Base { @replaceArrow m() { return 'original'; } }",
+    "probe('arrow', () => new ArrowDerived().m());",
+    "const replaceGetter = (value, context) => function () { return eval('super.describe()'); };",
+    "class GetterDerived extends Base {",
+    "  @replaceGetter get g() { return 'original'; }",
+    "  @replaceGetter static get sg() { return 'original'; }",
+    "}",
+    "probe('getter', () => new GetterDerived().g);",
+    "probe('static getter', () => GetterDerived.sg);",
+    "let setterResult;",
+    "const replaceSetter = (value, context) => function (v) { setterResult = eval('super.describe()'); };",
+    "class SetterDerived extends Base { @replaceSetter set s(v) {} @replaceSetter static set ss(v) {} }",
+    "probe('setter', () => { setterResult = undefined; new SetterDerived().s = 1; return setterResult; });",
+    "probe('static setter', () => { setterResult = undefined; SetterDerived.ss = 1; return setterResult; });",
+    "const replaceAccessor = (value, context) => ({ get: function () { return eval('super.describe()'); } });",
+    "class AccessorDerived extends Base { @replaceAccessor accessor a = 1; }",
+    "probe('accessor getter', () => new AccessorDerived().a);",
+    "const keep = (value, context) => value;",
+    "class KeptDerived extends Base {",
+    "  @keep m() { return eval('super.describe()'); }",
+    "  @keep static s() { return eval('super.describe()'); }",
+    "  @keep get g() { return eval('super.describe()'); }",
+    "}",
+    "probe('kept method', () => new KeptDerived().m());",
+    "probe('kept static method', () => KeptDerived.s());",
+    "probe('kept getter', () => new KeptDerived().g);",
+    "const wrap = (value, context) => function (...args) { return 'wrapped ' + value.call(this, ...args); };",
+    "class WrappedDerived extends Base { @wrap m() { return eval('super.describe()'); } }",
+    "probe('wrapped method', () => new WrappedDerived().m());",
+    "",
+  ].join("\n");
+  const expected = [
+    "instance method: SyntaxError",
+    "static method: SyntaxError",
+    "replacement afterwards: SyntaxError",
+    "arrow: SyntaxError",
+    "getter: SyntaxError",
+    "static getter: SyntaxError",
+    "setter: SyntaxError",
+    "static setter: SyntaxError",
+    "accessor getter: SyntaxError",
+    "kept method: base-proto",
+    "kept static method: base-static",
+    "kept getter: base-proto",
+    "wrapped method: wrapped base-proto",
+  ].join("\n");
+  for (const mode of ["interpreted", "bytecode"]) {
+    const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", `--mode=${mode}`, "--compat-function"], {
+      stdin: new TextEncoder().encode(source),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (proc.exitCode !== 0)
+      throw new Error(`Bare ${mode} decorator replacement eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+      throw new Error(`Bare ${mode} decorator replacement eval super got: ${proc.stdout.toString()}`);
+  }
+});
+
 await section("Test262 Runner: eval super permissions stop at ordinary function boundary...", async () => {
   const source = [
     "class Base { method() { return 11; } }",
@@ -2361,6 +3364,127 @@ await section("Test262 Runner: assigning a function to a property does not let e
         throw new Error(`Bare ${mode} ${probe.label} stored-function eval super got: ${proc.stdout.toString()}`);
     }
   }
+});
+
+await section("Test262 Runner: bytecode static field initializers are methods for eval super...", async () => {
+  // ES2026 §15.7.10: a static field initializer is a method whose home object
+  // is the class; arrows inside it inherit that, and §19.2.1.1 PerformEval
+  // allows super there. Defining the field never makes its value a method, so
+  // a function expression or an arrow from outside the class gets none. The
+  // interpreter's half of this table is #1389, so only bytecode runs here.
+  const source = [
+    "class Base { describe() { return 'base-proto'; } static describe() { return 'base-static'; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "const key = 'computed';",
+    "const outer = () => eval('super.describe()');",
+    "probe('direct', () => { class D extends Base { static direct = eval('super.describe()'); } return D.direct; });",
+    "class Derived extends Base {",
+    "  static arrow = () => eval('super.describe()');",
+    "  static inArray = [() => eval('super.describe()')];",
+    "  static [key] = () => eval('super.describe()');",
+    "  static #hidden = () => eval('super.describe()');",
+    "  static hidden() { return Derived.#hidden(); }",
+    "  static fnExpr = function () { return eval('super.describe()'); };",
+    "  static outerArrow = outer;",
+    "}",
+    "probe('arrow', () => Derived.arrow());",
+    "probe('arrow in array', () => Derived.inArray[0]());",
+    "probe('computed arrow', () => Derived[key]());",
+    "probe('private arrow', () => Derived.hidden());",
+    "probe('function expression', () => Derived.fnExpr());",
+    "probe('outer arrow', () => Derived.outerArrow());",
+    "probe('outer arrow afterwards', () => outer());",
+    "probe('base class', () => { class C { static f = eval('typeof super.call'); } return C.f; });",
+    "probe('new.target', () => { class C { static f = eval('new.target'); } return String(C.f); });",
+    "probe('eval var does not leak', () => { class C { static f = eval('var leaked = 1; leaked'); } return typeof leaked + ' ' + C.f; });",
+    "",
+  ].join("\n");
+  const expected = [
+    "direct: base-static",
+    "arrow: base-static",
+    "arrow in array: base-static",
+    "computed arrow: base-static",
+    "private arrow: base-static",
+    "function expression: SyntaxError",
+    "outer arrow: SyntaxError",
+    "outer arrow afterwards: SyntaxError",
+    "base class: function",
+    "new.target: undefined",
+    "eval var does not leak: undefined 1",
+  ].join("\n");
+  const proc = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+    stdin: new TextEncoder().encode(source),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (proc.exitCode !== 0)
+    throw new Error(`Bare bytecode static-field eval super probe exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+  if (normalizeLineEndings(proc.stdout.toString()).trim() !== expected)
+    throw new Error(`Bare bytecode static-field eval super got: ${proc.stdout.toString()}`);
+  // Instance fields go through the same definition opcodes, with the wide
+  // form once a <fields> function has more than 256 constants. A base
+  // constructor that returns a class makes that class the receiver, and the
+  // function expression stored there must still get no home object.
+  const padding = Array.from({ length: 300 }, (_, i) => `  pad${i} = ${i};`);
+  const classReceiverSource = [
+    "class Target {}",
+    "Object.setPrototypeOf(Target, class Parent { static describe() { return 'parent-static'; } });",
+    "class Returner { constructor() { return Target; } }",
+    "const probe = (label, fn) => {",
+    "  try { print(label + ': ' + fn()); } catch (e) { print(label + ': ' + e.name); }",
+    "};",
+    "class D extends Returner {",
+    "  early = function () { return eval('super.describe()'); };",
+    ...padding,
+    "  late = function () { return eval('super.describe()'); };",
+    "}",
+    "new D();",
+    "probe('field before the padding', () => Target.early());",
+    "probe('field after the padding', () => Target.late());",
+    "",
+  ].join("\n");
+  const classReceiverExpected = [
+    "field before the padding: SyntaxError",
+    "field after the padding: SyntaxError",
+  ].join("\n");
+  const classReceiver = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode", "--compat-function"], {
+    stdin: new TextEncoder().encode(classReceiverSource),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (classReceiver.exitCode !== 0)
+    throw new Error(`Bare bytecode class-receiver field eval super probe exited ${classReceiver.exitCode}: ${classReceiver.stderr.toString()}`);
+  if (normalizeLineEndings(classReceiver.stdout.toString()).trim() !== classReceiverExpected)
+    throw new Error(`Bare bytecode class-receiver field eval super got: ${classReceiver.stdout.toString()}`);
+  // `yield` and `await` in a field initializer are early errors in ECMAScript,
+  // but the parser accepts them inside a generator or async function. Such an
+  // initializer stays inline so the suspension still belongs to that function
+  // instead of to a <static field> function that cannot suspend.
+  const suspendingSource = [
+    "const o = { *g() { class C { static x = yield 1; static y = 'b'; } return C.x + C.y; } };",
+    "const it = o.g();",
+    "print(JSON.stringify(it.next()));",
+    "print(JSON.stringify(it.next(5)));",
+    "const run = async () => { class C { static x = await Promise.resolve(2); } return C.x; };",
+    "run().then((v) => print('await ' + v));",
+    "",
+  ].join("\n");
+  const suspendingExpected = [
+    '{"value":1,"done":false}',
+    '{"value":"5b","done":true}',
+    "await 2",
+  ].join("\n");
+  const suspending = Bun.spawnSync([TEST262RUNNER, "--eval-host", "--mode=bytecode"], {
+    stdin: new TextEncoder().encode(suspendingSource),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  if (suspending.exitCode !== 0)
+    throw new Error(`Bare bytecode suspending static initializer probe exited ${suspending.exitCode}: ${suspending.stderr.toString()}`);
+  if (normalizeLineEndings(suspending.stdout.toString()).trim() !== suspendingExpected)
+    throw new Error(`Bare bytecode suspending static initializer got: ${suspending.stdout.toString()}`);
 });
 
 await section("Test262 Runner: bytecode eval inherits arrow lexical super and new.target...", async () => {
@@ -3664,6 +4788,74 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       }
     }
 
+    console.log("Loader: branch coverage of conditional and logical expressions a constant decides...");
+    // The compiler can decide these from a const local or a literal, and with
+    // strict types can read `flag && true` as `flag`. Under coverage each keeps
+    // its taken and its untaken branch record, and the report matches the one
+    // for a form the compiler cannot decide.
+    const branchRecords = (lcov: string) =>
+      [...lcov.matchAll(/^BRDA:(\d+),\d+,(\d+),(\S+)$/gm)].map((m) => `${m[1]}:${m[2]}:${m[3]}`).sort();
+    const constantBranchCases = [
+      {
+        name: "constant-branch",
+        lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        decided: { args: [] as string[], decl: "const" },
+        undecided: { args: [] as string[], decl: "let" },
+        source: (decl: string) => [
+          "const pick = (value) => {",
+          `  ${decl} verbose = false;`,
+          `  ${decl} missing = null;`,
+          '  const label = verbose ? "long" : "short";',
+          "  const shown = verbose && value;",
+          "  const fallback = verbose || value;",
+          '  const chosen = missing ?? "none";',
+          "  const size = (verbose ? 1 : 2) + 1;",
+          "  if (verbose && value) { return label; }",
+          "  const negated = !(verbose || false);",
+          '  const literal = true ? "yes" : "no";',
+          "  return [label, shown, fallback, chosen, size, negated, literal].join();",
+          "};",
+          "console.log(pick(1));",
+          "",
+        ],
+      },
+      {
+        name: "strict-type-branch",
+        lines: [3, 4],
+        decided: { args: ["--strict-types"], decl: "const" },
+        undecided: { args: [] as string[], decl: "const" },
+        source: (decl: string) => [
+          "const check = (value) => {",
+          `  ${decl} flag = value > 0;`,
+          "  const both = flag && true;",
+          "  const either = flag || false;",
+          "  return [both, either].join();",
+          "};",
+          "console.log(check(1));",
+          "",
+        ],
+      },
+    ];
+    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+      const reports: Record<string, string> = {};
+      for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
+        const sourcePath = join(tmp, `${name}-${kind}.js`);
+        const lcovPath = join(tmp, `${name}-${kind}.lcov`);
+        writeFileSync(sourcePath, source(decl).join("\n"));
+        await $`${RUNNER} ${args} --coverage --coverage-format=lcov --coverage-output=${lcovPath} ${sourcePath}`.quiet();
+        reports[kind] = readFileSync(lcovPath, "utf-8");
+      }
+      for (const line of lines) {
+        if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
+            !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
+          throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {
+        throw new Error(`${name}: a decided and an undecided form should report the same branches, got:\n${reports.decided}\nand:\n${reports.undecided}`);
+      }
+    }
+
     console.log("Loader: function coverage (--coverage implies bytecode, so --mode is a no-op)...");
     const functionSourcePath = join(tmp, "function-coverage.js");
     writeFileSync(
@@ -3784,6 +4976,32 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
           throw new Error(`${modeName} LCOV should retain the name of ${name}`);
         }
       }
+    }
+
+    console.log("Loader: LCOV counts a static field's function value, not its initializer...");
+    // A static field initializer runs as a function of its own in bytecode
+    // mode, at the same position as an arrow or function it returns. Only
+    // the functions written in the source are counted.
+    const staticFieldSourcePath = join(tmp, "static-field-functions.js");
+    writeFileSync(
+      staticFieldSourcePath,
+      [
+        "class C {",
+        "  static never = () => 4;",
+        "  static neverFn = function named() { return 5; };",
+        "  static called = () => 6;",
+        "  static value = 7;",
+        "}",
+        "C.called();",
+        "",
+      ].join("\n"),
+    );
+    const staticFieldLcovPath = join(tmp, "static-field-functions.lcov");
+    await $`${RUNNER} --compat-function --coverage --coverage-format=lcov --coverage-output=${staticFieldLcovPath} ${staticFieldSourcePath}`.quiet();
+    const staticFieldLcov = readFileSync(staticFieldLcovPath, "utf-8");
+    for (const record of ["FNDA:0,never", "FNDA:0,named", "FNDA:1,called", "FNF:3", "FNH:1"]) {
+      if (!staticFieldLcov.split(/\r?\n/).includes(record))
+        throw new Error(`Static field LCOV should contain ${record}: ${staticFieldLcov}`);
     }
 
     console.log("Loader: LCOV function names cannot inject tracefile records...");
@@ -4908,6 +6126,62 @@ await section("TestRunner: JSON multi-file structure...", async () => {
   }
 });
 
+await section("TestRunner: a parallel worker reclaims each file's garbage before the next file...", async () => {
+  // Workers run with automatic collection off. Before the runner collected
+  // after each file, every object a worker allocated stayed live until the
+  // worker exited, so a run held the garbage of all its files at once. With
+  // the shims parsed once per thread, that alone raised the interpreted
+  // suite's peak from 0.70 GB to 1.27 GB resident on four 64-bit workers. The
+  // peak live GC heap is the observable: summed over the workers, it must not
+  // grow with the number of files each worker runs.
+  const tmp = makeTmp();
+  try {
+    const source = [
+      'describe("garbage", () => {',
+      '  test("allocates objects it does not keep", () => {',
+      "    let total = 0;",
+      "    for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      "      const item = { index: i, pair: [i, i + 1] };",
+      "      total += item.pair.length;",
+      "    }",
+      "    expect(total).toBe(10000);",
+      "  });",
+      "});",
+      "",
+    ].join("\n");
+    const peakLiveBytes = (mode: string, fileCount: number): number => {
+      const dir = join(tmp, `${mode}-${fileCount}`);
+      mkdirSync(dir);
+      for (let i = 0; i < fileCount; i++) writeFileSync(join(dir, `garbage-${i}.js`), source);
+      const resultsPath = join(tmp, `${mode}-${fileCount}.json`);
+      const proc = Bun.spawnSync(
+        [resolve(TESTRUNNER), "-P", dir, "--jobs=2", "--no-progress", `--mode=${mode}`, `--output=${resultsPath}`],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      if (proc.exitCode !== 0)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const json = JSON.parse(readFileSync(resultsPath, "utf-8"));
+      if (json.passed !== fileCount || json.workers.used !== 2)
+        throw new Error(`TestRunner garbage run (${mode}, ${fileCount} files) should pass on 2 workers: ${json.passed} passed, ${json.workers.used} workers`);
+      return json.memory.gc.peakLiveBytes;
+    };
+    for (const mode of ["interpreted", "bytecode"]) {
+      // Two files give each worker one; sixteen give each worker eight. With a
+      // collection between files the peaks match; without one the sixteen-file
+      // peak is about eight times the two-file peak.
+      const oneFileEach = peakLiveBytes(mode, 2);
+      const eightFilesEach = peakLiveBytes(mode, 16);
+      if (eightFilesEach > oneFileEach * 2)
+        throw new Error(
+          `TestRunner (${mode}) peak live GC heap grew with the files per worker: ` +
+            `${eightFilesEach} bytes for 16 files vs ${oneFileEach} bytes for 2 files on 2 workers`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {
@@ -5674,6 +6948,39 @@ await section("TestRunner: an unhandled promise rejection fails whatever left it
   }
 });
 
+await section("TestRunner (bytecode): work the tests leave pending runs, and a rejection it leaves fails the file...", async () => {
+  // runTests runs after the file. Work left pending once it returns, here by
+  // afterAll, still runs before the file ends, and a rejection that work
+  // leaves fails the file. The interpreted path does not wait for it.
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "late.test.js");
+    writeFileSync(
+      file,
+      [
+        'test("leaves a timer", () => { setTimeout(() => console.log("TIMER " + "AFTER TEST"), 5); });',
+        "afterAll(() => {",
+        '  setTimeout(() => console.log("TIMER " + "AFTER ALL"), 5);',
+        '  setTimeout(() => { Promise.reject(new Error("late rejection")); }, 10);',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    const proc = Bun.spawnSync(
+      [resolve(TESTRUNNER), "-P", file, "--no-progress", "--mode=bytecode"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = proc.stdout.toString() + proc.stderr.toString();
+    for (const line of ["TIMER AFTER TEST", "TIMER AFTER ALL"])
+      if (!containsLine(out, line))
+        throw new Error(`TestRunner (bytecode) should run ${JSON.stringify(line)}, got:\n${out}`);
+    if (proc.exitCode !== 1 || !out.includes("late.test.js: Error: late rejection"))
+      throw new Error(`TestRunner (bytecode) should fail the file for a late rejection, got exit ${proc.exitCode}:\n${out}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: a file that fails with work still queued does not reach the next file...", async () => {
   const tmp = makeTmp();
   try {
@@ -6216,6 +7523,73 @@ await section("TestRunner: --output=compact-json omits build, memory, stdout, st
   }
 }
 
+await section("Bundler: constants folding to Infinity, NaN and -0 compile + roundtrip...", async () => {
+  const tmp = makeTmp();
+  try {
+    // [constant expression, the value it folds to]. String(-0) is "0", so the
+    // program names -0 through Object.is.
+    const folds: [string, string][] = [
+      ["1 / 0", "Infinity"],
+      ["1e308 * 10", "Infinity"],
+      ["2 ** 1024", "Infinity"],
+      ["-1 / 0", "-Infinity"],
+      ["-1e308 * 10", "-Infinity"],
+      ["0 / 0", "NaN"],
+      ["Infinity - Infinity", "NaN"],
+      ["0 * -1", "-0"],
+      ["0 / -1", "-0"],
+    ];
+    const expected = folds.map(([expression, value]) => `fold ${expression} = ${value}`).join("\n");
+    const foldLines = (output: string): string =>
+      normalizeLineEndings(output)
+        .split("\n")
+        .filter((line) => line.startsWith("fold "))
+        .join("\n");
+    const run = (...args: string[]): string =>
+      foldLines(Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" }).stdout.toString());
+
+    const src = join(tmp, "folded.js");
+    const gbc = join(tmp, "folded.gbc");
+    writeFileSync(
+      src,
+      [
+        'const show = (value) => (Object.is(value, -0) ? "-0" : String(value));',
+        ...folds.map(
+          ([expression], i) => `const c${i} = ${expression};\nconsole.log("fold ${expression} =", show(c${i}));`,
+        ),
+        "",
+      ].join("\n"),
+    );
+    const compile = Bun.spawnSync([BUNDLER, src, `--output=${gbc}`], { stdout: "pipe", stderr: "pipe" });
+    if (compile.exitCode !== 0 || !existsSync(gbc))
+      throw new Error(
+        `Folded non-finite constants should compile to .gbc, got exit ${compile.exitCode}: ${compile.stdout.toString()}${compile.stderr.toString()}`,
+      );
+    const fromSource = run(src, "--mode=bytecode");
+    if (fromSource !== expected)
+      throw new Error(`Folded constants run from source in bytecode mode should print:\n${expected}\ngot:\n${fromSource}`);
+    const fromGbc = run(gbc);
+    if (fromGbc !== expected)
+      throw new Error(`Folded constants roundtrip should print:\n${expected}\ngot:\n${fromGbc}`);
+
+    // Each worker thread has its own floating-point state.
+    const dir = join(tmp, "workers");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "a.js"), 'console.log("fold a =", 1 / 0);\n');
+    writeFileSync(join(dir, "b.js"), 'console.log("fold b =", 0 / 0);\n');
+    const parallel = Bun.spawnSync([BUNDLER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    if (parallel.exitCode !== 0)
+      throw new Error(
+        `Folded non-finite constants should compile on worker threads, got exit ${parallel.exitCode}: ${parallel.stdout.toString()}${parallel.stderr.toString()}`,
+      );
+    const fromWorkers = `${run(join(dir, "a.gbc"))}\n${run(join(dir, "b.gbc"))}`;
+    if (fromWorkers !== "fold a = Infinity\nfold b = NaN")
+      throw new Error(`Worker-compiled folded constants should print Infinity and NaN, got:\n${fromWorkers}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 // ============================================================================
 // GocciaBenchmarkRunner
 // ============================================================================
@@ -6312,7 +7686,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       ],
     );
     for (const run of [
-      { output: moduleOnlyOut, modeArguments: [] },
+      { output: moduleOnlyOut, modeArguments: ["--mode=interpreted"] },
       { output: moduleOnlyBytecodeOut, modeArguments: ["--mode=bytecode"] },
     ]) {
       const proc = Bun.spawnSync(
@@ -6410,7 +7784,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
       ],
     );
     for (const run of [
-      { output: join(tmp, "async-scopes.json"), modeArguments: [] },
+      { output: join(tmp, "async-scopes.json"), modeArguments: ["--mode=interpreted"] },
       { output: join(tmp, "async-scopes-bytecode.json"), modeArguments: ["--mode=bytecode"] },
     ]) {
       const proc = Bun.spawnSync(
@@ -9940,8 +11314,9 @@ await section("Loader: a fetch() denial is located alike in both modes...", asyn
         throw new Error(`fetch denial (${mode}) should be located: ${text}`);
       locations.push(location.trim());
     }
-    // ADR 0014: the call expression's own position, as import() uses.
-    if (locations[0] !== `--> ${file}:2:28` || locations[1] !== locations[0])
+    // ADR 0014: the call expression's own position, as import() uses: the
+    // callee's name, where V8 locates the call (ADR 0135).
+    if (locations[0] !== `--> ${file}:2:23` || locations[1] !== locations[0])
       throw new Error(`fetch denial location differs between modes: ${JSON.stringify(locations)}`);
   } finally {
     clean(tmp);
@@ -11383,6 +12758,172 @@ await section("Memory budget: aggregated small-object growth is NOT bounded (ADR
       // fallback undershooting a spike cannot fail it.
       assertPeakRssAbove(run, `distributed property growth (${label})`, 32 * 1024 * 1024);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+// With --max-stack=0 nothing bounds a bytecode recursion but the memory
+// ceiling, so the VM stacks are charged to it (ADR 0130). They were neither
+// charged nor gated before, and this script grew until the kernel's OOM
+// killer stopped it (#1472). The refusal must be a catchable RangeError, and
+// the charge must be given back once the recursion has unwound: the 24 MiB
+// ArrayBuffer after it does not fit beside the ~44 MiB the stacks hold at the
+// refusal. --max-instructions is only the backstop that keeps a regression
+// from taking the CI host with it: the refusal needs about 1M instructions
+// here, while 4M without one reach ~800k frames and ~340 MiB resident, which
+// fails the RSS ceiling below.
+//
+// The ceiling must also bound what the process holds when the RangeError
+// fires (ADR 0132): the thread's call-stack and
+// execution-context records are charged with the stacks, every stack is
+// charged for its capacity, and a growth leaves room under the ceiling to copy
+// the largest stack. Peak RSS is compared with an idle run of the same binary,
+// so that the bound does not depend on how much a platform's runtime and
+// libraries take before the script starts.
+await section("Memory budget: unbounded bytecode recursion is refused at the ceiling...", async () => {
+  const tmp = makeTmp();
+  try {
+    const file = join(tmp, "recursion.js");
+    writeFileSync(
+      file,
+      "let d = 0;\n" +
+        "const f = () => { d++; f(); };\n" +
+        'try { f(); } catch (e) { console.log(e.constructor.name + ": " + e.message + " at " + d); }\n' +
+        "const buffer = new ArrayBuffer(24 * 1024 * 1024);\n" +
+        'console.log("after " + buffer.byteLength);\n',
+    );
+
+    const run = await runWithPeakRss([
+      RUNNER,
+      "--mode=bytecode",
+      "--max-stack=0",
+      "--max-memory=64MiB",
+      "--max-instructions=4000000",
+      file,
+    ]);
+    if (run.exitCode !== 0)
+      throw new Error(`Unbounded recursion did not end in a caught RangeError (exit ${run.exitCode}):\n${run.output}`);
+    const refused = run.output.match(/RangeError: Maximum call stack size exceeded at (\d+)/);
+    if (!refused)
+      throw new Error(`Expected a caught "Maximum call stack size exceeded" RangeError:\n${run.output}`);
+    // Measured at 177,478 frames. A refusal far earlier would come from
+    // something other than the ceiling.
+    if (Number(refused[1]) < 100000)
+      throw new Error(`Recursion was refused at depth ${refused[1]}, far short of the 64 MiB ceiling:\n${run.output}`);
+    if (!run.output.includes(`after ${24 * 1024 * 1024}`))
+      throw new Error(`The stacks kept their charge after the recursion unwound:\n${run.output}`);
+    const idle = join(tmp, "idle.js");
+    writeFileSync(idle, 'console.log("idle");\n');
+    const idleRun = await runWithPeakRss([RUNNER, "--mode=bytecode", "--max-stack=0", "--max-memory=64MiB", idle]);
+    if (idleRun.exitCode !== 0) throw new Error(`An idle run failed (exit ${idleRun.exitCode}):\n${idleRun.output}`);
+    // Measured 69.4 to 70.3 MiB above an idle run's 11.0 to 11.3 MiB over 12
+    // runs on Linux x64, 1.09 times the ceiling. Before the call-stack records
+    // and the stack copies were charged, the same run held 132 MiB above it,
+    // 2.07 times the ceiling. The bound leaves 13 MiB for other platforms'
+    // allocators and page sizes.
+    if (idleRun.peakRssBytes !== null)
+      assertPeakRssBelow(
+        run,
+        "unbounded bytecode recursion, above an idle run",
+        idleRun.peakRssBytes + 1.3 * 64 * 1024 * 1024,
+      );
+
+    // A heap that fills most of the ceiling must not turn an ordinary
+    // recursion into a stack overflow: small stacks may still grow into the
+    // memory-pressure reserve that a deep recursion is kept out of.
+    const heavy = join(tmp, "heavy-heap.js");
+    writeFileSync(
+      heavy,
+      "const big = new ArrayBuffer(56 * 1024 * 1024);\n" +
+        "const f = (n) => (n === 0 ? 0 : 1 + f(n - 1));\n" +
+        'console.log("depth " + f(1000) + " " + big.byteLength);\n',
+    );
+    const heavyRun = Bun.spawnSync([RUNNER, "--mode=bytecode", "--max-memory=64MiB", heavy], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const heavyOut = heavyRun.stdout.toString() + heavyRun.stderr.toString();
+    if (heavyRun.exitCode !== 0 || !heavyOut.includes(`depth 1000 ${56 * 1024 * 1024}`))
+      throw new Error(`A 1000-deep recursion beside a 56 MiB heap was refused under a 64 MiB ceiling:\n${heavyOut}`);
+
+    // A generator is charged for the frame it suspends, and gives the charge
+    // back when it finishes rather than when the collector frees it.
+    const generators = join(tmp, "generators.js");
+    writeFileSync(
+      generators,
+      "const source = { *make(seed) { const a = seed + 1; const b = a * 2; yield a + b; yield b; } };\n" +
+        "const all = Array.from({ length: 2000 }, (_, i) => source.make(i));\n" +
+        "for (const g of all) g.next();\n" +
+        "Goccia.gc();\n" +
+        "const suspended = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of all) { g.next(); g.next(); }\n" +
+        "Goccia.gc();\n" +
+        'console.log("released " + (suspended - Goccia.gc.bytesAllocated));\n' +
+        // Default parameters give a generator a frame before its first
+        // resume; return() before that start must give it back too.
+        "const preset = { *make(seed = 1, other = seed * 2) { yield seed + other; } };\n" +
+        "const fresh = Array.from({ length: 2000 }, (_, i) => preset.make(i));\n" +
+        "Goccia.gc();\n" +
+        "const created = Goccia.gc.bytesAllocated;\n" +
+        "for (const g of fresh) g.return(0);\n" +
+        "Goccia.gc();\n" +
+        'console.log("unstarted " + (created - Goccia.gc.bytesAllocated));\n',
+    );
+    const generatorRun = Bun.spawnSync([RUNNER, "--mode=bytecode", generators], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const generatorOut = generatorRun.stdout.toString() + generatorRun.stderr.toString();
+    const released = generatorOut.match(/released (-?\d+)/);
+    // Each suspended frame holds at least its receiver, its argument and two
+    // locals, 64 bytes; measured 128 bytes a generator.
+    if (generatorRun.exitCode !== 0 || !released || Number(released[1]) < 2000 * 64)
+      throw new Error(`Finished generators kept the charge for their suspended frames:\n${generatorOut}`);
+    const unstarted = generatorOut.match(/unstarted (-?\d+)/);
+    // Measured 96 bytes a generator.
+    if (!unstarted || Number(unstarted[1]) < 2000 * 48)
+      throw new Error(`Generators returned before their first resume kept their frame charge:\n${generatorOut}`);
+
+    // A frame inside a try block also holds an exception handler, which is
+    // charged with the stacks (ADR 0132) and given back once the recursion
+    // has returned. Each recursion runs in its own process, so that both
+    // start from the same stack capacities; what a try block adds at 1,000
+    // levels is then measured at 21,840 bytes, and 6,000 before the handlers
+    // were charged.
+    const recursionCharge = (name: string, body: string): { charged: number; kept: number } => {
+      const file = join(tmp, `${name}.js`);
+      writeFileSync(
+        file,
+        "const step = (x) => x + 1;\n" +
+          "const runAWhile = () => [...Array(4096).keys()].map(step).length;\n" +
+          "let peak = 0;\n" +
+          "const atBottom = () => { runAWhile(); peak = Goccia.gc.bytesAllocated; return 0; };\n" +
+          `const recurse = (n) => { ${body} };\n` +
+          "runAWhile(); Goccia.gc();\n" +
+          "const before = Goccia.gc.bytesAllocated;\n" +
+          "recurse(1000);\n" +
+          "runAWhile(); Goccia.gc();\n" +
+          'console.log("charged " + (peak - before) + " kept " + (Goccia.gc.bytesAllocated - before));\n',
+      );
+      const result = Bun.spawnSync([RUNNER, "--mode=bytecode", file], { stdout: "pipe", stderr: "pipe" });
+      const out = result.stdout.toString() + result.stderr.toString();
+      const match = out.match(/charged (-?\d+) kept (-?\d+)/);
+      if (result.exitCode !== 0 || !match) throw new Error(`The ${name} recursion did not run:\n${out}`);
+      return { charged: Number(match[1]), kept: Number(match[2]) };
+    };
+    const plainCharge = recursionCharge("plain", "if (n === 0) return atBottom(); return 1 + recurse(n - 1);");
+    const guardedCharge = recursionCharge(
+      "guarded",
+      "try { if (n === 0) return atBottom(); return 1 + recurse(n - 1); } catch (e) { throw e; }",
+    );
+    if (guardedCharge.charged - plainCharge.charged < 1000 * 12)
+      throw new Error(
+        `A recursion through try blocks was not charged for its handlers: ` +
+          `${guardedCharge.charged} bytes against ${plainCharge.charged} without them`,
+      );
+    if (guardedCharge.kept >= 8 * 1024)
+      throw new Error(`A recursion through try blocks kept ${guardedCharge.kept} bytes of charge after it returned`);
   } finally {
     clean(tmp);
   }

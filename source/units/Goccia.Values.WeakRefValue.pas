@@ -25,7 +25,6 @@ type
     destructor Destroy; override;
 
     function ToStringTag: string; override;
-    function BuiltinTagFallback: Boolean; override;
 
     procedure InitializeNativeFromArguments(const AArguments: TGocciaArgumentsCollection); override;
     procedure MarkReferences; override;
@@ -129,11 +128,6 @@ end;
 function TGocciaWeakRefValue.ToStringTag: string;
 begin
   Result := CONSTRUCTOR_WEAK_REF;
-end;
-
-function TGocciaWeakRefValue.BuiltinTagFallback: Boolean;
-begin
-  Result := True;
 end;
 
 // ES2026 §26.1.1.1 WeakRef(target)

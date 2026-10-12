@@ -54,6 +54,11 @@ type
   protected
     FStrictThis: Boolean;
     FStrictCode: Boolean;
+    // True while the function's original "length" or "name" is live and
+    // synthesized on demand. A delete clears it for good: a property of that
+    // key defined later is an ordinary entry in FProperties, listed where it
+    // was created (ES2026 §10.1.11.1 OrdinaryOwnPropertyKeys) rather than in
+    // the slot GetAllPropertyNames gives the original length and name.
     FHasOwnLengthProperty: Boolean;
     FHasOwnNameProperty: Boolean;
     FCreationRealm: TGocciaRealm;
@@ -932,10 +937,6 @@ procedure TGocciaFunctionBase.DefineProperty(const AName: string;
 begin
   MaterializeIntrinsicProperty(AName);
   inherited DefineProperty(AName, ADescriptor);
-  if AName = PROP_LENGTH then
-    FHasOwnLengthProperty := True
-  else if AName = PROP_NAME then
-    FHasOwnNameProperty := True;
 end;
 
 function TGocciaFunctionBase.TryDefineProperty(const AName: string;
@@ -943,13 +944,6 @@ function TGocciaFunctionBase.TryDefineProperty(const AName: string;
 begin
   MaterializeIntrinsicProperty(AName);
   Result := inherited TryDefineProperty(AName, ADescriptor);
-  if Result then
-  begin
-    if AName = PROP_LENGTH then
-      FHasOwnLengthProperty := True
-    else if AName = PROP_NAME then
-      FHasOwnNameProperty := True;
-  end;
 end;
 
 function TGocciaFunctionBase.IsCallable: Boolean;

@@ -101,6 +101,9 @@ function runIgnore(
 let baseSha: string;
 let websiteChangeSha: string;
 let releaseOnlySha: string;
+let docsChangeSha: string;
+let readmeChangeSha: string;
+let engineOnlySha: string;
 
 beforeAll(() => {
   repo = mkdtempSync(path.join(tmpdir(), "goccia-ignore-repo-"));
@@ -112,6 +115,12 @@ beforeAll(() => {
   websiteChangeSha = commit("website/src/app/page.tsx", "export default 1;\n");
   // A release commit as this repo actually produces one: CHANGELOG.md only.
   releaseOnlySha = commit("CHANGELOG.md", "## 0.11.0\n");
+  // website/source.config.ts compiles README.md and docs/**/*.md into the
+  // site, so these change it as much as a website/ edit does.
+  docsChangeSha = commit("docs/guide.md", "# Guide\n");
+  readmeChangeSha = commit("README.md", "changed\n");
+  // An engine-only commit: nothing the site is built from.
+  engineOnlySha = commit("source/units/Engine.pas", "unit Engine;\n");
 });
 
 afterAll(() => {
@@ -130,8 +139,48 @@ for (const cwdCase of CWD_CASES) {
         },
         cwdCase.dir(),
       );
-      expect(output).toContain("Website changes detected; building.");
+      expect(output).toContain("Website or docs changes detected; building.");
       expect(code).toBe(1);
+    });
+
+    test("builds when docs/ changed", () => {
+      const { code, output } = runIgnore(
+        {
+          VERCEL_GIT_PREVIOUS_SHA: releaseOnlySha,
+          VERCEL_GIT_COMMIT_SHA: docsChangeSha,
+          GOCCIA_SKIP_RELEASE_CHECK: "1",
+        },
+        cwdCase.dir(),
+      );
+      expect(output).toContain("Website or docs changes detected; building.");
+      expect(code).toBe(1);
+    });
+
+    test("builds when README.md changed", () => {
+      const { code, output } = runIgnore(
+        {
+          VERCEL_GIT_PREVIOUS_SHA: docsChangeSha,
+          VERCEL_GIT_COMMIT_SHA: readmeChangeSha,
+          GOCCIA_SKIP_RELEASE_CHECK: "1",
+        },
+        cwdCase.dir(),
+      );
+      expect(output).toContain("Website or docs changes detected; building.");
+      expect(code).toBe(1);
+    });
+
+    test("skips a commit that touches only engine source", () => {
+      const { code, output } = runIgnore(
+        {
+          VERCEL_GIT_PREVIOUS_SHA: readmeChangeSha,
+          VERCEL_GIT_COMMIT_SHA: engineOnlySha,
+          GOCCIA_SKIP_RELEASE_CHECK: "1",
+        },
+        cwdCase.dir(),
+      );
+      expect(output).toContain("No website or docs changes detected");
+      expect(output).toContain("Skipping build.");
+      expect(code).toBe(0);
     });
 
     test("skips a commit that touches nothing under website/", () => {
@@ -145,7 +194,7 @@ for (const cwdCase of CWD_CASES) {
       );
       // Reaching the freshness branch at all is the point: a pathspec that
       // matched the whole repository would report a website change here.
-      expect(output).toContain("No website changes detected");
+      expect(output).toContain("No website or docs changes detected");
       expect(output).toContain("Skipping build.");
       expect(code).toBe(0);
     });

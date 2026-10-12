@@ -36,6 +36,21 @@ type
   end;
   TNumericParameterProofMap = TDictionary<TGocciaExpression,
     TClosedNumericCallProof>;
+  // Variable declaration -> bit (1 shl I) for each of its variables I whose
+  // binding holds only Numbers (see Goccia.Compiler.NumericBindings).
+  TNumberBindingProofMap = THashMap<TGocciaStatement, UInt64>;
+  // The non-strict block-level function declarations that also get a var
+  // binding (see Goccia.Compiler.BlockFunctions). A declaration is a key only
+  // when it gets one; the value is unused.
+  TBlockFunctionVarBindingSet = THashMap<TGocciaStatement, Boolean>;
+
+  { The line-map position that BeginInstructionLocation displaced, so that
+    EndInstructionLocation can hand it back. }
+  TGocciaInstructionLocation = record
+    Restore: Boolean;
+    Line: UInt32;
+    Column: UInt16;
+  end;
 
   TGocciaCompilationContext = record
     Template: TGocciaFunctionTemplate;
@@ -43,10 +58,31 @@ type
     SourcePath: string;
     FormalParameterCounts: TFormalParameterCountMap;
     NumericParameterProofs: TNumericParameterProofMap;
+    NumberBindingProofs: TNumberBindingProofMap;
+    BlockFunctionVarBindings: TBlockFunctionVarBindingSet;
     GlobalBackedTopLevel: Boolean;
+    { Whether the top-level lexical declarations of a global-backed top level
+      are global bindings too. A Script's are (§16.1.7
+      GlobalDeclarationInstantiation); eval code's stay in the eval's own
+      declarative environment (§19.2.1.1 PerformEval step 17), so they are
+      locals of the eval template. }
+    GlobalBackedTopLevelLexicals: Boolean;
+    { The register that holds the completion value of eval code (§19.2.1.1
+      PerformEval steps 29-30), or -1 outside the top level of eval code. }
+    CompletionRegister: Integer;
+    { The top level of non-strict direct eval code in a function: its var and
+      function declarations are bindings of the caller's variable
+      environment, which the eval declared before its code runs (a caller's
+      var binding of the name, or a property of the caller's hidden variable
+      object). A declaration's value is assigned to the binding its name
+      resolves to, as an assignment would (ADR 0134). }
+    DirectEvalVarsByName: Boolean;
     PreinitializedTopLevelFunctions: Boolean;
     StrictTypes: Boolean;
     CompatibilityNonStrictMode: Boolean;
+    { The compiler-wide flag that lets code be non-strict at all, which a
+      strict class body clears for its duration and then restores. }
+    NonStrictCodeEnabled: Boolean;
     ArgumentsObjectEnabled: Boolean;
     NonStrictMode: Boolean;
     DerivedConstructorThisGuard: Boolean;
@@ -65,6 +101,10 @@ procedure EmitLoadStringLiteral(const ACtx: TGocciaCompilationContext;
   const ADest: UInt16; const AValue: string);
 procedure EmitLineMapping(const ACtx: TGocciaCompilationContext;
   const ALine, AColumn: Integer);
+function BeginInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALine, AColumn: Integer): TGocciaInstructionLocation;
+procedure EndInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALocation: TGocciaInstructionLocation);
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
   const AOp: TGocciaOpCode; const AReg: UInt16): Integer; overload;
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
@@ -89,10 +129,30 @@ implementation
 uses
   TextSemantics;
 
+// ES2026 §15.7.14 ClassDefinitionEvaluation runs the class body with the
+// class's PrivateEnvironment, so a function or class created by code in the
+// body belongs to it (§10.2.3 OrdinaryFunctionCreate). Code in a class body
+// runs inline in the enclosing function, so each such creation is followed
+// by an instruction that hands it the class.
+procedure EmitSetPrivateClass(const ACtx: TGocciaCompilationContext;
+  const AInstruction: UInt64);
+var
+  Target: UInt16;
+begin
+  Target := UInt16((AInstruction shr 8) and $FF) or
+    UInt16(((AInstruction shr 32) and $FF) shl 8);
+  ACtx.Template.EmitInstruction(EncodeABC(OP_SET_PRIVATE_CLASS, Target,
+    UInt16(ACtx.Scope.PrivateClassReg), 0));
+end;
+
 function EmitInstruction(const ACtx: TGocciaCompilationContext;
   const AInstruction: UInt64; const AForceWide: Boolean): Integer;
 begin
   Result := ACtx.Template.EmitInstruction(AInstruction, AForceWide);
+  if Assigned(ACtx.Scope) and (ACtx.Scope.PrivateClassReg >= 0) and
+     (((AInstruction and $FF) = Ord(OP_CLOSURE)) or
+      ((AInstruction and $FF) = Ord(OP_NEW_CLASS))) then
+    EmitSetPrivateClass(ACtx, AInstruction);
 end;
 
 function TrySingleUTF16CodeUnitString(const AValue: string;
@@ -124,6 +184,45 @@ begin
   if Assigned(ACtx.Template.DebugInfo) then
     ACtx.Template.DebugInfo.AddLineMapping(
       UInt32(ACtx.Template.CodeCount), UInt32(ALine), UInt16(AColumn));
+end;
+
+{ Locates the instructions emitted until EndInstructionLocation at ALine and
+  AColumn, and every instruction after them where it would have been without
+  the pair. An expression's own line mapping precedes the code of its
+  operands, so an instruction emitted after an operand — the property load of
+  `a.b.c` — would otherwise be located at that operand. Only the line map
+  changes: the instructions are the same either way. }
+function BeginInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALine, AColumn: Integer): TGocciaInstructionLocation;
+var
+  DebugInfo: TGocciaDebugInfo;
+  Last: TGocciaLineMapEntry;
+begin
+  Result.Restore := False;
+  Result.Line := 0;
+  Result.Column := 0;
+  DebugInfo := ACtx.Template.DebugInfo;
+  if not Assigned(DebugInfo) or (ALine <= 0) then
+    Exit;
+  if DebugInfo.LineMapCount > 0 then
+  begin
+    Last := DebugInfo.GetLineMapEntry(DebugInfo.LineMapCount - 1);
+    if (Last.Line = UInt32(ALine)) and (Last.Column = UInt16(AColumn)) then
+      Exit;
+    Result.Restore := True;
+    Result.Line := Last.Line;
+    Result.Column := Last.Column;
+  end;
+  DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), UInt32(ALine),
+    UInt16(AColumn));
+end;
+
+procedure EndInstructionLocation(const ACtx: TGocciaCompilationContext;
+  const ALocation: TGocciaInstructionLocation);
+begin
+  if ALocation.Restore then
+    ACtx.Template.DebugInfo.AddLineMapping(
+      UInt32(ACtx.Template.CodeCount), ALocation.Line, ALocation.Column);
 end;
 
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;

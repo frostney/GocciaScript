@@ -199,6 +199,11 @@ begin
       URLSearchParamsSymbolIterator,
       0,
       [pfConfigurable, pfWritable]);
+    // WebIDL: the class string lives on the interface prototype.
+    Members.AddSymbolDataProperty(
+      TGocciaSymbolValue.WellKnownToStringTag,
+      TGocciaStringLiteralValue.Create(CONSTRUCTOR_URL_SEARCH_PARAMS),
+      [pfConfigurable]);
     RegisterMemberDefinitions(Shared.Prototype, Members.ToDefinitions);
   finally
     Members.Free;

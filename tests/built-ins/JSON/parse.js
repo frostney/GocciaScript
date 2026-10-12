@@ -151,6 +151,30 @@ test("JSON.parse with reviver transforms values", () => {
   expect(result.b).toBe(4);
 });
 
+// InternalizeJSONProperty walks an object value's keys with
+// EnumerableOwnProperties, so a typed array a reviver stores ahead of the walk
+// has each of its elements revived.
+test("JSON.parse reviver walks the elements of a typed array it stores", () => {
+  const keys = [];
+  const reviver = {
+    revive(key, value) {
+      keys.push(key);
+      if (key === "a") {
+        this.b = new Uint8Array([9, 8]);
+      }
+      if (key === "0") {
+        return 7;
+      }
+      return value;
+    },
+  }.revive;
+
+  const result = JSON.parse('{"a":1,"b":2}', reviver);
+  expect(keys).toEqual(["a", "0", "1", "b", ""]);
+  expect(result.b[0]).toBe(7);
+  expect(result.b[1]).toBe(8);
+});
+
 test("JSON.parse reviver can remove properties", () => {
   const result = JSON.parse('{"a":1,"b":2,"c":3}', (key, value) => {
     if (key === "b") {

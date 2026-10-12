@@ -127,6 +127,9 @@ type
     FStrictModeSourceActive: Boolean;
     FAllowInExpression: Boolean;
     FParenthesizedExpressionDepth: Integer;
+    // ADR 0134 static detection: what the function being parsed contains
+    // so far (TGocciaDirectEvalUsage).
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
 
     procedure AddWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
     procedure AddUnsupportedFeatureWarning(const AMessage, ASuggestion: string; const ALine, AColumn: Integer);
@@ -151,6 +154,12 @@ type
     procedure EnterFunctionLabelScope(out ASavedActiveLabels,
       ASavedActiveIterationLabels: TUnicodeStringList;
       out ASavedDirectLabelStart: Integer);
+    function EnterDirectEvalScope: TGocciaDirectEvalUsage;
+    function LeaveDirectEvalScope(
+      const AOuterUsage: TGocciaDirectEvalUsage): TGocciaDirectEvalUsage;
+    procedure NoteDirectEvalCandidate(const ACall: TGocciaCallExpression);
+    function ParseClassFieldInitializer: TGocciaExpression;
+    function ParseClassStaticBlockBody: TGocciaBlockStatement;
     procedure LeaveFunctionLabelScope(const ASavedActiveLabels,
       ASavedActiveIterationLabels: TUnicodeStringList;
       const ASavedDirectLabelStart: Integer);
@@ -158,6 +167,7 @@ type
       const ALexicalGoal: TGocciaLexicalGoal);
     function SourceSpanAtPosition(const ALine,
       AColumn: Integer): TGocciaSourceSpan;
+    function SourceSpanFromToken(const AToken: TGocciaToken): TGocciaSourceSpan;
 
     function IsAtEnd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function Peek: TGocciaToken; {$IFDEF FPC}inline;{$ENDIF}
@@ -232,8 +242,9 @@ type
     function NullishCoalescing: TGocciaExpression;
     function LogicalAnd: TGocciaExpression;
     function ParseMemberAccessSegment(const AReceiver: TGocciaExpression;
-      const AUsePropertyNameLocation, AAllowOptionalCall: Boolean;
-      out ASegmentLine, ASegmentColumn: Integer): TGocciaExpression;
+      const AAllowOptionalCall: Boolean): TGocciaExpression;
+    function CallPositionToken(const ACallee: TGocciaExpression;
+      const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
     function ParseParameterList: TGocciaParameterArray;
@@ -241,6 +252,14 @@ type
     // Getter/setter expression parsing (shared by object literals and class bodies)
     function ParseGetterExpression: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
+
+    // Auto-accessor desugaring (TC39 proposal-decorators)
+    function AutoAccessorStorageName(const AMemberName: string;
+      const AIsComputed: Boolean; const AElementIndex: Integer): string;
+    function BuildAutoAccessorGetter(const AStorageName: string;
+      const ALine, AColumn: Integer): TGocciaGetterExpression;
+    function BuildAutoAccessorSetter(const AStorageName: string;
+      const ALine, AColumn: Integer): TGocciaSetterExpression;
 
     // Function body parsing: (params) { stmts } -> function expression
     function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
@@ -643,6 +662,21 @@ begin
   Result := Previous.Span.InSameSource(Offset, EndOffset);
 end;
 
+{ The span from AToken's start to the end of the last token consumed. For a
+  token on one line it is SourceSpanAtPosition(AToken.Line, AToken.Column),
+  without working out a line and column only to turn them back into an
+  offset. }
+function TGocciaParser.SourceSpanFromToken(
+  const AToken: TGocciaToken): TGocciaSourceSpan;
+var
+  EndOffset: Integer;
+begin
+  EndOffset := Previous.Span.EndOffset;
+  if EndOffset < AToken.Span.StartOffset then
+    EndOffset := AToken.Span.StartOffset;
+  Result := Previous.Span.InSameSource(AToken.Span.StartOffset, EndOffset);
+end;
+
 procedure TGocciaParser.ApplyOptions(const AOptions: TGocciaParserOptions);
 begin
   FAutomaticSemicolonInsertion := AOptions.AutomaticSemicolonInsertion;
@@ -796,6 +830,68 @@ begin
     if FPrivateClassContexts[I].HasDeclaration(AName) then
       Exit(True);
   Result := False;
+end;
+
+{ ADR 0134 static detection. Each function-like construct collects its own
+  TGocciaDirectEvalUsage: EnterDirectEvalScope starts an empty collection and
+  returns the enclosing one, and LeaveDirectEvalScope returns what was
+  collected and puts the enclosing one back. }
+function TGocciaParser.EnterDirectEvalScope: TGocciaDirectEvalUsage;
+begin
+  Result := FDirectEvalUsage;
+  FDirectEvalUsage := [];
+end;
+
+function TGocciaParser.LeaveDirectEvalScope(
+  const AOuterUsage: TGocciaDirectEvalUsage): TGocciaDirectEvalUsage;
+begin
+  Result := FDirectEvalUsage;
+  FDirectEvalUsage := AOuterUsage;
+end;
+
+{ ES2026 §13.3.6.1: a call whose callee is the plain identifier `eval`, not an
+  optional call, is a direct eval when the callee is %eval% at run time. The
+  test is the compiler's IsDirectEvalCall, so every call the compiler compiles
+  as a direct eval site is counted here. }
+procedure TGocciaParser.NoteDirectEvalCandidate(
+  const ACall: TGocciaCallExpression);
+begin
+  if ACall.Optional or not (ACall.Callee is TGocciaIdentifierExpression) or
+     (TGocciaIdentifierExpression(ACall.Callee).Name <> 'eval') then
+    Exit;
+  Include(FDirectEvalUsage, deuDirectEval);
+  if EffectiveNonStrictModeEnabled then
+    Include(FDirectEvalUsage, deuSloppyDirectEval);
+end;
+
+{ A class field initializer and a static block run as functions of their own
+  (ES2026 §15.7.10 ClassFieldDefinitionEvaluation, §15.7.11
+  ClassStaticBlockDefinitionEvaluation), so a direct eval in one is not in the
+  function that contains the class. Class code is strict by ES2026 §11.2.2,
+  so the compiler needs nothing recorded for them: their direct eval calls
+  are never sloppy. }
+function TGocciaParser.ParseClassFieldInitializer: TGocciaExpression;
+var
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
+begin
+  OuterDirectEvalUsage := EnterDirectEvalScope;
+  try
+    Result := AssignmentAllowIn;
+  finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
+  end;
+end;
+
+function TGocciaParser.ParseClassStaticBlockBody: TGocciaBlockStatement;
+var
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
+begin
+  OuterDirectEvalUsage := EnterDirectEvalScope;
+  try
+    Result := BlockStatement;
+  finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
+  end;
 end;
 
 procedure TGocciaParser.EnterFunctionLabelScope(out ASavedActiveLabels,
@@ -2053,29 +2149,28 @@ function ExpressionContainsOptionalChain(
 function ExpressionIsOptionalChainTag(
   const AExpr: TGocciaExpression): Boolean; forward;
 
+{ A dotted member is located at its property name, where V8 reports a failed
+  read (`obj.x` at `x`); a computed or private member stays at its `[` or `.`. }
 function TGocciaParser.ParseMemberAccessSegment(
-  const AReceiver: TGocciaExpression; const AUsePropertyNameLocation,
-  AAllowOptionalCall: Boolean; out ASegmentLine,
-  ASegmentColumn: Integer): TGocciaExpression;
+  const AReceiver: TGocciaExpression;
+  const AAllowOptionalCall: Boolean): TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Argument: TGocciaExpression;
   PropertyName: string;
-  Token: TGocciaToken;
-  PropertyLine, PropertyColumn: Integer;
+  Token, SegmentToken, OpenParen: TGocciaToken;
   IsOptionalChain: Boolean;
   CurrentType: TGocciaTokenType;
 begin
   CurrentType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
-  Token := Advance;
-  ASegmentLine := Token.Line;
-  ASegmentColumn := Token.Column;
+  SegmentToken := Advance;
+  Token := SegmentToken;
   IsOptionalChain := CurrentType = gttOptionalChaining;
 
   if IsOptionalChain and (AReceiver is TGocciaSuperExpression) then
     raise TGocciaSyntaxError.Create(
       'Optional chaining is not allowed directly on super',
-      ASegmentLine, ASegmentColumn, FFileName, FSourceLines);
+      SegmentToken.Line, SegmentToken.Column, FFileName, FSourceLines);
 
   case CurrentType of
     gttDot, gttOptionalChaining:
@@ -2088,7 +2183,7 @@ begin
           PropertyName := Token.Lexeme;
           RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
           Result := TGocciaPrivateMemberExpression.Create(
-            AReceiver, PropertyName, SourceSpanAtPosition(ASegmentLine, ASegmentColumn),
+            AReceiver, PropertyName, SourceSpanFromToken(SegmentToken),
             IsOptionalChain);
         end
         else if Check(gttLeftBracket) and IsOptionalChain then
@@ -2098,11 +2193,13 @@ begin
           Consume(gttRightBracket, 'Expected "]" after computed member expression',
             SSuggestCloseBracketComputedProperty);
           Result := TGocciaMemberExpression.Create(AReceiver, Argument,
-            SourceSpanAtPosition(ASegmentLine, ASegmentColumn), True);
+            SourceSpanFromToken(SegmentToken), True);
         end
         else if Check(gttLeftParen) and IsOptionalChain and AAllowOptionalCall then
         begin
-          Advance;
+          { An optional call follows `?.`, never a name, so it is located at
+            its `(`, as V8 locates it. }
+          OpenParen := Advance;
           Arguments := TObjectList<TGocciaExpression>.Create(True);
           try
             if not Check(gttRightParen) then
@@ -2119,7 +2216,7 @@ begin
             Consume(gttRightParen, 'Expected ")" after arguments',
               SSuggestCloseParenArguments);
             Result := TGocciaCallExpression.Create(AReceiver, Arguments,
-              SourceSpanAtPosition(ASegmentLine, ASegmentColumn), True);
+              SourceSpanFromToken(OpenParen), True);
           except
             Arguments.Free;
             raise;
@@ -2131,16 +2228,6 @@ begin
           begin
             Token := Advance;
             PropertyName := Token.Lexeme;
-            if AUsePropertyNameLocation then
-            begin
-              PropertyLine := Token.Line;
-              PropertyColumn := Token.Column;
-            end
-            else
-            begin
-              PropertyLine := ASegmentLine;
-              PropertyColumn := ASegmentColumn;
-            end;
           end
           else
             raise TGocciaSyntaxError.Create('Expected property name after "."',
@@ -2148,7 +2235,7 @@ begin
               SSuggestPropertyNameIdentifier);
 
           Result := TGocciaMemberExpression.Create(AReceiver, PropertyName,
-            False, SourceSpanAtPosition(PropertyLine, PropertyColumn), IsOptionalChain);
+            False, SourceSpanFromToken(Token), IsOptionalChain);
         end;
       end;
     gttHash:
@@ -2158,7 +2245,7 @@ begin
         PropertyName := Token.Lexeme;
         RecordPrivateNameReference(PropertyName, Token.Line, Token.Column);
         Result := TGocciaPrivateMemberExpression.Create(AReceiver, PropertyName,
-          SourceSpanAtPosition(ASegmentLine, ASegmentColumn));
+          SourceSpanFromToken(SegmentToken));
       end;
     gttLeftBracket:
       begin
@@ -2166,11 +2253,31 @@ begin
         Consume(gttRightBracket, 'Expected "]" after computed member expression',
           SSuggestCloseBracketComputedProperty);
         Result := TGocciaMemberExpression.Create(AReceiver, Argument,
-          SourceSpanAtPosition(ASegmentLine, ASegmentColumn));
+          SourceSpanFromToken(SegmentToken));
       end;
   else
     raise TGocciaSyntaxError.Create('Expected member access',
       Token.Line, Token.Column, FFileName, FSourceLines);
+  end;
+end;
+
+{ ECMA-262 does not say where a call is. A call is located where V8 locates
+  it, so that a stack trace, an audit event and a PermissionDenied name the
+  column V8 does: at the name the `(` follows when that name is an
+  identifier — the callee `f` of `f()`, `super` of `super()`, or the property
+  `b` of `a.b()` — and at the `(` otherwise. V8 keys this on the token, not on
+  the callee: a reserved-word property (`p.catch()`), a private name
+  (`this.#m()`), a parenthesized callee (`(f)()`) and type arguments
+  (`f<T>()`) all put the call at its `(`. }
+function TGocciaParser.CallPositionToken(const ACallee: TGocciaExpression;
+  const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
+begin
+  Result := AOpenParen;
+  if ACallee is TGocciaPrivateMemberExpression then
+    Exit;
+  case ACalleeEnd.TokenType of
+    gttIdentifier, gttLet, gttStatic, gttFrom, gttAs, gttSuper:
+      Result := ACalleeEnd;
   end;
 end;
 
@@ -2190,9 +2297,10 @@ begin
     case CurrentType of
       gttLeftParen:
         begin
-          Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
+          { The token before the `(`, read before Advance consumes the `(`:
+            Pascal does not fix the order a call's arguments are evaluated. }
+          Token := Previous;
+          Token := CallPositionToken(Result, Token, Advance);
           Arguments := TObjectList<TGocciaExpression>.Create(True);
           try
             if not Check(gttRightParen) then
@@ -2209,7 +2317,9 @@ begin
 
             Consume(gttRightParen, 'Expected ")" after arguments',
               SSuggestCloseParenArguments);
-            Result := TGocciaCallExpression.Create(Result, Arguments, SourceSpanAtPosition(Line, Column));
+            Result := TGocciaCallExpression.Create(Result, Arguments,
+              SourceSpanFromToken(Token));
+            NoteDirectEvalCandidate(TGocciaCallExpression(Result));
           except
             Arguments.Free;
             raise;
@@ -2217,15 +2327,15 @@ begin
         end;
       gttDot, gttOptionalChaining:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttHash:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttLeftBracket:
         begin
-          Result := ParseMemberAccessSegment(Result, False, True, Line, Column);
+          Result := ParseMemberAccessSegment(Result, True);
         end;
       gttNot:
         begin
@@ -2657,6 +2767,7 @@ var
   AsyncStartLine, AsyncStartColumn: Integer;
   IsGenerator: Boolean;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage, ArrowDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   case Peek.TokenType of
     gttTrue:
@@ -2801,7 +2912,7 @@ begin
         // but NOT call expressions — those belong to the outer Call loop.
         Expr := Primary;
         while Check(gttDot) or Check(gttLeftBracket) do
-          Expr := ParseMemberAccessSegment(Expr, True, False, Line, Column);
+          Expr := ParseMemberAccessSegment(Expr, False);
         TryCollectNewExpressionTypeArguments;
         if Check(gttOptionalChaining) then
           raise TGocciaSyntaxError.Create(
@@ -2888,12 +2999,14 @@ begin
           Inc(FFunctionDepth);
           FInAsyncFunction := 1;
           FInGeneratorFunction := 0;
+          OuterDirectEvalUsage := EnterDirectEvalScope;
           try
             if Match(gttLeftBrace) then
               ArrowBody := ParseFunctionBodyBlock
             else
               ArrowBody := Assignment;
           finally
+            ArrowDirectEvalUsage := LeaveDirectEvalScope(OuterDirectEvalUsage);
             FInGeneratorFunction := SavedInGeneratorFunction;
             FInAsyncFunction := SavedInAsyncFunction;
             Dec(FFunctionDepth);
@@ -2915,6 +3028,7 @@ begin
           ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, SourceSpanAtPosition(Line, Column));
           ArrowFn.IsAsync := True;
           ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+          ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
           Result := ArrowFn;
         end
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape then
@@ -4272,6 +4386,7 @@ var
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4293,16 +4408,71 @@ begin
   FInGeneratorFunction := 0;
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
     SavedDirectLabelStart);
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   try
     Result := TGocciaGetterExpression.Create(
       ParseFunctionBodyBlock, SourceSpanAtPosition(Line, Column));
+    Result.DirectEvalUsage := FDirectEvalUsage;
   finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
     LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
   end;
+end;
+
+// TC39 proposal-decorators, ClassFieldDefinitionEvaluation for
+// `accessor ClassElementName Initializer?`: the value lives in "a new Private
+// Name whose [[Description]] is" the name followed by " accessor storage". A
+// space keeps the name out of reach of any source text, and the element index
+// keeps two accessors of the same name apart. ':' and '$' delimit the parts of
+// a bytecode private key, so a name containing either is left out.
+function TGocciaParser.AutoAccessorStorageName(const AMemberName: string;
+  const AIsComputed: Boolean; const AElementIndex: Integer): string;
+begin
+  if AIsComputed or (AMemberName = '') or (Pos(':', AMemberName) > 0) or
+     (Pos('$', AMemberName) > 0) then
+    Result := IntToStr(AElementIndex) + ' accessor storage'
+  else
+    Result := AMemberName + ' accessor storage ' + IntToStr(AElementIndex);
+end;
+
+// MakeAutoAccessorGetter: `get name() { return this.#storage; }`. PrivateGet
+// throws TypeError on a receiver without the storage. The node has no source
+// text, so Function.prototype.toString gives the built-in form the proposal's
+// CreateBuiltinFunction calls for.
+function TGocciaParser.BuildAutoAccessorGetter(const AStorageName: string;
+  const ALine, AColumn: Integer): TGocciaGetterExpression;
+var
+  Span: TGocciaSourceSpan;
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  Span := SourceSpanAtPosition(ALine, AColumn);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Statements.Add(TGocciaReturnStatement.Create(
+    TGocciaPrivateMemberExpression.Create(TGocciaThisExpression.Create(Span),
+      AStorageName, Span), Span));
+  Result := TGocciaGetterExpression.Create(
+    TGocciaBlockStatement.Create(Statements, Span), Span);
+end;
+
+// MakeAutoAccessorSetter: `set name(value) { this.#storage = value; }`.
+function TGocciaParser.BuildAutoAccessorSetter(const AStorageName: string;
+  const ALine, AColumn: Integer): TGocciaSetterExpression;
+var
+  Span: TGocciaSourceSpan;
+  Statements: TObjectList<TGocciaASTNode>;
+begin
+  Span := SourceSpanAtPosition(ALine, AColumn);
+  Statements := TObjectList<TGocciaASTNode>.Create(True);
+  Statements.Add(TGocciaExpressionStatement.Create(
+    TGocciaPrivatePropertyAssignmentExpression.Create(
+      TGocciaThisExpression.Create(Span), AStorageName,
+      TGocciaIdentifierExpression.Create('value', Span), Span), Span));
+  Result := TGocciaSetterExpression.Create('value',
+    TGocciaBlockStatement.Create(Statements, Span), Span);
 end;
 
 function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
@@ -4314,53 +4484,60 @@ var
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  Consume(gttLeftParen, 'Expected "(" after setter name',
-    SSuggestOpenParenSetterParameterList);
-  if Check(gttRightParen) then
-    raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
-      Peek.Line, Peek.Column, FFileName, FSourceLines,
-      SSuggestSetterOneParameter);
-  Params := ParseParameterList;
-  if Length(Params) <> 1 then
-    raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
-      Previous.Line, Previous.Column, FFileName, FSourceLines,
-      SSuggestSetterOneParameter);
-  if Params[0].IsRest then
-    raise TGocciaSyntaxError.Create('Setter parameter cannot be a rest parameter',
-      Previous.Line, Previous.Column, FFileName, FSourceLines,
-      SSuggestSetterOneParameter);
-  Consume(gttRightParen, 'Expected ")" after setter parameter',
-    SSuggestCloseParenSetterParameter);
-  if Check(gttColon) then
-  begin
-    Advance;
-    CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
-  end;
-  Consume(gttLeftBrace, 'Expected "{" before setter body',
-    SSuggestOpenBraceSetterBody);
-  SavedInAsyncFunction := FInAsyncFunction;
-  SavedInGeneratorFunction := FInGeneratorFunction;
-  Inc(FFunctionDepth);
-  FInAsyncFunction := 0;
-  FInGeneratorFunction := 0;
-  EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
-    SavedDirectLabelStart);
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Body := ParseFunctionBodyBlock;
-    SetterIsStrict := (not EffectiveNonStrictModeEnabled) or
-      HasUseStrictDirective(Body);
-    ValidateParameterEarlyErrors(Params, Line, Column, True, False, False,
-      SetterIsStrict);
-    Result := TGocciaSetterExpression.Create(Params, Body, SourceSpanAtPosition(Line, Column));
-  finally
-    LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+    Consume(gttLeftParen, 'Expected "(" after setter name',
+      SSuggestOpenParenSetterParameterList);
+    if Check(gttRightParen) then
+      raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
+        Peek.Line, Peek.Column, FFileName, FSourceLines,
+        SSuggestSetterOneParameter);
+    Params := ParseParameterList;
+    if Length(Params) <> 1 then
+      raise TGocciaSyntaxError.Create('Setter must have exactly one parameter',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        SSuggestSetterOneParameter);
+    if Params[0].IsRest then
+      raise TGocciaSyntaxError.Create('Setter parameter cannot be a rest parameter',
+        Previous.Line, Previous.Column, FFileName, FSourceLines,
+        SSuggestSetterOneParameter);
+    Consume(gttRightParen, 'Expected ")" after setter parameter',
+      SSuggestCloseParenSetterParameter);
+    if Check(gttColon) then
+    begin
+      Advance;
+      CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
+    end;
+    Consume(gttLeftBrace, 'Expected "{" before setter body',
+      SSuggestOpenBraceSetterBody);
+    SavedInAsyncFunction := FInAsyncFunction;
+    SavedInGeneratorFunction := FInGeneratorFunction;
+    Inc(FFunctionDepth);
+    FInAsyncFunction := 0;
+    FInGeneratorFunction := 0;
+    EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
-    FInGeneratorFunction := SavedInGeneratorFunction;
-    FInAsyncFunction := SavedInAsyncFunction;
-    Dec(FFunctionDepth);
+    try
+      Body := ParseFunctionBodyBlock;
+      SetterIsStrict := (not EffectiveNonStrictModeEnabled) or
+        HasUseStrictDirective(Body);
+      ValidateParameterEarlyErrors(Params, Line, Column, True, False, False,
+        SetterIsStrict);
+      Result := TGocciaSetterExpression.Create(Params, Body, SourceSpanAtPosition(Line, Column));
+      Result.DirectEvalUsage := FDirectEvalUsage;
+    finally
+      LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
+        SavedDirectLabelStart);
+      FInGeneratorFunction := SavedInGeneratorFunction;
+      FInAsyncFunction := SavedInAsyncFunction;
+      Dec(FFunctionDepth);
+    end;
+  finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
   end;
 end;
 
@@ -4372,6 +4549,7 @@ var
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Consume(gttLeftParen, 'Expected "(" before function parameters',
     SSuggestOpenParenMethodParameterList);
@@ -4381,6 +4559,7 @@ begin
   Inc(FFunctionDepth);
   FInAsyncFunction := Ord(AIsAsync);
   FInGeneratorFunction := Ord(AIsGenerator);
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
@@ -4408,11 +4587,13 @@ begin
       TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
       TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
       TGocciaFunctionExpression(Result).ParsedInStrictMode := FunctionIsStrict;
+      TGocciaFunctionExpression(Result).DirectEvalUsage := FDirectEvalUsage;
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
     end;
   finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
@@ -4501,6 +4682,7 @@ var
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
   ParametersParsedInAwaitContext: Boolean;
   ParametersParsedInYieldContext: Boolean;
+  OuterDirectEvalUsage, ArrowDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4510,6 +4692,7 @@ begin
   Inc(FFunctionDepth);
   if AIsAsync then
     FInAsyncFunction := 1;
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
@@ -4547,6 +4730,7 @@ begin
         SavedDirectLabelStart);
     end;
   finally
+    ArrowDirectEvalUsage := LeaveDirectEvalScope(OuterDirectEvalUsage);
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
@@ -4555,6 +4739,7 @@ begin
   ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, SourceSpanAtPosition(Line, Column));
   ArrowFn.ReturnType := FnReturnType;
   ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+  ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
   Result := ArrowFn;
 end;
 
@@ -4571,6 +4756,7 @@ var
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage, ArrowDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Left := Conditional;
 
@@ -4596,12 +4782,14 @@ begin
       FInGeneratorFunction := 0;
       EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
+      OuterDirectEvalUsage := EnterDirectEvalScope;
       try
         if Match(gttLeftBrace) then
           ArrowBody := ParseFunctionBodyBlock
         else
           ArrowBody := Assignment;
       finally
+        ArrowDirectEvalUsage := LeaveDirectEvalScope(OuterDirectEvalUsage);
         LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
           SavedDirectLabelStart);
         FInGeneratorFunction := SavedInGeneratorFunction;
@@ -4613,6 +4801,7 @@ begin
           False, False, True);
       ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, SourceSpanAtPosition(Line, Column));
       ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+      ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
       Result := ArrowFn;
       Exit;
     end;
@@ -6692,6 +6881,7 @@ var
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -6706,6 +6896,7 @@ begin
   Inc(FFunctionDepth);
   FInAsyncFunction := Ord(AIsAsync);
   FInGeneratorFunction := Ord(AIsGenerator);
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   try
     Parameters := ParseParameterList;
     Consume(gttRightParen, 'Expected ")" after parameters',
@@ -6760,6 +6951,7 @@ begin
         Result.GenericParams := MethodGenericParams;
         Result.ReturnType := MethodReturnType;
         Result.SourceText := ExtractSourceRange(Line, Column);
+        Result.DirectEvalUsage := FDirectEvalUsage;
       except
         Statements.Free;
         raise;
@@ -6769,6 +6961,7 @@ begin
         SavedDirectLabelStart);
     end;
   finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
@@ -6798,6 +6991,7 @@ var
   Arg: TGocciaExpression;
   PropertyName: string;
   Line, Column: Integer;
+  CalleeEnd: TGocciaToken;
 begin
   if Match(gttLeftParen) then
   begin
@@ -6811,10 +7005,11 @@ begin
 
   while True do
   begin
-    if Match(gttLeftParen) then
+    if Check(gttLeftParen) then
     begin
-      Line := Previous.Line;
-      Column := Previous.Column;
+      { Read before Advance consumes the `(`, as in Call. }
+      CalleeEnd := Previous;
+      CalleeEnd := CallPositionToken(Result, CalleeEnd, Advance);
       Arguments := TObjectList<TGocciaExpression>.Create(True);
       try
         if not Check(gttRightParen) then
@@ -6829,7 +7024,9 @@ begin
         end;
         Consume(gttRightParen, 'Expected ")" after arguments',
           SSuggestCloseParenArguments);
-        Result := TGocciaCallExpression.Create(Result, Arguments, SourceSpanAtPosition(Line, Column));
+        Result := TGocciaCallExpression.Create(Result, Arguments,
+          SourceSpanFromToken(CalleeEnd));
+        NoteDirectEvalCandidate(TGocciaCallExpression(Result));
       except
         Arguments.Free;
         raise;
@@ -6858,7 +7055,7 @@ begin
             Peek.Line, Peek.Column, FFileName, FSourceLines,
             SSuggestPropertyNameIdentifier);
         Result := TGocciaMemberExpression.Create(
-          Result, PropertyName, False, SourceSpanAtPosition(Line, Column));
+          Result, PropertyName, False, SourceSpanFromToken(Previous));
       end;
     end
     else
@@ -7699,7 +7896,7 @@ begin
         Elements[High(Elements)].IsComputed := False;
         Elements[High(Elements)].ComputedKeyExpression := nil;
         Elements[High(Elements)].Decorators := nil;
-        Elements[High(Elements)].StaticBlockBody := BlockStatement;
+        Elements[High(Elements)].StaticBlockBody := ParseClassStaticBlockBody;
         Continue;
       end;
 
@@ -7871,7 +8068,7 @@ begin
         if Check(gttAssign) then
         begin
           Advance;
-          PropertyValue := AssignmentAllowIn;
+          PropertyValue := ParseClassFieldInitializer;
         end
         else
           PropertyValue := nil;
@@ -7888,6 +8085,41 @@ begin
         Elements[High(Elements)].Decorators := MemberDecorators;
         Elements[High(Elements)].FieldInitializer := PropertyValue;
         Elements[High(Elements)].TypeAnnotation := FieldType;
+        { The proposal README's desugaring: a public `accessor x = v` is a
+          private field holding v plus a getter and setter that read and write
+          it. A private auto-accessor keeps its value under its own name. }
+        if IsPrivate then
+          Elements[High(Elements)].AccessorStorageName := MemberName
+        else
+        begin
+          Elements[High(Elements)].AccessorStorageName :=
+            AutoAccessorStorageName(MemberName, IsComputed, High(Elements));
+          Elements[High(Elements)].GetterNode := BuildAutoAccessorGetter(
+            Elements[High(Elements)].AccessorStorageName, MemberStartLine,
+            MemberStartColumn);
+          Elements[High(Elements)].SetterNode := BuildAutoAccessorSetter(
+            Elements[High(Elements)].AccessorStorageName, MemberStartLine,
+            MemberStartColumn);
+        end;
+
+        { InitializeInstanceElements initializes fields and auto-accessors
+          together, in source order, so the instance storage joins the field
+          order as a private field. Static storage is initialized with the
+          other static elements. }
+        if not IsStatic then
+        begin
+          PrivateInstanceProperties.Add(
+            Elements[High(Elements)].AccessorStorageName, PropertyValue);
+          SetLength(FieldOrder, Length(FieldOrder) + 1);
+          FieldOrder[High(FieldOrder)].Name :=
+            Elements[High(Elements)].AccessorStorageName;
+          FieldOrder[High(FieldOrder)].IsPrivate := True;
+          FieldOrder[High(FieldOrder)].IsComputed := False;
+          FieldOrder[High(FieldOrder)].ElementIndex := High(Elements);
+          FieldOrder[High(FieldOrder)].ComputedKeyExpression := nil;
+          FieldOrder[High(FieldOrder)].FieldInitializer := PropertyValue;
+          FieldOrder[High(FieldOrder)].IsAutoAccessorStorage := True;
+        end;
       end
       else if (not IsGetter) and (not IsSetter) and Check(gttAssign) then
       begin
@@ -7896,7 +8128,7 @@ begin
 
         Consume(gttAssign, 'Expected "=" in property',
           SSuggestAddPropertyInitializer);
-        PropertyValue := AssignmentAllowIn;
+        PropertyValue := ParseClassFieldInitializer;
         ConsumeSemicolonOrASI('Expected ";" after property',
           SSuggestAddSemicolon);
 
@@ -8184,9 +8416,11 @@ var
   IsUseStrict: Boolean;
   DirectiveHasForbiddenEscape: Boolean;
   PrologueHasForbiddenEscape: Boolean;
+  OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
+  OuterDirectEvalUsage := EnterDirectEvalScope;
   FStrictModeActive := FInheritedStrictMode or not FNonStrictModeEnabled;
   FStrictModeSourceActive := FInheritedStrictMode;
   FHasTopLevelAwait := False;
@@ -8222,7 +8456,9 @@ begin
 
     Result := TGocciaProgram.Create(Statements);
     Result.HasTopLevelAwait := FHasTopLevelAwait;
+    Result.DirectEvalUsage := FDirectEvalUsage;
   finally
+    LeaveDirectEvalScope(OuterDirectEvalUsage);
     FStrictModeActive := SavedStrictModeActive;
     FStrictModeSourceActive := SavedStrictModeSourceActive;
   end;

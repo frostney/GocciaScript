@@ -844,3 +844,63 @@ describe.runIf(typeof Goccia !== "undefined")("explicit GC during stringify", ()
     ).toThrow(TypeError);
   });
 });
+
+// SerializeJSONObject takes its keys from EnumerableOwnProperties, and a typed
+// array's [[OwnPropertyKeys]] lists every integer index first, each reported
+// enumerable by [[GetOwnProperty]].
+describe("JSON.stringify typed arrays", () => {
+  test("serializes the elements as index keys", () => {
+    expect(JSON.stringify(new Uint8Array([1, 2]))).toBe('{"0":1,"1":2}');
+    expect(JSON.stringify(new Float64Array([1.5]))).toBe('{"0":1.5}');
+    expect(JSON.stringify(new Uint8ClampedArray([300]))).toBe('{"0":255}');
+    expect(JSON.stringify(new Uint8Array(0))).toBe("{}");
+  });
+
+  test("serializes a nested typed array", () => {
+    expect(JSON.stringify({ a: new Int16Array([3]) })).toBe('{"a":{"0":3}}');
+    expect(JSON.stringify([new Int8Array([-1])])).toBe('[{"0":-1}]');
+  });
+
+  test("reads the elements a view covers", () => {
+    const view = new Uint8Array([1, 2, 3]).subarray(1);
+    expect(JSON.stringify(view)).toBe('{"0":2,"1":3}');
+  });
+
+  test("serializes non-finite elements as null", () => {
+    expect(JSON.stringify(new Float32Array([NaN, Infinity]))).toBe(
+      '{"0":null,"1":null}',
+    );
+  });
+
+  test("lists named own properties after the elements", () => {
+    const typed = new Uint8Array([7]);
+    typed.extra = "x";
+    expect(JSON.stringify(typed)).toBe('{"0":7,"extra":"x"}');
+  });
+
+  test("indents the elements with a gap", () => {
+    expect(JSON.stringify(new Uint8Array([1, 2]), null, 1)).toBe(
+      '{\n "0": 1,\n "1": 2\n}',
+    );
+  });
+
+  test("passes each element through a replacer function", () => {
+    const seen = [];
+    const json = JSON.stringify(new Uint8Array([4, 5]), (key, value) => {
+      seen.push(key);
+      return typeof value === "number" ? value * 2 : value;
+    });
+    expect(json).toBe('{"0":8,"1":10}');
+    expect(seen).toEqual(["", "0", "1"]);
+  });
+
+  test("keeps only the listed indices with an array replacer", () => {
+    expect(JSON.stringify(new Uint8Array([1, 2, 3]), ["2", "0"])).toBe(
+      '{"2":3,"0":1}',
+    );
+  });
+
+  test("throws for BigInt elements", () => {
+    expect(() => JSON.stringify(new BigInt64Array(1))).toThrow(TypeError);
+  });
+});

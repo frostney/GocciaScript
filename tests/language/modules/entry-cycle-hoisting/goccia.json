@@ -1,0 +1,10 @@
+{
+  "source-type": "module",
+  "compat-function": true,
+  "compat-var": true,
+  "permissions": {
+    "allow-read": [
+      "../../../../fixtures/modules"
+    ]
+  }
+}

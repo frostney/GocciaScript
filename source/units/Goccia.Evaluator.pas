@@ -61,8 +61,11 @@ function EvaluateTry(const ATryStatement: TGocciaTryStatement; const AContext: T
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
 function EvaluateClassMethod(const AClassMethod: TGocciaClassMethod; const AContext: TGocciaEvaluationContext; const ASuperClass: TGocciaValue = nil): TGocciaValue;
 function EvaluateClass(const AClassDeclaration: TGocciaClassDeclaration; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
-function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
+function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext; const AInferredName: string = ''): TGocciaValue;
+function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer; const AInferredName: string = ''): TGocciaClassValue;
+function IsAnonymousClassExpression(const AExpression: TGocciaExpression): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+function EvaluateNamedExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
 function EvaluateNewExpression(const ANewExpression: TGocciaNewExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext): TGocciaValue; overload;
 function EvaluatePrivateMember(const APrivateMemberExpression: TGocciaPrivateMemberExpression; const AContext: TGocciaEvaluationContext; out AObjectValue: TGocciaValue): TGocciaValue; overload;
@@ -136,46 +139,8 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const AAllowNewTarget: Boolean = False;
   const AAllowSuperProperty: Boolean = False;
   const AAllowSuperCall: Boolean = False;
-  const ARejectArgumentsReference: Boolean = False): TGocciaValue;
-
-{ EvaluateEvalProgram split into its two phases, so a caller can distinguish a
-  pre-execution early error from a runtime abrupt completion (both are a Pascal
-  TGocciaError, differing only by phase). PrepareEvalProgram runs phase one — all
-  of the eval Script's pre-execution work: the static early-error passes (forbidden
-  module/using declarations, a forbidden `arguments` reference, and the
-  reference/assignment early errors of ValidateEvalEarlyErrors) and then
-  EvalDeclarationInstantiation. It returns the evaluation context the body runs in.
-  Every error it raises is a pre-execution error: a TGocciaSyntaxError for a static
-  early error (including a duplicate-lexical or lexical/var conflict surfaced by
-  EvalDeclarationInstantiation), or a TGocciaTypeError for a CanDeclareGlobal*
-  conflict. RunEvalProgramBody runs phase two — evaluating the body with that
-  context and returning the Script's completion value; an error it raises is a
-  runtime abrupt completion. EvaluateEvalProgram simply chains the two. }
-function PrepareEvalProgram(const AProgram: TGocciaProgram;
-  const AContext: TGocciaEvaluationContext; const AVarScope,
-  ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
-  const ARejectArgumentsVarDeclaration: Boolean;
-  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
-  const AAllowNewTarget: Boolean = False;
-  const AAllowSuperProperty: Boolean = False;
-  const AAllowSuperCall: Boolean = False;
-  const ARejectArgumentsReference: Boolean = False): TGocciaEvaluationContext;
-function RunEvalProgramBody(const AProgram: TGocciaProgram;
-  const AEvalContext: TGocciaEvaluationContext): TGocciaValue;
-
-{ Runs the eval Script's static early-error checks for forbidden references and
-  assignments — `new.target` / `super` outside a permitting context and, under
-  strict eval, assignment to `eval`/`arguments` — the same pass EvaluateEvalProgram
-  runs before evaluating. It does NOT cover EvalDeclarationInstantiation conflicts
-  (e.g. duplicate lexical bindings), which EvaluateEvalProgram still raises later.
-  Raises a TGocciaSyntaxError on the first violation. Exposed so callers that must
-  distinguish these early errors (SyntaxError) from runtime abrupt completions
-  (TypeError) can validate up front. }
-procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
-  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
-  AAllowSuperCall: Boolean);
-procedure ValidateStrictFunctionEarlyErrors(
-  const AFunction: TGocciaFunctionExpression);
+  const ARejectArgumentsReference: Boolean = False;
+  const AStaticChecksDone: Boolean = False): TGocciaValue;
 
 implementation
 
@@ -206,6 +171,7 @@ uses
   Goccia.Error.CallDiagnostics,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Evaluator.Assignment,
   Goccia.Evaluator.Decorators,
   Goccia.Evaluator.PatternMatching,
@@ -274,19 +240,6 @@ begin
       ALine, AColumn);
 end;
 
-// The position the bytecode line map resolves a member-read fault to: the
-// base-most expression of the access chain. The compiler emits a line-map entry
-// as it descends to the base and none for the individual property reads, so a
-// read anywhere along `a.b.c` traces to `a`'s column. Walking to the same base
-// here keeps the interpreter's code-frame caret byte-identical with the VM's.
-function MemberChainBaseExpression(
-  const AExpr: TGocciaExpression): TGocciaExpression;
-begin
-  Result := AExpr;
-  while Result is TGocciaMemberExpression do
-    Result := TGocciaMemberExpression(Result).ObjectExpr;
-end;
-
 // A class value that carries its own [[Construct]] implementation — a typed
 // array, or a bytecode-compiled class whose constructor is a closure rather
 // than an AST method — cannot be built by InstantiateClass, which drives
@@ -300,7 +253,6 @@ end;
 const
   FOR_IN_ENTRY_OWNER = '__gocciaForInOwner';
   FOR_IN_ENTRY_KEY = '__gocciaForInKey';
-  FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH = 256;
 
 type
   TGocciaTemplateObjectArrayValue = class(TGocciaArrayValue)
@@ -652,16 +604,6 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) then
     GC.CollectForMemoryPressure(AProtect);
-end;
-
-function VarBindingNameCollectionMode(
-  const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
-  TGocciaVarBindingNameCollectionMode;
-begin
-  if ANonStrictMode and ACompatibilityNonStrictMode then
-    Result := vbnNonStrictScriptCompatibility
-  else
-    Result := vbnStandard;
 end;
 
 // Helper: create a non-owning copy of a statement list (AST owns the nodes)
@@ -1042,24 +984,8 @@ begin
   AContext.Scope.DefineVariableBinding(Name, Value, True);
 end;
 
-procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
-  const AName: string);
-begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
-    ANames.Add(AName);
-end;
-
-function EvalFunctionDeclarationFromNode(
-  const ANode: TGocciaASTNode): TGocciaFunctionDeclaration;
-begin
-  if ANode is TGocciaFunctionDeclaration then
-    Result := TGocciaFunctionDeclaration(ANode)
-  else if ANode is TGocciaExportFunctionDeclaration then
-    Result := TGocciaExportFunctionDeclaration(ANode).Declaration
-  else
-    Result := nil;
-end;
-
+// The list is created and filled in this unit: a generic list class
+// specialized in one unit is not the same class as one specialized in another.
 procedure CollectEvalFunctionDeclarations(
   const ANodes: TObjectList<TGocciaStatement>;
   const ADeclarations: TObjectList<TGocciaFunctionDeclaration>);
@@ -1072,75 +998,6 @@ begin
     FuncDecl := EvalFunctionDeclarationFromNode(ANodes[I]);
     if Assigned(FuncDecl) then
       ADeclarations.Add(FuncDecl);
-  end;
-end;
-
-procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
-  const ANames: TUnicodeStringList);
-var
-  VarDecl: TGocciaVariableDeclaration;
-  DestructDecl: TGocciaDestructuringDeclaration;
-  Names: TUnicodeStringList;
-  I, J, K: Integer;
-begin
-  for I := 0 to ANodes.Count - 1 do
-  begin
-    if ANodes[I] is TGocciaVariableDeclaration then
-    begin
-      VarDecl := TGocciaVariableDeclaration(ANodes[I]);
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaExportVariableDeclaration then
-    begin
-      VarDecl := TGocciaExportVariableDeclaration(ANodes[I]).Declaration;
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaDestructuringDeclaration then
-    begin
-      DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
-      if DestructDecl.IsVar then
-        Continue;
-      Names := TUnicodeStringList.Create;
-      try
-        CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
-        for J := 0 to Names.Count - 1 do
-          AddUniqueEvalName(ANames, Names[J]);
-      finally
-        Names.Free;
-      end;
-    end
-    else if ANodes[I] is TGocciaClassDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaClassDeclaration(ANodes[I]).ClassDefinition.Name)
-    else if ANodes[I] is TGocciaEnumDeclaration then
-      AddUniqueEvalName(ANames, TGocciaEnumDeclaration(ANodes[I]).Name)
-    else if ANodes[I] is TGocciaExportEnumDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaExportEnumDeclaration(ANodes[I]).Declaration.Name);
   end;
 end;
 
@@ -1222,1462 +1079,12 @@ begin
   end;
 end;
 
-procedure ValidateEvalScriptBody(const ANodes: TObjectList<TGocciaStatement>);
-var
-  I: Integer;
-begin
-  for I := 0 to ANodes.Count - 1 do
-  begin
-    if (ANodes[I] is TGocciaImportDeclaration) or
-       (ANodes[I] is TGocciaExportDeclaration) or
-       (ANodes[I] is TGocciaExportDefaultDeclaration) or
-       (ANodes[I] is TGocciaExportVariableDeclaration) or
-       (ANodes[I] is TGocciaExportFunctionDeclaration) or
-       (ANodes[I] is TGocciaExportEnumDeclaration) or
-       (ANodes[I] is TGocciaReExportDeclaration) then
-      ThrowSyntaxError('Module declarations are not allowed in eval code');
-    if ANodes[I] is TGocciaUsingDeclaration then
-      ThrowSyntaxError(
-        'Using declarations are not allowed at the top level of eval');
-  end;
-end;
-
-function EvalExpressionContainsArgumentsReference(
-  const AExpr: TGocciaExpression): Boolean; forward;
-function EvalPatternContainsArgumentsReference(
-  const APattern: TGocciaDestructuringPattern): Boolean; forward;
-function EvalStatementContainsArgumentsReference(
-  const AStmt: TGocciaStatement): Boolean; forward;
-
-function EvalParameterListContainsArgumentsReference(
-  const AParameters: TGocciaParameterArray): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(AParameters) do
-  begin
-    if AParameters[I].IsPattern and
-       EvalPatternContainsArgumentsReference(AParameters[I].Pattern) then
-      Exit(True);
-    if EvalExpressionContainsArgumentsReference(AParameters[I].DefaultValue) then
-      Exit(True);
-  end;
-  Result := False;
-end;
-
-function EvalASTNodeContainsArgumentsReference(
-  const ANode: TGocciaASTNode): Boolean;
-begin
-  if ANode is TGocciaStatement then
-    Exit(EvalStatementContainsArgumentsReference(TGocciaStatement(ANode)));
-  if ANode is TGocciaExpression then
-    Exit(EvalExpressionContainsArgumentsReference(TGocciaExpression(ANode)));
-  Result := False;
-end;
-
-function EvalExpressionContainsArgumentsReference(
-  const AExpr: TGocciaExpression): Boolean;
-var
-  CallExpr: TGocciaCallExpression;
-  MemberExpr: TGocciaMemberExpression;
-  ArrayExpr: TGocciaArrayExpression;
-  ObjectExpr: TGocciaObjectExpression;
-  ArrowExpr: TGocciaArrowFunctionExpression;
-  NewExpr: TGocciaNewExpression;
-  Pair: TPair<TGocciaExpression, TGocciaExpression>;
-  I: Integer;
-begin
-  if not Assigned(AExpr) then
-    Exit(False);
-
-  if AExpr is TGocciaIdentifierExpression then
-    Exit(TGocciaIdentifierExpression(AExpr).Name = IDENTIFIER_ARGUMENTS)
-  else if AExpr is TGocciaArrowFunctionExpression then
-  begin
-    ArrowExpr := TGocciaArrowFunctionExpression(AExpr);
-    if EvalParameterListContainsArgumentsReference(ArrowExpr.Parameters) then
-      Exit(True);
-    Exit(EvalASTNodeContainsArgumentsReference(ArrowExpr.Body));
-  end
-  else if AExpr is TGocciaFunctionExpression then
-    Exit(False)
-  else if AExpr is TGocciaCallExpression then
-  begin
-    CallExpr := TGocciaCallExpression(AExpr);
-    if EvalExpressionContainsArgumentsReference(CallExpr.Callee) then
-      Exit(True);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(CallExpr.Arguments[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(AExpr);
-    if EvalExpressionContainsArgumentsReference(MemberExpr.ObjectExpr) then
-      Exit(True);
-    if MemberExpr.Computed and
-       EvalExpressionContainsArgumentsReference(MemberExpr.PropertyExpression) then
-      Exit(True);
-  end
-  else if AExpr is TGocciaBinaryExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaBinaryExpression(AExpr).Left) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaBinaryExpression(AExpr).Right))
-  else if AExpr is TGocciaSequenceExpression then
-  begin
-    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(
-        TGocciaSequenceExpression(AExpr).Expressions[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaUnaryExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaUnaryExpression(AExpr).Operand))
-  else if AExpr is TGocciaAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPropertyAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaPropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaComputedPropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaCompoundAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaPropertyCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaIncrementExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaIncrementExpression(AExpr).Operand))
-  else if AExpr is TGocciaArrayExpression then
-  begin
-    ArrayExpr := TGocciaArrayExpression(AExpr);
-    for I := 0 to ArrayExpr.Elements.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(ArrayExpr.Elements[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaObjectExpression then
-  begin
-    ObjectExpr := TGocciaObjectExpression(AExpr);
-    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
-      case ObjectExpr.PropertySourceOrder[I].PropertyType of
-        pstStatic:
-          if EvalExpressionContainsArgumentsReference(
-              ObjectExpr.PropertySourceOrder[I].Expression) then
-            Exit(True);
-        pstComputed:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            if EvalExpressionContainsArgumentsReference(Pair.Key) or
-               EvalExpressionContainsArgumentsReference(Pair.Value) then
-              Exit(True);
-          end;
-        pstComputedGetter,
-        pstComputedSetter:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            if EvalExpressionContainsArgumentsReference(Pair.Key) then
-              Exit(True);
-          end;
-      end;
-  end
-  else if AExpr is TGocciaYieldExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaYieldExpression(AExpr).Operand))
-  else if AExpr is TGocciaAwaitExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaAwaitExpression(AExpr).Operand))
-  else if AExpr is TGocciaConditionalExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaConditionalExpression(AExpr).Condition) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaConditionalExpression(AExpr).Consequent) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaConditionalExpression(AExpr).Alternate))
-  else if AExpr is TGocciaNewExpression then
-  begin
-    NewExpr := TGocciaNewExpression(AExpr);
-    if EvalExpressionContainsArgumentsReference(NewExpr.Callee) then
-      Exit(True);
-    for I := 0 to NewExpr.Arguments.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(NewExpr.Arguments[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaSpreadExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaSpreadExpression(AExpr).Argument))
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-  begin
-    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(
-        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaTaggedTemplateExpression then
-  begin
-    if EvalExpressionContainsArgumentsReference(
-        TGocciaTaggedTemplateExpression(AExpr).Tag) then
-      Exit(True);
-    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
-      if EvalExpressionContainsArgumentsReference(
-        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]) then
-        Exit(True);
-  end
-  else if AExpr is TGocciaDestructuringAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaDestructuringAssignmentExpression(AExpr).Right))
-  else if AExpr is TGocciaPrivateMemberExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPrivateMemberExpression(AExpr).ObjectExpr))
-  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaPrivatePropertyAssignmentExpression(AExpr).Value))
-  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr) or
-      EvalExpressionContainsArgumentsReference(
-        TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value));
-
-  Result := False;
-end;
-
-function EvalPatternContainsArgumentsReference(
-  const APattern: TGocciaDestructuringPattern): Boolean;
-var
-  ArrayPattern: TGocciaArrayDestructuringPattern;
-  ObjectPattern: TGocciaObjectDestructuringPattern;
-  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
-  Prop: TGocciaDestructuringProperty;
-  I: Integer;
-begin
-  if not Assigned(APattern) then
-    Exit(False);
-
-  if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrayPattern.Elements.Count - 1 do
-      if EvalPatternContainsArgumentsReference(ArrayPattern.Elements[I]) then
-        Exit(True);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjectPattern := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjectPattern.Properties.Count - 1 do
-    begin
-      Prop := ObjectPattern.Properties[I];
-      if Prop.Computed and
-         EvalExpressionContainsArgumentsReference(Prop.KeyExpression) then
-        Exit(True);
-      if EvalPatternContainsArgumentsReference(Prop.Pattern) then
-        Exit(True);
-    end;
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
-    Exit(EvalPatternContainsArgumentsReference(AssignmentPattern.Left) or
-      EvalExpressionContainsArgumentsReference(AssignmentPattern.Right));
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-    Exit(EvalPatternContainsArgumentsReference(
-      TGocciaRestDestructuringPattern(APattern).Argument))
-  else if APattern is TGocciaMemberExpressionDestructuringPattern then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaMemberExpressionDestructuringPattern(APattern).Expression))
-  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression));
-
-  Result := False;
-end;
-
-function EvalStatementContainsArgumentsReference(
-  const AStmt: TGocciaStatement): Boolean;
-var
-  VarDecl: TGocciaVariableDeclaration;
-  DestructDecl: TGocciaDestructuringDeclaration;
-  BlockStmt: TGocciaBlockStatement;
-  IfStmt: TGocciaIfStatement;
-  ForStmt: TGocciaForStatement;
-  ForOfStmt: TGocciaForOfStatement;
-  ForInStmt: TGocciaForInStatement;
-  WhileStmt: TGocciaWhileStatement;
-  DoWhileStmt: TGocciaDoWhileStatement;
-  WithStmt: TGocciaWithStatement;
-  ReturnStmt: TGocciaReturnStatement;
-  ThrowStmt: TGocciaThrowStatement;
-  TryStmt: TGocciaTryStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-  UsingDecl: TGocciaUsingDeclaration;
-  I, J: Integer;
-begin
-  if not Assigned(AStmt) then
-    Exit(False);
-
-  if AStmt is TGocciaExpressionStatement then
-    Exit(EvalExpressionContainsArgumentsReference(
-      TGocciaExpressionStatement(AStmt).Expression))
-  else if AStmt is TGocciaVariableDeclaration then
-  begin
-    VarDecl := TGocciaVariableDeclaration(AStmt);
-    for I := 0 to High(VarDecl.Variables) do
-      if EvalExpressionContainsArgumentsReference(
-          VarDecl.Variables[I].Initializer) then
-        Exit(True);
-  end
-  else if AStmt is TGocciaDestructuringDeclaration then
-  begin
-    DestructDecl := TGocciaDestructuringDeclaration(AStmt);
-    Exit(EvalPatternContainsArgumentsReference(DestructDecl.Pattern) or
-      EvalExpressionContainsArgumentsReference(DestructDecl.Initializer));
-  end
-  else if AStmt is TGocciaBlockStatement then
-  begin
-    BlockStmt := TGocciaBlockStatement(AStmt);
-    for I := 0 to BlockStmt.Nodes.Count - 1 do
-      if EvalASTNodeContainsArgumentsReference(BlockStmt.Nodes[I]) then
-        Exit(True);
-  end
-  else if AStmt is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(IfStmt.Condition) or
-      EvalStatementContainsArgumentsReference(IfStmt.Consequent) or
-      EvalStatementContainsArgumentsReference(IfStmt.Alternate));
-  end
-  else if AStmt is TGocciaForStatement then
-  begin
-    ForStmt := TGocciaForStatement(AStmt);
-    Exit(EvalStatementContainsArgumentsReference(ForStmt.Init) or
-      EvalExpressionContainsArgumentsReference(ForStmt.Condition) or
-      EvalExpressionContainsArgumentsReference(ForStmt.Update) or
-      EvalStatementContainsArgumentsReference(ForStmt.Body));
-  end
-  else if AStmt is TGocciaForOfStatement then
-  begin
-    ForOfStmt := TGocciaForOfStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(ForOfStmt.Iterable) or
-      EvalStatementContainsArgumentsReference(ForOfStmt.Body));
-  end
-  else if AStmt is TGocciaForInStatement then
-  begin
-    ForInStmt := TGocciaForInStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(ForInStmt.ObjectExpression) or
-      EvalStatementContainsArgumentsReference(ForInStmt.Body));
-  end
-  else if AStmt is TGocciaWhileStatement then
-  begin
-    WhileStmt := TGocciaWhileStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(WhileStmt.Condition) or
-      EvalStatementContainsArgumentsReference(WhileStmt.Body));
-  end
-  else if AStmt is TGocciaDoWhileStatement then
-  begin
-    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
-    Exit(EvalStatementContainsArgumentsReference(DoWhileStmt.Body) or
-      EvalExpressionContainsArgumentsReference(DoWhileStmt.Condition));
-  end
-  else if AStmt is TGocciaWithStatement then
-  begin
-    WithStmt := TGocciaWithStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(WithStmt.ObjectExpression) or
-      EvalStatementContainsArgumentsReference(WithStmt.Body));
-  end
-  else if AStmt is TGocciaReturnStatement then
-  begin
-    ReturnStmt := TGocciaReturnStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(ReturnStmt.Value));
-  end
-  else if AStmt is TGocciaThrowStatement then
-  begin
-    ThrowStmt := TGocciaThrowStatement(AStmt);
-    Exit(EvalExpressionContainsArgumentsReference(ThrowStmt.Value));
-  end
-  else if AStmt is TGocciaTryStatement then
-  begin
-    TryStmt := TGocciaTryStatement(AStmt);
-    Exit(EvalStatementContainsArgumentsReference(TryStmt.Block) or
-      EvalStatementContainsArgumentsReference(TryStmt.CatchBlock) or
-      EvalStatementContainsArgumentsReference(TryStmt.FinallyBlock));
-  end
-  else if AStmt is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(AStmt);
-    if EvalExpressionContainsArgumentsReference(SwitchStmt.Discriminant) then
-      Exit(True);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-    begin
-      if EvalExpressionContainsArgumentsReference(SwitchStmt.Cases[I].Test) then
-        Exit(True);
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        if EvalStatementContainsArgumentsReference(
-            SwitchStmt.Cases[I].Consequent[J]) then
-          Exit(True);
-    end;
-  end
-  else if AStmt is TGocciaUsingDeclaration then
-  begin
-    UsingDecl := TGocciaUsingDeclaration(AStmt);
-    for I := 0 to High(UsingDecl.Variables) do
-      if EvalExpressionContainsArgumentsReference(
-          UsingDecl.Variables[I].Initializer) then
-        Exit(True);
-  end;
-
-  Result := False;
-end;
-
-function EvalProgramContainsArgumentsReference(
-  const AProgram: TGocciaProgram): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to AProgram.Body.Count - 1 do
-    if EvalStatementContainsArgumentsReference(AProgram.Body[I]) then
-      Exit(True);
-  Result := False;
-end;
-
-procedure ValidateEvalEarlyErrorExpression(const AExpr: TGocciaExpression;
-  const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean); forward;
-procedure ValidateEvalEarlyErrorPattern(
-  const APattern: TGocciaDestructuringPattern; const AAllowNewTarget,
-  AAllowSuperProperty, AAllowSuperCall: Boolean); forward;
-
-procedure ValidateEvalEarlyErrorStatement(const AStmt: TGocciaStatement;
-  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
-  AAllowSuperCall: Boolean);
-var
-  VarDecl: TGocciaVariableDeclaration;
-  DestructDecl: TGocciaDestructuringDeclaration;
-  BlockStmt: TGocciaBlockStatement;
-  IfStmt: TGocciaIfStatement;
-  ForStmt: TGocciaForStatement;
-  ForOfStmt: TGocciaForOfStatement;
-  ForInStmt: TGocciaForInStatement;
-  WhileStmt: TGocciaWhileStatement;
-  DoWhileStmt: TGocciaDoWhileStatement;
-  WithStmt: TGocciaWithStatement;
-  ReturnStmt: TGocciaReturnStatement;
-  ThrowStmt: TGocciaThrowStatement;
-  TryStmt: TGocciaTryStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-  UsingDecl: TGocciaUsingDeclaration;
-  I, J: Integer;
-  function IsLabelledFunctionDeclaration(
-    const AStatement: TGocciaStatement): Boolean;
-  begin
-    Result := Assigned(AStatement) and (AStatement.LabelCount > 0) and
-      (AStatement is TGocciaFunctionDeclaration);
-  end;
-begin
-  if not Assigned(AStmt) then
-    Exit;
-
-  if AStrictEval and IsLabelledFunctionDeclaration(AStmt) then
-    ThrowSyntaxError('Invalid labelled function declaration');
-
-  if AStmt is TGocciaExpressionStatement then
-    ValidateEvalEarlyErrorExpression(
-      TGocciaExpressionStatement(AStmt).Expression, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall)
-  else if AStmt is TGocciaVariableDeclaration then
-  begin
-    VarDecl := TGocciaVariableDeclaration(AStmt);
-    for I := 0 to High(VarDecl.Variables) do
-    begin
-      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
-        ValidateEvalEarlyErrorPattern(VarDecl.Variables[I].Pattern,
-          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-      ValidateEvalEarlyErrorExpression(VarDecl.Variables[I].Initializer,
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    end;
-  end
-  else if AStmt is TGocciaDestructuringDeclaration then
-  begin
-    DestructDecl := TGocciaDestructuringDeclaration(AStmt);
-    ValidateEvalEarlyErrorPattern(DestructDecl.Pattern, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(DestructDecl.Initializer,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaBlockStatement then
-  begin
-    BlockStmt := TGocciaBlockStatement(AStmt);
-    for I := 0 to BlockStmt.Nodes.Count - 1 do
-      if BlockStmt.Nodes[I] is TGocciaStatement then
-        ValidateEvalEarlyErrorStatement(TGocciaStatement(BlockStmt.Nodes[I]),
-          AStrictEval, AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-      else if BlockStmt.Nodes[I] is TGocciaExpression then
-        ValidateEvalEarlyErrorExpression(TGocciaExpression(BlockStmt.Nodes[I]),
-          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(AStmt);
-    if AStrictEval and (IsLabelledFunctionDeclaration(IfStmt.Consequent) or
-       IsLabelledFunctionDeclaration(IfStmt.Alternate)) then
-      ThrowSyntaxError('Invalid labelled function declaration');
-    ValidateEvalEarlyErrorExpression(IfStmt.Condition, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(IfStmt.Consequent, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(IfStmt.Alternate, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaForStatement then
-  begin
-    ForStmt := TGocciaForStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(ForStmt.Init, AStrictEval, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(ForStmt.Condition, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(ForStmt.Update, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForStmt.Body, AStrictEval, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaForOfStatement then
-  begin
-    ForOfStmt := TGocciaForOfStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(ForOfStmt.Iterable, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForOfStmt.Body, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaForInStatement then
-  begin
-    ForInStmt := TGocciaForInStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(ForInStmt.ObjectExpression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(ForInStmt.Body, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaWhileStatement then
-  begin
-    WhileStmt := TGocciaWhileStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(WhileStmt.Condition, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(WhileStmt.Body, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaDoWhileStatement then
-  begin
-    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(DoWhileStmt.Body, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(DoWhileStmt.Condition, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaWithStatement then
-  begin
-    WithStmt := TGocciaWithStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(WithStmt.ObjectExpression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(WithStmt.Body, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaReturnStatement then
-  begin
-    ReturnStmt := TGocciaReturnStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(ReturnStmt.Value, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaThrowStatement then
-  begin
-    ThrowStmt := TGocciaThrowStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(ThrowStmt.Value, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaTryStatement then
-  begin
-    TryStmt := TGocciaTryStatement(AStmt);
-    ValidateEvalEarlyErrorStatement(TryStmt.Block, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(TryStmt.CatchBlock, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorStatement(TryStmt.FinallyBlock, AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AStmt is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(AStmt);
-    ValidateEvalEarlyErrorExpression(SwitchStmt.Discriminant, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-    begin
-      ValidateEvalEarlyErrorExpression(SwitchStmt.Cases[I].Test,
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        ValidateEvalEarlyErrorStatement(SwitchStmt.Cases[I].Consequent[J],
-          AStrictEval, AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    end;
-  end
-  else if AStmt is TGocciaUsingDeclaration then
-  begin
-    UsingDecl := TGocciaUsingDeclaration(AStmt);
-    for I := 0 to High(UsingDecl.Variables) do
-      ValidateEvalEarlyErrorExpression(UsingDecl.Variables[I].Initializer,
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end;
-end;
-
-procedure ValidateEvalEarlyErrorExpression(const AExpr: TGocciaExpression;
-  const AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall: Boolean);
-var
-  CallExpr: TGocciaCallExpression;
-  MemberExpr: TGocciaMemberExpression;
-  ArrayExpr: TGocciaArrayExpression;
-  ObjectExpr: TGocciaObjectExpression;
-  ArrowExpr: TGocciaArrowFunctionExpression;
-  NewExpr: TGocciaNewExpression;
-  Pair: TPair<TGocciaExpression, TGocciaExpression>;
-  I: Integer;
-begin
-  if not Assigned(AExpr) then
-    Exit;
-
-  if AExpr is TGocciaNewTargetExpression then
-  begin
-    if not AAllowNewTarget then
-      ThrowSyntaxError('new.target is not allowed in this eval context');
-    Exit;
-  end;
-
-  if AExpr is TGocciaArrowFunctionExpression then
-  begin
-    ArrowExpr := TGocciaArrowFunctionExpression(AExpr);
-    for I := 0 to High(ArrowExpr.Parameters) do
-    begin
-      if ArrowExpr.Parameters[I].IsPattern then
-        ValidateEvalEarlyErrorPattern(ArrowExpr.Parameters[I].Pattern,
-          AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-      ValidateEvalEarlyErrorExpression(ArrowExpr.Parameters[I].DefaultValue,
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    end;
-    if ArrowExpr.Body is TGocciaStatement then
-      ValidateEvalEarlyErrorStatement(TGocciaStatement(ArrowExpr.Body),
-        False, AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-    else if ArrowExpr.Body is TGocciaExpression then
-      ValidateEvalEarlyErrorExpression(TGocciaExpression(ArrowExpr.Body),
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaCallExpression then
-  begin
-    CallExpr := TGocciaCallExpression(AExpr);
-    if CallExpr.Callee is TGocciaSuperExpression then
-    begin
-      if not AAllowSuperCall then
-        ThrowSyntaxError('super() is not allowed in this eval context');
-    end
-    else
-      ValidateEvalEarlyErrorExpression(CallExpr.Callee, AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      ValidateEvalEarlyErrorExpression(CallExpr.Arguments[I], AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(AExpr);
-    if MemberExpr.ObjectExpr is TGocciaSuperExpression then
-    begin
-      if not AAllowSuperProperty then
-        ThrowSyntaxError('super property access is not allowed in this eval context');
-    end
-    else
-      ValidateEvalEarlyErrorExpression(MemberExpr.ObjectExpr, AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-    if MemberExpr.Computed then
-      ValidateEvalEarlyErrorExpression(MemberExpr.PropertyExpression,
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaSuperExpression then
-  begin
-    if not AAllowSuperProperty then
-      ThrowSyntaxError('super is not allowed in this eval context');
-  end
-  else if AExpr is TGocciaBinaryExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(TGocciaBinaryExpression(AExpr).Left,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(TGocciaBinaryExpression(AExpr).Right,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaSequenceExpression then
-  begin
-    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
-      ValidateEvalEarlyErrorExpression(
-        TGocciaSequenceExpression(AExpr).Expressions[I], AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaUnaryExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaUnaryExpression(AExpr).Operand,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaAssignmentExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaPropertyAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPropertyAssignmentExpression(AExpr).Value, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaCompoundAssignmentExpression then
-    ValidateEvalEarlyErrorExpression(
-      TGocciaCompoundAssignmentExpression(AExpr).Value, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaIncrementExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaIncrementExpression(AExpr).Operand,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaArrayExpression then
-  begin
-    ArrayExpr := TGocciaArrayExpression(AExpr);
-    for I := 0 to ArrayExpr.Elements.Count - 1 do
-      ValidateEvalEarlyErrorExpression(ArrayExpr.Elements[I], AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaObjectExpression then
-  begin
-    ObjectExpr := TGocciaObjectExpression(AExpr);
-    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
-      case ObjectExpr.PropertySourceOrder[I].PropertyType of
-        pstStatic:
-          ValidateEvalEarlyErrorExpression(
-            ObjectExpr.PropertySourceOrder[I].Expression, AAllowNewTarget,
-            AAllowSuperProperty, AAllowSuperCall);
-        pstComputed:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            ValidateEvalEarlyErrorExpression(Pair.Key, AAllowNewTarget,
-              AAllowSuperProperty, AAllowSuperCall);
-            ValidateEvalEarlyErrorExpression(Pair.Value, AAllowNewTarget,
-              AAllowSuperProperty, AAllowSuperCall);
-          end;
-        pstComputedGetter,
-        pstComputedSetter:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            ValidateEvalEarlyErrorExpression(Pair.Key, AAllowNewTarget,
-              AAllowSuperProperty, AAllowSuperCall);
-          end;
-      end;
-  end
-  else if AExpr is TGocciaYieldExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaYieldExpression(AExpr).Operand,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaAwaitExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaAwaitExpression(AExpr).Operand,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaConditionalExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(TGocciaConditionalExpression(AExpr).Condition,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(TGocciaConditionalExpression(AExpr).Consequent,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(TGocciaConditionalExpression(AExpr).Alternate,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaNewExpression then
-  begin
-    NewExpr := TGocciaNewExpression(AExpr);
-    ValidateEvalEarlyErrorExpression(NewExpr.Callee, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    for I := 0 to NewExpr.Arguments.Count - 1 do
-      ValidateEvalEarlyErrorExpression(NewExpr.Arguments[I], AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaSpreadExpression then
-    ValidateEvalEarlyErrorExpression(TGocciaSpreadExpression(AExpr).Argument,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-  begin
-    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
-      ValidateEvalEarlyErrorExpression(
-        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I],
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaTaggedTemplateExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(TGocciaTaggedTemplateExpression(AExpr).Tag,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
-      ValidateEvalEarlyErrorExpression(
-        TGocciaTaggedTemplateExpression(AExpr).Expressions[I],
-        AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaDestructuringAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorPattern(
-      TGocciaDestructuringAssignmentExpression(AExpr).Left, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaDestructuringAssignmentExpression(AExpr).Right, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaPrivateMemberExpression then
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivateMemberExpression(AExpr).ObjectExpr, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall)
-  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
-  begin
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-  end;
-end;
-
-procedure ValidateEvalEarlyErrorPattern(
-  const APattern: TGocciaDestructuringPattern; const AAllowNewTarget,
-  AAllowSuperProperty, AAllowSuperCall: Boolean);
-var
-  ArrayPattern: TGocciaArrayDestructuringPattern;
-  ObjectPattern: TGocciaObjectDestructuringPattern;
-  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
-  RestPattern: TGocciaRestDestructuringPattern;
-  Prop: TGocciaDestructuringProperty;
-  I: Integer;
-begin
-  if not Assigned(APattern) then
-    Exit;
-
-  if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrayPattern.Elements.Count - 1 do
-      ValidateEvalEarlyErrorPattern(ArrayPattern.Elements[I], AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjectPattern := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjectPattern.Properties.Count - 1 do
-    begin
-      Prop := ObjectPattern.Properties[I];
-      if Prop.Computed then
-        ValidateEvalEarlyErrorExpression(Prop.KeyExpression, AAllowNewTarget,
-          AAllowSuperProperty, AAllowSuperCall);
-      ValidateEvalEarlyErrorPattern(Prop.Pattern, AAllowNewTarget,
-        AAllowSuperProperty, AAllowSuperCall);
-    end;
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
-    ValidateEvalEarlyErrorPattern(AssignmentPattern.Left, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-    ValidateEvalEarlyErrorExpression(AssignmentPattern.Right, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-  begin
-    RestPattern := TGocciaRestDestructuringPattern(APattern);
-    ValidateEvalEarlyErrorPattern(RestPattern.Argument, AAllowNewTarget,
-      AAllowSuperProperty, AAllowSuperCall);
-  end
-  else if APattern is TGocciaMemberExpressionDestructuringPattern then
-    ValidateEvalEarlyErrorExpression(
-      TGocciaMemberExpressionDestructuringPattern(APattern).Expression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall)
-  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
-    ValidateEvalEarlyErrorExpression(
-      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-end;
-
-function IsStrictEvalRestrictedBindingName(const AName: string): Boolean;
-begin
-  Result := (AName = 'eval') or (AName = IDENTIFIER_ARGUMENTS);
-end;
-
-procedure ValidateStrictEvalAssignmentExpression(
-  const AExpr: TGocciaExpression); forward;
-procedure ValidateStrictEvalAssignmentPattern(
-  const APattern: TGocciaDestructuringPattern); forward;
-procedure ValidateStrictEvalAssignmentStatement(
-  const AStmt: TGocciaStatement); forward;
-
-procedure RejectStrictEvalAssignmentName(const AName: string;
-  const ALine, AColumn: Integer);
-begin
-  if IsStrictEvalRestrictedBindingName(AName) then
-    raise TGocciaSyntaxError.Create(
-      Format('Invalid assignment to ''%s'' in strict mode', [AName]),
-      ALine, AColumn, '', nil);
-end;
-
-procedure ValidateStrictFunctionExpression(
-  const AFunction: TGocciaFunctionExpression);
-var
-  BindingNames, PatternNames: TUnicodeStringList;
-  I, J: Integer;
-  procedure AddStrictParameterName(const AName: string);
-  begin
-    RejectStrictEvalAssignmentName(AName, AFunction.Line, AFunction.Column);
-    if AName = '' then
-      Exit;
-    if BindingNames.IndexOf(AName) >= 0 then
-      raise TGocciaSyntaxError.Create(
-        'Duplicate parameter name not allowed in strict mode',
-        AFunction.Line, AFunction.Column, '', nil);
-    BindingNames.Add(AName);
-  end;
-begin
-  if not Assigned(AFunction) then
-    Exit;
-  RejectStrictEvalAssignmentName(AFunction.Name, AFunction.Line,
-    AFunction.Column);
-  BindingNames := TUnicodeStringList.Create;
-  PatternNames := TUnicodeStringList.Create;
-  try
-    for I := 0 to High(AFunction.Parameters) do
-    begin
-      if AFunction.Parameters[I].IsPattern then
-      begin
-        ValidateStrictEvalAssignmentPattern(AFunction.Parameters[I].Pattern);
-        PatternNames.Clear;
-        CollectPatternBindingNames(AFunction.Parameters[I].Pattern,
-          PatternNames);
-        for J := 0 to PatternNames.Count - 1 do
-          AddStrictParameterName(PatternNames[J]);
-      end
-      else
-        AddStrictParameterName(AFunction.Parameters[I].Name);
-      ValidateStrictEvalAssignmentExpression(
-        AFunction.Parameters[I].DefaultValue);
-    end;
-  finally
-    PatternNames.Free;
-    BindingNames.Free;
-  end;
-  if AFunction.Body is TGocciaStatement then
-    ValidateStrictEvalAssignmentStatement(TGocciaStatement(AFunction.Body))
-  else if AFunction.Body is TGocciaExpression then
-    ValidateStrictEvalAssignmentExpression(TGocciaExpression(AFunction.Body));
-end;
-
-procedure ValidateStrictFunctionEarlyErrors(
-  const AFunction: TGocciaFunctionExpression);
-begin
-  ValidateStrictFunctionExpression(AFunction);
-end;
-
-procedure ValidateStrictEvalAssignmentStatement(
-  const AStmt: TGocciaStatement);
-var
-  BlockStmt: TGocciaBlockStatement;
-  DestructDecl: TGocciaDestructuringDeclaration;
-  DoWhileStmt: TGocciaDoWhileStatement;
-  FunctionDecl: TGocciaFunctionDeclaration;
-  ForInStmt: TGocciaForInStatement;
-  ForOfStmt: TGocciaForOfStatement;
-  ForStmt: TGocciaForStatement;
-  IfStmt: TGocciaIfStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-  ThrowStmt: TGocciaThrowStatement;
-  TryStmt: TGocciaTryStatement;
-  UsingDecl: TGocciaUsingDeclaration;
-  VarDecl: TGocciaVariableDeclaration;
-  WhileStmt: TGocciaWhileStatement;
-  WithStmt: TGocciaWithStatement;
-  I, J: Integer;
-begin
-  if not Assigned(AStmt) then
-    Exit;
-
-  if AStmt is TGocciaExpressionStatement then
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaExpressionStatement(AStmt).Expression)
-  else if AStmt is TGocciaVariableDeclaration then
-  begin
-    VarDecl := TGocciaVariableDeclaration(AStmt);
-    for I := 0 to High(VarDecl.Variables) do
-    begin
-      if VarDecl.Variables[I].IsPattern or Assigned(VarDecl.Variables[I].Pattern) then
-        ValidateStrictEvalAssignmentPattern(VarDecl.Variables[I].Pattern)
-      else
-        RejectStrictEvalAssignmentName(VarDecl.Variables[I].Name, AStmt.Line,
-          AStmt.Column);
-      ValidateStrictEvalAssignmentExpression(VarDecl.Variables[I].Initializer);
-    end;
-  end
-  else if AStmt is TGocciaDestructuringDeclaration then
-  begin
-    DestructDecl := TGocciaDestructuringDeclaration(AStmt);
-    ValidateStrictEvalAssignmentPattern(DestructDecl.Pattern);
-    ValidateStrictEvalAssignmentExpression(DestructDecl.Initializer);
-  end
-  else if AStmt is TGocciaFunctionDeclaration then
-  begin
-    FunctionDecl := TGocciaFunctionDeclaration(AStmt);
-    RejectStrictEvalAssignmentName(FunctionDecl.Name, AStmt.Line, AStmt.Column);
-    ValidateStrictFunctionExpression(FunctionDecl.FunctionExpression);
-  end
-  else if AStmt is TGocciaBlockStatement then
-  begin
-    BlockStmt := TGocciaBlockStatement(AStmt);
-    for I := 0 to BlockStmt.Nodes.Count - 1 do
-      if BlockStmt.Nodes[I] is TGocciaStatement then
-        ValidateStrictEvalAssignmentStatement(TGocciaStatement(BlockStmt.Nodes[I]))
-      else if BlockStmt.Nodes[I] is TGocciaExpression then
-        ValidateStrictEvalAssignmentExpression(TGocciaExpression(BlockStmt.Nodes[I]));
-  end
-  else if AStmt is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(AStmt);
-    ValidateStrictEvalAssignmentExpression(IfStmt.Condition);
-    ValidateStrictEvalAssignmentStatement(IfStmt.Consequent);
-    ValidateStrictEvalAssignmentStatement(IfStmt.Alternate);
-  end
-  else if AStmt is TGocciaForStatement then
-  begin
-    ForStmt := TGocciaForStatement(AStmt);
-    ValidateStrictEvalAssignmentStatement(ForStmt.Init);
-    ValidateStrictEvalAssignmentExpression(ForStmt.Condition);
-    ValidateStrictEvalAssignmentExpression(ForStmt.Update);
-    ValidateStrictEvalAssignmentStatement(ForStmt.Body);
-  end
-  else if AStmt is TGocciaForOfStatement then
-  begin
-    ForOfStmt := TGocciaForOfStatement(AStmt);
-    RejectStrictEvalAssignmentName(ForOfStmt.BindingName, AStmt.Line,
-      AStmt.Column);
-    ValidateStrictEvalAssignmentPattern(ForOfStmt.BindingPattern);
-    ValidateStrictEvalAssignmentPattern(ForOfStmt.AssignmentTarget);
-    ValidateStrictEvalAssignmentExpression(ForOfStmt.Iterable);
-    ValidateStrictEvalAssignmentStatement(ForOfStmt.Body);
-  end
-  else if AStmt is TGocciaForInStatement then
-  begin
-    ForInStmt := TGocciaForInStatement(AStmt);
-    RejectStrictEvalAssignmentName(ForInStmt.BindingName, AStmt.Line,
-      AStmt.Column);
-    ValidateStrictEvalAssignmentPattern(ForInStmt.BindingPattern);
-    ValidateStrictEvalAssignmentPattern(ForInStmt.AssignmentTarget);
-    ValidateStrictEvalAssignmentExpression(ForInStmt.ObjectExpression);
-    ValidateStrictEvalAssignmentStatement(ForInStmt.Body);
-  end
-  else if AStmt is TGocciaWhileStatement then
-  begin
-    WhileStmt := TGocciaWhileStatement(AStmt);
-    ValidateStrictEvalAssignmentExpression(WhileStmt.Condition);
-    ValidateStrictEvalAssignmentStatement(WhileStmt.Body);
-  end
-  else if AStmt is TGocciaDoWhileStatement then
-  begin
-    DoWhileStmt := TGocciaDoWhileStatement(AStmt);
-    ValidateStrictEvalAssignmentStatement(DoWhileStmt.Body);
-    ValidateStrictEvalAssignmentExpression(DoWhileStmt.Condition);
-  end
-  else if AStmt is TGocciaWithStatement then
-  begin
-    WithStmt := TGocciaWithStatement(AStmt);
-    ValidateStrictEvalAssignmentExpression(WithStmt.ObjectExpression);
-    ValidateStrictEvalAssignmentStatement(WithStmt.Body);
-  end
-  else if AStmt is TGocciaReturnStatement then
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaReturnStatement(AStmt).Value)
-  else if AStmt is TGocciaThrowStatement then
-  begin
-    ThrowStmt := TGocciaThrowStatement(AStmt);
-    ValidateStrictEvalAssignmentExpression(ThrowStmt.Value);
-  end
-  else if AStmt is TGocciaTryStatement then
-  begin
-    TryStmt := TGocciaTryStatement(AStmt);
-    ValidateStrictEvalAssignmentStatement(TryStmt.Block);
-    RejectStrictEvalAssignmentName(TryStmt.CatchParam, AStmt.Line,
-      AStmt.Column);
-    ValidateStrictEvalAssignmentPattern(TryStmt.CatchBindingPattern);
-    ValidateStrictEvalAssignmentStatement(TryStmt.CatchBlock);
-    ValidateStrictEvalAssignmentStatement(TryStmt.FinallyBlock);
-  end
-  else if AStmt is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(AStmt);
-    ValidateStrictEvalAssignmentExpression(SwitchStmt.Discriminant);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-    begin
-      ValidateStrictEvalAssignmentExpression(SwitchStmt.Cases[I].Test);
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        ValidateStrictEvalAssignmentStatement(SwitchStmt.Cases[I].Consequent[J]);
-    end;
-  end
-  else if AStmt is TGocciaUsingDeclaration then
-  begin
-    UsingDecl := TGocciaUsingDeclaration(AStmt);
-    for I := 0 to High(UsingDecl.Variables) do
-      ValidateStrictEvalAssignmentExpression(UsingDecl.Variables[I].Initializer);
-  end;
-end;
-
-procedure ValidateStrictEvalAssignmentExpression(
-  const AExpr: TGocciaExpression);
-var
-  ArrayExpr: TGocciaArrayExpression;
-  CallExpr: TGocciaCallExpression;
-  MemberExpr: TGocciaMemberExpression;
-  NewExpr: TGocciaNewExpression;
-  ObjectExpr: TGocciaObjectExpression;
-  Pair: TPair<TGocciaExpression, TGocciaExpression>;
-  UnaryExpr: TGocciaUnaryExpression;
-  I: Integer;
-begin
-  if not Assigned(AExpr) then
-    Exit;
-
-  if AExpr is TGocciaAssignmentExpression then
-  begin
-    RejectStrictEvalAssignmentName(TGocciaAssignmentExpression(AExpr).Name,
-      AExpr.Line, AExpr.Column);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaCompoundAssignmentExpression then
-  begin
-    RejectStrictEvalAssignmentName(TGocciaCompoundAssignmentExpression(AExpr).Name,
-      AExpr.Line, AExpr.Column);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaCompoundAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaIncrementExpression then
-  begin
-    if TGocciaIncrementExpression(AExpr).Operand is TGocciaIdentifierExpression then
-      RejectStrictEvalAssignmentName(
-        TGocciaIdentifierExpression(TGocciaIncrementExpression(AExpr).Operand).Name,
-        AExpr.Line, AExpr.Column);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaIncrementExpression(AExpr).Operand);
-  end
-  else if AExpr is TGocciaFunctionExpression then
-    ValidateStrictFunctionExpression(TGocciaFunctionExpression(AExpr))
-  else if AExpr is TGocciaArrowFunctionExpression then
-  begin
-    for I := 0 to High(TGocciaArrowFunctionExpression(AExpr).Parameters) do
-    begin
-      if TGocciaArrowFunctionExpression(AExpr).Parameters[I].IsPattern then
-        ValidateStrictEvalAssignmentPattern(
-          TGocciaArrowFunctionExpression(AExpr).Parameters[I].Pattern)
-      else
-        RejectStrictEvalAssignmentName(
-          TGocciaArrowFunctionExpression(AExpr).Parameters[I].Name,
-          AExpr.Line, AExpr.Column);
-      ValidateStrictEvalAssignmentExpression(
-        TGocciaArrowFunctionExpression(AExpr).Parameters[I].DefaultValue);
-    end;
-    if TGocciaArrowFunctionExpression(AExpr).Body is TGocciaStatement then
-      ValidateStrictEvalAssignmentStatement(
-        TGocciaStatement(TGocciaArrowFunctionExpression(AExpr).Body))
-    else if TGocciaArrowFunctionExpression(AExpr).Body is TGocciaExpression then
-      ValidateStrictEvalAssignmentExpression(
-        TGocciaExpression(TGocciaArrowFunctionExpression(AExpr).Body));
-  end
-  else if AExpr is TGocciaDestructuringAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentPattern(
-      TGocciaDestructuringAssignmentExpression(AExpr).Left);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaDestructuringAssignmentExpression(AExpr).Right);
-  end
-  else if AExpr is TGocciaCallExpression then
-  begin
-    CallExpr := TGocciaCallExpression(AExpr);
-    ValidateStrictEvalAssignmentExpression(CallExpr.Callee);
-    for I := 0 to CallExpr.Arguments.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(CallExpr.Arguments[I]);
-  end
-  else if AExpr is TGocciaMemberExpression then
-  begin
-    MemberExpr := TGocciaMemberExpression(AExpr);
-    ValidateStrictEvalAssignmentExpression(MemberExpr.ObjectExpr);
-    if MemberExpr.Computed then
-      ValidateStrictEvalAssignmentExpression(MemberExpr.PropertyExpression);
-  end
-  else if AExpr is TGocciaPropertyAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPropertyAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPropertyAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaComputedPropertyAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).PropertyExpression);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPropertyCompoundAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaComputedPropertyCompoundAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).PropertyExpression);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaComputedPropertyCompoundAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaBinaryExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(TGocciaBinaryExpression(AExpr).Left);
-    ValidateStrictEvalAssignmentExpression(TGocciaBinaryExpression(AExpr).Right);
-  end
-  else if AExpr is TGocciaSequenceExpression then
-  begin
-    for I := 0 to TGocciaSequenceExpression(AExpr).Expressions.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(
-        TGocciaSequenceExpression(AExpr).Expressions[I]);
-  end
-  else if AExpr is TGocciaUnaryExpression then
-  begin
-    UnaryExpr := TGocciaUnaryExpression(AExpr);
-    if (UnaryExpr.Operator = gttDelete) and
-       (UnaryExpr.Operand is TGocciaIdentifierExpression) then
-      raise TGocciaSyntaxError.Create(
-        'Delete of an unqualified identifier in strict mode',
-        AExpr.Line, AExpr.Column, '', nil);
-    ValidateStrictEvalAssignmentExpression(UnaryExpr.Operand);
-  end
-  else if AExpr is TGocciaArrayExpression then
-  begin
-    ArrayExpr := TGocciaArrayExpression(AExpr);
-    for I := 0 to ArrayExpr.Elements.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(ArrayExpr.Elements[I]);
-  end
-  else if AExpr is TGocciaObjectExpression then
-  begin
-    ObjectExpr := TGocciaObjectExpression(AExpr);
-    for I := 0 to High(ObjectExpr.PropertySourceOrder) do
-      case ObjectExpr.PropertySourceOrder[I].PropertyType of
-        pstStatic:
-          ValidateStrictEvalAssignmentExpression(
-            ObjectExpr.PropertySourceOrder[I].Expression);
-        pstComputed:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            ValidateStrictEvalAssignmentExpression(Pair.Key);
-            ValidateStrictEvalAssignmentExpression(Pair.Value);
-          end;
-        pstComputedGetter,
-        pstComputedSetter:
-          begin
-            Pair := ObjectExpr.ComputedPropertiesInOrder[
-              ObjectExpr.PropertySourceOrder[I].ComputedIndex];
-            ValidateStrictEvalAssignmentExpression(Pair.Key);
-          end;
-      end;
-  end
-  else if AExpr is TGocciaYieldExpression then
-    ValidateStrictEvalAssignmentExpression(TGocciaYieldExpression(AExpr).Operand)
-  else if AExpr is TGocciaAwaitExpression then
-    ValidateStrictEvalAssignmentExpression(TGocciaAwaitExpression(AExpr).Operand)
-  else if AExpr is TGocciaConditionalExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaConditionalExpression(AExpr).Condition);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaConditionalExpression(AExpr).Consequent);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaConditionalExpression(AExpr).Alternate);
-  end
-  else if AExpr is TGocciaNewExpression then
-  begin
-    NewExpr := TGocciaNewExpression(AExpr);
-    ValidateStrictEvalAssignmentExpression(NewExpr.Callee);
-    for I := 0 to NewExpr.Arguments.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(NewExpr.Arguments[I]);
-  end
-  else if AExpr is TGocciaSpreadExpression then
-    ValidateStrictEvalAssignmentExpression(TGocciaSpreadExpression(AExpr).Argument)
-  else if AExpr is TGocciaTemplateWithInterpolationExpression then
-  begin
-    for I := 0 to TGocciaTemplateWithInterpolationExpression(AExpr).Parts.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(
-        TGocciaTemplateWithInterpolationExpression(AExpr).Parts[I]);
-  end
-  else if AExpr is TGocciaTaggedTemplateExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaTaggedTemplateExpression(AExpr).Tag);
-    for I := 0 to TGocciaTaggedTemplateExpression(AExpr).Expressions.Count - 1 do
-      ValidateStrictEvalAssignmentExpression(
-        TGocciaTaggedTemplateExpression(AExpr).Expressions[I]);
-  end
-  else if AExpr is TGocciaPrivateMemberExpression then
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivateMemberExpression(AExpr).ObjectExpr)
-  else if AExpr is TGocciaPrivatePropertyAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivatePropertyAssignmentExpression(AExpr).Value);
-  end
-  else if AExpr is TGocciaPrivatePropertyCompoundAssignmentExpression then
-  begin
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).ObjectExpr);
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivatePropertyCompoundAssignmentExpression(AExpr).Value);
-  end;
-end;
-
-procedure ValidateStrictEvalAssignmentPattern(
-  const APattern: TGocciaDestructuringPattern);
-var
-  ArrayPattern: TGocciaArrayDestructuringPattern;
-  AssignmentPattern: TGocciaAssignmentDestructuringPattern;
-  ObjectPattern: TGocciaObjectDestructuringPattern;
-  Prop: TGocciaDestructuringProperty;
-  RestPattern: TGocciaRestDestructuringPattern;
-  I: Integer;
-begin
-  if not Assigned(APattern) then
-    Exit;
-
-  if APattern is TGocciaIdentifierDestructuringPattern then
-    RejectStrictEvalAssignmentName(
-      TGocciaIdentifierDestructuringPattern(APattern).Name,
-      APattern.Line, APattern.Column)
-  else if APattern is TGocciaArrayDestructuringPattern then
-  begin
-    ArrayPattern := TGocciaArrayDestructuringPattern(APattern);
-    for I := 0 to ArrayPattern.Elements.Count - 1 do
-      ValidateStrictEvalAssignmentPattern(ArrayPattern.Elements[I]);
-  end
-  else if APattern is TGocciaObjectDestructuringPattern then
-  begin
-    ObjectPattern := TGocciaObjectDestructuringPattern(APattern);
-    for I := 0 to ObjectPattern.Properties.Count - 1 do
-    begin
-      Prop := ObjectPattern.Properties[I];
-      if Prop.Computed then
-        ValidateStrictEvalAssignmentExpression(Prop.KeyExpression);
-      ValidateStrictEvalAssignmentPattern(Prop.Pattern);
-    end;
-  end
-  else if APattern is TGocciaAssignmentDestructuringPattern then
-  begin
-    AssignmentPattern := TGocciaAssignmentDestructuringPattern(APattern);
-    ValidateStrictEvalAssignmentPattern(AssignmentPattern.Left);
-    ValidateStrictEvalAssignmentExpression(AssignmentPattern.Right);
-  end
-  else if APattern is TGocciaRestDestructuringPattern then
-  begin
-    RestPattern := TGocciaRestDestructuringPattern(APattern);
-    ValidateStrictEvalAssignmentPattern(RestPattern.Argument);
-  end
-  else if APattern is TGocciaMemberExpressionDestructuringPattern then
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaMemberExpressionDestructuringPattern(APattern).Expression)
-  else if APattern is TGocciaPrivateMemberExpressionDestructuringPattern then
-    ValidateStrictEvalAssignmentExpression(
-      TGocciaPrivateMemberExpressionDestructuringPattern(APattern).Expression);
-end;
-
-procedure ValidateEvalEarlyErrors(const AProgram: TGocciaProgram;
-  const AStrictEval, AAllowNewTarget, AAllowSuperProperty,
-  AAllowSuperCall: Boolean);
-var
-  I: Integer;
-begin
-  if AStrictEval then
-    for I := 0 to AProgram.Body.Count - 1 do
-      ValidateStrictEvalAssignmentStatement(AProgram.Body[I]);
-
-  for I := 0 to AProgram.Body.Count - 1 do
-    ValidateEvalEarlyErrorStatement(AProgram.Body[I], AStrictEval,
-      AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall);
-end;
-
 procedure EvalDeclarationInstantiation(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
   const ARejectArgumentsVarDeclaration: Boolean;
-  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray);
+  const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
+  const AStaticChecksDone: Boolean);
 var
   VarNames: TUnicodeStringList;
   LexNames: TUnicodeStringList;
@@ -2701,12 +1108,8 @@ var
     Result := False;
   end;
   // A duplicate lexical name, or a lexical/var conflict, is a static Script
-  // early error (ECMA-262 §16.1.1). Raise TGocciaSyntaxError directly — like
-  // RejectEvalControlFlow and the parser's redeclaration error, and unlike
-  // ThrowSyntaxError, which raises a throwable TGocciaThrowValue — so a caller
-  // distinguishing early errors from runtime abrupt completions (notably
-  // ShadowRealm.prototype.evaluate, which maps the former to a caller-realm
-  // SyntaxError and the latter to a TypeError) classifies it correctly.
+  // early error (ECMA-262 §16.1.1), raised as TGocciaSyntaxError like the
+  // parser's redeclaration error.
   procedure RaiseAlreadyDeclared(const AName: string);
   begin
     raise TGocciaSyntaxError.Create(
@@ -2725,10 +1128,15 @@ begin
     CollectVarBindingNamesFromStatements(AProgram.Body, VarNames,
       VarBindingNameCollectionMode(not AStrictEval,
         AContext.CompatibilityNonStrictMode));
-    CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
-    for I := 0 to LexNames.Count - 1 do
-      if VarNames.IndexOf(LexNames[I]) >= 0 then
-        RaiseAlreadyDeclared(LexNames[I]);
+    // A global eval has had this check from TGocciaEngine.EvaluateGlobalEval
+    // (CheckEvalLexicalDeclarationConflicts).
+    if not AStaticChecksDone then
+    begin
+      CollectTopLevelEvalLexicalNames(AProgram.Body, LexNames);
+      for I := 0 to LexNames.Count - 1 do
+        if VarNames.IndexOf(LexNames[I]) >= 0 then
+          RaiseAlreadyDeclared(LexNames[I]);
+    end;
 
     if not AStrictEval then
     begin
@@ -2737,20 +1145,22 @@ begin
           if AVarScope.HasLexicalDeclaration(VarNames[I]) then
             RaiseAlreadyDeclared(VarNames[I]);
 
+      // Step 3.d. A catch clause's scope is exempt (its web-compat branch),
+      // and in the variable environment a parameter is what the var names
+      // (TGocciaScope.EvalVarDeclarationConflicts).
       ScopeCursor := ALexicalScope;
       while Assigned(ScopeCursor) and (ScopeCursor <> AVarScope) do
       begin
         if not (ScopeCursor is TGocciaWithScope) then
           for I := 0 to VarNames.Count - 1 do
-            if ScopeCursor.ContainsOwnLexicalBinding(VarNames[I]) or
-               ScopeCursor.ContainsOwnVarBinding(VarNames[I]) then
+            if ScopeCursor.EvalVarDeclarationConflicts(VarNames[I], False) then
               RaiseAlreadyDeclared(VarNames[I]);
         ScopeCursor := ScopeCursor.Parent;
       end;
 
       if AVarScope.ScopeKind <> skGlobal then
         for I := 0 to VarNames.Count - 1 do
-          if AVarScope.ContainsOwnLexicalBinding(VarNames[I]) then
+          if AVarScope.EvalVarDeclarationConflicts(VarNames[I], True) then
             RaiseAlreadyDeclared(VarNames[I]);
     end;
 
@@ -2841,113 +1251,6 @@ begin
   end;
 end;
 
-{ A `return`, or an unlabeled `break`/`continue` with no enclosing iteration or
-  switch, is a Script early error (a SyntaxError) — eval code is never a function
-  body, loop, or switch. Goccia otherwise detects these only at runtime via
-  control-flow propagation (the fallback case in RunEvalProgramBody), which would
-  let ShadowRealm.prototype.evaluate wrap them as a caller-realm TypeError;
-  validating here, before any evaluation, keeps them SyntaxErrors. Recursion walks
-  only statements, so it stops at function/class boundaries (which are
-  expressions) — a `return`/`break`/`continue` inside a nested function is never
-  flagged. Labeled break/continue are left to the parser, which validates their
-  targets and rejects undefined labels.
-
-  Raising TGocciaSyntaxError directly (rather than ThrowSyntaxError, which raises a
-  TGocciaThrowValue) matches the other eval early-error passes so the error is
-  classified as a static SyntaxError, not a runtime abrupt completion. }
-procedure RejectEvalControlFlow(const AMessage: string;
-  const AStmt: TGocciaStatement);
-begin
-  raise TGocciaSyntaxError.Create(AMessage, AStmt.Line, AStmt.Column, '', nil,
-    SSuggestExpressionExpected);
-end;
-
-procedure ValidateEvalControlFlowStatement(const AStmt: TGocciaStatement;
-  const AInIteration, AInSwitch: Boolean);
-var
-  I, J: Integer;
-  BlockStmt: TGocciaBlockStatement;
-  IfStmt: TGocciaIfStatement;
-  TryStmt: TGocciaTryStatement;
-  SwitchStmt: TGocciaSwitchStatement;
-begin
-  if not Assigned(AStmt) then
-    Exit;
-
-  if AStmt is TGocciaReturnStatement then
-    RejectEvalControlFlow('Illegal return statement', AStmt)
-  else if AStmt is TGocciaBreakStatement then
-  begin
-    if (TGocciaBreakStatement(AStmt).TargetLabel = '') and
-       not (AInIteration or AInSwitch) then
-      RejectEvalControlFlow(SErrorIllegalBreakStatement, AStmt);
-  end
-  else if AStmt is TGocciaContinueStatement then
-  begin
-    if (TGocciaContinueStatement(AStmt).TargetLabel = '') and
-       not AInIteration then
-      RejectEvalControlFlow(SErrorIllegalContinueStatement, AStmt);
-  end
-  else if AStmt is TGocciaBlockStatement then
-  begin
-    BlockStmt := TGocciaBlockStatement(AStmt);
-    for I := 0 to BlockStmt.Nodes.Count - 1 do
-      if BlockStmt.Nodes[I] is TGocciaStatement then
-        ValidateEvalControlFlowStatement(
-          TGocciaStatement(BlockStmt.Nodes[I]), AInIteration, AInSwitch);
-  end
-  else if AStmt is TGocciaIfStatement then
-  begin
-    IfStmt := TGocciaIfStatement(AStmt);
-    ValidateEvalControlFlowStatement(IfStmt.Consequent, AInIteration, AInSwitch);
-    ValidateEvalControlFlowStatement(IfStmt.Alternate, AInIteration, AInSwitch);
-  end
-  else if AStmt is TGocciaForStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaForStatement(AStmt).Body, True, AInSwitch)
-  else if AStmt is TGocciaForOfStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaForOfStatement(AStmt).Body, True, AInSwitch)
-  else if AStmt is TGocciaForInStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaForInStatement(AStmt).Body, True, AInSwitch)
-  else if AStmt is TGocciaWhileStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaWhileStatement(AStmt).Body, True, AInSwitch)
-  else if AStmt is TGocciaDoWhileStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaDoWhileStatement(AStmt).Body, True, AInSwitch)
-  else if AStmt is TGocciaWithStatement then
-    ValidateEvalControlFlowStatement(
-      TGocciaWithStatement(AStmt).Body, AInIteration, AInSwitch)
-  else if AStmt is TGocciaTryStatement then
-  begin
-    TryStmt := TGocciaTryStatement(AStmt);
-    ValidateEvalControlFlowStatement(TryStmt.Block, AInIteration, AInSwitch);
-    ValidateEvalControlFlowStatement(TryStmt.CatchBlock, AInIteration, AInSwitch);
-    ValidateEvalControlFlowStatement(
-      TryStmt.FinallyBlock, AInIteration, AInSwitch);
-  end
-  else if AStmt is TGocciaSwitchStatement then
-  begin
-    SwitchStmt := TGocciaSwitchStatement(AStmt);
-    for I := 0 to SwitchStmt.Cases.Count - 1 do
-      for J := 0 to SwitchStmt.Cases[I].Consequent.Count - 1 do
-        if SwitchStmt.Cases[I].Consequent[J] is TGocciaStatement then
-          ValidateEvalControlFlowStatement(
-            TGocciaStatement(SwitchStmt.Cases[I].Consequent[J]),
-            AInIteration, True);
-  end;
-end;
-
-procedure ValidateEvalControlFlow(const AProgram: TGocciaProgram);
-var
-  I: Integer;
-begin
-  for I := 0 to AProgram.Body.Count - 1 do
-    ValidateEvalControlFlowStatement(AProgram.Body[I], False, False);
-end;
-
 function PrepareEvalProgram(const AProgram: TGocciaProgram;
   const AContext: TGocciaEvaluationContext; const AVarScope,
   ALexicalScope: TGocciaScope; const AStrictEval: Boolean;
@@ -2955,15 +1258,19 @@ function PrepareEvalProgram(const AProgram: TGocciaProgram;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
   const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
   const AAllowSuperCall: Boolean;
-  const ARejectArgumentsReference: Boolean): TGocciaEvaluationContext;
+  const ARejectArgumentsReference: Boolean;
+  const AStaticChecksDone: Boolean): TGocciaEvaluationContext;
 begin
-  ValidateEvalScriptBody(AProgram.Body);
-  if ARejectArgumentsReference and
-     EvalProgramContainsArgumentsReference(AProgram) then
-    ThrowSyntaxError('arguments is not allowed in this eval context');
-  ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
-    AAllowSuperProperty, AAllowSuperCall);
-  ValidateEvalControlFlow(AProgram);
+  if not AStaticChecksDone then
+  begin
+    ValidateEvalScriptBody(AProgram.Body);
+    if ARejectArgumentsReference and
+       EvalProgramContainsArgumentsReference(AProgram) then
+      ThrowSyntaxError('arguments is not allowed in this eval context');
+    ValidateEvalEarlyErrors(AProgram, AStrictEval, AAllowNewTarget,
+      AAllowSuperProperty, AAllowSuperCall);
+    ValidateEvalControlFlow(AProgram);
+  end;
   Result := AContext;
   Result.Scope := ALexicalScope;
   Result.NonStrictMode := not AStrictEval;
@@ -2974,7 +1281,8 @@ begin
   AVarScope.NonStrictMode := not AStrictEval;
 
   EvalDeclarationInstantiation(AProgram, Result, AVarScope, ALexicalScope,
-    AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames);
+    AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames,
+    AStaticChecksDone);
 end;
 
 function RunEvalProgramBody(const AProgram: TGocciaProgram;
@@ -3020,14 +1328,15 @@ function EvaluateEvalProgram(const AProgram: TGocciaProgram;
   const ARejectVarDeclarationNames: TGocciaEvalRejectNameArray;
   const AAllowNewTarget: Boolean; const AAllowSuperProperty: Boolean;
   const AAllowSuperCall: Boolean;
-  const ARejectArgumentsReference: Boolean): TGocciaValue;
+  const ARejectArgumentsReference: Boolean;
+  const AStaticChecksDone: Boolean): TGocciaValue;
 var
   EvalContext: TGocciaEvaluationContext;
 begin
   EvalContext := PrepareEvalProgram(AProgram, AContext, AVarScope, ALexicalScope,
     AStrictEval, ARejectArgumentsVarDeclaration, ARejectVarDeclarationNames,
     AAllowNewTarget, AAllowSuperProperty, AAllowSuperCall,
-    ARejectArgumentsReference);
+    ARejectArgumentsReference, AStaticChecksDone);
   Result := RunEvalProgramBody(AProgram, EvalContext);
 end;
 
@@ -3798,25 +2107,6 @@ begin
   Result := False;
 end;
 
-function IsCurrentRealmEvalFunction(const ACallee: TGocciaValue;
-  const AContext: TGocciaEvaluationContext): Boolean;
-var
-  GlobalObject: TGocciaObjectValue;
-  EvalValue: TGocciaValue;
-begin
-  Result := False;
-  if not Assigned(AContext.Realm) or
-     not (AContext.Realm.GlobalObject is TGocciaObjectValue) then
-    Exit;
-
-  GlobalObject := TGocciaObjectValue(AContext.Realm.GlobalObject);
-  if not GlobalObject.HasProperty('eval') then
-    Exit;
-
-  EvalValue := GlobalObject.GetProperty('eval');
-  Result := EvalValue = ACallee;
-end;
-
 function TryEvaluateInterpreterDirectEval(
   const ACallExpression: TGocciaCallExpression;
   const AContext: TGocciaEvaluationContext;
@@ -3844,7 +2134,7 @@ begin
   Result := False;
   if not ((ACallee is TGocciaNativeFunctionValue) and
      TGocciaNativeFunctionValue(ACallee).DirectEvalHost and
-     IsCurrentRealmEvalFunction(ACallee, AContext)) then
+     IsRealmEvalFunction(AContext.Realm, ACallee)) then
     Exit;
   if not (ACallExpression.Callee is TGocciaIdentifierExpression) or
      (TGocciaIdentifierExpression(ACallExpression.Callee).Name <> 'eval') then
@@ -4591,7 +2881,6 @@ var
   ObjectEvaluated: Boolean;
   ShortCircuited: Boolean;
   Roots: TGocciaActiveRootFrame;
-  MemberBaseExpr: TGocciaExpression;
   SavedFrame: TGocciaCallFrame;
   FrameStamped: Boolean;
 begin
@@ -4700,7 +2989,25 @@ begin
   begin
     PropertyValue := EvaluateExpression(AMemberExpression.PropertyExpression, AContext);
     AddValueRoot(Roots, PropertyValue);
-    PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
+    if (Obj is TGocciaNullLiteralValue) or
+       (Obj is TGocciaUndefinedLiteralValue) then
+    begin
+      { The nullish base throws here; locate it at the `[`, as the named read
+        below is located at its property name, and restore the frame as the
+        throw unwinds. }
+      FrameStamped := (TGocciaCallStack.Instance <> nil) and
+        TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
+      StampInterpreterThrowLocation(AContext, AMemberExpression.Line,
+        AMemberExpression.Column);
+      try
+        PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
+      finally
+        if FrameStamped then
+          TGocciaCallStack.Instance.SetTopFrame(SavedFrame);
+      end;
+    end
+    else
+      PropertyKey := ToPropertyKeyForBase(Obj, PropertyValue);
     AddValueRoot(Roots, PropertyKey);
 
     if PropertyKey is TGocciaSymbolValue then
@@ -4765,10 +3072,10 @@ begin
       { Node's wording, shared with the bytecode VM's nullish-base path
         (Goccia.VM.ThrowNullishBasePropertyAccess) so the two executors report
         an identical message and suggestion for the same fault. Stamp the
-        executing frame with the access chain's base-most position so the trace
+        executing frame with the failed read's own position — the property name,
+        or the `[` of a computed member, where V8 reports it — so the trace
         points at the access rather than the enclosing function's call site, and
-        so the caret column matches the VM's line map (MemberChainBaseExpression). }
-      MemberBaseExpr := MemberChainBaseExpression(AMemberExpression);
+        so the caret column matches the VM's line map (EmitLoadMemberProperty). }
       { Snapshot the top frame before stamping and restore it as the throw
         unwinds: the error captures the stamped position at creation, but
         SetTopFrameLocation persists, so a try/catch that swallows this throw
@@ -4776,8 +3083,8 @@ begin
         later unstamped ThrowTypeError to capture. Mirrors EvaluateNewExpression. }
       FrameStamped := (TGocciaCallStack.Instance <> nil) and
         TGocciaCallStack.Instance.TryGetTopFrame(SavedFrame);
-      StampInterpreterThrowLocation(AContext, MemberBaseExpr.Line,
-        MemberBaseExpr.Column);
+      StampInterpreterThrowLocation(AContext, AMemberExpression.Line,
+        AMemberExpression.Column);
       try
         if Obj is TGocciaNullLiteralValue then
           ThrowTypeError(
@@ -4820,9 +3127,50 @@ begin
     Exit;
 
   if AValue is TGocciaFunctionValue then
-    TGocciaFunctionValue(AValue).SetInferredName(AName)
-  else if AValue is TGocciaClassValue then
-    TGocciaClassValue(AValue).SetInferredName(AName);
+    TGocciaFunctionValue(AValue).SetInferredName(AName);
+end;
+
+function IsAnonymousClassExpression(const AExpression: TGocciaExpression): Boolean;
+begin
+  Result := (AExpression is TGocciaClassExpression) and
+    (TGocciaClassExpression(AExpression).ClassDefinition.Name = '');
+end;
+
+{ ES2026 §8.4.5 NamedEvaluation. An anonymous class takes the name inside
+  §15.7.14 ClassDefinitionEvaluation, which calls SetFunctionName before any
+  static field or static block runs, so the name goes into the class
+  evaluation instead of onto the finished value. A function's body cannot run
+  before it is named, so a function is named after it is created. The class
+  path repeats EvaluateExpression's generator-resume and coverage bookkeeping,
+  so a class whose value a resumed generator already completed is not
+  evaluated a second time. }
+function EvaluateNamedExpression(const AExpression: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext; const AName: string): TGocciaValue;
+var
+  Continuation: TGocciaGeneratorContinuation;
+begin
+  if not IsAnonymousClassExpression(AExpression) then
+  begin
+    Result := EvaluateExpression(AExpression, AContext);
+    ApplyInferredNameForExpression(AExpression, Result, AName);
+    Exit;
+  end;
+
+  Continuation := CurrentGeneratorContinuation;
+  if Assigned(Continuation) and
+     Continuation.TakeCompletedExpressionValue(AExpression, Result) then
+  begin
+    CollectInterpreterMemoryPressure(Result);
+    Exit;
+  end;
+  if AContext.CoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) then
+    TGocciaCoverageTracker.Instance.RecordLineHit(
+      AContext.CurrentFilePath, AExpression.Line);
+  Result := EvaluateClassExpression(TGocciaClassExpression(AExpression),
+    AContext, AName);
+  if Assigned(Continuation) then
+    Continuation.SaveCompletedExpressionValue(AExpression, Result);
+  CollectInterpreterMemoryPressure(Result);
 end;
 
 function EvaluateArray(const AArrayExpression: TGocciaArrayExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
@@ -4967,17 +3315,17 @@ begin
 
             if Assigned(PropertyExpression) then
             begin
+              IsProtoSetter := (PropertyName = PROP_PROTO) and
+                AObjectExpression.PropertySourceOrder[I].UsesColonSyntax;
               if PropertyExpression is TGocciaObjectMethodDefinition then
                 PropertyValue := EvaluateObjectMethodDefinition(
                   TGocciaObjectMethodDefinition(PropertyExpression), AContext,
                   Obj, PropertyName)
+              else if IsProtoSetter then
+                PropertyValue := EvaluateExpression(PropertyExpression, AContext)
               else
-                PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-              IsProtoSetter := (PropertyName = PROP_PROTO) and
-                AObjectExpression.PropertySourceOrder[I].UsesColonSyntax;
-              if not IsProtoSetter then
-                ApplyInferredNameForExpression(PropertyExpression,
-                  PropertyValue, PropertyName);
+                PropertyValue := EvaluateNamedExpression(PropertyExpression,
+                  AContext, PropertyName);
 
               if IsProtoSetter then
               begin
@@ -5025,11 +3373,8 @@ begin
                     TGocciaObjectMethodDefinition(PropertyExpression), AContext,
                     Obj, FunctionNameFromPropertyKey(PropertyKey))
                 else
-                begin
-                  PropertyValue := EvaluateExpression(PropertyExpression, AContext);
-                  ApplyInferredNameForExpression(PropertyExpression, PropertyValue,
-                    FunctionNameFromPropertyKey(PropertyKey));
-                end;
+                  PropertyValue := EvaluateNamedExpression(PropertyExpression,
+                    AContext, FunctionNameFromPropertyKey(PropertyKey));
                 if PropertyKey is TGocciaSymbolValue then
                   Obj.DefineSymbolProperty(TGocciaSymbolValue(PropertyKey), TGocciaPropertyDescriptorData.Create(PropertyValue, [pfEnumerable, pfConfigurable, pfWritable]))
                 else
@@ -5647,7 +3992,8 @@ var
   KeyValue: TGocciaStringLiteralValue;
   Visited: TOrderedStringMap<Boolean>;
   GC: TGarbageCollector;
-  ChainDepth: Integer;
+  CycleMark: TGocciaObjectValue;
+  CycleSteps, CycleLimit: Integer;
 begin
   GC := TGarbageCollector.Instance;
   Result := TGocciaArrayValue.Create;
@@ -5665,15 +4011,19 @@ begin
     // (native case-sensitive string equality). Each object owns its key order.
     Visited := TOrderedStringMap<Boolean>.Create;
     try
+      // The walk follows the stored prototype links and has no length limit.
+      // Those links should not form a cycle (every [[SetPrototypeOf]] refuses
+      // one, and the walk does not follow a Proxy's [[GetPrototypeOf]], so a
+      // cycle closed through a Proxy ends it), but an internal write that
+      // skipped the check would make the walk loop forever. Brent's method
+      // notices a revisited link without remembering the objects: CycleMark
+      // jumps to the current link after 1, 2, 4, ... steps.
       Current := Obj;
-      ChainDepth := 0;
+      CycleMark := Obj;
+      CycleSteps := 0;
+      CycleLimit := 1;
       while Assigned(Current) do
       begin
-        Inc(ChainDepth);
-        if ChainDepth > FOR_IN_MAX_PROTOTYPE_CHAIN_DEPTH then
-          ThrowTypeError(Format(SErrorProtoChainDepthExceeded, ['for...in']),
-            SSuggestPrototypeChainTooDeep);
-
         Keys := Current.GetOwnPropertyKeys;
         for Key in Keys do
         begin
@@ -5704,6 +4054,15 @@ begin
           end;
         end;
         Current := Current.Prototype;
+        if Current = CycleMark then
+          ThrowRangeError(SErrorMaxCallStackExceeded);
+        Inc(CycleSteps);
+        if CycleSteps = CycleLimit then
+        begin
+          CycleMark := Current;
+          CycleSteps := 0;
+          CycleLimit := CycleLimit * 2;
+        end;
       end;
     finally
       Visited.Free;
@@ -7501,13 +5860,11 @@ begin
   for I := 0 to Length(AUsingDeclaration.Variables) - 1 do
   begin
     // TC39 Explicit Resource Management §3.4 CreateDisposableResource
-    Value := EvaluateExpression(AUsingDeclaration.Variables[I].Initializer, AContext);
+    Value := EvaluateNamedExpression(AUsingDeclaration.Variables[I].Initializer,
+      AContext, AUsingDeclaration.Variables[I].Name);
     if (Value is TGocciaFunctionValue) and
        (TGocciaFunctionValue(Value).Name = '') then
       TGocciaFunctionValue(Value).SetInferredName(
-        AUsingDeclaration.Variables[I].Name)
-    else if Value is TGocciaClassValue then
-      TGocciaClassValue(Value).SetInferredName(
         AUsingDeclaration.Variables[I].Name);
 
     // null and undefined are silently skipped (no error, no disposal)
@@ -7637,7 +5994,7 @@ begin
   end
   else if Assigned(ATryStatement.CatchBindingPattern) then
   begin
-    CatchScope := AContext.Scope.CreateChild(skBlock, 'CatchBlock');
+    CatchScope := TGocciaCatchScope.Create(AContext.Scope, '');
     if Assigned(GC) then
       GC.AddTempRoot(CatchScope);
     try
@@ -8076,7 +6433,6 @@ end;
 procedure InitializeInstanceProperties(const AInstance: TGocciaInstanceValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8142,16 +6498,6 @@ begin
         end;
       end;
     end;
-  end
-  else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
   end;
 end;
 
@@ -8162,7 +6508,6 @@ procedure InitializeRawPrivateInstanceProperty(
 procedure InitializeObjectInstanceProperties(const AInstance: TGocciaObjectValue; const AClassValue: TGocciaClassValue; const AContext: TGocciaEvaluationContext);
 var
   PropertyValue: TGocciaValue;
-  Entry: TGocciaExpressionMap.TKeyValuePair;
   I: Integer;
   FOEntry: TGocciaClassFieldOrderEntry;
   Expr: TGocciaExpression;
@@ -8225,16 +6570,7 @@ begin
     end;
   end
   else
-  begin
-    { Without a field order the only public entries are the backing values of
-      auto-accessors, which bytecode mode stores by assignment as well. }
-    for Entry in AClassValue.InstancePropertyDefs do
-    begin
-      PropertyValue := EvaluateExpression(Entry.Value, LocalContext);
-      AInstance.AssignProperty(Entry.Key, PropertyValue);
-    end;
     InitializePrivateInstanceProperties(AInstance, AClassValue, LocalContext);
-  end;
 end;
 
 function EvaluateSwitch(const ASwitchStatement: TGocciaSwitchStatement; const AContext: TGocciaEvaluationContext): TGocciaControlFlow;
@@ -8813,7 +7149,7 @@ begin
   end;
 end;
 
-function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext): TGocciaValue;
+function EvaluateClassExpression(const AClassExpression: TGocciaClassExpression; const AContext: TGocciaEvaluationContext; const AInferredName: string): TGocciaValue;
 var
   ClassDef: TGocciaClassDefinition;
   InnerContext: TGocciaEvaluationContext;
@@ -8836,7 +7172,7 @@ begin
   end
   else
     Result := EvaluateClassDefinition(ClassDef, AContext,
-      AClassExpression.Line, AClassExpression.Column);
+      AClassExpression.Line, AClassExpression.Column, AInferredName);
 end;
 
 // ES2022 §15.7.14 ClassStaticBlockDefinition: execute static block body
@@ -8954,7 +7290,7 @@ begin
   Result := 0;
 end;
 
-function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer): TGocciaClassValue;
+function EvaluateClassDefinition(const AClassDef: TGocciaClassDefinition; const AContext: TGocciaEvaluationContext; const ALine, AColumn: Integer; const AInferredName: string): TGocciaClassValue;
 var
   SuperClass: TGocciaClassValue;
   SuperClassValue: TGocciaValue;
@@ -8996,7 +7332,6 @@ var
   AccessGetterHelper: TGocciaAccessGetter;
   AccessSetterHelper: TGocciaAccessSetter;
   InitializerResults: TArray<TGocciaValue>;
-  AccessorBackingName: string;
   ExistingDescriptor: TGocciaPropertyDescriptor;
   StaticFieldContext: TGocciaEvaluationContext;
   StaticFieldScope: TGocciaScope;
@@ -9123,6 +7458,50 @@ var
       ClassValue.Prototype.DefineProperty(AName,
         TGocciaPropertyDescriptorAccessor.Create(
           AGetter, ASetter, [pfConfigurable, pfWritable]));
+  end;
+
+  { TC39 proposal-decorators, ClassFieldDefinitionEvaluation for a public
+    `accessor`: the getter and setter are defined together, in element order,
+    with DefinePropertyOrThrow as an enumerable, configurable accessor, so
+    the pair replaces whatever a member declared earlier under the same key
+    defined. AKey is nil for a literal name. }
+  procedure DefineAutoAccessorProperty(const AElem: TGocciaClassElement;
+    const AKey: TGocciaValue);
+  var
+    AccessorGetter, AccessorSetter: TGocciaFunctionValue;
+    Target: TGocciaObjectValue;
+    Descriptor: TGocciaPropertyDescriptorAccessor;
+  begin
+    AccessorGetter := BuildClassGetter(AElem.GetterNode);
+    { Nothing holds the getter until the descriptor is stored. }
+    TGarbageCollector.Instance.AddTempRoot(AccessorGetter);
+    try
+      AccessorSetter := BuildClassSetter(AElem.SetterNode);
+    finally
+      TGarbageCollector.Instance.RemoveTempRoot(AccessorGetter);
+    end;
+    if Assigned(AKey) then
+    begin
+      AccessorGetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'get'));
+      AccessorSetter.SetInferredName(FunctionNameFromPropertyKey(AKey, 'set'));
+    end
+    else
+    begin
+      AccessorGetter.SetInferredName('get ' + AElem.Name);
+      AccessorSetter.SetInferredName('set ' + AElem.Name);
+    end;
+    if AElem.IsStatic then
+      Target := ClassValue
+    else
+      Target := ClassValue.Prototype;
+    Descriptor := TGocciaPropertyDescriptorAccessor.Create(AccessorGetter,
+      AccessorSetter, [pfEnumerable, pfConfigurable]);
+    if AKey is TGocciaSymbolValue then
+      Target.DefineSymbolProperty(TGocciaSymbolValue(AKey), Descriptor)
+    else if Assigned(AKey) then
+      Target.DefineProperty(AKey.ToStringLiteral.Value, Descriptor)
+    else
+      Target.DefineProperty(AElem.Name, Descriptor);
   end;
 
   procedure EvaluateClassCallableElements;
@@ -9289,6 +7668,9 @@ var
             else
               ClassValue.AddSetter(Elem.Name, SetterFunction);
           end;
+          cekAccessor:
+            if not Elem.IsPrivate then
+              DefineAutoAccessorProperty(Elem, nil);
         end;
         Continue;
       end;
@@ -9323,7 +7705,7 @@ var
         cekField:
           ;
         cekAccessor:
-          ;
+          DefineAutoAccessorProperty(Elem, ComputedKey);
         cekMethod:
         begin
           Method := TGocciaMethodValue(EvaluateClassMethod(
@@ -9477,9 +7859,13 @@ begin
       MethodSuperClass := SuperClassValue;
   end;
 
-  // Use the class name if provided, otherwise create an anonymous class
+  // ES2026 §15.7.14 ClassDefinitionEvaluation names the class before any
+  // element is evaluated: the binding name of a named class, else the name
+  // NamedEvaluation passed in, else an anonymous class.
   if AClassDef.Name <> '' then
     ClassName := AClassDef.Name
+  else if AInferredName <> '' then
+    ClassName := AInferredName
   else
     ClassName := '<anonymous>';
 
@@ -9647,53 +8033,13 @@ begin
     ClassValue.SetFieldOrder(FieldOrderEntries);
   end;
 
-  // TC39 proposal-decorators §3.1 ClassDefinitionEvaluation — auto-accessor setup
-  for I := 0 to High(AClassDef.FElements) do
-  begin
-    if AClassDef.FElements[I].Kind = cekAccessor then
-    begin
-      Elem := AClassDef.FElements[I];
-      ComputedKey := nil;
-      AccessorBackingName := '__accessor_' + Elem.Name;
-      if Elem.IsComputed then
-      begin
-        if I <= High(ResolvedComputedElementKeys) then
-          ComputedKey := ResolvedComputedElementKeys[I];
-        if not Assigned(ComputedKey) then
-          ComputedKey := ToPropertyKey(EvaluateExpression(
-            Elem.ComputedKeyExpression, ClassStrictContext));
-        AccessorBackingName := '__accessor_computed_' + IntToStr(I);
-      end;
-
-      if Elem.IsPrivate then
-      begin
-        if not Elem.IsStatic then
-          ClassValue.AddPrivateInstanceProperty(Elem.Name,
-            Elem.FieldInitializer);
-        Continue;
-      end;
-
-      if Assigned(Elem.FieldInitializer) then
-        ClassValue.AddInstanceProperty(AccessorBackingName,
-          Elem.FieldInitializer);
-
-      if Elem.IsComputed then
-        ClassValue.AddAutoAccessorWithKey(
-          Elem.Name, ComputedKey, AccessorBackingName, Elem.IsStatic)
-      else
-        ClassValue.AddAutoAccessor(Elem.Name, AccessorBackingName, Elem.IsStatic);
-    end;
-  end;
-
   // ES2022 §15.7.14: evaluate static fields and static blocks in source order
   for I := 0 to High(AClassDef.FElements) do
   begin
     Elem := AClassDef.FElements[I];
     if Elem.Kind = cekStaticBlock then
       ExecuteStaticBlock(Elem.StaticBlockBody, ClassStrictContext, ClassValue)
-    else if ((Elem.Kind = cekField) or
-             ((Elem.Kind = cekAccessor) and Elem.IsPrivate)) and
-            Elem.IsStatic then
+    else if (Elem.Kind in [cekField, cekAccessor]) and Elem.IsStatic then
     begin
       if Assigned(Elem.FieldInitializer) then
       begin
@@ -9714,7 +8060,13 @@ begin
       end
       else
         PropertyValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-      if Elem.IsPrivate then
+      { An auto-accessor's value goes to its storage, a private name for a
+        public accessor as well (proposal-decorators InitializeFieldOrAccessor
+        on F with the element's [[BackingStorageKey]]). }
+      if Elem.Kind = cekAccessor then
+        ClassValue.AddPrivateStaticProperty(Elem.AccessorStorageName,
+          PropertyValue)
+      else if Elem.IsPrivate then
         ClassValue.AddPrivateStaticProperty(Elem.Name, PropertyValue)
       else if Elem.IsComputed then
       begin
@@ -10140,8 +8492,12 @@ begin
 
       ContextObject := TGocciaObjectValue.Create;
       ContextObject.AssignProperty(PROP_KIND, TGocciaStringLiteralValue.Create('class'));
+      // The decorator context's name is the class's name, including one an
+      // anonymous class took from its context, as bytecode mode reports.
       if AClassDef.Name <> '' then
         ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AClassDef.Name))
+      else if AInferredName <> '' then
+        ContextObject.AssignProperty(PROP_NAME, TGocciaStringLiteralValue.Create(AInferredName))
       else
         ContextObject.AssignProperty(PROP_NAME, TGocciaUndefinedLiteralValue.UndefinedValue);
       ContextObject.AssignProperty(PROP_METADATA, MetadataObject);
@@ -10231,13 +8587,18 @@ begin
   Result := nil;
   LastOwningClass := nil;
   repeat
-    OwningClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
-    if not (OwningClassValue is TGocciaClassValue) then
+    OwningClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
+    if not Assigned(OwningClassValue) then
       Exit;
 
-    CandidateClass := TGocciaClassValue(OwningClassValue);
-    if CandidateClass.HasOwnPrivateName(APrivateName) then
-      Exit(CandidateClass);
+    // An object-literal method's owner is its literal, not a class; the
+    // class body around the literal still supplies its private names.
+    if OwningClassValue is TGocciaClassValue then
+    begin
+      CandidateClass := TGocciaClassValue(OwningClassValue);
+      if CandidateClass.HasOwnPrivateName(APrivateName) then
+        Exit(CandidateClass);
+    end;
 
     LastOwningClass := OwningClassValue;
   until False;
@@ -10280,11 +8641,14 @@ begin
 
   LastOwningClass := nil;
   repeat
-    CandidateClassValue := AContext.Scope.FindOwningClassAfter(LastOwningClass);
-    if not (CandidateClassValue is TGocciaClassValue) then
+    CandidateClassValue := AContext.Scope.FindPrivateClassAfter(LastOwningClass);
+    if not Assigned(CandidateClassValue) then
       Exit;
-    OwningClassValue := TGocciaClassValue(CandidateClassValue);
-    OwningClassValue.AppendOwnPrivateNames(Result);
+    if CandidateClassValue is TGocciaClassValue then
+    begin
+      OwningClassValue := TGocciaClassValue(CandidateClassValue);
+      OwningClassValue.AppendOwnPrivateNames(Result);
+    end;
     LastOwningClass := CandidateClassValue;
   until False;
 end;
@@ -10349,9 +8713,12 @@ begin
     Result := '#brand:' + BrandToken + ':' + APrivateLookupName;
 end;
 
-procedure EnsureBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
-  const APrivateName, APrivateLookupName: string;
-  const AAccessClass: TGocciaClassValue);
+// Whether AReceiver carries the brand the bytecode VM stamps for the private
+// name APrivateLookupName of a class it declared (the key
+// ResolveDeclaredPrivateKey gives).
+function HasBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
+  const APrivateLookupName: string;
+  const AAccessClass: TGocciaClassValue): Boolean;
 var
   BrandKey: string;
   BrandValue: TGocciaValue;
@@ -10360,18 +8727,22 @@ begin
   BrandKey := BytecodePrivateBrandKeyForLookup(APrivateLookupName,
     AAccessClass);
   if BrandKey = '' then
-    ThrowPrivateBrandError(APrivateName, AAccessClass);
+    Exit(False);
 
   if AReceiver is TGocciaInstanceValue then
-  begin
-    if not TGocciaInstanceValue(AReceiver).TryGetRawPrivateProperty(
-      BrandKey, BrandValue) then
-      ThrowPrivateBrandError(APrivateName, AAccessClass);
-    Exit;
-  end;
+    Exit(TGocciaInstanceValue(AReceiver).TryGetRawPrivateProperty(
+      BrandKey, BrandValue));
 
-  if not (AReceiver.Properties.TryGetValue(BrandKey, Descriptor) and
-     (Descriptor is TGocciaPropertyDescriptorData)) then
+  Result := AReceiver.Properties.TryGetValue(BrandKey, Descriptor) and
+    (Descriptor is TGocciaPropertyDescriptorData);
+end;
+
+procedure EnsureBytecodePrivateBrand(const AReceiver: TGocciaObjectValue;
+  const APrivateName, APrivateLookupName: string;
+  const AAccessClass: TGocciaClassValue);
+begin
+  if not HasBytecodePrivateBrand(AReceiver, APrivateLookupName,
+     AAccessClass) then
     ThrowPrivateBrandError(APrivateName, AAccessClass);
 end;
 
@@ -10432,6 +8803,21 @@ begin
   Result := Descriptor is TGocciaPropertyDescriptorData;
 end;
 
+// Whether the bytecode VM keeps the private element APrivateLookupName on the
+// class object rather than behind an instance brand: a static field or
+// method, or an accessor in the class's private getter and setter maps (a
+// static accessor, or a decorated one). The VM stamps an instance brand for
+// these names as well, so that brand does not tell whether an object has them.
+function IsBytecodeClassHeldPrivateElement(
+  const AAccessClass: TGocciaClassValue;
+  const APrivateLookupName: string): Boolean;
+begin
+  Result := AAccessClass.HasOwnPrivateStaticProperty(APrivateLookupName) or
+    AAccessClass.HasOwnPrivateStaticMethod(APrivateLookupName) or
+    AAccessClass.HasPrivateGetter(APrivateLookupName) or
+    AAccessClass.HasPrivateSetter(APrivateLookupName);
+end;
+
 function EvaluatePrivateInOperator(
   const APrivateMemberExpression: TGocciaPrivateMemberExpression;
   const ARightExpression: TGocciaExpression;
@@ -10439,6 +8825,7 @@ function EvaluatePrivateInOperator(
 var
   RightValue: TGocciaValue;
   AccessClass: TGocciaClassValue;
+  PrivateName: string;
 begin
   RightValue := EvaluateExpression(ARightExpression, AContext);
   if RightValue.IsPrimitive then
@@ -10455,8 +8842,22 @@ begin
   if not Assigned(AccessClass) then
     ThrowPrivateBrandError(APrivateMemberExpression.PrivateName);
 
-  Result := TGocciaBooleanLiteralValue.FromBoolean(
-    HasRawPrivateInstanceBrand(TGocciaObjectValue(RightValue), AccessClass));
+  // A class the bytecode VM declared brands its instances under the
+  // compiled private key, not the evaluator's raw brand key: test the brand
+  // the VM stamps, as a private read in the same eval does (#1569). Only an
+  // instance element is tested this way; a check against a class, or of an
+  // element the class holds itself, keeps the raw test (#1574).
+  PrivateName := PrivateLookupName(AccessClass,
+    APrivateMemberExpression.PrivateName);
+  if (PrivateName <> APrivateMemberExpression.PrivateName) and
+     not (RightValue is TGocciaClassValue) and
+     not IsBytecodeClassHeldPrivateElement(AccessClass, PrivateName) then
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      HasBytecodePrivateBrand(TGocciaObjectValue(RightValue), PrivateName,
+        AccessClass))
+  else
+    Result := TGocciaBooleanLiteralValue.FromBoolean(
+      HasRawPrivateInstanceBrand(TGocciaObjectValue(RightValue), AccessClass));
 end;
 
 procedure EnsureRawPrivateInstanceBrand(const AReceiver: TGocciaObjectValue;
@@ -10759,7 +9160,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.HasOwnPrivateStaticMethod(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if not AccessClass.HasOwnPrivateStaticProperty(PrivateName) then
@@ -10803,7 +9204,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if (PrivateName <> APrivateName) and Assigned(AccessClass.Prototype) then
@@ -10829,7 +9230,7 @@ begin
       ThrowPrivateSetterMissingError(APrivateName);
     end
     else if Descriptor is TGocciaPropertyDescriptorData then
-      ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+      ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
         SSuggestPrivateFieldAccess);
   end;
 
@@ -10899,7 +9300,7 @@ begin
     ThrowPrivateSetterMissingError(APrivateName);
 
   if AccessClass.PrivateMethods.ContainsKey(PrivateName) then
-    ThrowTypeError(Format('Private method #%s is not writable', [APrivateName]),
+    ThrowTypeError(Format(SErrorPrivateMethodNotWritable, [APrivateName]),
       SSuggestPrivateFieldAccess);
 
   if PrivateName <> APrivateName then
@@ -11370,18 +9771,14 @@ begin
     InstancePrototype := AClassValue.Prototype;
 
   // ES2026 §20.1.1.1 Object(value): direct Object construction with a
-  // non-nullish argument returns that object or ToObject(value).
-  if (AClassValue.Name = CONSTRUCTOR_OBJECT) and
+  // non-nullish argument returns that object or ToObject(value), which
+  // TGocciaObjectClassValue.Instantiate does in Object's own realm.
+  if (AClassValue is TGocciaObjectClassValue) and
      (EffectiveNewTarget = AClassValue) and
      (AArguments.Length > 0) and
      not (AArguments.GetElement(0) is TGocciaUndefinedLiteralValue) and
      not (AArguments.GetElement(0) is TGocciaNullLiteralValue) then
-  begin
-    if AArguments.GetElement(0) is TGocciaObjectValue then
-      Exit(AArguments.GetElement(0));
-    if AArguments.GetElement(0).IsPrimitive then
-      Exit(AArguments.GetElement(0).Box);
-  end;
+    Exit(AClassValue.Instantiate(AArguments, ANewTarget));
 
   { §15.7.14 step 15a: this class runs an implicit constructor, and so does
     every class between it and the first ancestor that has a constructor body
@@ -12215,21 +10612,22 @@ begin
   Result := '';
 end;
 
-procedure ApplyInferredNameForDefaultInitializer(
+// A default initializer whose target is a single identifier is evaluated with
+// ES2026 §8.4.5 NamedEvaluation (SingleNameBinding, AssignmentProperty and
+// AssignmentElement all do this when the initializer is an anonymous function
+// or class definition).
+function EvaluateDefaultInitializer(
   const APattern: TGocciaDestructuringPattern;
-  const AInitializer: TGocciaExpression; const AValue: TGocciaValue);
+  const AInitializer: TGocciaExpression;
+  const AContext: TGocciaEvaluationContext): TGocciaValue;
 var
   Name: string;
 begin
-  if not IsAnonymousFunctionNameExpression(AInitializer) then
-    Exit;
   Name := SingleIdentifierPatternName(APattern);
   if Name = '' then
-    Exit;
-  if AValue is TGocciaFunctionValue then
-    TGocciaFunctionValue(AValue).SetInferredName(Name)
-  else if AValue is TGocciaClassValue then
-    TGocciaClassValue(AValue).SetInferredName(Name);
+    Result := EvaluateExpression(AInitializer, AContext)
+  else
+    Result := EvaluateNamedExpression(AInitializer, AContext, Name);
 end;
 
 procedure InitPreparedDestructuringReference(
@@ -12480,9 +10878,8 @@ begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(AssignPat.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(AssignPat.Left, AssignPat.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(AssignPat.Left,
+        AssignPat.Right, AContext);
     end
     else
       DefaultValue := AValue;
@@ -12761,9 +11158,8 @@ begin
     AssignPat := TGocciaAssignmentDestructuringPattern(APattern);
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(AssignPat.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(AssignPat.Left, AssignPat.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(AssignPat.Left,
+        AssignPat.Right, AContext);
     end
     else
       DefaultValue := AValue;
@@ -13165,9 +11561,8 @@ begin
 
     if AValue is TGocciaUndefinedLiteralValue then
     begin
-      DefaultValue := EvaluateExpression(APattern.Right, AContext);
-      ApplyInferredNameForDefaultInitializer(APattern.Left, APattern.Right,
-        DefaultValue);
+      DefaultValue := EvaluateDefaultInitializer(APattern.Left,
+        APattern.Right, AContext);
     end
     else
       DefaultValue := AValue;

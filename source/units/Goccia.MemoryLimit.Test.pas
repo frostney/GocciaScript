@@ -149,6 +149,8 @@ type
       run, so it answers one question about one script: did guest code keep
       running after a fault it should never have been able to observe? }
     FSwallowedFaultReported: Boolean;
+    { The budget SqueezeMemory replaces and RelaxMemory restores. }
+    FPressureMaxBytes: Int64;
     { The refusing sink itself. EmitCapabilityAudit wraps whatever it raises in
       EGocciaCapabilityAuditDeliveryError. }
     procedure FailingAuditSink(const AEvent: TGocciaCapabilityAuditEvent);
@@ -233,6 +235,16 @@ type
     procedure TestDiagnosticSourceAccountingUsesRetainedBytes;
     procedure TestDiagnosticRegistryCommitRollsBack;
     procedure TestDiagnosticReconcileRollsBack;
+    { Guest-callable natives for the closed numeric test: the first sets the
+      budget just above live usage, so every periodic memory-pressure check in
+      the VM collects, the second restores it, and the third collects now. }
+    function SqueezeMemory(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function RelaxMemory(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function CollectNow(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    procedure TestClosedNumericRecursionCollectsUnderPressure;
   protected
     procedure BeforeEach; override;
   public
@@ -440,6 +452,8 @@ begin
   Test('An async generator return/finally cannot swallow a refusal',
     TestAsyncGeneratorReturnCannotSwallowRefusal);
   Test('Ordinary script errors stay catchable', TestScriptErrorsStayCatchable);
+  Test('A closed numeric recursion collects past stale register slots',
+    TestClosedNumericRecursionCollectsUnderPressure);
   Test('Script try/catch cannot swallow an engine-integrity fault',
     TestSyncCatchCannotSwallowIntegrityFault);
   Test('A guest iterator return() cannot swallow a refusal while closing',
@@ -1673,6 +1687,123 @@ begin
   Expect<Boolean>(FaultEscapesScript(SourceText,
     TGocciaBytecodeExecutor.Create,
     'memory-limit-script-error-bytecode.js', TGocciaMemoryLimitError)).ToBe(False);
+end;
+
+function TMemoryLimitTests.SqueezeMemory(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+begin
+  { 8 KiB is below the smallest reserve the pressure check keeps (16 KiB), so
+    usage stays inside the reserve and every check collects, and it is enough
+    for the one closure the recursion's caller creates. }
+  GC := TGarbageCollector.Instance;
+  GC.MaxBytes := GC.BytesAllocated + 8 * 1024;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TMemoryLimitTests.RelaxMemory(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.MaxBytes := FPressureMaxBytes;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TMemoryLimitTests.CollectNow(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  TGarbageCollector.Instance.Collect;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+procedure TMemoryLimitTests.TestClosedNumericRecursionCollectsUnderPressure;
+const
+  { fibonacci runs on closed numeric frames (ADR 0101), which take their
+    register slots without clearing them. Each case lets ordinary frames store
+    object references in those slots and frees the objects, then recurses while
+    every memory-pressure check collects. A collector that marked the scalar
+    frames' slots would follow references to freed objects. }
+  SourceText =
+    'const numeric = () => {' + sLineBreak +
+    '  const fibonacci = (n) => n <= 1 ? n : fibonacci(n - 1) + fibonacci(n - 2);' + sLineBreak +
+    '  return fibonacci(16);' + sLineBreak +
+    '};' + sLineBreak +
+    'const dirty = (depth) => {' + sLineBreak +
+    '  const a = { depth }, b = [depth, depth], c = { a }, d = [b], e = { c, d };' + sLineBreak +
+    '  if (depth === 0) return [e].length;' + sLineBreak +
+    '  const rest = dirty(depth - 1);' + sLineBreak +
+    '  return rest + a.depth - depth;' + sLineBreak +
+    '};' + sLineBreak +
+    'const underPressure = (body) => {' + sLineBreak +
+    '  __squeezeMemory();' + sLineBreak +
+    '  const result = body();' + sLineBreak +
+    '  __relaxMemory();' + sLineBreak +
+    '  return result;' + sLineBreak +
+    '};' + sLineBreak +
+    // After an ordinary recursion: 987 + 1 + 987.
+    'let total = numeric();' + sLineBreak +
+    'total = total + dirty(80);' + sLineBreak +
+    '__collect();' + sLineBreak +
+    'total = total + underPressure(numeric);' + sLineBreak +
+    // After a native callback: 1 + 987.
+    'total = total + [80].map(dirty)[0];' + sLineBreak +
+    '__collect();' + sLineBreak +
+    'total = total + underPressure(numeric);' + sLineBreak +
+    // Inside a native callback: 987 + 1 + 987.
+    'total = total + [0].map(() => {' + sLineBreak +
+    '  let inner = numeric();' + sLineBreak +
+    '  inner = inner + dirty(80);' + sLineBreak +
+    '  __collect();' + sLineBreak +
+    '  return inner + underPressure(numeric);' + sLineBreak +
+    '})[0];' + sLineBreak +
+    // After a resumed generator: 3 + 3 + 987.
+    'const steps = ({' + sLineBreak +
+    '  *run() {' + sLineBreak +
+    '    const held = [{ a: 1 }, { b: 2 }, [3, 4]];' + sLineBreak +
+    '    yield held.length;' + sLineBreak +
+    '    const more = { held, again: [held, held] };' + sLineBreak +
+    '    yield more.again.length + dirty(40);' + sLineBreak +
+    '  },' + sLineBreak +
+    '}).run();' + sLineBreak +
+    'total = total + steps.next().value;' + sLineBreak +
+    'total = total + steps.next().value;' + sLineBreak +
+    '__collect();' + sLineBreak +
+    'total = total + underPressure(numeric);' + sLineBreak +
+    'total;';
+var
+  Source: TStringList;
+  Executor: TGocciaExecutor;
+  Engine: TGocciaEngine;
+  ScriptResult: TGocciaScriptResult;
+begin
+  Source := TStringList.Create;
+  Source.Text := SourceText;
+  Executor := TGocciaBytecodeExecutor.Create;
+  Engine := TGocciaEngine.Create('closed-numeric-pressure.js', Source,
+    Executor);
+  FPressureMaxBytes := TGarbageCollector.Instance.MaxBytes;
+  try
+    Engine.InjectGlobal('__squeezeMemory',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(SqueezeMemory,
+        '__squeezeMemory', 0));
+    Engine.InjectGlobal('__relaxMemory',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(RelaxMemory,
+        '__relaxMemory', 0));
+    Engine.InjectGlobal('__collect',
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(CollectNow,
+        '__collect', 0));
+    ScriptResult := Engine.Execute;
+    Expect<Double>(ScriptResult.Result.ToNumberLiteral.Value).ToBe(
+      1975 + 988 + 1975 + 993);
+  finally
+    TGarbageCollector.Instance.MaxBytes := FPressureMaxBytes;
+    Engine.Free;
+    Executor.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TMemoryLimitTests.TestSyncCatchCannotSwallowIntegrityFault;

@@ -611,3 +611,239 @@ test("a throw caught in an async function leaves its frame as it found it", asyn
     await stacksAroundAsyncOperation(afterAwait);
   expect(performedAfter).toBe(skippedAfter);
 });
+
+// The positions of the frames a stack lists for the named functions. Each
+// scenario below binds the error before returning it, so no call it makes is
+// in tail position and every named frame stays on the stack. Which call a
+// caller frame is located at differs between the executors (#1273), so these
+// tests check only that every frame has a position.
+const namedFramePositions = (stack, names) =>
+  stack
+    .split("\n")
+    .filter((line) => names.some((name) => line.startsWith(`    at ${name} (`)))
+    .map(positionOf);
+
+const expectEveryNamedFrameLocated = (stack, names) => {
+  const positions = namedFramePositions(stack, names);
+  expect(positions.length).toBe(names.length);
+  for (const position of positions) {
+    expect(position.line).toBeGreaterThan(0);
+    expect(position.column).toBeGreaterThan(0);
+  }
+};
+
+const createError = () => new Error("located");
+
+test("every frame of a nested call chain has a position", () => {
+  const innerFrame = () => {
+    const error = createError();
+    return error;
+  };
+  const middleFrame = () => {
+    const error = innerFrame();
+    return error;
+  };
+  const outerFrame = () => {
+    const error = middleFrame();
+    return error;
+  };
+
+  expectEveryNamedFrameLocated(outerFrame().stack, [
+    "innerFrame",
+    "middleFrame",
+    "outerFrame",
+  ]);
+});
+
+test("every frame has a position when the chain passes through a built-in callback", () => {
+  const callbackCaller = () => {
+    const error = [1].map(() => {
+      const error = createError();
+      return error;
+    })[0];
+    return error;
+  };
+  const outerOfCallback = () => {
+    const error = callbackCaller();
+    return error;
+  };
+
+  expectEveryNamedFrameLocated(outerOfCallback().stack, [
+    "callbackCaller",
+    "outerOfCallback",
+  ]);
+});
+
+test("every frame has a position when the chain passes through a constructor, a getter or a generator", () => {
+  class Located {
+    constructor() {
+      this.error = createError();
+    }
+  }
+  const constructing = () => {
+    const error = new Located().error;
+    return error;
+  };
+  const withGetter = {
+    get located() {
+      const error = createError();
+      return error;
+    },
+  };
+  const readingGetter = () => {
+    const error = withGetter.located;
+    return error;
+  };
+  const generators = {
+    *located() {
+      const error = createError();
+      yield error;
+    },
+  };
+  const resumingGenerator = () => {
+    const error = generators.located().next().value;
+    return error;
+  };
+
+  expectEveryNamedFrameLocated(constructing().stack, ["constructing"]);
+  expectEveryNamedFrameLocated(readingGetter().stack, ["readingGetter"]);
+  expectEveryNamedFrameLocated(resumingGenerator().stack, ["resumingGenerator"]);
+});
+
+test("every frame has a position when the chain passes through an async function before it awaits", async () => {
+  const asyncFrame = async () => {
+    const error = createError();
+    return error;
+  };
+  const callingAsync = () => {
+    const pending = asyncFrame();
+    return pending;
+  };
+
+  expectEveryNamedFrameLocated((await callingAsync()).stack, [
+    "asyncFrame",
+    "callingAsync",
+  ]);
+});
+
+test("every frame of a numeric recursion that overflows the stack has a position", () => {
+  const countDown = (n) => (n <= 0 ? 0 : countDown(n - 1) + 1);
+  let stack = "";
+  try {
+    countDown(1e7);
+  } catch (e) {
+    stack = e.stack;
+  }
+  const positions = namedFramePositions(stack, ["countDown"]);
+
+  expect(stack.startsWith("RangeError: ")).toBe(true);
+  expect(positions.length).toBeGreaterThan(1);
+  for (const position of positions) {
+    expect(position.line).toBeGreaterThan(0);
+  }
+});
+
+test("every frame has a position when the chain passes through another module", () => {
+  const callingImported = () => {
+    const error = importedAfterFunctionCall(false);
+    return error;
+  };
+
+  expectEveryNamedFrameLocated(callingImported().stack, [
+    "importedAfterFunctionCall",
+    "callingImported",
+  ]);
+});
+
+// The stack of the error a call throws. Each call below sits in a block body,
+// so it is not in tail position and its frame stays on the stack.
+const stackOfFailingCall = (call) => {
+  try {
+    call();
+  } catch (e) {
+    return e.stack;
+  }
+  return "";
+};
+
+// True when a frame of the stack is located at the line and column. The frame
+// that names a call's position differs between the executors (#1273), but
+// each lists it on some frame.
+const listsPosition = (stack, line, column) =>
+  stack.includes(`:${line}:${column})`);
+
+// A Set method on an object that is not a Set, so that calling it throws.
+const notASet = { delete: Set.prototype.delete };
+
+// A built-in that throws is located at the call that reached it, in both
+// modes: the call site an audit event and a PermissionDenied also report.
+test("a call is located at the name it follows, or at its opening parenthesis, as V8 locates it", () => {
+  // The calls below start five lines after this one, one to a line.
+  let line = 0;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    line = positionOf(e.stack.split("\n")[1]).line;
+  }
+  const stacks = [
+    stackOfFailingCall(() => { BigInt(1.5); }),
+    stackOfFailingCall(() => { JSON.parse("{"); }),
+    stackOfFailingCall(() => { JSON?.parse("{"); }),
+    stackOfFailingCall(() => { JSON["parse"]("{"); }),
+    stackOfFailingCall(() => { JSON.parse?.("{"); }),
+    stackOfFailingCall(() => { (JSON.parse)("{"); }),
+    stackOfFailingCall(() => { notASet.delete(1); }),
+    stackOfFailingCall(() => { new ArrayBuffer(-1); }),
+  ];
+  const columns = [
+    32, // BigInt(1.5): the callee
+    37, // JSON.parse: the property name
+    38, // JSON?.parse: the property name
+    45, // JSON["parse"](: the "(" after a computed callee
+    44, // JSON.parse?.(: the "(" of an optional call
+    44, // (JSON.parse)(: the "(" after a parenthesized callee
+    46, // notASet.delete(: the "(" after a reserved-word property name
+    32, // new ArrayBuffer: the "new"
+  ];
+
+  columns.forEach((column, index) => {
+    expect(listsPosition(stacks[index], line + 5 + index, column)).toBe(true);
+  });
+});
+
+const absentTarget = null;
+const nestedTargets = { inner: null };
+
+test("a failed property read is located at its property name, or at the [ of a computed read, as V8 locates it", () => {
+  // A built-in's error is located at the call that reached it, in both modes;
+  // the reads below start five lines after it, one to a line.
+  let line = 0;
+  try {
+    JSON.parse("{");
+  } catch (e) {
+    line = positionOf(e.stack.split("\n")[1]).line;
+  }
+  const stacks = [
+    stackOfFailingCall(() => { absentTarget.value; }),
+    stackOfFailingCall(() => { absentTarget . value; }),
+    stackOfFailingCall(() => { absentTarget["value"]; }),
+    stackOfFailingCall(() => { nestedTargets.inner.value; }),
+    stackOfFailingCall(() => { nestedTargets.inner.value(); }),
+  ];
+  const columns = [
+    45, // absentTarget.value: the property name
+    47, // absentTarget . value: the property name
+    44, // absentTarget["value"]: the "["
+    52, // nestedTargets.inner.value: the property that failed
+    52, // nestedTargets.inner.value(): the method that failed to load
+  ];
+
+  stacks.forEach((stack) => {
+    expect(stack.startsWith("TypeError: Cannot read properties of null")).toBe(
+      true,
+    );
+  });
+  columns.forEach((column, index) => {
+    expect(listsPosition(stacks[index], line + 5 + index, column)).toBe(true);
+  });
+});

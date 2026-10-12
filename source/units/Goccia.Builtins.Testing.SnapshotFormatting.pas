@@ -84,6 +84,7 @@ uses
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassValue,
   Goccia.Values.DataViewValue,
+  Goccia.Values.DateData,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.GeneratorValue,
@@ -295,14 +296,19 @@ begin
   Result := Buffer.ToString;
 end;
 
-function HasDateToStringTag(const AObject: TGocciaObjectValue): Boolean;
+{ pretty-format prints a value as a Date when Object.prototype.toString gives
+  "[object Date]": a string @@toStringTag decides, and without one the
+  [[DateValue]] internal slot does. }
+function IsSnapshotDate(const AObject: TGocciaObjectValue): Boolean;
 var
   TagValue: TGocciaValue;
 begin
   TagValue := AObject.GetSymbolProperty(
     TGocciaSymbolValue.WellKnownToStringTag);
-  Result := (TagValue is TGocciaStringLiteralValue) and
-    (TGocciaStringLiteralValue(TagValue).Value = 'Date');
+  if TagValue is TGocciaStringLiteralValue then
+    Result := TGocciaStringLiteralValue(TagValue).Value = 'Date'
+  else
+    Result := HasDateValue(AObject);
 end;
 
 function ObjectDisplayName(const AObject: TGocciaObjectValue): string;
@@ -682,10 +688,7 @@ begin
     Exit;
   end;
 
-  { Date is implemented by the standard shim as a branded class instance.
-    Its toStringTag is the only host-visible brand surface. }
-  if (ObjectDisplayName(ObjectValue) = 'Date') or
-     HasDateToStringTag(ObjectValue) then
+  if IsSnapshotDate(ObjectValue) then
   begin
     { pretty-format checks Number.isNaN(+value), so a user-defined valueOf
       participates in invalid-date detection even though ISO rendering uses

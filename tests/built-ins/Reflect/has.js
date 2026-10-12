@@ -37,4 +37,11 @@ describe("Reflect.has", () => {
     expect(() => Reflect.has("str", "x")).toThrow(TypeError);
     expect(() => Reflect.has(null, "x")).toThrow(TypeError);
   });
+
+  test("finds a symbol key on the prototype chain", () => {
+    const key = Symbol("key");
+    expect(Reflect.has([], Symbol.iterator)).toBe(true);
+    expect(Reflect.has(Object.create({ [key]: 1 }), key)).toBe(true);
+    expect(Reflect.has(Object.create(null), key)).toBe(false);
+  });
 });

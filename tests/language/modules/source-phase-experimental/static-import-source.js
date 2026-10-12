@@ -17,6 +17,27 @@ describe("experimental static source-phase imports", () => {
     expect(Object.getPrototypeOf(abstractModuleSourcePrototype)).toBe(Object.prototype);
   });
 
+  test("the ModuleSource tag is an accessor on the abstract prototype", () => {
+    const abstractModuleSourcePrototype = Object.getPrototypeOf(
+      Object.getPrototypeOf(mathModuleSource),
+    );
+    const descriptor = Object.getOwnPropertyDescriptor(
+      abstractModuleSourcePrototype,
+      Symbol.toStringTag,
+    );
+
+    expect(typeof descriptor.get).toBe("function");
+    expect(descriptor.set).toBeUndefined();
+    expect(descriptor.enumerable).toBe(false);
+    expect(descriptor.configurable).toBe(true);
+    expect(descriptor.get.call(mathModuleSource)).toBe("ModuleSource");
+    expect(descriptor.get.call({})).toBeUndefined();
+    expect(descriptor.get.call(1)).toBeUndefined();
+    expect(Object.prototype.toString.call(Object.create(Object.getPrototypeOf(mathModuleSource)))).toBe(
+      "[object Object]",
+    );
+  });
+
   test("duplicate star exports of one ModuleSource remain unambiguous", () => {
     expect(sharedSource).toBe(mathModuleSource);
   });

@@ -113,3 +113,63 @@ test("closed numeric scalar recursion preserves the stack limit and trace", () =
   expect(caught.message).toBe("Maximum call stack size exceeded");
   expect(caught.stack.includes("numeric")).toBe(true);
 });
+
+describe("the default limit allows exactly 2,200 nested calls", () => {
+  // The test runner's default --max-stack. The runner calls each test
+  // function itself, so the test function is not one of the nested calls.
+  const LIMIT = 2200;
+  const count = (n) => (n <= 1 ? 1 : count(n - 1) + 1);
+
+  test("plain calls", () => {
+    expect(count(LIMIT)).toBe(LIMIT);
+    expect(() => count(LIMIT + 1)).toThrow(RangeError);
+  });
+
+  test("method calls", () => {
+    const counter = {
+      count(n) {
+        return n <= 1 ? 1 : this.count(n - 1) + 1;
+      },
+    };
+    expect(counter.count(LIMIT)).toBe(LIMIT);
+    expect(() => counter.count(LIMIT + 1)).toThrow(RangeError);
+  });
+
+  test("closed numeric self-calls", () => {
+    // The outer arrow is the first call. Called with a number literal,
+    // numeric's calls to itself compile to OP_CALL_SELF_NUM in bytecode.
+    const below = () => {
+      const numeric = (k) => (k <= 1 ? k : numeric(k - 1) + 1);
+      return numeric(2199) + 1;
+    };
+    const above = () => {
+      const numeric = (k) => (k <= 1 ? k : numeric(k - 1) + 1);
+      return numeric(2200) + 1;
+    };
+    expect(below()).toBe(LIMIT);
+    expect(() => above()).toThrow(RangeError);
+  });
+
+  test("calls from a native callback", () => {
+    // map and the callback it calls count as one call between them.
+    expect([LIMIT].map(count)).toEqual([LIMIT]);
+    expect(() => [LIMIT + 1].map(count)).toThrow(RangeError);
+  });
+
+  test("calls from a generator", () => {
+    // next() is the first call.
+    const source = {
+      *values(n) {
+        yield count(n);
+      },
+    };
+    expect(source.values(LIMIT - 1).next().value).toBe(LIMIT - 1);
+    expect(() => source.values(LIMIT).next()).toThrow(RangeError);
+  });
+
+  test("calls after an await", async () => {
+    await Promise.resolve();
+    expect(count(LIMIT)).toBe(LIMIT);
+    expect(() => count(LIMIT + 1)).toThrow(RangeError);
+  });
+});

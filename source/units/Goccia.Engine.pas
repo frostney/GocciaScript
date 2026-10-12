@@ -275,6 +275,9 @@ type
     procedure DiscardRuntimePending;
     procedure PrintSourcePipelineWarnings(
       const APipelineResult: TGocciaSourcePipelineResult);
+    { The parse options of this engine's language profile. }
+    function SourcePipelineOptions(
+      const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -329,6 +332,13 @@ type
       const AScope: TGocciaScope): TGocciaValue;
     function RunModuleForSourceType(const AModule: TGocciaCompiledModule;
       const AFileName: string): TGocciaValue;
+    { Calls AFunction as a run of this engine, as ExecuteProgram runs a
+      program: it waits for the work the call leaves pending and raises a
+      rejection the call leaves unhandled. For script a host calls after the
+      engine's own run, such as the test runner's runTests. }
+    function CallAsRun(const AFunction: TGocciaFunctionBase;
+      const AArguments: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
     procedure ThrowError(const AMessage: string; const ALine,
       AColumn: Integer);
 
@@ -386,6 +396,17 @@ type
     procedure RefreshGlobalThis;
     procedure SuspendRealmExecutionContext;
     function ActivateRealmExecutionContext: TGocciaExecutionContextScope;
+    { ES2026 §19.2.1.1 PerformEval for eval code whose variable environment
+      is this realm's global environment: an indirect call of the realm's
+      `eval`, and ShadowRealm.prototype.evaluate (TC39 ShadowRealm §3.1.3).
+      ASourceText is the eval's source; the caller has handled a non-String.
+      Parses it as a Script, checks the static early errors, and has the
+      executor run it in this realm: compiled and run on the VM in bytecode
+      mode (ADR 0134 Phase 2), evaluated in interpreter mode. Returns the
+      completion value. When it raises, AStage tells whether compiling or
+      running failed. }
+    function EvaluateGlobalEval(const ASourceText, ASourcePath: string;
+      out AStage: TGocciaGlobalEvalStage): TGocciaValue;
     function AddExtension(
       const AExtension: TGocciaEngineExtension): TGocciaEngineExtension;
     function FindExtension(
@@ -505,6 +526,7 @@ uses
   Goccia.Coverage,
   Goccia.Error,
   Goccia.Error.Suggestions,
+  Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
   Goccia.Executor.Bytecode,
   Goccia.Executor.Interpreter,
@@ -539,6 +561,7 @@ uses
   Goccia.Values.WeakRefValue,
   Goccia.Values.WeakSetValue,
   Goccia.Version,
+  Goccia.VM,
   Goccia.VM.Exception;
 
 threadvar
@@ -1007,13 +1030,13 @@ begin
     if IsSideEffectShim(Shim.Name) then
       // Mutates Object.prototype with no exported global to bind lazily, so it
       // runs eagerly at boot.
-      LoadShimValue(FInterpreter, Shim)
+      LoadShimValue(FInterpreter, I)
     else
     begin
       // Defer the name-bound shim's lex/parse/tree-walk until the global is
       // first touched.  The heaviest shim (Date, ~671 source lines) is then
       // never parsed for scripts that don't use it.
-      Materializer := TGocciaShimMaterializer.Create(FInterpreter, Shim);
+      Materializer := TGocciaShimMaterializer.Create(FInterpreter, I);
       FLazyThunks.Add(Materializer);
       RegisterLazyGlobal(Shim.Name, Materializer.Materialize, dtConst);
     end;
@@ -1546,7 +1569,7 @@ begin
   TGocciaObjectValue.InitializeSharedPrototype;
   TypeDef.ConstructorName := CONSTRUCTOR_OBJECT;
   TypeDef.Kind := gtdkNativeInstanceType;
-  TypeDef.ClassValueClass := TGocciaClassValue;
+  TypeDef.ClassValueClass := TGocciaObjectClassValue;
   TypeDef.ExposePrototype := nil;
   TypeDef.PrototypeProvider := @ObjectPrototypeProvider;
   TypeDef.StaticSource := BuiltinObjectOrNil(FBuiltinGlobalObject);
@@ -1806,6 +1829,7 @@ var
 begin
   TAConstructor := TGocciaTypedArrayClassValue.Create(AName, FTypedArrayIntrinsic, AKind);
   TGocciaTypedArrayValue.ExposePrototype(TAConstructor);
+  TGocciaTypedArrayValue.SetKindPrototype(AKind, TAConstructor.Prototype);
   TGocciaTypedArrayValue.SetSharedPrototypeParent(AObjectConstructor.Prototype);
   BPE := TGocciaNumberLiteralValue.Create(TGocciaTypedArrayValue.BytesPerElement(AKind));
   TAConstructor.DefineProperty(PROP_BYTES_PER_ELEMENT,
@@ -2242,6 +2266,81 @@ begin
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
+end;
+
+function TGocciaEngine.EvaluateGlobalEval(const ASourceText,
+  ASourcePath: string; out AStage: TGocciaGlobalEvalStage): TGocciaValue;
+var
+  Options: TGocciaSourcePipelineOptions;
+  OptionsScope: TGocciaSourcePipelineOptionsScope;
+  ParseResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
+  SourceLines: TStringList;
+  StrictEval: Boolean;
+  Declarations: TGocciaGlobalEvalDeclarations;
+begin
+  AStage := gesCompile;
+  Declarations.VarNames := TUnicodeStringList.Create;
+  Declarations.FunctionNames := TUnicodeStringList.Create;
+  Declarations.DeclaredVarNames := TUnicodeStringList.Create;
+  SourceLines := CreateECMAScriptSourceLines(ASourceText);
+  try
+    Options := SourcePipelineOptions(stScript);
+    OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
+    try
+      RealmScope := ActivateRealmExecutionContext;
+      try
+        // §19.2.1.1 step 11: parse the source as a Script and check the early
+        // errors the eval call owns. An indirect eval is not in a function, a
+        // method or a derived constructor, so new.target, super.x and super()
+        // are SyntaxErrors.
+        ParseResult := TGocciaSourcePipeline.Parse(SourceLines, ASourcePath,
+          Options);
+        try
+          ValidateEvalScriptBody(ParseResult.ProgramNode.Body);
+          // Step 13: the eval is strict only by its own directive.
+          StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
+          ValidateEvalEarlyErrors(ParseResult.ProgramNode, StrictEval, False,
+            False, False);
+          ValidateEvalControlFlow(ParseResult.ProgramNode);
+          CollectGlobalEvalDeclarationNames(ParseResult.ProgramNode,
+            VarBindingNameCollectionMode(not StrictEval,
+              cfNonStrictMode in FCompatibility),
+            Declarations.VarNames, Declarations.FunctionNames,
+            Declarations.DeclaredVarNames);
+          CheckEvalLexicalDeclarationConflicts(ParseResult.ProgramNode,
+            Declarations.VarNames);
+          Result := FExecutor.EvaluateGlobalEval(ParseResult.ProgramNode,
+            ASourcePath, StrictEval, Declarations, AStage);
+        finally
+          ParseResult.Free;
+        end;
+      finally
+        RealmScope.Free;
+      end;
+    finally
+      OptionsScope.Free;
+    end;
+  finally
+    SourceLines.Free;
+    Declarations.DeclaredVarNames.Free;
+    Declarations.FunctionNames.Free;
+    Declarations.VarNames.Free;
+  end;
+end;
+
+function TGocciaEngine.SourcePipelineOptions(
+  const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+begin
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := FPreprocessors;
+  Result.Compatibility := FCompatibility;
+  Result.LabelStatementsEnabled := FLabelStatementsEnabled;
+  Result.ForInLoopsEnabled := FForInLoopsEnabled;
+  Result.ExperimentalJSModuleSourceEnabled :=
+    FExperimentalJSModuleSourceEnabled;
+  Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
+  Result.SourceType := ASourceType;
 end;
 
 procedure TGocciaEngine.RetainModule(const AModule: TGocciaCompiledModule);
@@ -2792,8 +2891,12 @@ function TGocciaEngine.RunModuleForSourceType(
   const AModule: TGocciaCompiledModule;
   const AFileName: string): TGocciaValue;
 var
+  EntryLastModified: TDateTime;
+  EntryModule: TGocciaModule;
   ModuleScope: TGocciaScope;
   PrevScope: TGocciaDiagnosticSourceScope;
+  SavedRuntimeModule: TGocciaModule;
+  VM: TGocciaVM;
 begin
   // Bytecode execution entry (the interpreter path uses Execute). Bind
   // code-frame capture to this engine's own scope for the run, as Execute does.
@@ -2808,11 +2911,87 @@ begin
       ModuleScope.NonStrictMode := False;
       ModuleScope.ArgumentsObjectEnabled :=
         cfArgumentsObject in FCompatibility;
-      Result := RunModuleInScope(AModule, ModuleScope);
+      { ES2026 §16.2.1.10 HostLoadImportedModule: an import that resolves to
+        the entry's own file gets the entry's Module Record, which
+        InnerModuleEvaluation (§16.2.1.6.1.3.1) does not evaluate again while
+        it is evaluating or once it is evaluated. Register the entry under its
+        resolved path, stamped with its file's modification time, and mark it
+        evaluating before its imports are linked, as Execute does. As the
+        VM's current runtime module it gets the program's exports
+        (TGocciaBytecodeExecutor.InitializeEntryExports, then OP_EXPORT). }
+      EntryModule := TGocciaModule.Create(ExpandFileName(AFileName));
+      if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
+         EntryLastModified) then
+        EntryModule.LastModified := EntryLastModified;
+      FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
+      VM := nil;
+      SavedRuntimeModule := nil;
+      if FExecutor is TGocciaBytecodeExecutor then
+      begin
+        VM := TGocciaBytecodeExecutor(FExecutor).VM;
+        SavedRuntimeModule := VM.CurrentRuntimeModule;
+        VM.CurrentRuntimeModule := EntryModule;
+      end;
+      FModuleLoader.BeginEvaluatingModulePath(EntryModule.Path);
+      try
+        try
+          Result := RunModuleInScope(AModule, ModuleScope);
+        except
+          on E: Exception do
+          begin
+            { A later import of the entry gets its error, never the record
+              of this incomplete run. }
+            FModuleLoader.FailEntryModule(EntryModule, E);
+            raise;
+          end;
+        end;
+      finally
+        FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+        if Assigned(VM) then
+          VM.CurrentRuntimeModule := SavedRuntimeModule;
+      end;
     end
     else
       Result := RunModule(AModule);
   finally
+    TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
+  end;
+end;
+
+function TGocciaEngine.CallAsRun(const AFunction: TGocciaFunctionBase;
+  const AArguments: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  GC: TGarbageCollector;
+  FloatingPointState: TGocciaFloatingPointState;
+  PrevScope: TGocciaDiagnosticSourceScope;
+  PreviousRunningEngine: TGocciaEngine;
+  Completed: Boolean;
+begin
+  PrevScope := TGocciaDiagnosticSourceRegistry.Activate(
+    FModuleLoader.DiagnosticScope);
+  EnterGocciaFloatingPointScope(FloatingPointState);
+  PreviousRunningEngine := GRunningEngine;
+  GRunningEngine := Self;
+  Completed := False;
+  try
+    Result := AFunction.Call(AArguments, AThisValue);
+    GC := TGarbageCollector.Instance;
+    if Assigned(Result) and Assigned(GC) then
+      GC.AddTempRoot(Result);
+    try
+      WaitForRuntimeIdle;
+      RaiseUnhandledRejection;
+    finally
+      if Assigned(Result) and Assigned(GC) then
+        GC.RemoveTempRoot(Result);
+    end;
+    Completed := True;
+  finally
+    if not Completed then
+      ClearPendingWorkOfFailedRun(PreviousRunningEngine);
+    GRunningEngine := PreviousRunningEngine;
+    LeaveGocciaFloatingPointScope(FloatingPointState);
     TGocciaDiagnosticSourceRegistry.Deactivate(PrevScope);
   end;
 end;
@@ -2911,15 +3090,7 @@ begin
   PipelineResult := nil;
 
   try
-    PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
-    PipelineOptions.Preprocessors := FPreprocessors;
-    PipelineOptions.Compatibility := FCompatibility;
-    PipelineOptions.LabelStatementsEnabled := FLabelStatementsEnabled;
-    PipelineOptions.ForInLoopsEnabled := FForInLoopsEnabled;
-    PipelineOptions.ExperimentalJSModuleSourceEnabled :=
-      FExperimentalJSModuleSourceEnabled;
-    PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
-    PipelineOptions.SourceType := FSourceType;
+    PipelineOptions := SourcePipelineOptions(FSourceType);
     PipelineResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
       PipelineOptions);
     FLastTiming.LexTimeNanoseconds := PipelineResult.LexTimeNanoseconds;
@@ -3030,9 +3201,13 @@ begin
                   SavedVMGlobalScope;
             end;
           except
-            FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
-            EntryModuleEvaluationStarted := False;
-            raise;
+            on E: Exception do
+            begin
+              FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
+              EntryModuleEvaluationStarted := False;
+              FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         end
         else
@@ -3049,49 +3224,60 @@ begin
         if Assigned(GC) then
           GC.AddTempRoot(ModuleScope);
         try
-          ModuleResult := FExecutor.EvaluateModuleBody(
-            PipelineResult.ProgramNode, ModuleContext,
-            ModuleProgramConsumed);
-          if Assigned(EntryModule) then
-            RegisterEntrySyntheticDefaultExports(EntryModule,
-              PipelineResult.ProgramNode, ModuleScope);
-          if ModuleProgramConsumed then
-            PipelineResult.TakeProgramNode;
-          if Assigned(ModuleResult) and Assigned(GC) then
-            GC.AddTempRoot(ModuleResult);
           try
-            SavedVMGlobalScope := nil;
-            if FExecutor is TGocciaBytecodeExecutor then
-            begin
-              SavedVMGlobalScope :=
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
-              TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
-            end;
-            try
-              WaitForRuntimeIdle;
-              if ModuleResult is TGocciaPromiseValue then
-              begin
-                EntryPromise := TGocciaPromiseValue(ModuleResult);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              if Assigned(EntryModule) and
-                 (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
-              begin
-                EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
-                if EntryPromise.State = gpsRejected then
-                  raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
-              end;
-              RaiseUnhandledRejection;
-              FLastTiming.Result := ModuleResult;
-            finally
-              if FExecutor is TGocciaBytecodeExecutor then
-                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
-                  SavedVMGlobalScope;
-            end;
-          finally
+            ModuleResult := FExecutor.EvaluateModuleBody(
+              PipelineResult.ProgramNode, ModuleContext,
+              ModuleProgramConsumed);
+            if Assigned(EntryModule) then
+              RegisterEntrySyntheticDefaultExports(EntryModule,
+                PipelineResult.ProgramNode, ModuleScope);
+            if ModuleProgramConsumed then
+              PipelineResult.TakeProgramNode;
             if Assigned(ModuleResult) and Assigned(GC) then
-              GC.RemoveTempRoot(ModuleResult);
+              GC.AddTempRoot(ModuleResult);
+            try
+              SavedVMGlobalScope := nil;
+              if FExecutor is TGocciaBytecodeExecutor then
+              begin
+                SavedVMGlobalScope :=
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope;
+                TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope := ModuleScope;
+              end;
+              try
+                WaitForRuntimeIdle;
+                if ModuleResult is TGocciaPromiseValue then
+                begin
+                  EntryPromise := TGocciaPromiseValue(ModuleResult);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                if Assigned(EntryModule) and
+                   (EntryModule.EvaluationPromise is TGocciaPromiseValue) then
+                begin
+                  EntryPromise := TGocciaPromiseValue(EntryModule.EvaluationPromise);
+                  if EntryPromise.State = gpsRejected then
+                    raise TGocciaThrowValue.Create(EntryPromise.PromiseResult);
+                end;
+                RaiseUnhandledRejection;
+                FLastTiming.Result := ModuleResult;
+              finally
+                if FExecutor is TGocciaBytecodeExecutor then
+                  TGocciaBytecodeExecutor(FExecutor).VM.GlobalScope :=
+                    SavedVMGlobalScope;
+              end;
+            finally
+              if Assigned(ModuleResult) and Assigned(GC) then
+                GC.RemoveTempRoot(ModuleResult);
+            end;
+          except
+            on E: Exception do
+            begin
+              { A later import of the entry gets its error, never the
+                record of this incomplete run. }
+              if Assigned(EntryModule) and Assigned(FModuleLoader) then
+                FModuleLoader.FailEntryModule(EntryModule, E);
+              raise;
+            end;
           end;
         finally
           if EntryModuleEvaluationStarted and Assigned(FModuleLoader) then

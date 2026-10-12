@@ -34,18 +34,13 @@ uses
   Math,
 
   OrderedStringMap,
-  TextSemantics,
 
   Goccia.Arguments.Collection,
-  Goccia.AST.Node,
-  Goccia.AST.Statements,
   Goccia.CapabilityAudit,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
   Goccia.Error,
-  Goccia.Evaluator,
-  Goccia.Evaluator.Context,
   Goccia.ExecutionContext,
   Goccia.Executor,
   Goccia.Executor.Bytecode,
@@ -55,7 +50,6 @@ uses
   Goccia.Modules.Loader,
   Goccia.ObjectModel,
   Goccia.Scope,
-  Goccia.SourcePipeline,
   Goccia.Utils,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -190,9 +184,9 @@ begin
   inherited Create;
   FSource := TStringList.Create;
   // Match the parent's execution mode so bytecode-mode hosts get bytecode
-  // child realms (and interpreter hosts get interpreter child realms).
-  // evaluate() runs source through the eval evaluator regardless of mode, but
-  // the engine still needs an executor of the host's mode for bootstrapping.
+  // child realms (and interpreter hosts get interpreter child realms):
+  // evaluate() and the child's eval run through the child engine's executor
+  // (TGocciaEngine.EvaluateGlobalEval).
   if AParentEngine.Executor is TGocciaBytecodeExecutor then
     FExecutor := TGocciaBytecodeExecutor.Create
   else
@@ -249,8 +243,7 @@ begin
     try
       EvalFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
         FEvalHost.Invoke, 'eval', 1);
-      EvalFn.DirectEvalHost := True;
-      FEngine.Realm.HostsDirectEval := True;
+      InstallRealmEvalFunction(FEngine.Realm, EvalFn);
       (FEngine.Realm.GlobalObject as TGocciaObjectValue).DefineProperty('eval',
         TGocciaPropertyDescriptorData.Create(EvalFn,
           [pfWritable, pfConfigurable]));
@@ -290,22 +283,15 @@ begin
   FEngine := AEngine;
 end;
 
-// ES2026 §19.2.1 eval ( x ), evaluated in this host's (child) realm.
+// ES2026 §19.2.1.1.1 eval ( x ), called indirectly in this host's (child)
+// realm: PerformEval(x, false, false). Errors are this realm's own, since the
+// eval was called from here; nothing crosses the realm boundary.
 function TGocciaShadowRealmEvalHost.Invoke(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   SourceValue: TGocciaValue;
-  SourceText: string;
-  SourceList: TStringList;
-  Options: TGocciaSourcePipelineOptions;
-  OptionsScope: TGocciaSourcePipelineOptionsScope;
-  ParseResult: TGocciaSourcePipelineResult;
-  RealmScope: TGocciaExecutionContextScope;
-  EvalScope, VarScope: TGocciaScope;
-  EvalContext: TGocciaEvaluationContext;
-  StrictEval: Boolean;
-  I: Integer;
+  Stage: TGocciaGlobalEvalStage;
 begin
   // Step 2: if x is not a String, return x unchanged.
   if AArgs.Length = 0 then
@@ -313,71 +299,9 @@ begin
   SourceValue := AArgs.GetElement(0);
   if not (SourceValue is TGocciaStringLiteralValue) then
     Exit(SourceValue);
-  SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-  SourceList := CreateECMAScriptSourceLines(SourceText);
-  try
-    Options := TGocciaSourcePipeline.DefaultOptions;
-    Options.SourceType := stScript;
-    Options.Preprocessors := FEngine.Preprocessors;
-    Options.Compatibility := FEngine.Compatibility;
-    Options.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
-    Options.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
-    Options.ExperimentalJSModuleSourceEnabled :=
-      FEngine.ExperimentalJSModuleSourceEnabled;
-    Options.WarningUnsupportedFeatures := FEngine.WarningUnsupportedFeatures;
-    OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
-    try
-      RealmScope := FEngine.ActivateRealmExecutionContext;
-      try
-        // The eval runs in this realm, so its parse/runtime errors are this
-        // realm's errors — no cross-realm wrapping (eval was called from here).
-        ParseResult := TGocciaSourcePipeline.Parse(SourceList,
-          '<shadow-realm-eval>', Options);
-        try
-          for I := 0 to ParseResult.ProgramNode.Body.Count - 1 do
-            if ParseResult.ProgramNode.Body[I] is TGocciaUsingDeclaration then
-              ThrowSyntaxError('Using declarations are not allowed at the ' +
-                'top level of eval');
-          StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
-          if StrictEval then
-            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
-              skFunction, 'ShadowRealmEvalFn')
-          else
-            EvalScope := FEngine.Interpreter.GlobalScope.CreateChild(
-              skBlock, 'ShadowRealmEvalFn');
-          EvalScope.ThisValue := FEngine.Interpreter.GlobalScope.ThisValue;
-          if (TGarbageCollector.Instance <> nil) then
-            TGarbageCollector.Instance.AddTempRoot(EvalScope);
-          try
-            EvalContext := FEngine.Interpreter.CreateEvaluationContext;
-            EvalContext.Scope := EvalScope;
-            EvalContext.CurrentFilePath := '<shadow-realm-eval>';
-            EvalContext.NonStrictMode := not StrictEval;
-            if StrictEval then
-              VarScope := EvalScope
-            else
-              VarScope := FEngine.Interpreter.GlobalScope;
-            Result := EvaluateEvalProgram(ParseResult.ProgramNode,
-              EvalContext, VarScope, EvalScope, StrictEval, False, nil,
-              False, False, False);
-          finally
-            if (TGarbageCollector.Instance <> nil) then
-              TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
-          end;
-        finally
-          ParseResult.Free;
-        end;
-      finally
-        RealmScope.Free;
-      end;
-    finally
-      OptionsScope.Free;
-    end;
-  finally
-    SourceList.Free;
-  end;
+  Result := FEngine.EvaluateGlobalEval(
+    TGocciaStringLiteralValue(SourceValue).Value, '<shadow-realm-eval>',
+    Stage);
 end;
 
 { TGocciaShadowRealmHost }
@@ -502,20 +426,11 @@ var
   Instance: TGocciaShadowRealmValue;
   ChildEngine: TGocciaEngine;
   SourceValue: TGocciaValue;
-  SourceText: string;
-  SourceList: TStringList;
-  Options: TGocciaSourcePipelineOptions;
-  OptionsScope: TGocciaSourcePipelineOptionsScope;
-  ParseResult: TGocciaSourcePipelineResult;
-  OwnerScope, ChildScope: TGocciaExecutionContextScope;
-  EvalScope, VarScope: TGocciaScope;
-  EvalContext: TGocciaEvaluationContext;
-  StrictEval: Boolean;
-  EarlyErrorThrew: Boolean;
-  EarlyErrorMessage: string;
   RawResult: TGocciaValue;
+  OwnerScope: TGocciaExecutionContextScope;
+  Stage: TGocciaGlobalEvalStage;
   Threw: Boolean;
-  I: Integer;
+  ErrorMessage: string;
 begin
   // PerformShadowRealmEval runs with the caller realm current. That caller
   // realm is this evaluate method's realm (FEngine) — not the ambient realm of
@@ -536,135 +451,51 @@ begin
       SourceValue := AArgs.GetElement(0);
     if not (SourceValue is TGocciaStringLiteralValue) then
       ThrowTypeError('ShadowRealm.prototype.evaluate expects a string');
-    SourceText := TGocciaStringLiteralValue(SourceValue).Value;
 
     ChildEngine := Instance.ChildRealm.Engine;
     RawResult := TGocciaUndefinedLiteralValue.UndefinedValue;
     Threw := False;
-    EarlyErrorThrew := False;
-    EarlyErrorMessage := '';
-
-    SourceList := CreateECMAScriptSourceLines(SourceText);
+    ErrorMessage := '';
+    Stage := gesCompile;
+    // §3.1.3 steps 2-15: the child engine parses the source, checks its early
+    // errors and compiles it (stage gesCompile), then runs
+    // EvalDeclarationInstantiation and the body in the eval realm (stage
+    // gesRun). Its var and function declarations bind in the realm's global
+    // environment and persist across evaluate calls; its lexical declarations
+    // live in a fresh environment per call. Strictness comes only from the
+    // source's own directive (step 3, ScriptIsStrict).
     try
-      Options := TGocciaSourcePipeline.DefaultOptions;
-      Options.SourceType := stScript;
-      Options.Preprocessors := ChildEngine.Preprocessors;
-      Options.Compatibility := ChildEngine.Compatibility;
-      Options.LabelStatementsEnabled := ChildEngine.LabelStatementsEnabled;
-      Options.ForInLoopsEnabled := ChildEngine.ForInLoopsEnabled;
-      Options.ExperimentalJSModuleSourceEnabled :=
-        ChildEngine.ExperimentalJSModuleSourceEnabled;
-      Options.WarningUnsupportedFeatures :=
-        ChildEngine.WarningUnsupportedFeatures;
-
-      OptionsScope := TGocciaSourcePipeline.ActivateOptions(Options);
-      try
-        // 3.1.3 step 2: a parse failure throws a SyntaxError in the caller
-        // realm. FEngine is the active realm here, so re-raising through
-        // ThrowSyntaxError tags the error with FEngine's intrinsics rather
-        // than the ambient realm the raw parser error would surface in.
-        try
-          ParseResult := TGocciaSourcePipeline.Parse(SourceList,
-            '<shadow-realm-eval>', Options);
-        except
-          on E: TGocciaError do
-            ThrowSyntaxError(E.Message);
-        end;
-        try
-          // §3.1.3 step 2: top-level using / await using declarations are not
-          // allowed in the eval body — reject as a caller-realm SyntaxError.
-          for I := 0 to ParseResult.ProgramNode.Body.Count - 1 do
-            if ParseResult.ProgramNode.Body[I] is TGocciaUsingDeclaration then
-              ThrowSyntaxError('Using declarations are not allowed at the ' +
-                'top level of ShadowRealm.prototype.evaluate');
-          // §3.1.3 steps 9-11: declaration instantiation + evaluation run in
-          // the eval realm; an abrupt completion becomes a caller-realm
-          // TypeError. Strictness comes only from the source's own directive,
-          // never the outer realm (ScriptIsStrict of script).
-          ChildScope := ChildEngine.ActivateRealmExecutionContext;
-          try
-            StrictEval := HasUseStrictDirective(ParseResult.ProgramNode);
-            if StrictEval then
-              EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
-                skFunction, 'ShadowRealmEval')
-            else
-              EvalScope := ChildEngine.Interpreter.GlobalScope.CreateChild(
-                skBlock, 'ShadowRealmEval');
-            EvalScope.ThisValue := ChildEngine.Interpreter.GlobalScope.ThisValue;
-            if (TGarbageCollector.Instance <> nil) then
-              TGarbageCollector.Instance.AddTempRoot(EvalScope);
-            try
-              EvalContext := ChildEngine.Interpreter.CreateEvaluationContext;
-              EvalContext.Scope := EvalScope;
-              EvalContext.CurrentFilePath := '<shadow-realm-eval>';
-              EvalContext.NonStrictMode := not StrictEval;
-              if StrictEval then
-                VarScope := EvalScope
-              else
-                VarScope := ChildEngine.Interpreter.GlobalScope;
-              // §3.1.3 splits evaluation into two phases that map to two
-              // different caller-realm errors. PrepareEvalProgram runs the static
-              // early-error passes and EvalDeclarationInstantiation; an early
-              // error there — such as a duplicate top-level lexical binding
-              // (`let x; let x;`), or, under strict eval, assignment to
-              // `eval`/`arguments` — is a SyntaxError, just like a parse failure
-              // (step 2). RunEvalProgramBody then evaluates the body; an abrupt
-              // completion there, including a runtime SyntaxError (e.g. from a
-              // nested eval), is wrapped as a caller-realm TypeError (step 15). A
-              // CanDeclareGlobal* conflict raised during instantiation is itself a
-              // TypeError, so it routes to the same wrap rather than to SyntaxError.
-              //
-              // var/function bind in the realm's global var environment (so they
-              // persist across evaluate calls and surface on globalThis);
-              // let/const bind in this fresh per-call lexical scope, so
-              // re-evaluating top-level lexical declarations does not clash.
-              try
-                EvalContext := PrepareEvalProgram(ParseResult.ProgramNode,
-                  EvalContext, VarScope, EvalScope, StrictEval, False, nil,
-                  False, False, False, False);
-              except
-                on E: TGocciaSyntaxError do
-                begin
-                  EarlyErrorThrew := True;
-                  EarlyErrorMessage := E.Message;
-                end;
-                on E: TGocciaThrowValue do Threw := True;
-                on E: EGocciaBytecodeThrow do Threw := True;
-                on E: TGocciaError do Threw := True;
-              end;
-              if not (EarlyErrorThrew or Threw) then
-              try
-                RawResult := RunEvalProgramBody(ParseResult.ProgramNode,
-                  EvalContext);
-              except
-                on E: TGocciaThrowValue do Threw := True;
-                on E: EGocciaBytecodeThrow do Threw := True;
-                on E: TGocciaError do Threw := True;
-              end;
-            finally
-              if (TGarbageCollector.Instance <> nil) then
-                TGarbageCollector.Instance.RemoveTempRoot(EvalScope);
-            end;
-          finally
-            ChildScope.Free;
-          end;
-        finally
-          ParseResult.Free;
-        end;
-      finally
-        OptionsScope.Free;
+      RawResult := ChildEngine.EvaluateGlobalEval(
+        TGocciaStringLiteralValue(SourceValue).Value, '<shadow-realm-eval>',
+        Stage);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        Threw := True;
+        ErrorMessage := E.Message;
       end;
-    finally
-      SourceList.Free;
+      on E: EGocciaBytecodeThrow do
+      begin
+        Threw := True;
+        ErrorMessage := E.Message;
+      end;
+      on E: TGocciaError do
+      begin
+        Threw := True;
+        ErrorMessage := E.Message;
+      end;
     end;
 
-    // 3.1.3 step 2: a static early error stays a caller-realm SyntaxError.
-    if EarlyErrorThrew then
-      ThrowSyntaxError(EarlyErrorMessage);
-
-    // 3.1.3 step 15: wrap evaluation errors into a caller-realm TypeError.
     if Threw then
+    begin
+      // §3.1.3 step 2: a parse failure or an early error throws a SyntaxError
+      // in the caller realm.
+      if Stage = gesCompile then
+        ThrowSyntaxError(ErrorMessage);
+      // §3.1.3 step 15: an abrupt completion of EvalDeclarationInstantiation
+      // or of the body becomes a caller-realm TypeError.
       ThrowTypeError('ShadowRealm evaluate threw');
+    end;
 
     // 3.1.3 step 16: GetWrappedValue(callerRealm, result).
     Result := WrapIncoming(RawResult, ChildEngine);

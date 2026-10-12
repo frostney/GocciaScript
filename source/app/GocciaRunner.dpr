@@ -1926,7 +1926,7 @@ end;
 procedure TRunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I, SectionIndex: Integer;
-  Files, RawFiles, StdinNames: TStringList;
+  Files, RawFiles, StdinNames, DiscoveredFiles: TStringList;
   Source, SectionSource: TStringList;
   JSONResult: TScriptLoaderJSONFileResult;
   JSONResults: array of TScriptLoaderJSONFileResult;
@@ -2054,7 +2054,14 @@ begin
           raise TParseError.Create(
             'stdin is supported only as the sole input.');
         if DirectoryExists(APaths[I]) then
-          RawFiles.AddStrings(FindAllFiles(APaths[I], ScriptExtensions))
+        begin
+          DiscoveredFiles := FindAllFiles(APaths[I], ScriptExtensions);
+          try
+            RawFiles.AddStrings(DiscoveredFiles);
+          finally
+            DiscoveredFiles.Free;
+          end;
+        end
         else if FileExists(APaths[I]) then
           RawFiles.Add(APaths[I])
         else

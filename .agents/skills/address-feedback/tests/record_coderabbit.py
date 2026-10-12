@@ -11,14 +11,17 @@ For each pull request it keeps only what `coderabbit_adapter.py` reads:
 - CodeRabbit's reviews (`commit_id`, `submitted_at`, and the lines that
   count findings);
 - every version of CodeRabbit's comments from their edit history, each
-  reduced to the summary marker, coverage marker, stated-wait sentence and
-  HTML block markers, with all other prose dropped;
+  reduced to the summary marker, coverage marker, stated-wait sentence,
+  CodeRabbit's line saying waiting won't change it, and HTML block markers,
+  with all other prose dropped and a blank line between kept lines a blank
+  line separated;
 - other comments that address CodeRabbit, line by line: a line that is only a
   CodeRabbit command keeps it, a line that mentions one inside other text
   keeps it between `[text]` placeholders, and every other line becomes
   `[text]` or stays empty;
 - when the pull request was opened, marked ready or draft, closed, reopened
-  and merged, and when each head was pushed (its check suites); and
+  and merged, when each head was pushed (its check suites), and each force
+  push with the heads it left and brought; and
 - each head's parents.
 
 It refuses any repository that an anonymous request cannot read as public,
@@ -142,20 +145,36 @@ def require_public(repo: str) -> None:
 
 
 def reduce_body(body: str) -> str:
-    """The lines of a CodeRabbit body the adapter reads; all other prose is dropped."""
-    kept = []
+    """The lines of a CodeRabbit body the adapter reads; all other prose is dropped.
+
+    Kept lines stay exactly as they are, and kept lines that a blank line
+    separated stay separated by one.
+    """
+    kept: list[str] = []
+    gap = False
     for line in (body or "").splitlines():
-        if (
-            line.strip() == ADAPTER.SUMMARY_MARKER
-            or BLOCK_MARKER.match(line)
-            or ADAPTER.COVERAGE_MARKER.search(line)
-            or WAIT_SENTENCE.search(line)
-            or ADAPTER.NO_ACTIONABLE in line
-            or ADAPTER.ACTIONABLE.search(line)
-            or ADAPTER.REVIEW_FINDINGS.search(line)
-        ):
-            kept.append(line.strip())
+        if not line.strip():
+            gap = bool(kept)
+            continue
+        if keeps(line):
+            if gap:
+                kept.append("")
+            kept.append(line)
+            gap = False
     return "\n".join(kept)
+
+
+def keeps(line: str) -> bool:
+    return bool(
+        line.strip() == ADAPTER.SUMMARY_MARKER
+        or BLOCK_MARKER.match(line)
+        or ADAPTER.COVERAGE_MARKER.search(line)
+        or WAIT_SENTENCE.search(line)
+        or ADAPTER.NO_CAPACITY.search(line)
+        or ADAPTER.NO_ACTIONABLE in line
+        or ADAPTER.ACTIONABLE.search(line)
+        or ADAPTER.REVIEW_FINDINGS.search(line)
+    )
 
 
 def reduce_command(body: str) -> str | None:
@@ -197,13 +216,34 @@ def comment_versions(item: dict[str, Any], shas: set[str]) -> tuple[list[list[st
         if not (edits.get("pageInfo") or {}).get("hasNextPage"):
             break
         cursor = edits["pageInfo"]["endCursor"]
-    versions = sorted(
-        [[node["editedAt"], reduce_body(node.get("diff") or "")] for node in nodes if node.get("diff") is not None]
-    )
-    complete = bool(versions) and len(versions) == len(nodes)
-    if not versions or versions[-1][0] < updated:
-        versions.append([updated, reduce_body(item["body"])])
+    # Oldest first in GitHub's own order, which is newest first; a stable sort by time keeps that
+    # order within a second. The REST body is the comment's current version at its updated_at.
+    history = [[node["editedAt"], reduce_body(node["diff"])] for node in reversed(nodes) if node.get("diff") is not None]
+    complete = bool(history) and len(history) == len(nodes)
+    versions = sorted((version for version in history if version[0] < updated), key=lambda version: version[0])
+    versions.append([updated, reduce_body(item["body"])])
     return versions, complete
+
+
+def pull_events(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The pull request's timeline events the adapter reads, oldest first; a force push names both its heads."""
+    kinds = {
+        "ReadyForReviewEvent": "ready",
+        "ConvertToDraftEvent": "draft",
+        "ClosedEvent": "closed",
+        "ReopenedEvent": "reopened",
+        "MergedEvent": "merged",
+    }
+    return sorted(
+        [{"type": kinds[item["__typename"]], "at": item["createdAt"]} for item in items if item["__typename"] in kinds]
+        + [
+            {"type": "force-pushed", "at": item["createdAt"], "from": item["beforeCommit"]["oid"],
+             "head": item["afterCommit"]["oid"]}
+            for item in items
+            if item["__typename"] == "HeadRefForcePushedEvent"
+        ],
+        key=lambda event: event["at"],
+    )
 
 
 def record(repo: str, number: int) -> dict[str, Any]:
@@ -216,17 +256,7 @@ def record(repo: str, number: int) -> dict[str, Any]:
         if not pull["timelineItems"]["pageInfo"]["hasNextPage"]:
             break
         cursor = pull["timelineItems"]["pageInfo"]["endCursor"]
-    kinds = {
-        "ReadyForReviewEvent": "ready",
-        "ConvertToDraftEvent": "draft",
-        "ClosedEvent": "closed",
-        "ReopenedEvent": "reopened",
-        "MergedEvent": "merged",
-    }
-    events = sorted(
-        ({"type": kinds[item["__typename"]], "at": item["createdAt"]} for item in items if item["__typename"] in kinds),
-        key=lambda event: event["at"],
-    )
+    events = pull_events(items)
     shas = {pull["headRefOid"]}
     for item in items:
         if item["__typename"] == "PullRequestCommit":

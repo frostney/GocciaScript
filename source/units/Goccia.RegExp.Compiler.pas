@@ -43,8 +43,23 @@ const
   WORD_ASSERT_ICASE_FLAG = $2;
   CLEAR_CAPTURE_COUNT_BITS = 12;
   CLEAR_CAPTURE_COUNT_MASK = (1 shl CLEAR_CAPTURE_COUNT_BITS) - 1;
+  // The compiler copies a quantified body once per counted iteration and
+  // instructions address each other with 24-bit operands, so a count above
+  // 2^24 - 1 cannot be compiled.
+  REGEXP_MAX_QUANTIFIER_BOUND = $FFFFFF;
+  // An instruction is an 8-bit opcode and a 24-bit operand. Jump and split
+  // targets are instruction indices, so a program holds at most this many
+  // instructions; a lookaround target has one bit less (LOOK_TARGET_MASK).
+  REGEXP_MAX_OPERAND = $FFFFFF;
+  REGEXP_MAX_PROGRAM_LENGTH = REGEXP_MAX_OPERAND;
+  SErrorRegExpTooLarge = 'Invalid regular expression: regular expression too large';
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
+{ An instruction word for AOp with operand AOperand. Raises EConvertError
+  (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
+  operand, instead of losing its high bits. }
+function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
+  const AOperand: Integer): UInt32; inline;
 
 implementation
 
@@ -110,6 +125,7 @@ type
     function CurrentPC: Integer;
     function EncodeOp(AOp: TRegExpOpCode): UInt32;
     function EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
+    procedure AddCapture;
     function AddCharClass(const ARanges: array of TRegExpCharRange): Integer;
     function AddStringSet(const AContents: TRegExpClassContents): Integer;
     procedure EmitRawCharClassRanges(const ARanges: array of TRegExpCharRange;
@@ -133,7 +149,7 @@ type
     function ParseGroupName: string;
     function ParseUnicodeEscape: Cardinal;
     function ParseHexEscape(ADigits: Integer): Cardinal;
-    function ParseDecimalEscape: Integer;
+    function ParseQuantifierBound(out ADigits: string): Int64;
     procedure EmitCharMatch(ACodePoint: Cardinal);
     procedure EmitCharClassRanges(const ARanges: array of TRegExpCharRange;
       ARangeCount: Integer; ANegated: Boolean);
@@ -381,8 +397,27 @@ begin
     Result := False;
 end;
 
+// The raise lives here so that EncodeRegExpInstruction, which runs once per
+// emitted instruction, can be inlined: in FPC 3.2.2 a function that raises
+// gets a full frame and is not inlined (docs/core-patterns.md, "Managed
+// Locals on Hot Paths").
+procedure RaiseRegExpTooLarge;
+begin
+  raise EConvertError.Create(SErrorRegExpTooLarge);
+end;
+
+function EncodeRegExpInstruction(const AOp: TRegExpOpCode;
+  const AOperand: Integer): UInt32;
+begin
+  if (AOperand < 0) or (AOperand > REGEXP_MAX_OPERAND) then
+    RaiseRegExpTooLarge;
+  Result := UInt32(Ord(AOp)) or (UInt32(AOperand) shl 8);
+end;
+
 procedure TRegExpCompiler.Emit(AInstr: UInt32);
 begin
+  if FCodeLen >= REGEXP_MAX_PROGRAM_LENGTH then
+    RaiseRegExpTooLarge;
   if FCodeLen >= Length(FCode) then
     SetLength(FCode, FCodeLen * 2 + 16);
   FCode[FCodeLen] := AInstr;
@@ -400,7 +435,7 @@ var
   Op: TRegExpOpCode;
 begin
   Op := TRegExpOpCode(FCode[AIndex] and $FF);
-  FCode[AIndex] := UInt32(Ord(Op)) or (UInt32(ATarget) shl 8);
+  FCode[AIndex] := EncodeRegExpInstruction(Op, ATarget);
 end;
 
 function TRegExpCompiler.CurrentPC: Integer;
@@ -413,9 +448,30 @@ begin
   Result := UInt32(Ord(AOp));
 end;
 
+// A lookaround's operand holds its end target in the low 23 bits and the
+// negation flag in the top bit.
+function EncodeLookaroundInstruction(const AOp: TRegExpOpCode;
+  const ATarget: Integer; const ANegated: Boolean): UInt32;
+begin
+  if (ATarget < 0) or (ATarget > LOOK_TARGET_MASK) then
+    RaiseRegExpTooLarge;
+  if ANegated then
+    Result := EncodeRegExpInstruction(AOp, ATarget or LOOK_NEGATED_FLAG)
+  else
+    Result := EncodeRegExpInstruction(AOp, ATarget);
+end;
+
+// A back reference's operand holds the group index in BACKREF_INDEX_MASK.
+procedure TRegExpCompiler.AddCapture;
+begin
+  if FCaptureCount >= BACKREF_INDEX_MASK then
+    RaiseRegExpTooLarge;
+  Inc(FCaptureCount);
+end;
+
 function TRegExpCompiler.EncodeOpBx(AOp: TRegExpOpCode; ABx: Integer): UInt32;
 begin
-  Result := UInt32(Ord(AOp)) or (UInt32(ABx) shl 8);
+  Result := EncodeRegExpInstruction(AOp, ABx);
 end;
 
 function TRegExpCompiler.AddCharClass(
@@ -2035,25 +2091,43 @@ begin
   end;
 end;
 
-function TRegExpCompiler.ParseDecimalEscape: Integer;
 const
-  MAX_QUANTIFIER = 1000000;
+  // A string holds at most MaxInt code units.
+  QUANTIFIER_UNREACHABLE_MIN = Int64(MaxInt) + 1;
+  QUANTIFIER_BOUND_SATURATED = Int64(1) shl 40;
+
+// A quantifier bound's value, saturated at QUANTIFIER_BOUND_SATURATED;
+// ADigits receives its digits without leading zeros, for exact comparison.
+function TRegExpCompiler.ParseQuantifierBound(out ADigits: string): Int64;
 var
   C: Char;
 begin
   Result := 0;
+  ADigits := '';
   while not AtEnd do
   begin
     C := Peek;
     if (C < '0') or (C > '9') then
       Break;
-    if Result <= MAX_QUANTIFIER then
-      Result := Result * 10 + (Ord(Advance) - Ord('0'))
-    else
-      Advance;
+    Advance;
+    if (ADigits <> '') or (C <> '0') then
+      ADigits := ADigits + C;
+    if Result < QUANTIFIER_BOUND_SATURATED then
+    begin
+      Result := Result * 10 + (Ord(C) - Ord('0'));
+      if Result > QUANTIFIER_BOUND_SATURATED then
+        Result := QUANTIFIER_BOUND_SATURATED;
+    end;
   end;
-  if Result > MAX_QUANTIFIER then
-    Result := MAX_QUANTIFIER;
+end;
+
+// Compares two decimal numbers given as digits without leading zeros.
+function CompareDecimalDigits(const A, B: string): Integer;
+begin
+  if Length(A) <> Length(B) then
+    Result := Length(A) - Length(B)
+  else
+    Result := CompareStr(A, B);
 end;
 
 procedure TRegExpCompiler.EmitDuplicateNamedBackref(const AName: string;
@@ -2208,10 +2282,22 @@ begin
       begin
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
+        begin
           BackrefIdx := BackrefIdx * 10 + (Ord(Advance) - Ord('0'));
+          // Saturate one past the largest index, so many digits neither
+          // overflow nor wrap to a small group number.
+          if BackrefIdx > BACKREF_INDEX_MASK then
+            BackrefIdx := BACKREF_INDEX_MASK + 1;
+        end;
         if FUnicode and (BackrefIdx > FPreScanCaptureCount) then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
+        // The index shares its operand with three flag bits. (Without the u
+        // flag, Annex B reads a number above the group count as an escape;
+        // this engine treats it as a back reference, so a number past the
+        // index bits is reported as too large.)
+        if BackrefIdx > BACKREF_INDEX_MASK then
+          RaiseRegExpTooLarge;
         Emit(EncodeOpBx(RX_BACKREF, BackrefIdx or BackrefFlags));
       end;
     'n': EmitCharMatch($0A);
@@ -2587,7 +2673,7 @@ begin
         raise EConvertError.Create('Unterminated lookahead');
       Emit(EncodeOp(RX_MATCH));
       PatchHole(SplitHole, CurrentPC);
-      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC);
+      FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKAHEAD, CurrentPC, False);
     end
     else if Match('!') then
     begin
@@ -2601,7 +2687,7 @@ begin
         raise EConvertError.Create('Unterminated negative lookahead');
       Emit(EncodeOp(RX_MATCH));
       PatchHole(SplitHole, CurrentPC);
-      FCode[SplitHole] := EncodeOpBx(RX_LOOKAHEAD, CurrentPC or LOOK_NEGATED_FLAG);
+      FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKAHEAD, CurrentPC, True);
     end
     else if Match('<') then
     begin
@@ -2617,7 +2703,7 @@ begin
           raise EConvertError.Create('Unterminated lookbehind');
         Emit(EncodeOp(RX_MATCH));
         PatchHole(SplitHole, CurrentPC);
-        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC);
+        FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKBEHIND, CurrentPC, False);
       end
       else if Match('!') then
       begin
@@ -2631,12 +2717,12 @@ begin
           raise EConvertError.Create('Unterminated negative lookbehind');
         Emit(EncodeOp(RX_MATCH));
         PatchHole(SplitHole, CurrentPC);
-        FCode[SplitHole] := EncodeOpBx(RX_LOOKBEHIND, CurrentPC or LOOK_NEGATED_FLAG);
+        FCode[SplitHole] := EncodeLookaroundInstruction(RX_LOOKBEHIND, CurrentPC, True);
       end
       else
       begin
         GroupName := ParseGroupName;
-        Inc(FCaptureCount);
+        AddCapture;
         CaptureIdx := FCaptureCount;
         // Backward capture groups still store source-order [start, end] slots.
         if FBackward then
@@ -2661,7 +2747,7 @@ begin
   end
   else
   begin
-    Inc(FCaptureCount);
+    AddCapture;
     CaptureIdx := FCaptureCount;
     // Backward capture groups still store source-order [start, end] slots.
     if FBackward then
@@ -2744,6 +2830,8 @@ end;
 
 procedure TRegExpCompiler.EnsureCodeCapacity(ANeeded: Integer);
 begin
+  if Int64(FCodeLen) + ANeeded > REGEXP_MAX_PROGRAM_LENGTH then
+    RaiseRegExpTooLarge;
   if FCodeLen + ANeeded >= Length(FCode) then
     SetLength(FCode, (FCodeLen + ANeeded) * 2 + 16);
 end;
@@ -2785,7 +2873,7 @@ begin
             Bx := Integer(FCode[J] shr 8);
             NegFlag := Bx and LOOK_NEGATED_FLAG;
             Bx := (Bx and LOOK_TARGET_MASK) + Delta;
-            FCode[J] := EncodeOpBx(Op, Bx or NegFlag);
+            FCode[J] := EncodeLookaroundInstruction(Op, Bx, NegFlag <> 0);
           end;
       end;
     end;
@@ -2796,15 +2884,88 @@ end;
 procedure TRegExpCompiler.CompileQuantifier(AAtomStart: Integer);
 var
   SplitPC: Integer;
-  MinCount, MaxCount, I: Integer;
+  MinCount, MaxCount: Int64;
+  I: Integer;
   Lazy: Boolean;
   C: Char;
   BodyLen: Integer;
   BodyCode: array of UInt32;
+  MinDigits, MaxDigits: string;
+  PrevSplit: Integer;
   SavePos: Integer;
   ClearOperand: Integer;
   HasCaptureClear: Boolean;
   NeedsRepeatGuard: Boolean;
+
+  // Whether every match of the body consumes at least one code unit: no
+  // path from the body's start to its end passes only instructions that
+  // match empty. Conservative: an instruction it does not model counts as
+  // reaching the end. A string set consumes, because AddStringSet keeps
+  // only strings of two or more code points beside its single-character
+  // class. It also drops an empty \q{} string, which should match empty
+  // (#1589); keeping it must make such a set count as matching empty here.
+  function BodyAlwaysConsumes: Boolean;
+  var
+    Visited: array of Boolean;
+    Pending: array of Integer;
+    PendingCount: Integer;
+    J, Target: Integer;
+    Instr: UInt32;
+    ReachesEnd: Boolean;
+
+    procedure Visit(APC: Integer);
+    begin
+      APC := APC - AAtomStart;
+      if (APC < 0) or (APC >= BodyLen) then
+        ReachesEnd := True
+      else if not Visited[APC] then
+      begin
+        Visited[APC] := True;
+        Pending[PendingCount] := APC;
+        Inc(PendingCount);
+      end;
+    end;
+
+  begin
+    SetLength(Visited, BodyLen);
+    SetLength(Pending, BodyLen);
+    PendingCount := 0;
+    ReachesEnd := False;
+    Visit(AAtomStart);
+    while (PendingCount > 0) and not ReachesEnd do
+    begin
+      Dec(PendingCount);
+      J := AAtomStart + Pending[PendingCount];
+      Instr := FCode[J];
+      Target := Integer(Instr shr 8);
+      case TRegExpOpCode(Instr and $FF) of
+        RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY, RX_STRING_SET,
+        RX_FAIL:
+          ;
+        RX_SAVE, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD,
+        RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK, RX_BACKREF:
+          Visit(J + 1);
+        RX_SPLIT, RX_SPLIT_LAZY:
+          begin
+            Visit(J + 1);
+            Visit(Target);
+          end;
+        RX_JUMP:
+          Visit(Target);
+        RX_LOOKAHEAD, RX_LOOKBEHIND:
+          // A lookaround consumes nothing; matching continues at its end.
+          Visit(Target and LOOK_TARGET_MASK);
+        RX_CAPTURE_UNDEFINED_JUMP:
+          begin
+            Visit(J + 1);
+            Visit(J + 2);
+          end;
+      else
+        ReachesEnd := True;
+      end;
+    end;
+    Result := not ReachesEnd;
+  end;
 
   function BodyRequiresProgress: Boolean;
   var
@@ -2888,22 +3049,27 @@ begin
           Dec(FPos);
           Exit;
         end;
-        MinCount := ParseDecimalEscape;
+        MinCount := ParseQuantifierBound(MinDigits);
         if Match(',') then
         begin
           if Peek = '}' then
             MaxCount := -1
           else
-            MaxCount := ParseDecimalEscape;
+            MaxCount := ParseQuantifierBound(MaxDigits);
         end
         else
+        begin
           MaxCount := MinCount;
+          MaxDigits := MinDigits;
+        end;
         if not Match('}') then
         begin
           FPos := SavePos;
           Exit;
         end;
-        if (MaxCount >= 0) and (MinCount > MaxCount) then
+        // ES2026 §22.2.1.1: compare the bounds' mathematical values.
+        if (MaxCount >= 0) and
+           (CompareDecimalDigits(MinDigits, MaxDigits) > 0) then
           raise EConvertError.Create(
             'Invalid regular expression: numbers out of order in quantifier');
       end;
@@ -2914,12 +3080,30 @@ begin
   BodyLen := CurrentPC - AAtomStart;
   if BodyLen = 0 then
     Exit;
+  // After its minimum, a repetition stops at an iteration that matches
+  // empty, so it runs at most MinCount + MaxInt iterations, and at most
+  // MaxInt when every iteration consumes: a larger maximum is no maximum.
+  if (MaxCount >= MinCount + MaxInt) or
+     ((MaxCount >= MaxInt) and BodyAlwaysConsumes) then
+    MaxCount := -1;
+  if (MinCount >= QUANTIFIER_UNREACHABLE_MIN) and BodyAlwaysConsumes then
+  begin
+    // Each iteration consumes at least one code unit and no string has
+    // MinCount of them: the repetition never matches.
+    FCodeLen := AAtomStart;
+    Emit(EncodeOp(RX_FAIL));
+    Exit;
+  end;
+  if (MinCount > REGEXP_MAX_QUANTIFIER_BOUND) or
+     (MaxCount > REGEXP_MAX_QUANTIFIER_BOUND) then
+    raise EConvertError.Create(
+      'Invalid regular expression: quantifier bound too large');
   SetLength(BodyCode, BodyLen);
   Move(FCode[AAtomStart], BodyCode[0], BodyLen * SizeOf(UInt32));
   HasCaptureClear := TryBuildCaptureClearOperand(ClearOperand);
   NeedsRepeatGuard := not BodyRequiresProgress;
   FCodeLen := AAtomStart;
-  for I := 1 to MinCount do
+  for I := 1 to Integer(MinCount) do
   begin
     EmitCaptureClearIfNeeded;
     EmitBodyAt(BodyCode, BodyLen, AAtomStart);
@@ -2937,14 +3121,25 @@ begin
   end
   else
   begin
-    for I := MinCount + 1 to MaxCount do
+    // x{0,3} compiles as (?:x(?:x(?:x)?)?)?: once an optional iteration is
+    // skipped, matching continues after the last copy instead of trying
+    // each remaining copy in turn. Until the end is known, each split's
+    // operand links to the previous split (index + 1, 0 for none).
+    PrevSplit := -1;
+    for I := Integer(MinCount) + 1 to Integer(MaxCount) do
     begin
       SplitPC := CurrentPC;
       if Lazy then
-        Emit(EncodeOpBx(RX_SPLIT_LAZY, 0))
+        Emit(EncodeOpBx(RX_SPLIT_LAZY, PrevSplit + 1))
       else
-        Emit(EncodeOpBx(RX_SPLIT, 0));
+        Emit(EncodeOpBx(RX_SPLIT, PrevSplit + 1));
+      PrevSplit := SplitPC;
       EmitOptionalBody;
+    end;
+    while PrevSplit >= 0 do
+    begin
+      SplitPC := PrevSplit;
+      PrevSplit := Integer(FCode[SplitPC] shr 8) - 1;
       PatchHole(SplitPC, CurrentPC);
     end;
   end;
@@ -3070,12 +3265,7 @@ begin
           Negated := (Bx and LOOK_NEGATED_FLAG) <> 0;
           Bx := Bx and LOOK_TARGET_MASK;
           if Bx >= APos then
-          begin
-            Inc(Bx);
-            if Negated then
-              Bx := Bx or LOOK_NEGATED_FLAG;
-            FCode[I] := EncodeOpBx(Op, Bx);
-          end;
+            FCode[I] := EncodeLookaroundInstruction(Op, Bx + 1, Negated);
         end;
     end;
   end;
@@ -3251,6 +3441,8 @@ begin
 end;
 
 function TRegExpCompiler.Compile: TRegExpProgram;
+var
+  I: Integer;
 begin
   PreScanNamedGroups;
   ValidateNamedGroups;
@@ -3263,6 +3455,13 @@ begin
   BuildStartCheck(FCode, FCodeLen, FCharClasses, Result.StartCheck);
   Result.NamedGroups := FNamedGroups;
   Result.StringSets := FStringSets;
+  Result.HasBackreferences := False;
+  for I := 0 to FCodeLen - 1 do
+    if TRegExpOpCode(FCode[I] and $FF) = RX_BACKREF then
+    begin
+      Result.HasBackreferences := True;
+      Break;
+    end;
 end;
 
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;

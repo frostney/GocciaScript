@@ -79,10 +79,11 @@ procedure VerifyFunctionTemplate(const ATemplate: TGocciaFunctionTemplate;
 var
   A, B, C: UInt16;
   Handler: TGocciaExceptionHandler;
-  I, PC: Integer;
+  I, J, PC: Integer;
   Instruction, Prefix: UInt32;
   JumpTarget: Int64;
   Op: UInt8;
+  EvalEnv: TGocciaDirectEvalEnvironment;
 
   procedure RequireConstant(const AIndex: Integer);
   begin
@@ -117,6 +118,40 @@ var
       RejectInvalidBytecode(ATemplate, PC, Format(
         'upvalue index %d is outside 0..%d',
         [AIndex, ATemplate.UpvalueCount - 1]));
+  end;
+
+  { OP_DIRECT_EVAL names an eval site record, and the VM reads the operands
+    of the OP_CALL or OP_CALL_METHOD after it, on the same callee register,
+    when the callee is %eval%. }
+  procedure RequireDirectEvalCall(const ASiteIndex: Integer;
+    const ACalleeReg: UInt16);
+  var
+    CallPC: Integer;
+    CallInstruction, CallPrefix: UInt32;
+    CallA: UInt16;
+  begin
+    if ASiteIndex >= ATemplate.DirectEvalEnvironmentCount then
+      RejectInvalidBytecode(ATemplate, PC, Format(
+        'eval site record %d is outside 0..%d',
+        [ASiteIndex, ATemplate.DirectEvalEnvironmentCount - 1]));
+    CallPC := PC + 1;
+    CallPrefix := 0;
+    if (CallPC < ATemplate.CodeCount) and
+       (DecodeOp(ATemplate.GetInstruction(CallPC)) = Ord(OP_WIDE)) then
+    begin
+      CallPrefix := ATemplate.GetInstruction(CallPC);
+      Inc(CallPC);
+    end;
+    if CallPC >= ATemplate.CodeCount then
+      RejectInvalidBytecode(ATemplate, PC,
+        'OP_DIRECT_EVAL is not followed by a call');
+    CallInstruction := ATemplate.GetInstruction(CallPC);
+    CallA := DecodeA(CallInstruction) or
+      (UInt16(DecodeA(CallPrefix)) shl 8);
+    if not (DecodeOp(CallInstruction) in [Ord(OP_CALL),
+       Ord(OP_CALL_METHOD)]) or (CallA <> ACalleeReg) then
+      RejectInvalidBytecode(ATemplate, PC,
+        'OP_DIRECT_EVAL is not followed by a call on its callee register');
   end;
 
   procedure RequireJumpTarget(const ATarget: Int64);
@@ -193,6 +228,9 @@ begin
         else
           RequireRegisterRange(Int64(A) + 1, B);
 
+      OP_DIRECT_EVAL:
+        RequireDirectEvalCall(DecodeBx(Instruction), A);
+
       OP_CALL_METHOD:
         begin
           RequireRegister(Int64(A) - 1);
@@ -214,7 +252,17 @@ begin
             RejectInvalidBytecode(ATemplate, PC, Format(
               'closed numeric self-call argument count %d is outside 1..3',
               [C]));
+          if not ATemplate.IsArrow or ATemplate.IsAsync or
+             ATemplate.IsGenerator then
+            RejectInvalidBytecode(ATemplate, PC,
+              'closed numeric self-call outside a synchronous arrow function');
           RequireRegisterRange(B, C);
+          // A closed numeric frame is safe only under the compiler's proof
+          // that the function stores nothing but numbers, and the proof is not
+          // serialized: the collector does not mark closed numeric frames. A
+          // loaded template therefore calls itself through an ordinary frame.
+          ATemplate.PatchInstruction(PC,
+            (Instruction and not UInt32($FF)) or OP_CALL_SELF);
         end;
 
       OP_ITER_CLOSE:
@@ -232,27 +280,33 @@ begin
       OP_TO_PRIMITIVE, OP_GET_LOCAL, OP_SET_LOCAL, OP_CLOSE_UPVALUE:
         RequireRegister(DecodeBx(Instruction));
 
-      OP_GET_UPVALUE, OP_SET_UPVALUE, OP_SET_UPVALUE_DYNAMIC:
+      OP_GET_UPVALUE, OP_SET_UPVALUE:
         RequireUpvalue(DecodeBx(Instruction));
 
-      OP_RESOLVE_UPVALUE_REF:
-        RequireUpvalue(B);
-
-      OP_SET_UPVALUE_REF:
-        RequireUpvalue(C);
+      OP_CHECK_BINDING_INITIALIZED:
+        case A of
+          CHECK_BINDING_UPVALUE:
+            RequireUpvalue(DecodeBx(Instruction));
+          CHECK_BINDING_GLOBAL:
+            RequireConstant(DecodeBx(Instruction));
+        else
+          RejectInvalidBytecode(ATemplate, PC,
+            Format('binding-check mode %d is not 0 or 1', [A]));
+        end;
 
       OP_LOAD_CONST, OP_LOAD_REGEXP, OP_SET_GLOBAL_STATIC, OP_NEW_CLASS,
       OP_SET_CLASS_SOURCE_CONST, OP_DELETE_PROP_CONST,
       OP_DELETE_PROP_CONST_LOOSE, OP_GET_GLOBAL, OP_SET_GLOBAL,
       OP_SET_GLOBAL_LOOSE, OP_HAS_GLOBAL, OP_DELETE_GLOBAL, OP_IMPORT,
       OP_IMPORT_DEFER, OP_IMPORT_SOURCE, OP_EXPORT,
-      OP_THROW_TYPE_ERROR_CONST_LONG, OP_DEFINE_GLOBAL_VAR_DECL_LONG,
+      OP_THROW_TYPE_ERROR_CONST_LONG, OP_THROW_UNDEFINED_VARIABLE,
+      OP_DEFINE_GLOBAL_VAR_DECL_LONG,
       OP_DEFINE_GLOBAL_VAR_LONG, OP_DEFINE_GLOBAL_LET_LONG,
       OP_DEFINE_GLOBAL_CONST_LONG, OP_DEFINE_GLOBAL_FUNCTION_LONG,
       OP_PREDECLARE_GLOBAL_LET_LONG, OP_PREDECLARE_GLOBAL_CONST_LONG:
         RequireConstant(DecodeBx(Instruction));
 
-      OP_GET_IMPORT_BINDING:
+      OP_GET_IMPORT_BINDING, OP_CREATE_GLOBAL_IMPORT_BINDING:
         begin
           RequireConstant(B);
           RequireConstant(C);
@@ -264,7 +318,7 @@ begin
         RequireConstant(B);
 
       OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST, OP_SETUP_AUTO_ACCESSOR_CONST,
-      OP_SETUP_AUTO_ACCESSOR_DYNAMIC, OP_APPLY_ELEMENT_DECORATOR_CONST,
+      OP_APPLY_ELEMENT_DECORATOR_CONST,
       OP_DEFINE_ACCESSOR_CONST, OP_THROW_TYPE_ERROR_CONST, OP_FINALIZE_ENUM,
       OP_SUPER_GET_CONST:
         RequireConstant(C);
@@ -318,6 +372,62 @@ begin
       RejectInvalidBytecode(ATemplate, 0, 'invalid exception finally target');
     if Handler.CatchRegister >= ATemplate.MaxRegisters then
       RejectInvalidBytecode(ATemplate, 0, 'invalid exception catch register');
+  end;
+
+  for I := 0 to ATemplate.DirectEvalEnvironmentCount - 1 do
+  begin
+    EvalEnv := ATemplate.GetDirectEvalEnvironment(I);
+    if EvalEnv.PC >= UInt32(ATemplate.CodeCount) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, outside the code', [I, EvalEnv.PC]));
+    // The bridge compares the record's PC with the parameter preamble, so it
+    // must be the start of the OP_DIRECT_EVAL that names this record: its
+    // OP_WIDE prefix when it has one, as the compiler records it.
+    if (EvalEnv.PC > 0) and (DecodeOp(ATemplate.GetInstruction(
+       Integer(EvalEnv.PC) - 1)) = Ord(OP_WIDE)) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, inside an OP_WIDE instruction',
+        [I, EvalEnv.PC]));
+    Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC));
+    if (DecodeOp(Instruction) = Ord(OP_WIDE)) and
+       (Int64(EvalEnv.PC) + 1 < ATemplate.CodeCount) then
+      Instruction := ATemplate.GetInstruction(Integer(EvalEnv.PC) + 1);
+    if (DecodeOp(Instruction) <> Ord(OP_DIRECT_EVAL)) or
+       (DecodeBx(Instruction) <> I) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d is at PC %d, which is not the OP_DIRECT_EVAL ' +
+        'that names it', [I, EvalEnv.PC]));
+    if (EvalEnv.VarEnvironment in [devFunction, devParameters]) <>
+       (EvalEnv.VarObjectSlot >= 0) then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d has a variable object slot that does not ' +
+        'match its variable environment', [I]));
+    if EvalEnv.VarObjectSlot >= ATemplate.MaxRegisters then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d names register %d, outside MaxRegisters %d',
+        [I, EvalEnv.VarObjectSlot, ATemplate.MaxRegisters]));
+    if EvalEnv.PrivateClassRegister >= ATemplate.MaxRegisters then
+      RejectInvalidBytecode(ATemplate, 0, Format(
+        'eval site record %d names private class register %d, outside ' +
+        'MaxRegisters %d',
+        [I, EvalEnv.PrivateClassRegister, ATemplate.MaxRegisters]));
+    // Eval code compiled at the site captures these registers and upvalues
+    // of the calling frame.
+    for J := 0 to High(EvalEnv.Bindings) do
+      case EvalEnv.Bindings[J].Kind of
+        debLocal, debWithLocal:
+          if EvalEnv.Bindings[J].Index >= ATemplate.MaxRegisters then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to register %d, outside ' +
+              'MaxRegisters %d', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.MaxRegisters]));
+        debUpvalue, debWithUpvalue:
+          if EvalEnv.Bindings[J].Index >= ATemplate.UpvalueCount then
+            RejectInvalidBytecode(ATemplate, 0, Format(
+              'eval site record %d binds ''%s'' to upvalue %d, outside ' +
+              'the %d upvalues', [I, EvalEnv.Bindings[J].Name,
+              EvalEnv.Bindings[J].Index, ATemplate.UpvalueCount]));
+      end;
   end;
 
   for I := 0 to ATemplate.FunctionCount - 1 do
@@ -407,6 +517,10 @@ var
   EvalBinding: TGocciaDirectEvalBindingInfo;
   Handler: TGocciaExceptionHandler;
 begin
+  // Eval code is compiled when the eval runs and lives only in memory; the
+  // format has no field for TGocciaFunctionTemplate.GlobalEvalCode.
+  if AProto.GlobalEvalCode then
+    raise Exception.Create('Eval code cannot be serialized');
   WriteString(AProto.Name);
   WriteUInt16(AProto.MaxRegisters);
   WriteUInt16(AProto.ParameterCount);
@@ -420,7 +534,16 @@ begin
 
   WriteUInt32(UInt32(AProto.CodeCount));
   for I := 0 to AProto.CodeCount - 1 do
-    WriteUInt32(AProto.GetInstruction(I));
+    // A template loaded from a file holds the runtime-only OP_CALL_SELF where
+    // the file had OP_CALL_SELF_NUM. Write the file opcode back, so saving a
+    // loaded module produces a file the verifier accepts; the next load
+    // de-specializes it again. The operands are unchanged, and an OP_WIDE
+    // prefix word never has OP_CALL_SELF as its low byte.
+    if DecodeOp(AProto.GetInstruction(I)) = OP_CALL_SELF then
+      WriteUInt32((AProto.GetInstruction(I) and not UInt32($FF)) or
+        Ord(OP_CALL_SELF_NUM))
+    else
+      WriteUInt32(AProto.GetInstruction(I));
 
   WriteUInt16(UInt16(AProto.ConstantCount));
   for I := 0 to AProto.ConstantCount - 1 do
@@ -471,6 +594,22 @@ begin
     EvalEnv := AProto.GetDirectEvalEnvironment(I);
     WriteUInt32(EvalEnv.PC);
     WriteBoolean(EvalEnv.RejectArgumentsReference);
+    WriteBoolean(EvalEnv.StrictCaller);
+    WriteUInt8(Ord(EvalEnv.VarEnvironment));
+    if EvalEnv.VarObjectSlot < 0 then
+      WriteUInt16(High(UInt16))
+    else
+      WriteUInt16(UInt16(EvalEnv.VarObjectSlot));
+    if EvalEnv.PrivateClassRegister < 0 then
+      WriteUInt16(High(UInt16))
+    else
+      WriteUInt16(UInt16(EvalEnv.PrivateClassRegister));
+    WriteUInt16(UInt16(Length(EvalEnv.PrivateNames)));
+    for J := 0 to High(EvalEnv.PrivateNames) do
+    begin
+      WriteString(EvalEnv.PrivateNames[J].Name);
+      WriteString(EvalEnv.PrivateNames[J].Prefix);
+    end;
     WriteUInt16(UInt16(Length(EvalEnv.Bindings)));
     for J := 0 to High(EvalEnv.Bindings) do
     begin
@@ -481,6 +620,9 @@ begin
       WriteBoolean(EvalBinding.IsConst);
       WriteBoolean(EvalBinding.IsVarEnvironmentBinding);
       WriteBoolean(EvalBinding.IsEvalSyntheticArguments);
+      WriteBoolean(EvalBinding.IsCatchParameter);
+      WriteBoolean(EvalBinding.IsOutsideVarEnvironment);
+      WriteBoolean(EvalBinding.IsCallerFunctionBinding);
     end;
   end;
 
@@ -571,6 +713,9 @@ begin
     Export_ := AModule.GetExport(I);
     WriteString(Export_.Name);
     WriteUInt16(Export_.LocalSlot);
+    WriteUInt8(UInt8(Ord(Export_.Kind)));
+    WriteString(Export_.ModuleRequest);
+    WriteString(Export_.ImportName);
   end;
 
   WriteFunctionTemplate(AModule.TopLevel);
@@ -677,6 +822,12 @@ var
   ConstKind: UInt8;
   EvalPC: UInt32;
   EvalRejectArgumentsReference: Boolean;
+  EvalStrictCaller: Boolean;
+  EvalVarEnvironment: TGocciaDirectEvalVarEnvironment;
+  EvalVarEnvironmentKind: UInt8;
+  EvalVarObjectSlot: Integer;
+  EvalPrivateClassRegister: Integer;
+  EvalPrivateNames: TGocciaDirectEvalPrivateNameArray;
   EvalBindings: TGocciaDirectEvalBindingArray;
   EvalBinding: TGocciaDirectEvalBindingInfo;
   UpvalueIsLocal: Boolean;
@@ -686,6 +837,9 @@ var
   DebugInfo: TGocciaDebugInfo;
   SourceFile, RegExpPattern, RegExpFlags: string;
   LineMapCount, LocalCount: UInt32;
+  LocalName: string;
+  LocalSlot: UInt16;
+  LocalStartPC, LocalEndPC: UInt32;
   DeclarationLine: UInt32;
   DeclarationColumn: UInt16;
   CookedStrings, RawStrings: TGocciaBytecodeStringArray;
@@ -773,6 +927,27 @@ begin
   begin
     EvalPC := ReadUInt32;
     EvalRejectArgumentsReference := ReadBoolean;
+    EvalStrictCaller := ReadBoolean;
+    EvalVarEnvironmentKind := ReadUInt8;
+    if EvalVarEnvironmentKind > Ord(High(TGocciaDirectEvalVarEnvironment)) then
+      raise Exception.CreateFmt(
+        'Invalid direct-eval variable environment: %d',
+        [EvalVarEnvironmentKind]);
+    EvalVarEnvironment := TGocciaDirectEvalVarEnvironment(
+      EvalVarEnvironmentKind);
+    EvalVarObjectSlot := ReadUInt16;
+    if EvalVarObjectSlot = High(UInt16) then
+      EvalVarObjectSlot := -1;
+    EvalPrivateClassRegister := ReadUInt16;
+    if EvalPrivateClassRegister = High(UInt16) then
+      EvalPrivateClassRegister := -1;
+    EvalBindingCount := ReadUInt16;
+    SetLength(EvalPrivateNames, EvalBindingCount);
+    for J := 0 to EvalBindingCount - 1 do
+    begin
+      EvalPrivateNames[J].Name := ReadString;
+      EvalPrivateNames[J].Prefix := ReadString;
+    end;
     EvalBindingCount := ReadUInt16;
     SetLength(EvalBindings, EvalBindingCount);
     for J := 0 to EvalBindingCount - 1 do
@@ -787,10 +962,14 @@ begin
       EvalBinding.IsConst := ReadBoolean;
       EvalBinding.IsVarEnvironmentBinding := ReadBoolean;
       EvalBinding.IsEvalSyntheticArguments := ReadBoolean;
+      EvalBinding.IsCatchParameter := ReadBoolean;
+      EvalBinding.IsOutsideVarEnvironment := ReadBoolean;
+      EvalBinding.IsCallerFunctionBinding := ReadBoolean;
       EvalBindings[J] := EvalBinding;
     end;
     Result.AddDirectEvalEnvironment(EvalPC, EvalRejectArgumentsReference,
-      EvalBindings);
+      EvalStrictCaller, EvalVarEnvironment, EvalVarObjectSlot, EvalBindings,
+      EvalPrivateClassRegister, EvalPrivateNames);
   end;
 
   HandlerCount := ReadUInt16;
@@ -819,8 +998,16 @@ begin
 
     LocalCount := ReadUInt32;
     RequireRemaining(Int64(LocalCount) * 14, 'debug local mappings');
+    // Read each field into its own variable: Pascal does not fix the order
+    // in which a call's arguments are evaluated.
     for I := 0 to Integer(LocalCount) - 1 do
-      DebugInfo.AddLocal(ReadString, ReadUInt16, ReadUInt32, ReadUInt32);
+    begin
+      LocalName := ReadString;
+      LocalSlot := ReadUInt16;
+      LocalStartPC := ReadUInt32;
+      LocalEndPC := ReadUInt32;
+      DebugInfo.AddLocal(LocalName, LocalSlot, LocalStartPC, LocalEndPC);
+    end;
 
     Result.DebugInfo := DebugInfo;
   end;
@@ -859,7 +1046,9 @@ var
   HasDebug: Boolean;
   ImportCount, ExportCount: UInt16;
   I, J: Integer;
-  ModulePath: string;
+  ExportImportName, ExportName, ExportRequest, ModulePath: string;
+  ExportKindTag: UInt8;
+  ExportSlot: UInt16;
   BindingCount: UInt16;
   Bindings: array of TGocciaModuleBinding;
 begin
@@ -896,7 +1085,20 @@ begin
 
   ExportCount := ReadUInt16;
   for I := 0 to ExportCount - 1 do
-    Result.AddExport(ReadString, ReadUInt16);
+  begin
+    { Read in stream order: Pascal does not fix the order in which a call's
+      arguments are evaluated. }
+    ExportName := ReadString;
+    ExportSlot := ReadUInt16;
+    ExportKindTag := ReadUInt8;
+    if ExportKindTag > Ord(High(TGocciaModuleExportKind)) then
+      raise Exception.CreateFmt('Invalid module export kind: %d',
+        [ExportKindTag]);
+    ExportRequest := ReadString;
+    ExportImportName := ReadString;
+    Result.AddExport(ExportName, ExportSlot,
+      TGocciaModuleExportKind(ExportKindTag), ExportRequest, ExportImportName);
+  end;
 
   Result.TopLevel := ReadFunctionTemplate;
   VerifyFunctionTemplate(Result.TopLevel, 1);

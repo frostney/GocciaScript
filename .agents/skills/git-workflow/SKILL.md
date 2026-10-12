@@ -45,6 +45,8 @@ new repository or operation needs its own scope.
   branch.
 - When entering an existing focused branch or worktree, fetch and merge its
   remote base before editing.
+- Before new work starts, apply the
+  [default-branch health](#default-branch-health) gate.
 
 ## Update, commit, and push
 
@@ -116,8 +118,38 @@ Act on its result:
 - Any other exit: the guard failed. Stop, do not publish, and report its
   output.
 
+## Default-branch health
+
+Establish the default branch's health before new work starts, and recheck it
+immediately before each merge. Check the CI the project requires on
+default-branch commits, such as its push CI, not an integration deployment.
+Judge the current tip commit by its newest completed run; a run for an earlier
+commit says nothing about the tip.
+
+- **Green:** that run succeeded, or the project requires no CI on
+  default-branch commits. Work starts and merges.
+- **Pending:** the tip has no succeeded or failed run yet, and one is queued
+  or in progress. Pending is not green: await its result with `delivery-wait` before
+  starting or merging, and never merge anything that would supersede or cancel
+  it.
+- **No result:** the tip's newest run was cancelled or superseded with nothing
+  replacing it, or it has no run. This is not green either. Rerun or trigger
+  its required CI where the project allows; otherwise report it.
+- **Red:** that run failed. Getting it green comes first, and only its repair
+  starts or merges. Identify the failing job and its cause, then look for an
+  owner of the fix: an open PR, an issue or another session. When no one owns
+  it and the active request authorizes merging, deliver the repair as its own
+  work item through `/deliver` and land it first. Otherwise report the failing
+  job, its cause and the repair it needs. Independent local investigation can
+  continue; nothing else starts development or merges.
+
+The rule is strict by default. Only the person or the project can relax it,
+explicitly, for example to let an unrelated docs-only change land.
+
 ## Merge
 
+- Before each merge, recheck
+  [default-branch health](#default-branch-health).
 - Squash-merge pull requests and delete the source branch afterward.
 - Because the merge is a squash, the pull request **title** becomes the commit
   subject on the base branch: the branch's own commit subjects do not survive.

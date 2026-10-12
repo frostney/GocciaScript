@@ -11,11 +11,17 @@ the recorded history:
 
 - `completion`: a head is complete only when CodeRabbit posted a findings
   review of that exact head, or a matching coverage marker followed by a
-  `Review completed` status on it, after the head's latest push, open or
-  ready event and the latest trigger on the pull request;
+  `Review completed` status on it, on any recorded pull request of that
+  commit, after the head last reached the pull request's branch, after the
+  latest trigger on the pull request, and after a newer pending status on
+  the head that CodeRabbit has not completed, paused or skipped since, in
+  the order of time and status id; a force push leaving or reaching the head
+  counts as its push;
 - `refused-trigger`: no trigger while the head's latest refusal states a wait
   that is still running, unless a recorded trigger at that point was
   accepted;
+- `no-capacity`: no trigger after a refusal whose newest paired notice says
+  waiting won't change it;
 - `automatic-review`: no trigger while CodeRabbit's own review of the head
   starts within 120 s;
 - `unbounded`: every decision is final, a trigger, or a wait with a bound or
@@ -214,6 +220,19 @@ class RecordedGitHub:
             ready = [event["at"] for event in pull["events"] if event["type"] == "ready" and at(event["at"]) <= self.now]
             nodes = [{"createdAt": ready[-1]}] if ready else []
             return {"repository": {"pullRequest": {"timelineItems": {"nodes": nodes}}}}
+        if "HEAD_REF_FORCE_PUSHED_EVENT" in query:
+            # Pages of `last: N` force pushes, newest page first; a cursor is the index a page starts at.
+            pull = self.pull(f"{variables['owner']}/{variables['name']}", int(variables["number"]))
+            limit = int(re.search(r"timelineItems\(last: (\d+)", query).group(1))
+            pushes = [
+                {"createdAt": event["at"], "beforeCommit": {"oid": event["from"]}, "afterCommit": {"oid": event["head"]}}
+                for event in pull["events"]
+                if event["type"] == "force-pushed" and at(event["at"]) <= self.now
+            ]
+            end = int(variables["cursor"]) if variables.get("cursor") else len(pushes)
+            begin = max(0, end - limit)
+            info = {"hasPreviousPage": begin > 0, "startCursor": str(begin)}
+            return {"repository": {"pullRequest": {"timelineItems": {"pageInfo": info, "nodes": pushes[begin:end]}}}}
         if "userContentEdits" in query:
             identifier = int(variables["id"].removeprefix("IC_"))
             if identifier in self.unreadable_histories:
@@ -237,11 +256,25 @@ class RecordedGitHub:
         raise AssertionError(f"unexpected GraphQL query {query[:60]}")
 
 
+def force_pushes(pull: dict[str, Any]) -> list[tuple[float, str]]:
+    """Each recorded force push of the branch, with the head it brought, oldest first."""
+    return sorted((at(event["at"]), event["head"]) for event in pull["events"] if event["type"] == "force-pushed")
+
+
+def open_at(pull: dict[str, Any], now: float) -> bool:
+    state = True
+    for event in pull["events"]:
+        if at(event["at"]) <= now and event["type"] in {"closed", "merged", "reopened"}:
+            state = event["type"] == "reopened"
+    return state
+
+
 def head_timeline(pull: dict[str, Any]) -> list[tuple[float, str]]:
     """Each head the branch had, with when it arrived, oldest first.
 
     A head arrives with its first check suite on the branch; without one, with
-    CodeRabbit's first status on it. The recorded final head comes last.
+    CodeRabbit's first status on it. The recorded final head comes last. A
+    recorded force push brings its head back to the branch.
     """
     arrivals = []
     for sha, head in pull["heads"].items():
@@ -250,6 +283,9 @@ def head_timeline(pull: dict[str, Any]) -> list[tuple[float, str]]:
         if suites or (statuses and sha != pull["head"]):
             arrivals.append((min(suites or statuses), sha))
     arrivals.sort()
+    if force_pushes(pull):
+        timeline = sorted(set(arrivals + force_pushes(pull)))
+        return timeline if timeline[-1][1] == pull["head"] else timeline + [(timeline[-1][0], pull["head"])]
     final = [entry for entry in arrivals if entry[1] == pull["head"]]
     arrivals = [entry for entry in arrivals if entry[1] != pull["head"]]
     last = max([arrivals[-1][0] if arrivals else at(pull["createdAt"])] + [entry[0] for entry in final])
@@ -259,18 +295,47 @@ def head_timeline(pull: dict[str, Any]) -> list[tuple[float, str]]:
 # --- Ground truth ------------------------------------------------------------------
 
 
-def stated_wait(pulls: list[dict[str, Any]], status: dict[str, Any]) -> tuple[float, float] | None:
-    """The recorded refusal's stated wait, as (status time, available time)."""
-    status_at = at(status["created_at"])
-    best = None
+def shown_versions(pulls: list[dict[str, Any]], now: float) -> list[tuple[float, str]]:
+    """What each CodeRabbit comment showed at each second by `now`, comment by comment.
+
+    Within one comment a later version in its recorded order wins a second it
+    shares with an earlier one, whether or not either states a wait.
+    """
+    shown = []
     for pull in pulls:
         for item in pull["comments"]:
             if item["user"]["login"].lower() not in ADAPTER.BOT_LOGINS:
                 continue
+            versions: dict[float, str] = {}
             for edited, body in item["versions"]:
-                seconds = ADAPTER.stated_seconds(body)
-                if seconds is not None and status_at - ADAPTER.CORRELATION_SECONDS <= at(edited) <= status_at:
-                    best = max(best or 0.0, at(edited) + seconds)
+                if at(edited) <= now:
+                    versions[at(edited)] = body
+            shown += sorted(versions.items())
+    return shown
+
+
+def refused_for_capacity(pulls: list[dict[str, Any]], status: dict[str, Any], now: float) -> bool:
+    """Whether the newest CodeRabbit notice stating a wait before the refusal says waiting won't change it.
+
+    Between comments, the first listed wins a tie.
+    """
+    status_at = at(status["created_at"])
+    paired = [
+        (edited, ADAPTER.no_capacity(body))
+        for edited, body in shown_versions(pulls, now)
+        if ADAPTER.stated_seconds(body) is not None and status_at - ADAPTER.CORRELATION_SECONDS <= edited <= status_at
+    ]
+    return bool(paired) and max(paired, key=lambda entry: entry[0])[1]
+
+
+def stated_wait(pulls: list[dict[str, Any]], status: dict[str, Any], now: float) -> tuple[float, float] | None:
+    """The recorded refusal's stated wait, as (status time, available time)."""
+    status_at = at(status["created_at"])
+    best = None
+    for edited, body in shown_versions(pulls, now):
+        seconds = ADAPTER.stated_seconds(body)
+        if seconds is not None and status_at - ADAPTER.CORRELATION_SECONDS <= edited <= status_at:
+            best = max(best or 0.0, edited + seconds)
     return (status_at, best) if best else None
 
 
@@ -307,17 +372,37 @@ class History:
             if item["user"]["login"] == "maintainer" and asks(item["versions"][0][1])
         ]
 
-    def cycle_start(self, pull: dict[str, Any], sha: str, now: float) -> float:
-        """The head's latest push, open or ready event or trigger on the pull request by `now`."""
-        arrival = next(time for time, head in head_timeline(pull) if head == sha)
-        moments = [arrival, at(pull["createdAt"])]
-        moments += [at(event["at"]) for event in pull["events"] if event["type"] == "ready"]
-        moments += [time for time in self.triggers(pull, whole_line=True) if time >= arrival]
+    def review_cutoff(self, pull: dict[str, Any], sha: str, now: float) -> float:
+        """The head's latest push to the pull request's branch, its latest trigger, or a newer review by `now`.
+
+        Opening the pull request or marking it ready leaves an existing review of the commit standing.
+        A newer review starts with a pending status on the head and ends when CodeRabbit completes,
+        pauses or skips it; a skip on a head another open pull request shares may answer that one.
+        """
+        suites = [at(suite["created_at"]) for suite in pull["heads"][sha]["checkSuites"] if suite["head_branch"] == pull["ref"]]
+        pushed = min(suites) if suites else next(time for time, head in head_timeline(pull) if head == sha)
+        pushed = max([pushed] + [
+            at(event["at"]) for event in pull["events"]
+            if event["type"] == "force-pushed" and sha in (event["from"], event["head"]) and at(event["at"]) <= now
+        ])
+        moments = [pushed] + [time for time in self.triggers(pull, whole_line=True) if time >= pushed]
+        # In CodeRabbit's order, by time and then status id.
+        statuses = [(at(status["created_at"]), ADAPTER.status_kind(status)) for status in self.statuses(pull["repo"], sha)]
+        statuses = [(when, kind) for when, kind in statuses if when <= now]
+        shared = any(
+            other is not pull and sha in other["heads"] and at(other["createdAt"]) <= now and open_at(other, now)
+            for other in self.by_repo[pull["repo"]]
+        )
+        ending = {"completed", "paused", "draft-skip"} | (set() if shared else {"skipped"})
+        pending = [index for index, (_when, kind) in enumerate(statuses) if kind == "in-progress"][-1:]
+        moments += [statuses[index][0] for index in pending if not any(kind in ending for _when, kind in statuses[index + 1:])]
         return max(moment for moment in moments if moment <= now)
 
     def completed_with_evidence(self, pull: dict[str, Any], sha: str, now: float) -> bool:
-        cutoff = self.cycle_start(pull, sha, now)
-        for review in pull["reviews"]:
+        """Whether the commit was reviewed since its push to this pull request's branch, on any pull request."""
+        cutoff = self.review_cutoff(pull, sha, now)
+        sharing = [other for other in self.by_repo[pull["repo"]] if sha in other["heads"]]
+        for review in (review for other in sharing for review in other["reviews"]):
             submitted = at(review["submitted_at"])
             if review["commit_id"] == sha and cutoff < submitted <= now and ADAPTER.findings_review([review], sha):
                 return True
@@ -325,7 +410,8 @@ class History:
         covered = {sha} | ({parents[0]} if len(parents) > 1 else set())
         markers = [
             at(edited)
-            for item in pull["comments"]
+            for other in sharing
+            for item in other["comments"]
             for edited, body in item["versions"]
             if at(edited) <= now
             and ADAPTER.clean_review([{"body": body}], sorted(covered))
@@ -363,9 +449,11 @@ class History:
         )
         refusals = [status for status in before if ADAPTER.status_kind(status) == "rate-limited"]
         sharing = [other for other in self.by_repo[pull["repo"]] if sha in other["heads"]]
-        own = stated_wait(sharing, refusals[-1]) if refusals else None
+        own = stated_wait(sharing, refusals[-1], now) if refusals else None
         if own and now < own[1] and not accepted:
             found.append("refused-trigger")
+        if refusals and refused_for_capacity(sharing, refusals[-1], now):
+            found.append("no-capacity")
         for status in after:
             started = at(status["created_at"])
             if started > now + ADAPTER.AUTOMATIC_REVIEW_SECONDS:

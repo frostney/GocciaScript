@@ -22,6 +22,19 @@ describe("class decorators", () => {
     expect(receivedContext.name).toBe("MyClass");
   });
 
+  test("an anonymous class's context name is the name it takes from its position", () => {
+    const names = [];
+    const record = (cls, context) => {
+      names.push(context.name);
+    };
+    const key = "K";
+    const Bound = @record class {};
+    const object = { [key]: @record class {} };
+    expect(names).toEqual(["Bound", "K"]);
+    expect(Bound.name).toBe("Bound");
+    expect(object.K.name).toBe("K");
+  });
+
   test("decorator returning undefined keeps original class", () => {
     const noop = (cls, context) => {
       return undefined;
