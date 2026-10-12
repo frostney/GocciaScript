@@ -39,6 +39,7 @@ type
     procedure TestRejectsClosedNumericSelfCallInNonArrowTemplate;
     procedure TestRoundTripsDebugLocals;
     procedure TestRoundTripsDirectEvalSiteRecord;
+    procedure TestRejectsMalformedDirectEvalSite;
   public
     procedure SetupTests; override;
   end;
@@ -63,6 +64,8 @@ begin
     TestRoundTripsDebugLocals);
   Test('Round-trips a direct eval site record field by field',
     TestRoundTripsDirectEvalSiteRecord);
+  Test('Rejects a malformed direct eval site',
+    TestRejectsMalformedDirectEvalSite);
 end;
 
 // Serialises a one-instruction module and reads it back through the ordinary
@@ -383,44 +386,25 @@ begin
   end;
 end;
 
-// The loader rebuilds a direct eval site record from the module, and the VM
-// reads the call's strictness and each binding's flags from it.
-procedure TBytecodeBinaryTests.TestRoundTripsDirectEvalSiteRecord;
-const
-  EVAL_PC = 5;
+// Writes ATemplate as the top level of a module and reads it back through the
+// ordinary loader path. Returns the loaded module, or nil with the rejection
+// message in AReason.
+function LoadTemplateThroughBinary(const ATemplate: TGocciaFunctionTemplate;
+  out AReason: string): TGocciaBytecodeModule;
 var
-  Loaded, Module: TGocciaBytecodeModule;
+  Module: TGocciaBytecodeModule;
   Reader: TGocciaBytecodeReader;
   Stream: TMemoryStream;
-  Template: TGocciaFunctionTemplate;
   Writer: TGocciaBytecodeWriter;
-  Bindings: TGocciaDirectEvalBindingArray;
-  Env: TGocciaDirectEvalEnvironment;
 begin
-  SetLength(Bindings, 2);
-  Bindings[0] := Default(TGocciaDirectEvalBindingInfo);
-  Bindings[0].Name := 'caught';
-  Bindings[0].Kind := debLocal;
-  Bindings[0].Index := 2;
-  Bindings[0].IsCatchParameter := True;
-  Bindings[1] := Default(TGocciaDirectEvalBindingInfo);
-  Bindings[1].Name := 'outer';
-  Bindings[1].Kind := debUpvalue;
-  Bindings[1].Index := 1;
-  Bindings[1].IsConst := True;
-  Bindings[1].IsVarEnvironmentBinding := True;
+  Result := nil;
+  AReason := '';
   Stream := TMemoryStream.Create;
   try
     Module := TGocciaBytecodeModule.Create(TEST_RUNTIME_TAG, TEST_SOURCE_PATH);
     try
-      Template := TGocciaFunctionTemplate.Create('main');
-      Template.MaxRegisters := TEST_MAX_REGISTERS;
-      Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
-      Template.AddDirectEvalEnvironment(EVAL_PC, False, True, Bindings);
-      Template.AddDirectEvalEnvironment(EVAL_PC + 1, True, False, nil);
-      Module.TopLevel := Template;
+      Module.TopLevel := ATemplate;
       Module.HasDebugInfo := False;
-
       Writer := TGocciaBytecodeWriter.Create(Stream);
       try
         Writer.WriteModule(Module);
@@ -434,30 +418,11 @@ begin
     Stream.Position := 0;
     Reader := TGocciaBytecodeReader.Create(Stream);
     try
-      Loaded := Reader.ReadModule;
       try
-        Expect<Integer>(Loaded.TopLevel.DirectEvalEnvironmentCount).ToBe(2);
-        Env := Loaded.TopLevel.GetDirectEvalEnvironment(0);
-        Expect<Integer>(Env.PC).ToBe(EVAL_PC);
-        Expect<Boolean>(Env.RejectArgumentsReference).ToBe(False);
-        Expect<Boolean>(Env.StrictCaller).ToBe(True);
-        Expect<Integer>(Length(Env.Bindings)).ToBe(2);
-        Expect<string>(Env.Bindings[0].Name).ToBe('caught');
-        Expect<Integer>(Ord(Env.Bindings[0].Kind)).ToBe(Ord(debLocal));
-        Expect<Integer>(Env.Bindings[0].Index).ToBe(2);
-        Expect<Boolean>(Env.Bindings[0].IsCatchParameter).ToBe(True);
-        Expect<Boolean>(Env.Bindings[0].IsVarEnvironmentBinding).ToBe(False);
-        Expect<string>(Env.Bindings[1].Name).ToBe('outer');
-        Expect<Integer>(Ord(Env.Bindings[1].Kind)).ToBe(Ord(debUpvalue));
-        Expect<Boolean>(Env.Bindings[1].IsConst).ToBe(True);
-        Expect<Boolean>(Env.Bindings[1].IsVarEnvironmentBinding).ToBe(True);
-        Expect<Boolean>(Env.Bindings[1].IsCatchParameter).ToBe(False);
-        Env := Loaded.TopLevel.GetDirectEvalEnvironment(1);
-        Expect<Boolean>(Env.RejectArgumentsReference).ToBe(True);
-        Expect<Boolean>(Env.StrictCaller).ToBe(False);
-        Expect<Integer>(Length(Env.Bindings)).ToBe(0);
-      finally
-        Loaded.Free;
+        Result := Reader.ReadModule;
+      except
+        on E: Exception do
+          AReason := E.Message;
       end;
     finally
       Reader.Free;
@@ -465,6 +430,172 @@ begin
   finally
     Stream.Free;
   end;
+end;
+
+function DirectEvalBinding(const AName: string;
+  const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
+  const AIsConst, AIsVarEnvironmentBinding, AIsEvalSyntheticArguments,
+  AIsCatchParameter: Boolean): TGocciaDirectEvalBindingInfo;
+begin
+  Result := Default(TGocciaDirectEvalBindingInfo);
+  Result.Name := AName;
+  Result.Kind := AKind;
+  Result.Index := AIndex;
+  Result.IsConst := AIsConst;
+  Result.IsVarEnvironmentBinding := AIsVarEnvironmentBinding;
+  Result.IsEvalSyntheticArguments := AIsEvalSyntheticArguments;
+  Result.IsCatchParameter := AIsCatchParameter;
+end;
+
+procedure ExpectDirectEvalBinding(const ABinding,
+  AExpected: TGocciaDirectEvalBindingInfo);
+begin
+  Expect<string>(ABinding.Name).ToBe(AExpected.Name);
+  Expect<Integer>(Ord(ABinding.Kind)).ToBe(Ord(AExpected.Kind));
+  Expect<Integer>(ABinding.Index).ToBe(AExpected.Index);
+  Expect<Boolean>(ABinding.IsConst).ToBe(AExpected.IsConst);
+  Expect<Boolean>(ABinding.IsVarEnvironmentBinding).ToBe(
+    AExpected.IsVarEnvironmentBinding);
+  Expect<Boolean>(ABinding.IsEvalSyntheticArguments).ToBe(
+    AExpected.IsEvalSyntheticArguments);
+  Expect<Boolean>(ABinding.IsCatchParameter).ToBe(
+    AExpected.IsCatchParameter);
+end;
+
+// The loader rebuilds every field of a direct eval site record from the
+// module, and the OP_DIRECT_EVAL that names it. The records cover every
+// binding kind, every flag both ways and every variable environment, so a
+// field the writer or the reader drops or reorders fails here.
+procedure TBytecodeBinaryTests.TestRoundTripsDirectEvalSiteRecord;
+const
+  EVAL_MAX_REGISTERS = 8;
+  FUNCTION_VAR_OBJECT_SLOT = 6;
+  PARAMETER_VAR_OBJECT_SLOT = 7;
+var
+  Loaded: TGocciaBytecodeModule;
+  Template: TGocciaFunctionTemplate;
+  Bindings: TGocciaDirectEvalBindingArray;
+  Env: TGocciaDirectEvalEnvironment;
+  Instruction: UInt32;
+  Reason: string;
+  I: Integer;
+begin
+  SetLength(Bindings, 5);
+  Bindings[0] := DirectEvalBinding('caught', debLocal, 2, True, False, False,
+    True);
+  Bindings[1] := DirectEvalBinding('outer', debUpvalue, 1, False, True,
+    False, False);
+  Bindings[2] := DirectEvalBinding('global', debGlobal, 0, True, True, False,
+    False);
+  Bindings[3] := DirectEvalBinding('`#with`:0', debWithLocal, 3, False,
+    False, True, False);
+  Bindings[4] := DirectEvalBinding('`#with`:1', debWithUpvalue, 4, False,
+    False, False, False);
+
+  Template := TGocciaFunctionTemplate.Create('main');
+  Template.MaxRegisters := EVAL_MAX_REGISTERS;
+  // eval(x): a plain call with one argument.
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 0));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 1, 0));
+  // eval(...args) found on a `with` object: a method call with a spread.
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 2, 1));
+  Template.EmitInstruction(EncodeABC(OP_CALL_METHOD, 2, 3, CALL_FLAG_SPREAD));
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 2));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, 3));
+  Template.EmitInstruction(EncodeABC(OP_CALL, 1, 0, 0));
+  Template.AddDirectEvalEnvironment(0, False, False, devFunction,
+    FUNCTION_VAR_OBJECT_SLOT, Bindings);
+  Template.AddDirectEvalEnvironment(2, True, False, devParameters,
+    PARAMETER_VAR_OBJECT_SLOT, nil);
+  Template.AddDirectEvalEnvironment(4, False, True, devNone, -1, nil);
+  Template.AddDirectEvalEnvironment(6, False, False, devGlobal, -1, nil);
+
+  Loaded := LoadTemplateThroughBinary(Template, Reason);
+  try
+    Expect<string>(Reason).ToBe('');
+    Expect<Boolean>(Assigned(Loaded)).ToBe(True);
+    if not Assigned(Loaded) then
+      Exit;
+
+    Instruction := Loaded.TopLevel.GetInstruction(2);
+    Expect<Integer>(DecodeOp(Instruction)).ToBe(Ord(OP_DIRECT_EVAL));
+    Expect<Integer>(DecodeA(Instruction)).ToBe(2);
+    Expect<Integer>(DecodeBx(Instruction)).ToBe(1);
+
+    Expect<Integer>(Loaded.TopLevel.DirectEvalEnvironmentCount).ToBe(4);
+    Env := Loaded.TopLevel.GetDirectEvalEnvironment(0);
+    Expect<Integer>(Env.PC).ToBe(0);
+    Expect<Boolean>(Env.RejectArgumentsReference).ToBe(False);
+    Expect<Boolean>(Env.StrictCaller).ToBe(False);
+    Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devFunction));
+    Expect<Integer>(Env.VarObjectSlot).ToBe(FUNCTION_VAR_OBJECT_SLOT);
+    Expect<Integer>(Length(Env.Bindings)).ToBe(Length(Bindings));
+    for I := 0 to High(Bindings) do
+      ExpectDirectEvalBinding(Env.Bindings[I], Bindings[I]);
+
+    Env := Loaded.TopLevel.GetDirectEvalEnvironment(1);
+    Expect<Integer>(Env.PC).ToBe(2);
+    Expect<Boolean>(Env.RejectArgumentsReference).ToBe(True);
+    Expect<Boolean>(Env.StrictCaller).ToBe(False);
+    Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devParameters));
+    Expect<Integer>(Env.VarObjectSlot).ToBe(PARAMETER_VAR_OBJECT_SLOT);
+    Expect<Integer>(Length(Env.Bindings)).ToBe(0);
+
+    Env := Loaded.TopLevel.GetDirectEvalEnvironment(2);
+    Expect<Integer>(Env.PC).ToBe(4);
+    Expect<Boolean>(Env.StrictCaller).ToBe(True);
+    Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devNone));
+    Expect<Integer>(Env.VarObjectSlot).ToBe(-1);
+
+    Env := Loaded.TopLevel.GetDirectEvalEnvironment(3);
+    Expect<Integer>(Env.PC).ToBe(6);
+    Expect<Boolean>(Env.StrictCaller).ToBe(False);
+    Expect<Integer>(Ord(Env.VarEnvironment)).ToBe(Ord(devGlobal));
+    Expect<Integer>(Env.VarObjectSlot).ToBe(-1);
+  finally
+    Loaded.Free;
+  end;
+end;
+
+// The VM reads the operands of the call after OP_DIRECT_EVAL and the record it
+// names, so the loader rejects a file in which either is missing or wrong.
+procedure TBytecodeBinaryTests.TestRejectsMalformedDirectEvalSite;
+
+  function Reason(const ASiteIndex: UInt16; const ACall: UInt64;
+    const AVarEnvironment: TGocciaDirectEvalVarEnvironment;
+    const AVarObjectSlot: Integer): string;
+  var
+    Loaded: TGocciaBytecodeModule;
+    Template: TGocciaFunctionTemplate;
+  begin
+    Template := TGocciaFunctionTemplate.Create('main');
+    Template.MaxRegisters := TEST_MAX_REGISTERS;
+    Template.EmitInstruction(EncodeABx(OP_DIRECT_EVAL, 1, ASiteIndex));
+    Template.EmitInstruction(ACall);
+    Template.AddDirectEvalEnvironment(0, False, False, AVarEnvironment,
+      AVarObjectSlot, nil);
+    Loaded := LoadTemplateThroughBinary(Template, Result);
+    Loaded.Free;
+  end;
+
+begin
+  Expect<string>(Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devFunction, 2))
+    .ToBe('');
+  Expect<Boolean>(Pos('eval site record 1 is outside 0..0',
+    Reason(1, EncodeABC(OP_CALL, 1, 0, 0), devFunction, 2)) > 0).ToBe(True);
+  Expect<Boolean>(Pos('not followed by a call on its callee register',
+    Reason(0, EncodeABC(OP_LOAD_UNDEFINED, 1, 0, 0), devFunction, 2)) > 0)
+    .ToBe(True);
+  Expect<Boolean>(Pos('not followed by a call on its callee register',
+    Reason(0, EncodeABC(OP_CALL, 2, 0, 0), devFunction, 2)) > 0).ToBe(True);
+  Expect<Boolean>(Pos('does not match its variable environment',
+    Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devFunction, -1)) > 0).ToBe(True);
+  Expect<Boolean>(Pos('does not match its variable environment',
+    Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devGlobal, 2)) > 0).ToBe(True);
+  Expect<Boolean>(Pos('names register 9, outside MaxRegisters 4',
+    Reason(0, EncodeABC(OP_CALL, 1, 0, 0), devParameters,
+      TEST_OUT_OF_RANGE_REGISTER)) > 0).ToBe(True);
 end;
 
 begin

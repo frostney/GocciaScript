@@ -1164,16 +1164,15 @@ begin
       // global-backed top-level binding those cannot run inside its temporal
       // dead zone: top-level statements run in source order, and hoisted
       // function declarations, which can run earlier, are compiled before
-      // all of them. Non-strict compatibility mode keeps the named read,
-      // because a sloppy direct eval can shadow the name with a
-      // function-level var at run time. So does a coverage run: a ternary or
-      // logical expression decided by the constant would be folded and lose
-      // its branch records.
+      // all of them. A read in or under a function that contains a sloppy
+      // direct eval does not take the value, since the eval can shadow the
+      // name with a function-level var at run time (DirectEvalMayShadow). A
+      // coverage run keeps the named read: a ternary or logical expression
+      // decided by the constant would be folded and lose its branch records.
       CanTrackConstant := ACtx.OptimizationOptions.EnableConstPropagation and
         AStmt.IsConst and not AStmt.IsVar and
         not (IsTopLevelGlobalBacked and
-          (ACtx.CompatibilityNonStrictMode or
-           ACtx.OptimizationOptions.PreserveCoverageShape)) and
+          ACtx.OptimizationOptions.PreserveCoverageShape) and
         HasRealInitializer and Assigned(Info.Initializer) and
         TryEvaluateConstantExpression(ACtx, Info.Initializer, ConstantValue);
 
@@ -5373,6 +5372,7 @@ begin
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AMethod.DirectEvalUsage;
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
@@ -5486,6 +5486,7 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
@@ -5566,6 +5567,7 @@ begin
   ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern then
@@ -5659,6 +5661,7 @@ begin
   ChildTemplate.ParameterCount := 0;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AGetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   SetLength(EmptyParams, 0);
   ArgumentsSlot := DeclareArgumentsObjectLocal(ACtx, ChildScope, EmptyParams,
@@ -5740,6 +5743,7 @@ begin
   ChildTemplate.ParameterCount := Length(SetterParams);
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := ASetter.DirectEvalUsage;
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   for I := 0 to High(SetterParams) do
     if SetterParams[I].IsPattern then
@@ -5831,6 +5835,7 @@ begin
   ChildTemplate.SourceText := AMethod.SourceText;
   ChildScope := TGocciaCompilerScope.Create(OldScope, 0);
   ChildScope.PrivatePrefix := OldScope.ResolvePrivatePrefix;
+  ChildScope.DirectEvalUsage := AMethod.DirectEvalUsage;
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);

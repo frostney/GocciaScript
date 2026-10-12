@@ -14,6 +14,15 @@ uses
   Goccia.Values.Primitives;
 
 type
+  { ADR 0134 static detection. What the parser found in a function's own code,
+    its parameter list included and the bodies of nested functions excluded:
+    a call whose callee is the plain identifier `eval` (ES2026 §13.3.6.1 makes
+    it a direct eval when the callee is %eval% at run time), and whether one
+    such call is in non-strict code, so that a var it declares may land in the
+    function's variable environment (§19.2.1.3 EvalDeclarationInstantiation). }
+  TGocciaDirectEvalUsageFlag = (deuDirectEval, deuSloppyDirectEval);
+  TGocciaDirectEvalUsage = set of TGocciaDirectEvalUsageFlag;
+
   TGocciaASTNode = class
   private
     FSpan: TGocciaSourceSpan;
@@ -55,10 +64,13 @@ type
   private
     FBody: TObjectList<TGocciaStatement>;
     FHasTopLevelAwait: Boolean;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
     constructor Create(const ABody: TObjectList<TGocciaStatement>);
     property Body: TObjectList<TGocciaStatement> read FBody;
     property HasTopLevelAwait: Boolean read FHasTopLevelAwait write FHasTopLevelAwait;
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
   end;
 
 // Conservative pre-scan shared by the interpreter and the bytecode compiler to

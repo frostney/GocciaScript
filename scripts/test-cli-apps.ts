@@ -1956,6 +1956,27 @@ await section("Test262 Runner: a private brand check in an eval finds the class'
   ], ["true/true/false/false true/true/false/false true/true/false/false true/true/false/false", "TypeError,1"]);
 });
 
+// OP_DIRECT_EVAL runs `eval(...)` when the callee is %eval% and otherwise
+// leaves the call to the OP_CALL after it, an ordinary call with its own
+// `this`, spread arguments and tail position (ES2026 §13.3.6.1). A const
+// read across a function containing a sloppy direct eval keeps its named
+// read, and one across a sloppy function without one is folded; both give
+// the result Node.js does (#872, ADR 0134 Phase 1).
+await section("Test262 Runner: an eval call site falls back to an ordinary call and keeps shadowable reads...", async () => {
+  expectEvalHostProbe("eval call site", [
+    "function notEval() { var eval = function (a, b) { return [typeof this, a, b].join(); }; return eval(1, ...[2]); }",
+    "function spreadNotEval() { var eval = (...args) => args.length; return eval(...[1, 2, 3]); }",
+    "function tail() { var eval = function (n) { return n > 0 ? eval(n - 1) : 'done'; }; return eval(3); }",
+    "print([notEval(), spreadNotEval(), tail(), eval(...['40 + 2'])].join(' '));",
+    "const k = 1;",
+    "function shadows() { eval('var k = 2'); return (() => k * 10)(); }",
+    "function shadowsNested() { eval('var k = 3'); function inner() { return k * 10; } return inner(); }",
+    "function plain() { return (() => k * 10)(); }",
+    "function inParameters(a = eval('var p = 4; p')) { return a + p; }",
+    "print([shadows(), shadowsNested(), plain(), inParameters()].join());",
+  ], ["object,1,2 3 done 42", "20,30,10,8"]);
+});
+
 await section("Test262 Runner: bytecode eval keeps nested variable environments isolated...", async () => {
   const proc = Bun.spawnSync([
     TEST262RUNNER,

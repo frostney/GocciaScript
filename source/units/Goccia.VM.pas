@@ -555,11 +555,11 @@ type
       const AArguments: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function ExecuteDirectEval(const ASourceValue: TGocciaValue;
-      const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
-      const ACallerStrict: Boolean): TGocciaValue;
-    function TryExecuteDirectEvalCall(const ACalleeReg, AArgsOperand,
-      AFlags: UInt16; const ATemplate: TGocciaFunctionTemplate;
-      const APC: UInt32): Boolean;
+      const ATemplate: TGocciaFunctionTemplate;
+      const ASiteIndex: Integer): TGocciaValue;
+    function TryExecuteDirectEvalSite(const ACalleeReg: UInt16;
+      const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
+      var AIP, AInstructionStartIP: Integer): Boolean;
     procedure ThrowError(const AMessage: string; const ALine, AColumn: Integer);
     procedure PushFrame(const AResultRegister, AFrameIP: Integer;
       const ATemplate: TGocciaFunctionTemplate;
@@ -15131,17 +15131,28 @@ begin
   Result := Names;
 end;
 
-// ES2026 §13.3.6.1 (Function Calls) step 6: a call the compiler flagged with
-// CALL_FLAG_DIRECT_EVAL is a direct eval when the callee is the realm's %eval%,
-// whatever the global `eval` property holds now.
-// OP_CALL and OP_CALL_METHOD share this; the second is the `eval` a `with`
-// object supplied, whose this-value direct eval does not use. The callee is in
-// register ACalleeReg, followed by its arguments, or by the spread arguments
-// array in register AArgsOperand when the flags carry CALL_FLAG_SPREAD.
-function TGocciaVM.TryExecuteDirectEvalCall(const ACalleeReg,
-  AArgsOperand, AFlags: UInt16; const ATemplate: TGocciaFunctionTemplate;
-  const APC: UInt32): Boolean;
+// OP_DIRECT_EVAL, ES2026 §13.3.6.1 (Function Calls) step 6: `eval(...)` is a
+// direct eval when the callee is the realm's %eval%, whatever the global
+// `eval` property holds now. The callee is in register ACalleeReg, and AIP is
+// the OP_CALL or OP_CALL_METHOD after OP_DIRECT_EVAL (the second when a `with`
+// object supplied `eval`, whose this-value direct eval does not use). Its B
+// operand is the argument count, or, with CALL_FLAG_SPREAD in C, the register
+// of the spread arguments array.
+//
+// For %eval% this runs the eval with eval site record ASiteIndex, leaves its
+// completion value in ACalleeReg and moves AIP past the call, which does not
+// run. The call is the executing instruction while the eval runs, as it was
+// when OP_CALL ran it, so a frame, a stack trace or a handler sees the call.
+// For any other callee it returns False and changes nothing, and the call
+// runs as an ordinary call.
+function TGocciaVM.TryExecuteDirectEvalSite(const ACalleeReg: UInt16;
+  const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
+  var AIP, AInstructionStartIP: Integer): Boolean;
 var
+  CallInstruction: UInt32;
+  CallIP: Integer;
+  WideB, WideC: UInt16;
+  ArgsOperand, Flags: UInt16;
   EvalSourceValue: TGocciaValue;
 begin
   Result := (FRegisters[ACalleeReg].Kind = grkObject) and
@@ -15150,24 +15161,41 @@ begin
     IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue);
   if not Result then
     Exit;
-  EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-  if (AFlags and CALL_FLAG_SPREAD) <> 0 then
+  CallIP := AIP;
+  CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
+  Inc(CallIP);
+  WideB := 0;
+  WideC := 0;
+  if DecodeOp(CallInstruction) = Ord(OP_WIDE) then
   begin
-    if (FRegisters[AArgsOperand].Kind = grkObject) and
-       (FRegisters[AArgsOperand].ObjectValue is TGocciaArrayValue) and
-       (TGocciaArrayValue(FRegisters[AArgsOperand].ObjectValue).Elements.Count > 0) then
+    WideB := UInt16(DecodeB(CallInstruction)) shl 8;
+    WideC := UInt16(DecodeC(CallInstruction)) shl 8;
+    CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
+    Inc(CallIP);
+  end;
+  ArgsOperand := WideB or DecodeB(CallInstruction);
+  Flags := WideC or DecodeC(CallInstruction);
+  AInstructionStartIP := AIP;
+  AIP := CallIP;
+
+  EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+  if (Flags and CALL_FLAG_SPREAD) <> 0 then
+  begin
+    if (FRegisters[ArgsOperand].Kind = grkObject) and
+       (FRegisters[ArgsOperand].ObjectValue is TGocciaArrayValue) and
+       (TGocciaArrayValue(FRegisters[ArgsOperand].ObjectValue).Elements.Count > 0) then
       EvalSourceValue := TGocciaArrayValue(
-        FRegisters[AArgsOperand].ObjectValue).GetProperty('0');
+        FRegisters[ArgsOperand].ObjectValue).GetProperty('0');
   end
-  else if AArgsOperand > 0 then
+  else if ArgsOperand > 0 then
     EvalSourceValue := GetRegister(ACalleeReg + 1);
-  SetRegister(ACalleeReg, ExecuteDirectEval(EvalSourceValue, ATemplate, APC,
-    ATemplate.StrictCode));
+  SetRegister(ACalleeReg, ExecuteDirectEval(EvalSourceValue, ATemplate,
+    ASiteIndex));
 end;
 
 function TGocciaVM.ExecuteDirectEval(const ASourceValue: TGocciaValue;
-  const ATemplate: TGocciaFunctionTemplate; const APC: UInt32;
-  const ACallerStrict: Boolean): TGocciaValue;
+  const ATemplate: TGocciaFunctionTemplate;
+  const ASiteIndex: Integer): TGocciaValue;
 var
   SourceText: string;
   EvalSource: TStringList;
@@ -15196,6 +15224,7 @@ var
   AllowSuperCall: Boolean;
   UseGlobalVarEnvironment: Boolean;
   CallerStrict: Boolean;
+  SitePC: UInt32;
 begin
   if not (ASourceValue is TGocciaStringLiteralValue) then
     Exit(ASourceValue);
@@ -15208,12 +15237,10 @@ begin
   // ES2026 §13.3.6.1 step 6.a: the eval is strict when its call expression
   // is, which the site record knows; the template's StrictCode describes the
   // whole function, and class-body code runs inline in a sloppy one.
-  if not ATemplate.FindDirectEvalEnvironment(APC, EnvIndex) then
-    EnvIndex := -1;
-  if EnvIndex >= 0 then
-    CallerStrict := ATemplate.GetDirectEvalEnvironment(EnvIndex).StrictCaller
-  else
-    CallerStrict := ACallerStrict;
+  EnvIndex := ASiteIndex;
+  DirectEvalEnv := ATemplate.GetDirectEvalEnvironment(EnvIndex);
+  SitePC := DirectEvalEnv.PC;
+  CallerStrict := DirectEvalEnv.StrictCaller;
   EvalSource := CreateECMAScriptSourceLines(SourceText);
   try
     EvalOptions := TGocciaSourcePipeline.CurrentOptionsOrDefault;
@@ -15313,17 +15340,12 @@ begin
             try
               RejectArgumentsVarDeclaration :=
                 DirectEvalRejectsArgumentsVarDeclaration(ATemplate, EnvIndex,
-                  APC);
+                  SitePC);
             RejectVarDeclarationNames :=
               DirectEvalParameterPreambleVarRejectNames(
-                ATemplate, EnvIndex, APC);
-            RejectArgumentsReference := ATemplate.RejectArgumentsInDirectEval;
-            if EnvIndex >= 0 then
-            begin
-              DirectEvalEnv := ATemplate.GetDirectEvalEnvironment(EnvIndex);
-              RejectArgumentsReference := RejectArgumentsReference or
-                DirectEvalEnv.RejectArgumentsReference;
-            end;
+                ATemplate, EnvIndex, SitePC);
+            RejectArgumentsReference := ATemplate.RejectArgumentsInDirectEval or
+              DirectEvalEnv.RejectArgumentsReference;
             try
               Result := EvaluateEvalProgram(PipelineResult.ProgramNode,
                 EvalContext, VarScope, ActiveScope, StrictEval,

@@ -9,6 +9,7 @@ uses
 
   OrderedStringMap,
 
+  Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.ConstantValue,
   Goccia.Modules;
@@ -111,7 +112,6 @@ type
     FPrivatePrefixes: array of string;
     FPrivateNameCount: Integer;
     FIsArrow: Boolean;
-    FNonStrictCode: Boolean;
     FDirectEvalSyntheticArgumentsSlot: Integer;
     FWithBindingNames: array of string;
     FWithBindingDepths: array of Integer;
@@ -121,6 +121,10 @@ type
     // FLoopMayCreateClosure as it was when each open loop was entered.
     FOuterLoopMayCreateClosure: array of Boolean;
     FDirectEvalSeen: Boolean;
+    FDirectEvalUsage: TGocciaDirectEvalUsage;
+    FEvalVarObjectSlot: Integer;
+    FParameterEvalVarObjectSlot: Integer;
+    FCompilingParameters: Boolean;
     FParametersInVarEnvironment: Boolean;
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
@@ -231,12 +235,33 @@ type
     property PrivateClassReg: Integer read FPrivateClassReg
       write FPrivateClassReg;
     property IsArrow: Boolean read FIsArrow write FIsArrow;
-    property NonStrictCode: Boolean read FNonStrictCode write FNonStrictCode;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property WithBindingCount: Integer read FWithBindingCount;
     property LoopDepth: Integer read FLoopDepth;
     property LoopMayCreateClosure: Boolean read FLoopMayCreateClosure;
     property DirectEvalSeen: Boolean read FDirectEvalSeen;
+    // ADR 0134 static detection: what the parser found in this function's own
+    // code (TGocciaDirectEvalUsage), set before any of it is compiled. Empty
+    // for the compiler's own functions around class field initializers and
+    // static blocks, whose code is strict.
+    property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
+      write FDirectEvalUsage;
+    { Declares the hidden locals that stand for the variable environments a
+      sloppy direct eval in this function declares its vars in (ADR 0134):
+      the function's own, and, when the parameter list is not simple, the
+      parameters' (ES2026 §10.2.11 step 20). Called with the parameters
+      declared and before any code of the function is compiled, so the
+      registers are this function's for its whole extent. Does nothing
+      unless DirectEvalUsage has deuSloppyDirectEval. }
+    procedure DeclareEvalVarObjects(const AParameterListIsSimple: Boolean);
+    // The registers DeclareEvalVarObjects reserved, or -1.
+    property EvalVarObjectSlot: Integer read FEvalVarObjectSlot;
+    property ParameterEvalVarObjectSlot: Integer
+      read FParameterEvalVarObjectSlot;
+    // True while the parameter list is compiled, where a direct eval's vars
+    // go to the parameters' environment.
+    property CompilingParameters: Boolean read FCompilingParameters
+      write FCompilingParameters;
     // ES2026 §10.2.11 step 28: the parameter list has no expressions, so the
     // parameters are bindings of the function's variable environment, which a
     // sloppy direct eval in the body declares its vars in.
@@ -245,6 +270,12 @@ type
   end;
 
 function NextClassPrivatePrefix: string;
+
+const
+  // Names of the hidden locals DeclareEvalVarObjects declares. No source text
+  // can spell them, so name resolution never finds them.
+  EVAL_VAR_OBJECT_LOCAL = '`#eval-var-object`';
+  PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`';
 
 implementation
 
@@ -311,6 +342,10 @@ begin
   FLoopDepth := 0;
   FLoopMayCreateClosure := False;
   FDirectEvalSeen := False;
+  FDirectEvalUsage := [];
+  FEvalVarObjectSlot := -1;
+  FParameterEvalVarObjectSlot := -1;
+  FCompilingParameters := False;
   FParametersInVarEnvironment := False;
   FTemplate := nil;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
@@ -710,6 +745,18 @@ begin
   FDirectEvalSeen := True;
 end;
 
+procedure TGocciaCompilerScope.DeclareEvalVarObjects(
+  const AParameterListIsSimple: Boolean);
+begin
+  if not (deuSloppyDirectEval in FDirectEvalUsage) then
+    Exit;
+  if FEvalVarObjectSlot < 0 then
+    FEvalVarObjectSlot := DeclareLocal(EVAL_VAR_OBJECT_LOCAL, False);
+  if (not AParameterListIsSimple) and (FParameterEvalVarObjectSlot < 0) then
+    FParameterEvalVarObjectSlot := DeclareLocal(
+      PARAMETER_EVAL_VAR_OBJECT_LOCAL, False);
+end;
+
 // True where a let binding or a parameter of this function may hold its
 // current value somewhere other than its register, although no closure
 // compiled so far has captured it. Two things cause that:
@@ -871,8 +918,11 @@ end;
 // its vars in the variable environment of the function that calls it, where
 // they shadow a same-named binding of any enclosing function. What the
 // compiler knows about such a binding, its constant value or its type, holds
-// for a reference only when no non-strict function lies between the reference
-// and the declaration.
+// for a reference only when no function containing a sloppy direct eval lies
+// between the reference and the declaration, the reference's own function
+// included. The parser marks those functions (deuSloppyDirectEval) before any
+// of their code is compiled, so the answer covers code compiled ahead of the
+// eval call too.
 function TGocciaCompilerScope.DirectEvalMayShadow(const AName: string): Boolean;
 var
   Scope: TGocciaCompilerScope;
@@ -880,7 +930,7 @@ begin
   Scope := Self;
   while Assigned(Scope) and (Scope.ResolveLocal(AName) < 0) do
   begin
-    if Scope.FNonStrictCode then
+    if deuSloppyDirectEval in Scope.FDirectEvalUsage then
       Exit(True);
     Scope := Scope.FParent;
   end;

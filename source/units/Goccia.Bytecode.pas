@@ -219,7 +219,14 @@ const
   //   v89 -> v90: a direct-eval site record stores the strictness of its call
   //               expression, and each of its bindings whether it is a catch
   //               parameter.
-  GOCCIA_FORMAT_VERSION = 90;
+  //   v90 -> v91: added OP_DIRECT_EVAL (opcode 237), which precedes the
+  //               OP_CALL or OP_CALL_METHOD of an `eval(...)` call and names
+  //               its eval site record by index; CALL_FLAG_DIRECT_EVAL is
+  //               gone. A site record stores where the eval's vars go (none,
+  //               global, function or parameter list) and the caller's
+  //               register for that environment's hidden variable object
+  //               (ADR 0134).
+  GOCCIA_FORMAT_VERSION = 91;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -254,7 +261,6 @@ const
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
-  CALL_FLAG_DIRECT_EVAL = 4;
   // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its
   // enclosing function, so the VM reuses the current call frame instead of
   // pushing a new one (PrepareForTailCall).
@@ -532,7 +538,14 @@ type
     // GetValue step 2, §6.2.5.6 PutValue step 2.a), created from the
     // intrinsic %ReferenceError% whatever the global `ReferenceError` binding
     // holds, and carrying the evaluator's suggestion.
-    OP_THROW_UNDEFINED_VARIABLE = 236
+    OP_THROW_UNDEFINED_VARIABLE = 236,
+    // A = callee register, Bx = index of the template's eval site record.
+    // Always followed by the OP_CALL or OP_CALL_METHOD of an `eval(...)`
+    // call (ES2026 §13.3.6.1), on the same callee register. When the callee
+    // is the realm's %eval% this runs the direct eval, leaves its completion
+    // value in A and skips the call; otherwise it does nothing and the call
+    // runs as an ordinary call or method call.
+    OP_DIRECT_EVAL = 237
   );
 
 const
